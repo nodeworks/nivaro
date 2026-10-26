@@ -6046,6 +6046,11 @@ export async function createOne(
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
+  await (await import('./file-access.js')).assertEmbeddedFilesReadable(
+    collection,
+    ctx.payload as Record<string, unknown>,
+    req
+  )
   if (dry) {
     const writable = filterToActualColumns(securedPayload, actualCols)
     const notes: string[] = []
@@ -6554,6 +6559,12 @@ export async function updateOne(
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)
+  await (await import('./file-access.js')).assertEmbeddedFilesReadable(
+    collection,
+    ctx.payload as Record<string, unknown>,
+    req,
+    previousData
+  )
   const columnPayload = filterToActualColumns(securedPayload, actualCols)
   // A payload of only alias/virtual fields (e.g. an M2A alias like
   // internal_contact) leaves nothing to write — knex throws on an empty

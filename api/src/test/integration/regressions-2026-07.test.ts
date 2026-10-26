@@ -77,7 +77,17 @@ function makeDbChain(overrides: Record<string, unknown> = {}) {
     count: vi.fn().mockResolvedValue([{ total: 0 }]),
     returning: vi.fn().mockResolvedValue([{ id: 42 }])
   }
-  for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'limit', 'offset']) {
+  for (const m of [
+    'where',
+    'whereIn',
+    'whereNull',
+    'whereNotNull',
+    'whereNot',
+    'orWhere',
+    'orderBy',
+    'limit',
+    'offset'
+  ]) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
   ;(chain.insert as ReturnType<typeof vi.fn>).mockReturnValue(chain)
@@ -254,6 +264,9 @@ describe('Files route regressions', () => {
       filename_download: 'report.pdf',
       type: 'application/pdf'
     } as never)
+    // An admin's read now checks the file is not a DM / private-channel attachment
+    // (army v3 round 2): those reads need a chain that answers them (empty = used nowhere).
+    vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(makeDbChain())
 
     const app = await buildApp(async (a) => {
       const { filesRoutes } = await import('../../routes/files.js')

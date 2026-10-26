@@ -34,52 +34,21 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
     },
     {
       type: 'pre',
-      code: `GET /api/global-search?q=acme&limit=20
+      code: `GET /api/global-search?q=acme
 
 // Response
 {
-  "items": [
-    {
-      "collection": "customers",
-      "id": "cust-123",
-      "label": "Acme Corp",
-      "highlight": "Acme Corp",
-      "displayField": "name",
-      "score": 0.95
-    },
-    {
-      "collection": "orders",
-      "id": "order-456",
-      "label": "Order #123456 for Acme",
-      "highlight": "Acme",
-      "displayField": "title",
-      "score": 0.87
-    }
-  ],
-  "pages": [
-    {
-      "type": "page",
-      "label": "SLA Rules",
-      "route": "/deadlines",
-      "category": "Monitoring",
-      "icon": "Clock"
-    },
-    {
-      "type": "page",
-      "label": "Workflows",
-      "route": "/workflows",
-      "category": "Automation",
-      "icon": "GitBranch"
-    }
-  ],
-  "actions": [
-    {
-      "type": "create",
-      "label": "Create customer",
-      "collection": "customers",
-      "icon": "Plus"
-    }
-  ]
+  "data": {
+    "records": [
+      { "collection": "customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
+    ],
+    "people": [
+      { "id": "9F1C…", "first_name": "Ana", "last_name": "Acme", "email": "ana@example.com", "title": "Buyer", "department": "Procurement" }
+    ],
+    "pages": [{ "label": "SLA Rules", "path": "/deadlines" }],
+    "actions": [{ "label": "New customer", "path": "/collections/customers/new" }],
+    "semantic": []
+  }
 }`
     },
     {
@@ -90,11 +59,11 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
     {
       type: 'ul',
       items: [
-        'Item results respect RBAC — only collections where user has read action are included',
-        'Text fields are searched by fuzzy match; display field (collection label setting) is highlighted in results',
-        'Page results index all admin routes (Collections, Workflows, Pipelines, etc.)',
-        'Actions include quick-create for each accessible collection',
-        'Score algorithm: partial matches score lower than prefix/exact matches; recent items boosted'
+        'Record results are read as you: only collections you can read, and only rows your row filters and User Scopes let you open',
+        'Ranking: an exact match on a searched column first, then a prefix match, then the newest',
+        'People: up to 6 matches on first name, last name, email or job title, opening the person’s profile. Non-administrators see only directory details and never suspended, redacted, placeholder or service accounts; administrators also find suspended and service accounts, marked with a chip',
+        'Page results index the admin routes (Collections, Workflows, Pipelines, etc.)',
+        'Actions include quick-create for each collection you can create in'
       ]
     },
     {

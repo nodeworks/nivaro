@@ -10,7 +10,9 @@ vi.mock('../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('./activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('./integration-remediation.js', () => ({ classifyError: vi.fn(() => 'unknown') }))
 vi.mock('./external-apis.js', () => ({
-  callExternalApi: vi.fn(async () => ({ status: 200, body: { status: 'SUCCESS' }, ok: true }))
+  callExternalApi: vi.fn(async () => ({ status: 200, body: { status: 'SUCCESS' }, ok: true })),
+  // The stored-body / preview scrub resolves the API's instance row (no overrides here).
+  resolveInstanceRow: vi.fn((row: unknown) => row)
 }))
 vi.mock('./integration-obligations.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./integration-obligations.js')>()
@@ -475,9 +477,26 @@ describe('template API and the record-form preview', () => {
     expect(out[0].body).toBeNull()
   })
 
+  // The template has a `secret` slot (token): it may only go to an API that holds that body
+  // secret. The slot is checked against the action's API (by id), not the template's raw name.
+  const partnerWithToken = {
+    nivaro_external_apis: [
+      { id: 5, name: 'Partner', auth_config: JSON.stringify({ body_secrets: { token: 'S3CRET' } }) }
+    ]
+  }
+
   it('the API names compare case-insensitively', async () => {
-    wire(published(MAP, { external_api: ' partner ' }))
+    wire(published(MAP, { external_api: ' partner ' }), partnerWithToken)
     await run([keyAction()])
     expect(callExternalApi).toHaveBeenCalledTimes(1)
+    const sent = vi.mocked(callExternalApi).mock.calls[0][1] as { body: Record<string, unknown> }
+    expect(sent.body.auth).toBe(REAL)
+  })
+
+  it('a secret slot the action’s API does not hold is refused, nothing sent', async () => {
+    wire(published(MAP, { external_api: ' partner ' }))
+    await run([keyAction()])
+    expect(callExternalApi).not.toHaveBeenCalled()
+    expect(submission().row.last_error).toMatch(/token is not a body secret on this API/)
   })
 })

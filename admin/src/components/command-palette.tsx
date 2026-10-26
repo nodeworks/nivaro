@@ -1,6 +1,15 @@
 import { openAskPanel } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowRight, CornerDownLeft, FileText, History, Plus, Search, Sparkles } from 'lucide-react'
+import {
+  ArrowRight,
+  CornerDownLeft,
+  FileText,
+  History,
+  Plus,
+  Search,
+  Sparkles,
+  UserRound
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -67,11 +76,36 @@ interface SearchRecord {
   snippet: string
 }
 
+/** A person from the directory search: directory columns for everyone;
+ *  status and account kind only reach an admin. */
+export interface SearchPerson {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  title: string | null
+  department: string | null
+  status?: string | null
+  account_kind?: string | null
+}
+
 interface GlobalSearchResponse {
   records: SearchRecord[]
+  people?: SearchPerson[]
   semantic?: SearchRecord[]
   pages: { label: string; path: string }[]
   actions: { label: string; path: string }[]
+}
+
+export function personName(p: SearchPerson): string {
+  return [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || p.email || 'Unnamed person'
+}
+
+/** Why an admin sees this account flagged: machine kind first, then suspended. */
+export function personFlag(p: SearchPerson): string | null {
+  if (p.account_kind) return titleCase(p.account_kind)
+  if (p.status === 'suspended') return 'Suspended'
+  return null
 }
 
 function matchesQuery(p: { label: string; path: string; keywords?: string }, q: string) {
@@ -229,6 +263,7 @@ export function CommandPalette() {
     ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8)
     : allPages.slice(0, 8)
   const records = debouncedQuery.length >= 2 ? (searchData?.records ?? []) : []
+  const people = debouncedQuery.length >= 2 ? (searchData?.people ?? []) : []
   const serverActions = debouncedQuery.length >= 2 ? (searchData?.actions ?? []) : []
   const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []
 
@@ -258,6 +293,7 @@ export function CommandPalette() {
     if (searchLogRef.current?.key === key) return
     const count =
       (searchData.records?.length ?? 0) +
+      (searchData.people?.length ?? 0) +
       (searchData.actions?.length ?? 0) +
       (debouncedQuery.length >= 4 ? (searchData.semantic?.length ?? 0) : 0) +
       allPages.filter((p) => matchesQuery(p, debouncedQuery)).length
@@ -322,6 +358,7 @@ export function CommandPalette() {
     !!q ||
     pageMatches.length > 0 ||
     records.length > 0 ||
+    people.length > 0 ||
     semantic.length > 0 ||
     newItemActions.length > 0 ||
     serverActions.length > 0
@@ -337,7 +374,7 @@ export function CommandPalette() {
           className='[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-4 [&_[cmdk-input-wrapper]_svg]:w-4 [&_[cmdk-input]]:h-11 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-2'
         >
           <CommandInput
-            placeholder='Search pages, records, actions…'
+            placeholder='Search pages, people, records, actions…'
             value={query}
             onValueChange={setQuery}
           />
@@ -412,6 +449,43 @@ export function CommandPalette() {
                     </CommandItem>
                   ))}
                 </CommandGroup>
+              )}
+
+              {people.length > 0 && (
+                <>
+                  <CommandSeparator />
+                  <CommandGroup heading='People'>
+                    {people.map((p) => {
+                      const name = personName(p)
+                      const flag = personFlag(p)
+                      const sub = [p.title, p.email].filter(Boolean).join(' · ')
+                      return (
+                        <CommandItem
+                          key={`person-${p.id}`}
+                          value={`person-${p.id}`}
+                          onSelect={() => go(`/users/${encodeURIComponent(p.id)}`, name)}
+                        >
+                          <UserRound className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                          <div className='min-w-0 flex-1'>
+                            <div className='truncate text-[13px]'>
+                              <Hi text={name} q={q} />
+                            </div>
+                            {sub && (
+                              <div className='truncate text-[11px] text-muted-foreground'>
+                                <Hi text={sub} q={q} />
+                              </div>
+                            )}
+                          </div>
+                          {flag && (
+                            <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                              {flag}
+                            </span>
+                          )}
+                        </CommandItem>
+                      )
+                    })}
+                  </CommandGroup>
+                </>
               )}
 
               {records.length > 0 && (
@@ -517,6 +591,7 @@ export function CommandPalette() {
             <PreviewPane
               value={selectedValue}
               records={[...records, ...semantic]}
+              people={people}
               pages={PAGES}
               recents={recents}
             />
@@ -551,11 +626,13 @@ export function CommandPalette() {
 function PreviewPane({
   value,
   records,
+  people,
   pages,
   recents
 }: {
   value: string
   records: SearchRecord[]
+  people: SearchPerson[]
   pages: { label: string; path: string; keywords?: string }[]
   recents: RecentEntry[]
 }) {
@@ -570,6 +647,14 @@ function PreviewPane({
       sub = r.snippet && r.snippet !== r.label ? r.snippet : ''
       path = `/collections/${r.collection}/${r.id}`
       kind = titleCase(r.collection)
+    }
+  } else if (value.startsWith('person-')) {
+    const p = people.find((x) => value === `person-${x.id}`)
+    if (p) {
+      title = personName(p)
+      sub = [p.title, p.department, p.email].filter(Boolean).join(' · ')
+      path = `/users/${p.id}`
+      kind = personFlag(p) ?? 'Person'
     }
   } else if (value.startsWith('page-')) {
     const p = pages.find((x) => value === `page-${x.path}`)

@@ -1056,13 +1056,27 @@ async function cachedPublished(key: string): Promise<PublishedTemplate | null> {
 
 const defaultSecretNames: SecretNamesResolver = (apiName) => bodySecretNames(apiName)
 
+/**
+ * The API a template names, as nivaro_external_apis spells it: an id as-is, else matched trimmed
+ * and case-insensitively — the way the push compares it (workflow-actions assertTemplateApi), so
+ * preview / check / convert and the push read the same secrets. A raw ' mwf ' found no API and
+ * every secret slot read as unknown. No match = the trimmed name (the resolver answers "none").
+ */
+async function canonicalApiName(apiName: string): Promise<string> {
+  const want = apiName.trim()
+  if (/^\d+$/.test(want)) return want
+  const rows = (await db('nivaro_external_apis').select('name')) as Array<{ name: string | null }>
+  const hit = rows.find((r) => (r.name ?? '').trim().toLowerCase() === want.toLowerCase())
+  return hit?.name ?? want
+}
+
 async function secretNamesFor(
   apiName: string | null,
   resolver: SecretNamesResolver
 ): Promise<string[] | undefined> {
-  if (!apiName) return undefined
+  if (!apiName?.trim()) return undefined
   try {
-    const names = await resolver(apiName)
+    const names = await resolver(await canonicalApiName(apiName))
     return Array.isArray(names) ? names : undefined
   } catch (e) {
     // biome-ignore lint/suspicious/noConsole: a failed secret lookup must be visible in the server log

@@ -8269,6 +8269,9 @@ function ItemEditFormView({
       // mentions) go stale the moment a save lands — refresh them so the
       // popover answers with current data.
       invalidateRecordInsights(qc, collection, String(id))
+      // The header's "Edited … by …" names this save, not the one before it
+      // (RecordLiveSync refreshes it only for other people's writes).
+      void qc.invalidateQueries({ queryKey: ['last-touch', collection, String(id)] })
       // The Notes thread gains entries from the save itself (change reasons,
       // rule/hook writes, integration pushes) — some land seconds later.
       invalidateRecordNotes(qc, collection, String(id))

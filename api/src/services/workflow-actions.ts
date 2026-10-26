@@ -8,11 +8,13 @@ import {
 } from './action-writes.js'
 import { logActivity } from './activity.js'
 import {
+  applyScrub,
+  bodySecretNames,
   protectTemplatePlaceholders,
   scrubbedBodyMessage,
   scrubbedExcerpt,
-  scrubSecretsFor,
-  secretPathsOf
+  secretPathsOf,
+  secretsForScrub
 } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
@@ -581,7 +583,12 @@ async function renderActionBody(
   const key = templateKeyOf(action)
   if (key) {
     await assertTemplateApi(key, action, apiId)
-    const r = await renderPayloadTemplate(key, scope)
+    // The secret slots are checked against the API this action sends to, by id: the template's
+    // stored API name is compared loosely above (' partner ' = Partner), but looked up by that
+    // raw name it found no API, so every secret slot read as unknown and the push was refused.
+    const r = await renderPayloadTemplate(key, scope, {
+      secretNames: () => bodySecretNames(String(apiId))
+    })
     if (!r.body || typeof r.body !== 'object' || Array.isArray(r.body)) {
       throw new PayloadTemplateError(
         'invalid',
@@ -1618,6 +1625,15 @@ export async function recordSubmission(
 ): Promise<number | null> {
   try {
     const now = new Date()
+    // The request is stored scrubbed like the response: a body-secret VALUE an admin inlined into
+    // a template (instead of its placeholder) is stored as the placeholder, and secret_paths is
+    // read from the scrubbed body, so a resend substitutes it back exactly where this send carried
+    // it. Secrets that cannot be resolved = no body stored (fail closed: a stand-in is never resent).
+    const secrets = await secretsForScrub(externalApi)
+    const storedBody =
+      body == null || secrets === null
+        ? null
+        : (applyScrub(body, secrets) as Record<string, unknown>)
     // Probed once per tenant — naming a column this database hasn't run
     // migration 350 for yet fails the WHOLE insert, not just these two
     // fields, so the requester is spread conditionally instead of written
@@ -1639,10 +1655,11 @@ export async function recordSubmission(
         // secret_paths: where the template's real placeholders sit — a resend honours only those.
         payload: JSON.stringify({
           endpoint_path: endpointPath,
-          body,
-          secret_paths: body ? secretPathsOf(body) : []
+          body: storedBody,
+          secret_paths: storedBody ? secretPathsOf(storedBody) : []
         }),
-        response: await scrubSecretsFor(externalApi, serializeResponseBody(responseBody)),
+        // Scrubbed before the 100k cut, so a secret straddling it cannot survive half-scrubbed.
+        response: serializeResponseBody(applyScrub(responseBody, secrets)),
         change_signature: signature ?? null,
         ...requesterFields,
         ...(await chainFields('nivaro_erp_submissions')),
@@ -1902,7 +1919,9 @@ export async function previewErpActions(opts: {
       })
       continue
     }
-    base.body = body
+    // Shown and diffed against the last STORED body, which recordSubmission scrubbed — so scrub
+    // the same way (after the signature below, which is taken over the body as sent).
+    base.body = applyScrub(body, await secretsForScrub(apiId as number)) as Record<string, unknown>
     if (action.push_when) {
       const signature =
         action.push_when.payload === true

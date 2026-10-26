@@ -129,7 +129,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: 'aggregate',
-    description: `Count/sum/avg/min/max over a collection, optionally grouped by one column. Use for "how many", totals, and breakdowns instead of fetching rows — never page through rows and tally them yourself. The filter may cross relations and to-many links (e.g. {"regions.short_name": {"_eq": "NE"}}) while grouping by a plain or link column; a link group comes back as {id, label}. ${FILTER_DOC}`,
+    description: `Count/sum/avg/min/max over a collection, optionally grouped by one column. Use for "how many", totals, and breakdowns instead of fetching rows — never page through rows and tally them yourself. The filter may cross relations and to-many links (e.g. {"regions.short_name": {"_eq": "NE"}}, or {"divisions": {"_eq": 3}} for "linked to division 3") while grouping by a plain or link column; a link group comes back as {id, label}. A to-many filter counts each record once. ${FILTER_DOC}`,
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -485,6 +485,47 @@ async function labelColumnOf(collection: string): Promise<string> {
   }
 }
 
+/**
+ * A many-to-many link is walked junction-and-all by the hop planner: "divisions.short_name" goes
+ * workflows → workflows_divisions → divisions. Spelling the junction's own column as well
+ * ("divisions.divisions_id", "divisions.divisions_id.short_name" — the Directus deep-filter shape)
+ * used to name a column that does not exist on the target and fail, so the tool was refused and
+ * the model paged rows to count them by hand (army 2026-10-25: wrong vendor named the leader).
+ * The junction column right after an M2M alias is dropped: "divisions.divisions_id" compares the
+ * linked ids, "divisions.divisions_id.short_name" reads the target's field.
+ */
+async function dropJunctionSegments(
+  collection: string,
+  path: string[],
+  links: (collection: string) => Promise<ChatRelations>
+): Promise<string[]> {
+  const out: string[] = []
+  let current: string | null = collection
+  for (let i = 0; i < path.length; i++) {
+    const seg = path[i]
+    out.push(seg)
+    if (!current) continue
+    const rel: ChatRelations = await links(current)
+    const m2o = rel.m2o.find((r) => r.field === seg)
+    if (m2o) {
+      current = m2o.collection
+      continue
+    }
+    const alias = rel.aliases.find((a) => a.field === seg)
+    if (!alias) {
+      current = null
+      continue
+    }
+    if (alias.kind === 'm2m' && alias.junction) {
+      if (path[i + 1] === alias.junction) i++
+      current =
+        (await links(alias.collection)).m2o.find((r) => r.field === alias.junction)?.collection ??
+        null
+    } else current = alias.collection
+  }
+  return out
+}
+
 export async function compileChatFilter(
   collection: string,
   raw: unknown,
@@ -550,6 +591,8 @@ export async function compileChatFilter(
   await walk([], raw as Record<string, unknown>)
   for (const c of out) {
     if (c.path[0] === '$state') continue
+    // Relations unreadable = the path as written; the planner below still decides.
+    c.path = await dropJunctionSegments(collection, c.path, links).catch(() => c.path)
     if ((await plan(collection, c.path)) == null) {
       throw new Error(
         `Cannot filter ${collection} on path "${c.path.join('.')}" — check the relations list_collections reports.`
@@ -590,7 +633,14 @@ async function fieldSet(collection: string): Promise<Set<string>> {
 
 type ChatRelations = {
   m2o: Array<{ field: string; collection: string }>
-  aliases: Array<{ field: string; kind: 'm2m' | 'o2m'; collection: string; fk: string | null }>
+  aliases: Array<{
+    field: string
+    kind: 'm2m' | 'o2m'
+    collection: string
+    fk: string | null
+    /** M2M: the junction's column pointing at the target (null for O2M). */
+    junction?: string | null
+  }>
 }
 
 /** Links out of a collection (M2O) and to-many aliases onto it, from nivaro_relations. */
@@ -620,7 +670,8 @@ async function relationsFor(collection: string): Promise<ChatRelations> {
       field: r.one_field,
       kind: r.junction_field ? 'm2m' : 'o2m',
       collection: r.many_collection,
-      fk: r.many_field
+      fk: r.many_field,
+      junction: r.junction_field
     }))
   }
 }
@@ -1116,7 +1167,10 @@ async function runChatTool(
         collection,
         conditions.map((c) => c.path),
         hidden,
-        relationsFor
+        relationsFor,
+        // applyConditions compiles every hop to EXISTS: a to-many filter narrows the rows
+        // counted, never multiplies them.
+        { toMany: true }
       )
 
       const q = db(collection)
@@ -1131,7 +1185,7 @@ async function runChatTool(
         else q.max({ [aggAlias]: field })
       }
       if (groupBy) {
-        q.select(groupBy).groupBy(groupBy).orderBy(aggAlias, 'desc').limit(20)
+        q.select(groupBy).groupBy(groupBy).orderBy(aggAlias, 'desc').orderBy(groupBy).limit(20)
         // A link group (vendor: 1201) answers {id, label} as the asker — a bare
         // id sent the model off paging rows to name the groups and counting
         // them by hand (army 2026-10-25: the wrong vendor named the leader).

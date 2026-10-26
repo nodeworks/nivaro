@@ -452,9 +452,51 @@ export async function workflowsRoutes(app: FastifyInstance) {
         id: txId,
         label: body.label?.trim() || 'Parallel Split',
         branch_states: body.branch_states,
-        join_state: body.join_state
+        join_state: body.join_state,
+        from_state: body.from_state ?? null
       }
     })
+  })
+
+  // Set or clear the step an existing split starts from (splits made before
+  // `from` existed have none, so only an admin can run them).
+  app.patch('/templates/:id/splits/:splitId', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, splitId } = req.params as { id: string; splitId: string }
+    const body = (req.body ?? {}) as { from_state?: string | null }
+    if (!('from_state' in body)) {
+      return reply.code(400).send({ error: 'from_state is required (a state key, or null)' })
+    }
+    const row = (await db('nivaro_workflow_transitions')
+      .where({ id: splitId, template: id })
+      .first()) as WorkflowTransition | undefined
+    const cfg = row && isSplitConfigRow(row) ? parseSplitConfig(row) : null
+    if (!row || !cfg) return reply.code(404).send({ error: 'Not found' })
+    const from =
+      typeof body.from_state === 'string' && body.from_state.trim() ? body.from_state.trim() : null
+    if (from) {
+      const state = await db('nivaro_workflow_states').where({ template: id, key: from }).first()
+      if (!state) return reply.code(400).send({ error: `Unknown state keys: ${from}` })
+    }
+    const groupLabel = `${SPLIT_PREFIX}${JSON.stringify({
+      branches: cfg.branches,
+      join: cfg.join,
+      ...(from ? { from } : {})
+    } satisfies SplitConfig)}`
+    if (groupLabel.length > 255) {
+      return reply.code(400).send({ error: 'Split config too large (group_label limit 255)' })
+    }
+    await db('nivaro_workflow_transitions')
+      .where({ id: splitId })
+      .update({ group_label: groupLabel })
+    await logActivity({
+      action: 'update',
+      collection: 'nivaro_workflow_transitions',
+      item: splitId,
+      user: req.user?.id,
+      req,
+      comment: `split-config template:${id} from:${from ?? '(none)'}`
+    })
+    return reply.send({ data: { id: splitId, from_state: from } })
   })
 
   app.delete('/templates/:id/splits/:splitId', { preHandler: requireAdmin }, async (req, reply) => {
@@ -664,10 +706,21 @@ export async function workflowsRoutes(app: FastifyInstance) {
             .map((s) => formatStateLite(s as WorkflowState)),
           join_state: stateByKey.has(cfg.join)
             ? formatStateLite(stateByKey.get(cfg.join) as WorkflowState)
-            : null
+            : null,
+          from_state: cfg.from ?? null
         }
       })
       .filter((c) => c && c.branch_states.length >= 2 && c.join_state)
+      // Only splits this caller could run now, as POST /instance/:id/split judges
+      // them (the step owner check stays at POST time).
+      .filter((c) => {
+        if (!c?.from_state) return !!req.isAdmin
+        const from = stateByKey.get(c.from_state)
+        return (
+          !!from &&
+          String(from.id).toUpperCase() === String(instance.current_state ?? '').toUpperCase()
+        )
+      })
 
     const split = await getOpenSplit(id)
     if (!split) {

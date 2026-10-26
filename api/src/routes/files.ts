@@ -6,7 +6,12 @@ import sharp from 'sharp'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { mayChangeFile, mayReadFile, readableFileIdList } from '../services/file-access.js'
+import {
+  chatComplianceRead,
+  mayChangeFile,
+  mayReadFile,
+  readableFileIdList
+} from '../services/file-access.js'
 import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
 import {
   assertUploadContent,
@@ -56,6 +61,12 @@ async function servableFile(id: string, req: FastifyRequest) {
   // A render or export made from records is private to whoever made it (and administrators):
   // anyone else gets the same 404 as an unknown file.
   if (!viewerMaySeeFile(file, { id: req.user?.id, isAdmin: req.isAdmin })) return undefined
+  // The logged chat compliance view (?chat_message=<id>, administrators only):
+  // an attachment of the message being read, DMs included — every fetch logged.
+  // A missing or mismatched message falls back to the normal rule below, which
+  // keeps an admin out of DMs and private channels they are not in.
+  const via = (req.query as { chat_message?: string } | undefined)?.chat_message
+  if (via && req.isAdmin && (await chatComplianceRead(file, via, req))) return file
   // A record's attachment reads only for someone who can open one of its records.
   if (!(await mayReadFile(file, req))) return undefined
   return file
@@ -552,7 +563,25 @@ export async function filesRoutes(app: FastifyInstance) {
     }
     if ('description' in body) patch.description = body.description
     if ('folder' in body) patch.folder = body.folder
-    if ('tags' in body) patch.tags = body.tags
+    if ('tags' in body) {
+      // A clip's `poster:<id>` tag makes that file read with the clip: only a
+      // poster the writer uploaded themselves (admins pass).
+      const posters = (Array.isArray(body.tags) ? body.tags : [])
+        .map(String)
+        .filter((t) => t.startsWith('poster:'))
+        .map((t) => t.slice(7))
+      if (posters.length > 0 && !req.isAdmin) {
+        const own = (await db('nivaro_files')
+          .whereIn('id', posters.filter(isUuid))
+          .where('uploaded_by', req.user!.id)
+          .select('id')) as Array<{ id: unknown }>
+        if (own.length !== new Set(posters.map((p) => p.toLowerCase())).size)
+          return reply
+            .code(400)
+            .send({ error: 'A poster must be a file you uploaded', code: 'FILE_NOT_READABLE' })
+      }
+      patch.tags = body.tags
+    }
     if ('expires_at' in body) {
       if (!body.expires_at) {
         patch.expires_at = null

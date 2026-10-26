@@ -9,9 +9,33 @@ const PRIV = '11111111-1111-4111-8111-111111111111'
 const PUBLIC = '22222222-2222-4222-8222-222222222222'
 const state = vi.hoisted(() => ({ user: 'OWNER', admin: false }))
 const listed = vi.hoisted(() => ({ calls: [] as any[] }))
-const access = vi.hoisted(() => ({ read: true, change: true }))
-vi.mock('../../../services/file-access.js', () => ({
-  mayReadFile: vi.fn(async (_f: unknown, req: { isAdmin?: boolean }) => req.isAdmin || access.read),
+const access = vi.hoisted(() => ({
+  read: true,
+  change: true,
+  // A DM / private-channel file the admin is not in: the normal rule refuses admins too.
+  closed: false,
+  compliance: [] as string[],
+  // Use the real chatComplianceRead against the chat tables below.
+  real: false,
+  chat: {
+    message: undefined as Record<string, unknown> | undefined,
+    versions: [] as Array<Record<string, unknown>>
+  }
+}))
+vi.mock('../../../services/file-access.js', async (orig) => ({
+  mayReadFile: vi.fn(
+    async (_f: unknown, req: { isAdmin?: boolean }) =>
+      !access.closed && (req.isAdmin || access.read)
+  ),
+  chatComplianceRead: vi.fn(async (f: never, message: unknown, req: never) =>
+    access.real
+      ? (await orig<typeof import('../../../services/file-access.js')>()).chatComplianceRead(
+          f,
+          message,
+          req
+        )
+      : access.compliance.includes(String(message))
+  ),
   mayChangeFile: vi.fn(async (_f: unknown, req: { isAdmin?: boolean }) =>
     req.isAdmin || access.change ? { ok: true } : { ok: false, message: 'No', code: 'EDIT_LOCKED' }
   ),
@@ -75,11 +99,19 @@ vi.mock('../../../services/storage/index.js', () => ({
   getStorage: () => ({ get: vi.fn(), put: vi.fn(), getUrl: vi.fn() })
 }))
 vi.mock('../../../db/index.js', () => {
-  const chain: any = {
-    whereIn: () => chain,
-    select: async () => [{ id: PUBLIC.toUpperCase(), uploaded_by: 'OWNER', tags: null }]
+  const chain = (t: string) => {
+    const c: any = {
+      whereIn: () => c,
+      where: () => c,
+      first: async () => (t === 'chat_messages' ? access.chat.message : undefined),
+      select: async () =>
+        t === 'nivaro_chat_message_history'
+          ? access.chat.versions
+          : [{ id: PUBLIC.toUpperCase(), uploaded_by: 'OWNER', tags: null }]
+    }
+    return c
   }
-  return { db: Object.assign(() => chain, { raw: () => '' }) }
+  return { db: Object.assign((t: string) => chain(t), { raw: () => '' }) }
 })
 
 import { filesRoutes } from '../../../routes/files.js'
@@ -96,6 +128,10 @@ beforeEach(() => {
   state.admin = false
   access.read = true
   access.change = true
+  access.closed = false
+  access.compliance = []
+  access.real = false
+  access.chat = { message: undefined, versions: [] }
   listed.calls.length = 0
 })
 
@@ -151,5 +187,70 @@ describe('record attachments follow the record', () => {
     })
     expect(res.json()).toEqual({ data: [], total: 0 })
     expect(listed.calls).toHaveLength(0)
+  })
+})
+
+describe('chat compliance reads (?chat_message=)', () => {
+  it('an admin outside a DM gets 404 without the param or with a message that does not carry the file', async () => {
+    state.admin = true
+    access.closed = true
+    access.compliance = ['41']
+    const a = await app()
+    expect((await a.inject({ url: `/api/files/${PUBLIC}?download=1` })).statusCode).toBe(404)
+    expect(
+      (await a.inject({ url: `/api/files/${PUBLIC}?download=1&chat_message=99` })).statusCode
+    ).toBe(404)
+  })
+
+  it('an admin with the message that carries the file reads it (the helper logs it)', async () => {
+    state.admin = true
+    access.closed = true
+    access.compliance = ['41']
+    const a = await app()
+    const { chatComplianceRead } = await import('../../../services/file-access.js')
+    const r = await a.inject({ url: `/api/files/${PUBLIC}?download=1&chat_message=41` })
+    expect(r.statusCode).toBe(200)
+    expect(vi.mocked(chatComplianceRead)).toHaveBeenCalled()
+  })
+
+  it('a non-admin never takes the compliance path', async () => {
+    state.admin = false
+    access.closed = true
+    access.compliance = ['41']
+    const { chatComplianceRead } = await import('../../../services/file-access.js')
+    vi.mocked(chatComplianceRead).mockClear()
+    const a = await app()
+    const r = await a.inject({ url: `/api/files/${PUBLIC}?download=1&chat_message=41` })
+    expect(r.statusCode).toBe(404)
+    expect(vi.mocked(chatComplianceRead)).not.toHaveBeenCalled()
+  })
+})
+
+describe('chat compliance reads of a preserved version (real check)', () => {
+  it('an admin follows a VERSION attachment via the parent message id; logged; a wrong id is 404', async () => {
+    state.admin = true
+    access.closed = true
+    access.real = true
+    // The file left the message in an edit; version 1 still carries it.
+    access.chat = {
+      message: { room: 'dm:A:B', attachments: '[]' },
+      versions: [{ attachments: JSON.stringify([PUBLIC.toUpperCase()]) }]
+    }
+    const { logActivity } = await import('../../../services/activity.js')
+    vi.mocked(logActivity).mockClear()
+    const a = await app()
+    const ok = await a.inject({ url: `/api/files/${PUBLIC}?download=1&chat_message=41` })
+    expect(ok.statusCode).toBe(200)
+    expect(vi.mocked(logActivity)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'chat-admin-read',
+        collection: 'chat_messages',
+        item: '41',
+        comment: expect.stringContaining(PUBLIC.toUpperCase())
+      })
+    )
+    access.chat = { message: { room: 'dm:A:B', attachments: '[]' }, versions: [] }
+    const no = await a.inject({ url: `/api/files/${PUBLIC}?download=1&chat_message=41` })
+    expect(no.statusCode).toBe(404)
   })
 })

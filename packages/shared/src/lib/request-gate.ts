@@ -397,6 +397,41 @@ interface SettledEntry {
 }
 
 /**
+ * Moves when any write through a coalesced client in this page is sent and
+ * again when it lands. A GET sent in an earlier epoch may carry the pre-write
+ * row, so a read asked now never joins it (a save's own refetch joined a read
+ * sent just before the PATCH and put the old values back on the form).
+ */
+let writeEpoch = 0
+
+/**
+ * Record data (`/items/...`): a read joins one already in flight only when both
+ * were asked in the same moment (one mount burst). A read asked later is a
+ * refetch after a live event or a save — the record changed since the earlier
+ * read was sent, and that answer must come from the server as it is now.
+ */
+export const RECORD_JOIN_MS = 50
+const RECORD_READ_PATH = /^\/items\//
+
+interface InflightEntry {
+  p: Promise<unknown>
+  at: number
+  epoch: number
+}
+
+/** Whether a read asked now may share the HTTP request `entry` already has in flight. */
+export function mayJoinInflight(
+  command: unknown,
+  entry: { at: number; epoch: number },
+  now: number,
+  epoch: number
+): boolean {
+  if (entry.epoch !== epoch) return false
+  const path = (command as AnyCommand)._path ?? ''
+  return !RECORD_READ_PATH.test(path) || now - entry.at < RECORD_JOIN_MS
+}
+
+/**
  * Feed a request's outcome to the signed-out gate: an identity read that succeeds opens it, a
  * 401 that says the session is gone closes it (only identity refusals push the backoff out — a
  * page of reads all refused at once is one refusal, not twenty).
@@ -419,7 +454,7 @@ export function withGetCoalescing(
   opts: CoalescingOptions = {}
 ): NivaroClient {
   if (isCoalesced(client)) return client
-  const inflight = new Map<string, Promise<unknown>>()
+  const inflight = new Map<string, InflightEntry>()
   const batch = opts.batchReads ? readBatcher(client) : null
   const metaBatch = opts.batchCollections === false ? null : collectionMetaBatcher(client)
   const settled = new Map<string, SettledEntry>()
@@ -447,7 +482,10 @@ export function withGetCoalescing(
       // and when it lands (a read sent meanwhile must not settle).
       const busts = !cannotChangeConfig(c)
       if (busts) forgetSettledReads()
-      const sent = watchSignedOut(client.request<T>(command), false)
+      writeEpoch++
+      const sent = watchSignedOut(client.request<T>(command), false).finally(() => {
+        writeEpoch++
+      })
       return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
         noteOwnWriteFromCommand(c._method, c._path, c._body, res)
         return res
@@ -461,7 +499,8 @@ export function withGetCoalescing(
         return Promise.resolve(cloneResult(hit.value as T))
     }
     const current = inflight.get(key)
-    if (current) return (current as Promise<T>).then(cloneResult)
+    if (current && mayJoinInflight(c, current, Date.now(), writeEpoch))
+      return (current.p as Promise<T>).then(cloneResult)
     // A signed-out tab stops asking who it is (signed-out.ts): one probe per backoff window.
     const identity = isIdentityRead(c._method, c._path, c._params)
     if (identity && !claimIdentityCall()) return Promise.reject(signedOutError())
@@ -482,9 +521,9 @@ export function withGetCoalescing(
         return res
       })
       .finally(() => {
-        if (inflight.get(key) === p) inflight.delete(key)
+        if (inflight.get(key)?.p === p) inflight.delete(key)
       })
-    inflight.set(key, p)
+    inflight.set(key, { p, at: Date.now(), epoch: writeEpoch })
     return p
   }
   return new Proxy(client, {

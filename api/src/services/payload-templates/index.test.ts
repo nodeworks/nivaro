@@ -768,6 +768,48 @@ describe('renderPayloadTemplate', () => {
     expect(resolver).toHaveBeenCalledWith('MWF')
     expect(r.problems.some((p) => /token/.test(p.message))).toBe(true)
   })
+
+  // The push compares the template's API name trimmed + case-insensitively; the secret lookup
+  // must find the same API, or preview / check / convert call every secret slot unknown.
+  const tokenBody = JSON.stringify({
+    v: 1,
+    fields: [
+      {
+        id: 't',
+        key: 'token',
+        type: 'text',
+        include: 'always',
+        value: { source: 'secret', name: 'token' }
+      }
+    ]
+  })
+  const mwfOnly = vi.fn(async (api: string) => (api === 'MWF' ? ['token'] : []))
+
+  it('a template API name with stray spaces or other case still gets its secret names', async () => {
+    store.tables.nivaro_external_apis = [{ id: 1, name: 'MWF' }]
+    await registerPayloadTemplate('efp-ops', {
+      ...def(tokenBody),
+      external_api: ' mwf ',
+      locked_keys: []
+    })
+    mwfOnly.mockClear()
+    const draft = await renderPayloadTemplate(KEY, {}, { draft: true, secretNames: mwfOnly })
+    expect(mwfOnly).toHaveBeenCalledWith('MWF')
+    expect(draft.problems.some((p) => /token/.test(p.message))).toBe(false)
+  })
+
+  it('an API that does not exist still reads as having no secrets (refused slot)', async () => {
+    store.tables.nivaro_external_apis = [{ id: 1, name: 'MWF' }]
+    await registerPayloadTemplate('efp-ops', {
+      ...def(tokenBody),
+      external_api: ' Other ',
+      locked_keys: []
+    })
+    mwfOnly.mockClear()
+    const draft = await renderPayloadTemplate(KEY, {}, { draft: true, secretNames: mwfOnly })
+    expect(mwfOnly).toHaveBeenCalledWith('Other')
+    expect(draft.problems.some((p) => /token is not a body secret/.test(p.message))).toBe(true)
+  })
 })
 
 describe('installTemplateDraft (blueprint install)', () => {

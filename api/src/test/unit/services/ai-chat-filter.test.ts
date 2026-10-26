@@ -115,6 +115,72 @@ describe('compileChatFilter', () => {
   })
 })
 
+describe('compileChatFilter — many-to-many junction column (army v3 round 2)', () => {
+  const zoneLinks = async (c: string) =>
+    c === 'workflows'
+      ? {
+          m2o: [{ field: 'vendor', collection: 'vendors' }],
+          aliases: [
+            {
+              field: 'divisions',
+              kind: 'm2m' as const,
+              collection: 'workflows_divisions',
+              fk: 'workflows_id',
+              junction: 'divisions_id'
+            },
+            {
+              field: 'lines',
+              kind: 'o2m' as const,
+              collection: 'workflow_lines',
+              fk: 'workflow',
+              junction: null
+            }
+          ]
+        }
+      : c === 'workflows_divisions'
+        ? {
+            m2o: [
+              { field: 'workflows_id', collection: 'workflows' },
+              { field: 'divisions_id', collection: 'divisions' }
+            ],
+            aliases: []
+          }
+        : { m2o: [], aliases: [] }
+  const zoneValid = new Set(['id', 'vendor', 'divisions', 'lines', 'is_on_hold'])
+
+  it('drops the junction column the Directus deep-filter shape spells out', async () => {
+    const out = await compileChatFilter(
+      'workflows',
+      {
+        'divisions.divisions_id': { _eq: 3 },
+        divisions: { divisions_id: { short_name: { _eq: 'Zone 2' } } }
+      },
+      zoneValid,
+      planOk,
+      zoneLinks
+    )
+    expect(out).toEqual([
+      { path: ['divisions'], op: '_eq', value: 3 },
+      { path: ['divisions', 'short_name'], op: '_eq', value: 'Zone 2' }
+    ])
+  })
+
+  it('leaves planner-shaped and O2M paths alone', async () => {
+    const out = await compileChatFilter(
+      'workflows',
+      { 'divisions.short_name': { _eq: 'Zone 2' }, 'lines.amount': { _gt: 0 }, vendor: 7 },
+      zoneValid,
+      planOk,
+      zoneLinks
+    )
+    expect(out.map((c) => c.path)).toEqual([
+      ['divisions', 'short_name'],
+      ['lines', 'amount'],
+      ['vendor']
+    ])
+  })
+})
+
 describe('buildWrapUpMessages', () => {
   it('folds the tool history into one plain user turn with no tool blocks', async () => {
     const { buildWrapUpMessages } = await import('../../../services/ai-chat.js')

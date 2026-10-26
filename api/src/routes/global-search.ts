@@ -1,8 +1,11 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
 import { searchPhrases } from '../services/search-synonyms.js'
+import { systemReadableColumns } from '../services/system-collections.js'
+import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
 import type { Policy, Role, User } from '../types.js'
 
 // ─── Static admin page registry ───────────────────────────────────────────────
@@ -327,6 +330,91 @@ async function searchRecords(
   return results.slice(0, RECORD_CAP)
 }
 
+// ─── People ───────────────────────────────────────────────────────────────────
+//
+// One extra TOP-N query over nivaro_users (army 2026-10-25: finding a person
+// meant leaving the palette for the Users page). Matches name, email and job
+// title, ranked like the record arms: exact, then prefix, then newest. A
+// non-admin gets the person directory GET /users gives them — directory
+// columns only, no suspended, redacted, placeholder or machine account; an
+// admin also finds suspended and machine accounts (where they are managed),
+// with their status and kind so the palette can say so.
+
+export const PEOPLE_CAP = 6
+const PEOPLE_DIRECTORY_COLS = ['id', 'first_name', 'last_name', 'email', 'title', 'department']
+const PEOPLE_ADMIN_COLS = [...PEOPLE_DIRECTORY_COLS, 'status', 'account_kind']
+const PEOPLE_MAX_TERMS = 4
+const PEOPLE_SEARCH_COLS = ['first_name', 'last_name', 'email', 'title']
+
+export interface PersonHit {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  title: string | null
+  department: string | null
+  status?: string | null
+  account_kind?: string | null
+}
+
+/** The people query for one search, as the caller; null = this caller finds
+ *  nobody. `readable` is what a non-admin may read of nivaro_users (the
+ *  system-collections list; injectable for tests). Exported for tests. */
+export function peopleSearchQuery(
+  knex: Knex,
+  q: string,
+  isAdmin: boolean,
+  readable: readonly string[] | null = systemReadableColumns('nivaro_users')
+): Knex.QueryBuilder | null {
+  // Never wider than what a non-admin may read of nivaro_users through /items,
+  // and never searched or ranked on a column they cannot read (a match on a
+  // withheld column would answer for it). No list, or no id: deny.
+  const allowed = new Set(readable ?? [])
+  if (!isAdmin && !allowed.has('id')) return null
+  const may = (c: string) => isAdmin || allowed.has(c)
+  const cols = isAdmin ? PEOPLE_ADMIN_COLS : PEOPLE_DIRECTORY_COLS.filter(may)
+  const searchable = PEOPLE_SEARCH_COLS.filter(may)
+  const phrase = q.trim()
+  if (searchable.length === 0 || !phrase) return null
+  const qb = knex('nivaro_users').select(cols).limit(PEOPLE_CAP)
+  if (isAdmin) {
+    // Anonymised and legacy placeholder rows are noise even for an admin.
+    qb.where('is_redacted', false)
+      .whereRaw(`email not like 'legacy-%'`)
+      .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+  } else {
+    applyDirectoryListingRules(qb)
+  }
+  // AND across words, OR across columns, so "Jane Doe" and "doe finance" hit.
+  for (const term of phrase.split(/\s+/).slice(0, PEOPLE_MAX_TERMS)) {
+    const like = `%${escapeLike(term)}%`
+    qb.where((inner) => {
+      for (const c of searchable) inner.orWhereRaw(`[${c}] LIKE ? ESCAPE '\\'`, [like])
+    })
+  }
+  // Rank exact, then prefix, then newest — on readable columns only.
+  const ranked = searchable.map((c) => `[${c}]`)
+  if (may('first_name') && may('last_name')) ranked.push(`CONCAT([first_name], ' ', [last_name])`)
+  const prefix = `${escapeLike(phrase)}%`
+  const exact = ranked.map((e) => `${e} = ?`).join(' OR ')
+  const starts = ranked.map((e) => `${e} LIKE ? ESCAPE '\\'`).join(' OR ')
+  const newest = may('created_at') ? '[created_at] DESC' : '[last_name], [first_name]'
+  qb.orderByRaw(`CASE WHEN ${exact} THEN 0 WHEN ${starts} THEN 1 ELSE 2 END, ${newest}`, [
+    ...ranked.map(() => phrase),
+    ...ranked.map(() => prefix)
+  ])
+  return qb
+}
+
+async function searchPeople(q: string, isAdmin: boolean): Promise<PersonHit[]> {
+  try {
+    const qb = peopleSearchQuery(db as unknown as Knex, q, isAdmin)
+    return qb ? ((await qb) as PersonHit[]) : []
+  } catch {
+    return []
+  }
+}
+
 function matchStatic(
   list: { label: string; path: string; keywords?: string }[],
   forms: string[],
@@ -361,7 +449,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     const actions = q ? matchStatic(QUICK_ACTIONS, forms, 4) : []
 
     if (q.length < 2) {
-      return reply.send({ data: { records: [], pages, actions } })
+      return reply.send({ data: { records: [], people: [], pages, actions } })
     }
 
     // Registered, non-system collections
@@ -402,7 +490,10 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       byCollection.set(f.collection, list)
     }
 
-    const records = await searchRecords(user as User, readable, q)
+    const [records, people] = await Promise.all([
+      searchRecords(user as User, readable, q),
+      searchPeople(q, req.isAdmin === true)
+    ])
 
     // Semantic hits — meaning-based matches from the embeddings index, deduped
     // against keyword records. Only collections that are both indexed and
@@ -452,6 +543,6 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       }
     }
 
-    return reply.send({ data: { records, pages, actions, semantic } })
+    return reply.send({ data: { records, people, pages, actions, semantic } })
   })
 }

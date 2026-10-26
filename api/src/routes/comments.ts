@@ -159,6 +159,23 @@ async function recordVisible(
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
+/** The 400 body when `text` links a file the writer cannot open (new links only). */
+async function fileIdsRefused(
+  req: import('fastify').FastifyRequest,
+  text: unknown,
+  previous?: unknown
+): Promise<{ error: string; code: string; field: string } | null> {
+  const { assertFileIdsReadable } = await import('../services/file-access.js')
+  try {
+    await assertFileIdsReadable('text', text, req, previous)
+    return null
+  } catch (err) {
+    const e = err as Error & { code?: string; statusCode?: number }
+    if (e.statusCode !== 400) throw err
+    return { error: e.message, code: String(e.code), field: 'text' }
+  }
+}
+
 export async function commentsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -491,6 +508,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       if (!(await recordVisible(req, body.collection, body.item))) {
         return reply.code(404).send({ error: 'Not found' })
       }
+      // A comment may only link files its writer can open.
+      const unreadable = await fileIdsRefused(req, body.text)
+      if (unreadable) return reply.code(400).send(unreadable)
 
       const userId = req.user!.id
       const id = randomUUID()
@@ -683,6 +703,15 @@ export async function commentsRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string }; Body: { text: string } }>('/:id', async (req, reply) => {
     const { id } = req.params
     const text = req.body?.text
+    // New file links only for files the writer can open (checked before the
+    // row lock: the check reads nivaro_comments).
+    const before = (await db('nivaro_comments').where({ id }).first('text', 'user')) as
+      | { text?: string; user?: string }
+      | undefined
+    if (before && text && (before.user === req.user!.id || req.isAdmin)) {
+      const unreadable = await fileIdsRefused(req, text, before.text)
+      if (unreadable) return reply.code(400).send(unreadable)
+    }
 
     // Lock the comment row so concurrent edits/deletes serialize on it and
     // version allocation + deletion checks see committed state.

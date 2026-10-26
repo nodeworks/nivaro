@@ -26,6 +26,7 @@ vi.mock('../../../services/integration-obligations.js', async (importOriginal) =
 
 import { db } from '../../../db/index.js'
 import {
+  restrictPlaceholders,
   SCRUB_FAILED_TEXT,
   secretPathsOf,
   substituteBodySecrets
@@ -231,5 +232,89 @@ describe('erp_submit — the stored response fails closed when the secrets canno
     await run()
     expect(storedResponse()).toContain(REAL)
     expect(storedResponse()).not.toContain('S3CRET')
+  })
+})
+
+describe('erp_submit — the stored REQUEST is scrubbed too (army v3 round 2)', () => {
+  // An admin re-inlined the token VALUE into the template instead of its placeholder.
+  const inlined = {
+    ...action,
+    payload_template: '{"auth":"S3CRET","note":"{{ record.status }}"}'
+  }
+  const withSecret = {
+    id: 5,
+    name: 'Partner',
+    auth_config: JSON.stringify({ body_secrets: { token: 'S3CRET' } })
+  }
+  const run = (a: Record<string, unknown> = inlined) =>
+    runTransitionActions({
+      transition: { id: 't1', label: 'Submit', actions: JSON.stringify([a]) } as never,
+      instance: { collection: 'orders', item: 'o1' },
+      newStateObj: { key: 'submitted', label: 'Submitted' },
+      userId: null
+    })
+  const storedPayload = () =>
+    JSON.parse(String(inserts.find((i) => i.table === 'nivaro_erp_submissions')?.row.payload)) as {
+      body: Record<string, unknown> | null
+      secret_paths: string[]
+    }
+
+  it('an inlined secret value is stored as its placeholder, at a recorded secret path', async () => {
+    wire(withSecret)
+    await run()
+    // Sent as authored (the partner gets what the template says) …
+    const sent = vi.mocked(callExternalApi).mock.calls[0][1] as { body: Record<string, unknown> }
+    expect(sent.body.auth).toBe('S3CRET')
+    // … but never stored as the value.
+    const stored = storedPayload()
+    expect(JSON.stringify(stored)).not.toContain('S3CRET')
+    expect(stored.body).toEqual({ auth: REAL, note: 'open' })
+    expect(stored.secret_paths).toEqual(['/auth'])
+    // A resend substitutes it back exactly where the first send carried it.
+    const resent = substituteBodySecrets(
+      restrictPlaceholders(stored.body, stored.secret_paths),
+      { token: 'S3CRET' },
+      'Partner'
+    )
+    expect(resent).toEqual(sent.body)
+  })
+
+  it('a record field echoing a forged placeholder stays inert in the stored body', async () => {
+    wire(withSecret)
+    await run(action)
+    const stored = storedPayload()
+    expect(stored.secret_paths).toEqual(['/auth'])
+    expect(stored.body?.plain).toBe(`x ${NEUTRAL} y`)
+  })
+
+  it('an API without body secrets stores the body unchanged', async () => {
+    wire()
+    await run()
+    expect(storedPayload()).toEqual({
+      endpoint_path: '/orders',
+      body: { auth: 'S3CRET', note: 'open' },
+      secret_paths: []
+    })
+  })
+
+  it('secrets that cannot be read: no body is stored (never the value, never a resendable stand-in)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    wire({ id: 5, name: 'Partner', auth_config: '{"body_secrets":' })
+    await run()
+    const stored = storedPayload()
+    expect(stored.body).toBeNull()
+    expect(stored.secret_paths).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('the preview shows the scrubbed body, matching what was stored', async () => {
+    wire(withSecret)
+    const out = await previewErpActions({
+      transition: { id: 't1', label: 'Submit', actions: JSON.stringify([inlined]) },
+      instance: { collection: 'orders', item: 'o1' },
+      newStateObj: { key: 'submitted', label: 'Submitted' },
+      userId: null
+    })
+    expect(out[0].body).toEqual({ auth: REAL, note: 'open' })
   })
 })

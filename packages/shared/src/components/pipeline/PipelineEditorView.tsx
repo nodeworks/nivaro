@@ -4662,6 +4662,29 @@ type SplitConfig = {
   branch_state_objs: SplitStateLite[]
   join_state: string
   join_state_obj: SplitStateLite | null
+  /** The step the split starts from (state key); null = only an administrator may run it. */
+  from_state: string | null
+}
+
+/**
+ * Steps a split may start from: any non-terminal step that is not one of its
+ * branches (a finished record cannot split; a branch start cannot also be the
+ * step the record leaves).
+ */
+export function splitStartOptions(
+  states: Array<Pick<PipelineState, 'key' | 'label' | 'is_terminal'>>,
+  branchKeys: string[]
+): { value: string; label: string }[] {
+  return states
+    .filter((st) => !st.is_terminal && !branchKeys.includes(st.key))
+    .map((st) => ({ value: st.key, label: st.label }))
+}
+
+/** What the "Starts from" choice means for who may run the split. */
+export function splitStartNote(fromLabel: string | null): string {
+  return fromLabel
+    ? `Runs only while the record is in ${fromLabel}, by that step's owners or an administrator.`
+    : 'No starting step: only an administrator can run this split.'
 }
 
 function SplitStateChip({
@@ -4723,6 +4746,13 @@ function OwnerFallbackInput({ value, onCommit }: { value: string; onCommit: (v: 
   )
 }
 
+type SplitCreateBody = {
+  branch_states: string[]
+  join_state: string
+  label: string
+  from_state?: string
+}
+
 function SplitCreateForm({
   states,
   saving,
@@ -4731,17 +4761,20 @@ function SplitCreateForm({
 }: {
   states: PipelineState[]
   saving: boolean
-  onSave: (data: { branch_states: string[]; join_state: string; label: string }) => void
+  onSave: (data: SplitCreateBody) => void
   onCancel: () => void
 }) {
   const [label, setLabel] = useState('')
   const [branchKeys, setBranchKeys] = useState<string[]>([])
   const [joinKey, setJoinKey] = useState('')
+  const [fromKey, setFromKey] = useState('')
 
   const toggleBranch = (key: string) => {
     setBranchKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
     if (joinKey === key) setJoinKey('')
+    if (fromKey === key) setFromKey('')
   }
+  const fromLabel = fromKey ? (states.find((st) => st.key === fromKey)?.label ?? fromKey) : null
   const valid = branchKeys.length >= 2 && !!joinKey && !branchKeys.includes(joinKey)
 
   return (
@@ -4754,6 +4787,30 @@ function SplitCreateForm({
           placeholder='e.g. Finance + Engineering review in parallel'
           className='text-[13px] bg-white'
         />
+      </div>
+      <div className='space-y-1.5'>
+        <Label className='text-[12px]'>
+          Starts from
+          <span className='ml-1.5 font-normal text-slate-400'>
+            (the step the record must be in to split)
+          </span>
+        </Label>
+        <SimpleCombobox
+          value={fromKey}
+          onChange={setFromKey}
+          options={splitStartOptions(states, branchKeys)}
+          noneLabel='No starting step'
+          placeholder='No starting step'
+          className='max-w-xs'
+        />
+        <p
+          className={cn(
+            'text-[11px]',
+            fromKey ? 'text-slate-500' : 'text-amber-700 dark:text-amber-400'
+          )}
+        >
+          {splitStartNote(fromLabel)}
+        </p>
       </div>
       <div className='space-y-1.5'>
         <Label className='text-[12px]'>
@@ -4803,12 +4860,63 @@ function SplitCreateForm({
           className='text-[12px]'
           disabled={!valid || saving}
           onClick={() =>
-            onSave({ branch_states: branchKeys, join_state: joinKey, label: label.trim() })
+            onSave({
+              branch_states: branchKeys,
+              join_state: joinKey,
+              label: label.trim(),
+              ...(fromKey ? { from_state: fromKey } : {})
+            })
           }
         >
           {saving ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : 'Create Split'}
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** A saved split's "Starts from" step — shown and changeable in place. */
+function SplitStartRow({
+  split,
+  states,
+  saving,
+  onChange
+}: {
+  split: SplitConfig
+  states: PipelineState[]
+  saving: boolean
+  onChange: (from: string | null) => void
+}) {
+  const from = split.from_state ?? ''
+  const fromState = from ? states.find((st) => st.key === from) : undefined
+  return (
+    <div className='flex flex-wrap items-center gap-2'>
+      <span className='text-[11px] text-slate-500'>Starts from</span>
+      <SimpleCombobox
+        value={from}
+        onChange={(v) => {
+          if (v !== from) onChange(v || null)
+        }}
+        options={splitStartOptions(states, split.branch_states)}
+        noneLabel='No starting step'
+        placeholder='No starting step'
+        className='h-7 w-56'
+      />
+      {saving && <Loader2 className='h-3 w-3 animate-spin text-slate-400' />}
+      {from && !fromState ? (
+        <span className='text-[11px] text-red-600 dark:text-red-400'>
+          Step "{from}" no longer exists — no one can run this split until you pick another.
+        </span>
+      ) : (
+        <span
+          className={cn(
+            'text-[11px]',
+            from ? 'text-slate-400' : 'text-amber-700 dark:text-amber-400'
+          )}
+        >
+          {from ? 'Step owners or an administrator' : 'Administrators only'}
+        </span>
+      )}
     </div>
   )
 }
@@ -4836,7 +4944,7 @@ function ParallelBranchesCard({
   const invalidate = () => queryClient.invalidateQueries({ queryKey: splitsKey })
 
   const createSplit = useMutation({
-    mutationFn: (body: { branch_states: string[]; join_state: string; label: string }) =>
+    mutationFn: (body: SplitCreateBody) =>
       client.request(post(`/workflows/templates/${templateId}/splits`, body)),
     onSuccess: () => {
       invalidate()
@@ -4847,6 +4955,22 @@ function ParallelBranchesCard({
       const msg =
         (err as { response?: { error?: string } })?.response?.error ?? (err as Error)?.message
       toast.error(msg ?? 'Failed to create split')
+    }
+  })
+  // Sets / clears "Starts from" on a split already saved (older splits have none).
+  const setSplitFrom = useMutation({
+    mutationFn: ({ splitId, from }: { splitId: string; from: string | null }) =>
+      client.request(
+        patch(`/workflows/templates/${templateId}/splits/${splitId}`, { from_state: from })
+      ),
+    onSuccess: () => {
+      invalidate()
+      toast.success('Starting step saved')
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { error?: string } })?.response?.error ?? (err as Error)?.message
+      toast.error(msg ?? 'Failed to save the starting step')
     }
   })
   const deleteSplit = useMutation({
@@ -4874,7 +4998,9 @@ function ParallelBranchesCard({
           <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
             A split sends one record into several states at the same time — each branch keeps its
             own owners and SLA clock. When every branch reaches a terminal state, the record
-            auto-joins into the join state. Splits appear as a "Split" action on bound records.
+            auto-joins into the join state. Splits appear as a "Split" action on bound records while
+            the record is in the split's starting step; a split with no starting step can only be
+            run by an administrator.
           </span>
         </h2>
         {!adding && (
@@ -4910,6 +5036,12 @@ function ParallelBranchesCard({
         >
           <div className='min-w-0 flex-1 space-y-1.5'>
             <p className='text-[12px] font-medium text-slate-700'>{split.label}</p>
+            <SplitStartRow
+              split={split}
+              states={states}
+              saving={setSplitFrom.isPending && setSplitFrom.variables?.splitId === split.id}
+              onChange={(from) => setSplitFrom.mutate({ splitId: split.id, from })}
+            />
             <div className='flex flex-wrap items-center gap-1.5'>
               {split.branch_state_objs.map((st) => (
                 <SplitStateChip key={st.id} state={st} />

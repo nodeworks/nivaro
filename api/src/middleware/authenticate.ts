@@ -14,6 +14,7 @@ import { setTraceUser, span } from '../services/request-trace.js'
 import { callerBreakerCheck } from '../services/traffic-breaker.js'
 import { inflightAuth } from '../services/traffic-inflight.js'
 import type { Role, User } from '../types.js'
+import { settleWorkspaceHeader } from './workspace.js'
 
 export interface ApiKeyScope {
   collection: string
@@ -186,6 +187,9 @@ async function hydrateRole(
   if (opts?.touch !== false) touchLastAccess(String(user.id))
   req.userRole = role ?? null
   req.isAdmin = roleIsAdmin(role)
+  // An x-workspace header parked before sign-in is honoured only for a workspace the caller
+  // belongs to (middleware/workspace.ts).
+  settleWorkspaceHeader(req)
 }
 
 // ─── IPv4 CIDR matching ───────────────────────────────────────────────────────

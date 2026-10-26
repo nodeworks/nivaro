@@ -348,6 +348,14 @@ async function postInner(
   if (!room || (!message.trim() && attachments.length === 0)) {
     throw new ChatSendError(400, 'room and message are required')
   }
+  // Attach only files the sender can open: a stored id must never name someone
+  // else's file (file-access.ts — admins and the uploader pass).
+  if (attachments.length > 0 && actor.user && !actor.system) {
+    const { unreadableFileIds } = await import('./file-access.js')
+    const caller = { user: actor.user, isAdmin: !!actor.isAdmin, workspaceId: null }
+    if ((await unreadableFileIds(attachments, caller as never)).length > 0)
+      throw new ChatSendError(400, 'An attachment is a file you cannot open')
+  }
   const user = actor.user
   if (!actor.skipVisibility) {
     if (!user) throw new ChatSendError(403, 'That conversation is not available to you')

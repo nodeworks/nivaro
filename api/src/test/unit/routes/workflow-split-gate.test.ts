@@ -13,7 +13,16 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.user = { id: me.id, role: me.role }
     req.isAdmin = me.isAdmin
   }),
-  requireAdmin: vi.fn(async () => {})
+  requireAdmin: vi.fn(
+    async (
+      req: { user?: unknown; isAdmin?: boolean },
+      reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+    ) => {
+      req.user = { id: me.id, role: me.role }
+      req.isAdmin = me.isAdmin
+      if (!me.isAdmin) return reply.code(403).send({ error: 'Administrators only' })
+    }
+  )
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/chain-columns.js', () => ({ chainFields: vi.fn(async () => ({})) }))
@@ -78,7 +87,11 @@ const parent = {
  *  .first()) answers from the table's fixture. */
 function chain(rows: unknown[], inserts: unknown[]) {
   const c: Record<string, unknown> = {}
-  for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'select', 'update']) c[m] = () => c
+  for (const m of ['where', 'whereIn', 'whereNull', 'orderBy', 'select']) c[m] = () => c
+  c.update = (row: unknown) => {
+    inserts.push({ __update: row })
+    return c
+  }
   c.first = async () => rows[0]
   c.insert = async (row: unknown) => {
     inserts.push(row)
@@ -102,11 +115,21 @@ function installDb(fx: { instance?: unknown; transitions?: unknown[]; history?: 
   return inserts
 }
 
-async function post(url: string, payload: unknown) {
+async function send(method: 'POST' | 'PATCH' | 'GET', url: string, payload?: unknown) {
   const app = Fastify({ logger: false })
   app.decorate('io', {} as never)
   await app.register(workflowsRoutes)
-  return app.inject({ method: 'POST', url, payload: payload as object })
+  return app.inject({ method, url, payload: payload as object | undefined })
+}
+const post = (url: string, payload: unknown) => send('POST', url, payload)
+
+async function asAdmin<T>(run: () => Promise<T>): Promise<T> {
+  me.isAdmin = true
+  try {
+    return await run()
+  } finally {
+    me.isAdmin = false
+  }
 }
 
 afterEach(() => vi.clearAllMocks())
@@ -251,5 +274,67 @@ describe('POST /instance/:id/transition (branch)', () => {
       comment: 'done'
     })
     expect(ok.statusCode).toBe(200)
+  })
+})
+
+describe('PATCH /templates/:id/splits/:splitId (starting step)', () => {
+  const url = '/templates/tpl/splits/T-SPLIT'
+
+  it('is refused for a non-admin and writes nothing', async () => {
+    const writes = installDb({ transitions: [unboundSplitRow] })
+    const res = await send('PATCH', url, { from_state: 'started' })
+    expect(res.statusCode).toBe(403)
+    expect(writes).toHaveLength(0)
+  })
+
+  it('refuses an unknown step, and a body without from_state', async () => {
+    const writes = installDb({ transitions: [unboundSplitRow] })
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_workflow_states') return chain([], writes)
+      if (table === 'nivaro_workflow_transitions') return chain([unboundSplitRow], writes)
+      throw new Error(`unexpected table ${table}`)
+    }) as never)
+    const unknown = await asAdmin(() => send('PATCH', url, { from_state: 'nope' }))
+    expect(unknown.statusCode).toBe(400)
+    const missing = await asAdmin(() => send('PATCH', url, {}))
+    expect(missing.statusCode).toBe(400)
+    expect(writes).toHaveLength(0)
+  })
+
+  it('sets the starting step on an existing split, and clears it with null', async () => {
+    const writes = installDb({ transitions: [unboundSplitRow] })
+    const set = await asAdmin(() => send('PATCH', url, { from_state: 'started' }))
+    expect(set.statusCode).toBe(200)
+    const setLabel = (writes[0] as { __update: { group_label: string } }).__update.group_label
+    expect(JSON.parse(setLabel.slice('split:'.length))).toEqual({
+      branches: ['legal', 'finance'],
+      join: 'joined',
+      from: 'started'
+    })
+
+    const cleared = installDb({ transitions: [splitRow] })
+    const res = await asAdmin(() => send('PATCH', url, { from_state: null }))
+    expect(res.statusCode).toBe(200)
+    const label = (cleared[0] as { __update: { group_label: string } }).__update.group_label
+    expect(JSON.parse(label.slice('split:'.length))).not.toHaveProperty('from')
+  })
+})
+
+describe('GET /instance/:id/branches (split affordance)', () => {
+  const both = [splitRow, { ...unboundSplitRow, id: 'T-ADMIN-ONLY' }]
+  const ids = (res: { body: string }) =>
+    (JSON.parse(res.body).data.split_configs as Array<{ id: string }>).map((c) => c.id)
+
+  it('lists only the split that starts from the record step for a non-admin', async () => {
+    installDb({ transitions: both })
+    expect(ids(await send('GET', '/instance/inst-parent/branches'))).toEqual(['T-SPLIT'])
+    installDb({ transitions: both, instance: { ...parent, current_state: 'S-A' } })
+    expect(ids(await send('GET', '/instance/inst-parent/branches'))).toEqual([])
+  })
+
+  it('also lists a split with no starting step for an admin', async () => {
+    installDb({ transitions: both })
+    const res = await asAdmin(() => send('GET', '/instance/inst-parent/branches'))
+    expect(ids(res)).toEqual(['T-SPLIT', 'T-ADMIN-ONLY'])
   })
 })

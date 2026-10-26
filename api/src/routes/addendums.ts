@@ -502,6 +502,17 @@ export async function addendumsRoutes(app: FastifyInstance) {
       )
     }
 
+    // Attach only files the writer can open (file-access.ts — admins and the uploader pass).
+    if (Array.isArray(body.attachments) && body.attachments.length > 0) {
+      const { assertFileIdsReadable } = await import('../services/file-access.js')
+      try {
+        await assertFileIdsReadable('attachments', body.attachments.map(String).slice(0, 50), req)
+      } catch (err) {
+        const e = err as Error & { statusCode?: number; code?: string }
+        if (e.statusCode !== 400) throw err
+        return reply.code(400).send({ error: e.message, code: e.code, field: 'attachments' })
+      }
+    }
     const now = new Date()
     const [row] = await db('nivaro_addendums')
       .insert({

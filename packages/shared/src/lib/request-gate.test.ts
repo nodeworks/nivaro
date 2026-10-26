@@ -3,8 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   batchableRead,
   createGatedClient,
+  forgetSettledReads,
+  mayJoinInflight,
+  RECORD_JOIN_MS,
   releaseGatedReads,
   releaseGatedReadsOnSharedFetch,
+  SETTLED_READ_MS,
   withGetCoalescing
 } from './request-gate'
 
@@ -193,5 +197,124 @@ describe('createGatedClient shared-cache release', () => {
     listener!({ type: 'observerAdded', query: { state: { fetchStatus: 'fetching' } } })
     await held
     expect(calls).toEqual(['/collection-layouts/active'])
+  })
+})
+
+describe('withGetCoalescing in-flight joins (stale record after a save)', () => {
+  const get = (path: string) => ({ _method: 'GET', _path: path }) as Cmd
+
+  it('mayJoinInflight: same moment joins; a later record read or another write epoch does not', () => {
+    const rec = get('/items/workflows/1')
+    const meta = get('/collections/workflows')
+    expect(mayJoinInflight(rec, { at: 1000, epoch: 3 }, 1000 + RECORD_JOIN_MS - 1, 3)).toBe(true)
+    expect(mayJoinInflight(rec, { at: 1000, epoch: 3 }, 1000 + RECORD_JOIN_MS, 3)).toBe(false)
+    expect(mayJoinInflight(meta, { at: 1000, epoch: 3 }, 9000, 3)).toBe(true)
+    expect(mayJoinInflight(meta, { at: 1000, epoch: 3 }, 1000, 4)).toBe(false)
+  })
+
+  it('same-tick reads of one record still share one request', async () => {
+    const { client, calls } = fakeClient(() => ({ data: { id: 1, description: 'A' } }))
+    const c = withGetCoalescing(client)
+    const [a, b] = await Promise.all([
+      c.request(get('/items/workflows/1') as never),
+      c.request(get('/items/workflows/1') as never)
+    ])
+    expect(calls).toHaveLength(1)
+    expect(a).toEqual(b)
+  })
+
+  it('a read asked after a save never joins a read sent before it (refused join)', async () => {
+    let row = { id: 1, description: 'A' }
+    let release: (() => void) | null = null
+    const calls: Cmd[] = []
+    const client = {
+      request: vi.fn((cmd: Cmd) => {
+        calls.push(cmd)
+        if (cmd._method === 'PATCH') {
+          row = { ...row, ...(cmd._body as object) }
+          return Promise.resolve({ data: row })
+        }
+        const snapshot = { ...row }
+        // The first read is slow: it was sent before the save and answers the old row.
+        if (calls.filter((x) => x._method === 'GET').length === 1)
+          return new Promise((r) => {
+            release = () => r({ data: snapshot })
+          })
+        return Promise.resolve({ data: snapshot })
+      })
+    } as unknown as NivaroClient
+    const c = withGetCoalescing(client)
+    const early = c.request(get('/items/workflows/1') as never)
+    await c.request({
+      _method: 'PATCH',
+      _path: '/items/workflows/1',
+      _body: { description: 'A b3' }
+    } as never)
+    const after = c.request(get('/items/workflows/1') as never)
+    ;(release as unknown as () => void)()
+    expect(((await early) as { data: { description: string } }).data.description).toBe('A')
+    expect(((await after) as { data: { description: string } }).data.description).toBe('A b3')
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(2)
+  })
+
+  it('a record refetch asked later (live event, no local write) goes to the server', async () => {
+    vi.useFakeTimers()
+    try {
+      let n = 0
+      let release: (() => void) | null = null
+      const { client, calls } = fakeClient(() => {
+        n++
+        if (n === 1)
+          return new Promise((r) => {
+            release = () => r({ data: { id: 1, description: 'A' } })
+          })
+        return { data: { id: 1, description: 'A b3' } }
+      })
+      const c = withGetCoalescing(client)
+      const early = c.request(get('/items/workflows/1') as never)
+      vi.advanceTimersByTime(RECORD_JOIN_MS + 1)
+      const after = c.request(get('/items/workflows/1') as never)
+      ;(release as unknown as () => void)()
+      await early
+      expect(((await after) as { data: { description: string } }).data.description).toBe('A b3')
+      expect(calls).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('withGetCoalescing speed kept (no regression from the write epoch)', () => {
+  const get = (path: string) => ({ _method: 'GET', _path: path }) as Cmd
+
+  it('N identical reads fired together on a load collapse into ONE request (config and record)', async () => {
+    for (const path of ['/field-config/workflows', '/items/workflows/1', '/items/workflows']) {
+      const { client, calls } = fakeClient(() => ({ data: [{ id: 1 }] }))
+      const c = withGetCoalescing(client)
+      const all = await Promise.all(Array.from({ length: 8 }, () => c.request(get(path) as never)))
+      expect(calls).toHaveLength(1)
+      expect(new Set(all.map((a) => JSON.stringify(a))).size).toBe(1)
+    }
+  })
+
+  it('settled config reads are reused for SETTLED_READ_MS with no write, and a write ends it', async () => {
+    forgetSettledReads()
+    const { client, calls } = fakeClient(() => ({ data: [{ field: 'x' }] }))
+    const c = withGetCoalescing(client)
+    await c.request(get('/field-config/workflows') as never)
+    await c.request(get('/field-config/workflows') as never)
+    expect(calls).toHaveLength(1)
+    await c.request({ _method: 'PATCH', _path: '/field-config/workflows/x', _body: {} } as never)
+    await c.request(get('/field-config/workflows') as never)
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(2)
+    expect(SETTLED_READ_MS).toBe(3000)
+  })
+
+  it('a record write splits only reads straddling it: reads fired together after it still collapse', async () => {
+    const { client, calls } = fakeClient(() => ({ data: [] }))
+    const c = withGetCoalescing(client)
+    await c.request({ _method: 'PATCH', _path: '/items/vendors/9', _body: { a: 1 } } as never)
+    await Promise.all(Array.from({ length: 5 }, () => c.request(get('/items/zones') as never)))
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(1)
   })
 })

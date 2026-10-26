@@ -12,6 +12,23 @@ vi.mock('../../../services/socket-access.js', () => ({
     record.visible ? ids : []
   )
 }))
+// Write-time file check (army v3 round 2): the helper is unit-tested in
+// file-access.test.ts; here only that comments refuse what it refuses.
+const files = vi.hoisted(() => ({ refused: new Set<string>() }))
+vi.mock('../../../services/file-access.js', () => ({
+  assertFileIdsReadable: vi.fn(
+    async (field: string, value: unknown, req: { user: { id: string } }, previous?: unknown) => {
+      const fresh =
+        String(value).includes('F-SECRET') && !String(previous ?? '').includes('F-SECRET')
+      if (fresh && files.refused.has(req.user.id))
+        throw Object.assign(new Error('Text names a file you cannot open, so it cannot be saved'), {
+          statusCode: 400,
+          code: 'FILE_NOT_READABLE',
+          field
+        })
+    }
+  )
+}))
 vi.mock('../../../services/record-notes.js', () => ({ loadRecordNotes: vi.fn(async () => []) }))
 
 vi.mock('../../../config.js', () => ({
@@ -197,5 +214,45 @@ describe('comment history', () => {
     const a = await app('reader')
     const r = await a.inject({ method: 'GET', url: '/comments/related?collection=x&item=1' })
     expect(r.statusCode).toBe(200)
+  })
+})
+
+describe('comments only link files their writer can open', () => {
+  it('a writer naming a file they cannot read is refused on create and edit', async () => {
+    files.refused = new Set(['stranger', 'author'])
+    const a = await app('stranger')
+    const post = await a.inject({
+      method: 'POST',
+      url: '/comments',
+      payload: { collection: 'x', item: '1', text: 'see /api/files/F-SECRET' }
+    })
+    expect(post.statusCode).toBe(400)
+    expect(post.json()).toMatchObject({ code: 'FILE_NOT_READABLE', field: 'text' })
+    expect(tables.nivaro_comments).toHaveLength(1)
+    const b = await app('author')
+    const edit = await b.inject({
+      method: 'PATCH',
+      url: '/comments/c1',
+      payload: { text: 'now with F-SECRET' }
+    })
+    expect(edit.statusCode).toBe(400)
+    expect(tables.nivaro_comments[0].text).toBe('v0')
+  })
+
+  it('the uploader (or anyone who can read the file) passes', async () => {
+    files.refused = new Set()
+    const a = await app('author')
+    const post = await a.inject({
+      method: 'POST',
+      url: '/comments',
+      payload: { collection: 'x', item: '1', text: 'see /api/files/F-SECRET' }
+    })
+    expect(post.statusCode).toBeLessThan(300)
+    const edit = await a.inject({
+      method: 'PATCH',
+      url: '/comments/c1',
+      payload: { text: 'now with F-SECRET' }
+    })
+    expect(edit.statusCode).toBe(200)
   })
 })

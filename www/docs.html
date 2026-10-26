@@ -16927,60 +16927,29 @@ Enter                  Select highlighted result
 Escape                 Close palette
 Cmd+N                  Quick "Create in [collection]" (collection-filtered)</code></pre>
           <h3 class="doc-h3" id="global-search-api">API Reference</h3>
-          <pre class="doc-pre"><code>GET /api/global-search?q=acme&amp;limit=20
+          <pre class="doc-pre"><code>GET /api/global-search?q=acme
 
 // Response
 {
-  "items": [
-    {
-      "collection": "customers",
-      "id": "cust-123",
-      "label": "Acme Corp",
-      "highlight": "Acme Corp",
-      "displayField": "name",
-      "score": 0.95
-    },
-    {
-      "collection": "orders",
-      "id": "order-456",
-      "label": "Order #123456 for Acme",
-      "highlight": "Acme",
-      "displayField": "title",
-      "score": 0.87
-    }
-  ],
-  "pages": [
-    {
-      "type": "page",
-      "label": "SLA Rules",
-      "route": "/deadlines",
-      "category": "Monitoring",
-      "icon": "Clock"
-    },
-    {
-      "type": "page",
-      "label": "Workflows",
-      "route": "/workflows",
-      "category": "Automation",
-      "icon": "GitBranch"
-    }
-  ],
-  "actions": [
-    {
-      "type": "create",
-      "label": "Create customer",
-      "collection": "customers",
-      "icon": "Plus"
-    }
-  ]
+  "data": {
+    "records": [
+      { "collection": "customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
+    ],
+    "people": [
+      { "id": "9F1C…", "first_name": "Ana", "last_name": "Acme", "email": "ana@example.com", "title": "Buyer", "department": "Procurement" }
+    ],
+    "pages": [{ "label": "SLA Rules", "path": "/deadlines" }],
+    "actions": [{ "label": "New customer", "path": "/collections/customers/new" }],
+    "semantic": []
+  }
 }</code></pre>
           <h3 class="doc-h3" id="global-search-behavior">Search Behavior</h3>
           <ul class="doc-ul">
-            <li>Item results respect RBAC — only collections where user has read action are included</li>
-            <li>Text fields are searched by fuzzy match; display field (collection label setting) is highlighted in results</li>
-            <li>Page results index all admin routes (Collections, Workflows, Pipelines, etc.)</li>
-            <li>Actions include quick-create for each accessible collection</li>
-            <li>Score algorithm: partial matches score lower than prefix/exact matches; recent items boosted</li>
+            <li>Record results are read as you: only collections you can read, and only rows your row filters and User Scopes let you open</li>
+            <li>Ranking: an exact match on a searched column first, then a prefix match, then the newest</li>
+            <li>People: up to 6 matches on first name, last name, email or job title, opening the person’s profile. Non-administrators see only directory details and never suspended, redacted, placeholder or service accounts; administrators also find suspended and service accounts, marked with a chip</li>
+            <li>Page results index the admin routes (Collections, Workflows, Pipelines, etc.)</li>
+            <li>Actions include quick-create for each collection you can create in</li>
           </ul>
           <h3 class="doc-h3" id="global-search-integration">Integration</h3>
           <p class="doc-p">Global search is built into AppLayout header and available on every admin page. No SDK method needed — it is UI-only and uses the same backend search as collection browser keyword filtering.</p>

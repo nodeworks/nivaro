@@ -87,4 +87,57 @@ describe('aggregate field guard', () => {
       assertFilterReadable(user, 'employees', [['manager', 'name']], new Set(), links)
     ).rejects.toThrow(/scopes/)
   })
+
+  describe('to-many hops (toMany: the aggregate tool, army v3 round 2)', () => {
+    const zoneLinks = async (c: string) =>
+      c === 'workflows'
+        ? {
+            m2o: [{ field: 'vendor', collection: 'vendors' }],
+            aliases: [
+              { field: 'divisions', collection: 'workflows_divisions', junction: 'divisions_id' },
+              { field: 'lines', collection: 'workflow_lines', junction: null }
+            ]
+          }
+        : c === 'workflows_divisions'
+          ? { m2o: [{ field: 'divisions_id', collection: 'divisions' }] }
+          : { m2o: [] }
+    const walk = (paths: string[][], toMany = true) =>
+      assertFilterReadable(user, 'workflows', paths, new Set(), zoneLinks, { toMany })
+
+    it('allows M2M (junction → target), O2M and bare-alias paths the caller may read', async () => {
+      await expect(
+        walk([['divisions', 'short_name'], ['divisions'], ['lines', 'amount']])
+      ).resolves.toBeUndefined()
+    })
+
+    it('without toMany a to-many hop is still refused', async () => {
+      await expect(walk([['divisions', 'short_name']], false)).rejects.toThrow(
+        /only links to a single record/
+      )
+    })
+
+    it('refuses when the junction, the target or the child is not readable', async () => {
+      perms.read.workflows_divisions = false
+      await expect(walk([['divisions', 'short_name']])).rejects.toThrow(/workflows_divisions/)
+      // A bare alias leaf reads the junction too — refused whatever toMany says.
+      await expect(walk([['divisions']], false)).rejects.toThrow(/workflows_divisions/)
+      perms.read.workflows_divisions = true
+      perms.fields.divisions = ['id', 'name']
+      await expect(walk([['divisions', 'short_name']])).rejects.toThrow(/short_name/)
+      perms.fields.workflow_lines = ['id']
+      await expect(walk([['lines', 'amount']])).rejects.toThrow(/amount/)
+    })
+
+    it('refuses a to-many hop into a row-filtered or scoped collection', async () => {
+      perms.scoped.divisions = true
+      await expect(walk([['divisions', 'short_name']])).rejects.toThrow(/scopes/)
+      perms.scoped.divisions = false
+      perms.rowFilter.workflows_divisions = [{}]
+      await expect(walk([['divisions']])).rejects.toThrow(/row-filtered/)
+    })
+
+    it('refuses a path through something that is not a link', async () => {
+      await expect(walk([['is_on_hold', 'x']])).rejects.toThrow(/not a link/)
+    })
+  })
 })

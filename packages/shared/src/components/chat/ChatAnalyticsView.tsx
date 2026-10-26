@@ -1087,7 +1087,7 @@ function MessageDetailPanel({
                   {data.attachments.map((f) => (
                     <li key={f.id}>
                       <a
-                        href={`${apiBase}/files/${f.id}?download=1`}
+                        href={`${apiBase}/files/${f.id}?download=1&chat_message=${data.message.id}`}
                         className='inline-flex items-center gap-1 hover:underline'
                         target='_blank'
                         rel='noreferrer'
@@ -1189,7 +1189,7 @@ function MessageDetailPanel({
                           {x.attachments.map((f) => (
                             <li key={f.id}>
                               <a
-                                href={`${apiBase}/files/${f.id}?download=1`}
+                                href={`${apiBase}/files/${f.id}?download=1&chat_message=${data.message.id}`}
                                 className='inline-flex items-center gap-1 hover:underline'
                                 target='_blank'
                                 rel='noreferrer'
