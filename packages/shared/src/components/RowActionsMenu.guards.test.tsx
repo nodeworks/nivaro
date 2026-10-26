@@ -60,7 +60,11 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-async function openMenu(record: Record<string, unknown> | null, row?: Record<string, unknown>) {
+async function openMenu(
+  record: Record<string, unknown> | null,
+  row?: Record<string, unknown>,
+  disabled = false
+) {
   const { client, calls } = makeClient(record)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const host = document.createElement('div')
@@ -79,6 +83,7 @@ async function openMenu(record: Record<string, unknown> | null, row?: Record<str
               urlFor={() => '#'}
               onDeleted={() => {}}
               row={row}
+              disabled={disabled}
             />
           </ItemEditAuthContext.Provider>
         </NivaroProvider>
@@ -116,5 +121,13 @@ describe('RowActionsMenu — registry actions follow the record', () => {
   it('a record the person cannot read: both show and the server decides', async () => {
     const { shown } = await openMenu(null)
     expect(shown.sort()).toEqual(['on-hold', 'remove-hold'])
+  })
+
+  it('bulk mode on: the row menu is disabled and never opens', async () => {
+    const { shown, calls } = await openMenu({ is_on_hold: true }, undefined, true)
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Actions for 5"]')
+    expect(trigger?.disabled).toBe(true)
+    expect(shown).toEqual([])
+    expect(calls.some((c) => c._path === '/bulk-actions/available')).toBe(false)
   })
 })

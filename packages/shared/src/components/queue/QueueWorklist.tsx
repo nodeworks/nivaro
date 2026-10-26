@@ -24,6 +24,7 @@ import {
   Flame,
   GripVertical,
   Inbox,
+  ListChecks,
   Loader2,
   Pin,
   Play,
@@ -2347,6 +2348,21 @@ export function QueueWorklist({
 
   // ── Bulk actions ──
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  // Selecting rows is an explicit mode, as on the CBV (Rob 2026-10-26): off =
+  // no checkboxes and no bulk bar; on = both, and each row's own Actions menu
+  // is disabled. Leaving it clears the selection.
+  const [bulkMode, setBulkMode] = useState(false)
+  const toggleBulkMode = () => {
+    if (bulkMode) setSelectedIds([])
+    setBulkMode(!bulkMode)
+  }
+  // Checkboxes live in the table view only: leaving it leaves bulk mode.
+  useEffect(() => {
+    if (view !== 'table' && bulkMode) {
+      setBulkMode(false)
+      setSelectedIds([])
+    }
+  }, [view, bulkMode])
   useBulkProgressFeed()
   selectedCountRef.current = selectedIds.length
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -2954,6 +2970,7 @@ export function QueueWorklist({
               void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
             }
             bulkEnabledKeys={displayConfig?.bulk_action_keys ?? null}
+            disabled={bulkMode}
           />
         </span>
       )
@@ -3766,6 +3783,27 @@ export function QueueWorklist({
                 </PopoverContent>
               </Popover>
             )}
+            {view === 'table' && bulkActionsEnabled && (
+              <button
+                type='button'
+                onClick={toggleBulkMode}
+                aria-pressed={bulkMode}
+                data-queue-bulk-mode={bulkMode ? 'on' : 'off'}
+                data-tip={
+                  bulkMode
+                    ? 'Leave bulk mode — clears the selection and turns row actions back on'
+                    : 'Select rows to act on several at once'
+                }
+                className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium shadow-sm ${
+                  bulkMode
+                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
+                    : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:bg-card dark:text-slate-400 dark:hover:bg-muted'
+                }`}
+              >
+                <ListChecks className='h-3.5 w-3.5' />
+                {bulkMode ? 'Done' : 'Bulk select'}
+              </button>
+            )}
             {view === 'table' && (
               <button
                 type='button'
@@ -4471,8 +4509,8 @@ export function QueueWorklist({
                   rowGroups={rowGroups ?? undefined}
                   collapsedGroups={collapsedGroups}
                   onToggleGroup={toggleGroup}
-                  selectedIds={bulkActionsEnabled ? selectedIds : undefined}
-                  onSelectionChange={bulkActionsEnabled ? setSelectedIds : undefined}
+                  selectedIds={bulkActionsEnabled && bulkMode ? selectedIds : undefined}
+                  onSelectionChange={bulkActionsEnabled && bulkMode ? setSelectedIds : undefined}
                   hideFilterRow
                   nowrapCells
                   columnPins={effectivePins}
@@ -4528,7 +4566,7 @@ export function QueueWorklist({
         )}
       </div>
 
-      {bulkActionsEnabled && (
+      {bulkActionsEnabled && bulkMode && (
         <QueueBulkBar
           count={selectedIds.length}
           claimsEnabled={claimsEnabled}

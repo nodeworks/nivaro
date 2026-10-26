@@ -14,6 +14,7 @@ import {
   ChevronsRight,
   FileDiff,
   FileText,
+  ListChecks,
   Loader2,
   Map as MapIcon,
   Network,
@@ -733,7 +734,8 @@ export function RowActionsMenu({
   onDeleted,
   onAfterTransition,
   row,
-  bulkEnabledKeys
+  bulkEnabledKeys,
+  disabled = false
 }: {
   collection: string
   id: string | number
@@ -754,6 +756,8 @@ export function RowActionsMenu({
   /** Surface allow-list for registry actions (browser_config.bulk_actions /
    *  display_config.bulk_action_keys); null = all. */
   bulkEnabledKeys?: string[] | null
+  /** Bulk mode is on: the selection acts, so the row's own menu is shut. */
+  disabled?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -765,6 +769,10 @@ export function RowActionsMenu({
   // Delete is offered only to people whose role may delete here (same answer
   // and cache as the profile's "What can I access?"); the server still judges
   // the record itself.
+  // Bulk mode turned on while the menu was open: shut it.
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
   const { data: myPermissions } = useQuery<MyPermissions>({
     queryKey: ['my-permissions'],
     queryFn: () =>
@@ -1105,13 +1113,15 @@ export function RowActionsMenu({
       <button
         ref={btnRef}
         type='button'
+        disabled={disabled}
         onClick={() => {
           const r = btnRef.current?.getBoundingClientRect()
           if (r) setPos({ x: r.right - 176, y: r.bottom + 4 })
           setOpen((o) => !o)
         }}
         aria-label={`Actions for ${id}`}
-        className='inline-flex h-6 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-slate-100'
+        data-tip={disabled ? 'Turn off bulk mode to use a row’s own actions' : undefined}
+        className='inline-flex h-6 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-slate-100 dark:disabled:hover:border-slate-700 dark:disabled:hover:text-slate-300'
       >
         Actions
         <ChevronDown aria-hidden className='h-3 w-3 text-slate-400' />
@@ -4378,6 +4388,15 @@ export function CollectionBrowserView({
   }, [meta])
   const enableCheckboxes = bc.checkbox_selection !== false
   const enableActions = bc.show_actions !== false
+  // Selecting rows is an explicit mode (Rob 2026-10-26). Off: no checkboxes
+  // (the column keeps each row's live marks). On: checkboxes, select-all and
+  // the bulk bar, and each row's own Actions menu is disabled so a one-row
+  // action never runs beside a selection. Leaving it clears the selection.
+  const [bulkMode, setBulkMode] = useState(false)
+  const toggleBulkMode = () => {
+    if (bulkMode) setSelectedIds([])
+    setBulkMode(!bulkMode)
+  }
   const canCreate = showCreate && bc.allow_create !== false
   // Layout choices for the New-item button (slug-opt-in, same rules as the
   // classic admin browser) — plain button when none exist.
@@ -7116,6 +7135,27 @@ export function CollectionBrowserView({
             </div>
           )}
         </div>
+        {enableCheckboxes && (
+          <button
+            type='button'
+            onClick={toggleBulkMode}
+            aria-pressed={bulkMode}
+            data-cbv-bulk-mode={bulkMode ? 'on' : 'off'}
+            data-tip={
+              bulkMode
+                ? 'Leave bulk mode — clears the selection and turns row actions back on'
+                : 'Select rows to act on several at once'
+            }
+            className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${
+              bulkMode
+                ? 'border-nvr-cyan bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800'
+            }`}
+          >
+            <ListChecks className='h-3.5 w-3.5' />
+            {bulkMode ? 'Done' : 'Bulk select'}
+          </button>
+        )}
         <button
           type='button'
           onClick={toggleDensity}
@@ -8226,12 +8266,14 @@ export function CollectionBrowserView({
                           unseen mark, so the checkboxes stack in one column. */}
                         <span className='flex items-center gap-1'>
                           <UnseenDot change={null} />
-                          <input
-                            type='checkbox'
-                            checked={allSelected}
-                            onChange={toggleAll}
-                            aria-label='Select all'
-                          />
+                          {bulkMode && (
+                            <input
+                              type='checkbox'
+                              checked={allSelected}
+                              onChange={toggleAll}
+                              aria-label='Select all'
+                            />
+                          )}
                         </span>
                       </th>
                     )}
@@ -8712,12 +8754,14 @@ export function CollectionBrowserView({
                                   <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
                                 )}
                                 <BulkRowMark rowId={id} />
-                                <input
-                                  type='checkbox'
-                                  checked={isSelected}
-                                  onChange={() => toggleRow(id)}
-                                  aria-label={`Select ${id}`}
-                                />
+                                {bulkMode && (
+                                  <input
+                                    type='checkbox'
+                                    checked={isSelected}
+                                    onChange={() => toggleRow(id)}
+                                    aria-label={`Select ${id}`}
+                                  />
+                                )}
                               </span>
                             </td>
                           )}
@@ -8945,6 +8989,7 @@ export function CollectionBrowserView({
                                     onDeleted={() => deleteRow.mutate(id)}
                                     row={row}
                                     bulkEnabledKeys={bc.bulk_actions ?? null}
+                                    disabled={bulkMode}
                                   />
                                 </td>
                               )
@@ -9257,6 +9302,7 @@ export function CollectionBrowserView({
       {/* Select-all-matching strip (#77): the whole page is checked and more
           rows match the filter — offer the full set. */}
       {enableCheckboxes &&
+        bulkMode &&
         allSelected &&
         !groupBy &&
         total > rows.length &&
@@ -9281,7 +9327,7 @@ export function CollectionBrowserView({
         )}
 
       {/* Bulk bar */}
-      {enableCheckboxes && selectedIds.length > 0 && (
+      {enableCheckboxes && bulkMode && selectedIds.length > 0 && (
         <BulkBar
           collection={collection}
           selectedIds={selectedIds}
