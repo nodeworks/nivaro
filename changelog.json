@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-10-26T14:46:25.945Z",
+  "generated_at": "2026-10-26T17:15:56.539Z",
   "releases": [
+    {
+      "version": "0.3.32",
+      "tag": "v0.3.32",
+      "date": "2026-10-26T13:15:42-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "queues",
+              "text": "keep materialized worklists safe to turn on",
+              "hash": "67b3ee0ce"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.access.readFilter — role read access for raw-SQL read models",
+              "hash": "19906531d"
+            },
+            {
+              "section": "Added",
+              "scope": "extensions",
+              "text": "ctx.pipelines.ownedItemIds — records whose current step a person owns",
+              "hash": "c208c96ed"
+            },
+            {
+              "section": "Added",
+              "scope": "record-header",
+              "text": "pack folded rows first-fit and always show owners",
+              "hash": "7fc226efd"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "queues",
+              "text": "share concurrent identical worklist reads per person",
+              "hash": "392ac17f8"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.31",
       "tag": "v0.3.31",
-      "date": "2026-10-26T10:46:08-04:00",
+      "date": "2026-10-26T10:46:26-04:00",
       "sections": [
         {
           "label": "Added",
