@@ -255,8 +255,8 @@ async function roomPlace(room: string, record: RoomRecord | null): Promise<strin
   if (parsed.kind === 'dm') return 'a direct message'
   if (parsed.kind === 'entity') return record?.label ?? parsed.token ?? room
   if (parsed.kind === 'channel') {
-    const { channels } = await import('./chat.js')
-    const ch = (await channels().catch(() => null))?.get(parsed.channelKey ?? '')
+    const { channelByKey } = await import('./chat.js')
+    const ch = await channelByKey(parsed.channelKey ?? '').catch(() => undefined)
     if (ch?.is_direct) return 'a group conversation'
     return `#${ch?.name ?? parsed.channelKey}`
   }

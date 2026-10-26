@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { channels, parseRoom } from './chat.js'
+import { channelByKey, channels, parseRoom } from './chat.js'
 
 /**
  * Huddle sessions (#2849) — what the admin "Huddles" tab in Chat Analytics reads.
@@ -241,7 +241,7 @@ export async function defaultKindOf(room: string): Promise<HuddleKind> {
   if (p.kind === 'dm') return 'dm'
   if (p.kind === 'channel') {
     try {
-      return (await channels()).get(p.channelKey ?? '')?.is_direct ? 'group' : 'channel'
+      return (await channelByKey(p.channelKey ?? ''))?.is_direct ? 'group' : 'channel'
     } catch {
       return 'channel'
     }

@@ -1,6 +1,6 @@
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
-import { channels, parseRoom, type RoomVisibilityCache } from './chat.js'
+import { channelByKey, parseRoom, type RoomVisibilityCache } from './chat.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -45,7 +45,7 @@ export async function defaultLabelOf(room: string): Promise<string> {
   if (p.kind === 'global') return 'General'
   if (p.kind === 'channel') {
     try {
-      return (await channels()).get(p.channelKey ?? '')?.name ?? room
+      return (await channelByKey(p.channelKey ?? ''))?.name ?? room
     } catch {
       return room
     }

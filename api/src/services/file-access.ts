@@ -326,11 +326,11 @@ async function countedAttributions(files: FileRow[]): Promise<{
 
 /** A DM or a private channel (incl. group DMs): rooms admin access does not open. */
 async function isPrivateRoom(room: string): Promise<boolean> {
-  const { parseRoom, channels } = await import('./chat.js')
+  const { parseRoom, channelByKey } = await import('./chat.js')
   const parsed = parseRoom(room)
   if (parsed.kind === 'dm') return true
   if (parsed.kind !== 'channel') return false
-  const channel = (await channels().catch(() => null))?.get(parsed.channelKey ?? '')
+  const channel = await channelByKey(parsed.channelKey ?? '').catch(() => undefined)
   return !channel || channel.visibility === 'private' || !!channel.is_direct
 }
 

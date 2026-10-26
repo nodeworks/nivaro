@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
-import { canSeeRoom, channels } from '../services/chat.js'
+import { canSeeRoom, channelByKey, channels, findChannelRow } from '../services/chat.js'
 import {
   answerArchiveSuggestion,
   archiveOverview,
@@ -179,8 +179,10 @@ export function registerChatExtras(app: FastifyInstance): void {
 
   // ── Idle channel archive suggestions (#2485) ─────────────────────────────
 
+  /** A channel by id or key — read from the database, so one made on another replica is found. */
   async function channelById(id: string) {
-    return [...(await channels()).values()].find((c) => String(c.id) === String(id)) ?? null
+    const row = await findChannelRow(id)
+    return row ? ((await channelByKey(String(row.key))) ?? null) : null
   }
   const ownsOrAdmin = (
     ch: { created_by: string | null },

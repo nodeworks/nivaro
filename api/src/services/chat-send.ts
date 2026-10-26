@@ -8,7 +8,7 @@ import { logActivity } from './activity.js'
 import { linkTo } from './app-links.js'
 import {
   canSeeRoom,
-  channels,
+  channelByKey,
   generalChannel,
   type MentionPolicy,
   mayBroadcastMention,
@@ -304,7 +304,7 @@ async function announceRefusal(
   const ch = (
     parsedRoom.kind === 'global'
       ? await generalChannel()
-      : (await channels()).get(parsedRoom.channelKey ?? '')
+      : await channelByKey(parsedRoom.channelKey ?? '')
   ) as (Record<string, unknown> & { created_by?: string | null }) | undefined
   if (!ch?.announce) return null
   const owner = String(ch.created_by ?? '').toUpperCase() === String(senderId).toUpperCase()
@@ -641,7 +641,7 @@ async function fanOut(
 
   // ── Group DMs: urgent reaches every member
   if (parsedRoom.kind === 'channel' && row.urgent) {
-    const ch = (await channels()).get(parsedRoom.channelKey ?? '')
+    const ch = await channelByKey(parsedRoom.channelKey ?? '')
     if (ch?.is_direct) {
       const members = (await db('nivaro_chat_memberships')
         .where({ room })

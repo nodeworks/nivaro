@@ -34,7 +34,7 @@ const clean = (v: unknown, cap: number): string | null => {
  * `includeOps` (an admin-only ops room, where every reader may see them).
  */
 export async function channelFacts(room: string, includeOps: boolean): Promise<ChannelFacts> {
-  const { channels, generalChannel, parseRoom } = await import('./chat.js')
+  const { channelByKey, generalChannel, parseRoom } = await import('./chat.js')
   const parsed = parseRoom(room)
   let name: string | null = null
   let topic: string | null = null
@@ -43,7 +43,7 @@ export async function channelFacts(room: string, includeOps: boolean): Promise<C
     const ch =
       parsed.kind === 'global'
         ? await generalChannel().catch(() => null)
-        : ((await channels().catch(() => null))?.get(parsed.channelKey ?? '') ?? null)
+        : ((await channelByKey(parsed.channelKey ?? '').catch(() => undefined)) ?? null)
     // A group DM is a conversation, not a channel with a purpose.
     if (ch && !ch.is_direct) {
       name = clean(ch.name, 80)

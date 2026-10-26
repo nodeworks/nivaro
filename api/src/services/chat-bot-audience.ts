@@ -78,8 +78,8 @@ export interface AudienceDeps {
 
 const audienceDb: AudienceDeps = {
   async channel(key) {
-    const { channels } = await import('./chat.js')
-    const ch = (await channels()).get(key)
+    const { channelByKey } = await import('./chat.js')
+    const ch = await channelByKey(key)
     if (!ch || ch.is_archived) return null
     return { visibility: ch.visibility, role: ch.role ?? null }
   },

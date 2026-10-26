@@ -371,8 +371,8 @@ export async function directMembersOf(room: string): Promise<string[] | null> {
   const parsed = parseRoom(room)
   if (parsed.kind === 'dm') return parsed.participants ?? []
   if (parsed.kind !== 'channel') return null
-  const { channels } = await import('./chat.js')
-  const ch = (await channels()).get(parsed.channelKey ?? '')
+  const { channelByKey } = await import('./chat.js')
+  const ch = await channelByKey(parsed.channelKey ?? '')
   if (!ch?.is_direct) return null
   const { db } = await import('../db/index.js')
   const ids = (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]

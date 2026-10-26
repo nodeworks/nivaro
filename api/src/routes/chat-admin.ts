@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { channels, parseRoom } from '../services/chat.js'
+import { channels, isIntId, parseRoom } from '../services/chat.js'
 import { loadChatAnalytics } from '../services/chat-analytics.js'
 import { type HuddleRedis, huddlePeers } from '../services/huddle.js'
 import { loadHuddleAnalytics, type SessionRedis } from '../services/huddle-sessions.js'
@@ -338,6 +338,7 @@ export async function chatAdminRoutes(app: FastifyInstance) {
 
   // ── One message, fully ───────────────────────────────────────────────────
   app.get<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
+    if (!isIntId(req.params.id)) return reply.code(404).send({ error: 'Message not found' })
     const id = Number(req.params.id)
     const msg = (await db('chat_messages').where({ id }).first()) as
       | Record<string, unknown>
