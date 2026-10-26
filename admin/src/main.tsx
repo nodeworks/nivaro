@@ -1,4 +1,6 @@
-// First: every later import may create an SDK client over window.fetch (#2840).
+// First: every later import may create an SDK client over window.fetch — the View-as bearer
+// (#640) and browser chaos (#2840) must both wrap it before then.
+import './lib/masquerade-boot'
 import './lib/client-chaos-boot'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import React, { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -9,13 +11,11 @@ import './globals.css'
 import { disableRecordOutbox, installStaleChunkRecovery } from '@nivaro/shared'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
-import { captureMasqueradeFromHash, installMasqueradeFetch, readMasquerade } from './lib/masquerade'
+import { readMasquerade } from './lib/masquerade'
 import { installPageContextFetch } from './lib/page-context'
 
-// A "View as" tab (#640) reads its token before anything fetches.
-captureMasqueradeFromHash()
-installMasqueradeFetch()
-// …and never queues an offline save under the person it is viewing as (#1678):
+// A "View as" tab (#640; its token is read in lib/masquerade-boot.ts) never queues an
+// offline save under the person it is viewing as (#1678):
 // a failed save there shows the normal error.
 if (readMasquerade()) disableRecordOutbox()
 // A tab opened before a deploy asks for the previous build's screen files, which the new

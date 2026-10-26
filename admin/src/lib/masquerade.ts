@@ -13,109 +13,14 @@
  */
 
 import { clearRecordOutboxFor } from '@nivaro/shared'
+import { MASQUERADE_KEY as KEY, readMasquerade } from './masquerade-core'
 
-const KEY = 'nvr_masq'
-
-export interface MasqueradeTab {
-  token: string
-  name: string
-  user_id: string
-}
-
-export function readMasquerade(): MasqueradeTab | null {
-  try {
-    const raw = sessionStorage.getItem(KEY)
-    if (!raw) return null
-    const v = JSON.parse(raw) as MasqueradeTab
-    return v?.token?.startsWith('nvm_') ? v : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * A popped-out record (#2131) opened from a "View as" tab is that same
- * person: browsers copy the opener's session storage into a window it opens,
- * and where one does not, the opener (same origin only) still has the token.
- * Only a pop-out adopts it — any other window opened from a View-as tab stays
- * the admin.
- */
-function adoptOpenerMasquerade(): void {
-  try {
-    if (readMasquerade()) return
-    const isPopout =
-      new URLSearchParams(window.location.search).get('popout') === '1' ||
-      window.name.startsWith('nvr-record:')
-    if (!isPopout || !window.opener) return
-    const raw = (window.opener as Window).sessionStorage.getItem(KEY)
-    if (raw) sessionStorage.setItem(KEY, raw)
-  } catch {
-    /* cross-origin opener or blocked storage: the window opens as the cookie session */
-  }
-}
-
-/** Run once at boot, before anything fetches. */
-export function captureMasqueradeFromHash(): void {
-  if (typeof window === 'undefined') return
-  adoptOpenerMasquerade()
-  const hash = window.location.hash.replace(/^#/, '')
-  if (!hash.includes('masq=')) return
-  const params = new URLSearchParams(hash)
-  const token = params.get('masq')
-  if (token?.startsWith('nvm_')) {
-    try {
-      sessionStorage.setItem(
-        KEY,
-        JSON.stringify({
-          token,
-          name: params.get('name') ?? '',
-          user_id: params.get('uid') ?? ''
-        } satisfies MasqueradeTab)
-      )
-    } catch {
-      /* private mode: the tab simply opens as the admin */
-    }
-  }
-  window.history.replaceState(
-    window.history.state,
-    '',
-    `${window.location.pathname}${window.location.search}`
-  )
-}
-
-function sameOriginApi(input: RequestInfo | URL): boolean {
-  try {
-    const url = new URL(
-      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-      window.location.origin
-    )
-    return (
-      url.origin === window.location.origin && /^\/(api|graphql|files)(\/|$)/.test(url.pathname)
-    )
-  } catch {
-    return false
-  }
-}
-
-/**
- * Every fetch() this tab makes to its own API carries the masquerade bearer —
- * the SDK clients, the widget renderers and raw fetches alike. A request that
- * already names an Authorization header (the Playground's own token) is left
- * alone. axios adds it in lib/api.ts.
- */
-export function installMasqueradeFetch(): void {
-  const m = readMasquerade()
-  if (!m || typeof window === 'undefined') return
-  const original = window.fetch.bind(window)
-  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    if (!sameOriginApi(input)) return original(input, init)
-    const headers = new Headers(
-      init?.headers ?? (input instanceof Request ? input.headers : undefined)
-    )
-    if (!headers.has('authorization')) headers.set('authorization', `Bearer ${m.token}`)
-    return original(input, { ...init, headers })
-  }
-}
+export {
+  captureMasqueradeFromHash,
+  installMasqueradeFetch,
+  type MasqueradeTab,
+  readMasquerade
+} from './masquerade-core'
 
 /** Revoke the token and leave: close the tab, or land back as the admin. */
 export async function stopMasquerade(): Promise<void> {
