@@ -7,13 +7,16 @@ import { logActivity } from '../services/activity.js'
 import {
   type ChatChannel,
   canSeeRoom,
+  channelByKey,
   channelLookPatch,
-  channels,
+  chatParamRefusal,
   cleanChannelLinks,
   clearChatCaches,
+  findChannelRow,
   GENERAL_CHANNEL_ID,
   GLOBAL_ROOM,
   generalChannel,
+  isUuidLike,
   listDirectory,
   listRooms,
   MENTION_POLICIES,
@@ -43,6 +46,7 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { embeddingProvider } from '../services/embeddings.js'
 import { mcpAppLabel } from '../services/mcp-config.js'
 import {
   loadVisibleMessage,
@@ -66,6 +70,12 @@ import { registerChatExtras } from './chat-extras.js'
 
 export async function chatRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+  // A malformed `:id` / `:userId` answers 404 here — never a database conversion error (500).
+  // `/channels/:id` takes a channel id or key (channelTarget), `/bot/streams/:id` a stream id.
+  app.addHook('preHandler', async (req, reply) => {
+    const refusal = chatParamRefusal(req.routeOptions.url ?? '', req.params)
+    if (refusal) return reply.code(404).send({ error: refusal })
+  })
 
   const forbidden = { error: 'That conversation is not available to you' }
 
@@ -539,7 +549,7 @@ export async function chatRoutes(app: FastifyInstance) {
       item: String(msg.id),
       comment: `room ${String(msg.room)}`
     })
-    emitRoomTouch(String(msg.room))
+    emitPreviewChange(String(msg.room))
     return { data: { id: msg.id, message: text } }
   })
 
@@ -570,7 +580,7 @@ export async function chatRoutes(app: FastifyInstance) {
       item: String(msg.id),
       comment: `room ${String(msg.room)}${own ? '' : ` — sender ${String(msg.sender)}`}`
     })
-    emitRoomTouch(String(msg.room))
+    emitPreviewChange(String(msg.room))
     return { data: { deleted: true } }
   })
 
@@ -646,7 +656,12 @@ export async function chatRoutes(app: FastifyInstance) {
     // Only for a plain text query — a sender/date/attachment filter narrows by
     // fact, and meaning hits would not honour it.
     const plain = !q.sender && !q.from && !q.to && !q.has_attachment && !q.mentions_me
+    // Which matcher answered the meaning step: 'words' = the local hash embedding (no embed model
+    // configured — Settings → AI Features → Model per feature), which only finds shared words.
+    let meaning: 'model' | 'words' | null = null
     if (term.length >= 3 && plain && q.meaning !== '0') {
+      const provider = await embeddingProvider().catch(() => null)
+      meaning = provider && provider.provider !== 'local' ? 'model' : 'words'
       try {
         const hits = await searchByMeaning(term, rooms, {
           limit: 20,
@@ -677,7 +692,7 @@ export async function chatRoutes(app: FastifyInstance) {
         app.log.warn({ err }, 'chat meaning search failed')
       }
     }
-    return reply.send({ data: exact })
+    return reply.send({ data: exact, meta: { meaning } })
   })
 
   // ── Slash commands (#2338) ────────────────────────────────────────────────
@@ -1310,7 +1325,7 @@ export async function chatRoutes(app: FastifyInstance) {
         .replace(/[^a-z0-9-]+/g, '-')
         .replace(/^-+|-+$/g, '') || slugify(name)
     if (!key) return reply.code(400).send({ error: 'A channel key could not be derived' })
-    if ((await channels()).has(key)) {
+    if (await channelByKey(key)) {
       return reply.code(409).send({ error: `A channel named "${key}" already exists` })
     }
     const visibility: ChatChannel['visibility'] =
@@ -1342,7 +1357,7 @@ export async function chatRoutes(app: FastifyInstance) {
       item: key,
       req
     })
-    return reply.code(201).send({ data: (await channels()).get(key) })
+    return reply.code(201).send({ data: await channelByKey(key) })
   })
 
   app.patch<{ Params: { id: string } }>('/channels/:id', async (req, reply) => {
@@ -1365,7 +1380,7 @@ export async function chatRoutes(app: FastifyInstance) {
       })
       return { data }
     }
-    const row = await db('nivaro_chat_channels').where('id', req.params.id).first()
+    const row = await findChannelRow(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
     // Creator or admin — the same mutation posture queues use.
     if (!req.isAdmin && String(row.created_by ?? '') !== String(req.user?.id)) {
@@ -1429,7 +1444,7 @@ export async function chatRoutes(app: FastifyInstance) {
         : undefined,
       req
     })
-    return { data: (await channels()).get(String(row.key)) }
+    return { data: await channelByKey(String(row.key)) }
   })
 
   /** Members of a private channel, so an owner can see who is in it. */
@@ -1453,6 +1468,7 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const b = req.body as { user_id?: string }
     if (!b.user_id) return reply.code(400).send({ error: 'user_id is required' })
+    if (!isUuidLike(b.user_id)) return reply.code(400).send({ error: 'user_id is not a user id' })
     if ((await nonAdminsFor(row.room, [String(b.user_id)])).length)
       return reply.code(403).send({ error: OPS_ONLY_MESSAGE, code: OPS_ONLY_CODE })
     await upsertMembership(String(b.user_id), row.room, {})
@@ -1582,18 +1598,22 @@ export async function chatRoutes(app: FastifyInstance) {
     let candidates: string[] = []
     let source = ''
     if (b.team_id != null && b.team_id !== '') {
-      const team = (await db('nivaro_user_groups').where('id', b.team_id).first('id', 'name')) as
-        | { id: string; name: string }
-        | undefined
+      // A malformed id is "not found", not a conversion error.
+      const team = (await db('nivaro_user_groups')
+        .where('id', b.team_id)
+        .first('id', 'name')
+        .catch(() => undefined)) as { id: string; name: string } | undefined
       if (!team) return reply.code(404).send({ error: 'Team not found' })
       candidates = (await db('nivaro_user_group_members')
         .where({ group_id: team.id })
         .pluck('user')) as string[]
       source = `team ${team.name}`
     } else if (b.role_id) {
-      const role = (await db('nivaro_roles').where('id', b.role_id).first('id', 'name')) as
-        | { id: string; name: string }
-        | undefined
+      const role = (
+        isUuidLike(b.role_id)
+          ? await db('nivaro_roles').where('id', b.role_id).first('id', 'name')
+          : undefined
+      ) as { id: string; name: string } | undefined
       if (!role) return reply.code(404).send({ error: 'Role not found' })
       candidates = (await db('nivaro_users').where({ role: role.id }).pluck('id')) as string[]
       source = `role ${role.name}`
@@ -1814,7 +1834,7 @@ export async function chatRoutes(app: FastifyInstance) {
         (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]
       ).map((u) => String(u).toUpperCase())
     if (parsed.kind === 'channel') {
-      const ch = (await channels()).get(parsed.channelKey ?? '') as
+      const ch = (await channelByKey(parsed.channelKey ?? '')) as
         | (ChatChannel & { created_at?: unknown })
         | undefined
       createdBy = ch?.created_by ?? null
@@ -2091,6 +2111,29 @@ export async function chatRoutes(app: FastifyInstance) {
   function emitRoomTouch(room: string): void {
     app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', { room, touch: true })
   }
+
+  /**
+   * An edit or a delete can change the room's last-message preview. A DM's new message reaches
+   * both participants' own socket rooms (their chat list shows it at once), so its edit and
+   * delete must reach them too — otherwise the list kept showing the deleted text while the
+   * room said "Message removed" (2026-10-26). Group DMs (≤ 21 people) get the same nudge.
+   */
+  async function touchConversationLists(room: string): Promise<void> {
+    const parsed = parseRoom(room)
+    let people: string[] = []
+    if (parsed.kind === 'dm') people = parsed.participants ?? []
+    else if (parsed.kind === 'channel') {
+      const ch = await channelByKey(parsed.channelKey ?? '')
+      if (ch?.is_direct)
+        people = (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]
+    }
+    for (const p of people.slice(0, 50))
+      app.io?.to(`user:${p}`).emit('chat:message', { room, touch: true })
+  }
+  function emitPreviewChange(room: string): void {
+    emitRoomTouch(room)
+    void touchConversationLists(room).catch(() => {})
+  }
 }
 
 function parseAttachments(raw: unknown): string[] {
@@ -2133,7 +2176,7 @@ interface ChannelTarget {
   auditItem: string
 }
 
-/** A channel by id, or General for id 0 (the `global` room, no channel row). */
+/** A channel by id or key, or General for id 0 (the `global` room, no channel row). */
 async function channelTarget(id: string): Promise<ChannelTarget | null> {
   if (String(id) === String(GENERAL_CHANNEL_ID)) {
     return {
@@ -2145,9 +2188,11 @@ async function channelTarget(id: string): Promise<ChannelTarget | null> {
       auditItem: GENERAL_AUDIT_ITEM
     }
   }
-  const row = (await db('nivaro_chat_channels').where('id', id).first()) as
-    | { id: number; key: string; created_by?: string | null }
-    | undefined
+  const row = (await findChannelRow(id)) as {
+    id: number
+    key: string
+    created_by?: string | null
+  } | null
   if (!row) return null
   return {
     id: Number(row.id),

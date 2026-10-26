@@ -144,6 +144,8 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     app.addHook('onClose', async () => {
       await closeItemEvents()
     })
+    // Socket joins gate on canSeeRoom: hear the web processes' chat registry clears.
+    await (await import('./services/chat.js')).wireChatRegistryRelay()
     // Record changes from the web processes: the event stream delivers them to this process's
     // sockets and journal listeners (saved-view streams); the bridge hands them to /events/stream.
     const { initEventStream, closeEventStream } = await import('./services/event-stream.js')

@@ -106,22 +106,50 @@ export function useDraftSync(
     })
   }, [enabled, realtime, room])
 
+  const save = (forRoom: string, body: string) => {
+    const done = () => {
+      // Only the open room's copy is tracked; a flush for a room just left only refreshes the marker.
+      if (forRoom === roomRef.current) synced.current = body
+      void qc.invalidateQueries({ queryKey: ['nvr-chat-drafts'] })
+    }
+    const req = body.trim()
+      ? client.request(put(`/chat/drafts/${encodeURIComponent(forRoom)}`, { body, device: DEVICE }))
+      : client.request(del(`/chat/drafts/${encodeURIComponent(forRoom)}?device=${DEVICE}`))
+    void req.then(done).catch(() => {})
+  }
+  const roomRef = useRef(room)
+  roomRef.current = room
+  /** Typed but not saved yet — sent at once when the room changes or the composer goes away. */
+  const pending = useRef<{ room: string; body: string } | null>(null)
+
   // Save (or clear) shortly after typing stops.
   // biome-ignore lint/correctness/useExhaustiveDependencies: debounced on draft only
   useEffect(() => {
     if (!enabled || !restored.current) return
-    if (draft === synced.current) return
+    if (draft === synced.current) {
+      pending.current = null
+      return
+    }
+    pending.current = { room, body: draft }
     const t = setTimeout(() => {
-      const body = draft
-      const done = () => {
-        synced.current = body
-        void qc.invalidateQueries({ queryKey: ['nvr-chat-drafts'] })
-      }
-      const req = body.trim()
-        ? client.request(put(`/chat/drafts/${encodeURIComponent(room)}`, { body, device: DEVICE }))
-        : client.request(del(`/chat/drafts/${encodeURIComponent(room)}?device=${DEVICE}`))
-      void req.then(done).catch(() => {})
+      pending.current = null
+      save(room, draft)
     }, DEBOUNCE_MS)
     return () => clearTimeout(t)
   }, [draft, room, enabled])
+
+  // Switching conversations (or closing the panel) inside the debounce used to drop what was
+  // typed: the timer was cleared with nothing sent (2026-10-26). Flush it instead.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: flushes the room being left
+  useEffect(() => {
+    if (!enabled) return
+    return () => {
+      const p = pending.current
+      pending.current = null
+      if (p && p.room === room) save(p.room, p.body)
+    }
+  }, [room, enabled])
 }
+
+/** Exported for tests: the debounce before a typed draft is saved. */
+export const DRAFT_DEBOUNCE_MS = DEBOUNCE_MS

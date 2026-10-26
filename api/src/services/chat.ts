@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { readItems } from './items.js'
 import { can } from './permissions.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Chat room visibility.
@@ -196,13 +197,68 @@ export function channelLookPatch(
 }
 
 const TTL_MS = 30_000
-let typeCache: { at: number; byPrefix: Map<string, RoomType> } | null = null
-let channelCache: { at: number; byKey: Map<string, ChatChannel> } | null = null
+/** How long "no channel has this key" is believed before the row is looked up again. */
+const MISS_TTL_MS = 3_000
 
+/**
+ * The registry caches, per tenant (module state is shared by every cloud tenant). `gen` moves on
+ * every clear, so a load that started before a clear never stores what it read.
+ *
+ * Other replicas hear a clear over the record-event channel (wireChatRegistryRelay), and a
+ * channel key the cache does not know is read through from the database (`channelsWith`) — a
+ * group DM or channel made on another replica is usable at once, not after the TTL (2026-10-26:
+ * the first message to a new group failed with "not available to you" for up to 30 s).
+ */
+interface ChatRegistryCache {
+  gen: number
+  types: { at: number; byPrefix: Map<string, RoomType> } | null
+  chans: { at: number; byKey: Map<string, ChatChannel> } | null
+  general: { at: number; channel: ChatChannel; customName: boolean } | null
+  /** Keys read through and not found, with when. */
+  misses: Map<string, number>
+}
+const registry = new Map<string, ChatRegistryCache>()
+
+function registryFor(tenant = currentTenantKey()): ChatRegistryCache {
+  let c = registry.get(tenant)
+  if (!c) {
+    c = { gen: 0, types: null, chans: null, general: null, misses: new Map() }
+    registry.set(tenant, c)
+  }
+  return c
+}
+
+function dropRegistry(tenant: string): void {
+  const c = registry.get(tenant)
+  if (!c) return
+  c.gen++
+  c.types = null
+  c.chans = null
+  c.general = null
+  c.misses.clear()
+}
+
+const REGISTRY_TABLES = new Set(['nivaro_chat_channels', 'nivaro_chat_room_types'])
+let relayClear: (() => void) | null = null
+
+/**
+ * Boot (web processes and the realtime tier, after initItemEvents): hear the registry clears of
+ * other replicas, and tell them about ours. Wired at boot rather than imported here so this
+ * module stays light for the many places (and tests) that load it.
+ */
+export async function wireChatRegistryRelay(): Promise<void> {
+  if (relayClear) return
+  const events = await import('./item-events.js')
+  events.onCollectionTouched((collection, tenant) => {
+    if (REGISTRY_TABLES.has(collection)) dropRegistry(tenant)
+  })
+  relayClear = () => events.publishCollectionTouched('nivaro_chat_channels')
+}
+
+/** A channel, room type or General changed: forget them here and on every other replica. */
 export function clearChatCaches(): void {
-  typeCache = null
-  channelCache = null
-  generalCache = null
+  dropRegistry(currentTenantKey())
+  relayClear?.()
 }
 
 // ── General (the `global` room) ─────────────────────────────────────────────
@@ -213,7 +269,6 @@ export function clearChatCaches(): void {
 
 export const GENERAL_CHANNEL_ID = 0
 const GENERAL_DEFAULT_NAME = 'General'
-let generalCache: { at: number; channel: ChatChannel; customName: boolean } | null = null
 
 /** The stored General settings, parsed. Empty object when unset or unreadable. */
 async function readGeneralSettings(): Promise<Record<string, unknown>> {
@@ -231,7 +286,9 @@ async function readGeneralSettings(): Promise<Record<string, unknown>> {
 }
 
 async function loadGeneral(): Promise<{ channel: ChatChannel; customName: boolean }> {
-  if (generalCache && Date.now() - generalCache.at < TTL_MS) return generalCache
+  const cache = registryFor()
+  if (cache.general && Date.now() - cache.general.at < TTL_MS) return cache.general
+  const gen = cache.gen
   const s = await readGeneralSettings()
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null)
   const name = str(s.name)
@@ -253,8 +310,9 @@ async function loadGeneral(): Promise<{ channel: ChatChannel; customName: boolea
     welcome_note: str(s.welcome_note),
     default_roles: jsonList<string>(s.default_roles).map((x) => String(x).toUpperCase())
   }
-  generalCache = { at: Date.now(), channel, customName: !!name }
-  return generalCache
+  const entry = { at: Date.now(), channel, customName: !!name }
+  if (cache.gen === gen) cache.general = entry
+  return entry
 }
 
 /** General as a channel (id 0). */
@@ -277,36 +335,134 @@ export async function saveGeneralSettings(patch: Record<string, unknown>): Promi
   await db('nivaro_settings')
     .where('id', 1)
     .update({ chat_general: Object.keys(next).length ? JSON.stringify(next) : null })
-  generalCache = null
+  clearChatCaches()
   return generalChannel()
 }
 
 async function roomTypes(): Promise<Map<string, RoomType>> {
-  if (typeCache && Date.now() - typeCache.at < TTL_MS) return typeCache.byPrefix
+  const cache = registryFor()
+  if (cache.types && Date.now() - cache.types.at < TTL_MS) return cache.types.byPrefix
+  const gen = cache.gen
   const rows = (await db('nivaro_chat_room_types').where('is_active', true)) as RoomType[]
   const byPrefix = new Map(rows.map((r) => [r.prefix, r]))
-  typeCache = { at: Date.now(), byPrefix }
+  if (cache.gen === gen) cache.types = { at: Date.now(), byPrefix }
   return byPrefix
 }
 
+function channelFromRow(r: Record<string, unknown>): ChatChannel {
+  return {
+    ...r,
+    is_archived: !!r.is_archived,
+    is_direct: !!r.is_direct,
+    announce: !!r.announce,
+    links: jsonList<{ label: string; url: string }>(r.links),
+    default_roles: jsonList<string>(r.default_roles).map((x) => String(x).toUpperCase())
+  } as unknown as ChatChannel
+}
+
+/** Every channel, by key. A key you are about to look up goes through `channelByKey` /
+ *  `channelsWith`, which also find a channel made on another replica since the last load. */
 export async function channels(): Promise<Map<string, ChatChannel>> {
-  if (channelCache && Date.now() - channelCache.at < TTL_MS) return channelCache.byKey
+  const cache = registryFor()
+  if (cache.chans && Date.now() - cache.chans.at < TTL_MS) return cache.chans.byKey
+  const gen = cache.gen
   const rows = (await db('nivaro_chat_channels')) as Array<Record<string, unknown>>
-  const byKey = new Map(
-    rows.map((r) => [
-      String(r.key),
-      {
-        ...r,
-        is_archived: !!r.is_archived,
-        is_direct: !!r.is_direct,
-        announce: !!r.announce,
-        links: jsonList<{ label: string; url: string }>(r.links),
-        default_roles: jsonList<string>(r.default_roles).map((x) => String(x).toUpperCase())
-      } as unknown as ChatChannel
-    ])
-  )
-  channelCache = { at: Date.now(), byKey }
+  const byKey = new Map(rows.map((r) => [String(r.key), channelFromRow(r)]))
+  if (cache.gen === gen) {
+    cache.chans = { at: Date.now(), byKey }
+    cache.misses.clear()
+  }
   return byKey
+}
+
+/**
+ * The channel map, with every key in `keys` the cache does not hold read from the database
+ * first (one statement; a key that is not there either is believed absent for MISS_TTL_MS).
+ */
+export async function channelsWith(keys: Iterable<string>): Promise<Map<string, ChatChannel>> {
+  const byKey = await channels()
+  const cache = registryFor()
+  const now = Date.now()
+  const wanted = [...new Set([...keys].filter(Boolean))].filter((k) => {
+    if (byKey.has(k)) return false
+    const missAt = cache.misses.get(k)
+    return missAt == null || now - missAt >= MISS_TTL_MS
+  })
+  if (wanted.length === 0) return byKey
+  const gen = cache.gen
+  const rows: Array<Record<string, unknown>> = []
+  for (let i = 0; i < wanted.length; i += 500) {
+    rows.push(
+      ...((await db('nivaro_chat_channels').whereIn('key', wanted.slice(i, i + 500))) as Array<
+        Record<string, unknown>
+      >)
+    )
+  }
+  const found = new Set<string>()
+  for (const r of rows) {
+    const ch = channelFromRow(r)
+    found.add(String(ch.key))
+    byKey.set(String(ch.key), ch)
+  }
+  if (cache.gen === gen) {
+    for (const k of wanted) if (!found.has(k)) cache.misses.set(k, now)
+    if (cache.misses.size > 5000) cache.misses.clear()
+  }
+  return byKey
+}
+
+/** One channel by key, read through when this replica has not seen it yet. */
+export async function channelByKey(key: string): Promise<ChatChannel | undefined> {
+  if (!key) return undefined
+  return (await channelsWith([key])).get(key)
+}
+
+/** Largest value an `int` id column holds. */
+const INT_MAX = 2_147_483_647
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const CHANNEL_KEY_RE = /^[A-Za-z0-9_-]{1,100}$/
+
+/** A positive whole number that fits an int id column. */
+export function isIntId(v: unknown): boolean {
+  const s = String(v ?? '')
+  return /^\d{1,10}$/.test(s) && Number(s) <= INT_MAX
+}
+
+export function isUuidLike(v: unknown): boolean {
+  return UUID_RE.test(String(v ?? ''))
+}
+
+/**
+ * Why a chat route's `:id` / `:userId` param cannot name anything (null = fine). Channel routes
+ * take an id or a key, the bot-stream route a stream id; every other `:id` is an int column and
+ * `:userId` a uuid one — a malformed value is a 404, never a conversion error from the database.
+ */
+export function chatParamRefusal(routeUrl: string, params: unknown): string | null {
+  const p = (params ?? {}) as { id?: unknown; userId?: unknown }
+  if (p.userId !== undefined && !isUuidLike(p.userId)) return 'Not found'
+  if (p.id === undefined) return null
+  if (/\/channels\/:id(\/|$)/.test(routeUrl)) {
+    const ref = String(p.id).replace(/^ch:/, '')
+    return isIntId(ref) || CHANNEL_KEY_RE.test(ref) ? null : 'Not found'
+  }
+  if (/\/bot\/streams\/:id(\/|$)/.test(routeUrl)) return null
+  return isIntId(p.id) ? null : 'Not found'
+}
+
+/**
+ * A channel row by numeric id, or by key (`key` or `ch:key`) — an all-digit key is tried after
+ * the id. Null when nothing matches or the reference cannot name a channel.
+ */
+export async function findChannelRow(ref: string): Promise<Record<string, any> | null> {
+  const s = String(ref ?? '').trim()
+  if (isIntId(s)) {
+    const row = await db('nivaro_chat_channels').where('id', Number(s)).first()
+    if (row) return row as Record<string, any>
+  }
+  const key = s.startsWith('ch:') ? s.slice(3) : s
+  if (!CHANNEL_KEY_RE.test(key)) return null
+  const row = await db('nivaro_chat_channels').where('key', key).first()
+  return (row ?? null) as Record<string, any> | null
 }
 
 // ── Visibility ──────────────────────────────────────────────────────────────
@@ -351,7 +507,7 @@ async function computeVisibility(user: User, room: string): Promise<boolean> {
       return (parsed.participants ?? []).includes(String(user.id).toUpperCase())
 
     case 'channel': {
-      const channel = (await channels()).get(parsed.channelKey ?? '')
+      const channel = await channelByKey(parsed.channelKey ?? '')
       if (!channel || channel.is_archived) return false
       if (channel.visibility === 'open') return true
       // A membership row admits you to ANY channel kind. That matters for
@@ -460,7 +616,7 @@ export async function listRooms(
   const uid = String(user.id)
   const wantArchived = opts.archived === true
   await autoJoinDefaultChannels(user).catch(() => {})
-  const [memberships, dmRooms, chans] = await Promise.all([
+  const [memberships, dmRooms] = await Promise.all([
     db('nivaro_chat_memberships').where('user', uid) as Promise<
       Array<{
         room: string
@@ -492,6 +648,10 @@ export async function listRooms(
       ]) as Promise<string[]>,
     channels()
   ])
+  // A channel or group this person was just added to on another replica is read through.
+  const chans = await channelsWith(
+    memberships.filter((m) => m.room.startsWith('ch:')).map((m) => m.room.slice(3))
+  )
   const general = await loadGeneral()
 
   const byRoom = new Map(memberships.map((m) => [m.room, m]))

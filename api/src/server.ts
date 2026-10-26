@@ -226,6 +226,8 @@ export async function buildServer() {
     app.addHook('onClose', async () => {
       await closeItemEvents()
     })
+    // Chat channel registry clears reach every replica (a new group is usable at once).
+    await (await import('./services/chat.js')).wireChatRegistryRelay()
     // Slim parity: the media worker (a full-image process that ticks crons,
     // or MEDIA_WORKER=on) drains clips, captions, upload extras and replay
     // videos that slim processes handed off (services/media-handoff.ts).

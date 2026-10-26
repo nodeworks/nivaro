@@ -640,11 +640,11 @@ export function registrationMembers(
       post: async (room, text, o) => {
         note('chat')
         try {
-          const { parseRoom, channels } = await import('../services/chat.js')
+          const { parseRoom, channelByKey } = await import('../services/chat.js')
           const parsed = parseRoom(room)
           if (parsed.kind === 'dm' || parsed.kind === 'unknown') return null
           if (parsed.kind === 'channel') {
-            const ch = (await channels()).get(parsed.channelKey ?? '')
+            const ch = await channelByKey(parsed.channelKey ?? '')
             if (!ch || ch.is_archived) return null
           }
           if (parsed.kind === 'entity') {

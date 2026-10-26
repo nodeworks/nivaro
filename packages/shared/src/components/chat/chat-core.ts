@@ -1306,14 +1306,22 @@ export function useChatSearch(q: string, filters: ChatSearchFilters = {}) {
         get<{ data: ChatSearchHit[] }>('/chat/search', params)
       )) as {
         data: ChatSearchHit[]
+        meta?: { meaning?: ChatSearchMeaning }
       }
-      return res.data ?? []
+      return { hits: res.data ?? [], meaning: res.meta?.meaning ?? null }
     },
     enabled: q.trim().length >= 2 || filtered,
     staleTime: 15_000
   })
-  return { hits: data ?? [], loading: isLoading }
+  return { hits: data?.hits ?? [], meaning: data?.meaning ?? null, loading: isLoading }
 }
+
+/**
+ * How the server's "same meaning" step matched: `model` = an embedding model, `words` = the
+ * local hash fallback (no embed model configured), which finds only shared words. Null when the
+ * step did not run (short or filtered query, older server).
+ */
+export type ChatSearchMeaning = 'model' | 'words' | null
 
 // ── Group DMs ────────────────────────────────────────────────────────────────
 

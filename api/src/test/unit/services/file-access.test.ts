@@ -71,11 +71,11 @@ vi.mock('../../../services/chat.js', () => ({
       : room.startsWith('channel:')
         ? { kind: 'channel', channelKey: room.slice(8) }
         : { kind: 'entity' },
-  channels: async () =>
+  channelByKey: async (key: string) =>
     new Map([
       ['priv', { visibility: 'private', is_direct: false }],
       ['ops', { visibility: 'open', is_direct: false }]
-    ]),
+    ]).get(key),
   newRoomVisibilityCache: () => new Map(),
   canSeeRoom: vi.fn(async (u: { id: string }, room: string) => state.rooms.has(`${u.id}|${room}`))
 }))

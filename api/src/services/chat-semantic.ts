@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { channels, parseRoom } from './chat.js'
+import { channelByKey, parseRoom } from './chat.js'
 import { cosineSim, embedText } from './embeddings.js'
 
 /**
@@ -39,7 +39,7 @@ export async function roomMayBeEmbedded(room: string): Promise<boolean> {
   if (p.kind === 'global' || p.kind === 'entity') return true
   if (p.kind !== 'channel') return false
   try {
-    const c = (await channels()).get(String(p.channelKey)) as
+    const c = (await channelByKey(String(p.channelKey))) as
       | { visibility?: string; is_direct?: boolean }
       | undefined
     return !!c && c.visibility === 'open' && !c.is_direct

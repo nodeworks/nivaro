@@ -2862,6 +2862,9 @@ export function ChatChannelSettings({
   const [memberSearch, setMemberSearch] = useState('')
   const debounced = useDebouncedValue(memberSearch, 250)
   const { users } = useUserSearch(debounced, visibility === 'private')
+  // Archiving a channel closes it for EVERY member — unlike "Archive for me" in the room menu,
+  // which only files it under the person's own Archived tab — so it asks first.
+  const [confirmArchive, setConfirmArchive] = useState(false)
 
   // General (id 0) has no owner — only admins dress it.
   const isGeneral = channel.id === GENERAL_CHANNEL_ID
@@ -3007,13 +3010,57 @@ export function ChatChannelSettings({
               ) : (
                 <button
                   type='button'
-                  onClick={() => update.mutate({ is_archived: true })}
-                  className='ml-auto rounded-md px-2 py-1 text-[11.5px] font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40'
+                  onClick={() => setConfirmArchive(true)}
+                  disabled={confirmArchive}
+                  className='ml-auto rounded-md px-2 py-1 text-[11.5px] font-medium text-red-500 hover:bg-red-50 disabled:opacity-40 dark:hover:bg-red-950/40'
+                  data-chat-archive-everyone
                 >
-                  Archive channel
+                  Archive for everyone
                 </button>
               )}
             </div>
+            {confirmArchive && !isGeneral && (
+              <div
+                className='space-y-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-[11.5px] leading-relaxed text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200'
+                data-chat-archive-confirm
+              >
+                <p>
+                  Archive {channel.is_direct ? 'this conversation' : `#${label}`} for everyone? It
+                  closes for all {members.length ? `${members.length} ` : ''}members: it leaves
+                  their chat lists and nobody can read or post in it any more.{' '}
+                  {channel.is_direct ? (
+                    <>
+                      To only hide it from your own list, use{' '}
+                      <span className='font-semibold'>Archive for me</span> in the room's menu
+                      instead.
+                    </>
+                  ) : (
+                    <>
+                      To only stop hearing from it yourself, set{' '}
+                      <span className='font-semibold'>Notify me</span> to Never in the room's menu
+                      instead.
+                    </>
+                  )}
+                </p>
+                <div className='flex gap-2'>
+                  <button
+                    type='button'
+                    disabled={update.isPending}
+                    onClick={() => update.mutate({ is_archived: true })}
+                    className='h-7 rounded-md bg-red-600 px-2.5 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50'
+                  >
+                    {update.isPending ? 'Archiving…' : 'Archive for everyone'}
+                  </button>
+                  <button
+                    type='button'
+                    onClick={() => setConfirmArchive(false)}
+                    className='h-7 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:bg-card dark:text-slate-200'
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             {update.isError && (
               <p className='text-[11.5px] text-red-500'>{(update.error as Error).message}</p>
             )}
@@ -3241,7 +3288,7 @@ export function ChatRoomList({
   const q = useDebouncedValue(search.trim(), 250)
   // Cross-room message search rides the same box: type ≥2 chars and matching
   // MESSAGES appear under the filtered room list.
-  const { hits, loading: searching } = useChatSearch(q, sf.filters)
+  const { hits, meaning, loading: searching } = useChatSearch(q, sf.filters)
   const searchActive = q.length >= 2 || sf.active
   // Hits grouped by room, busiest room first (#987).
   const hitGroups = useMemo(() => {
@@ -3389,6 +3436,15 @@ export function ChatRoomList({
                 </div>
               )
             })
+          )}
+          {!searching && meaning === 'words' && (
+            <p
+              className='px-2.5 pb-1 pt-1.5 text-[10.5px] leading-snug text-slate-400'
+              data-chat-search-meaning='words'
+            >
+              Only messages that share words with your search are found. Matching by meaning needs
+              an embedding model, which an admin can choose under Settings → AI Features.
+            </p>
           )}
         </div>
       )}
@@ -4419,6 +4475,11 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                 // The open conversation survives a visit to another tab —
                 // coming back to Chat returns to where the person was.
                 onClick={() => setTab(t)}
+                data-tip={
+                  t === 'archived'
+                    ? 'Conversations you archived for yourself. Everyone else still sees them.'
+                    : undefined
+                }
                 className={cn(
                   'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors',
                   tab === t
@@ -4847,6 +4908,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
         ) : tab === 'archived' ? (
           archivedRoom ? (
             <ChatRoomView
+              key={archivedRoom.room}
               room={archivedRoom.room}
               label={archivedRoom.label}
               onBack={() => setArchivedRoom(null)}
@@ -4889,6 +4951,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
           />
         ) : activeRoom ? (
           <ChatRoomView
+            key={activeRoom.room}
             room={activeRoom.room}
             label={activeRoom.label}
             onOpenSettings={

@@ -1223,12 +1223,12 @@ async function runChatPost(op: FlowOperation, data: FlowData, ctx: ExecutionCont
     output: { ...data, $error: `chat-post: ${why}` }
   })
   if (!room || !message) return reject('room and message are required')
-  const { parseRoom, channels } = await import('./chat.js')
+  const { parseRoom, channelByKey } = await import('./chat.js')
   const parsed = parseRoom(room)
   if (parsed.kind === 'dm' || parsed.kind === 'unknown')
     return reject('not a channel or record room')
   if (parsed.kind === 'channel') {
-    const ch = (await channels()).get(parsed.channelKey ?? '')
+    const ch = await channelByKey(parsed.channelKey ?? '')
     if (!ch || ch.is_archived) return reject(`no channel ${room}`)
   }
   if (parsed.kind === 'entity') {
