@@ -150,7 +150,7 @@ function isRecordScoped(sub: { filter_field?: string | null; filters?: unknown }
  *  (CM26-79811 for workflows) first, then the collection's display template,
  *  then '#<id>'. Both resolvers are imported lazily — workflow-transitions.ts
  *  and queues.ts import THIS module, so a static import would be circular. */
-async function friendlyRecordLabel(collection: string, item: string): Promise<string> {
+export async function friendlyRecordLabel(collection: string, item: string): Promise<string> {
   try {
     const { resolveFriendlyId } = await import('../services/workflow-transitions.js')
     const f = await resolveFriendlyId(collection, item)
