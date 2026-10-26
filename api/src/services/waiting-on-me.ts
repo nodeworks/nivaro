@@ -155,15 +155,21 @@ const waitingDefaults: WaitingDeps = {
     for (const [collection, items] of byColl) {
       if (/^(nivaro|directus)_/i.test(collection)) continue
       if (!(await can(user, 'read', collection).catch(() => false))) continue
-      try {
-        const res = (await readItems(user, collection, {
-          filter: { id: { _in: [...items] } },
-          fields: ['id'],
-          limit: items.size
-        })) as { data?: Array<{ id?: unknown }> }
-        for (const row of res.data ?? []) allowed.add(`${collection}:${String(row.id)}`)
-      } catch {
-        /* unreadable collection contributes nothing */
+      // Chunked: someone who owns thousands of records must not hit the
+      // ~2100 bound-parameter cap in one IN list.
+      const ids = [...items]
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500)
+        try {
+          const res = (await readItems(user, collection, {
+            filter: { id: { _in: chunk } },
+            fields: ['id'],
+            limit: chunk.length
+          })) as { data?: Array<{ id?: unknown }> }
+          for (const row of res.data ?? []) allowed.add(`${collection}:${String(row.id)}`)
+        } catch {
+          /* unreadable collection contributes nothing */
+        }
       }
     }
     return allowed
