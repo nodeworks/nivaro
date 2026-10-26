@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { applyRowFilter, getRowFilter } from './permissions.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import {
   applyScopeEnforcement,
   getUserScopeEnforcement,
@@ -77,26 +78,91 @@ export function applyQueueGate(q: Knex.QueryBuilder, gate: QueueGate | null, use
   applyScopeEnforcement(q, gate.collection, gate.scopes)
 }
 
-/**
- * Narrow a query over the materialized cache (`nivaro_queue_items as qi`):
- * rows of a gated collection stay only when their record passes the gate.
- */
-export function applyQueueGatesToCache(
-  qb: Knex.QueryBuilder,
+// The cache stores every record id as NVARCHAR (item_id); a gate that casts
+// the SOURCE's id to text to compare cannot use its primary key index, and
+// the materialized read used to repeat that scan in each of ~30 queries — a
+// person with a zone scope waited 15–46 s per worklist read (staging
+// 2026-10-26). Now the cache's text id is converted to the source key's own
+// type (a seek per cache row), and the visible cache rows are worked out ONCE
+// per read; every query then filters on the cache's own key.
+
+const PK_TYPES = new Set(['int', 'bigint', 'smallint', 'uniqueidentifier'])
+const pkTypes = new Map<string, Promise<string | null>>()
+
+/** The SQL type of a table's `id` when it is a number or uuid (null for a
+ *  text key, which compares as text). Read once per tenant + table. */
+export function pkSqlType(table: string): Promise<string | null> {
+  const key = `${currentTenantKey()}|${table}`
+  let hit = pkTypes.get(key)
+  if (!hit) {
+    hit = (
+      db('INFORMATION_SCHEMA.COLUMNS')
+        .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
+        .first('DATA_TYPE as type') as Promise<{ type?: string } | undefined>
+    )
+      .then((r) => {
+        const t = String(r?.type ?? '').toLowerCase()
+        return PK_TYPES.has(t) ? t : null
+      })
+      .catch(() => {
+        pkTypes.delete(key)
+        return null
+      })
+    pkTypes.set(key, hit)
+  }
+  return hit
+}
+
+/** `<table>.id = <text expression>`, matched on the table's own key type. */
+export function idMatchesText(table: string, textExpr: string, type: string | null): Knex.Raw {
+  return type
+    ? db.raw(`??.?? = TRY_CONVERT(${type}, ${textExpr})`, [table, 'id'])
+    : db.raw(`CAST(??.?? AS NVARCHAR(255)) = ${textExpr}`, [table, 'id'])
+}
+
+/** Which cache rows a viewer may see, per gated collection: `deny` hides the
+ *  collection's rows, `ids` lists the visible nivaro_queue_items ids. */
+export type CacheVisibility = Array<
+  { collection: string; deny: true } | { collection: string; ids: number[] }
+>
+
+/** One query per gated collection: the queue's cache rows of it whose record
+ *  passes the viewer's gate. */
+export async function cacheVisibilityFor(
+  queueId: string,
   gates: QueueGate[],
   user: User
-): void {
-  for (const gate of gates) {
-    if (gate.deny) {
-      void qb.whereNot('qi.collection', gate.collection)
+): Promise<CacheVisibility> {
+  return Promise.all(
+    gates.map(async (gate) => {
+      if (gate.deny) return { collection: gate.collection, deny: true as const }
+      const type = await pkSqlType(gate.collection)
+      const passes = db(gate.collection)
+        .where(idMatchesText(gate.collection, 'qi.item_id', type))
+        .select(db.raw('1'))
+      applyQueueGate(passes, gate, user)
+      const rows = (await db('nivaro_queue_items as qi')
+        .where({ 'qi.queue_id': queueId, 'qi.collection': gate.collection })
+        .whereExists(passes)
+        .select('qi.id')) as Array<{ id: number }>
+      return { collection: gate.collection, ids: rows.map((r) => Number(r.id)) }
+    })
+  )
+}
+
+/** Narrow a query over the cache (`nivaro_queue_items as qi`) to what the
+ *  viewer may see; other collections' rows are left alone. */
+export function applyCacheVisibility(qb: Knex.QueryBuilder, visibility: CacheVisibility): void {
+  for (const v of visibility) {
+    if ('deny' in v) {
+      void qb.whereNot('qi.collection', v.collection)
       continue
     }
-    const visible = db(gate.collection).select(
-      db.raw('CAST(??.?? AS NVARCHAR(255))', [gate.collection, 'id'])
-    )
-    applyQueueGate(visible, gate, user)
     void qb.where(function (this: Knex.QueryBuilder) {
-      void this.whereNot('qi.collection', gate.collection).orWhereIn('qi.item_id', visible)
+      void this.whereNot('qi.collection', v.collection).orWhereRaw(
+        'qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?))',
+        [JSON.stringify(v.ids)]
+      )
     })
   }
 }

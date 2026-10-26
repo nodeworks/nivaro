@@ -7,8 +7,12 @@ import { getSlaScheduleSync } from './business-hours.js'
 import { parseColumnFilterOp } from './column-filter-ops.js'
 import { parseJson } from './pipeline-engine.js'
 import {
+  applyCacheVisibility,
   applyQueueGate,
-  applyQueueGatesToCache,
+  type CacheVisibility,
+  cacheVisibilityFor,
+  idMatchesText,
+  pkSqlType,
   type QueueGate,
   queueGatesFor
 } from './queue-access.js'
@@ -344,37 +348,78 @@ async function addendumCacheGatesFor(user: User, queueId: string): Promise<Adden
   )
 }
 
-function applyAddendumCacheGates(qb: Knex.QueryBuilder, gates: AddendumCacheGate[], user: User) {
+/** The addendum rows (by cache id) of each gated addendums source the viewer
+ *  may see — one query per source per read, matched on the addendum's and
+ *  the parent's own key types (see queue-access.ts cacheVisibilityFor). */
+type AddendumVisibility = Array<
+  { sourceId: number; deny: true } | { sourceId: number; ids: number[] }
+>
+
+async function addendumVisibilityFor(
+  queueId: string,
+  gates: AddendumCacheGate[],
+  user: User
+): Promise<AddendumVisibility> {
+  const out: AddendumVisibility = []
   for (const g of gates) {
     if (g.deny || g.gate?.deny) {
-      qb.whereNot('qi.source_id', g.sourceId)
+      out.push({ sourceId: g.sourceId, deny: true })
       continue
     }
     if (!g.gate) continue
-    const gate = g.gate
-    const visibleParents = db(g.parentCollection).select(
-      db.raw('CAST(??.?? AS NVARCHAR(255))', [g.parentCollection, 'id'])
-    )
-    applyQueueGate(visibleParents, gate, user)
-    const visibleAddendums = db('nivaro_addendums as a')
-      .where('a.parent_collection', g.parentCollection)
-      .whereIn('a.parent_id', visibleParents)
-      .select(db.raw('CAST(a.id AS NVARCHAR(255))'))
+    const [addType, parentType] = await Promise.all([
+      pkSqlType('nivaro_addendums'),
+      pkSqlType(g.parentCollection)
+    ])
+    const parentPasses = db(g.parentCollection)
+      .where(idMatchesText(g.parentCollection, '[nivaro_addendums].[parent_id]', parentType))
+      .select(db.raw('1'))
+    applyQueueGate(parentPasses, g.gate, user)
+    const addendumPasses = db('nivaro_addendums')
+      .where(idMatchesText('nivaro_addendums', 'qi.item_id', addType))
+      .where('nivaro_addendums.parent_collection', g.parentCollection)
+      .whereExists(parentPasses)
+      .select(db.raw('1'))
+    const rows = (await db('nivaro_queue_items as qi')
+      .where({ 'qi.queue_id': queueId, 'qi.source_id': g.sourceId })
+      .whereExists(addendumPasses)
+      .select('qi.id')) as Array<{ id: number }>
+    out.push({ sourceId: g.sourceId, ids: rows.map((r) => Number(r.id)) })
+  }
+  return out
+}
+
+function applyAddendumVisibility(qb: Knex.QueryBuilder, visibility: AddendumVisibility) {
+  for (const v of visibility) {
+    if ('deny' in v) {
+      qb.whereNot('qi.source_id', v.sourceId)
+      continue
+    }
     qb.where(function () {
-      this.whereNot('qi.source_id', g.sourceId).orWhereIn('qi.item_id', visibleAddendums)
+      this.whereNot('qi.source_id', v.sourceId).orWhereRaw(
+        'qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?))',
+        [JSON.stringify(v.ids)]
+      )
     })
   }
 }
 
-async function cacheGatesFor(
-  user: User,
-  queueId: string
-): Promise<{ gates: QueueGate[]; addendumGates: AddendumCacheGate[] }> {
+/** What this viewer may see of the cache, worked out once per read and
+ *  applied to every query of it (applyScope). */
+type CacheGates = { visibility: CacheVisibility; addendums: AddendumVisibility }
+
+async function cacheGatesFor(user: User, queueId: string): Promise<CacheGates> {
   const [gates, addendumGates] = await Promise.all([
     queueGatesFor(user, queueId),
     addendumCacheGatesFor(user, queueId)
   ])
-  return { gates, addendumGates }
+  const [visibility, addendums] = await Promise.all([
+    gates.length ? cacheVisibilityFor(queueId, gates, user) : Promise.resolve([]),
+    addendumGates.length
+      ? addendumVisibilityFor(queueId, addendumGates, user)
+      : Promise.resolve([] as AddendumVisibility)
+  ])
+  return { visibility, addendums }
 }
 
 /**
@@ -550,16 +595,14 @@ function applyScope(
   queueId: string,
   user: User,
   scope: QueueScope,
-  cacheGates: { gates: QueueGate[]; addendumGates: AddendumCacheGate[] } = {
-    gates: [],
-    addendumGates: []
-  }
+  cacheGates: CacheGates = { visibility: [], addendums: [] }
 ): Knex.QueryBuilder {
   qb.where('qi.queue_id', queueId)
   // The viewer's row filter + user scopes per source collection — the cache
-  // holds every viewer's rows, so it is narrowed here, on every read.
-  applyQueueGatesToCache(qb, cacheGates.gates, user)
-  applyAddendumCacheGates(qb, cacheGates.addendumGates, user)
+  // holds every viewer's rows, so it is narrowed here, on every query, from
+  // the visible rows cacheGatesFor worked out once for this read.
+  applyCacheVisibility(qb, cacheGates.visibility)
+  applyAddendumVisibility(qb, cacheGates.addendums)
   if (scope === 'mine') {
     qb.whereExists(function () {
       this.select('*')

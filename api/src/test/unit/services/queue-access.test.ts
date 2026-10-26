@@ -21,9 +21,8 @@ vi.mock('../../../db/index.js', () => ({
 vi.mock('../../../services/permissions.js', () => perms)
 vi.mock('../../../services/user-scopes.js', () => scopes)
 
-const { applyQueueGate, applyQueueGatesToCache, canUserReadQueue, queueGateFor } = await import(
-  '../../../services/queue-access.js'
-)
+const { applyCacheVisibility, applyQueueGate, canUserReadQueue, idMatchesText, queueGateFor } =
+  await import('../../../services/queue-access.js')
 const user = { id: 'u1', role: 'r1' } as never
 const NONE = { filters: [], deny: false }
 
@@ -77,27 +76,30 @@ describe('queue row access', () => {
     expect(q.toSQL().sql).toBe('select [id] from [orders]')
   })
 
-  it('narrows cached rows per collection and leaves other collections alone', () => {
+  it('narrows cached rows per collection by the visible cache ids, other collections untouched', () => {
     const qb = knex('nivaro_queue_items as qi').where('qi.queue_id', 'q1')
-    applyQueueGatesToCache(
-      qb,
-      [
-        {
-          collection: 'orders',
-          deny: false,
-          rowFilter: null,
-          scopes: { filters: [{}], deny: false }
-        },
-        { collection: 'invoices', deny: true, rowFilter: null, scopes: { filters: [], deny: true } }
-      ] as never,
-      user
-    )
+    applyCacheVisibility(qb, [
+      { collection: 'orders', ids: [3, 7] },
+      { collection: 'invoices', deny: true }
+    ])
     const { sql, bindings } = qb.toSQL()
     expect(sql).toContain(
-      '(not [qi].[collection] = ? or [qi].[item_id] in (select CAST([orders].[id] AS NVARCHAR(255)) from [orders] where [orders].[zone] in (?)))'
+      '(not [qi].[collection] = ? or qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?)))'
     )
     expect(sql).toContain('not [qi].[collection] = ?')
-    expect(bindings).toEqual(['q1', 'orders', 4, 'invoices'])
+    // One parameter for the id list, however long — never one per id.
+    expect(bindings).toEqual(['q1', 'orders', '[3,7]', 'invoices'])
+    // No source table is read per query any more.
+    expect(sql).not.toContain('[orders].[id]')
+  })
+
+  it("matches a cache row on the source key's own type, so the key index is used", () => {
+    expect(idMatchesText('orders', 'qi.item_id', 'int').toSQL().sql).toBe(
+      '[orders].[id] = TRY_CONVERT(int, qi.item_id)'
+    )
+    expect(idMatchesText('docs', 'qi.item_id', null).toSQL().sql).toBe(
+      'CAST([docs].[id] AS NVARCHAR(255)) = qi.item_id'
+    )
   })
 })
 
