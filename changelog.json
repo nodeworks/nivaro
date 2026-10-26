@@ -1,10 +1,99 @@
 {
-  "generated_at": "2026-10-26T17:15:56.539Z",
+  "generated_at": "2026-10-26T19:17:56.808Z",
   "releases": [
+    {
+      "version": "0.3.33",
+      "tag": "v0.3.33",
+      "date": "2026-10-26T15:17:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "query-table",
+              "text": "Expand all / Collapse all on grouped (tree) tables",
+              "hash": "3710c0b53"
+            },
+            {
+              "section": "Added",
+              "scope": "item-actions",
+              "text": "ctx.callAsCaller — run a step as the person who pressed the button",
+              "hash": "a18c1bb53"
+            },
+            {
+              "section": "Added",
+              "scope": "item-actions",
+              "text": "`bulk: false` keeps a one-record action off the bulk bars",
+              "hash": "75b6ee6ed"
+            },
+            {
+              "section": "Added",
+              "scope": "row-actions",
+              "text": "list every push in the row menu, disabled when not ready",
+              "hash": "dfa3f14dd"
+            },
+            {
+              "section": "Added",
+              "scope": "records",
+              "text": "registry actions as record-header buttons, with a justification popup",
+              "hash": "aab7076da"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "explicit bulk mode on the CBV and queue worklists",
+              "hash": "721b7996f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "header action popup padding and one-record wording",
+              "hash": "abf67eed8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "bulk-actions",
+              "text": "describe actions in plain words, never by column name",
+              "hash": "b73ba2822"
+            },
+            {
+              "section": "Fixed",
+              "scope": "row-actions",
+              "text": "list Actions menu offers only what fits the record",
+              "hash": "6a98e4d22"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "delivery acks sampled on a quiet instance, and silence alerts",
+              "hash": "67b096925"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "queues",
+              "text": "materialized reads judge a viewer's scopes once, on the key index",
+              "hash": "e1b32740d"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.32",
       "tag": "v0.3.32",
-      "date": "2026-10-26T13:15:42-04:00",
+      "date": "2026-10-26T13:15:56-04:00",
       "sections": [
         {
           "label": "Added",
