@@ -9,7 +9,6 @@ import {
   canSeeRoom,
   channelByKey,
   channelLookPatch,
-  channels,
   chatParamRefusal,
   cleanChannelLinks,
   clearChatCaches,
@@ -47,6 +46,7 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { embeddingProvider } from '../services/embeddings.js'
 import { mcpAppLabel } from '../services/mcp-config.js'
 import {
   loadVisibleMessage,
@@ -549,7 +549,7 @@ export async function chatRoutes(app: FastifyInstance) {
       item: String(msg.id),
       comment: `room ${String(msg.room)}`
     })
-    emitRoomTouch(String(msg.room))
+    emitPreviewChange(String(msg.room))
     return { data: { id: msg.id, message: text } }
   })
 
@@ -580,7 +580,7 @@ export async function chatRoutes(app: FastifyInstance) {
       item: String(msg.id),
       comment: `room ${String(msg.room)}${own ? '' : ` — sender ${String(msg.sender)}`}`
     })
-    emitRoomTouch(String(msg.room))
+    emitPreviewChange(String(msg.room))
     return { data: { deleted: true } }
   })
 
@@ -656,7 +656,12 @@ export async function chatRoutes(app: FastifyInstance) {
     // Only for a plain text query — a sender/date/attachment filter narrows by
     // fact, and meaning hits would not honour it.
     const plain = !q.sender && !q.from && !q.to && !q.has_attachment && !q.mentions_me
+    // Which matcher answered the meaning step: 'words' = the local hash embedding (no embed model
+    // configured — Settings → AI Features → Model per feature), which only finds shared words.
+    let meaning: 'model' | 'words' | null = null
     if (term.length >= 3 && plain && q.meaning !== '0') {
+      const provider = await embeddingProvider().catch(() => null)
+      meaning = provider && provider.provider !== 'local' ? 'model' : 'words'
       try {
         const hits = await searchByMeaning(term, rooms, {
           limit: 20,
@@ -687,7 +692,7 @@ export async function chatRoutes(app: FastifyInstance) {
         app.log.warn({ err }, 'chat meaning search failed')
       }
     }
-    return reply.send({ data: exact })
+    return reply.send({ data: exact, meta: { meaning } })
   })
 
   // ── Slash commands (#2338) ────────────────────────────────────────────────
@@ -2105,6 +2110,29 @@ export async function chatRoutes(app: FastifyInstance) {
    *  invalidate on; the payload only needs the room. */
   function emitRoomTouch(room: string): void {
     app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', { room, touch: true })
+  }
+
+  /**
+   * An edit or a delete can change the room's last-message preview. A DM's new message reaches
+   * both participants' own socket rooms (their chat list shows it at once), so its edit and
+   * delete must reach them too — otherwise the list kept showing the deleted text while the
+   * room said "Message removed" (2026-10-26). Group DMs (≤ 21 people) get the same nudge.
+   */
+  async function touchConversationLists(room: string): Promise<void> {
+    const parsed = parseRoom(room)
+    let people: string[] = []
+    if (parsed.kind === 'dm') people = parsed.participants ?? []
+    else if (parsed.kind === 'channel') {
+      const ch = await channelByKey(parsed.channelKey ?? '')
+      if (ch?.is_direct)
+        people = (await db('nivaro_chat_memberships').where({ room }).pluck('user')) as string[]
+    }
+    for (const p of people.slice(0, 50))
+      app.io?.to(`user:${p}`).emit('chat:message', { room, touch: true })
+  }
+  function emitPreviewChange(room: string): void {
+    emitRoomTouch(room)
+    void touchConversationLists(room).catch(() => {})
   }
 }
 

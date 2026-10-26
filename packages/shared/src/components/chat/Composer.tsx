@@ -620,7 +620,9 @@ export const ChatComposer = forwardRef<
   }
 
   return (
-    <div className={cn('shrink-0 border-t', th.divider)} data-chat-composer-wrap>
+    // `relative`: the slash-command form (absolute, bottom-full) sits just above the composer.
+    // Unpositioned, it anchored to the room view and opened above the whole panel, off screen.
+    <div className={cn('relative shrink-0 border-t', th.divider)} data-chat-composer-wrap>
       {quietNote && draft.trim() && (
         <p
           className='px-3 pt-1.5 text-[11px] text-slate-500 dark:text-slate-400'

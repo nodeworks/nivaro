@@ -47,8 +47,8 @@ export function ArchiveSuggestionBanner({
     >
       <Archive className='h-3.5 w-3.5 shrink-0 text-slate-500' strokeWidth={2} />
       <p className='min-w-0 flex-1 text-[12px] text-slate-700 dark:text-slate-200'>
-        #{channelName} has been quiet. Archive it to tidy the list, or keep it open. Suggested{' '}
-        {formatRelative(suggestedAt)}.
+        #{channelName} has been quiet. Archive it for everyone (it closes for all members), or keep
+        it open. Suggested {formatRelative(suggestedAt)}.
       </p>
       <span className='flex shrink-0 gap-1.5'>
         <button
@@ -58,7 +58,7 @@ export function ArchiveSuggestionBanner({
           className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white disabled:opacity-50'
           data-chat-archive-accept
         >
-          Archive
+          Archive for everyone
         </button>
         <button
           type='button'
