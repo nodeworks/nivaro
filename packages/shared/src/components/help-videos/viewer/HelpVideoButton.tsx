@@ -134,13 +134,18 @@ export function HelpVideoButton({
               )}
             </button>
           </PopoverTrigger>
-          <PopoverContent align='end' className='w-[340px] p-1.5 text-[13px]'>
+          {/* Capped to the room below the button: a long list scrolls inside,
+              and the links under it stay on screen (Rob 2026-10-26). */}
+          <PopoverContent
+            align='end'
+            className='flex max-h-[min(70vh,var(--radix-popover-content-available-height))] w-[340px] flex-col p-1.5 text-[13px]'
+          >
             {videos.length === 0 && (
               <p className='px-2 py-1.5 text-muted-foreground'>
                 No videos for this screen yet. Record one to show people how it works.
               </p>
             )}
-            <ul>
+            <ul className='-mr-1 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1'>
               {videos.map((v) => {
                 const p = progressLabel(v)
                 const meta = listMeta(v)
@@ -176,7 +181,7 @@ export function HelpVideoButton({
                 )
               })}
             </ul>
-            <div className='mt-1 flex flex-wrap items-start gap-x-3 gap-y-1 border-t border-border px-2 pt-1.5'>
+            <div className='mt-1 flex shrink-0 flex-wrap items-start gap-x-3 gap-y-1 border-t border-border px-2 pt-1.5'>
               <button
                 type='button'
                 className={`rounded text-[12px] text-muted-foreground hover:underline ${focusRing}`}

@@ -4543,7 +4543,13 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
         </div>
 
         {tab === 'online' ? (
-          <div className='min-h-0 flex-1 overflow-y-auto p-2' data-chat-online>
+          <div
+            // No top padding on the scroller: a sticky group heading sticks at
+            // the padding edge, and rows showed through the 8px strip above it.
+            // The top gap lives on the first row instead.
+            className='min-h-0 flex-1 overflow-y-auto px-2 pb-2 [&>:first-child]:mt-2'
+            data-chat-online
+          >
             {/* Group by an attribute of the people listed — role, or any scope
                 dimension the instance tracks (Zone, Region…). Purely a view
                 preference, remembered per browser. */}
@@ -4587,7 +4593,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
               onlineSections.map((section) => (
                 <div key={section.key} data-chat-online-group={section.key}>
                   {section.label !== null && (
-                    <div className='sticky top-0 z-[1] flex items-center gap-1.5 bg-white/95 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 backdrop-blur dark:bg-card/95'>
+                    <div className='sticky top-0 z-[1] flex items-center gap-1.5 bg-white px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-slate-400 dark:bg-card'>
                       {section.label}
                       <span className='font-normal normal-case text-slate-300'>
                         {section.users.length}

@@ -194,9 +194,12 @@ export function UserRosterCluster({
               {users.length} user{users.length === 1 ? '' : 's'}
             </p>
             {/* Same UserChip as the Creator header field — click opens the
-                full user card popover. */}
+                full user card popover. A flex row, not a text line: an
+                inline chip sits on the line's baseline, and a photo avatar
+                (no text baseline) set it lower than an initials one, so the
+                rows were uneven. */}
             {users.map((o) => (
-              <div key={o.id} className='px-2 py-0.5'>
+              <div key={o.id} className='flex px-2 py-0.5'>
                 <UserChip userId={o.id} size='compact' />
               </div>
             ))}
