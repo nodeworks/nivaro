@@ -47,6 +47,8 @@ export interface PushItemAction {
   choose?: ItemActionChooseMeta
   /** Hidden from people who could not create the addendum it makes. */
   requires_addendum_create?: boolean
+  /** false = one record at a time: never in the bulk bars. */
+  bulk?: boolean
 }
 
 export type PushRunOutcome = BulkRunResult & {
@@ -131,7 +133,8 @@ export function PushBulkButtons({
   const pushActions = useMemo(() => {
     const byId = new Map<string, PushItemAction & { collections: string[] }>()
     pushCollections.forEach((c, i) => {
-      for (const a of actionQueries[i]?.data ?? []) {
+      // One-record actions (bulk: false — closing out a PO) stay off the bar.
+      for (const a of (actionQueries[i]?.data ?? []).filter((x) => x.bulk !== false)) {
         const cur = byId.get(a.id)
         if (cur) cur.collections.push(c)
         else byId.set(a.id, { ...a, collections: [c] })

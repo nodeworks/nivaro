@@ -94,6 +94,10 @@ export async function runItemActionOver(opts: {
     throw Object.assign(new Error(`"${action.label}" does not apply to ${collection}`), {
       statusCode: 400
     })
+  if (action.bulk === false && ids.length > 1)
+    throw Object.assign(new Error(`"${action.label}" runs on one record at a time`), {
+      statusCode: 400
+    })
   const result = emptyResult()
   const rec = recorder(result)
 

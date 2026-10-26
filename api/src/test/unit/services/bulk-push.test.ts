@@ -77,6 +77,25 @@ describe('runItemActionOver (#620 push)', () => {
     ).rejects.toMatchObject({ statusCode: 400 })
   })
 
+  it('a one-record action (bulk: false) runs on one record, never several', async () => {
+    const execute = vi.fn(async () => ({ message: 'done' }))
+    state.actions.set('closeout', { id: 'closeout', label: 'Close out PO', bulk: false, execute })
+    await expect(
+      runItemActionOver({ actionId: 'closeout', collection: 'orders', ids: ['1', '2'], req })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: '"Close out PO" runs on one record at a time'
+    })
+    expect(execute).not.toHaveBeenCalled()
+    const one = await runItemActionOver({
+      actionId: 'closeout',
+      collection: 'orders',
+      ids: ['1'],
+      req
+    })
+    expect(one.succeeded).toBe(1)
+  })
+
   it('runs per record with the form button gates and reports every outcome', async () => {
     const execute = vi.fn(async ({ itemId }: { itemId: string }) => {
       if (itemId === '4') throw new Error('Partner said no')

@@ -87,6 +87,9 @@ export interface ItemActionDef {
    *  button hides when the caller could not create one, and execute 403s with
    *  the gate's reason. Declared, not implemented. */
   requires_addendum_create?: boolean
+  /** false = one record at a time only: never offered in the bulk bars, and a
+   *  multi-record push of it is refused (e.g. closing out a PO). Default true. */
+  bulk?: boolean
   /** Per-record applicability; the client hides inapplicable buttons. Errors
    *  count as applicable — a broken check must not hide a working action. */
   applicable?(ctx: { collection: string; itemId: string | number }): Promise<boolean>
