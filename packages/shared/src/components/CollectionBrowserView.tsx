@@ -137,6 +137,7 @@ import { HScrollProxy } from './HScrollProxy'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
+import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
 import { MapView } from './MapView'
@@ -967,6 +968,7 @@ export function RowActionsMenu({
       setOpen(false)
       toast.success('Transitioned')
       invalidateCbvRowQueries(qc, collection)
+      invalidateRecordQueries(qc, collection, [id])
       onAfterTransition?.()
     },
     onError: (err: unknown) => toast.error(userErrorMessage(err, 'Transition failed'))
@@ -1009,6 +1011,9 @@ export function RowActionsMenu({
       }
       toast.success(action.label)
       invalidateCbvRowQueries(qc, collection)
+      // The record page skips this tab's own writes: a record opened next must not show the
+      // pre-action values from cache (#priority "Priority: No" right after setting it).
+      invalidateRecordQueries(qc, collection, [id])
       onAfterTransition?.()
     },
     onError: (err: unknown) => {

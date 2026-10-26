@@ -17,7 +17,7 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
@@ -92,6 +92,8 @@ interface FieldMeta {
   onLayout: boolean
   /** M2O target — FK values render as the related record's display label. */
   relatedCollection?: string | null
+  /** A calendar date (no time): renders as its stored day, never shifted to local time. */
+  dateOnly?: boolean
 }
 
 const AUDIT_FIELDS = new Set([
@@ -117,6 +119,7 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       label: string | null
       hidden?: boolean
       layout_assigned?: boolean
+      type?: string | null
     }>
     relations: Array<{
       many_collection: string | null
@@ -137,6 +140,7 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
               label: string | null
               hidden?: boolean
               layout_assigned?: boolean
+              type?: string | null
             }>
           }>(get(`/field-config/${collection}`))
           .then((r) => r.data ?? [])
@@ -171,7 +175,8 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
         // layout_assigned is only stamped when the collection HAS an active
         // layout — absent means there's no layout to be off of.
         onLayout: f.layout_assigned !== false,
-        relatedCollection: m2oTarget(f.field)
+        relatedCollection: m2oTarget(f.field),
+        dateOnly: String(f.type ?? '').toLowerCase() === 'date'
       })
     }
     return map
@@ -205,10 +210,19 @@ function FieldLabel({ map, field }: { map: FieldMetaMap; field: string }) {
 // ─── Value formatting ───────────────────────────────────────────────────────
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+// A calendar date: bare yyyy-mm-dd, or exactly UTC midnight — how an MSSQL `date` column
+// serializes (EFP's Date Required is registered as datetime but stored as a date), the same
+// rule formatDate / format-value use.
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:\.0+)?Z)?$/
 
-function displayValue(value: unknown): string {
+/** Exported for tests. A calendar date (`dateOnly` = the field is typed `date`, or the value
+ *  is one) renders as its stored day — `toLocaleString` showed UTC midnight as the previous
+ *  day at 7:00 PM for anyone in Eastern time. */
+export function displayValue(value: unknown, dateOnly = false): string {
   if (value === null || value === undefined || value === '') return ''
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'string' && (DATE_ONLY_RE.test(value) || (dateOnly && ISO_RE.test(value))))
+    return toLocalDateString(value)
   if (typeof value === 'string' && ISO_RE.test(value)) {
     const d = new Date(value)
     if (!Number.isNaN(d.getTime())) return d.toLocaleString()
@@ -253,9 +267,17 @@ function richTextToText(v: unknown): string {
 
 const TRUNCATE_AT = 160
 
-function ValueCell({ value, tone }: { value: unknown; tone: 'before' | 'after' }) {
+function ValueCell({
+  value,
+  tone,
+  dateOnly
+}: {
+  value: unknown
+  tone: 'before' | 'after'
+  dateOnly?: boolean
+}) {
   const [expanded, setExpanded] = useState(false)
-  const str = displayValue(value)
+  const str = displayValue(value, dateOnly)
   if (str === '')
     return <span className='text-[11.5px] italic text-slate-300 dark:text-slate-600'>empty</span>
   const isLong = str.length > TRUNCATE_AT
@@ -550,7 +572,7 @@ function RevValue({
       </span>
     )
   if (isRichText(value)) return <ValueCell value={richTextToText(value)} tone={tone} />
-  return <ValueCell value={value} tone={tone} />
+  return <ValueCell value={value} tone={tone} dateOnly={meta.dateOnly} />
 }
 
 function FieldChangeRow({

@@ -1231,6 +1231,68 @@ export function resolveM2MAlias(
   }
 }
 
+/**
+ * Plain prefill values that name an M2M/M2A alias field (`{internal_contact: ['<id>']}`,
+ * one id, or `{id}` / `{item}` objects) as the staged links they mean. `__links` is
+ * handled separately; O2M aliases (no junction) are left alone. Exported for tests.
+ */
+export function prefillAliasLinks(
+  values: Record<string, unknown>,
+  relations: CMSRelation[] | null | undefined,
+  collection: string
+): Array<{ field: string; stagingKey: string; ids: Array<string | number> }> {
+  const out: Array<{ field: string; stagingKey: string; ids: Array<string | number> }> = []
+  for (const [field, value] of Object.entries(values)) {
+    if (field === '__links' || value == null || value === '') continue
+    const isJunction = (relations ?? []).some(
+      (r) => r.one_collection === collection && r.one_field === field && r.junction_field != null
+    )
+    if (!isJunction) continue
+    const info = resolveM2MAlias(relations, collection, field)
+    if (!info) continue
+    const ids: Array<string | number> = []
+    for (const v of Array.isArray(value) ? value : [value]) {
+      const id =
+        v && typeof v === 'object'
+          ? ((v as Record<string, unknown>).id ??
+            (v as Record<string, unknown>).item ??
+            (v as Record<string, unknown>)[info.junctionField])
+          : v
+      if ((typeof id === 'string' && id) || typeof id === 'number') ids.push(id)
+    }
+    out.push({ field, stagingKey: info.stagingKey, ids })
+  }
+  return out
+}
+
+/**
+ * Save as template: the record's M2M / M2A links (visible, editable aliases; never files) as
+ * the `__links` prefill block, keyed by staging key. Null when there are none. Exported for
+ * tests.
+ */
+export function templateLinks(
+  fieldConfig: ReadonlyArray<{ field: string; hidden?: boolean | null }>,
+  aliases: ReadonlyMap<string, M2MAliasInfo>,
+  states: Record<string, M2MFieldState>,
+  relations: CMSRelation[] | null | undefined
+): Record<string, string[]> | null {
+  const out: Record<string, string[]> = {}
+  for (const [field, info] of aliases) {
+    const fc = fieldConfig.find((f) => f.field === field) as
+      | { hidden?: boolean | null; readonly?: boolean | null; layout_assigned?: boolean }
+      | undefined
+    if (!fc || fc.hidden || fc.readonly || fc.layout_assigned === false) continue
+    const companion = (relations ?? []).find(
+      (r) => r.many_collection === info.manyCollection && r.many_field === info.junctionField
+    )
+    if (resolveM2MRelatedCollection(companion) === 'nivaro_files') continue
+    const st = states[field]
+    if (!st?.known || st.ids.length === 0) continue
+    out[info.stagingKey] = [...st.ids]
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 // Effective (post-staging) related-id set for an M2M alias field — committed
 // junction rows minus staged unlinks, plus staged links. Matches
 // M2MCombobox's allSelectedIds derivation exactly, so trigger values and
@@ -3423,6 +3485,24 @@ function ItemEditFormView({
     draftRef.current = next
     setDraft(next)
   }, [isNew, activeLayoutData, relations, relationsFetched, collection, m2mStagingCtx])
+
+  // A ?prefill= / record template that names an M2M or M2A alias as a plain value
+  // (`internal_contact: ['<user id>']`, or one id) — the pickers and the save read staged
+  // links, never a draft key, so the value was silently dropped. Stage it like `__links`.
+  const appliedPrefillAliasesRef = useRef(false)
+  useEffect(() => {
+    if (!isNew || !initialValues || appliedPrefillAliasesRef.current || !relationsFetched) return
+    appliedPrefillAliasesRef.current = true
+    const staged = prefillAliasLinks(initialValues, relations, collection)
+    if (staged.length === 0) return
+    for (const { stagingKey, ids } of staged)
+      for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+    const drop = new Set(staged.map((x) => x.field))
+    const strip = (d: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(d).filter(([k]) => !drop.has(k)))
+    draftRef.current = strip(draftRef.current)
+    setDraft((d) => strip(d))
+  }, [isNew, initialValues, relations, relationsFetched, collection, m2mStagingCtx])
 
   // Relation-path fields ('purchase_order.workflow.workflow_id'): read-only
   // values reached through M2O hops, resolved server-side in one batched call
@@ -11889,6 +11969,17 @@ function ItemEditFormView({
                                                         if (typeof v === 'object') continue
                                                         values[fc.field] = v
                                                       }
+                                                      // M2M / M2A links (a contact picker) ride
+                                                      // as `__links` — the prefill contract —
+                                                      // instead of being left out. Files stay
+                                                      // with their record.
+                                                      const links = templateLinks(
+                                                        fieldConfig ?? [],
+                                                        m2mAliasFieldsForRules,
+                                                        m2mAliasFieldStates,
+                                                        relations
+                                                      )
+                                                      if (links) values.__links = links
                                                       if (Object.keys(values).length === 0) {
                                                         toast.error(
                                                           'Nothing to save — no plain field values on this record'

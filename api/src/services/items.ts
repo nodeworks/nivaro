@@ -64,6 +64,7 @@ import {
   peopleFields,
   peopleReadable
 } from './m2a-expand.js'
+import { orderByPeopleRelevance } from './people-search-rank.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from './permissions.js'
 import { liveRelations, tableIsMissing } from './physical-tables.js'
 import { enforcePickerRules } from './picker-rules.js'
@@ -4129,8 +4130,9 @@ export async function readItems(
 
   if (sort.length) {
     await applySorts(q, sort, collection, rels)
-  } else {
-    // MSSQL requires ORDER BY when OFFSET is used
+  } else if (!(collection === 'nivaro_users' && search && orderByPeopleRelevance(q, search))) {
+    // A people search with no sort of its own ranks by name (services/people-search-rank.ts);
+    // anything else: MSSQL requires ORDER BY when OFFSET is used.
     q.orderByRaw('(SELECT NULL)')
   }
 

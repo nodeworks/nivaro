@@ -69,6 +69,15 @@ export function moveNotice(
   }
 }
 
+/**
+ * The record's last activity row names the viewer — the write that just arrived was theirs
+ * (e.g. their save's after-effects, past the own-write window). Exported for tests.
+ */
+export function writtenBySelf(touch: unknown, userId: string | null | undefined): boolean {
+  const by = (touch as { user_id?: unknown } | null | undefined)?.user_id
+  return typeof by === 'string' && !!userId && by.toUpperCase() === String(userId).toUpperCase()
+}
+
 /** The import notice lapses this long after the last import write to the record. */
 const IMPORT_QUIET_MS = 8_000
 
@@ -112,6 +121,30 @@ export function purgeRecordQueries(
   qc.removeQueries({
     predicate: (q) =>
       heads.has(q.queryKey[0]) && q.queryKey[1] === collection && String(q.queryKey[2]) === id
+  })
+}
+
+/**
+ * Mark every cached query about these records stale (refetching the ones on screen). For a
+ * write made OUTSIDE the record page — a list row's action, a bulk run, a row transition:
+ * the record page skips this tab's own writes and its reads keep a 30 s staleTime, so opening
+ * the record right after showed the old values ("Priority: No" just after setting it).
+ */
+export function invalidateRecordQueries(
+  qc: {
+    invalidateQueries: (f: {
+      predicate: (q: { queryKey: readonly unknown[] }) => boolean
+    }) => Promise<unknown> | unknown
+  },
+  collection: string,
+  itemIds: Array<string | number>
+): void {
+  if (!collection || itemIds.length === 0) return
+  const heads = new Set<unknown>(RECORD_QUERY_HEADS)
+  const ids = new Set(itemIds.map(String))
+  void qc.invalidateQueries({
+    predicate: (q) =>
+      heads.has(q.queryKey[0]) && q.queryKey[1] === collection && ids.has(String(q.queryKey[2]))
   })
 }
 
@@ -333,18 +366,22 @@ export function RecordLiveSync({
       ])
       return
     }
-    refreshRecord()
+    void refreshRecord(true)
   }
-  const refreshRecord = () => {
+  const refreshRecord = async (flashIt: boolean) => {
     invalidate([
       ['item', collection, itemId],
       // Summary mode reads its own copy (#1869) — it diffs + highlights.
       ['rrv-record', collection, itemId],
       ['field-touch', collection, itemId],
-      ['revisions', collection, itemId],
-      // Who made the write — the field ghosts (#2) attribute from it.
-      ['last-touch', collection, itemId]
+      ['revisions', collection, itemId]
     ])
+    // Who made the write — the field ghosts (#2) attribute from it, and so does the chip: a
+    // write the own-write window missed (the after-effects of this person's save landing
+    // late — rollups, hooks, a slow replica) names them, and is not "someone else".
+    const touchKey = ['last-touch', collection, String(itemId)]
+    await qc.invalidateQueries({ queryKey: touchKey }).catch(() => {})
+    if (!flashIt || writtenBySelf(qc.getQueryData(touchKey), userIdRef.current)) return
     setFlash(true)
     if (flashTimer.current) clearTimeout(flashTimer.current)
     flashTimer.current = setTimeout(() => setFlash(false), 4000)
@@ -353,9 +390,12 @@ export function RecordLiveSync({
   // #2131: this person saved the record in another window (a popped-out
   // record, another tab). Their own writes never come back over the socket.
   const { userId } = useItemEditAuth()
+  const userIdRef = useRef(userId)
+  userIdRef.current = userId
   useRecordTabsSignal(userId, 'saved', collection, itemId, () => {
     if (goneRef.current) return
-    refreshRecord()
+    // Their own save in another window: refresh quietly — it was not someone else.
+    void refreshRecord(false)
     invalidate([
       ['pipeline-instance', collection, itemId],
       ['comments', collection, itemId],

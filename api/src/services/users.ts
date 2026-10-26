@@ -7,6 +7,7 @@ import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
+import { orderByPeopleRelevance } from './people-search-rank.js'
 import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
 
 /** Only an active, non-redacted account may hold a session. */
@@ -373,7 +374,8 @@ export async function listUsers(
     const col = sort.startsWith('-') ? sort.slice(1) : sort
     const dir = sort.startsWith('-') ? 'desc' : 'asc'
     listQ.orderBy(SORTABLE_USER_COLS.has(col) ? col : 'created_at', dir)
-  } else {
+  } else if (!orderByPeopleRelevance(listQ, search)) {
+    // A search ranks by name (services/people-search-rank.ts); the plain list stays newest first.
     listQ.orderBy('created_at', 'desc')
   }
 

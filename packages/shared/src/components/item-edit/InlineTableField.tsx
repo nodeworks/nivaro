@@ -1391,6 +1391,22 @@ function AutoAllocateButton({
   )
 }
 
+/** The apply-values form's columns: configured for it, displayable and writable by the
+ *  viewer (field config answers `readonly` per caller). Exported for tests. */
+export function applyValueColumns(cols: CMSField[]): CMSField[] {
+  return cols.filter(
+    (c) =>
+      c.group_key === '__apply_values__' &&
+      !NON_DISPLAY_TYPES.has(c.type ?? '') &&
+      !SENTINEL_FIELDS.has(c.field) &&
+      !c.readonly &&
+      !(c.computed_type === 'write' && !!c.computed_formula) &&
+      c.interface !== 'formula-column' &&
+      c.interface !== 'match-agg-column' &&
+      c.interface !== 'relation-path'
+  )
+}
+
 export function InlineTableField({
   relatedCollection,
   manyField,
@@ -4271,17 +4287,10 @@ export function InlineTableField({
     if (cur.pending < prev.pending) localCreateAtRef.current = Date.now()
   }, [stagedSignature])
 
-  // Fields configured for the apply values form (group_key === '__apply_values__')
-  const applyValuesCols = useMemo(
-    () =>
-      cols.filter(
-        (c) =>
-          c.group_key === '__apply_values__' &&
-          !NON_DISPLAY_TYPES.has(c.type ?? '') &&
-          !SENTINEL_FIELDS.has(c.field)
-      ),
-    [cols]
-  )
+  // Fields configured for the apply values form (group_key === '__apply_values__') — only
+  // the ones this person can write: a read-only or derived column (EFP's REQ ID) can't take
+  // a value, so a form offering only those did nothing, and the button stays away.
+  const applyValuesCols = useMemo(() => applyValueColumns(cols), [cols])
 
   // Fields configured for the create-with-defaults form (group_key === '__create_with_defaults__')
   // Falls back to displayCols if none configured
