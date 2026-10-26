@@ -27,6 +27,8 @@ import {
   validateColumnFormats
 } from '../services/queues.js'
 import { clientGoneSignal, gateServerTiming } from '../services/read-gate.js'
+import { singleFlight } from '../services/single-flight.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { checkTransitionOwner } from '../services/record-access.js'
 
@@ -1328,18 +1330,36 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    const result = await fetchQueueItems(id, req.user!, scope, {
-      sort,
-      filters: parsedFilters,
-      withUnseen: true,
-      group,
-      ...(page !== undefined ? { page, limit } : {}),
-      ...(after !== undefined ? { after } : {}),
-      readGate: {
-        signal: clientGoneSignal(reply.raw),
-        onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
-      }
-    })
+    // The same person asking for the same page while it is still being read
+    // (two tabs, several dashboard widgets on one poke) shares that one read.
+    // Never reused once it has answered, so a refetch after a write is fresh.
+    const signal = clientGoneSignal(reply.raw)
+    const flightKey = [
+      'queue-items',
+      currentTenantKey(),
+      id,
+      req.user!.id,
+      req.isAdmin ? 1 : 0,
+      JSON.stringify(parsed.value)
+    ].join('|')
+    const { promise } = singleFlight(
+      flightKey,
+      ({ signal: shared }) =>
+        fetchQueueItems(id, req.user!, scope, {
+          sort,
+          filters: parsedFilters,
+          withUnseen: true,
+          group,
+          ...(page !== undefined ? { page, limit } : {}),
+          ...(after !== undefined ? { after } : {}),
+          readGate: {
+            signal: shared,
+            onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
+          }
+        }),
+      { signal }
+    )
+    const result = await promise
     // #502: an empty view says WHY — nothing yours vs filtered out vs a
     // source this role cannot read looked identical before.
     const empty =
