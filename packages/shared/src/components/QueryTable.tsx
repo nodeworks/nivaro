@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
 
@@ -778,6 +779,9 @@ export function QueryTable({
   // Tree sections: header row per distinct tree_group_by value with column
   // sums, child rows underneath, collapse toggling per section.
   let body: ReactNode
+  // Every section and sub-section key the tree renders, for Expand all /
+  // Collapse all (Rob 2026-10-26: budget detail opens on its categories).
+  const treeKeys: Array<{ key: string; startsCollapsed: boolean }> = []
   if (config?.tree_group_by) {
     const field = config.tree_group_by
     // Rows with an EMPTY section value render flat, in data order, above the
@@ -795,6 +799,7 @@ export function QueryTable({
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, children]) => {
         const isCollapsed = config.tree_collapsed ? !toggled.has(name) : toggled.has(name)
+        treeKeys.push({ key: name, startsCollapsed: !!config.tree_collapsed })
         const sums: Record<string, unknown> = { [field]: name }
         const sumInto = (f: string) => {
           sums[f] = children.reduce((s, r) => {
@@ -880,6 +885,10 @@ export function QueryTable({
                     .sort(([a], [b]) => a.localeCompare(b))
                     .map(([sub, kids]) => {
                       const subKey = `s:${name}|${sub}`
+                      treeKeys.push({
+                        key: subKey,
+                        startsCollapsed: config.tree_sub_collapsed ?? true
+                      })
                       const subCollapsed =
                         (config.tree_sub_collapsed ?? true)
                           ? !toggled.has(subKey)
@@ -951,9 +960,37 @@ export function QueryTable({
     body = effective.map((row, i) => renderRow(row, String(i)))
   }
 
+  // A key is open when it starts open and was not flipped, or starts closed
+  // and was. Expand all / Collapse all set every key's flip to match.
+  const isOpen = (k: { key: string; startsCollapsed: boolean }) =>
+    k.startsCollapsed ? toggled.has(k.key) : !toggled.has(k.key)
+  const allOpen = treeKeys.length > 0 && treeKeys.every(isOpen)
+  const setAll = (open: boolean) =>
+    setToggled(
+      new Set(
+        treeKeys.filter((k) => (open ? k.startsCollapsed : !k.startsCollapsed)).map((k) => k.key)
+      )
+    )
+  const treeToggle =
+    treeKeys.length > 0 ? (
+      <button
+        type='button'
+        data-query-tree-toggle={allOpen ? 'collapse' : 'expand'}
+        onClick={() => setAll(!allOpen)}
+        className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 dark:border-border dark:text-slate-300 dark:hover:bg-muted dark:hover:text-slate-100'
+      >
+        {allOpen ? (
+          <ChevronsDownUp className='h-3.5 w-3.5' aria-hidden />
+        ) : (
+          <ChevronsUpDown className='h-3.5 w-3.5' aria-hidden />
+        )}
+        {allOpen ? 'Collapse all' : 'Expand all'}
+      </button>
+    ) : null
+
   return (
     <div className={sticky ? 'flex min-h-0 flex-1 flex-col' : undefined}>
-      {(config?.pivot?.quarter_toggle || (config?.toggles?.length ?? 0) > 0) && (
+      {(config?.pivot?.quarter_toggle || (config?.toggles?.length ?? 0) > 0 || treeToggle) && (
         <div className='flex shrink-0 items-center justify-between gap-2 pb-2'>
           {(config?.toggles?.length ?? 0) > 0 ? (
             <div className='inline-flex gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'>
@@ -986,24 +1023,27 @@ export function QueryTable({
           ) : (
             <span />
           )}
-          {config?.pivot?.quarter_toggle && (
-            <div className='inline-flex gap-0.5 rounded-md border border-slate-200 p-0.5 dark:border-border'>
-              {(['month', 'quarter'] as const).map((g) => (
-                <button
-                  key={g}
-                  type='button'
-                  onClick={() => setGranularity(g)}
-                  className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                    granularity === g
-                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                  }`}
-                >
-                  {g === 'month' ? 'Monthly' : 'Quarterly'}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className='flex items-center gap-2'>
+            {treeToggle}
+            {config?.pivot?.quarter_toggle && (
+              <div className='inline-flex gap-0.5 rounded-md border border-slate-200 p-0.5 dark:border-border'>
+                {(['month', 'quarter'] as const).map((g) => (
+                  <button
+                    key={g}
+                    type='button'
+                    onClick={() => setGranularity(g)}
+                    className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                      granularity === g
+                        ? 'bg-nvr-cyan/10 text-slate-800 dark:text-slate-100'
+                        : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                    }`}
+                  >
+                    {g === 'month' ? 'Monthly' : 'Quarterly'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
       <div className={sticky ? 'relative flex min-h-0 flex-1 flex-col' : 'relative'}>
