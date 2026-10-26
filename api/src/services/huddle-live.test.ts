@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('./chat.js', () => ({
   channels: async () => new Map([['ops', { name: 'Ops' }]]),
+  channelByKey: async (key: string) => (key === 'ops' ? { name: 'Ops' } : undefined),
   parseRoom: (room: string) =>
     room.startsWith('ch:')
       ? { kind: 'channel', room, channelKey: room.slice(3) }
