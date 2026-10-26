@@ -1,21 +1,20 @@
 import {
   AutofillRunsChip,
+  applyDisplayPrefs,
   configureTabSound,
   configureUserSync,
   DEMO_USER,
   DndMark,
   DoNotDisturbRow,
   ForceReloadBanner,
+  hexToRgbChannels,
   installReplayTail,
   isDndActive,
   parseThemeAccents,
   registerViewAsOpener,
   resolveAccentColor,
   rumRouteChange,
-  setDisplayTimezone,
-  setNumberFormat,
   setRecordingSelf,
-  setTimeDisplay,
   startRum,
   UserAvatar,
   useCleanRecording,
@@ -265,23 +264,6 @@ function WorkspaceSwitcher() {
   )
 }
 
-/** `#00ceff` / `#0cf` → `"0 206 255"`. Returns null for anything else, so a
- *  non-hex setting leaves the default channels in place rather than breaking
- *  every tinted surface. */
-function hexToRgbChannels(hex: string): string | null {
-  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim())
-  if (!m) return null
-  const h =
-    m[1].length === 3
-      ? m[1]
-          .split('')
-          .map((c) => c + c)
-          .join('')
-      : m[1]
-  const n = Number.parseInt(h, 16)
-  return `${(n >> 16) & 255} ${(n >> 8) & 255} ${n & 255}`
-}
-
 export function AppLayout() {
   useSessionKeepalive()
   const t = useT()
@@ -314,27 +296,18 @@ export function AppLayout() {
   // chosen zone once set; browser default otherwise.
   const { user: authUser } = useAuth()
   useEffect(() => {
-    const prefs = (authUser?.preferences ?? {}) as {
-      timezone?: string
-      time_display?: string
-      number_format?: { locale?: string; compact?: boolean }
-      font_size?: string
-    }
+    // Display prefs (#229/#230/#232/#411): the shared formatters honor them and
+    // Text size scales the root — the same applyDisplayPrefs efp-new's shell runs.
+    const prefs = authUser?.preferences as Record<string, unknown> | undefined
+    applyDisplayPrefs(prefs)
     // Instance default timezone (#178): users without a pref get the
     // instance-configured default rather than the browser zone.
-    if (typeof prefs.timezone === 'string') setDisplayTimezone(prefs.timezone)
-    else {
+    if (typeof prefs?.timezone !== 'string') {
       void api
         .get<{ data: { default_timezone?: string | null } }>('/settings')
-        .then((r) => setDisplayTimezone(r.data.data.default_timezone ?? null))
-        .catch(() => setDisplayTimezone(null))
+        .then((r) => applyDisplayPrefs(prefs, r.data.data.default_timezone ?? null))
+        .catch(() => {})
     }
-    // Display prefs (#229/#230/#411): shared formatters honor them.
-    setTimeDisplay(prefs.time_display ?? null)
-    setNumberFormat(prefs.number_format ?? null)
-    // Font size (#232): root scaling — everything in rem follows.
-    const size = prefs.font_size === 'small' ? '15px' : prefs.font_size === 'large' ? '17.5px' : ''
-    document.documentElement.style.fontSize = size
   }, [authUser])
 
   const location = useLocation()

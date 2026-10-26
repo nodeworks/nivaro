@@ -46,6 +46,7 @@ import {
   offeredToActor,
   visibleIds
 } from '../services/record-access.js'
+import { labelSeatFilters } from '../services/seat-labels.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import {
@@ -1057,10 +1058,33 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         't.id as template_id',
         't.name as template_name'
       )) as Array<Record<string, unknown>>
+    // Filters carry field paths ("regions.short_name"); the matrix names them
+    // by dimension label ("Region"). One read for every pipeline involved.
+    const templateIds = [...new Set(rows.map((r) => String(r.template_id)))]
+    const dimRows = templateIds.length
+      ? ((await db('nivaro_pipeline_owner_dimensions as d')
+          .join('nivaro_workflow_bindings as b', 'd.binding', 'b.id')
+          .whereIn('b.template', templateIds)
+          .select('b.template as template_id', 'd.field', 'd.label')) as Array<{
+          template_id: string
+          field: string
+          label: string | null
+        }>)
+      : []
+    const dimsByTemplate = new Map<string, Map<string, string>>()
+    for (const d of dimRows) {
+      const key = String(d.template_id).toUpperCase()
+      const m = dimsByTemplate.get(key) ?? new Map<string, string>()
+      if (d.label && !m.has(d.field)) m.set(d.field, d.label)
+      dimsByTemplate.set(key, m)
+    }
     return reply.send({
       data: rows.map((r) => ({
         ...r,
-        filters: parseJson(r.filters as string | null)
+        filters: labelSeatFilters(
+          parseJson(r.filters as string | null),
+          dimsByTemplate.get(String(r.template_id).toUpperCase()) ?? new Map()
+        )
       }))
     })
   })

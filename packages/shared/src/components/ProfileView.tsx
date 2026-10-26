@@ -2030,9 +2030,11 @@ function MyMatrixSeatsCard() {
     Array<{
       group_id: number
       group_name: string | null
-      filters: Array<{ field: string; value: unknown }> | null
+      /** `label` = the pipeline's dimension label ("Region"); newer servers. */
+      filters: Array<{ field: string; value: unknown; label?: string }> | null
       is_default: boolean | number
       state_label: string
+      state_key?: string
       template_name: string
       template_id: string
     }>
@@ -2081,27 +2083,37 @@ function MyMatrixSeatsCard() {
                 <p className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
                   {template}
                 </p>
-                <ul className='mt-1 space-y-0.5'>
+                <ul className='mt-1 space-y-1.5'>
                   {list.slice(0, 40).map((seat) => (
                     <li key={seat.group_id} className='text-[12.5px]'>
-                      <span className='font-medium'>{seat.state_label}</span>
+                      <span className='font-medium'>{seat.state_label || seat.state_key}</span>
                       {seat.group_name && (
                         <span className='text-slate-500 dark:text-muted-foreground'>
                           {' '}
                           — {seat.group_name}
                         </span>
                       )}
-                      {Array.isArray(seat.filters) && seat.filters.length > 0 && (
-                        <span className='ml-1.5 font-mono text-[10.5px] text-slate-400'>
-                          {seat.filters
-                            .slice(0, 3)
-                            .map((f) => `${f.field}=${String(f.value)}`)
-                            .join(' · ')}
-                        </span>
-                      )}
                       {(seat.is_default === true || seat.is_default === 1) && (
                         <span className='ml-1.5 rounded bg-slate-100 px-1 py-px text-[9.5px] text-slate-500 dark:bg-muted'>
                           default
+                        </span>
+                      )}
+                      {Array.isArray(seat.filters) && seat.filters.length > 0 && (
+                        // "Region: KEY  Zone: Zone 1" — what the matrix cell matches on.
+                        <span
+                          data-seat-filters
+                          className='mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11.5px]'
+                        >
+                          {seat.filters.map((f) => (
+                            <span key={f.field} className='whitespace-nowrap'>
+                              <span className='text-slate-500 dark:text-slate-400'>
+                                {f.label ?? f.field}:
+                              </span>{' '}
+                              <span className='text-slate-600 dark:text-slate-300'>
+                                {String(f.value ?? '—')}
+                              </span>
+                            </span>
+                          ))}
                         </span>
                       )}
                     </li>

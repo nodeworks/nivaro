@@ -3,6 +3,7 @@ import { BellRing, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { type PushStage, pushFailure } from './push-failure'
 
 /**
  * Browser push for your own account, on whichever app hosts the profile.
@@ -32,7 +33,7 @@ function pushSupported(): boolean {
   )
 }
 
-type Note = { tone: 'ok' | 'error'; text: string } | null
+type Note = { tone: 'ok' | 'error'; text: string; detail?: string } | null
 
 export function BrowserPushCard({ serviceWorkerPath = '/sw.js' }: { serviceWorkerPath?: string }) {
   const client = useNivaroClient()
@@ -76,44 +77,74 @@ export function BrowserPushCard({ serviceWorkerPath = '/sw.js' }: { serviceWorke
   async function enable() {
     setBusy(true)
     setNote(null)
+    // Each step names its own failure (push-failure.ts) — the catch-all
+    // sentence this replaced told nobody what to do.
+    const fail = (stage: PushStage, err?: unknown, perm?: NotificationPermission | null) => {
+      setNote({ tone: 'error', ...pushFailure(stage, err, { permission: perm }) })
+    }
     try {
-      const perm = await Notification.requestPermission()
-      setPermission(perm)
-      if (perm !== 'granted') {
-        setNote({
-          tone: 'error',
-          text: 'Notifications are blocked for this site. Allow them in your browser’s site settings, then try again.'
-        })
-        return
+      if (typeof window !== 'undefined' && window.isSecureContext === false) return fail('insecure')
+      let perm: NotificationPermission
+      try {
+        perm = await Notification.requestPermission()
+      } catch (e) {
+        return fail('permission', e, Notification.permission)
       }
+      setPermission(perm)
+      if (perm !== 'granted') return fail('permission', null, perm)
       let reg: ServiceWorkerRegistration
       try {
         reg = await navigator.serviceWorker.register(serviceWorkerPath)
-      } catch {
-        setNote({
-          tone: 'error',
-          text: 'This app is not set up for browser notifications yet (no service worker).'
-        })
-        return
+      } catch (e) {
+        return fail('register', e)
       }
-      await navigator.serviceWorker.ready
-      const key = await client.request<{ data: { public_key: string } }>(
-        get('/push/vapid-public-key')
-      )
-      const existing = await reg.pushManager.getSubscription()
-      const sub =
-        existing ??
-        (await reg.pushManager.subscribe({
+      // `ready` never settles when the worker cannot activate — give it a bound.
+      const ready = await Promise.race([
+        navigator.serviceWorker.ready.then(() => true),
+        new Promise<false>((r) => setTimeout(() => r(false), 10_000))
+      ])
+      if (!ready) return fail('ready', `${serviceWorkerPath} did not activate within 10 s`)
+      let publicKey: string
+      try {
+        const key = await client.request<{ data: { public_key: string } }>(
+          get('/push/vapid-public-key')
+        )
+        publicKey = key.data?.public_key
+        if (!publicKey) return fail('key', 'empty public_key')
+      } catch (e) {
+        return fail('key', e)
+      }
+      const subscribe = () =>
+        reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(key.data.public_key)
-        }))
+          applicationServerKey: urlBase64ToUint8Array(publicKey)
+        })
+      let sub: PushSubscription
+      try {
+        const existing = await reg.pushManager.getSubscription()
+        sub = existing ?? (await subscribe())
+      } catch (e) {
+        // A subscription made under an older server key blocks a new one:
+        // drop it and subscribe once more.
+        if ((e as Error)?.name !== 'InvalidStateError') return fail('subscribe', e)
+        try {
+          await (await reg.pushManager.getSubscription())?.unsubscribe()
+          sub = await subscribe()
+        } catch (e2) {
+          return fail('subscribe', e2)
+        }
+      }
       const json = sub.toJSON()
-      await client.request(post('/push/subscribe', { endpoint: json.endpoint, keys: json.keys }))
+      try {
+        await client.request(post('/push/subscribe', { endpoint: json.endpoint, keys: json.keys }))
+      } catch (e) {
+        return fail('save', e)
+      }
       setHere(true)
       setNote({ tone: 'ok', text: 'Turned on in this browser.' })
       refresh()
-    } catch {
-      setNote({ tone: 'error', text: 'Could not turn on browser notifications.' })
+    } catch (e) {
+      fail('subscribe', e)
     } finally {
       setBusy(false)
     }
@@ -192,8 +223,17 @@ export function BrowserPushCard({ serviceWorkerPath = '/sw.js' }: { serviceWorke
       </div>
 
       {!supported ? (
-        <p className='mt-3 text-[12px] text-slate-500 dark:text-muted-foreground'>
-          This browser does not support push notifications.
+        <p
+          data-push-unsupported
+          className='mt-3 text-[12px] text-slate-500 dark:text-muted-foreground'
+        >
+          {
+            pushFailure(
+              typeof window !== 'undefined' && window.isSecureContext === false
+                ? 'insecure'
+                : 'unsupported'
+            ).text
+          }
         </p>
       ) : (
         <>
@@ -252,6 +292,14 @@ export function BrowserPushCard({ serviceWorkerPath = '/sw.js' }: { serviceWorke
               }
             >
               {note.text}
+              {note.detail && (
+                <span
+                  data-push-detail
+                  className='mt-0.5 block font-mono text-[10.5px] text-slate-500 dark:text-slate-400'
+                >
+                  {note.detail}
+                </span>
+              )}
             </p>
           )}
         </>

@@ -605,6 +605,18 @@ export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
+export {
+  type AccentTargets,
+  accentInk,
+  applyAccentVars,
+  applyDisplayPrefs,
+  contrastRatio,
+  type DisplayPrefs,
+  hexToRgbChannels,
+  liftForDarkSurface,
+  rootFontSize,
+  useDisplayPreferences
+} from './lib/display-prefs'
 export { breaksThroughDnd, type DndPref, dndUntil, isDndActive } from './lib/dnd'
 export {
   deleteDraft,
