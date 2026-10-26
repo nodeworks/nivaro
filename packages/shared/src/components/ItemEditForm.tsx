@@ -2158,7 +2158,7 @@ function ItemEditFormView({
   // AFTER the strip is gone; otherwise the header simply stays as it is.
   const headerStripRef = useRef<HTMLDivElement | null>(null)
   // Stacked / dense / folded stat band — components/item-edit/HeaderBand.tsx.
-  const { headerDense, headerFolded, headerTilesRef } = useHeaderBand()
+  const { headerDense, headerFolded, headerRows, headerTilesRef } = useHeaderBand()
   const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.target as HTMLDivElement
     const top = el.scrollTop
@@ -6850,62 +6850,88 @@ function ItemEditFormView({
     [activeLayoutData]
   )
 
-  const headerFields = useMemo(
-    () =>
-      (activeLayoutData?.assignments ?? [])
-        .filter(
-          (a) =>
-            (a.field === '__owners__' || !a.field.startsWith('__')) &&
-            (a.group_key ?? null) === '__header__'
-        )
-        .map((a) => {
-          const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
-          let displayFormat = 'text'
-          let color: string | undefined
-          let weight: string | undefined
-          let displayAs: string | undefined
-          let linkTemplate: string | undefined
-          let thresholds: Array<{ op: string; value: number; color: string }> | undefined
-          try {
-            const raw = (a as unknown as Record<string, unknown>).input_bindings
-            const parsed: Array<{ key: string; binding_value: string }> =
-              typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
-            const fmt = parsed.find((b) => b.key === '__display_format__')
-            if (fmt?.binding_value) displayFormat = fmt.binding_value
-            color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
-            weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
-            displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
-            linkTemplate =
-              parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
-            // #5 — threshold rules: [{op: lt|lte|gt|gte|eq, value, color}] —
-            // the first matching rule recolours the chip (Left to Forecast
-            // reads red below zero, amber under 10%…).
-            const thrRaw = parsed.find((b) => b.key === '__threshold__')?.binding_value
-            if (thrRaw) {
-              const t = JSON.parse(thrRaw)
-              if (Array.isArray(t))
-                thresholds = t.filter(
-                  (r) => r && typeof r === 'object' && typeof r.value === 'number' && r.color
-                )
-            }
-          } catch {
-            /* noop */
+  const headerFields = useMemo(() => {
+    const fromLayout = (activeLayoutData?.assignments ?? [])
+      .filter(
+        (a) =>
+          (a.field === '__owners__' || !a.field.startsWith('__')) &&
+          (a.group_key ?? null) === '__header__'
+      )
+      .map((a) => {
+        const meta = (fieldConfig ?? []).find((f) => f.field === a.field)
+        let displayFormat = 'text'
+        let color: string | undefined
+        let weight: string | undefined
+        let displayAs: string | undefined
+        let linkTemplate: string | undefined
+        let thresholds: Array<{ op: string; value: number; color: string }> | undefined
+        try {
+          const raw = (a as unknown as Record<string, unknown>).input_bindings
+          const parsed: Array<{ key: string; binding_value: string }> =
+            typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : []
+          const fmt = parsed.find((b) => b.key === '__display_format__')
+          if (fmt?.binding_value) displayFormat = fmt.binding_value
+          color = parsed.find((b) => b.key === '__color__')?.binding_value || undefined
+          weight = parsed.find((b) => b.key === '__weight__')?.binding_value || undefined
+          displayAs = parsed.find((b) => b.key === '__display_as__')?.binding_value || undefined
+          linkTemplate =
+            parsed.find((b) => b.key === '__link_template__')?.binding_value || undefined
+          // #5 — threshold rules: [{op: lt|lte|gt|gte|eq, value, color}] —
+          // the first matching rule recolours the chip (Left to Forecast
+          // reads red below zero, amber under 10%…).
+          const thrRaw = parsed.find((b) => b.key === '__threshold__')?.binding_value
+          if (thrRaw) {
+            const t = JSON.parse(thrRaw)
+            if (Array.isArray(t))
+              thresholds = t.filter(
+                (r) => r && typeof r === 'object' && typeof r.value === 'number' && r.color
+              )
           }
-          return {
-            field: a.field,
-            label: a.label_override ?? titleCase(meta?.label ?? a.field),
-            sort: a.sort ?? 0,
-            displayFormat,
-            color,
-            weight,
-            displayAs,
-            linkTemplate,
-            thresholds,
-            cmsField: meta ?? null
-          }
-        }),
-    [activeLayoutData, fieldConfig]
-  )
+        } catch {
+          /* noop */
+        }
+        return {
+          field: a.field,
+          label: a.label_override ?? titleCase(meta?.label ?? a.field),
+          sort: a.sort ?? 0,
+          displayFormat,
+          color,
+          weight,
+          displayAs,
+          linkTemplate,
+          thresholds,
+          cmsField: meta ?? null
+        }
+      })
+    // Owners are ALWAYS in the header of a record with a workflow (Rob
+    // 2026-10-26): a layout that shows the progress or owners slot but not an
+    // owners header tile gets one, first. The tile is pinned (never folds).
+    const hasWorkflow =
+      showPipeline &&
+      !isNew &&
+      (activeLayoutData?.assignments ?? []).some(
+        (a) =>
+          (a.field === '__pipeline__' || a.field === '__owners__') &&
+          !(a.is_visible === 0 || a.is_visible === false)
+      )
+    if (!hasWorkflow || fromLayout.some((f) => f.field === '__owners__')) return fromLayout
+    const first = fromLayout.reduce((m, f) => Math.min(m, f.sort), 0)
+    return [
+      {
+        field: '__owners__',
+        label: 'Owners',
+        sort: first - 1,
+        displayFormat: 'text',
+        color: undefined,
+        weight: undefined,
+        displayAs: undefined,
+        linkTemplate: undefined,
+        thresholds: undefined,
+        cmsField: null
+      },
+      ...fromLayout
+    ]
+  }, [activeLayoutData, fieldConfig, showPipeline, isNew])
 
   useEffect(() => {
     if (!onHeaderWidgets) return
@@ -12497,8 +12523,10 @@ function ItemEditFormView({
                                                     { kind: 'header', field: '__owners__' },
                                                     <div
                                                       key='__owners__'
-                                                      // Empty roster reads as an empty cell (dim, folds first).
+                                                      // Empty roster reads dim. Pinned: who holds the
+                                                      // record never folds behind "+N more" (Rob 2026-10-26).
                                                       className={`${HEADER_TILE} [&:has([data-roster-empty])]:opacity-60`}
+                                                      data-header-pin=''
                                                     >
                                                       <span
                                                         className={HEADER_LABEL}
@@ -12841,13 +12869,20 @@ function ItemEditFormView({
                                             const foldedCells = headerDense ? headerFolded : []
                                             return (
                                               <>
-                                                <HeaderTiles tiles={tiles} folded={foldedCells} />
+                                                <HeaderTiles
+                                                  tiles={tiles}
+                                                  folded={foldedCells}
+                                                  rows={headerDense ? headerRows : null}
+                                                />
                                                 {!isNew && itemId && (
                                                   // Below lg the Integrations chip ends the last row
                                                   // (the column dock is lg-only) — never a third shelf.
+                                                  // Ordered last: tiles packed first-fit carry
+                                                  // their row as a flex order (HeaderTiles).
                                                   <div
                                                     className={HEADER_DOCK_INLINE}
                                                     data-header-tail
+                                                    style={{ order: 99 }}
                                                   >
                                                     <ExternalRequestsChip
                                                       collection={collection}

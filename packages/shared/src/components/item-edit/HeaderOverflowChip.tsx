@@ -16,11 +16,14 @@ export function HeaderOverflowChip({
   count,
   allEmpty,
   labels,
+  order,
   children
 }: {
   count: number
   allEmpty: boolean
   labels: string[]
+  /** Flex order when the band packs rows first-fit (HeaderTiles). */
+  order?: number
   children: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -32,6 +35,7 @@ export function HeaderOverflowChip({
           data-header-more
           data-copy-skip
           data-open={open ? 'true' : undefined}
+          style={order != null ? { order } : undefined}
           className={cn(
             'flex min-h-[34px] flex-none items-center gap-1 self-stretch pr-3 pl-4 text-[11px] font-semibold tabular-nums text-slate-500 shadow-[-1px_1px_0_0_#e2e8f0] transition-colors duration-[120ms] hover:text-slate-900 dark:text-slate-500 dark:shadow-[-1px_1px_0_0_hsl(var(--border))] dark:hover:text-slate-100',
             open && 'text-slate-900 dark:text-slate-100'

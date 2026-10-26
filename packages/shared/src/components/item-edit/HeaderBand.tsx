@@ -1,9 +1,17 @@
-import { cloneElement, type ReactElement, useCallback, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  cloneElement,
+  type ReactElement,
+  useCallback,
+  useRef,
+  useState
+} from 'react'
 import {
   type FoldedCell,
+  HEADER_MORE_ROW_KEY,
   type HeaderWidthCache,
   headerChangedCells,
-  headerFoldedCells,
+  headerFoldPlan,
   headerNeedsDense
 } from '../../lib/header-strip'
 import { useLayoutDesign } from '../layout-editor/design-context'
@@ -25,6 +33,10 @@ export function useHeaderBand() {
   const [headerFolded, setHeaderFolded] = useState<FoldedCell[]>([])
   const headerFoldedRef = useRef<FoldedCell[]>([])
   headerFoldedRef.current = headerFolded
+  // Row per cell key when the fold packs rows first-fit; null = layout order.
+  const [headerRows, setHeaderRows] = useState<Record<string, number> | null>(null)
+  const headerRowsRef = useRef<Record<string, number> | null>(null)
+  headerRowsRef.current = headerRows
   const headerWidthCache = useRef<HeaderWidthCache>(new Map())
   const headerStackedCache = useRef<HeaderWidthCache>(new Map())
   // Callback ref: the band mounts only once the layout has loaded, so a
@@ -39,11 +51,13 @@ export function useHeaderBand() {
       frame = 0
       const dense = headerNeedsDense(el, headerDenseRef.current, headerStackedCache.current)
       if (dense !== headerDenseRef.current) setHeaderDense(dense)
-      const folded = dense
-        ? headerFoldedCells(el, headerDenseRef.current, headerWidthCache.current)
-        : []
+      const plan = dense
+        ? headerFoldPlan(el, headerDenseRef.current, headerWidthCache.current)
+        : { folded: [], rows: null }
       const key = (list: FoldedCell[]) => list.map((c) => `${c.key}${c.empty ? 'e' : ''}`).join()
-      if (key(folded) !== key(headerFoldedRef.current)) setHeaderFolded(folded)
+      if (key(plan.folded) !== key(headerFoldedRef.current)) setHeaderFolded(plan.folded)
+      const rowsKey = (r: Record<string, number> | null) => (r ? JSON.stringify(r) : '')
+      if (rowsKey(plan.rows) !== rowsKey(headerRowsRef.current)) setHeaderRows(plan.rows)
     }
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(measure)
@@ -77,7 +91,7 @@ export function useHeaderBand() {
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [])
-  return { headerDense, headerFolded, headerTilesRef }
+  return { headerDense, headerFolded, headerRows, headerTilesRef }
 }
 
 /**
@@ -88,7 +102,17 @@ export function useHeaderBand() {
  * state). Folding goes by that cell key, so a tile that renders nothing
  * never shifts which tile folds.
  */
-export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: FoldedCell[] }) {
+export function HeaderTiles({
+  tiles,
+  folded,
+  rows = null
+}: {
+  tiles: ReactElement[]
+  folded: FoldedCell[]
+  /** `useHeaderBand`'s row per cell key: each shown tile gets that row as its
+   *  flex `order`, so a narrower later tile fills an earlier row's room. */
+  rows?: Record<string, number> | null
+}) {
   const foldSet = new Set(folded.map((c) => String(c.key)))
   // A repeated key gets `key#position`, as headerCellKeys does: two tiles
   // never share a cell key.
@@ -111,23 +135,30 @@ export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: 
     : foldedTiles
   return (
     <>
-      {tiles.map((t, k) =>
+      {tiles.map((t, k) => {
         // Folded: marked on the tile itself, which keeps its own key — a
         // wrapper changed the key and remounted the tile on every fold, so a
         // widget refetched and re-rendered each time. Out of flow but in the
         // DOM, in place.
-        cloneElement(
-          t as ReactElement<Record<string, unknown>>,
-          foldSet.has(cellKeys[k])
-            ? { 'data-header-cell': cellKeys[k], 'data-header-folded': '', 'aria-hidden': 'true' }
-            : { 'data-header-cell': cellKeys[k] }
-        )
-      )}
+        if (foldSet.has(cellKeys[k]))
+          return cloneElement(t as ReactElement<Record<string, unknown>>, {
+            'data-header-cell': cellKeys[k],
+            'data-header-folded': '',
+            'aria-hidden': 'true'
+          })
+        const row = rows?.[cellKeys[k]]
+        const own = (t.props as { style?: CSSProperties }).style
+        return cloneElement(t as ReactElement<Record<string, unknown>>, {
+          'data-header-cell': cellKeys[k],
+          ...(row != null || own ? { style: row != null ? { ...own, order: row } : own } : {})
+        })
+      })}
       {foldedTiles.length > 0 && (
         <HeaderOverflowChip
           count={foldedTiles.length}
           allEmpty={folded.every((c) => c.empty)}
           labels={folded.map((c) => c.label)}
+          order={rows?.[HEADER_MORE_ROW_KEY]}
         >
           {chipTiles}
         </HeaderOverflowChip>

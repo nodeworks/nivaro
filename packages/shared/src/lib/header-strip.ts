@@ -269,6 +269,52 @@ export function headerEstimateDenseWidth(cell: Element): number {
  *  HeaderTiles folds by; `index` its position among the cells. */
 export type FoldedCell = { index: number; key: string | number; label: string; empty: boolean }
 
+/**
+ * The band's fold plan. `rows`: the row each shown cell sits on (by cell key),
+ * plus the "+N more" chip's under HEADER_MORE_ROW_KEY — null while the cells
+ * keep their layout order. HeaderTiles turns a row into the tile's flex
+ * `order`, so a later, narrower tile fills the room a wide one left at the end
+ * of an earlier row (a five-figure budget widget missing row one by a few
+ * pixels left ~1,000px empty beside two tiles and folded eight more — the
+ * 2026-10-26 staging demo).
+ */
+export type HeaderFoldPlan = { folded: FoldedCell[]; rows: Record<string, number> | null }
+
+/** `rows` key of the "+N more" chip. */
+export const HEADER_MORE_ROW_KEY = '__more__'
+
+/**
+ * Rows for `widths` (null = folded) in `available` px. In order: one after
+ * another, wrapping like the browser. First fit: each cell on the first row
+ * with room for it, which only HeaderTiles' `order` makes the browser follow.
+ * The chip (`chipWidth`, when anything folds) packs like a cell; the inline
+ * dock (`tailWidth`) always ends the LAST row (it renders last).
+ */
+export function headerPackRows(
+  widths: Array<number | null>,
+  available: number,
+  chipWidth: number,
+  tailWidth: number,
+  firstFit: boolean
+): { count: number; rowOf: number[]; chipRow: number } {
+  const room: number[] = []
+  const fits = (r: number, w: number) => room[r] === available || w <= room[r] + 0.5
+  const place = (w: number) => {
+    let r = firstFit ? room.findIndex((_, i) => fits(i, w)) : room.length - 1
+    if (r < 0 || !fits(r, w)) {
+      room.push(available)
+      r = room.length - 1
+    }
+    room[r] -= w
+    return r
+  }
+  const rowOf = widths.map((w) => (w == null ? -1 : place(w)))
+  const chipRow = widths.some((w) => w == null) ? place(chipWidth) : -1
+  if (room.length === 0) room.push(available)
+  if (tailWidth > 0 && !fits(room.length - 1, tailWidth)) room.push(available - tailWidth)
+  return { count: room.length, rowOf, chipRow }
+}
+
 /** A cell with no value: flagged `data-empty`, or showing only the dash. */
 export function headerCellIsEmpty(cell: Element): boolean {
   if (cell.matches('[data-empty="true"]') || cell.querySelector('[data-empty="true"]')) return true
@@ -289,8 +335,10 @@ export function headerCellIsEmpty(cell: Element): boolean {
  * the DOM in place as out-of-flow children (`data-header-folded`) so the
  * text can still be sized. Before the band has flipped to dense the widths
  * are estimated from that text; the next observer pass measures them.
+ * Cells marked `data-header-pin` never fold. When the layout order does not
+ * fit, rows are packed first-fit (`rows`), so fewer cells fold.
  */
-export function headerFoldedCells(
+export function headerFoldPlan(
   group: HTMLElement,
   denseNow: boolean,
   // Dense width per cell (headerCells' key), remembered from when that cell
@@ -298,12 +346,12 @@ export function headerFoldedCells(
   // decided on — measuring the folded copy (out of flow, collapsed) did, and
   // the band flickered between two and three rows.
   cache: HeaderWidthCache
-): FoldedCell[] {
+): HeaderFoldPlan {
   const kids = Array.from(group.children)
   const chip = kids.find((k) => k.hasAttribute('data-header-more'))
   const tail = kids.find((k) => k.hasAttribute('data-header-tail'))
   const cells = headerCells(group)
-  if (cells.length === 0) return []
+  if (cells.length === 0) return { folded: [], rows: null }
   const keys = headerCellKeys(cells)
   const widths = cells.map((c, i) => {
     const key = keys[i]
@@ -316,47 +364,62 @@ export function headerFoldedCells(
   const available = group.clientWidth
   const chipWidth = chip ? chip.getBoundingClientRect().width : 96
   const tailWidth = tail?.getBoundingClientRect().width ?? 0
-  const rowsFor = (folded: Set<number>) => {
-    let rows = 1
-    let x = 0
-    const place = (w: number) => {
-      if (x > 0 && x + w > available + 0.5) {
-        rows++
-        x = 0
-      }
-      x += w
-    }
-    for (let i = 0; i < widths.length; i++) if (!folded.has(i)) place(widths[i])
-    if (folded.size > 0) place(chipWidth)
-    if (tailWidth > 0) place(tailWidth)
-    return rows
-  }
+  const pack = (folded: Set<number>, firstFit: boolean) =>
+    headerPackRows(
+      widths.map((w, i) => (folded.has(i) ? null : w)),
+      available,
+      chipWidth,
+      tailWidth,
+      firstFit
+    )
   const folded = new Set<number>()
-  if (rowsFor(folded) <= HEADER_MAX_ROWS) return []
+  // Layout order when it fits: the author's order is only given up to save a fold.
+  if (pack(folded, false).count <= HEADER_MAX_ROWS) return { folded: [], rows: null }
   const empty = cells.map(headerCellIsEmpty)
   const money = cells.map(
     (c) => c.hasAttribute('data-header-money') || c.querySelector('[data-header-money]') != null
   )
+  // Pinned cells (the owners) never fold.
+  const pinned = cells.map((c) => c.hasAttribute('data-header-pin'))
   const idx = (keep: (i: number) => boolean) =>
     cells
       .map((_, i) => i)
-      .filter(keep)
+      .filter((i) => !pinned[i] && keep(i))
       .reverse()
   const order = [
     ...idx((i) => empty[i]),
     ...idx((i) => !empty[i] && !money[i]),
     ...idx((i) => !empty[i] && money[i])
   ]
+  let packed = pack(folded, true)
   for (const i of order) {
+    if (packed.count <= HEADER_MAX_ROWS) break
     folded.add(i)
-    if (rowsFor(folded) <= HEADER_MAX_ROWS) break
+    packed = pack(folded, true)
   }
-  return [...folded]
-    .sort((a, b) => a - b)
-    .map((index) => ({
-      index,
-      key: keys[index],
-      empty: empty[index],
-      label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
-    }))
+  const rows: Record<string, number> = {}
+  packed.rowOf.forEach((r, i) => {
+    if (r >= 0) rows[String(keys[i])] = r
+  })
+  if (packed.chipRow >= 0) rows[HEADER_MORE_ROW_KEY] = packed.chipRow
+  return {
+    folded: [...folded]
+      .sort((a, b) => a - b)
+      .map((index) => ({
+        index,
+        key: keys[index],
+        empty: empty[index],
+        label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
+      })),
+    rows
+  }
+}
+
+/** The fold alone (`headerFoldPlan` without the row order). */
+export function headerFoldedCells(
+  group: HTMLElement,
+  denseNow: boolean,
+  cache: HeaderWidthCache
+): FoldedCell[] {
+  return headerFoldPlan(group, denseNow, cache).folded
 }

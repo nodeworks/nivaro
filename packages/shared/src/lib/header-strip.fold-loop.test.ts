@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { headerChangedCells, headerEstimateDenseWidth, headerFoldedCells } from './header-strip'
+import {
+  HEADER_MORE_ROW_KEY,
+  headerChangedCells,
+  headerEstimateDenseWidth,
+  headerFoldedCells,
+  headerFoldPlan,
+  headerPackRows
+} from './header-strip'
 
 // jsdom has no layout: widths come from the fixture. getBoundingClientRect
 // reads W (a cell's rendered dense width), scrollWidth reads SW (a label's or
@@ -105,17 +112,48 @@ function band(folded: Array<string | number>): HTMLElement {
   return group
 }
 
+/** Four 300px money tiles then the widget, in a 1006px band: rows pack
+ *  A B C | D, and the widget (952 measured) fits no row, so it folds — but
+ *  costed at its text estimate (658) it WOULD fit beside D. A fold that lost
+ *  the measured width unfolds, refolds, and loops. */
+function budgetBand(folded: Array<string | number>): HTMLElement {
+  const group = document.createElement('div')
+  Object.defineProperty(group, 'clientWidth', { value: 1006 })
+  for (const k of ['a', 'b', 'c', 'd']) {
+    const t = pair(k, '$1.00', 200, 40)
+    t.setAttribute('data-header-money', '')
+    t.setAttribute('data-header-cell', k)
+    W.set(t, 300)
+    group.append(t)
+  }
+  const w = widget()
+  w.setAttribute('data-header-cell', 'budget')
+  if (folded.includes('budget')) w.setAttribute('data-header-folded', '')
+  else W.set(w, 952)
+  group.append(w)
+  if (folded.length) {
+    const chip = document.createElement('button')
+    chip.setAttribute('data-header-more', '')
+    W.set(chip, 90)
+    const marker = document.createElement('span')
+    marker.hidden = true
+    marker.setAttribute('data-nvr-popover-marker', '')
+    group.append(chip, marker)
+  }
+  return group
+}
+
 describe('headerFoldedCells — the fold decision is a fixed point', () => {
   it('re-deciding a folded band with the cache the first decision filled keeps the same fold', () => {
     // As useHeaderBand does: one cache for the band's life; a fold or a
     // change inside a folded cell never empties it.
     const cache = new Map<string | number, number>()
-    const first = headerFoldedCells(band([]), true, cache).map((c) => c.key)
-    expect(first).toContain('f2') // the widget must fold at this width
-    const second = headerFoldedCells(band(first), true, cache)
+    const first = headerFoldedCells(budgetBand([]), true, cache).map((c) => c.key)
+    expect(first).toEqual(['budget']) // the widget must fold at this width
+    const second = headerFoldedCells(budgetBand(first), true, cache)
     expect(second.map((c) => c.key)).toEqual(first)
     // The popover marker beside the chip is not a cell.
-    expect(second.every((c) => c.index < DENSE.length)).toBe(true)
+    expect(second.every((c) => c.index < 5)).toBe(true)
   })
 
   it('folds by tile key, and a repeated key never shares a cache entry', () => {
@@ -165,5 +203,68 @@ describe('headerChangedCells — which remembered widths a mutation makes stale'
       { target: g, type: 'childList' }
     ] as unknown as MutationRecord[]
     expect(headerChangedCells(g, records)).toEqual({ shown: [], folded: ['f2'] })
+  })
+})
+
+describe('headerPackRows — first fit fills the room a wide tile leaves', () => {
+  it('in order, a wide tile that misses row one strands the room beside it', () => {
+    // The staging demo record: two tiles, the 980px budget widget, then narrow ones.
+    const widths = [250, 215, 980, 190, 160, 150]
+    expect(headerPackRows(widths, 1440, 96, 0, false).count).toBe(3)
+    const ff = headerPackRows(widths, 1440, 96, 0, true)
+    expect(ff.count).toBe(2)
+    // Unallocated (190) and the rest go up beside the first two.
+    expect(ff.rowOf).toEqual([0, 0, 1, 0, 0, 0])
+  })
+
+  it('the inline dock always ends the last row', () => {
+    const r = headerPackRows([600, 600], 1000, 96, 300, true)
+    expect(r.count).toBe(2)
+    expect(headerPackRows([600, 600], 1000, 96, 500, true).count).toBe(3)
+  })
+})
+
+describe('headerFoldPlan — first fit folds less, and never a pinned cell', () => {
+  /** The demo record at 1440px: 2 tiles, the widget, then 9 text tiles. */
+  function demoBand(width = 1440, budget = 980): HTMLElement {
+    const group = document.createElement('div')
+    Object.defineProperty(group, 'clientWidth', { value: width })
+    const add = (key: string, w: number, money = false) => {
+      const t = pair(key, 'value', w - 76, 40)
+      t.setAttribute('data-header-cell', key)
+      if (money) t.setAttribute('data-header-money', '')
+      W.set(t, w)
+      group.append(t)
+      return t
+    }
+    add('requisition', 250, true)
+    add('left', 215, true)
+    add('budget', budget, true)
+    add('unallocated', 190, true)
+    for (let i = 0; i < 7; i++) add(`text${i}`, 160)
+    add('__owners__', 170).setAttribute('data-header-pin', '')
+    return group
+  }
+
+  it('packs later tiles beside the first two instead of folding them', () => {
+    const plan = headerFoldPlan(demoBand(), true, new Map())
+    // In order: requisition, left | budget, unallocated, … — 8 folded.
+    // First fit: everything that fits beside requisition + left goes up.
+    expect(plan.folded.length).toBeLessThanOrEqual(2)
+    expect(plan.rows?.requisition).toBe(0)
+    expect(plan.rows?.budget).toBe(1)
+    expect(plan.rows?.unallocated).toBe(0)
+    if (plan.folded.length) expect(plan.rows?.[HEADER_MORE_ROW_KEY]).toBeGreaterThanOrEqual(0)
+  })
+
+  it('a pinned cell never folds', () => {
+    const plan = headerFoldPlan(demoBand(700), true, new Map())
+    expect(plan.folded.length).toBeGreaterThan(0)
+    expect(plan.folded.map((c) => c.key)).not.toContain('__owners__')
+  })
+
+  it('keeps layout order (no rows) when the band fits in order', () => {
+    const plan = headerFoldPlan(demoBand(2400, 300), true, new Map())
+    expect(plan).toEqual({ folded: [], rows: null })
   })
 })

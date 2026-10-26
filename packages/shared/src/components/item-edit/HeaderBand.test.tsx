@@ -144,36 +144,26 @@ function FakeWidget({ committed }: { committed: string }) {
   )
 }
 
-// Layout 2's header tiles (dense widths from the investigation, 1400px
-// viewport); index 2 is the widget.
-const DENSE = [172, 190, 952, 125, 110, 196, 173, 105, 161, 309, 90, 150]
-const EMPTY = new Set([0, 4, 5, 8, 10])
-const MONEY = new Set([0, 1])
-
+// Four 300px money tiles, then the widget, in a 1006px band: rows pack
+// A B C | D and the widget (952 rendered) fits no row, so it folds; costed at
+// its text estimate (658) it would fit beside D — the fold must keep the
+// measured width or the band unfolds and refolds.
 function tiles(committed: string): ReactElement[] {
-  return DENSE.map((w, i) =>
-    i === 2 ? (
-      <div key='project_budget' className={HEADER_TILE} data-header-money=''>
-        <FakeWidget committed={committed} />
-      </div>
-    ) : (
-      <div
-        // biome-ignore lint/suspicious/noArrayIndexKey: a fixed fixture, never reordered
-        key={`field_${i}`}
-        className={HEADER_TILE}
-        data-test-w={w}
-        data-empty={EMPTY.has(i) ? 'true' : undefined}
-        data-header-money={MONEY.has(i) ? '' : undefined}
-      >
-        <span data-header-label data-test-sw={w - 76}>
-          Field {i}
+  return [
+    ...['A', 'B', 'C', 'D'].map((k) => (
+      <div key={`field_${k}`} className={HEADER_TILE} data-test-w={300} data-header-money=''>
+        <span data-header-label data-test-sw={200}>
+          {k}
         </span>
         <span data-header-value data-test-sw={40}>
-          {EMPTY.has(i) ? '—' : 'value'}
+          $1.00
         </span>
       </div>
-    )
-  )
+    )),
+    <div key='project_budget' className={HEADER_TILE} data-header-money=''>
+      <FakeWidget committed={committed} />
+    </div>
+  ]
 }
 
 function Band({
@@ -300,5 +290,30 @@ describe('HeaderTiles — folds by tile key, not position', () => {
       (l) => l.textContent === 'Lines'
     )
     expect(lines?.closest('[data-header-folded]')).not.toBeNull()
+  })
+})
+
+describe('HeaderTiles — rows packed first-fit become flex order', () => {
+  it('puts each shown tile and the chip on its row, keeping a tile own style', async () => {
+    const items = [
+      <div key='a' className={HEADER_TILE} style={{ color: 'red' }} />,
+      <div key='b' className={HEADER_TILE} />,
+      <div key='c' className={HEADER_TILE} />
+    ]
+    const host = await mount(
+      <HeaderTiles
+        tiles={items}
+        folded={[{ index: 2, key: 'c', label: 'C', empty: false }]}
+        rows={{ a: 1, b: 0, __more__: 0 }}
+      />
+    )
+    const a = host.querySelector<HTMLElement>('[data-header-cell="a"]')
+    const b = host.querySelector<HTMLElement>('[data-header-cell="b"]')
+    const c = host.querySelector<HTMLElement>('[data-header-cell="c"]')
+    expect(a?.style.order).toBe('1')
+    expect(a?.style.color).toBe('red')
+    expect(b?.style.order).toBe('0')
+    expect(c?.style.order).toBe('')
+    expect(host.querySelector<HTMLElement>('[data-header-more]')?.style.order).toBe('0')
   })
 })

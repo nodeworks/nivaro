@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { type CSSProperties, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
 import {
@@ -48,6 +48,8 @@ interface Props {
   'data-header-cell'?: string
   'data-header-folded'?: string
   'aria-hidden'?: 'true'
+  /** The band's row order (HeaderTiles), when it packs rows first-fit. */
+  style?: CSSProperties
 }
 
 interface Summary {
