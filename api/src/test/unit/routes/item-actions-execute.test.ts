@@ -83,7 +83,9 @@ describe('item action execute gates', () => {
       collection: 'workflows',
       itemId: 42,
       payload: undefined,
-      userId: 'U1'
+      userId: 'U1',
+      // Runs a step as the caller, never as a machine identity.
+      callAsCaller: expect.any(Function)
     })
   })
 

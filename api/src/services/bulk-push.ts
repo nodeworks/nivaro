@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { itemActionRegistry } from '../extensions/item-actions.js'
 import { logActivity } from './activity.js'
 import type { BulkRunResult } from './bulk-actions.js'
+import { callAsCallerFor } from './caller-inject.js'
 
 /**
  * #620 / #622 — integration pushes over a selection (collection browser,
@@ -139,7 +140,8 @@ export async function runItemActionOver(opts: {
         collection,
         itemId: item,
         payload: opts.payload ?? undefined,
-        userId: req.user?.id
+        userId: req.user?.id,
+        callAsCaller: callAsCallerFor(req)
       })
       await logActivity({
         action: 'item-action-execute',

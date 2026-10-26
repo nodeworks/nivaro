@@ -3,6 +3,7 @@ import { itemActionRegistry } from '../extensions/item-actions.js'
 import { describeDbRefusal, messageWithoutSql } from '../lib/db-refusal.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { callAsCallerFor } from '../services/caller-inject.js'
 
 export async function itemActionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -250,7 +251,8 @@ export async function itemActionsRoutes(app: FastifyInstance) {
         collection,
         itemId,
         payload,
-        userId: user.id
+        userId: user.id,
+        callAsCaller: callAsCallerFor(req)
       })
       // The mutation itself lives in extension code — log the invocation.
       await logActivity({

@@ -2,8 +2,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import { callerHeaders } from './caller-inject.js'
 import { ExtensionToolError, liveExtensionTools, runExtensionTool } from './extension-tools.js'
-import { MCP_INNER_HEADER } from './mcp-config.js'
 
 /**
  * The instance's own MCP tools, beyond the fixed set in @nivaro/mcp:
@@ -352,16 +352,6 @@ export function declaredInputs(
   const props = (schema.properties ?? {}) as Record<string, unknown>
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(props)) if (input[k] !== undefined) out[k] = input[k]
-  return out
-}
-
-/** The caller's own credential for an in-process call made on their behalf. */
-function callerHeaders(req: FastifyRequest): Record<string, string> {
-  const out: Record<string, string> = { 'content-type': 'application/json' }
-  for (const h of ['authorization', 'cookie', 'x-workspace', 'user-agent', MCP_INNER_HEADER]) {
-    const v = req.headers[h]
-    if (typeof v === 'string') out[h] = v
-  }
   return out
 }
 

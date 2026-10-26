@@ -42,6 +42,15 @@ export interface ItemActionContext {
   itemId: string | number
   payload?: Record<string, unknown>
   userId?: string
+  /** An in-process `/api/...` call made AS the person who pressed the button
+   *  (their own permissions, scopes, hooks and logs) — e.g. to run a
+   *  pipeline step on their behalf. The credential never reaches the
+   *  extension. Absent on an older core. */
+  callAsCaller?(opts: { method: string; url: string; payload?: unknown }): Promise<{
+    statusCode: number
+    body: string
+    json(): unknown
+  }>
 }
 
 /** A contextual button in the record form's toolbar. */
