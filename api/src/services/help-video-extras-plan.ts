@@ -3,6 +3,7 @@
 // imports so it can be unit-tested and run against ffmpeg alone; the job
 // that uses it lives in help-video-extras.ts.
 import { isLockedMime, lockedInputArgs } from './ffmpeg.js'
+import { fitFrame, SOURCE_INPUT_ARGS } from './help-video-frame-fit.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -95,13 +96,16 @@ export function buildSpriteArgs(
     String(input.threads ?? threads()),
     '-t',
     String(MAX_INPUT_SECONDS),
+    // A recording may change frame size mid-stream (help-video-frame-fit.ts):
+    // the graph is kept, so the tile is not restarted at the change.
+    ...SOURCE_INPUT_ARGS,
     ...lock,
     '-i',
     input.path,
     '-an',
     '-sn',
     '-vf',
-    `fps=1/${g.interval_ms / 1000},scale=${g.tile_w}:${g.tile_h}:flags=area,tile=${g.cols}x${g.rows}`,
+    `fps=1/${g.interval_ms / 1000},${fitFrame(g.tile_w, g.tile_h, 'area')},tile=${g.cols}x${g.rows}`,
     '-frames:v',
     '1',
     '-q:v',

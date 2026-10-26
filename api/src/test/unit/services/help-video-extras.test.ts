@@ -9,6 +9,7 @@ import {
   SPRITE_MAX_TILES,
   spriteGeometry
 } from '../../../services/help-video-extras.js'
+import { fitFrame } from '../../../services/help-video-frame-fit.js'
 
 // #1560: the sprite sheet geometry and the peaks maths, with no ffmpeg.
 
@@ -58,7 +59,9 @@ describe('buildSpriteArgs / buildPeaksArgs', () => {
     expect(args.slice(0, 2)).toEqual(['-y', '-v'])
     expect(args).toContain('-format_whitelist')
     expect(args[args.indexOf('-i') + 1]).toBe('/w/src.webm')
-    expect(args[args.indexOf('-vf') + 1]).toBe('fps=1/1,scale=160:90:flags=area,tile=10x2')
+    expect(args[args.indexOf('-vf') + 1]).toBe(`fps=1/1,${fitFrame(160, 90, 'area')},tile=10x2`)
+    expect(args[args.indexOf('-reinit_filter') + 1]).toBe('0')
+    expect(args.indexOf('-reinit_filter')).toBeLessThan(args.indexOf('-i'))
     expect(args[args.indexOf('-frames:v') + 1]).toBe('1')
     expect(args[args.indexOf('-t') + 1]).toBe(String(31 * 60 + 1))
     expect(args).toContain('-an')

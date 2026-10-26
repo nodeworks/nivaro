@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { lockedInputArgs } from '../../../services/ffmpeg.js'
 import { EDIT_LIMITS, normalizeEdits } from '../../../services/help-video-edits.js'
+import { fitFrame } from '../../../services/help-video-frame-fit.js'
 import {
   blurPower,
   buildPosterArgs,
@@ -73,6 +75,23 @@ describe('buildRenderArgs', () => {
       ])
     )
     expect(args.at(-1)).toBe('out.mp4')
+  })
+  it('keeps one frame size when the recording changes size mid-stream', () => {
+    const args = buildRenderArgs({ ...base, edits: normalizeEdits({}, 10_000) })
+    // -reinit_filter 0 belongs to the recording's input, before its -i.
+    const at = args.indexOf('-reinit_filter')
+    expect(args[at + 1]).toBe('0')
+    expect(args.slice(at + 2, args.indexOf('in.webm') + 1)).toEqual([
+      ...lockedInputArgs('video/webm'),
+      '-i',
+      'in.webm'
+    ])
+    expect(fc(args)).toContain(`[0:v]${fitFrame(1280, 720)},format=yuv420p,setsar=1[v0]`)
+  })
+  it('fitFrame scales a same-aspect frame to the exact size and letterboxes another', () => {
+    const f = fitFrame(1280, 720)
+    expect(f).toContain(':eval=frame,pad=1280:720:(ow-iw)/2:(oh-ih)/2:eval=frame')
+    expect(fitFrame(160, 90, 'area')).toContain(':eval=frame:flags=area,pad=160:90')
   })
   it('skips trimming when nothing is cut', () => {
     const graph = fc(buildRenderArgs({ ...base, edits: normalizeEdits({}, 10_000) }))

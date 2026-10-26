@@ -1,5 +1,6 @@
 import { isLockedMime, lockedInputArgs } from './ffmpeg.js'
 import { introMs, type VideoEdits } from './help-video-edits.js'
+import { fitFrame, SOURCE_INPUT_ARGS } from './help-video-frame-fit.js'
 import { blurPower, graphArgs, pixelRect, renderSizes } from './help-video-render-plan.js'
 
 // Short clips and GIFs (#1562): the ffmpeg plan for one clip. A clip is a
@@ -164,7 +165,7 @@ export function buildClipPlan(
     let label = 'v0'
     let n = 0
     const next = () => `v${++n}`
-    parts.push(`[0:v]scale=${work.width}:${work.height},format=yuv420p,setsar=1[${label}]`)
+    parts.push(`[0:v]${fitFrame(work.width, work.height)},format=yuv420p,setsar=1[${label}]`)
     // Blurs exactly as the render draws them, in time shifted by the seek.
     for (const b of e.blurs) {
       if (b.end_ms <= off || b.start_ms >= off + window.length_ms) continue
@@ -275,6 +276,8 @@ export function buildClipPlan(
     sec(off),
     '-t',
     sec(window.length_ms),
+    // A recording may change frame size mid-stream (help-video-frame-fit.ts).
+    ...SOURCE_INPUT_ARGS,
     ...lock,
     '-i',
     input.inputPath,

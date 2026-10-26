@@ -137,7 +137,18 @@ const files = vi.hoisted(() => ({
   deleteFail: false,
   afterUpload: null as null | (() => void),
   deleted: [] as string[],
-  objects: [] as string[]
+  objects: [] as string[],
+  /** Stored upload parts by key (help-video-parts/…), the storage every replica shares. */
+  parts: new Map<string, Buffer>(),
+  putFail: 0
+}))
+const roster = vi.hoisted(() => ({ hosts: [] as string[], tenant: '' }))
+vi.mock('../../../services/instance-roster.js', () => ({
+  INSTANCE_ID: 'test0001',
+  listInstances: async () => roster.hosts.map((host) => ({ host }))
+}))
+vi.mock('../../../db/tenant-context.js', () => ({
+  getTenantId: () => roster.tenant || undefined
 }))
 vi.mock('../../../services/files.js', () => ({
   uploadFileFromPath: async () => {
@@ -151,9 +162,26 @@ vi.mock('../../../services/files.js', () => ({
     files.deleted.push(id)
   }
 }))
+const isPart = (key: string) => /(^|\/)help-video-parts\//.test(key)
 vi.mock('../../../services/storage-drivers.js', () => ({
   deleteStoredObject: async (key: string) => {
-    files.objects.push(key)
+    if (isPart(key)) files.parts.delete(key)
+    else files.objects.push(key)
+  },
+  getActiveStorageDriver: async () => ({
+    name: 'local',
+    put: async (key: string, buf: Buffer) => {
+      if (files.putFail > 0) {
+        files.putFail--
+        throw new Error('storage down')
+      }
+      files.parts.set(key, Buffer.from(buf))
+    }
+  }),
+  readStoredObject: async (key: string) => {
+    const buf = files.parts.get(key)
+    if (!buf) throw new Error('ENOENT')
+    return buf
   }
 }))
 
@@ -163,6 +191,10 @@ const up = await import('../../../services/help-video-uploads.js')
 const user = { id: 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA' } as never
 const webm = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4])
 const partFile = (id: string) => join(work, 'uploads', `${id}.part`)
+const partKey = (id: string, n: number) => `help-video-parts/${id.toLowerCase()}/${n}.part`
+/** The parts an upload has in storage. */
+const storedParts = (id: string) =>
+  [...files.parts.keys()].filter((k) => k.includes(`/${id.toLowerCase()}/`))
 
 beforeEach(() => {
   for (const t of Object.values(tables)) t.length = 0
@@ -176,6 +208,10 @@ beforeEach(() => {
   files.afterUpload = null
   files.deleted = []
   files.objects = []
+  files.parts.clear()
+  files.putFail = 0
+  roster.hosts = []
+  roster.tenant = ''
 })
 
 describe('upload ids', () => {
@@ -188,10 +224,10 @@ describe('upload ids', () => {
       await expect(up.takeFinalizedUpload(user, bad)).rejects.toMatchObject({ statusCode: 404 })
     }
   })
-  it('builds the temp path from the row id, not the caller string', async () => {
+  it('builds the part key from the row id, not the caller string', async () => {
     const s = await up.openUpload(user, 'video/webm')
     await up.appendPart(user, s.id.toUpperCase(), 0, webm)
-    expect(existsSync(partFile(s.id))).toBe(true)
+    expect([...files.parts.keys()]).toEqual([partKey(s.id, 0)])
   })
 })
 
@@ -201,7 +237,7 @@ describe('part 0 magic bytes', () => {
     await expect(
       up.appendPart(user, s.id, 0, Buffer.from('#EXTM3U\n/etc/hosts'))
     ).rejects.toMatchObject({ statusCode: 422, code: 'UPLOAD_NOT_VIDEO' })
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
   })
   it('recognises EBML and ftyp', () => {
     expect(up.looksLikeVideo('video/webm', webm)).toBe(true)
@@ -220,7 +256,8 @@ describe('concurrent parts', () => {
       up.appendPart(user, s.id, 1, part)
     ])
     expect(r.every((x) => x.status === 'fulfilled')).toBe(true)
-    expect(readFileSync(partFile(s.id)).length).toBe(webm.length + part.length)
+    expect(rows[0]).toMatchObject({ next_part: 2, bytes_received: webm.length + part.length })
+    expect(files.parts.get(partKey(s.id, 1))).toEqual(part)
   })
   it('refuses the loser with 409 when sizes differ and writes only the winner', async () => {
     const s = await up.openUpload(user, 'video/webm')
@@ -232,7 +269,165 @@ describe('concurrent parts', () => {
     expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1)
     const bad = r.find((x) => x.status === 'rejected') as PromiseRejectedResult
     expect(bad.reason).toMatchObject({ statusCode: 409 })
+    expect(rows[0].bytes_received).toBe(webm.length + 4)
+    expect(files.parts.get(partKey(s.id, 1))?.length).toBe(4)
+  })
+})
+
+describe('any replica takes any request (parts in shared storage)', () => {
+  // Another API process: its own module state (locks, work directory), the
+  // same database and file storage.
+  async function otherReplica() {
+    vi.resetModules()
+    const before = process.env.VIDEO_WORK_DIR
+    process.env.VIDEO_WORK_DIR = mkdtempSync(join(tmpdir(), 'nvr-up-b-'))
+    const mod = await import('../../../services/help-video-uploads.js')
+    process.env.VIDEO_WORK_DIR = before
+    return mod
+  }
+  it('parts alternate between replicas, the other one finalizes, nothing is left behind', async () => {
+    const b = await otherReplica()
+    const s = await up.openUpload(user, 'video/webm')
+    expect(rows[0].instance).toBe('shared:help-video-parts')
+    await up.appendPart(user, s.id, 0, webm)
+    await b.appendPart(user, s.id, 1, Buffer.from('second'))
+    await up.appendPart(user, s.id, 2, Buffer.from('third'))
+    await expect(b.finalizeUpload(user, s.id, {})).resolves.toMatchObject({ file_id: 'file-1' })
+    expect(rows[0].status).toBe('finalized')
+    expect(storedParts(s.id)).toEqual([])
+    expect(existsSync(join(work, 'uploads', `${s.id}.joined`))).toBe(false)
+  })
+  it('the other replica discards an open upload and its parts', async () => {
+    const b = await otherReplica()
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    await b.abandonUpload(user, s.id)
+    expect(rows[0].status).toBe('abandoned')
+    expect(storedParts(s.id)).toEqual([])
+  })
+  it('a part store that fails gives the claim back, and the resend is taken', async () => {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    files.putFail = 1
+    await expect(up.appendPart(user, s.id, 1, Buffer.from('abcd'))).rejects.toThrow('storage down')
+    expect(rows[0]).toMatchObject({ next_part: 1, bytes_received: webm.length })
+    await up.appendPart(user, s.id, 1, Buffer.from('abcd'))
+    expect(rows[0]).toMatchObject({ next_part: 2, bytes_received: webm.length + 4 })
+  })
+  it('a claimed part whose bytes never landed is stored by the resend', async () => {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    await up.appendPart(user, s.id, 1, Buffer.from('abcd'))
+    files.parts.delete(partKey(s.id, 1)) // the process died between claim and store
+    await up.appendPart(user, s.id, 1, Buffer.from('abcd')) // the recorder resends (no ack came)
+    await expect(up.finalizeUpload(user, s.id, {})).resolves.toMatchObject({ file_id: 'file-1' })
+  })
+  it('a part missing at finalize refuses it and keeps the upload open', async () => {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    await up.appendPart(user, s.id, 1, Buffer.from('abcd'))
+    files.parts.delete(partKey(s.id, 1))
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'UPLOAD_INCOMPLETE'
+    })
+    expect(rows[0].status).toBe('open')
+    expect(existsSync(join(work, 'uploads', `${s.id}.joined`))).toBe(false)
+  })
+  it('no part is taken once the upload is finishing (a part racing finalize on another replica)', async () => {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    rows[0].status = 'finalizing'
+    await expect(up.appendPart(user, s.id, 1, Buffer.from('late'))).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'UPLOAD_CLOSED'
+    })
+    expect(rows[0].next_part).toBe(1)
+  })
+  it('cloud mode keeps the parts under the tenant prefix, found again from the row alone', async () => {
+    roster.tenant = 'tenant-1'
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    expect(rows[0].instance).toBe('shared:tenant-1/help-video-parts')
+    expect([...files.parts.keys()]).toEqual([`tenant-1/${partKey(s.id, 0)}`])
+    roster.tenant = '' // the purge runs outside any request
+    rows[0].updated_at = new Date(Date.now() - 25 * 3_600_000)
+    await up.purgeStaleUploads()
+    expect(files.parts.size).toBe(0)
+  })
+})
+
+describe('uploads opened before parts were shared (one file on the host that opened them)', () => {
+  async function legacy(host: string, bytes: Buffer | null) {
+    const s = await up.openUpload(user, 'video/webm')
+    if (bytes) {
+      mkdirSync(join(work, 'uploads'), { recursive: true })
+      writeFileSync(partFile(s.id), bytes)
+    }
+    Object.assign(rows[0], {
+      instance: host,
+      next_part: bytes ? 1 : 0,
+      bytes_received: bytes?.length ?? 0,
+      last_part_bytes: bytes?.length ?? null
+    })
+    return s
+  }
+  it('while the host that holds it serves, a part elsewhere is still 409 UPLOAD_ELSEWHERE', async () => {
+    roster.hosts = ['web-a', 'web-b']
+    const s = await legacy('web-a', null)
+    rows[0].next_part = 1 // something was sent to web-a
+    await expect(up.appendPart(user, s.id, 1, Buffer.from('x'))).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'UPLOAD_ELSEWHERE'
+    })
+  })
+  it('one with nothing sent yet becomes a shared-parts upload', async () => {
+    roster.hosts = ['web-a']
+    const s = await legacy('web-a', null)
+    await up.appendPart(user, s.id, 0, webm)
+    expect(rows[0].instance).toBe('shared:help-video-parts')
+    expect(storedParts(s.id)).toEqual([partKey(s.id, 0)])
+  })
+  it('its host gone and its file here (a shared work directory): taken over and finished', async () => {
+    roster.hosts = ['web-new']
+    const s = await legacy('web-gone', webm)
+    await up.appendPart(user, s.id, 1, Buffer.from('more'))
     expect(readFileSync(partFile(s.id)).length).toBe(webm.length + 4)
+    await expect(up.finalizeUpload(user, s.id, {})).resolves.toMatchObject({ file_id: 'file-1' })
+    expect(existsSync(partFile(s.id))).toBe(false)
+  })
+  it('its host gone with the file: 409 UPLOAD_LOST, and it can still be discarded', async () => {
+    roster.hosts = ['web-new']
+    const s = await legacy('web-gone', null)
+    rows[0].next_part = 3
+    rows[0].bytes_received = 100
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'UPLOAD_LOST'
+    })
+    await up.abandonUpload(user, s.id)
+    expect(rows[0].status).toBe('abandoned')
+  })
+  it('any replica may discard it, even while its host serves', async () => {
+    roster.hosts = ['web-a', 'web-b']
+    const s = await legacy('web-a', webm)
+    await up.abandonUpload(user, s.id)
+    expect(rows[0].status).toBe('abandoned')
+  })
+  it('old part files from discarded legacy uploads are swept after a day', async () => {
+    const dir = join(work, 'uploads')
+    mkdirSync(dir, { recursive: true })
+    const old = join(dir, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee.part')
+    const recent = join(dir, 'ffffffff-ffff-4fff-8fff-ffffffffffff.part')
+    const joined = join(dir, 'abababab-abab-4bab-8bab-abababababab.joined')
+    for (const f of [old, recent, joined]) writeFileSync(f, 'x')
+    const dayAgo = (Date.now() - 25 * 3_600_000) / 1000
+    utimesSync(old, dayAgo, dayAgo)
+    utimesSync(joined, dayAgo, dayAgo)
+    await up.purgeTempFiles()
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(joined)).toBe(false)
+    expect(existsSync(recent)).toBe(true)
   })
 })
 
@@ -257,12 +452,13 @@ describe('finalize', () => {
     const s = await ready()
     files.fail = true
     await expect(up.finalizeUpload(user, s.id, {})).rejects.toThrow('storage down')
-    expect(existsSync(partFile(s.id))).toBe(true)
+    expect(storedParts(s.id)).toHaveLength(1)
     expect(existsSync(join(work, 'uploads', `${s.id}.fixed.webm`))).toBe(false)
+    expect(existsSync(join(work, 'uploads', `${s.id}.joined`))).toBe(false)
     expect(rows[0].status).toBe('open')
     files.fail = false
     await expect(up.finalizeUpload(user, s.id, {})).resolves.toMatchObject({ file_id: 'file-1' })
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
   })
   it('refuses a probed duration over 31 minutes and keeps the upload open', async () => {
     const s = await ready()
@@ -272,7 +468,7 @@ describe('finalize', () => {
       code: 'UPLOAD_TOO_LONG'
     })
     expect(rows[0].status).toBe('open')
-    expect(existsSync(partFile(s.id))).toBe(true)
+    expect(storedParts(s.id)).toHaveLength(1)
   })
 })
 
@@ -392,7 +588,7 @@ describe('stale finalizing rows', () => {
     const s = await stuck(25 * 3_600_000)
     expect(await up.purgeStaleUploads()).toBe(1)
     expect(rows[0].status).toBe('abandoned')
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
   })
 })
 
@@ -558,7 +754,8 @@ describe('uploaded files (picked, not recorded)', () => {
     expect(st).toMatchObject({ status: 'finalized', source: 'upload', name: 'Walkthrough.mov' })
     expect(st.error).toBeNull()
     expect(ff.ran[0]).toEqual(expect.arrayContaining(['-c:v', 'copy', '-movflags', '+faststart']))
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
+    expect(existsSync(join(work, 'uploads', `${s.id}.joined`))).toBe(false)
     const taken = await up.takeFinalizedUpload(user, s.id)
     expect(taken).toMatchObject({
       file_id: 'file-1',
@@ -579,7 +776,7 @@ describe('uploaded files (picked, not recorded)', () => {
       error: 'That file has no video in it',
       error_code: 'UPLOAD_NO_VIDEO'
     })
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
     expect(ff.ran).toHaveLength(0)
   })
   it('a file longer than 30 minutes is refused before any conversion', async () => {
@@ -600,7 +797,7 @@ describe('uploaded files (picked, not recorded)', () => {
       status: 'open',
       error_code: 'UPLOAD_SAVE_FAILED'
     })
-    expect(existsSync(partFile(s.id))).toBe(true)
+    expect(storedParts(s.id)).toHaveLength(1)
     files.fail = false
     await up.finalizeUpload(user, s.id, {})
     await settle()
@@ -618,7 +815,7 @@ describe('uploaded files (picked, not recorded)', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(rows[0].status).toBe('abandoned')
     expect(rows[0].file_id ?? null).toBeNull()
-    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(storedParts(s.id)).toEqual([])
     expect(existsSync(join(work, 'uploads', `${s.id}.fixed.mp4`))).toBe(false)
   })
   it('a recording says so, and its meta is never parsed for the list', async () => {

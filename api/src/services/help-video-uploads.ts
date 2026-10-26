@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readdir, rm, stat, truncate } from 'node:fs/promises'
+import { appendFile, mkdir, open, readdir, rm, stat, truncate } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import {
@@ -37,8 +38,9 @@ import {
   normalizeClicks,
   normalizeLevels
 } from './help-video-walk.js'
+import { listInstances } from './instance-roster.js'
 import { peerFileOp } from './render-peer.js'
-import { deleteStoredObject } from './storage-drivers.js'
+import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
 // temp files and must keep accepting parts for uploads it opened before.
@@ -46,8 +48,16 @@ const HOST = hostname().slice(0, 200)
 
 // Recording uploads arrive as numbered parts every few seconds so a long
 // recording never meets a request-size limit and a closed tab loses nothing.
-// Parts append to a temp file on the process that opened the session (its
-// instance is stored); finalize moves the file into storage as nivaro_files.
+// Each part is stored as its own object in file storage (2026-10-26), which
+// every API process shares, so any replica takes the next part, the finalize
+// or the discard: behind a round-robin proxy a part used to land on another
+// replica than the one holding the upload and was refused (409
+// UPLOAD_ELSEWHERE) until the recorder gave up. The row's `instance` says
+// where the parts are: `shared:<key prefix>` for stored parts; a bare host
+// name for an upload opened before that change, whose parts are one file in
+// the work directory of that host (the legacy path below, kept so those
+// uploads still finish or can be discarded). Finalize joins the parts into a
+// temp file, stores the recording as nivaro_files, then deletes the parts.
 
 export const MAX_PART_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = Math.round(1.2 * 1024 * 1024 * 1024)
@@ -151,12 +161,134 @@ function assertId(id: string): string {
   }
   return id.toLowerCase()
 }
+/** A legacy upload's parts: one file on the host that opened it. */
 function partPath(id: string): string {
   return join(videoWorkDir(), 'uploads', `${assertId(id)}.part`)
 }
+/** A stored-parts upload joined back into one file for finalize. */
+function joinedPath(id: string): string {
+  return join(videoWorkDir(), 'uploads', `${assertId(id)}.joined`)
+}
 
-// Per-upload serialization: uploads are pinned to one host, so an in-process
-// promise chain is enough to make read -> decide -> append -> update atomic.
+const PARTS_PREFIX = 'help-video-parts'
+const SHARED_MARK = 'shared:'
+// The key prefix travels on the row, so a purge or another replica (no request,
+// no tenant context) finds the parts from the row alone. In cloud mode it
+// starts with the tenant id, like every stored file (files.ts buildDiskName).
+const SHARED_RE = /^shared:((?:[\w-]{1,64}\/)?help-video-parts)$/
+
+function sharedInstance(): string {
+  const tenant = getTenantId()
+  return `${SHARED_MARK}${tenant ? `${tenant}/` : ''}${PARTS_PREFIX}`
+}
+/** Where a stored-parts upload keeps its parts, or null for a legacy upload. */
+function partsBase(row: Record<string, unknown>): string | null {
+  return SHARED_RE.exec(String(row.instance ?? ''))?.[1] ?? null
+}
+function partKey(base: string, id: unknown, n: number): string {
+  return `${base}/${assertId(String(id))}/${n}.part`
+}
+async function putPart(base: string, id: unknown, n: number, body: Buffer): Promise<void> {
+  const driver = await getActiveStorageDriver()
+  await driver.put(partKey(base, id, n), body, 'application/octet-stream')
+}
+
+/** Deletes a stored-parts upload's parts (best effort: a part that will not
+ *  delete is an unreachable object, never a listed file). One past
+ *  `next_part` too: a part whose claim was given back may have been stored. */
+async function deleteParts(row: Record<string, unknown>): Promise<void> {
+  const base = partsBase(row)
+  if (!base) return
+  const count = Number(row.next_part) + 1
+  for (let n = 0; n < count; n += 8) {
+    await Promise.all(
+      Array.from({ length: Math.min(8, count - n) }, (_, i) =>
+        deleteStoredObject(partKey(base, row.id, n + i)).catch(() => undefined)
+      )
+    )
+  }
+}
+
+/** Joins a stored-parts upload's parts, in order, into `dest`. A part that is
+ *  missing, or a total that is not what the row says arrived, refuses it
+ *  (422): the recording would be cut short. Reads a few parts ahead. */
+async function joinParts(row: Record<string, unknown>, dest: string): Promise<void> {
+  const base = partsBase(row) as string
+  const count = Number(row.next_part)
+  const ahead = 4
+  const fetchPart = (n: number) =>
+    readStoredObject(partKey(base, row.id, n)).then(
+      (buf) => ({ buf }),
+      () => ({ buf: null })
+    )
+  await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
+  const out = await open(dest, 'w')
+  let total = 0
+  try {
+    const queue = Array.from({ length: Math.min(ahead, count) }, (_, i) => fetchPart(i))
+    for (let n = 0; n < count; n++) {
+      const { buf } = await (queue.shift() as ReturnType<typeof fetchPart>)
+      if (n + ahead < count) queue.push(fetchPart(n + ahead))
+      if (!buf) {
+        await Promise.all(queue) // settle the read-ahead before leaving
+        throw fail(422, 'UPLOAD_INCOMPLETE', `Part ${n} of the recording is missing on the server`)
+      }
+      await out.write(buf)
+      total += buf.length
+    }
+  } finally {
+    await out.close()
+  }
+  if (total !== Number(row.bytes_received)) {
+    throw fail(422, 'UPLOAD_INCOMPLETE', 'Part of the recording is missing on the server')
+  }
+}
+
+/** Is the host a legacy upload names still serving? Unknown (no roster, e.g.
+ *  no Redis) counts as yes, so nothing is taken from a live host. */
+async function hostAlive(host: string): Promise<boolean> {
+  const roster = await listInstances().catch(() => [])
+  if (!roster.length) return true
+  return roster.some((r) => String(r.host ?? '') === host)
+}
+
+/**
+ * A legacy upload (parts in one file on the host that opened it) takes a part
+ * or a finalize. Nothing sent yet: it becomes a stored-parts upload. On its
+ * own host it carries on as before. Elsewhere, its host is gone and its file is here (the replicas share a work directory)
+ * with every byte the row counts: this process takes it over. Otherwise 409:
+ * UPLOAD_ELSEWHERE while the host serves (the recorder retries), UPLOAD_LOST
+ * once it is gone with the parts (the author can only discard it).
+ */
+async function holdHere(row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const instance = row.instance == null ? null : String(row.instance)
+  if (!instance || partsBase(row)) return row
+  const take = async (to: string) => {
+    const moved = await db('nivaro_help_video_uploads')
+      .where({ id: row.id, instance })
+      .update({ instance: to, updated_at: new Date() })
+    if (!moved) {
+      throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
+    }
+    return { ...row, instance: to }
+  }
+  if (Number(row.next_part) === 0 && row.status === 'open') return take(sharedInstance())
+  if (instance === HOST) return row
+  if (await hostAlive(instance)) {
+    throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
+  }
+  const here = await stat(partPath(String(row.id))).catch(() => null)
+  if (here && here.size === Number(row.bytes_received)) return take(HOST)
+  throw fail(
+    409,
+    'UPLOAD_LOST',
+    'The server that held this recording is gone, and the recording with it. Discard it and record again.'
+  )
+}
+
+// Per-upload serialization inside this process (a part and a finalize of one
+// upload never interleave here). Across processes the conditional updates on
+// next_part / status decide: only one request can claim a part or the finalize.
 const locks = new Map<string, Promise<unknown>>()
 async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
   const prev = locks.get(id) ?? Promise.resolve()
@@ -231,6 +363,8 @@ function shape(r: Record<string, unknown>): UploadSession {
   }
 }
 
+/** The caller's upload. Without `anyHost` (parts, finalize) this process
+ *  must also be able to reach its parts (holdHere). */
 async function own(
   user: User,
   id: string,
@@ -240,10 +374,7 @@ async function own(
   const row = await db('nivaro_help_video_uploads').where({ id }).first()
   if (!row || String(row.user).toLowerCase() !== user.id.toLowerCase())
     throw fail(404, 'UPLOAD_NOT_FOUND', 'Upload not found')
-  if (!opts.anyHost && row.instance && row.instance !== HOST) {
-    throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
-  }
-  return row
+  return opts.anyHost ? row : holdHere(row)
 }
 
 export async function openUpload(
@@ -279,7 +410,7 @@ export async function openUpload(
   }
   const id = randomUUID()
   const now = new Date()
-  await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
+  sweepTempFilesSoon()
   await db('nivaro_help_video_uploads').insert({
     id,
     user: user.id,
@@ -288,7 +419,7 @@ export async function openUpload(
     next_part: 0,
     last_part_bytes: null,
     status: 'open',
-    instance: HOST,
+    instance: sharedInstance(),
     meta,
     created_at: now,
     updated_at: now
@@ -317,7 +448,13 @@ export async function appendPart(
       n,
       body.length
     )
-    if (decision === 'duplicate') return shape(row)
+    const base = partsBase(row)
+    if (decision === 'duplicate') {
+      // Stored again: a part whose claim landed but whose bytes never did (the
+      // process died in between) is completed by the recorder's resend.
+      if (base) await putPart(base, row.id, n, body)
+      return shape(row)
+    }
     if (typeof decision === 'object') throw fail(decision.status, 'UPLOAD_PART', decision.error)
     const isFile = !!uploadMeta(row)
     let sniffed: UploadContainer | null = null
@@ -329,10 +466,12 @@ export async function appendPart(
     } else if (n === 0 && !looksLikeVideo(String(row.mime), body)) {
       throw fail(422, 'UPLOAD_NOT_VIDEO', 'That does not look like a WebM or MP4 recording')
     }
-    const path = partPath(String(row.id))
-    // #1773 — upload parts land in the video work directory: a storage chaos fault acts here.
+    // #1773 — an upload part is a storage write: a storage chaos fault acts here.
     const hit = storageChaos('write')
     if (hit) await hit
+    if (base) return storePart(row, base, n, body, sniffed)
+    const path = partPath(String(row.id))
+    await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
     await appendFile(path, body)
     const updated = await db('nivaro_help_video_uploads')
       .where({ id: row.id, next_part: n })
@@ -354,6 +493,66 @@ export async function appendPart(
       >
     )
   })
+}
+
+/**
+ * A stored-parts upload takes part `n`: claim it on the row first (only one
+ * request, on any process, can move next_part from n), then store the bytes.
+ * A store that fails gives the claim back, so the resend is taken as new. A
+ * claim lost to a same-size copy of the part is that copy's duplicate.
+ */
+async function storePart(
+  row: Record<string, unknown>,
+  base: string,
+  n: number,
+  body: Buffer,
+  sniffed: UploadContainer | null
+): Promise<UploadSession> {
+  // What the claim replaces, to give it back.
+  const before = {
+    next_part: n,
+    last_part_bytes: row.last_part_bytes ?? null,
+    bytes_received: Number(row.bytes_received),
+    mime: row.mime
+  }
+  const claimed = await db('nivaro_help_video_uploads')
+    .where({ id: row.id, next_part: n, status: 'open' })
+    .update({
+      next_part: n + 1,
+      last_part_bytes: body.length,
+      bytes_received: before.bytes_received + body.length,
+      ...(sniffed ? { mime: sniffed } : {}),
+      updated_at: new Date()
+    })
+  if (!claimed) {
+    const now = (await db('nivaro_help_video_uploads').where({ id: row.id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (
+      now?.status === 'open' &&
+      Number(now.next_part) === n + 1 &&
+      Number(now.last_part_bytes) === body.length
+    ) {
+      await putPart(base, row.id, n, body)
+      return shape(now)
+    }
+    if (now && now.status !== 'open') {
+      throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+    }
+    throw fail(409, 'UPLOAD_PART', 'Another request wrote this part first')
+  }
+  try {
+    await putPart(base, row.id, n, body)
+  } catch (err) {
+    await db('nivaro_help_video_uploads')
+      .where({ id: row.id, next_part: n + 1, last_part_bytes: body.length })
+      .update({ ...before, updated_at: new Date() })
+      .catch(() => undefined)
+    throw err
+  }
+  return shape(
+    (await db('nivaro_help_video_uploads').where({ id: row.id }).first()) as Record<string, unknown>
+  )
 }
 
 export async function finalizeUpload(
@@ -413,7 +612,9 @@ export async function finalizeUpload(
     db('nivaro_help_video_uploads')
       .where({ id: dbId, status: 'finalizing' })
       .update({ status: 'open', updated_at: new Date() })
-  const raw = partPath(String(dbId))
+  // Stored parts are joined into a temp file here; a legacy upload's file is its parts.
+  const stored = !!partsBase(row)
+  const raw = stored ? joinedPath(String(dbId)) : partPath(String(dbId))
   const ext = row.mime === 'video/mp4' ? '.mp4' : '.webm'
   const fixed = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
   // The new file row is listable (nothing guards it yet) until the upload row
@@ -421,6 +622,7 @@ export async function finalizeUpload(
   let createdFile: string | null = null
   let recorded = false
   try {
+    if (stored) await joinParts(row, raw)
     const size = await stat(raw)
       .then((s) => s.size)
       .catch(() => 0)
@@ -481,8 +683,9 @@ export async function finalizeUpload(
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
     recorded = true
-    // The recording is stored and recorded: only now is the temp file expendable.
+    // The recording is stored and recorded: only now are the parts expendable.
     await rm(raw, { force: true })
+    await deleteParts(row)
     // Thumbnails and waveform (#1560) are built after the answer goes out.
     startMediaExtras(user, {
       uploadId: String(dbId).toLowerCase(),
@@ -521,6 +724,8 @@ export async function finalizeUpload(
     throw err
   } finally {
     await rm(fixed, { force: true })
+    // The joined copy is rebuilt from the stored parts by the next finalize.
+    if (stored && !recorded) await rm(raw, { force: true })
   }
 }
 
@@ -704,12 +909,17 @@ export async function processFile(
 ): Promise<void> {
   const dbId = row.id
   const mime = String(row.mime) as UploadContainer
-  const raw = partPath(String(dbId))
+  const stored = !!partsBase(row)
+  const raw = stored ? joinedPath(String(dbId)) : partPath(String(dbId))
   const keep: UploadMeta = { name: base.name ?? null, size: base.size ?? null }
   let out: string | null = null
   let createdFile: string | null = null
   let recorded = false
   try {
+    if (stored) {
+      await setFileMeta(dbId, { ...keep, phase: 'checking' })
+      await joinParts(row, raw)
+    }
     const size = await stat(raw)
       .then((x) => x.size)
       .catch(() => 0)
@@ -780,6 +990,7 @@ export async function processFile(
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
     recorded = true
     await rm(raw, { force: true })
+    await deleteParts(row)
     // Thumbnails and waveform (#1560): an uploaded file has no microphone
     // levels, so its peaks are what gives it a waveform.
     startMediaExtras(user, {
@@ -823,15 +1034,20 @@ export async function processFile(
         })
         .catch(() => undefined)
     }
-    // Abandoned (refused, cancelled, parked): the parts on this disk can go.
+    // Abandoned (refused, cancelled, parked): the parts can go.
     const now = await db('nivaro_help_video_uploads')
       .where({ id: dbId })
       .first()
       .catch(() => null)
-    if (now?.status === 'abandoned') await rm(raw, { force: true })
+    if (now?.status === 'abandoned') {
+      await rm(raw, { force: true })
+      await deleteParts(row)
+    }
     if (e.code !== 'UPLOAD_CANCELLED' && e.statusCode !== 422) throw err
   } finally {
     if (out) await rm(out, { force: true })
+    // Reopened: the next finalize joins the stored parts again.
+    if (stored) await rm(raw, { force: true })
   }
 }
 
@@ -1062,18 +1278,21 @@ export async function abandonUpload(user: User, id: string): Promise<void> {
     if (done) {
       processing.get(String(row.id).toLowerCase())?.abort()
       await rm(partPath(String(row.id)), { force: true })
+      await deleteParts(row)
       return
     }
   }
   if (row.status === 'open') {
-    if (row.instance && row.instance !== HOST) {
-      throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
-    }
+    // Any process may discard it: stored parts are reachable from every one,
+    // and a legacy upload's file on another host (which may no longer exist)
+    // goes with that host's sweep of old temp files (purgeTempFiles).
     const done = await db('nivaro_help_video_uploads')
       .where({ id: row.id, status: 'open' })
       .update({ status: 'abandoned', updated_at: new Date() })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+    const now = (await db('nivaro_help_video_uploads').where({ id: row.id }).first()) ?? row
     await rm(partPath(String(row.id)), { force: true })
+    await deleteParts(now)
     return
   }
   if (row.status === 'finalized' && row.file_id) {
@@ -1095,8 +1314,12 @@ export async function purgeStaleUploads(): Promise<number> {
   const rows = await db('nivaro_help_video_uploads')
     .whereIn('status', ['open', 'finalizing'])
     .where('updated_at', '<', cutoff)
-    .select('id')
-  for (const r of rows) await rm(partPath(String(r.id)), { force: true })
+    .select('id', 'instance', 'next_part')
+  for (const r of rows) {
+    await rm(partPath(String(r.id)), { force: true })
+    await rm(joinedPath(String(r.id)), { force: true })
+    await deleteParts(r)
+  }
   if (rows.length) {
     await db('nivaro_help_video_uploads')
       .whereIn(
@@ -1127,21 +1350,36 @@ export async function purgeStaleUploads(): Promise<number> {
   return rows.length + recordings
 }
 
-/** Remux output (`<id>.fixed.<ext>`) left behind by a finalize that died. A
- *  live finalize finishes well inside FINALIZING_STALE_MS, so only older
- *  files go. */
+/** Temp files a finalize that died left behind: remux or conversion output
+ *  (`<id>.fixed.<ext>`) and joined parts (`<id>.joined`) older than a live
+ *  finalize ever runs; and a legacy upload's parts (`<id>.part`) untouched
+ *  for longer than an open upload is kept (its row was discarded or purged
+ *  by a process that cannot see this disk). */
 export async function purgeTempFiles(now = Date.now()): Promise<number> {
   const dir = join(videoWorkDir(), 'uploads')
   const names = await readdir(dir).catch(() => [] as string[])
   let removed = 0
   for (const name of names) {
-    if (!/^[0-9a-f-]{36}\.fixed\.(webm|mp4)$/i.test(name)) continue
+    const finalizeTemp = /^[0-9a-f-]{36}\.(fixed\.(webm|mp4|peer)|joined)$/i.test(name)
+    const legacyParts = /^[0-9a-f-]{36}\.part$/i.test(name)
+    if (!finalizeTemp && !legacyParts) continue
+    const maxAge = legacyParts ? STALE_HOURS * 3_600_000 : FINALIZING_STALE_MS
     const path = join(dir, name)
     const s = await stat(path).catch(() => null)
-    if (s && now - s.mtimeMs > FINALIZING_STALE_MS) {
+    if (s && now - s.mtimeMs > maxAge) {
       await rm(path, { force: true })
       removed++
     }
   }
   return removed
+}
+
+/** The purge runs on the process that ticks crons, which never sees another
+ *  replica's work directory: every process sweeps its own, at most hourly,
+ *  when an upload is opened. */
+let lastSweep = 0
+function sweepTempFilesSoon(): void {
+  if (Date.now() - lastSweep < 3_600_000) return
+  lastSweep = Date.now()
+  void purgeTempFiles().catch(() => 0)
 }
