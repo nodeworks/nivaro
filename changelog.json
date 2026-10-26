@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-10-26T13:33:42.245Z",
+  "generated_at": "2026-10-26T13:59:23.674Z",
   "releases": [
+    {
+      "version": "0.3.30",
+      "tag": "v0.3.30",
+      "date": "2026-10-26T09:59:02-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "a View-as tab sends every request as the viewed person",
+              "hash": "c0c23c812"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch",
+              "text": "repair watch notifications filed under the record's project",
+              "hash": "a0afa460f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "no chat module cache is shared across tenants",
+              "hash": "ffb221325"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "regenerate the docs index for the waiting_on_me docs change",
+              "hash": "83eb6ed31"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.29",
       "tag": "v0.3.29",
-      "date": "2026-10-26T09:33:27-04:00",
+      "date": "2026-10-26T09:33:42-04:00",
       "sections": [
         {
           "label": "Fixed",
