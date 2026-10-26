@@ -614,3 +614,13 @@ html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-nvr-dock-aware],
 html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-sonner-toaster] {
   margin-right: 0 !important;
 }
+
+/* Radix Select renders a visually hidden native <select aria-hidden
+   tabindex="-1"> (position: absolute) beside a trigger inside a <form>. With
+   no positioned ancestor its containing block is the page itself, so a select
+   sitting far down a scrolled panel stretched the document and the whole app
+   scrolled past its bottom (admin Ops Console). A fixed box never adds to the
+   page's scrollable area. */
+select[aria-hidden='true'][tabindex='-1'] {
+  position: fixed !important;
+}
