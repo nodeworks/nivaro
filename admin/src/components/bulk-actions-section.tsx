@@ -50,7 +50,7 @@ export interface BulkActionDef {
   label: string
   variant: 'default' | 'danger'
   kind: Kind
-  config: { set?: Record<string, unknown>; transition_label?: string }
+  config: { set?: Record<string, unknown>; transition_label?: string; header?: boolean }
   guard: GuardRule[] | null
   access: { mode: AccessMode; role_ids?: string[] }
   require_reason: boolean
@@ -262,6 +262,7 @@ interface FormState {
   accessMode: AccessMode
   roleIds: string[]
   requireReason: boolean
+  inHeader: boolean
   confirmText: string
   danger: boolean
 }
@@ -278,6 +279,7 @@ function emptyForm(): FormState {
     accessMode: 'everyone',
     roleIds: [],
     requireReason: false,
+    inHeader: false,
     confirmText: '',
     danger: false
   }
@@ -301,6 +303,7 @@ function formFrom(a: BulkActionDef): FormState {
     accessMode: a.access.mode,
     roleIds: a.access.role_ids ?? [],
     requireReason: a.require_reason,
+    inHeader: a.config.header === true,
     confirmText: a.confirm_text ?? '',
     danger: a.variant === 'danger'
   }
@@ -341,11 +344,12 @@ function BulkActionForm({
   const body = () => {
     const config =
       f.kind === 'transition'
-        ? { transition_label: f.transitionLabel.trim() }
+        ? { transition_label: f.transitionLabel.trim(), ...(f.inHeader ? { header: true } : {}) }
         : {
             set: Object.fromEntries(
               f.sets.filter((r) => r.field).map((r) => [r.field, valueFor(r.kind, r.text)])
-            )
+            ),
+            ...(f.inHeader ? { header: true } : {})
           }
     return {
       collection,
@@ -632,6 +636,17 @@ function BulkActionForm({
               onCheckedChange={(v) => patch({ requireReason: v })}
             />
             Ask for a reason — recorded on every record’s history
+          </label>
+          <label
+            htmlFor='ba-in-header'
+            className='flex items-center gap-2 text-[12.5px] text-slate-700'
+          >
+            <Switch
+              id='ba-in-header'
+              checked={f.inHeader}
+              onCheckedChange={(v) => patch({ inHeader: v })}
+            />
+            Also a button in the record header, beside its transitions
           </label>
           <Textarea
             value={f.confirmText}

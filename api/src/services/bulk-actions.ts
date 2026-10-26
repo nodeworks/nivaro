@@ -189,6 +189,9 @@ export interface AvailableBulkAction {
   summary: string
   /** Built-ins only: which bars render it. */
   surfaces?: BulkSurface[]
+  /** Registry actions: also a button in the record header, beside the
+   *  record's transitions (config.header). */
+  header?: boolean
 }
 
 /** A built-in with its per-collection override state (editor rows). */
@@ -398,7 +401,8 @@ function fromRow(row: BulkActionRow): AvailableBulkAction {
     confirm_text: row.confirm_text,
     guard: row.guard,
     access: row.access,
-    summary: summarize(row.kind, row.config)
+    summary: summarize(row.kind, row.config),
+    header: row.config?.header === true
   }
 }
 

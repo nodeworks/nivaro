@@ -410,12 +410,18 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
       else if (kind === 'transition') {
         if (!String(cfg.transition_label ?? '').trim())
           errs.push('config.transition_label is required')
-        out.config = JSON.stringify({ transition_label: String(cfg.transition_label).trim() })
+        out.config = JSON.stringify({
+          transition_label: String(cfg.transition_label).trim(),
+          ...(cfg.header === true ? { header: true } : {})
+        })
       } else if (kind === 'update_fields') {
         const set =
           cfg.set && typeof cfg.set === 'object' ? (cfg.set as Record<string, unknown>) : null
         if (!set || Object.keys(set).length === 0) errs.push('config.set needs at least one field')
-        out.config = JSON.stringify({ set: set ?? {} })
+        out.config = JSON.stringify({
+          set: set ?? {},
+          ...(cfg.header === true ? { header: true } : {})
+        })
       }
     }
     if ('guard' in b)

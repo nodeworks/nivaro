@@ -230,6 +230,12 @@ import {
   invalidateRecordNotes,
   RecordInsightsButton
 } from './item-edit/RecordInsights'
+import type { AvailableBulkAction } from './bulk/BulkActionButtons'
+import {
+  RecordHeaderActionButtons,
+  RecordHeaderActionDialog,
+  useRecordHeaderActions
+} from './item-edit/RecordHeaderActions'
 import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
@@ -5144,6 +5150,14 @@ function ItemEditFormView({
   const viewingAddendum = addendumViewId !== 'original'
   const pipelineCollection = viewingAddendum ? 'nivaro_addendums' : collection
   const pipelineItem = viewingAddendum ? addendumViewId : itemId
+  // Registry actions flagged for the header (Hold / Remove Hold), beside the
+  // transitions; never on a new record or while viewing an addendum.
+  const headerRegistryActions = useRecordHeaderActions(
+    collection,
+    isNew || viewingAddendum || designOn ? null : String(itemId),
+    draft
+  )
+  const [headerRegistryPick, setHeaderRegistryPick] = useState<AvailableBulkAction | null>(null)
 
   // A SETTLED addendum picked in the Viewing menu (approved / reverted /
   // imported): its lines come from the server snapshot — before → after —
@@ -12241,8 +12255,22 @@ function ItemEditFormView({
                                             onBeforeTransition={saveThenTransition}
                                           />
                                         )}
+                                      {!isNew && (
+                                        <RecordHeaderActionButtons
+                                          actions={headerRegistryActions}
+                                          onPick={setHeaderRegistryPick}
+                                        />
+                                      )}
                                     </div>
                                   </header>
+                                )}
+                                {!isNew && itemId && (
+                                  <RecordHeaderActionDialog
+                                    action={headerRegistryPick}
+                                    collection={collection}
+                                    itemId={String(itemId)}
+                                    onClose={() => setHeaderRegistryPick(null)}
+                                  />
                                 )}
                                 {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
                                 children, so a change-reason / collision prompt raised from Save never

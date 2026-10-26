@@ -34,6 +34,8 @@ export interface AvailableBulkAction {
   surfaces?: Array<'browser' | 'queue'>
   /** Registry actions: `[{field, op, value}]` AND'd over the record (server-enforced; the row menu also pre-checks it). */
   guard?: GuardRule[] | null
+  /** Registry actions: also a button in the record header (RecordHeaderActions). */
+  header?: boolean
 }
 
 export type GuardRule = { field: string; op: string; value?: unknown }
