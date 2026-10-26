@@ -14,6 +14,7 @@ import {
 import { Button } from '../ui/button'
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -185,9 +186,15 @@ export function RecordHeaderActionDialog({
       <DialogContent className='sm:max-w-md' data-record-header-action-dialog=''>
         <DialogHeader>
           <DialogTitle>{action?.label}</DialogTitle>
-          {action?.confirm_text && <DialogDescription>{action.confirm_text}</DialogDescription>}
+          {/* The registry's confirm text speaks of "the selected records" (bulk
+              wording); this popup is about one record. */}
+          <DialogDescription>
+            {needsReason
+              ? 'Say why — your justification is saved as a note on this record.'
+              : 'Runs on this record. A justification, if you add one, is saved as a note.'}
+          </DialogDescription>
         </DialogHeader>
-        <div className='space-y-1.5'>
+        <DialogBody className='space-y-1.5'>
           <label htmlFor='record-header-action-reason' className='text-[12.5px] font-medium'>
             {needsReason ? 'Justification (required)' : 'Justification (optional)'}
           </label>
@@ -197,9 +204,9 @@ export function RecordHeaderActionDialog({
             rows={4}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder='Why? This is saved as a note on the record.'
+            placeholder='Why?'
           />
-        </div>
+        </DialogBody>
         <DialogFooter>
           <Button variant='outline' onClick={onClose} disabled={run.isPending}>
             Cancel
