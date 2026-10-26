@@ -16,6 +16,7 @@ import {
   zoomInView
 } from './help-video-edits.js'
 import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.js'
+import { fitFrame, SOURCE_INPUT_ARGS } from './help-video-frame-fit.js'
 
 // Builds the single ffmpeg pass that bakes a help video's edits into an MP4.
 // Everything is applied in SOURCE time — blur, annotation overlays, crop, zoom
@@ -334,7 +335,8 @@ export function buildRenderPlan(input: RenderInput): { args: string[]; graph: st
   let label = 'v0'
   let n = 0
   const next = () => `v${++n}`
-  parts.push(`[0:v]scale=${work.width}:${work.height},format=yuv420p,setsar=1[${label}]`)
+  // One fixed size whatever the recording does mid-stream (help-video-frame-fit.ts).
+  parts.push(`[0:v]${fitFrame(work.width, work.height)},format=yuv420p,setsar=1[${label}]`)
 
   for (const b of e.blurs) {
     const pr = pixelRect(b.rect, work)
@@ -677,6 +679,7 @@ export function buildRenderPlan(input: RenderInput): { args: string[]; graph: st
     '-filter_complex_threads',
     '1',
     ...(input.video?.inputArgs ?? []),
+    ...SOURCE_INPUT_ARGS,
     ...sourceLock,
     '-i',
     input.sourcePath,

@@ -11,6 +11,7 @@ import {
   type VideoEdits,
   zoomInView
 } from '../../../services/help-video-edits.js'
+import { fitFrame } from '../../../services/help-video-frame-fit.js'
 import { buildRenderArgs, renderSizes } from '../../../services/help-video-render-plan.js'
 import { viewerMayPlaySource } from '../../../services/help-video-views.js'
 
@@ -98,7 +99,7 @@ describe('crop', () => {
       SRC
     )
     const g = fc(buildRenderArgs({ ...base, edits: e }))
-    expect(g.startsWith('[0:v]scale=1280:720,')).toBe(true)
+    expect(g.startsWith(`[0:v]${fitFrame(1280, 720)},`)).toBe(true)
     const cropAt = g.indexOf('crop=640:720:320:0')
     expect(cropAt).toBeGreaterThan(g.indexOf('boxblur'))
     expect(g.indexOf("scale=w='trunc(640")).toBeGreaterThan(cropAt)

@@ -16,6 +16,7 @@ import {
   normalizeEdits,
   type VideoEdits
 } from '../../../services/help-video-edits.js'
+import { fitFrame } from '../../../services/help-video-frame-fit.js'
 
 // #1562: the edit mapping and ffmpeg arguments of a clip, with no ffmpeg.
 
@@ -181,7 +182,10 @@ describe('buildClipArgs', () => {
     expect(g).toContain('[s1]trim=start=12.000:end=18.000,setpts=(PTS-STARTPTS)/2[c1]')
     expect(g).toContain('asetpts=PTS-STARTPTS,atempo=2[ca1]')
     expect(g).toContain('[c0][ca0][c1][ca1]concat=n=2:v=1:a=1[vcut][acut]')
-    expect(g).toContain('[0:v]scale=1920:1080,format=yuv420p,setsar=1[v0]')
+    expect(g).toContain(`[0:v]${fitFrame(1920, 1080)},format=yuv420p,setsar=1[v0]`)
+    // The graph is kept when the recording changes frame size mid-stream.
+    expect(args.indexOf('-reinit_filter')).toBeLessThan(args.indexOf('-i'))
+    expect(argAfter(args, '-reinit_filter')).toBe('0')
   })
   it('draws the blurs and the crop before the cut, in shifted time', () => {
     const e: VideoEdits = {
