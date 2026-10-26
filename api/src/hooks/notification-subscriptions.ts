@@ -13,6 +13,7 @@ import {
 import { can, getAllowedFields } from '../services/permissions.js'
 import { computeDelta } from '../services/revisions.js'
 import { canSeeRecord } from '../services/sla-visibility.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { deferEffect } from '../services/unit-of-work.js'
 import type { User } from '../types.js'
 import { hooks } from './registry.js'
@@ -177,7 +178,7 @@ async function friendlyRowLabel(
 ): Promise<string> {
   const own = await friendlyRecordLabel(collection, item)
   try {
-    const rels = await parentRelationsOf(collection)
+    const rels = await rowOwnerRelationsOf(collection)
     if (rels.length === 0) return own
     // The coalescer's flush hands over `{id}` only — read the FKs off the row.
     let src: Record<string, unknown> | null = row
@@ -206,13 +207,13 @@ async function friendlyRowLabel(
 /** The record a watched ROW belongs to — a watch on one line or one plan year
  *  should land the person on that record with the row in view, not on the
  *  row's own bare page. Null for a row with no parent. */
-async function parentOfRow(
+export async function parentOfRow(
   collection: string,
   item: string,
   row: Record<string, unknown> | null
 ): Promise<{ collection: string; id: string } | null> {
   try {
-    const rels = await parentRelationsOf(collection)
+    const rels = await rowOwnerRelationsOf(collection)
     if (rels.length === 0) return null
     let src: Record<string, unknown> | null = row
     if (!src || !rels.some((r) => src?.[r.fk] != null)) {
@@ -259,6 +260,33 @@ async function parentRelationsOf(child: string): Promise<Array<{ parent: string;
   }
   parentRelCache.set(child, { at: Date.now(), rels })
   return rels
+}
+
+/**
+ * The relations that make a watched record a ROW of another record (a line, a
+ * plan year) — the watch then names and opens that parent. A collection bound
+ * to a pipeline is a record of its own: its M2Os (a workflow's project,
+ * vendor, location) are links, not ownership, so a watch on a workflow stays
+ * on the workflow (2026-10-26: it was filed and opened under its PROJECT).
+ */
+const boundCache = new Map<string, { at: number; bound: boolean }>()
+async function rowOwnerRelationsOf(
+  collection: string
+): Promise<Array<{ parent: string; fk: string }>> {
+  const rels = await parentRelationsOf(collection)
+  if (rels.length === 0) return rels
+  // Keyed per tenant: module state is shared by every cloud tenant.
+  const cacheKey = `${currentTenantKey()}\u0000${collection}`
+  let hit = boundCache.get(cacheKey)
+  if (!hit || Date.now() - hit.at >= 60_000) {
+    const row = await db('nivaro_workflow_bindings')
+      .where({ collection })
+      .first('collection')
+      .catch(() => undefined)
+    hit = { at: Date.now(), bound: !!row }
+    boundCache.set(cacheKey, hit)
+  }
+  return hit.bound ? [] : rels
 }
 
 let _app: FastifyInstance | null = null
