@@ -4,9 +4,14 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { act, createElement, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NivaroProvider } from '../../context'
+import { ItemEditAuthContext, NivaroProvider } from '../../context'
 import { type RealtimeAdapter, RealtimeContext } from '../../lib/realtime'
-import { purgeRecordQueries, type RecordGone, RecordLiveSync } from './RecordLiveSync'
+import {
+  purgeRecordQueries,
+  type RecordGone,
+  RecordLiveSync,
+  writtenBySelf
+} from './RecordLiveSync'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -137,5 +142,75 @@ describe('lost access (#1925 / F7)', () => {
     expect(host.querySelector('[data-title]')).toBeNull()
     expect(host.textContent).not.toContain('Secret plan')
     expectPurged(qc)
+  })
+})
+
+describe('"Updated just now by someone else" (own saves)', () => {
+  let root: Root
+  let host: HTMLDivElement
+  beforeEach(() => {
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+  })
+  afterEach(() => {
+    act(() => root.unmount())
+    host.remove()
+  })
+
+  it('writtenBySelf compares the last activity row with the viewer, any case', () => {
+    expect(writtenBySelf({ user_id: 'abc-1' }, 'ABC-1')).toBe(true)
+    expect(writtenBySelf({ user_id: 'other' }, 'abc-1')).toBe(false)
+    expect(writtenBySelf(null, 'abc-1')).toBe(false)
+    expect(writtenBySelf({ user_id: 'abc-1' }, null)).toBe(false)
+  })
+
+  async function arrive(touchUser: string) {
+    let push: ((ev: unknown) => void) | null = null
+    const rt: RealtimeAdapter = {
+      subscribeCollections: (_c, cb) => {
+        push = cb as (ev: unknown) => void
+        return () => {}
+      },
+      on: () => () => {},
+      emit() {}
+    }
+    const client = { request: vi.fn(async () => ({ data: null })) } as unknown as NivaroClient
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    // A stand-in for ItemEditForm's header read of the record's last activity row.
+    function Form() {
+      useQuery({
+        queryKey: ['last-touch', 'workflows', '5'],
+        queryFn: async () => ({ user_id: touchUser, user_name: 'X', action: 'update' })
+      })
+      return createElement(RecordLiveSync, { collection: 'workflows', itemId: '5' })
+    }
+    act(() =>
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client}>
+            <ItemEditAuthContext.Provider value={{ userId: 'me-1', isAdmin: false }}>
+              <RealtimeContext.Provider value={rt}>
+                <Form />
+              </RealtimeContext.Provider>
+            </ItemEditAuthContext.Provider>
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    )
+    await act(async () => {
+      // A write to this record the own-write window did not catch (it named nobody).
+      push?.({ collection: 'workflows', item: '5', action: 'update', changed_fields: ['amount'] })
+      await new Promise((r) => setTimeout(r, 400))
+    })
+    return host.textContent ?? ''
+  }
+
+  it('stays quiet when the write was the viewer’s own (their save’s late after-effects)', async () => {
+    expect(await arrive('ME-1')).not.toContain('someone else')
+  })
+
+  it('still says so for another person’s write', async () => {
+    expect(await arrive('other-user')).toContain('Updated just now by someone else')
   })
 })

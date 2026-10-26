@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib
 import { get, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
+import { invalidateRecordQueries } from '../item-edit/RecordLiveSync'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { PushBulkButtons } from './PushBulkButtons'
 
@@ -211,6 +212,7 @@ export function BulkActionButtons({
   onDone?: (result: BulkRunResult & { action: AvailableBulkAction }) => void
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const collections = [...new Set(targets.map((t) => t.collection))]
   const { data } = useAvailableBulkActions(collections)
   const actions = mergeBulkActions(data, collections, enabledKeys)
@@ -288,6 +290,13 @@ export function BulkActionButtons({
         total.skipped += r.skipped ?? 0
         total.errors.push(...(r.errors ?? []))
       }
+      // Records open (or cached) elsewhere show the change — the record page skips own writes.
+      for (const c of a.collections)
+        invalidateRecordQueries(
+          qc,
+          c,
+          targets.filter((t) => t.collection === c).map((t) => t.id)
+        )
       const msg = describeResult(a.label, total, count)
       const detail = total.errors
         .slice(0, 3)

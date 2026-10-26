@@ -22,6 +22,7 @@ import {
 import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
+import { matchesVisibleWhen } from '../lib/visible-when'
 import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
@@ -58,6 +59,10 @@ interface LayoutGroup {
   read_width?: string | null
   /** Rows of fields and the empty-section text ride here (lib/form-structure.ts). */
   swap_config?: string | null
+  /** The edit form's group gates, honoured here too: rules the record must meet
+   *  (lib/visible-when.ts) and "hide this section while everything in it is empty". */
+  visible_when?: string | null
+  hide_when_empty?: boolean | number | null
 }
 interface LayoutAssignment {
   field: string
@@ -366,7 +371,19 @@ function M2MValue({
         : mapTarget(allowed[0])
       : null)
   const { data: rows } = useQuery({
-    queryKey: ['rrv-m2m', junction, parentFk, parentId, junctionField, isM2A ? discField : ''],
+    // Under the edit form's ['m2m-items', junction, parentFk, parentId] prefix (a longer key,
+    // so never the same cache entry): every link write that refreshes the form's list —
+    // a file upload, a picker change, the save itself — refreshes Summary's too. Its own
+    // 'rrv-m2m' key heard none of them, so a file added this session never showed here.
+    queryKey: [
+      'm2m-items',
+      junction,
+      parentFk,
+      parentId,
+      'rrv',
+      junctionField,
+      isM2A ? discField : ''
+    ],
     queryFn: () =>
       client
         .request<{ data: Array<Record<string, unknown>> }>(
@@ -1369,6 +1386,9 @@ function RecordReadViewBody({
     // The edit form's group gate: a new-record-only group never shows on a
     // saved record (read mode only ever renders saved records).
     .filter((g) => showAll || g.visibility_mode !== 'new_only')
+    // …and a section whose visible_when rules the record fails (a Unit Selection step on a
+    // Non-Unit request) — the same evaluator the form's conditional steps use.
+    .filter((g) => showAll || !record || matchesVisibleWhen(g.visible_when, record))
   // Sections the layout collapses by default start collapsed here too — the
   // same first impression as the form; the header expands them.
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set())
@@ -1589,8 +1609,24 @@ function RecordReadViewBody({
     // A section whose visible content is gone (empty widgets, empty grids,
     // empty links) collapses; everything stays mounted inside so it can
     // still report.
+    const relCountOf = (a: LayoutAssignment) => gridCounts?.[a.field] ?? relCounts[a.field]
+    // The section's own hide_when_empty (the edit form's GroupSection rule): every value blank,
+    // every grid / alias reported empty, no widget or live slot showing anything. A count not
+    // in yet is not empty — the card stays until it says so.
+    const flaggedEmpty =
+      !!g.hide_when_empty &&
+      !design &&
+      !showAll &&
+      !!record &&
+      groupLive.length === 0 &&
+      shownWidgets.length === 0 &&
+      items.every((a) => (isGrid(a) || isM2M(a) ? relCountOf(a) === 0 : isBlank(record[a.field])))
     const sectionHidden =
-      !groupEmpty && shownItems.length === 0 && groupLive.length === 0 && shownWidgets.length === 0
+      flaggedEmpty ||
+      (!groupEmpty &&
+        shownItems.length === 0 &&
+        groupLive.length === 0 &&
+        shownWidgets.length === 0)
     // #2700: nothing in the section filled — its own words instead of a wall of dashes.
     const relCount = (a: LayoutAssignment) => gridCounts?.[a.field] ?? relCounts[a.field]
     const nothingFilled =
@@ -1617,7 +1653,9 @@ function RecordReadViewBody({
     // apps whose own sheet emits the same class names later (a host's
     // `.grid-cols-1` / `.lg:grid-cols-4` outranked ours at equal specificity).
     const renderFact = (a: LayoutAssignment): ReactNode => {
-      if (relEmpty(a)) return null
+      // An alias with no links stays MOUNTED (hidden) so its count keeps reporting — a link
+      // added later (a file uploaded this session) must bring the fact and its card back.
+      const emptyRel = relEmpty(a)
       const ov = parseOverrides(a.overrides)
       const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
       const long = isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
@@ -1634,6 +1672,7 @@ function RecordReadViewBody({
       return (
         <div
           key={a.field}
+          hidden={emptyRel}
           // A file list, or a long list of links, is a row rather
           // than a fact and takes the whole width; a two-value
           // alias (Zone, Region) stays a fact in one track.
@@ -1781,11 +1820,17 @@ function RecordReadViewBody({
                   {structure.emptyText}
                 </p>
               )}
-              {scalars.length > 0 && !nothingFilled && (
+              {scalars.length > 0 && (
                 // One column rhythm for the whole page: every section's facts sit
                 // on the same 2 / 3 / 4 / 6 tracks, so values line up card to
-                // card instead of each card auto-filling its own grid.
-                <dl className='grid gap-x-6 gap-y-5' data-read-dl={width}>
+                // card instead of each card auto-filling its own grid. Hidden, not
+                // unrendered, under the empty text: its link facts must keep reporting.
+                <dl
+                  className='grid gap-x-6 gap-y-5'
+                  data-read-dl={width}
+                  // Inline: the `grid` utility outranks the [hidden] attribute.
+                  style={nothingFilled ? { display: 'none' } : undefined}
+                >
                   {scalarUnits.map((u) =>
                     u.kind === 'row' ? renderRowFact(u.row, u.members) : renderFact(u.field)
                   )}

@@ -612,7 +612,10 @@ export function RowHistorySheet({
     }
     if (/^(date|dateTime|datetime|timestamp)$/i.test(type)) {
       const s = String(v)
-      return { text: /^\d{4}-\d{2}-\d{2}$/.test(s) ? formatDate(s) : formatDateTime(s), mono: true }
+      // A date column (no time) keeps its stored day: UTC midnight through
+      // formatDateTime read as the previous evening west of UTC.
+      const dayOnly = /^date$/i.test(type) || /^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:\.0+)?Z)?$/.test(s)
+      return { text: dayOnly ? formatDate(s) : formatDateTime(s), mono: true }
     }
     if (
       typeof v === 'number' ||
