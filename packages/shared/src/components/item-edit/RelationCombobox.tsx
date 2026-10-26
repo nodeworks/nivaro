@@ -28,6 +28,7 @@ import { cn, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
 import { collidingIds, disambiguators } from './option-disambiguate'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
+import { narrowLocally, useLatestSearch } from './picker-search'
 
 /**
  * Instant hover tooltip for a picker whose committed value failed its
@@ -124,22 +125,17 @@ export function RelationCombobox({
   const readRow = useRecordReader()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  // One server search at a time (picker-search.ts): typing while a search is
+  // in flight waits for it, then only the newest text goes out.
+  const [searchBusy, setSearchBusy] = useState(false)
+  const debouncedQuery = useLatestSearch(query, searchBusy)
   const inputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 30)
-    else {
-      setQuery('')
-      setDebouncedQuery('')
-    }
+    else setQuery('')
   }, [open])
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(query), 300)
-    return () => clearTimeout(t)
-  }, [query])
 
   useEffect(() => {
     if (!open) return
@@ -200,7 +196,7 @@ export function RelationCombobox({
     }
   }, [open])
 
-  const { data: colMeta } = useQuery<{ display_template?: string }>({
+  const { data: colMeta, isPending: colMetaPending } = useQuery<{ display_template?: string }>({
     queryKey: ['col-meta', collection],
     queryFn: () =>
       client
@@ -281,7 +277,11 @@ export function RelationCombobox({
   const filterStr = combinedFilter ? JSON.stringify(combinedFilter) : undefined
   // Column-based option sort goes to the server; 'label'/'-label' sort client-side
   const serverSort = optionSort && !/^-?label$/.test(optionSort) ? optionSort : undefined
-  const { data, isFetching: isLoadingOptions } = useQuery<Item[]>({
+  const {
+    data,
+    isFetching: isLoadingOptions,
+    isPlaceholderData
+  } = useQuery<Item[]>({
     queryKey: [
       'relation-opts',
       collection,
@@ -303,14 +303,30 @@ export function RelationCombobox({
           })
         )
         .then((r) => (r.data ?? []) as Item[]),
-    enabled: open,
-    staleTime: filterStr ? 0 : 30_000
+    // Wait for the display template: it decides `fields`, and starting before
+    // it lands sent the whole first page twice.
+    enabled: open && !colMetaPending,
+    staleTime: filterStr ? 0 : 30_000,
+    // A new SEARCH keeps the previous answer on screen (narrowed locally below)
+    // instead of blanking the list behind a spinner. A changed filter, sort or
+    // template never does — those rows may no longer be allowed.
+    placeholderData: (prev, prevQuery) => {
+      const k = prevQuery?.queryKey
+      if (!prev || !k) return undefined
+      return k[1] === collection &&
+        k[3] === filterStr &&
+        k[4] === tmplFields &&
+        k[5] === (serverSort ?? '')
+        ? prev
+        : undefined
+    }
   })
+  useEffect(() => setSearchBusy(isLoadingOptions), [isLoadingOptions])
   usePickerMissReport({
     placement: missPlacement,
     open,
     search: debouncedQuery,
-    settled: !isLoadingOptions && data !== undefined,
+    settled: !isLoadingOptions && !isPlaceholderData && data !== undefined,
     count: data?.length ?? 0
   })
 
@@ -411,6 +427,19 @@ export function RelationCombobox({
 
   const tmpl = effectiveTemplate
   const selectedLabel = value && selected ? applyDisplayTemplate(tmpl, selected) : null
+  // The answer on screen is for what is typed now — otherwise the previous
+  // answer, narrowed by the newer text until the server replies.
+  const optionsSettled = !isPlaceholderData && query === debouncedQuery
+  const shownOptions = useMemo(
+    () =>
+      narrowLocally(
+        data ?? [],
+        (item) => applyDisplayTemplate(tmpl, item) || `#${item.id}`,
+        query,
+        optionsSettled
+      ),
+    [data, tmpl, query, optionsSettled]
+  )
 
   // Options that render the same label ("CEG 1" twice) get a muted secondary
   // detail: the column that tells them apart, read only for those rows.
@@ -552,6 +581,13 @@ export function RelationCombobox({
                 placeholder='Search…'
                 className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
               />
+              {/* A newer search is out while the last answer stays listed. */}
+              {isLoadingOptions && data !== undefined && (
+                <Loader2
+                  data-picker-searching
+                  className='ml-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground'
+                />
+              )}
             </div>
             <div className='max-h-52 overflow-y-auto py-1'>
               {!!value && !disabled && (
@@ -597,11 +633,13 @@ export function RelationCombobox({
                   </span>
                 </button>
               )}
-              {isLoadingOptions ? (
+              {data === undefined && isLoadingOptions ? (
                 <div className='flex items-center justify-center py-4'>
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
                 </div>
-              ) : (data ?? []).length === 0 ? (
+              ) : shownOptions.length === 0 && !optionsSettled ? (
+                <p className='px-3 py-2 text-[13px] text-muted-foreground'>Searching…</p>
+              ) : shownOptions.length === 0 ? (
                 narrowedBy && narrowedBy.labels.length > 0 && !query.trim() ? (
                   <div className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'>
                     <p>
@@ -636,8 +674,8 @@ export function RelationCombobox({
                 )
               ) : (
                 (serverSort
-                  ? [...(data ?? [])]
-                  : [...(data ?? [])].sort((a, b) =>
+                  ? [...shownOptions]
+                  : [...shownOptions].sort((a, b) =>
                       optionSort === '-label'
                         ? applyDisplayTemplate(tmpl, b).localeCompare(applyDisplayTemplate(tmpl, a))
                         : applyDisplayTemplate(tmpl, a).localeCompare(applyDisplayTemplate(tmpl, b))
