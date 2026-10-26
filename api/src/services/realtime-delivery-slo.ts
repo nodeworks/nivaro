@@ -11,7 +11,8 @@
  * - `probe` — the synthetic delivery probe's write-to-arrival time (realtime-probe.ts). A probe
  *   event that never arrived counts as a bad delivery.
  * - `client` — real clients acknowledging a small sample of events: every event whose journal
- *   sequence is a multiple of REALTIME_ACK_EVERY (default 50; 0 = off) carries `_st`, the server
+ *   sequence is a multiple of REALTIME_ACK_EVERY (default 50; 0 = off), and each process's first
+ *   event after REALTIME_ACK_FLOOR_S (default 30) without one, carries `_st`, the server
  *   time it left (event-journal.ts locally, event-stream.ts for another replica's write). The
  *   client answers `rt:ack {seq, st, rx}` with its receive time on the server clock (#2132
  *   offset). The server keeps the client's figure only when it fits inside the round trip it can
@@ -20,11 +21,23 @@
  * Samples are not kept one by one: they land in latency histograms in Redis (the same buckets
  * the request SLO uses), per 5 minutes for the last day (burn rates) and per hour for the window
  * (up to 14 days), split by source and by replica — `node` = this process's host name.
+ *
+ * Under the realtime tier (NIVARO_ROLE=realtime, web with SOCKETS=off) the web process stamps
+ * and the realtime process that holds the socket takes the ack; both write the same Redis.
+ * Each process also counts the stamped events it wrote to connected sockets (SENT_KEY), so the
+ * delivery check can tell "nothing to measure" from "people got sampled events and nothing
+ * came back" (judgeAckSilence — the readiness check and the delivery_node monitor).
  */
-import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { getApp } from './io-holder.js'
-import { ackEvery, ackSampled, ackStampKey } from './realtime-ack-sample.js'
+import {
+  ackEvery,
+  ackSampled,
+  ackStampKey,
+  deliveryNode,
+  SENT_BUCKET_MS,
+  SENT_KEY
+} from './realtime-ack-sample.js'
 import { percentileFromHistogram } from './slo.js'
 
 export type DeliverySource = 'probe' | 'client'
@@ -39,7 +52,7 @@ export const DELIVERY_WINDOW_MAX_DAYS = 14
 /** The longest delay a sample may claim; anything above is a clock problem, not a delivery. */
 const MAX_DELAY_MS = 120_000
 
-export { ackEvery, ackSampled }
+export { ackEvery, ackSampled, deliveryNode }
 
 export const DEFAULT_DELIVERY_TARGETS = { delivery_p95_ms: 2000, delivery_good_pct: 95 }
 
@@ -56,12 +69,6 @@ function redisOf(given?: Redis | null): Redis | null {
   } catch {
     return null
   }
-}
-
-/** This replica's label in the per-node rows. */
-export function deliveryNode(): string {
-  const inst = process.env.NIVARO_INSTANCE?.trim() || process.env.NODE_ENV?.trim() || 'default'
-  return `${inst} · ${hostname().slice(0, 40)}`
 }
 
 /** Latency → histogram bucket (upper edge in ms), matching the request SLO's buckets. */
@@ -134,7 +141,8 @@ export async function noteDeliverySample(
  * socket's ack counts, each person has a small token bucket (2, refilled one per 10 s — a
  * client cannot flood the histograms however many tabs or sockets it opens), and the `st` it
  * echoes must equal the stamp the server kept for that sequence (ackStampKey, written by the
- * journal when it stamped the event). A forged or replayed-late ack is dropped.
+ * journal when it stamped the event). A forged or replayed-late ack is dropped. The kept stamp
+ * is the only proof a sequence was sampled: the time floor stamps sequences off the 1-in-N grid.
  */
 const ACK_BUCKET = 2
 const ACK_REFILL_MS = 10_000
@@ -182,7 +190,7 @@ export async function acceptAck(
   if (!userId || ackEvery() === 0) return null
   const p = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>
   const seq = Number(p.seq)
-  if (!Number.isSafeInteger(seq) || !ackSampled(seq)) return null
+  if (!Number.isSafeInteger(seq) || seq <= 0) return null
   const st = Number(p.st)
   if (!Number.isFinite(st)) return null
   const now = opts.now ?? Date.now()
@@ -547,5 +555,98 @@ export function judgeDeliveryByNode(
       `Every node delivers at least ${cfg.good_pct}% within ${cfg.target_ms} ms (last ${windowMinutes} minutes):`,
       ...judged.map((r) => `  ${line(r)}`)
     ].join('\n')
+  }
+}
+
+// ─── Silent acknowledgements ───────────────────────────────────────────────────
+
+export interface AckSilenceFigures {
+  window_minutes: number
+  /** Client acknowledgements recorded in the window (every node). */
+  client_samples: number
+  /** Stamped events written to at least one connected socket in the window. */
+  stamped_events: number
+  /** Socket deliveries of those events (an event to a room of 3 sockets counts 3). */
+  socket_deliveries: number
+}
+
+/**
+ * Client samples and stamped socket deliveries over the last `windowMinutes` (whole 5-minute
+ * buckets, the current one included). Null without Redis and in cloud mode. One pipeline.
+ */
+export async function ackSilenceRecent(
+  windowMinutes: number,
+  opts: { redis?: Redis | null; now?: number } = {}
+): Promise<AckSilenceFigures | null> {
+  if (process.env.CLOUD_META_DB_URL) return null
+  const redis = redisOf(opts.redis)
+  if (!redis) return null
+  const now = opts.now ?? Date.now()
+  const n = Math.min(24 * 12, Math.max(1, Math.ceil(windowMinutes / 5)))
+  const mNow = Math.floor(now / FIVE_MIN_MS)
+  const sNow = Math.floor(now / SENT_BUCKET_MS)
+  let hashes: Array<Record<string, string>>
+  try {
+    hashes = await readHashes(redis, [
+      ...Array.from({ length: n }, (_, i) => `${MINUTE_KEY}${mNow - i}`),
+      ...Array.from({ length: n }, (_, i) => `${SENT_KEY}${sNow - i}`)
+    ])
+  } catch {
+    return null
+  }
+  let client = 0
+  for (const h of hashes.slice(0, n))
+    for (const [k, v] of Object.entries(h)) if (k.startsWith('client|')) client += Number(v) || 0
+  let events = 0
+  let sockets = 0
+  for (const h of hashes.slice(n))
+    for (const [k, v] of Object.entries(h)) {
+      if (k.startsWith('e|')) events += Number(v) || 0
+      else if (k.startsWith('s|')) sockets += Number(v) || 0
+    }
+  return {
+    window_minutes: n * 5,
+    client_samples: client,
+    stamped_events: events,
+    socket_deliveries: sockets
+  }
+}
+
+/** Socket deliveries of sampled events, without one ack, before the check calls it broken. */
+export const ACK_SILENCE_MIN_DELIVERIES = 10
+
+/**
+ * Is the delivery check measuring anything (pure)? `silent` when connected sockets received at
+ * least `minDeliveries` sampled events in the window and no client acknowledged one — the SLO
+ * page then shows old figures as if they were current (staging demo 2026-10-26). `idle` when no
+ * sampled event reached a socket (nothing to measure — people connected but nothing changed),
+ * `ok` when acknowledgements arrive.
+ */
+export function judgeAckSilence(
+  f: AckSilenceFigures,
+  minDeliveries: number = ACK_SILENCE_MIN_DELIVERIES
+): { status: 'ok' | 'idle' | 'silent'; detail: string } {
+  const w = `the last ${f.window_minutes} minutes`
+  if (ackEvery() === 0)
+    return {
+      status: 'idle',
+      detail: 'Client acknowledgements are off (REALTIME_ACK_EVERY=0); only the probe measures.'
+    }
+  if (f.client_samples > 0)
+    return {
+      status: 'ok',
+      detail: `${f.client_samples} client acknowledgement${f.client_samples === 1 ? '' : 's'} in ${w} (${f.stamped_events} sampled event${f.stamped_events === 1 ? '' : 's'} reached connected sockets).`
+    }
+  if (f.socket_deliveries >= minDeliveries)
+    return {
+      status: 'silent',
+      detail: `Connected sockets received ${f.stamped_events} sampled event${f.stamped_events === 1 ? '' : 's'} (${f.socket_deliveries} deliveries) in ${w} and no client acknowledged one: the delivery SLO is not measuring. Check that the processes holding sockets take rt:ack and share this Redis, and that clients run a build that acknowledges.`
+    }
+  return {
+    status: 'idle',
+    detail:
+      f.socket_deliveries > 0
+        ? `No client acknowledgement in ${w}, but only ${f.socket_deliveries} sampled deliver${f.socket_deliveries === 1 ? 'y' : 'ies'} reached a socket (needs ${minDeliveries} to judge).`
+        : `No sampled event reached a connected socket in ${w}: nothing changed that anyone was watching, so there was nothing to measure.`
   }
 }

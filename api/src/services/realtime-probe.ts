@@ -127,6 +127,24 @@ export async function runRealtimeProbe(
   }
   const io = getIo()
   const port = listenPort(app)
+  // SOCKETS=off (a web or worker process beside the realtime tier) has an emitter-only io and
+  // no /socket.io on its port: a probe here would connect to nothing and record a missed
+  // delivery. The realtime processes' client acknowledgements measure delivery instead.
+  const { socketsServed } = await import('./process-role.js')
+  if (!socketsServed()) {
+    return record(app, {
+      ...base,
+      ok: false,
+      arrived: false,
+      delivery_ms: null,
+      path: 'none',
+      journaled: false,
+      durable: null,
+      detail:
+        'This process serves no sockets (SOCKETS=off); the realtime processes hold them. Delivery is measured by client acknowledgements (Realtime → Verify).',
+      skipped: true
+    })
+  }
   if (!io || !port) {
     return record(app, {
       ...base,

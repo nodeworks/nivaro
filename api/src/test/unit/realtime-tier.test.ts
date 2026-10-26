@@ -29,6 +29,7 @@ const bus = vi.hoisted(() => {
   /** One key space for every client (string values only; TTLs are not modelled). */
   const kv = new Map<string, string>()
   const zsets = new Map<string, Map<string, number>>()
+  const hashes = new Map<string, Map<string, number>>()
   /** Anything not modelled: a chainable, awaitable no-op (resolves to null). */
   const noop: any = new Proxy(() => {}, {
     get: (_t, k) =>
@@ -117,6 +118,57 @@ const bus = vi.hoisted(() => {
     async pexpire() {
       return 1
     }
+    async get(key: string) {
+      return kv.get(key) ?? null
+    }
+    async incr(key: string) {
+      const n = Number(kv.get(key) ?? 0) + 1
+      kv.set(key, String(n))
+      return n
+    }
+    async hincrby(key: string, field: string, by: number) {
+      const h = hashes.get(key) ?? new Map<string, number>()
+      h.set(field, (h.get(field) ?? 0) + Number(by))
+      hashes.set(key, h)
+      return h.get(field)
+    }
+    async hgetall(key: string) {
+      return Object.fromEntries(
+        [...(hashes.get(key) ?? new Map<string, number>())].map(([f, n]) => [f, String(n)])
+      )
+    }
+    /** MULTI / pipeline: the modelled commands run in order at exec; the rest answer null. */
+    multi() {
+      const queued: Array<() => Promise<unknown>> = []
+      const self = this as any
+      const chain: any = new Proxy(
+        {},
+        {
+          get: (_t, k) => {
+            if (k === 'exec')
+              return async () => {
+                const out: Array<[null, unknown]> = []
+                for (const q of queued) out.push([null, await q()])
+                return out
+              }
+            if (k === 'then') return undefined
+            return (...args: unknown[]) => {
+              const fn = typeof k === 'string' ? self[k] : undefined
+              queued.push(async () =>
+                typeof fn === 'function' && k !== 'multi' && k !== 'pipeline'
+                  ? fn.apply(self, args)
+                  : null
+              )
+              return chain
+            }
+          }
+        }
+      )
+      return chain
+    }
+    pipeline() {
+      return this.multi()
+    }
     async publish(channel: string, msg: string | Buffer) {
       const m = Buffer.isBuffer(msg) ? msg : Buffer.from(msg)
       let n = 0
@@ -165,7 +217,7 @@ const bus = vi.hoisted(() => {
   } as unknown as new (
     opts?: Record<string, unknown>
   ) => any
-  return { FakeRedis, clients, kv }
+  return { FakeRedis, clients, kv, hashes }
 })
 
 vi.mock('ioredis', () => ({ Redis: bus.FakeRedis, default: bus.FakeRedis }))
@@ -492,6 +544,57 @@ describe('realtime tier (NIVARO_ROLE=realtime + SOCKETS=off)', () => {
       const v = await sock.getClusterClientVersionGroups(null)
       expect(JSON.stringify(v.groups)).toContain('b-old')
     } finally {
+      ws.close()
+    }
+  })
+
+  it('a sampled event from a SOCKETS=off process is acknowledged on the realtime process (#2477)', async () => {
+    const { setIo } = await import('../../services/io-holder.js')
+    const { journaledEmit, setJournalRedis } = await import('../../services/event-journal.js')
+    const { _resetStampFloorForTests } = await import('../../services/realtime-ack-sample.js')
+    const { ackSilenceRecent } = await import('../../services/realtime-delivery-slo.js')
+    const { ws, events } = await connect(realtimePort)
+    const savedFloor = process.env.REALTIME_ACK_FLOOR_S
+    try {
+      await waitFor(() => realtime.io.sockets.sockets.size > 0)
+      const held = [...realtime.io.sockets.sockets.values()].at(-1)
+      if (!held) throw new Error('no socket')
+      // Signed in, as the auth handler leaves it for socket-verify, and watching the collection.
+      held.data.nvrAccess = { user: () => ({ id: 'u-ack' }), applyUser() {}, leaveRoom() {} }
+      held.join('collection:orders')
+      // The web process writes: its io (emitter only) and Redis. The time floor stamps its
+      // first event whatever the sequence — a quiet morning still gets measured.
+      setIo(web.io as never)
+      setJournalRedis(web.redis as never)
+      process.env.REALTIME_ACK_FLOOR_S = '30'
+      _resetStampFloorForTests()
+      const r = await journaledEmit('collection:orders', 'collection:update', {
+        collection: 'orders',
+        item: 7
+      })
+      expect(r.seq).toBeGreaterThan(0)
+      await waitFor(() => events.some(([e]) => e === 'collection:update'))
+      const payload = events.find(([e]) => e === 'collection:update')?.[1] as {
+        _seq: number
+        _st: number
+      }
+      expect(payload._seq).toBe(r.seq)
+      expect(typeof payload._st).toBe('number')
+      // The tab answers on its socket: the realtime process checks the stamp the web process
+      // kept and records a client sample in the shared Redis.
+      ws.send(
+        `42${JSON.stringify(['rt:ack', { seq: payload._seq, st: payload._st, rx: Date.now() }])}`
+      )
+      const clientSamples = async () =>
+        (await ackSilenceRecent(15, { redis: web.redis as never }))?.client_samples ?? 0
+      const until = Date.now() + 3000
+      while ((await clientSamples()) === 0 && Date.now() < until)
+        await new Promise((res) => setTimeout(res, 20))
+      expect(await clientSamples()).toBe(1)
+    } finally {
+      setIo(realtime.io as never)
+      if (savedFloor === undefined) delete process.env.REALTIME_ACK_FLOOR_S
+      else process.env.REALTIME_ACK_FLOOR_S = savedFloor
       ws.close()
     }
   })

@@ -13,7 +13,8 @@ const stream = vi.hoisted(() => ({
   publishToStream: vi.fn(async () => true)
 }))
 const emits = vi.hoisted(() => ({
-  list: [] as Array<{ scope: string; room: string; event: string }>
+  list: [] as Array<{ scope: string; room: string; event: string }>,
+  payloads: [] as unknown[]
 }))
 
 vi.mock('../../../services/event-journal-store.js', async (orig) => ({
@@ -31,12 +32,17 @@ vi.mock('../../../services/event-stream.js', async (orig) => ({
 vi.mock('../../../services/io-holder.js', () => {
   const op = (scope: string) => ({
     to: (room: string) => ({
-      emit: (event: string) => {
+      emit: (event: string, payload?: unknown) => {
         emits.list.push({ scope, room, event })
+        emits.payloads.push(payload)
       }
     })
   })
-  return { getIo: () => ({ ...op('adapter'), local: op('local') }) }
+  // Two sockets sit in collection:orders on this process (the stamped-delivery count).
+  const rooms = new Map([['collection:orders', new Set(['s1', 's2'])]])
+  return {
+    getIo: () => ({ ...op('adapter'), local: op('local'), of: () => ({ adapter: { rooms } }) })
+  }
 })
 
 import { journaledEmit, replaySince, setJournalRedis } from '../../../services/event-journal.js'
@@ -47,7 +53,8 @@ import {
   shouldDeliver
 } from '../../../services/event-stream.js'
 import { planBroadcasts, rowsToAnnouncements } from '../../../services/raw-write-announcer.js'
-import { judgeProbe, parseEioFrame } from '../../../services/realtime-probe.js'
+import { _resetStampFloorForTests, shouldStamp } from '../../../services/realtime-ack-sample.js'
+import { judgeProbe, parseEioFrame, runRealtimeProbe } from '../../../services/realtime-probe.js'
 
 /** A Redis double holding one sorted-set journal. */
 function fakeRedis(journal: Array<{ seq: number; entry: unknown }>, seq: number) {
@@ -80,7 +87,11 @@ function fakeRedis(journal: Array<{ seq: number; entry: unknown }>, seq: number)
 }
 
 beforeEach(() => {
+  // The time floor stamps the first event a process sends; the routing tests pin 1 in N only.
+  process.env.REALTIME_ACK_FLOOR_S = '0'
+  _resetStampFloorForTests()
   emits.list = []
+  emits.payloads = []
   stream.active = false
   store.replayFromTable.mockClear()
   store.recordDurable.mockClear()
@@ -249,7 +260,8 @@ describe('delivery acknowledgement stamps (#2477)', () => {
     expect(st).toBeGreaterThan(0)
     expect(stream.publishToStream).toHaveBeenCalledWith(expect.anything(), {
       self: undefined,
-      at: st
+      at: st,
+      stamped: true
     })
   })
 
@@ -288,6 +300,93 @@ describe('delivery acknowledgement stamps (#2477)', () => {
   })
 })
 
+describe('delivery stamps: time floor and socket deliveries (staging demo 2026-10-26)', () => {
+  /** A journal Redis whose global sequence is `seq`; records SETs and HINCRBYs. */
+  function stampRedis(seq: number) {
+    const sets: unknown[][] = []
+    const incrs: Array<[string, string, number]> = []
+    const redis = {
+      multi: () => {
+        let counted = false
+        const m = {
+          incr: () => {
+            counted = true
+            return m
+          },
+          zadd: () => m,
+          zremrangebyrank: () => m,
+          expire: () => m,
+          set: (...a: unknown[]) => {
+            sets.push(a)
+            return m
+          },
+          hincrby: (k: string, f: string, n: number) => {
+            incrs.push([k, f, n])
+            return m
+          },
+          exec: async () =>
+            counted
+              ? [
+                  [null, seq],
+                  [null, 3],
+                  [null, 1]
+                ]
+              : []
+        }
+        return m
+      }
+    }
+    return { redis, sets, incrs }
+  }
+
+  it('stamps an off-grid event once the floor has passed, then waits out the floor', () => {
+    const env = { REALTIME_ACK_FLOOR_S: '30' }
+    expect(shouldStamp(51, { now: 100_000, env })).toBe(true)
+    expect(shouldStamp(52, { now: 110_000, env })).toBe(false)
+    // 1 in N still stamps inside the floor.
+    expect(shouldStamp(100, { now: 111_000, env })).toBe(true)
+    expect(shouldStamp(101, { now: 140_000, env })).toBe(false)
+    expect(shouldStamp(102, { now: 141_000, env })).toBe(true)
+    // Synthetic emits never take the floor; REALTIME_ACK_EVERY=0 turns stamping off.
+    _resetStampFloorForTests()
+    expect(shouldStamp(53, { now: 500_000, env, floor: false })).toBe(false)
+    expect(shouldStamp(53, { now: 500_000, env: { ...env, REALTIME_ACK_EVERY: '0' } })).toBe(false)
+    expect(shouldStamp(53, { now: 500_000, env: { REALTIME_ACK_FLOOR_S: '0' } })).toBe(false)
+  })
+
+  it('a quiet process stamps its next record event and counts the sockets it reached', async () => {
+    process.env.REALTIME_ACK_FLOOR_S = '30'
+    const { redis, sets, incrs } = stampRedis(51)
+    setJournalRedis(redis as never)
+    stream.active = true
+    await journaledEmit('collection:orders', 'collection:update', { item: 1 })
+    expect(sets.map((a) => a[0])).toEqual(['nvr:rt:ack:st:51'])
+    const st = Number(sets[0][1])
+    expect(emits.payloads[0]).toMatchObject({ item: 1, _seq: 51, _st: st })
+    expect(stream.publishToStream).toHaveBeenCalledWith(expect.anything(), {
+      self: undefined,
+      at: st,
+      stamped: true
+    })
+    await new Promise((r) => setImmediate(r))
+    // One stamped event, two sockets in the room on this process.
+    expect(incrs.map(([, f, n]) => [f.split('|')[0], n])).toEqual([
+      ['e', 1],
+      ['s', 2]
+    ])
+  })
+
+  it('the probe never takes the floor, so its synthetic socket is never counted', async () => {
+    process.env.REALTIME_ACK_FLOOR_S = '30'
+    const { redis, sets, incrs } = stampRedis(51)
+    setJournalRedis(redis as never)
+    stream.active = true
+    await journaledEmit('probe:x', 'realtime:probe', { probe: 'x' }, { selfViaStream: true })
+    expect(sets).toEqual([])
+    expect(incrs).toEqual([])
+  })
+})
+
 describe('stream entries', () => {
   const entry = {
     seq: 5,
@@ -299,6 +398,12 @@ describe('stream entries', () => {
   it('round-trips through XADD fields', () => {
     const d = decodeStreamEntry(encodeStreamEntry(entry, { node: 'n1', at: 1000 }))
     expect(d).toEqual({ node: 'n1', self: false, at: 1000, entry })
+  })
+
+  it('carries the writer stamp flag, and reads entries from writers without it', () => {
+    const d = decodeStreamEntry(encodeStreamEntry(entry, { node: 'n1', at: 1000, stamped: true }))
+    expect(d).toEqual({ node: 'n1', self: false, at: 1000, entry, stamped: true })
+    expect(encodeStreamEntry(entry, { node: 'n1', at: 1000 })).not.toContain('k')
   })
 
   it('rejects malformed entries', () => {
@@ -378,6 +483,23 @@ describe('delivery probe (#1682)', () => {
       data: { probe: 'p' }
     })
     expect(parseEioFrame('42garbage')).toEqual({ kind: 'other' })
+  })
+
+  it('skips on a SOCKETS=off process rather than record a delivery that could never arrive', async () => {
+    const saved = { sockets: process.env.SOCKETS, role: process.env.NIVARO_ROLE }
+    process.env.SOCKETS = 'off'
+    process.env.NIVARO_ROLE = 'worker'
+    try {
+      const app = { server: { address: () => ({ port: 3055 }) } }
+      const r = await runRealtimeProbe(app as never)
+      expect(r).toMatchObject({ skipped: true, arrived: false, path: 'none' })
+      expect(r.detail).toMatch(/SOCKETS=off/)
+    } finally {
+      if (saved.sockets === undefined) delete process.env.SOCKETS
+      else process.env.SOCKETS = saved.sockets
+      if (saved.role === undefined) delete process.env.NIVARO_ROLE
+      else process.env.NIVARO_ROLE = saved.role
+    }
   })
 
   it('judges missing, slow, unjournaled and good deliveries', () => {

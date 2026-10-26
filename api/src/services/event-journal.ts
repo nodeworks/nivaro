@@ -9,7 +9,13 @@ import {
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
-import { ACK_STAMP_TTL_S, ackSampled, ackStampKey } from './realtime-ack-sample.js'
+import {
+  ACK_STAMP_TTL_S,
+  ackStampKey,
+  localRoomSize,
+  noteStampedDelivery,
+  shouldStamp
+} from './realtime-ack-sample.js'
 import { livePayload } from './socket-transport.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
@@ -120,7 +126,9 @@ export async function journaledEmit(
         .zadd(JOURNAL_KEY, seq, JSON.stringify(entry))
         .zremrangebyrank(JOURNAL_KEY, 0, -(JOURNAL_MAX + 1))
         .expire(JOURNAL_KEY, JOURNAL_TTL_S)
-      if (ackSampled(seq)) {
+      // 1 in N by sequence, or this process's first event after the time floor; never the
+      // floor for synthetic emits (the probe, drills), whose sockets are not people.
+      if (shouldStamp(seq, { floor: !opts.selfViaStream && !opts.roomScoped })) {
         st = Date.now()
         m.set(ackStampKey(seq), String(st), 'EX', ACK_STAMP_TTL_S)
       }
@@ -141,15 +149,20 @@ export async function journaledEmit(
     recordDurable(entry) // #1673 — buffered, never awaited
     // #1737 — stream first; the local emit only once the other replicas will hear it.
     // The stream entry's write time is the stamp, so other replicas send the same `_st`.
-    const pub = { self: opts.selfViaStream, ...(st != null ? { at: st } : {}) }
+    const pub = { self: opts.selfViaStream, ...(st != null ? { at: st, stamped: true } : {}) }
     if (streamActive() && (await publishToStream(entry, pub))) {
       path = 'stream'
-      if (!opts.selfViaStream) io.local.to(room).emit(event, out)
+      if (!opts.selfViaStream) {
+        io.local.to(room).emit(event, out)
+        if (st != null) noteStampedDelivery(_redis, room, localRoomSize(io, room))
+      }
     }
   }
   // No sequence, no stream, or the append failed: the adapter's pub/sub as before.
   if (path === 'adapter') {
     io.to(room).emit(event, out)
+    // Only this process's own sockets are counted; other processes' are not visible here.
+    if (st != null) noteStampedDelivery(_redis, room, localRoomSize(io, room))
     // Post-mortem 3.3 — the other processes' journal listeners (saved-view and SSE streams,
     // pushed widgets, MCP live sessions) hear stream entries only; on this path they hear it on
     // a plain Redis channel every process subscribes to (SOCKETS=off ones included).

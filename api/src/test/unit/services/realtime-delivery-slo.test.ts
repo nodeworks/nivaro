@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { noteStampedDelivery } from '../../../services/realtime-ack-sample.js'
 import {
   _resetAckBucketsForTests,
   acceptAck,
   ackDelayMs,
   ackEvery,
   ackSampled,
+  ackSilenceRecent,
   burnOf,
   burnVerdict,
   computeDeliverySlo,
   deliveryBucket,
   deliveryByNodeRecent,
   figuresOf,
+  judgeAckSilence,
   judgeDeliveryByNode,
   noteDeliverySample,
   setDeliveryRedis,
@@ -168,7 +171,7 @@ describe('realtime delivery SLO (#2477)', () => {
       acceptAck(user, p, 20, { now: at, lookupStamp })
     // Unauthenticated socket: dropped.
     expect(await ack(null, { seq: 50, st: now - 100, rx: now - 50 })).toBeNull()
-    // Unsampled sequence: dropped.
+    // A sequence the server did not stamp: dropped (the kept stamp is the proof).
     expect(await ack('u1', { seq: 51, st: now - 100, rx: now - 50 })).toBeNull()
     // A forged stamp (claims a slow delivery that never happened): dropped.
     expect(await ack('u1', { seq: 50, st: now - 90_000, rx: now - 50 })).toBeNull()
@@ -183,6 +186,67 @@ describe('realtime delivery SLO (#2477)', () => {
     expect(await ack('u4', { seq: 200, st: now - 50, rx: now - 20 }, now + 10_000)).toBe(30)
     process.env.REALTIME_ACK_EVERY = '0'
     expect(await ack('u5', { seq: 50, st: now - 100, rx: now - 50 })).toBeNull()
+  })
+
+  it('takes an ack for an event the time floor stamped off the 1-in-N grid', async () => {
+    _resetAckBucketsForTests()
+    const redis = fakeRedis()
+    setDeliveryRedis(redis)
+    const now = 10_000_000
+    const lookupStamp = async (seq: number) => (seq === 73 ? now - 400 : null)
+    expect(
+      await acceptAck('u1', { seq: 73, st: now - 400, rx: now - 300 }, 20, { now, lookupStamp })
+    ).toBe(100)
+    expect(
+      await acceptAck('u2', { seq: 0, st: now - 400, rx: now - 300 }, 20, { now, lookupStamp })
+    ).toBeNull()
+  })
+
+  it('tells a silent check from a quiet one (staging demo 2026-10-26)', async () => {
+    const redis = fakeRedis()
+    const now = 50_000_000
+    // Nothing anywhere: idle, never an alarm.
+    const empty = await ackSilenceRecent(15, { redis, now })
+    expect(empty).toEqual({
+      window_minutes: 15,
+      client_samples: 0,
+      stamped_events: 0,
+      socket_deliveries: 0
+    })
+    expect(judgeAckSilence(empty!).status).toBe('idle')
+    // Sampled events reached 12 sockets (realtime process) and no ack came back: silent.
+    for (let i = 0; i < 4; i++)
+      noteStampedDelivery(redis, 'collection:orders', 3, { node: 'rt-1', at: now - i * 60_000 })
+    // The probe's synthetic socket is never counted.
+    noteStampedDelivery(redis, 'probe:abc', 1, { node: 'rt-1', at: now })
+    await new Promise((r) => setImmediate(r))
+    const silent = await ackSilenceRecent(15, { redis, now })
+    expect(silent).toMatchObject({ client_samples: 0, stamped_events: 4, socket_deliveries: 12 })
+    const v = judgeAckSilence(silent!)
+    expect(v.status).toBe('silent')
+    expect(v.detail).toMatch(/no client acknowledged one/)
+    // A probe sample does not count as a client acknowledgement.
+    await noteDeliverySample('probe', 40, { redis, at: now, node: 'web-1' })
+    expect(judgeAckSilence((await ackSilenceRecent(15, { redis, now }))!).status).toBe('silent')
+    // One client acknowledgement and the check is measuring again.
+    await noteDeliverySample('client', 120, { redis, at: now, node: 'rt-1' })
+    const ok = await ackSilenceRecent(15, { redis, now })
+    expect(ok?.client_samples).toBe(1)
+    expect(judgeAckSilence(ok!).status).toBe('ok')
+    // Older than the window: forgotten.
+    expect((await ackSilenceRecent(15, { redis, now: now + 3_600_000 }))?.socket_deliveries).toBe(0)
+    // Too few deliveries to call it broken.
+    expect(
+      judgeAckSilence({
+        window_minutes: 15,
+        client_samples: 0,
+        stamped_events: 1,
+        socket_deliveries: 3
+      }).status
+    ).toBe('idle')
+    // Acknowledgements switched off: never an alarm.
+    process.env.REALTIME_ACK_EVERY = '0'
+    expect(judgeAckSilence(silent!).status).toBe('idle')
   })
 
   it('a full bucket map drops the least recently used people, not everyone', () => {

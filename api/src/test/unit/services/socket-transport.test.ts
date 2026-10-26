@@ -166,6 +166,31 @@ describe('createCoalescer (#1681)', () => {
     ])
   })
 
+  it('a stamped event closes its window and keeps its delivery stamp (#2477)', () => {
+    const sent: Array<Record<string, unknown>> = []
+    const c = createCoalescer({ send: (p) => sent.push(p) })
+    c.push({ collection: 'a', item: 1, _seq: 10 })
+    c.push({ collection: 'a', item: 2, _seq: 11 })
+    // Held behind item 2, but out at once: the client can acknowledge it.
+    c.push({ collection: 'a', item: 3, _seq: 12, _st: 5000 })
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toMatchObject({ coalesced: true, items: [2, 3], _seq: 12, _st: 5000 })
+    // A fresh window follows: the next event is held again.
+    c.push({ collection: 'a', item: 4, _seq: 13 })
+    expect(sent).toHaveLength(2)
+    vi.advanceTimersByTime(COALESCE_WINDOW_MS)
+    expect(sent[2]).toEqual({ collection: 'a', item: 4, _seq: 13 })
+  })
+
+  it('a merged message never pairs a stamp with another event sequence', () => {
+    const m = mergeUpdates('a', [
+      { collection: 'a', item: 1, _seq: 12, _st: 5000 },
+      { collection: 'a', item: 2, _seq: 14 }
+    ])
+    expect(m._seq).toBe(14)
+    expect(m._st).toBeUndefined()
+  })
+
   it('drops what is held once disposed', () => {
     const sent: unknown[] = []
     const c = createCoalescer({ send: (p) => sent.push(p) })

@@ -101,8 +101,15 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
 
   // ── #2477 delivery SLO ──────────────────────────────────────────────────────
   app.get('/delivery-slo', async () => {
-    const { computeDeliverySlo } = await import('../services/realtime-delivery-slo.js')
-    return { data: await computeDeliverySlo(await sloTargets()) }
+    const { ackSilenceRecent, computeDeliverySlo, judgeAckSilence } = await import(
+      '../services/realtime-delivery-slo.js'
+    )
+    const slo = await computeDeliverySlo(await sloTargets())
+    if (!slo) return { data: null }
+    // Whether the figures are current: acknowledgements against sampled events that reached
+    // connected sockets in the last 15 minutes (the 7-day totals alone hide a silent check).
+    const recent = await ackSilenceRecent(15)
+    return { data: { ...slo, acks: recent ? { ...recent, ...judgeAckSilence(recent) } : null } }
   })
 
   // ── #2760 leak auditor ─────────────────────────────────────────────────────

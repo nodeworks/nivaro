@@ -448,6 +448,8 @@ export interface CoalescedUpdate {
   _rseq?: number
   _rseq_min?: number
   _room?: string
+  /** #2477 — the delivery stamp of the newest event merged, when that one carried it. */
+  _st?: number
 }
 
 /** Collapse several `collection:update` payloads for one collection into one message. */
@@ -462,6 +464,7 @@ export function mergeUpdates(
   const fields = new Set<string>()
   let anyAllFields = false
   let seq: number | undefined
+  let st: number | undefined
   let rseq: number | undefined
   let rseqMin: number | undefined
   let room: string | undefined
@@ -475,7 +478,10 @@ export function mergeUpdates(
     const cf = p.changed_fields
     if (Array.isArray(cf) && cf.length) for (const f of cf) fields.add(String(f))
     else anyAllFields = true
-    if (typeof p._seq === 'number' && (seq == null || p._seq > seq)) seq = p._seq
+    if (typeof p._seq === 'number' && (seq == null || p._seq > seq)) {
+      seq = p._seq
+      st = typeof p._st === 'number' ? p._st : undefined
+    }
     if (typeof p._rseq === 'number') {
       if (rseq == null || p._rseq > rseq) rseq = p._rseq
       const lo = typeof p._rseq_min === 'number' ? p._rseq_min : p._rseq
@@ -496,6 +502,8 @@ export function mergeUpdates(
   // A message with no field list means "anything may have changed" — the union stays open.
   if (!anyAllFields && fields.size) out.changed_fields = [...fields].slice(0, 50)
   if (seq != null) out._seq = seq
+  // An ack names `_seq` and echoes `_st`: the stamp rides along only with its own sequence.
+  if (seq != null && st != null) out._st = st
   if (rseq != null && room) {
     out._rseq = rseq
     out._rseq_min = rseqMin
@@ -555,6 +563,12 @@ export function createCoalescer(opts: {
         return
       }
       w.buf.push(payload)
+      // #2477 — a stamped event closes its window now: it is the newest held, so the merged
+      // message carries its `_seq` and `_st` and the client can acknowledge it. Rare (1 in N).
+      if (typeof payload._st === 'number') {
+        clearTimeout(w.timer as ReturnType<typeof setTimeout>)
+        close(c)
+      }
     },
     dispose() {
       disposed = true

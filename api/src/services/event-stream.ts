@@ -8,7 +8,7 @@ import {
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
-import { ackSampled } from './realtime-ack-sample.js'
+import { ackSampled, localRoomSize, noteStampedDelivery } from './realtime-ack-sample.js'
 import { livePayload } from './socket-transport.js'
 import { noteAdapterLag } from './traffic-taps/realtime.js'
 
@@ -73,10 +73,14 @@ export function streamActive(): boolean {
   return running && pub != null
 }
 
-/** Field list for XADD: node, self-delivery flag, write time, entry JSON. Exported for tests. */
+/**
+ * Field list for XADD: node, self-delivery flag, write time, entry JSON, and `k 1` when the
+ * writer stamped the event for client acknowledgements (#2477 time floor — a stamp the sequence
+ * alone does not imply). Exported for tests.
+ */
 export function encodeStreamEntry(
   entry: JournalEntry,
-  opts: { self?: boolean; node?: string; at?: number } = {}
+  opts: { self?: boolean; node?: string; at?: number; stamped?: boolean } = {}
 ): string[] {
   return [
     'n',
@@ -86,7 +90,8 @@ export function encodeStreamEntry(
     't',
     String(opts.at ?? Date.now()),
     'e',
-    JSON.stringify(entry)
+    JSON.stringify(entry),
+    ...(opts.stamped ? ['k', '1'] : [])
   ]
 }
 
@@ -95,6 +100,8 @@ export interface DecodedStreamEntry {
   self: boolean
   at: number
   entry: JournalEntry
+  /** The writer stamped it (`_st` = `at`); absent from writers older than the time floor. */
+  stamped?: boolean
 }
 
 /** Parse XREAD field pairs back. Null for a malformed entry. Exported for tests. */
@@ -110,7 +117,8 @@ export function decodeStreamEntry(fields: string[]): DecodedStreamEntry | null {
       node: map.get('n') ?? '',
       self: map.get('s') === '1',
       at: Number(map.get('t')) || 0,
-      entry
+      entry,
+      ...(map.get('k') === '1' ? { stamped: true } : {})
     }
   } catch {
     return null
@@ -129,8 +137,9 @@ export function shouldDeliver(d: DecodedStreamEntry, node: string = NODE): boole
  */
 export async function publishToStream(
   entry: JournalEntry,
-  /** `at`: the write time to record (a sampled event's `_st`, #2477); default now. */
-  opts: { self?: boolean; at?: number } = {}
+  /** `at`: the write time to record (a sampled event's `_st`, #2477); default now.
+   *  `stamped`: the writer stamped it, so every reader sends `_st` (the time floor). */
+  opts: { self?: boolean; at?: number; stamped?: boolean } = {}
 ): Promise<boolean> {
   if (!streamActive() || !pub) return false
   try {
@@ -157,9 +166,12 @@ function deliver(d: DecodedStreamEntry): void {
   if (!io) return
   const { entry } = d
   const live = livePayload(entry)
-  // #2477 — a sampled event carries the time it was written, for client acknowledgements.
-  const payload = entry.seq != null && ackSampled(entry.seq) && d.at ? { ...live, _st: d.at } : live
+  // #2477 — a sampled event carries the time it was written, for client acknowledgements:
+  // flagged by its writer (`k`), or 1 in N by sequence (writers from before the flag).
+  const stamped = entry.seq != null && !!d.at && (d.stamped === true || ackSampled(entry.seq))
+  const payload = stamped ? { ...live, _st: d.at } : live
   io.local.to(entry.room).emit(entry.event, payload)
+  if (stamped) noteStampedDelivery(pub, entry.room, localRoomSize(io, entry.room))
   stats.delivered++
   notePartitionDelivery(entry.room, entry.seq) // #2838 — the partition drill's probe rooms only
   if (d.at) {

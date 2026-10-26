@@ -499,7 +499,17 @@ async function evalDeliveryByNode(cfg: Record<string, unknown>): Promise<EvalRes
   }
   const rows = await deliveryByNodeRecent(windowMinutes, judge.target_ms)
   if (rows == null) return { status: 'unknown', detail: 'Delivery figures need Redis' }
-  return judgeDeliveryByNode(rows, judge, windowMinutes)
+  const verdict = judgeDeliveryByNode(rows, judge, windowMinutes)
+  if (verdict.status !== 'unknown') return verdict
+  // Too few samples to judge a node: say whether that is a quiet spell or a check that stopped
+  // hearing acknowledgements while people received sampled events (staging demo 2026-10-26).
+  const { ackSilenceRecent, judgeAckSilence } = await import('./realtime-delivery-slo.js')
+  const figures = await ackSilenceRecent(windowMinutes)
+  if (!figures) return verdict
+  const silence = judgeAckSilence(figures)
+  return silence.status === 'silent'
+    ? { status: 'failing', detail: silence.detail, metric: figures.socket_deliveries }
+    : { ...verdict, detail: `${verdict.detail}. ${silence.detail}` }
 }
 
 export async function evaluateMonitor(

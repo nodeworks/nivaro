@@ -182,6 +182,26 @@ export function registerDeployReadinessChecks(): void {
     }
   })
   registerReadinessCheck({
+    id: 'realtime-delivery-acks',
+    label: 'The live-update delivery check hears from clients',
+    group: 'Deploy',
+    description:
+      'Clients acknowledge a sample of the record events they receive (REALTIME_ACK_EVERY, plus one per process every REALTIME_ACK_FLOOR_S); that is what the realtime delivery SLO and the delivery_node monitor measure. Warns when connected sockets received sampled events in the last 15 minutes and not one acknowledgement came back — the SLO would keep showing old figures. Passes while acknowledgements arrive or nothing anyone watches changed. Reads two Redis counters.',
+    ttlMs: 120_000,
+    run: async () => {
+      if (process.env.CLOUD_META_DB_URL)
+        return {
+          status: 'skip',
+          detail: 'Not kept in cloud mode: delivery figures are not per tenant.'
+        }
+      const { ackSilenceRecent, judgeAckSilence } = await import('./realtime-delivery-slo.js')
+      const figures = await ackSilenceRecent(15)
+      if (!figures) return { status: 'skip', detail: 'Delivery figures need Redis.' }
+      const v = judgeAckSilence(figures)
+      return { status: v.status === 'silent' ? 'warn' : 'pass', detail: v.detail }
+    }
+  })
+  registerReadinessCheck({
     id: 'other-instance-scheduled-runs',
     label: 'Only this deployment runs scheduled jobs on its database',
     group: 'Deploy',
