@@ -1,10 +1,88 @@
 {
-  "generated_at": "2026-10-26T02:47:55.288Z",
+  "generated_at": "2026-10-26T13:33:42.245Z",
   "releases": [
+    {
+      "version": "0.3.29",
+      "tag": "v0.3.29",
+      "date": "2026-10-26T09:33:27-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ai",
+              "text": "chunk waiting_on_me visibility reads under the parameter cap",
+              "hash": "7f1d97946"
+            },
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "stale record views, summary sections, people ranking",
+              "hash": "9350456f8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "portal",
+              "text": "apply display prefs everywhere, name push failures, pace picker search, label approval seats",
+              "hash": "7ab388cb7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "deleted previews, lost drafts, slash form, archive copy",
+              "hash": "ebdd846d8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "help-videos",
+              "text": "any replica takes recording parts, finalize and discard",
+              "hash": "8eed92347"
+            },
+            {
+              "section": "Fixed",
+              "scope": "help-videos",
+              "text": "render recordings whose frame size changes mid-stream",
+              "hash": "d756b7a20"
+            },
+            {
+              "section": "Fixed",
+              "scope": "watch",
+              "text": "a watched workflow stays on the workflow, not its project",
+              "hash": "7df686903"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ai",
+              "text": "answer \"what's waiting on me\" from the asker's My Work list",
+              "hash": "5f80c1efc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "new groups and channels usable on every replica at once",
+              "hash": "fa33cd50b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "chat",
+              "text": "mock channelByKey in the huddle-live label test",
+              "hash": "029a0c9ad"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.28",
       "tag": "v0.3.28",
-      "date": "2026-10-25T22:47:36-04:00",
+      "date": "2026-10-25T22:47:55-04:00",
       "sections": [
         {
           "label": "Fixed",
