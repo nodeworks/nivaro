@@ -370,6 +370,11 @@ export const extContext: DocSection = {
           'Record ids of a collection whose CURRENT pipeline step the person owns: the same answer as My Work and a queue\'s My Items (owner groups, manual owners, teams, delegation). Resolving it scans every open record, so a cold call takes seconds; the answer is kept a minute per person and cleared whenever owners change. Use it for a "mine" filter, never per row. Older APIs do not offer it — `ctx.pipelines?.ownedItemIds`.'
         ],
         [
+          'access',
+          '{ readFilter(user, collection) } (optional)',
+          'The role\'s read access for your own raw-SQL read model. Pass the request\'s `req.user`: `allowed` is false when the role cannot read the collection at all, and `apply(query, alias)` adds the role\'s row filter for rows of that collection under `alias`, exactly as the items API narrows them. User Scopes are not included — apply your own. Admins: allowed, nothing applied. A raw SQL list that skips this shows rows the person could never open. Older APIs do not offer it — fall back to a narrower audience, never a wider one.'
+        ],
+        [
           'sql',
           '{ runLong, announceWrites, triggerSafeReturning? }',
           '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids)` tells open pages a raw write changed records. `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'

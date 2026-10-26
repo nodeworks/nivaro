@@ -399,6 +399,18 @@ export interface ExtensionContext {
      *  cleared when owners change. */
     ownedItemIds(userId: string, collection: string): Promise<string[]>
   }
+  /** The role's read access for an extension's own raw-SQL read model.
+   *  Optional: older APIs do not offer it. */
+  access?: {
+    /** `user` is the request's `req.user`. `allowed`: the role reads the
+     *  collection at all. `apply(qb, alias)`: adds the role's row filter for
+     *  rows of the collection under `alias`. User Scopes are not included.
+     *  Admins: allowed, nothing applied. */
+    readFilter(
+      user: unknown,
+      collection: string
+    ): Promise<{ allowed: boolean; apply(qb: Knex.QueryBuilder, alias: string): void }>
+  }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }
