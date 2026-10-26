@@ -18,7 +18,13 @@ import { currentTenantKey } from './tenant-rooms.js'
  * Everything here is best-effort decoration: a failed emit never fails a write.
  */
 
-export type HelpVideoChange = 'render' | 'published' | 'required' | 'archived' | 'restored'
+export type HelpVideoChange =
+  | 'render'
+  | 'published'
+  | 'unpublished'
+  | 'required'
+  | 'archived'
+  | 'restored'
 
 // A publish queues a render and a render reports through the same row: one
 // signal per video and kind per second is plenty for a re-read.

@@ -271,6 +271,12 @@ export function publishHelpVideo(
 ): Command<{ data: HelpVideo }> {
   return cmd('POST', `/help-videos/${id}/publish`, undefined, opts ?? {})
 }
+/** Back to draft: viewers stop seeing it; the published version (and its render) is kept, so
+ *  `publishHelpVideo` with no changes since puts the same cut back without a new render.
+ *  409 `HELP_VIDEO_NOT_PUBLISHED` unless the video is published. */
+export function unpublishHelpVideo(id: string): Command<{ data: HelpVideo }> {
+  return cmd('POST', `/help-videos/${id}/unpublish`, undefined, {})
+}
 export function rerecordHelpVideo(
   id: string,
   upload_id: string

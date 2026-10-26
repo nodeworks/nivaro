@@ -2686,6 +2686,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | readHelpVideoDraft(id) | GET /help-videos/:id/draft/edits | Author |
 | saveHelpVideoDraft(id, edits, base_hash?) | PUT /help-videos/:id/draft/edits | Author |
 | publishHelpVideo(id, opts?) | POST /help-videos/:id/publish | Author |
+| unpublishHelpVideo(id) | POST /help-videos/:id/unpublish | Author |
 | rerecordHelpVideo(id, upload_id) | POST /help-videos/:id/rerecord | Author |
 | listHelpVideoVersions(id) | GET /help-videos/:id/versions | Author |
 | restoreHelpVideoVersion(id, versionId) | POST /help-videos/:id/versions/:vid/restore | Author |

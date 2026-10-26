@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, History, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { Archive, EyeOff, History, Pencil, Plus, Search, Send, Trash2, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
@@ -186,6 +186,35 @@ export function HelpVideoLibrary({
     }
   }
 
+  // Unpublish (back to draft) and Publish again share the archive guard and error line: one
+  // action per card at a time.
+  const move = async (v: HelpVideoDto, to: 'draft' | 'published') => {
+    if (archiving.has(v.id)) return
+    setArchiveError(null)
+    setArchiving((cur) => new Set(cur).add(v.id))
+    const title = v.title || 'Untitled video'
+    try {
+      if (to === 'draft') await helpVideoApi(client).unpublish(v.id)
+      else await helpVideoApi(client).publish(v.id, false)
+      toast.success(
+        to === 'draft'
+          ? `"${title}" is back in Drafts — viewers no longer see it`
+          : `"${title}" is published again`
+      )
+      void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+    } catch (e) {
+      setArchiveError(
+        `"${title}" could not be ${to === 'draft' ? 'unpublished' : 'published again'}. ${(e as Error).message}`
+      )
+    } finally {
+      setArchiving((cur) => {
+        const next = new Set(cur)
+        next.delete(v.id)
+        return next
+      })
+    }
+  }
+
   const archive = async (v: HelpVideoDto) => {
     if (archiving.has(v.id)) return
     setArchiveError(null)
@@ -354,7 +383,13 @@ export function HelpVideoLibrary({
             const meta = [
               v.category,
               chapters > 1 ? `${chapters} chapters` : null,
-              !v.published ? 'Draft' : waiting ? 'Getting ready' : p.text
+              !v.published
+                ? 'Draft'
+                : v.status === 'draft'
+                  ? 'Unpublished'
+                  : waiting
+                    ? 'Getting ready'
+                    : p.text
             ]
               .filter(Boolean)
               .join(' · ')
@@ -441,6 +476,32 @@ export function HelpVideoLibrary({
                     >
                       <Pencil className='h-3.5 w-3.5' /> Edit
                     </Button>
+                    {v.status === 'published' && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => void move(v, 'draft')}
+                        disabled={archiving.has(v.id)}
+                        data-tip='Back to Drafts: viewers stop seeing it until you publish it again'
+                        data-hv-unpublish={v.id}
+                      >
+                        <EyeOff className='h-3.5 w-3.5' /> Unpublish
+                      </Button>
+                    )}
+                    {v.status === 'draft' &&
+                      !!v.published &&
+                      (!v.draft || v.draft_matches_published) && (
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          onClick={() => void move(v, 'published')}
+                          disabled={archiving.has(v.id)}
+                          data-tip='Put the last published version back for viewers'
+                          data-hv-republish={v.id}
+                        >
+                          <Send className='h-3.5 w-3.5' /> Publish again
+                        </Button>
+                      )}
                     {v.status !== 'archived' && (
                       <Button
                         size='sm'

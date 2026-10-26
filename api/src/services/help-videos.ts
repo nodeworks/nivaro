@@ -1123,6 +1123,12 @@ export async function publishVideo(
   opts: { watch_again?: boolean; note?: unknown }
 ): Promise<string> {
   const draft = await loadVersion(video.draft_version_id)
+  // An unpublished video (back to draft, its published version kept) whose draft adds nothing:
+  // publishing again puts the kept version back — no new version, no fresh render.
+  if (video.status === 'draft' && video.published_version_id != null) {
+    const kept = await loadVersion(video.published_version_id)
+    if (kept && (!draft || sameContent(draft, kept))) return republishKept(video, user, kept)
+  }
   if (!draft) throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', NOTHING_TO_PUBLISH)
   // "What changed" (#1497): shown to people who watched an earlier version and
   // carried in the watch-again notification.
@@ -1472,6 +1478,50 @@ export async function listVersions(
     is_draft: low(r.id) === low(video.draft_version_id),
     created_by_name: `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || null
   }))
+}
+
+/** Publish an unpublished video's kept version again (no draft changes). */
+async function republishKept(video: VideoRow, user: User, kept: VersionRow): Promise<string> {
+  const contextCount = Number(
+    (await db('nivaro_help_video_contexts').where({ video_id: video.id }).count('* as n').first())
+      ?.n ?? 0
+  )
+  const missing = publishChecklist(video, contextCount)
+  if (missing.length) {
+    throw fail(422, 'HELP_VIDEO_NOT_READY', 'Finish the checklist before publishing', { missing })
+  }
+  await db('nivaro_help_videos')
+    .where({ id: video.id })
+    .update({ status: 'published', draft_version_id: null, ...touch(user) })
+  announceHelpVideoChanged(String(video.id), 'published')
+  await logActivity({
+    action: 'help-video-republish',
+    user: user.id,
+    collection: 'nivaro_help_videos',
+    item: low(video.id)
+  })
+  return String(kept.id)
+}
+
+/**
+ * Take a published video back to draft: viewers stop seeing it (every viewer read and the
+ * required list ask for status 'published'), authors keep it under Drafts. The published
+ * version, its render and its views stay, so publishing again puts the same cut back at once.
+ */
+export async function unpublishVideo(video: VideoRow, user: User): Promise<void> {
+  if (video.status !== 'published') {
+    throw fail(409, 'HELP_VIDEO_NOT_PUBLISHED', 'Only a published video can be unpublished.')
+  }
+  await db('nivaro_help_videos')
+    .where({ id: video.id, status: 'published' })
+    .update({ status: 'draft', ...touch(user) })
+  announceHelpVideoChanged(String(video.id), 'unpublished')
+  await logActivity({
+    action: 'help-video-unpublish',
+    user: user.id,
+    collection: 'nivaro_help_videos',
+    item: low(video.id)
+  })
 }
 
 export async function archiveVideo(video: VideoRow, user: User): Promise<void> {

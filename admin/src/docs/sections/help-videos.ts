@@ -189,7 +189,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',
-      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, how many found it helpful (thumbs up and down), where people stop — the share of viewers who reached each 5% of the video — and the questions viewers asked, with their answers. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
+      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, how many found it helpful (thumbs up and down), where people stop — the share of viewers who reached each 5% of the video — and the questions viewers asked, with their answers. Unpublish on a published video takes it back to Drafts: viewers stop seeing it at once (the library, Videos for this screen, search, required viewing and Ask AI all leave it out), while authors keep it under Drafts marked Unpublished. Publish again on that card — or Publish in the editor when nothing changed — puts the same version back with no new render. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
     },
     { type: 'h3', text: 'Storage' },
     {
@@ -277,6 +277,11 @@ export const helpVideosApi: DocSection = {
           'POST /help-videos/:id/publish',
           'authors',
           'Publish the draft; watch_again resets required viewing; note (≤ 500 characters) is what changed, shown to people who watched an earlier version and sent with watch_again'
+        ],
+        [
+          'POST /help-videos/:id/unpublish',
+          'authors',
+          'Back to draft: viewers stop seeing the video; the published version and its render are kept, so publishing again with no changes puts the same cut back with no new render. 409 HELP_VIDEO_NOT_PUBLISHED unless it is published'
         ],
         ['POST /help-videos/:id/render', 'authors', 'Queue a render again'],
         [
@@ -640,6 +645,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
         ['readHelpVideoDraft(id)', 'GET /help-videos/:id/draft/edits', 'Author'],
         ['saveHelpVideoDraft(id, edits, base_hash?)', 'PUT /help-videos/:id/draft/edits', 'Author'],
         ['publishHelpVideo(id, opts?)', 'POST /help-videos/:id/publish', 'Author'],
+        ['unpublishHelpVideo(id)', 'POST /help-videos/:id/unpublish', 'Author'],
         ['rerecordHelpVideo(id, upload_id)', 'POST /help-videos/:id/rerecord', 'Author'],
         ['listHelpVideoVersions(id)', 'GET /help-videos/:id/versions', 'Author'],
         [

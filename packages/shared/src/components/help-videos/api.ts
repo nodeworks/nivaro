@@ -458,6 +458,10 @@ export function helpVideoApi(client: NivaroClient) {
     setRequirements: (id: string, role_ids: string[]) =>
       r(put(`/help-videos/${id}/requirements`, { role_ids })),
     archive: (id: string) => r(del(`/help-videos/${id}`)),
+    /** Back to draft: viewers stop seeing it; the published version is kept, so `publish` puts the
+     *  same cut back with no new render. 409 HELP_VIDEO_NOT_PUBLISHED unless it is published. */
+    unpublish: (id: string) =>
+      r(post<{ data: HelpVideoDto }>(`/help-videos/${id}/unpublish`, {})).then((x) => x.data),
     /** Deletes the video, its versions, files, views and requirements for good. Administrators
      *  only (403 ADMIN_ONLY otherwise); 404 when it is already gone. */
     purge: (id: string) => r(del(`/help-videos/${id}?purge=1`)),

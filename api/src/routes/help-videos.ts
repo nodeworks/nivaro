@@ -146,6 +146,7 @@ import {
   serializeVersion,
   serializeVideo,
   sessionTag,
+  unpublishVideo,
   updateDetails,
   type VideoRow,
   validateContexts,
@@ -770,6 +771,15 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const fresh = await loadVideoForUser(req, id)
     return reply.send({ data: await serializeVideo(fresh.video, viewerCtx(req, true)) })
   })
+  // Back to draft: viewers stop seeing it; the published version stays for "Publish again".
+  app.post('/:id/unpublish', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    await unpublishVideo(video, req.user!)
+    const fresh = await loadVideoForUser(req, id)
+    return reply.send({ data: await serializeVideo(fresh.video, viewerCtx(req, true)) })
+  })
+
   app.post('/:id/rerecord', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)

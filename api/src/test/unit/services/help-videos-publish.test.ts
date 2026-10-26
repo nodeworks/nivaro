@@ -13,7 +13,12 @@ vi.mock('../../../services/io-holder.js', () => ({ getApp: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import { queueRender } from '../../../services/help-video-render.js'
-import { publishVideo, sameContent, serializeVideo } from '../../../services/help-videos.js'
+import {
+  publishVideo,
+  sameContent,
+  serializeVideo,
+  unpublishVideo
+} from '../../../services/help-videos.js'
 import { getApp } from '../../../services/io-holder.js'
 import { notifyUser } from '../../../services/notification-channels.js'
 
@@ -156,5 +161,46 @@ describe('sameContent / draft_matches_published', () => {
     expect(
       (await serializeVideo(live(), { ...ctx, author: false })).draft_matches_published
     ).toBeUndefined()
+  })
+})
+
+describe('unpublish and publish again', () => {
+  const unpublished = (draft: string | null = null) =>
+    ({ ...(live() as object), status: 'draft', draft_version_id: draft }) as never
+
+  it('takes a published video back to draft and keeps its published version', async () => {
+    await unpublishVideo(live(null as never), user)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].table).toBe('nivaro_help_videos')
+    expect(updates[0].patch).toMatchObject({ status: 'draft' })
+    expect(updates[0].patch).not.toHaveProperty('published_version_id')
+  })
+
+  it('refuses a video that is not published', async () => {
+    await expect(unpublishVideo(unpublished(), user)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'HELP_VIDEO_NOT_PUBLISHED'
+    })
+    expect(updates).toEqual([])
+  })
+
+  it('publishing again with no draft puts the kept version back: no new version, no render', async () => {
+    expect(await publishVideo(unpublished(), user, {})).toBe('P1')
+    expect(queueRender).not.toHaveBeenCalled()
+    expect(updates).toHaveLength(1)
+    expect(updates[0].patch).toMatchObject({ status: 'published', draft_version_id: null })
+    expect(updates[0].patch).not.toHaveProperty('published_version_id')
+  })
+
+  it('an identical draft (the editor was opened) also puts the kept version back', async () => {
+    expect(await publishVideo(unpublished('D2'), user, {})).toBe('P1')
+    expect(queueRender).not.toHaveBeenCalled()
+  })
+
+  it('a changed draft publishes as a new version', async () => {
+    versions.D2 = version('D2', { edits_hash: 'h2' })
+    expect(await publishVideo(unpublished('D2'), user, {})).toBe('D2')
+    expect(queueRender).toHaveBeenCalledWith('D2')
+    expect(updates[0].patch).toMatchObject({ status: 'published', published_version_id: 'D2' })
   })
 })
