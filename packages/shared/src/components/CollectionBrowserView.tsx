@@ -833,17 +833,49 @@ export function RowActionsMenu({
   // fetched only once the menu opens, one request per collection (react-query
   // dedupes across rows). Built-ins are the bar's own buttons, never listed.
   const { data: bulkData } = useAvailableBulkActions(open ? [collection] : [])
+  const rowCandidates = useMemo(
+    () =>
+      open
+        ? mergeBulkActions(bulkData, [collection], bulkEnabledKeys).filter(
+            // Transition-kind registry actions (Cancel / Uncancel) are the pipeline
+            // transitions already listed above — never the same move twice.
+            (a) => a.kind !== 'builtin' && a.kind !== 'transition'
+          )
+        : [],
+    [open, bulkData, collection, bulkEnabledKeys]
+  )
+  // The fields those actions' guards read that the host's row does not carry
+  // — a queue row carries none of the record's own columns, a list row only
+  // its visible ones — are read for this one record when the menu opens, so
+  // "On Hold" never offers itself on a held record (Rob 2026-10-26).
+  const guardFields = useMemo(() => {
+    const need = new Set<string>()
+    for (const a of rowCandidates)
+      for (const g of a.guard ?? [])
+        if (g && typeof g.field === 'string' && !(row && g.field in row)) need.add(g.field)
+    return [...need].sort()
+  }, [rowCandidates, row])
+  const { data: guardRow } = useQuery<Record<string, unknown>>({
+    queryKey: ['row-action-guard', collection, String(id), guardFields.join(',')],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> | null }>(
+          get(`/items/${encodeURIComponent(collection)}/${encodeURIComponent(String(id))}`, {
+            fields: guardFields.join(',')
+          })
+        )
+        .then((r) => r.data ?? {})
+        // Unreadable here: every action shows and the server decides.
+        .catch(() => ({})),
+    enabled: open && guardFields.length > 0,
+    staleTime: 0
+  })
   const rowActions = useMemo(() => {
-    if (!open) return []
-    return mergeBulkActions(bulkData, [collection], bulkEnabledKeys).filter((a) => {
-      // Transition-kind registry actions (Cancel / Uncancel) are the pipeline
-      // transitions already listed above — never the same move twice.
-      if (a.kind === 'builtin' || a.kind === 'transition') return false
-      if (!row) return true
-      const verdict = guardMatches(a.guard, row)
-      return verdict !== false
-    })
-  }, [open, bulkData, collection, bulkEnabledKeys, row])
+    // Until the guard fields arrive, a guarded action waits rather than flash.
+    if (guardFields.length > 0 && !guardRow) return rowCandidates.filter((a) => !a.guard?.length)
+    const values = { ...(guardRow ?? {}), ...(row ?? {}) }
+    return rowCandidates.filter((a) => guardMatches(a.guard, values) !== false)
+  }, [rowCandidates, guardFields, guardRow, row])
   // #622 — integration pushes for this row: registered item actions that
   // apply to the record, and a retry when a partner's latest push failed.
   const { pushActions, failedPartners } = useRowPushActions({
