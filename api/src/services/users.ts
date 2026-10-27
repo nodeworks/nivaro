@@ -15,6 +15,59 @@ export function canSignIn(user: Pick<User, 'status'> & { is_redacted?: unknown }
   return user.status === 'active' && !user.is_redacted
 }
 
+/**
+ * Store the Entra object id + tenant id on a user (Teams bot, spec §4).
+ * 'same' = already stored; 'conflict' = the user holds a different oid, or
+ * another user holds this one: nothing is written.
+ */
+export async function recordEntraIdentity(
+  userId: string,
+  oid: string,
+  tid: string
+): Promise<'stored' | 'same' | 'conflict'> {
+  const row = (await db('nivaro_users').where({ id: userId }).first('entra_oid', 'entra_tid')) as
+    | { entra_oid?: string | null; entra_tid?: string | null }
+    | undefined
+  if (row?.entra_oid) {
+    if (row.entra_oid.toLowerCase() === oid.toLowerCase()) return 'same'
+    console.warn(`[entra-oid] refused: user ${userId} already holds a different object id`)
+    return 'conflict'
+  }
+  const other = await db('nivaro_users')
+    .where({ entra_oid: oid })
+    .whereNot({ id: userId })
+    .first('id')
+  if (other) {
+    console.warn(`[entra-oid] refused: object id already held by another user (${userId})`)
+    return 'conflict'
+  }
+  await db('nivaro_users').where({ id: userId }).update({ entra_oid: oid, entra_tid: tid })
+  return 'stored'
+}
+
+/** Sign-in hook: never blocks the sign-in; a conflict leaves an activity row. */
+async function captureEntraIdentity(
+  userId: string,
+  profile: { entraOid?: string | null; entraTid?: string | null }
+): Promise<void> {
+  if (!profile.entraOid || !profile.entraTid) return
+  try {
+    const out = await recordEntraIdentity(userId, profile.entraOid, profile.entraTid)
+    if (out === 'conflict') {
+      const { logActivity } = await import('./activity.js')
+      await logActivity({
+        action: 'entra-oid-conflict',
+        user: userId,
+        collection: 'nivaro_users',
+        item: userId,
+        comment: 'Sign-in carried an Entra object id that does not match the stored one'
+      })
+    }
+  } catch {
+    // column missing (behind migration 505) or transient: sign-in proceeds
+  }
+}
+
 export async function findOrCreateFromOIDC(profile: {
   sub: string
   email: string
@@ -34,6 +87,9 @@ export async function findOrCreateFromOIDC(profile: {
   employee_id?: string | null
   preferred_language?: string | null
   avatar?: string | null
+  // Entra object + tenant id from the ID token (Microsoft issuers only).
+  entraOid?: string | null
+  entraTid?: string | null
 }): Promise<User> {
   // Match by the immutable subject first; email only links a pre-provisioned
   // user on their FIRST login (external_id gets stamped immediately below,
@@ -74,6 +130,7 @@ export async function findOrCreateFromOIDC(profile: {
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
     if (profile.office_location) queueOfficeGeocode(existing.id)
+    await captureEntraIdentity(existing.id, profile)
     return {
       ...existing,
       ...updates,
@@ -125,6 +182,7 @@ export async function findOrCreateFromOIDC(profile: {
   // Welcome auto-broadcast (#389): a configured message greets brand-new
   // users on first login — in-app row, fire-and-forget.
   const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  if (newId) await captureEntraIdentity(newId, profile)
   if (newId && profile.office_location) queueOfficeGeocode(newId)
   if (newId) {
     void db('nivaro_settings')

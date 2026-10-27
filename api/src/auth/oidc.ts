@@ -340,6 +340,10 @@ async function buildProfileFromTokens(
     employee_id: graph?.employee_id ?? null,
     preferred_language: graph?.preferred_language ?? null,
     avatar,
+    // Entra object + tenant id (Microsoft issuers only): the stable identity
+    // Teams puts on every activity. `sub` is per application, not the oid.
+    entraOid: microsoft && typeof claims?.oid === 'string' ? claims.oid : null,
+    entraTid: microsoft && typeof claims?.tid === 'string' ? claims.tid : null,
     tokens
   }
 }
