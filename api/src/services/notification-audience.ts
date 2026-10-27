@@ -363,6 +363,7 @@ export async function whoWouldHear(input: {
         critical: false,
         inapp: false,
         push: false,
+        teams: false,
         email: 'off',
         sms: false,
         reasons: [],

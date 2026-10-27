@@ -37,7 +37,7 @@ import {
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
 import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
-import { pipelineOutline } from '../services/pipeline-outline.js'
+import { loadPipelineOutline } from '../services/pipeline-outline-load.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
@@ -1997,39 +1997,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // whole template; services/pipeline-outline.ts says what a non-admin gets.
   app.get('/:id/outline', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const template = await db('nivaro_workflow_templates').where({ id }).first('id', 'name')
-    if (!template) return reply.code(404).send({ error: 'Not found' })
-    const [states, transitions] = await Promise.all([
-      db('nivaro_workflow_states')
-        .where({ template: id })
-        .orderBy('sort')
-        .orderBy('label')
-        .select('id', 'key', 'label', 'color', 'sort', 'is_initial', 'is_terminal'),
-      db('nivaro_workflow_transitions')
-        .where({ template: id })
-        .orderBy('sort')
-        .orderBy('label')
-        .select(
-          'id',
-          'label',
-          'from_state',
-          'to_state',
-          'color',
-          'sort',
-          'group_label',
-          'required_roles',
-          'auto_trigger',
-          'require_owner',
-          ...((await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
-            ? ['allow_creator']
-            : [])
-        )
-    ])
-    const outline = pipelineOutline(states, transitions, {
+    const outline = await loadPipelineOutline(id, {
       isAdmin: req.isAdmin ?? false,
       role: (req.user?.role as string | null | undefined) ?? null
     })
-    return reply.send({ data: { id: template.id, name: template.name ?? null, ...outline } })
+    if (!outline) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: outline })
   })
 
   // Flow map — transition volumes for a template over a period (Sankey).

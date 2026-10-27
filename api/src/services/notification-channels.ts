@@ -245,7 +245,14 @@ export interface NotifyPrefs {
   matrix?: Partial<
     Record<
       NotifyCategory,
-      { inapp?: boolean; push?: boolean; email?: EmailMode; quiet_override?: boolean }
+      {
+        inapp?: boolean
+        push?: boolean
+        /** Teams 1:1 message. Opt-in: absent = off (unlike push). */
+        teams?: boolean
+        email?: EmailMode
+        quiet_override?: boolean
+      }
     >
   >
 }
@@ -326,6 +333,10 @@ export interface DeliveryReason {
     | 'matrix_inapp_off'
     | 'matrix_push_off'
     | 'quiet_hours_push'
+    | 'teams_off'
+    | 'teams_not_connected'
+    | 'teams_quiet_hours'
+    | 'teams_sent'
     | 'quiet_override'
     | 'email_off'
     | 'email_daily'
@@ -334,7 +345,7 @@ export interface DeliveryReason {
     | 'no_email'
     | 'no_phone'
     | 'sender_cadence'
-  channel: 'all' | 'inapp' | 'push' | 'email' | 'sms'
+  channel: 'all' | 'inapp' | 'push' | 'teams' | 'email' | 'sms'
   text: string
 }
 
@@ -344,6 +355,8 @@ export interface DeliveryDecision {
   /** Whether each channel fires; email 'deferred' = lands in the daily summary. */
   inapp: boolean
   push: boolean
+  /** Teams 1:1 message: opted in, connected, outside quiet hours. */
+  teams: boolean
   email: 'send' | 'deferred' | 'off' | 'not_requested' | 'no_address'
   sms: boolean
   reasons: DeliveryReason[]
@@ -381,6 +394,7 @@ export async function decideDelivery(
     critical,
     inapp: false,
     push: false,
+    teams: false,
     email: 'off',
     sms: false,
     reasons: [{ code, channel: 'all', text }],
@@ -501,6 +515,37 @@ export async function decideDelivery(
     }
   }
 
+  // Teams rides the in-app channel like push (viewing / in-app-off suppress it, critical lands),
+  // but is opt-in: only a person who turned it on in Notification rules is messaged. Critical
+  // subjects bypass quiet hours, never the opt-in.
+  let teams = false
+  if (inapp) {
+    if (matrixRow?.teams !== true) {
+      // Said only where a Teams bot exists, so instances without one see no new line.
+      if (await teamsBotEnabled())
+        reasons.push({
+          code: 'teams_off',
+          channel: 'teams',
+          text: 'Teams is off for this kind of notification.'
+        })
+    } else if (!(await hasTeamsLink(userId))) {
+      reasons.push({
+        code: 'teams_not_connected',
+        channel: 'teams',
+        text: 'Teams is not connected.'
+      })
+    } else if (!critical && inQuietHours(prefs, now) && !quietOverridden(prefs, category)) {
+      reasons.push({
+        code: 'teams_quiet_hours',
+        channel: 'teams',
+        text: `Quiet hours (${prefs?.quiet_start}–${prefs?.quiet_end} ET) — the Teams message is held; the inbox row still lands.`
+      })
+    } else {
+      teams = true
+      reasons.push({ code: 'teams_sent', channel: 'teams', text: 'Sent to Teams.' })
+    }
+  }
+
   let email: DeliveryDecision['email'] = 'not_requested'
   if (channels.email) {
     if (!recipient?.email) {
@@ -559,7 +604,27 @@ export async function decideDelivery(
     reasons.push({ code: 'no_phone', channel: 'sms', text: 'The account has no phone number.' })
   }
 
-  return { category, critical, inapp, push, email, sms, reasons, dropped: false }
+  return { category, critical, inapp, push, teams, email, sms, reasons, dropped: false }
+}
+
+async function teamsBotEnabled(): Promise<boolean> {
+  try {
+    const { getTeamsBotConfig } = await import('./teams-bot/config.js')
+    return (await getTeamsBotConfig()).enabled
+  } catch {
+    return false
+  }
+}
+
+/** A working Teams link (active, with a chat to write to). Lookup trouble = not connected. */
+async function hasTeamsLink(userId: string): Promise<boolean> {
+  try {
+    const { linkForUser } = await import('./teams-bot/links.js')
+    const link = await linkForUser(userId)
+    return !!(link?.conversation_id && link.service_url)
+  } catch {
+    return false
+  }
 }
 
 async function legacyEmailDigest(userId: string): Promise<unknown> {
@@ -709,6 +774,11 @@ export interface NotificationDelivery {
     at?: string
   }
   sms?: { status: 'sent' | 'failed' | 'skipped' | 'not_requested'; reason?: string }
+  teams?: {
+    status: 'sent' | 'not_connected' | 'disabled' | 'skipped' | 'failed'
+    reason?: string
+    at?: string
+  }
   /** Unread-escalation stamps (channel fallback chain). */
   escalation?: {
     push_at?: string
@@ -803,6 +873,11 @@ export async function notifyUser(
       ? pushAllowed
         ? { status: 'skipped', reason: 'pending' }
         : { status: 'skipped', reason: reasonText('push') }
+      : { status: 'skipped', reason: reasonText('inapp') },
+    teams: decision.inapp
+      ? decision.teams
+        ? { status: 'skipped', reason: 'pending' }
+        : { status: 'skipped', reason: reasonText('teams') }
       : { status: 'skipped', reason: reasonText('inapp') },
     email:
       decision.email === 'not_requested'
@@ -902,6 +977,47 @@ export async function notifyUser(
             }),
           () => stampDelivery(notifId, { push: { status: 'failed' } })
         )
+      }
+
+      // Teams 1:1 message: built per recipient (buttons only when there is something to do),
+      // never blocks the caller, and a failure here is only a delivery stamp.
+      if (decision.teams) {
+        void (async () => {
+          const openUrl =
+            (await resolveTargetUrl(target, { recipientUserId: userId }).catch(() => null)) ??
+            (opts.collection && opts.item
+              ? `/collections/${opts.collection}/${opts.item}`
+              : '/notifications')
+          const { buildTeamsNotificationCard } = await import('./teams-bot/notification-card.js')
+          const { deliverTeams } = await import('./teams-bot/send.js')
+          const card = await buildTeamsNotificationCard({
+            userId,
+            notificationId: notifId,
+            subject: opts.subject,
+            message: opts.message,
+            category: decision.category,
+            collection: opts.collection,
+            item: opts.item,
+            target,
+            ackRequired: !!opts.ack_required,
+            openUrl
+          })
+          const outcome = await deliverTeams(app, userId, card, { notificationId: notifId })
+          await stampDelivery(notifId, {
+            teams:
+              outcome === 'sent'
+                ? { status: 'sent', at: new Date().toISOString() }
+                : {
+                    status: outcome,
+                    reason:
+                      outcome === 'not_connected'
+                        ? 'Teams is not connected.'
+                        : outcome === 'disabled'
+                          ? 'Teams messages are off on this instance (or held by test mode).'
+                          : 'The Teams message could not be sent.'
+                  }
+          })
+        })().catch(() => stampDelivery(notifId, { teams: { status: 'failed' } }))
       }
 
       if (app.io) {

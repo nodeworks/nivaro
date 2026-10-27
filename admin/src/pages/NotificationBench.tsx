@@ -30,7 +30,7 @@ interface Catalog {
 }
 interface Reason {
   code: string
-  channel: 'all' | 'inapp' | 'push' | 'email' | 'sms'
+  channel: 'all' | 'inapp' | 'push' | 'teams' | 'email' | 'sms'
   text: string
 }
 interface SimResult {
@@ -75,6 +75,7 @@ const CHANNEL_LABEL: Record<string, string> = {
   all: 'Everything',
   inapp: 'In-app',
   push: 'Push',
+  teams: 'Teams',
   email: 'Email',
   sms: 'SMS'
 }

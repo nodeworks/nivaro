@@ -945,7 +945,13 @@ export async function usersRoutes(app: FastifyInstance) {
         if (np.matrix && typeof np.matrix === 'object') {
           const m: Record<
             string,
-            { inapp?: boolean; push?: boolean; email?: string; quiet_override?: boolean }
+            {
+              inapp?: boolean
+              push?: boolean
+              teams?: boolean
+              email?: string
+              quiet_override?: boolean
+            }
           > = {}
           for (const cat of CATS) {
             const row = (np.matrix as Record<string, unknown>)[cat]
@@ -954,6 +960,8 @@ export async function usersRoutes(app: FastifyInstance) {
               m[cat] = {
                 inapp: (row as { inapp?: unknown }).inapp !== false,
                 push: (row as { push?: unknown }).push !== false,
+                // Teams is opt-in: only an explicit true turns it on.
+                ...((row as { teams?: unknown }).teams === true ? { teams: true } : {}),
                 ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {}),
                 // #78 — this category's push + instant email ignore quiet hours.
                 ...((row as { quiet_override?: unknown }).quiet_override === true

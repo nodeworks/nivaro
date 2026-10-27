@@ -97,6 +97,7 @@ export function sanitizePrefs(raw: unknown): NotifyPrefs {
       m[cat] = {
         inapp: row.inapp !== false,
         push: row.push !== false,
+        ...(row.teams === true ? { teams: true } : {}),
         ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {}),
         ...(row.quiet_override === true ? { quiet_override: true } : {})
       }
