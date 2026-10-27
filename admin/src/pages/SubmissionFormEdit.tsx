@@ -1085,7 +1085,9 @@ export function SubmissionFormEditPage() {
                             src={formUrl}
                             title='Form preview'
                             className='h-[360px] w-full border-none'
-                            sandbox='allow-scripts allow-forms allow-same-origin'
+                            // Opaque origin: the form's own script runs, but never with
+                            // the admin app's origin, cookies or storage.
+                            sandbox='allow-scripts allow-forms'
                           />
                         </div>
                         <p className='text-[11px] text-muted-foreground'>
