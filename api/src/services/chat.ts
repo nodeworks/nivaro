@@ -129,7 +129,9 @@ export function cleanChannelLinks(raw: unknown): Array<{ label: string; url: str
   const out: Array<{ label: string; url: string }> = []
   for (const l of raw.slice(0, 8)) {
     const url = String((l as { url?: unknown })?.url ?? '').trim()
-    if (!/^https?:\/\/\S+$/i.test(url) && !/^\/[\w\-/?=&%.#]*$/.test(url)) return null
+    // An in-app path starts with ONE slash: `//host` is a scheme-relative link
+    // to another site (security audit 2026-10-27).
+    if (!/^https?:\/\/\S+$/i.test(url) && !/^\/(?!\/)[\w\-/?=&%.#]*$/.test(url)) return null
     const label =
       String((l as { label?: unknown })?.label ?? '')
         .trim()

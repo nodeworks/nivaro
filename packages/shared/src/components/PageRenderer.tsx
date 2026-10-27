@@ -18,6 +18,7 @@ import {
   initialFilterSelection
 } from '../lib/query-filter-seed'
 import { userErrorMessage } from '../lib/safe-error'
+import { safeLinkKind } from '../lib/safe-href'
 import { resolveSheetDef, type SheetDefInput, type SheetHeaderAsOf } from '../lib/sheet-def'
 import { uniqueByValue } from '../lib/unique-options'
 import {
@@ -119,7 +120,7 @@ function mdInline(text: string, keyPrefix: string): ReactNode[] {
       )
     } else {
       const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-      if (link && (/^https?:\/\//i.test(link[2]) || link[2].startsWith('/'))) {
+      if (link && safeLinkKind(link[2]) !== null) {
         nodes.push(
           <a key={key} href={link[2]} className='text-nvr-cyan underline-offset-2 hover:underline'>
             {link[1]}

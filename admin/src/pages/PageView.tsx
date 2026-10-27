@@ -61,13 +61,15 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
       if (link) {
         const href = link[2]
-        const safe = /^https?:\/\//i.test(href) || href.startsWith('/')
+        // In-app paths start with ONE slash: `//host` / `/\host` leave the site.
+        const internal = /^\/(?![/\\])/.test(href) && !/[\s\\]/.test(href)
+        const safe = /^https?:\/\//i.test(href) || internal
         nodes.push(
           safe ? (
             <a
               key={key}
               href={href}
-              target={href.startsWith('/') ? undefined : '_blank'}
+              target={internal ? undefined : '_blank'}
               rel='noreferrer'
               className='text-nvr-cyan underline-offset-2 hover:underline'
             >
