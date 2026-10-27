@@ -107,6 +107,17 @@ describe('addendum + submission notices', () => {
 })
 
 describe('record-room events', () => {
+  it('cloud: a record event goes to the tenant record room', () => {
+    tenant.id = 'T1'
+    try {
+      emitRecordEvent('workflows', 12, 'record:integrity')
+    } finally {
+      tenant.id = undefined
+    }
+    expect(roomEmits.at(-1)?.room).toBe('t:T1:record:workflows:12')
+    roomEmits.length = 0
+  })
+
   it('emits ids and names only to the record room', () => {
     emitRecordEvent('workflows', 12, 'record:integrity')
     announceAutomation({ collection: 'workflows', item: '12' }, { id: 'f1', name: 'Sync' }, 'start')

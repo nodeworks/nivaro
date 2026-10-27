@@ -7,6 +7,7 @@ import {
   gateWatch,
   type ReportRow,
   type ReportWidgetRow,
+  takeBudget,
   unwatchWidgets,
   type WidgetLiveDeps,
   watchWidgets,
@@ -277,5 +278,27 @@ describe('pushed widgets', () => {
     write('orders')
     await vi.advanceTimersByTimeAsync(2_000)
     expect(sa.sent).toEqual([])
+  })
+})
+
+describe('live widget budget per tenant (Low: widget-live)', () => {
+  afterEach(() => {
+    __resetWidgetLive()
+    vi.unstubAllEnvs()
+  })
+
+  it('a tenant spends at most its share; others still get recomputes', () => {
+    vi.stubEnv('WIDGET_LIVE_MAX_PER_MIN', '40')
+    let a = 0
+    for (let i = 0; i < 40; i++) if (takeBudget('A')) a++
+    expect(a).toBe(10)
+    expect(takeBudget('B')).toBe(true)
+  })
+
+  it('self-hosted keeps the whole process budget', () => {
+    vi.stubEnv('WIDGET_LIVE_MAX_PER_MIN', '40')
+    let n = 0
+    for (let i = 0; i < 50; i++) if (takeBudget('')) n++
+    expect(n).toBe(40)
   })
 })

@@ -150,11 +150,15 @@ describe('live queries over graphql-ws (#2126) with a ticket sign-in (#1749)', (
     expect(closedWith).toBe(4401)
   })
 
-  it('a connection without a usable sign-in gets no live query', async () => {
+  it('a connection without a usable sign-in is refused (4403) and runs nothing (M8)', async () => {
     vi.mocked(redeemStreamTicket).mockResolvedValueOnce(null)
-    const c = client({ ticket: '11111111-2222-3333-4444-555555555555' })
+    let closedWith = 0
+    const c = client({ ticket: '11111111-2222-3333-4444-555555555555' }, (code) => {
+      closedWith = code
+    })
     const sub = collect(c, 'query @live { orders { id } }')
-    await until(() => sub.isDone() || sub.got.length > 0)
-    expect(sub.got[0]).toMatchObject({ errors: [{ extensions: { code: 'UNAUTHENTICATED' } }] })
+    await until(() => closedWith !== 0)
+    expect(closedWith).toBe(4403)
+    expect(sub.got.some((g) => (g as { data?: unknown }).data)).toBe(false)
   })
 })

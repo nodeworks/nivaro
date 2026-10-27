@@ -79,6 +79,9 @@ function unauthorized(reply: FastifyReply, message: string, invalid: boolean) {
     .send({ jsonrpc: '2.0', error: { code: -32001, message }, id: null })
 }
 
+/** Headers the tenant hook resolves a cloud tenant from (middleware/tenant.ts). */
+export const MCP_TENANT_HEADERS = ['host', 'x-tenant-host', 'x-forwarded-host'] as const
+
 /**
  * A fetch for the SDK that answers through `app.inject` as the original caller. `cookie`
  * (the admin MCP console) forwards the signed-in session instead of a bearer, and drops the
@@ -92,6 +95,9 @@ export function injectFetch(
   const forward: Record<string, string> = {}
   const names = ['authorization', 'x-workspace', 'user-agent', 'x-forwarded-for']
   if (opts.cookie) names.push('cookie')
+  // Cloud (M11): the tenant is resolved from the host headers, so the in-process call carries
+  // the caller's — without them it reached no tenant (or the default one).
+  if (process.env.CLOUD_META_DB_URL) names.push(...MCP_TENANT_HEADERS)
   for (const h of names) {
     const v = req.headers[h]
     if (typeof v === 'string') forward[h] = v

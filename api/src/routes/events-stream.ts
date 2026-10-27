@@ -1,13 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
-import { bindFromRequest, checkBind, type SocketBind } from '../services/socket-access.js'
+import { bindFromRequest, type SocketBind } from '../services/socket-access.js'
 import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
 import {
   loadStreamIdentity,
   mintStreamTicket,
-  redeemStreamTicket
+  recheckStreamIdentity,
+  redeemStreamTicket,
+  type StreamIdentity
 } from '../services/stream-ticket.js'
+import { captureTenant } from '../services/tenant-capture.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { trackSse } from '../services/traffic-taps/realtime.js'
 
@@ -26,6 +29,17 @@ import { trackSse } from '../services/traffic-taps/realtime.js'
 
 const HEARTBEAT_MS = 25_000
 const MAX_FILTER_COLLECTIONS = 50
+
+/** The collections of `wanted` the user may read (unreadable ones dropped silently). */
+async function readableOf(
+  user: NonNullable<import('fastify').FastifyRequest['user']>,
+  wanted: string[]
+): Promise<Set<string>> {
+  const checks = await Promise.all(
+    wanted.map(async (c) => ((await can(user, 'read', c).catch(() => false)) ? c : null))
+  )
+  return new Set(checks.filter((c): c is string => c != null))
+}
 
 export async function eventsStreamRoutes(app: FastifyInstance) {
   /** Mint a one-shot connect ticket (ws-token precedent) — the ONLY way a
@@ -60,20 +74,22 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
       await authenticate(req, reply)
       bind = bindFromRequest(req)
     }
-    const user = req.user
+    const signedIn = req.user
     // #1719 — the stream is the read-only fallback for a blocked websocket, so it ends with the
     // sign-in like a socket does (session gone or revoked, View-as ended, token rotated, API key
     // revoked or expired, account no longer active) at the next heartbeat. A sign-in with
     // nothing to bind to opens no stream.
-    if (!user || !bind) return reply.code(401).send({ error: 'Unauthorized' })
+    if (!signedIn || !bind) return reply.code(401).send({ error: 'Unauthorized' })
+    let user = signedIn
 
     // Per-connection collection filter. Unauthorized collections are dropped
     // SILENTLY (a 403 here would let a caller probe which collections exist).
     // No filter = all collections, permission-checked lazily per collection
     // on first event and cached for the connection's lifetime.
     let allowed: Set<string> | null = null
+    let wanted: string[] = []
     if (q.collections?.trim()) {
-      const wanted = [
+      wanted = [
         ...new Set(
           q.collections
             .split(',')
@@ -81,10 +97,7 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
             .filter(Boolean)
         )
       ].slice(0, MAX_FILTER_COLLECTIONS)
-      const checks = await Promise.all(
-        wanted.map(async (c) => ((await can(user, 'read', c).catch(() => false)) ? c : null))
-      )
-      allowed = new Set(checks.filter((c): c is string => c != null))
+      allowed = await readableOf(user, wanted)
     }
 
     reply.hijack()
@@ -114,7 +127,8 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
       } else {
         let check = lazyCan.get(ev.collection)
         if (check === undefined) {
-          check = can(user, 'read', ev.collection).catch(() => false)
+          const reader = user
+          check = can(reader, 'read', ev.collection).catch(() => false)
           lazyCan.set(ev.collection, check)
         }
         if (!(await check)) return
@@ -132,9 +146,26 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     })
 
     const streamBind = bind
+    const userId = String(user.id)
+    const inTenant = captureTenant()
+    let last: StreamIdentity = { user, isAdmin: req.isAdmin ?? false }
+    // Every heartbeat re-reads the identity (sign-in, account, role, API key narrowing); the
+    // per-collection read answers are dropped then, so a role or policy change applies to this
+    // stream within one heartbeat instead of lasting as long as the connection.
     const stillSignedIn = async (): Promise<boolean> => {
       try {
-        return !(await checkBind(app.redis, String(user.id), streamBind))
+        const r = await inTenant(() => recheckStreamIdentity(app.redis, userId, streamBind, last))
+        if (!r.identity) return false
+        if (r.identity !== last) {
+          last = r.identity
+          user = r.identity.user
+          lazyCan.clear()
+          if (allowed) {
+            const reader = user
+            allowed = await inTenant(() => readableOf(reader, wanted))
+          }
+        }
+        return true
       } catch {
         return true // a failed check never ends a stream; the next heartbeat asks again
       }

@@ -24,6 +24,8 @@ import {
   staleBuildsByUser,
   type VersionGroup
 } from '../services/client-versions-cluster.js'
+import { ownUserRoom, scopeUserRoomsPerTenant } from '../services/cloud-user-rooms.js'
+import { fieldValueAudience } from '../services/field-change-relay.js'
 import { fieldFocusTracker } from '../services/field-focus.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
@@ -111,6 +113,7 @@ import {
   trackSocket
 } from '../services/socket-health.js'
 import { joinsSettled, trackJoins } from '../services/socket-join-tracker.js'
+import { createSocketLimiter, socketRateLimitOn } from '../services/socket-rate-limit.js'
 import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 import {
   type Coalescer,
@@ -654,12 +657,20 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // Post-mortem 3.3 — SOCKETS=off (a web process beside a realtime tier): bound to an HTTP
   // server that never listens, so this process serves no /socket.io, while what it emits still
   // reaches the realtime processes' clients through the Redis adapter and the event stream.
+  // CORS_ORIGINS (the same allowlist server.ts applies to HTTP) narrows the long-polling CORS
+  // answer to those origins; unset keeps the historic wildcard.
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
   const io = new SocketIOServer(socketsServed() ? app.server : createServer(), {
-    cors: { origin: '*', credentials: true },
+    cors: { origin: corsOrigins.length > 0 ? corsOrigins : '*', credentials: true },
     transports: socketPollingAllowed() ? ['websocket', 'polling'] : ['websocket'],
     perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
+  // Cloud: personal `user:<id>` rooms are per tenant (services/cloud-user-rooms.ts).
+  scopeUserRoomsPerTenant(io)
   // #2460 / #2488 / #2779 / #2462 — buffer growth samples and this process's figures for the
   // Realtime console, published to Redis every 10 s so every replica's view merges.
   startSocketHealth(app.redis ?? null)
@@ -826,8 +837,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // #1104: every inbound event is a counter bump on the Traffic Map's socket lane (no event
     // object, no emit) — the map stays free while nobody watches it.
     noteSocket('connect')
+    // M10 — per-socket token buckets (services/socket-rate-limit.ts): generous enough that normal
+    // use never meets them; an event over its bucket is dropped, logged at most once a minute.
+    const limiter = socketRateLimitOn() ? createSocketLimiter() : null
+    let limitLoggedAt = 0
     socket.use((packet, next) => {
-      noteSocket(typeof packet?.[0] === 'string' ? packet[0] : 'other')
+      const event = typeof packet?.[0] === 'string' ? packet[0] : 'other'
+      noteSocket(event)
+      if (limiter && !limiter.allow(event)) {
+        if (Date.now() - limitLoggedAt > 60_000) {
+          limitLoggedAt = Date.now()
+          app.log.warn(
+            { socketId: socket.id, event, dropped: limiter.dropped },
+            'Socket events over the per-socket rate limit were dropped'
+          )
+        }
+        return
+      }
       next()
     })
     socketMeta.set(socket.id, {
@@ -1261,7 +1287,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
       publishClient()
       checkStickyRefresh()
-      socket.join(`user:${user.id}`)
+      // Cloud: the tenant's own personal room (sign-in runs inside the socket's tenant context).
+      socket.join(ownUserRoom(String(user.id), currentTenantKey()))
       // A revoke publishes to these rooms, which reach the socket on every replica.
       if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))
       else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
@@ -1428,9 +1455,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
-        const wsValue = await app.redis.get(`ws:token:${token}`)
+        // One-time use, atomically: GETDEL, so two sockets racing one token cannot both sign in.
+        const wsValue = (await app.redis.getdel(`ws:token:${token}`)) as string | null
         if (wsValue) {
-          await app.redis.del(`ws:token:${token}`) // one-time use
+          // Cloud: a token minted under another tenant signs nothing in here.
+          if (!(await mintedForThisTenant(wsValue))) return
           // Bound to what signed in the request that minted it: the session, the View-as, the
           // static token or the named API key. A token with no bind (an older API's bare user
           // id) signs nothing in — the client asks for a new one on its next connect.
@@ -1456,6 +1485,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const raw = await app.redis.get(`masq:${token}`)
           if (!raw) return
           const payloadIds = JSON.parse(raw) as { user_id?: string; admin_id?: string }
+          if (!(await mintedForThisTenant(raw))) return
           const user = await db<User>('nivaro_users')
             .where({ id: payloadIds.user_id, status: 'active' })
             .first()
@@ -1475,6 +1505,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         app.log.warn({ err }, 'Socket auth failed')
       }
     }
+    /**
+     * Cloud: a ws-token / View-as entry that names the tenant it was minted under (`t` or
+     * `tenant` in its JSON) signs a socket in only on that tenant's host. One that names none
+     * (older minting code) is judged by the socket's own tenant database alone, as before.
+     */
+    const mintedForThisTenant = async (raw: string): Promise<boolean> => {
+      if (!cloud) return true
+      let named: unknown = null
+      try {
+        const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
+        named = v?.t ?? v?.tenant ?? null
+      } catch {
+        return true
+      }
+      if (named == null || named === '') return true
+      const t = await socketTenant(socket)
+      return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
+    }
+
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
     socket.on('auth', inSocketTenant(socket, onAuth))
 
@@ -1482,6 +1531,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // hand this socket that tenant's broadcasts); self-hosted there are no tenants to cross.
     socket.on('tenant:join', async (tenantId: string) => {
       if (typeof tenantId !== 'string' || tenantId.length === 0) return
+      // Signed-in sockets only (an anonymous socket joins nothing, self-hosted included).
+      if (!authenticatedUser) return
       if (process.env.CLOUD_META_DB_URL) {
         const t = await socketTenant(socket)
         if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
@@ -1991,23 +2042,53 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Live co-editing v3 — relay value keystrokes inside the record room.
     // Preview-only on the receiving side; persistence still goes through the
     // normal save path with all its validation.
+    // M6 — the value goes only to viewers whose read policy includes the field; the others get
+    // the same event without a value (they still see who is editing which field).
     socket.on(
       'field:change',
-      (payload: { field?: string; value?: unknown; collection?: string; item?: unknown }) => {
-        const user = authenticatedUser
-        const room = roomFor(payload)
-        if (!user || !room || typeof payload?.field !== 'string') return
-        const value =
-          typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
-        // Typing keeps the "editing this field" mark alive.
-        focusMarks.touch(room, payload.field)
-        socket.to(room).emit('field:changed', {
-          ...recordOf(room),
-          field: payload.field,
-          value,
-          user: { id: user.id, name: displayName(user) }
-        })
-      }
+      inSocketTenant(
+        socket,
+        async (payload: {
+          field?: string
+          value?: unknown
+          collection?: string
+          item?: unknown
+        }) => {
+          const user = authenticatedUser
+          const room = roomFor(payload)
+          if (!user || !room || typeof payload?.field !== 'string') return
+          const field = payload.field
+          const value =
+            typeof payload.value === 'string' ? payload.value.slice(0, 300) : payload.value
+          // Typing keeps the "editing this field" mark alive.
+          focusMarks.touch(room, field)
+          const record = recordOf(room)
+          const base = { ...record, field, user: { id: user.id, name: displayName(user) } }
+          const me = String(user.id).toLowerCase()
+          const viewerIds = [
+            ...(recordViewers.get(room)?.values() ?? []),
+            ...boardPeerViewers(room)
+          ]
+            .map((v) => String(v.id))
+            .filter((id) => id.toLowerCase() !== me)
+          if (viewerIds.length === 0 || !record.collection) return
+          let audience: { readers: string[]; others: string[] }
+          try {
+            audience = await fieldValueAudience(viewerIds, record.collection, field)
+          } catch {
+            audience = { readers: [], others: viewerIds }
+          }
+          // Personal rooms reach each viewer's tabs on every replica; a tab not on this record
+          // ignores it (the payload names its record).
+          if (audience.readers.length)
+            io.to(audience.readers.map((id) => `user:${id}`)).emit('field:changed', {
+              ...base,
+              value
+            })
+          if (audience.others.length)
+            io.to(audience.others.map((id) => `user:${id}`)).emit('field:changed', base)
+        }
+      )
     )
 
     socket.on('field:blur', (payload: { field?: string; collection?: string; item?: unknown }) => {
@@ -2065,7 +2146,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       clearInterval(rttTimer)
       clearInterval(presenceRefreshTimer)
       socketMeta.delete(socket.id)
-      if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
+      // Inside the socket's tenant (cloud): presence rows and the personal room it asks about.
+      const leaving = authenticatedUser
+      if (leaving) void inSocketTenant(socket, () => markOffline(leaving.id, socket.id))()
       leaveRecordRoom()
       for (const room of removeSocketFromTopics(socket.id)) {
         const topic = splitTenantRoom(room).room.slice(4)
