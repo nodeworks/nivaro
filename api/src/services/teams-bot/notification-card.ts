@@ -130,10 +130,23 @@ async function recordExtras(
   )
     return { recordLabel, stateLabel, transitions: [] }
 
+  // A card is a one-click surface: it offers only what list surfaces offer (in_row_menu, migration 312).
+  const { db } = await import('../../db/index.js')
+  const menu = (await db('nivaro_workflow_transitions')
+    .where({ template: instance.template })
+    .select('id', 'in_row_menu')) as Array<{ id: string; in_row_menu: unknown }>
+  const oneClick = new Set(
+    menu
+      .filter((r) => r.in_row_menu == null || r.in_row_menu === true || r.in_row_menu === 1)
+      .map((r) => String(r.id))
+  )
   const transitions: CardAction[] = outline.transitions
     // Owner-only moves are left to the record page: the owner test is per record.
     .filter(
-      (t) => !t.require_owner && (t.from_state === null || t.from_state === instance.current_state)
+      (t) =>
+        !t.require_owner &&
+        oneClick.has(String(t.id)) &&
+        (t.from_state === null || t.from_state === instance.current_state)
     )
     .slice(0, MAX_TRANSITION_BUTTONS)
     .map((t) => ({

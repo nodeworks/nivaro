@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   who: { user: { id: 'u1', role: 'r', preferences: null }, link: null } as any,
   maintenance: false,
   instance: { collection: 'orders', item: '7' } as any,
+  inRowMenu: 1 as unknown,
   access: 'ok' as 'ok' | 'denied',
   decide: vi.fn(async (_o: unknown) => ({ ok: true }) as any),
   transition: vi.fn(async (_o: unknown) => ({ status: 200, body: {} }) as any),
@@ -12,7 +13,12 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../db/index.js', () => ({
-  db: () => ({ where: () => ({ first: async () => h.instance }) })
+  db: (table: string) => ({
+    where: () => ({
+      first: async () =>
+        table === 'nivaro_workflow_transitions' ? { in_row_menu: h.inRowMenu } : h.instance
+    })
+  })
 }))
 vi.mock('../../../routes/approvals.js', () => ({ applyApprovalDecision: h.decide }))
 vi.mock('../../../services/app-links.js', () => ({
@@ -61,6 +67,7 @@ beforeEach(() => {
   h.maintenance = false
   h.instance = { collection: 'orders', item: '7' }
   h.access = 'ok'
+  h.inRowMenu = 1
   h.decide.mockReset().mockResolvedValue({ ok: true })
   h.transition.mockReset().mockResolvedValue({ status: 200, body: {} })
   h.ack.mockReset().mockResolvedValue({ status: 200, body: {} })
@@ -72,7 +79,7 @@ describe('handleInvoke', () => {
     expect(h.decide).toHaveBeenCalledWith(
       expect.objectContaining({ instanceId: 5, decision: 'approved', user: h.who.user })
     )
-    expect(text(card)).toMatch(/Approved by you · \d{1,2}:\d{2} [AP]M E[ST]|ET/)
+    expect(text(card)).toMatch(/Approved by you · \d{1,2}:\d{2} [AP]M ET/)
   })
 
   it('second invoke with the same nonce returns the refreshed card and decides nothing', async () => {
@@ -195,6 +202,54 @@ describe('handleInvoke', () => {
       { ...app, redis } as unknown as FastifyInstance,
       press({ kind: 'ack', ref: '9', action: 'ack', nonce: 'rx' })
     )
-    expect(calls[0]).toEqual(['nvr:teams:nonce:rx', '__pending__', 'EX', 604800, 'NX'])
+    expect(calls[0]).toEqual(['nvr:teams:nonce:rx', '__pending__', 'EX', 60, 'NX'])
+  })
+
+  it('a form-only transition (in_row_menu false) answers Open in Nivaro and nothing runs', async () => {
+    h.inRowMenu = 0
+    const card = await handleInvoke(
+      app,
+      press({ kind: 'transition', ref: 'orders/7', action: 't1' })
+    )
+    expect(text(card)).toContain('This needs the form. Open in Nivaro')
+    expect(text(card)).toContain('https://n.test/orders/7')
+    expect(h.transition).not.toHaveBeenCalled()
+  })
+
+  it('a retry while the first press is pending returns the stored card once it lands', async () => {
+    let release!: () => void
+    h.decide.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          release = () => r({ ok: true })
+        }) as never
+    )
+    const a = press({ kind: 'approval', ref: '5', action: 'approved', nonce: 'slow' })
+    const first = handleInvoke(app, a)
+    await new Promise((r) => setTimeout(r, 5))
+    const retry = handleInvoke(app, a)
+    await new Promise((r) => setTimeout(r, 300))
+    release()
+    const [c1, c2] = await Promise.all([first, retry])
+    expect(h.decide).toHaveBeenCalledTimes(1)
+    expect(text(c2)).toContain('Approved by you')
+    expect(c2).toEqual(c1)
+  })
+
+  it('a pending marker that never resolves answers Working on it with Open', async () => {
+    vi.useFakeTimers()
+    try {
+      h.decide.mockImplementationOnce(() => new Promise(() => undefined) as never)
+      const a = press({ kind: 'approval', ref: '5', action: 'approved', nonce: 'stuck' })
+      void handleInvoke(app, a)
+      await vi.advanceTimersByTimeAsync(10)
+      const retry = handleInvoke(app, a)
+      await vi.advanceTimersByTimeAsync(9000)
+      const card = await retry
+      expect(text(card)).toContain('Working on it')
+      expect(text(card)).toContain('https://n.test/orders/7')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

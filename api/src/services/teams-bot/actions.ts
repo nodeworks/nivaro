@@ -20,6 +20,9 @@ import { resolveTeamsUser } from './links.js'
 const NONCE_TTL_S = 7 * 24 * 3600
 const NONCE_MAX = 5000
 const PENDING = '__pending__'
+const PENDING_TTL_S = 60
+const POLL_STEP_MS = 250
+const POLL_MAX_MS = 8000
 const KEY = (n: string) => `nvr:teams:nonce:${n}`
 
 type RedisLike = {
@@ -36,7 +39,7 @@ async function claim(app: FastifyInstance, nonce: string): Promise<string | null
   const redis = redisOf(app)
   if (redis) {
     try {
-      if ((await redis.set(KEY(nonce), PENDING, 'EX', NONCE_TTL_S, 'NX')) === 'OK') return null
+      if ((await redis.set(KEY(nonce), PENDING, 'EX', PENDING_TTL_S, 'NX')) === 'OK') return null
       return (await redis.get(KEY(nonce))) ?? PENDING
     } catch {
       // Redis trouble: this process's memory still stops same-process repeats.
@@ -57,10 +60,25 @@ async function store(app: FastifyInstance, nonce: string, card: AdaptiveCard): P
       await redis.set(KEY(nonce), json, 'EX', NONCE_TTL_S)
       return
     } catch {
-      /* fall through */
+      // Redis failed: keep the card in this process so a repeat still gets it.
     }
   }
-  if (local.has(nonce)) local.set(nonce, json)
+  local.set(nonce, json)
+  if (local.size > NONCE_MAX) local.delete(local.keys().next().value as string)
+}
+
+/** What a repeat press waits for while the first is still running. */
+async function lookup(app: FastifyInstance, nonce: string): Promise<string> {
+  const redis = redisOf(app)
+  if (redis) {
+    try {
+      const v = await redis.get(KEY(nonce))
+      if (v != null && v !== PENDING) return v
+    } catch {
+      /* local below */
+    }
+  }
+  return local.get(nonce) ?? PENDING
 }
 
 async function release(app: FastifyInstance, nonce: string): Promise<void> {
@@ -105,6 +123,28 @@ function readPress(activity: TeamsActivity): Pressed | null {
     comment: s(d.comment).trim()
   }
   return p.kind && p.ref && p.action && p.nonce ? p : null
+}
+
+async function pendingLink(p: Pressed, userId: string): Promise<string | undefined> {
+  try {
+    if (p.kind === 'transition') {
+      const cut = p.ref.indexOf('/')
+      return cut > 0
+        ? await recordLink(p.ref.slice(0, cut), p.ref.slice(cut + 1), { recipientUserId: userId })
+        : undefined
+    }
+    if (p.kind === 'approval') {
+      const inst = (await db('nivaro_approval_instances')
+        .where({ id: Number(p.ref) })
+        .first('collection', 'item')) as { collection: string; item: string } | undefined
+      return inst
+        ? await recordLink(inst.collection, String(inst.item), { recipientUserId: userId })
+        : undefined
+    }
+  } catch {
+    /* no link */
+  }
+  return undefined
 }
 
 const NOT_FOUND = "You can't open this record any more."
@@ -216,6 +256,17 @@ async function runTransition(
     if (err instanceof InstanceAccessError) return { card: resultCard(NOT_FOUND), keep: true }
     throw err
   }
+  // A card is a one-click surface: a transition list surfaces keep off their menu (migration 312
+  // in_row_menu = false) is form-only here too. Config row, not a record.
+  const cfg = (await db('nivaro_workflow_transitions')
+    .where({ id: p.action })
+    .first('in_row_menu')) as { in_row_menu?: unknown } | undefined
+  const menu = cfg?.in_row_menu
+  if (cfg && menu != null && menu !== true && menu !== 1 && menu !== '1' && menu !== 'true')
+    return {
+      card: await openCard(`${NEEDS_FORM} Open in Nivaro`, collection, item, user.id),
+      keep: true
+    }
   const r = await runRecordTransition({
     user,
     isAdmin,
@@ -293,9 +344,18 @@ export async function handleInvoke(
 
   const held = await claim(app, p.nonce)
   if (held !== null) {
-    if (held === PENDING) return resultCard('Working on it…')
+    let value = held
+    // The first press is still running (Teams re-sent because it was slow): wait for its card.
+    for (let waited = 0; value === PENDING && waited < POLL_MAX_MS; waited += POLL_STEP_MS) {
+      await new Promise((r) => setTimeout(r, POLL_STEP_MS))
+      value = await lookup(app, p.nonce)
+    }
+    if (value === PENDING) {
+      const link = await pendingLink(p, user.id)
+      return resultCard('Working on it…', link)
+    }
     try {
-      return JSON.parse(held) as AdaptiveCard
+      return JSON.parse(value) as AdaptiveCard
     } catch {
       return resultCard('Already done.')
     }
