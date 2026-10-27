@@ -7,6 +7,7 @@ import { getFields, getRelations } from '../services/collections.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
+import { acknowledgeNotification } from '../services/notification-ack.js'
 import {
   type ActedNotification,
   type ActedTally,
@@ -33,7 +34,6 @@ import {
   ackPending,
   classifyNotification,
   decideDelivery,
-  detailColumn,
   getNotifyPrefs,
   laneFromRow,
   NOTIFY_CATEGORIES,
@@ -1272,33 +1272,9 @@ export async function notificationsRoutes(app: FastifyInstance) {
   /** #2365 — acknowledge a notification that asked for it. Own rows only;
    *  stamps who/when in the row's detail and marks it read. */
   app.post('/:id/acknowledge', async (req, reply) => {
-    const userId = req.user!.id
     const id = Number((req.params as { id: string }).id)
-    const row = (await db('nivaro_notifications')
-      .where({ id, recipient: userId })
-      .first('id', 'detail')) as { id: number; detail: string | null } | undefined
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    const detail = parseDetail(row.detail)
-    if (!detail?.ack_required)
-      return reply.code(400).send({ error: 'This notification does not ask for acknowledgement' })
-    const at = detail.ack_at ?? new Date().toISOString()
-    if (!detail.ack_at) {
-      await db('nivaro_notifications')
-        .where({ id })
-        .update({
-          detail: detailColumn({ ...detail, ack_at: at, ack_by: String(userId) }),
-          status: 'read',
-          read_at: new Date()
-        })
-      await logActivity({
-        action: 'notification-acknowledge',
-        user: userId,
-        collection: 'nivaro_notifications',
-        item: String(id),
-        req
-      })
-    }
-    return reply.send({ data: { id, ack: { required: true, at, by: String(userId) } } })
+    const r = await acknowledgeNotification(app, req.user!, id, req)
+    return reply.code(r.status).send(r.body)
   })
 
   /** #2409 — one action over several notifications: explicit ids, or

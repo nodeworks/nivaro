@@ -15,7 +15,6 @@ import {
   buildBranchLanes,
   lifecycleOf
 } from '../services/branch-lanes.js'
-import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
@@ -23,11 +22,6 @@ import { selectInChunks } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
-import {
-  type GateInstance,
-  type GateTransition,
-  manualTransitionRefusal
-} from '../services/manual-transition-gate.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -46,13 +40,12 @@ import {
   offeredToActor,
   visibleIds
 } from '../services/record-access.js'
+import { formatWorkflowState, runRecordTransition } from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
-import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import {
   pickRerunAction,
   runTransitionActions,
-  TransitionBlockedError,
   validateRerunBody
 } from '../services/workflow-actions.js'
 import {
@@ -68,11 +61,7 @@ import {
   snapshotTemplateVersion,
   type TemplateSnapshot
 } from '../services/workflow-template-versions.js'
-import {
-  applyTransition,
-  resolveTransitionTarget,
-  runAutoTransitions
-} from '../services/workflow-transitions.js'
+import { resolveTransitionTarget } from '../services/workflow-transitions.js'
 import { ownerMatrixVersionRoutes, registerOwnerMatrixCapture } from './owner-matrix-versions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -274,16 +263,7 @@ export function normalizeExternalLabel(v: unknown): string | null {
 }
 
 function formatState(s: WorkflowState) {
-  return {
-    ...s,
-    is_initial: coerceBool(s.is_initial),
-    is_terminal: coerceBool(s.is_terminal),
-    lock_record: coerceBool(s.lock_record),
-    skip_if_no_owners: coerceBool(s.skip_if_no_owners),
-    skip_criteria: parseJson(s.skip_criteria),
-    stage_visibility: s.stage_visibility ?? 'always',
-    owners_not_required: s.owners_not_required === true || s.owners_not_required === 1
-  }
+  return formatWorkflowState(s)
 }
 
 /** Only these three mean anything to the panel; anything else is 'none'. */
@@ -2711,111 +2691,18 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
-      // Moving a pipeline changes the record: update permission + visibility.
-      try {
-        await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
-      } catch (err) {
-        if (err instanceof InstanceAccessError)
-          return reply.code(err.statusCode).send({ error: err.message })
-        throw err
-      }
-
-      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
-      if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
-
-      const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
-        .where({ id: body.transition_id, template: instance.template })
-        .first()
-      if (!transition) return reply.code(404).send({ error: 'Transition not found' })
-
-      // The shared manual-transition gate chain: completed/escape, from-state,
-      // auto refusal, roles, owner-only, required note, requirements and
-      // condition rules — the same chain branch and bulk transitions run.
-      const refusal = await manualTransitionRefusal({
-        user: req.user,
+      const r = await runRecordTransition({
+        user: req.user!,
         isAdmin: req.isAdmin ?? false,
         collection,
         item,
-        instance: instance as unknown as GateInstance,
-        transition: transition as unknown as GateTransition,
-        comment: body.comment ?? null,
-        reviewed: body.reviewed === true,
-        log: req.log
+        transitionId: body.transition_id,
+        comment: body.comment,
+        reviewed: body.reviewed,
+        log: req.log,
+        req
       })
-      if (refusal) return reply.code(refusal.status).send(refusal.body)
-
-      // Shared mutation chain (instance update, history, materialized queue
-      // sync, state_field mirror incl. state_field_map, transition actions).
-      // A blocking action failure (e.g. an ERP submission) aborts BEFORE any
-      // mutation — the record stays in its current state and the client gets
-      // the error to display.
-      // Double-fire guard: the twin of a request already running (or just
-      // finished) is refused here, after every gate and before any mutation.
-      let claim: Awaited<ReturnType<typeof claimTransition>>
-      try {
-        claim = await claimTransition({
-          instanceId: String(instance.id),
-          transitionId: String(transition.id),
-          label: transition.label
-        })
-      } catch (err) {
-        if (err instanceof TransitionDuplicateError) {
-          return reply.code(409).send({ error: err.message, code: err.code, first: err.first })
-        }
-        throw err
-      }
-
-      // #1217: a person acting on the record is the retry the engine was
-      // waiting for — held auto transitions on it may fire again.
-      await clearAutoFailures({ instanceId: String(instance.id) })
-
-      let applied: Awaited<ReturnType<typeof applyTransition>>
-      try {
-        applied = await applyTransition({
-          instance,
-          transition: transition as unknown as Parameters<typeof applyTransition>[0]['transition'],
-          userId: req.user?.id ?? null,
-          comment: body.comment ?? null,
-          source: 'manual'
-        })
-      } catch (err) {
-        // The move did not happen — an immediate retry must be allowed.
-        await claim.release()
-        if (err instanceof TransitionBlockedError) {
-          return reply.code(422).send({ error: err.message })
-        }
-        throw err
-      }
-      const { updatedInstance, newStateObj, previousState } = applied
-
-      // Chained automation: fire any auto transitions now valid from the new state.
-      // They hang under this transition's history row in the event chain.
-      await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
-        runAutoTransitions(collection, item)
-      )
-
-      const prevStateObj = previousState
-        ? await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()
-        : null
-      const fromLabel = prevStateObj?.label ?? previousState ?? 'Start'
-      const toLabel = newStateObj?.label ?? 'Unknown'
-      const transitionLabel = transition.label
-      const userComment = body.comment ? ` — "${body.comment}"` : ''
-
-      await logActivity({
-        action: 'pipeline-transition',
-        collection,
-        item,
-        user: req.user?.id,
-        req,
-        comment: `${fromLabel} → ${toLabel} via ${transitionLabel}${userComment}`
-      })
-      return reply.send({
-        data: {
-          instance: updatedInstance,
-          new_state: newStateObj ? formatState(newStateObj as unknown as WorkflowState) : null
-        }
-      })
+      return reply.code(r.status).send(r.body)
     }
   )
 
