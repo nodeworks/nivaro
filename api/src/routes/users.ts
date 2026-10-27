@@ -941,6 +941,11 @@ export async function usersRoutes(app: FastifyInstance) {
           clean.quiet_start = np.quiet_start
         if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end))
           clean.quiet_end = np.quiet_end
+        if (
+          typeof np.teams_muted_until === 'string' &&
+          !Number.isNaN(Date.parse(np.teams_muted_until))
+        )
+          clean.teams_muted_until = np.teams_muted_until
         const CATS = NOTIFY_CATEGORIES
         if (np.matrix && typeof np.matrix === 'object') {
           const m: Record<

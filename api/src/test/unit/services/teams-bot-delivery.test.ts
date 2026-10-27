@@ -134,6 +134,15 @@ describe('teams in the delivery decision', () => {
     expect(o.teams).toBe(true)
   })
 
+  it('teams_muted_until in the future holds teams', async () => {
+    const future = new Date(NOON.getTime() + 30 * 60_000).toISOString()
+    const d = await ask({ ...on, teams_muted_until: future })
+    expect(d.teams).toBe(false)
+    expect(d.reasons.find((r) => r.channel === 'teams')?.code).toBe('teams_muted')
+    const past = new Date(NOON.getTime() - 60_000).toISOString()
+    expect((await ask({ ...on, teams_muted_until: past })).teams).toBe(true)
+  })
+
   it('critical subjects bypass quiet hours for teams', async () => {
     const d = await ask(
       { ...on, quiet_start: '00:00', quiet_end: '23:59' },

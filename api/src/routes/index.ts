@@ -266,6 +266,7 @@ import { supportRoutes } from './support.js'
 import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
+import { teamsBotRoutes } from './teams-bot.js'
 import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
@@ -308,6 +309,9 @@ export async function registerRoutes(app: FastifyInstance) {
       // The render peer (#2789) renders for another process's request, which
       // that process already judged; it carries a bearer, never a person.
       url.startsWith('/api/internal/render/') ||
+      // Teams calls the bot with a Connector JWT, never a person; the route judges its own
+      // activities (message/install stay answerable, invokes say "in maintenance" themselves).
+      url.startsWith('/api/teams/messages') ||
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
       url.startsWith('/api/users/cards') ||
@@ -712,6 +716,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(itemLocksRoutes, { prefix: '/item-locks' })
   // No auth hook — callbacks are HMAC-token-authenticated and must be reachable from Teams/Slack
   await app.register(messageActionsRoutes, { prefix: '/message-actions' })
+  // No auth hook — the Bot Connector JWT is verified inside; /connect reads the session itself
+  await app.register(teamsBotRoutes, { prefix: '/teams' })
   await app.register(userActivityRoutes, { prefix: '/user-activity' })
   await app.register(globalSearchRoutes, { prefix: '/global-search' })
   await app.register(savedViewsRoutes, { prefix: '/saved-views' })

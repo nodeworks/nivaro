@@ -88,6 +88,8 @@ export function sanitizePrefs(raw: unknown): NotifyPrefs {
   if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start))
     out.quiet_start = np.quiet_start
   if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end)) out.quiet_end = np.quiet_end
+  if (typeof np.teams_muted_until === 'string' && !Number.isNaN(Date.parse(np.teams_muted_until)))
+    out.teams_muted_until = np.teams_muted_until
   if (np.matrix && typeof np.matrix === 'object') {
     const m: NonNullable<NotifyPrefs['matrix']> = {}
     for (const cat of NOTIFY_CATEGORIES) {

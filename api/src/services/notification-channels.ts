@@ -236,6 +236,8 @@ export type EmailMode = 'instant' | 'daily' | 'off'
 export interface NotifyPrefs {
   quiet_start?: string
   quiet_end?: string
+  /** Teams only: set by the bot's `mute 1h`. ISO UTC; a future time holds Teams messages. */
+  teams_muted_until?: string
   /** Per category: in-app row on/off, browser push on/off, and how EMAIL
    *  reaches the person — each message as it happens, folded into the daily
    *  action summary, or not at all. `email` absent = the legacy
@@ -304,6 +306,14 @@ export function bustNotifyPrefsCache(userId?: string): void {
   else prefsCache.clear()
 }
 
+/** The end of an active `mute 1h` on Teams, or null when none is running. */
+export function teamsMutedUntil(prefs: NotifyPrefs | null | undefined, now = new Date()) {
+  const raw = prefs?.teams_muted_until
+  if (typeof raw !== 'string') return null
+  const t = new Date(raw)
+  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? null : t
+}
+
 /** Is the wall clock inside the user's quiet window right now (ET)? */
 export function inQuietHours(prefs: NotifyPrefs | null, now = new Date()): boolean {
   if (!prefs?.quiet_start || !prefs?.quiet_end) return false
@@ -336,6 +346,7 @@ export interface DeliveryReason {
     | 'teams_off'
     | 'teams_not_connected'
     | 'teams_quiet_hours'
+    | 'teams_muted'
     | 'teams_sent'
     | 'teams_test_mode'
     | 'quiet_override'
@@ -540,6 +551,12 @@ export async function decideDelivery(
         code: 'teams_not_connected',
         channel: 'teams',
         text: 'Teams is not connected.'
+      })
+    } else if (!critical && teamsMutedUntil(prefs, now)) {
+      reasons.push({
+        code: 'teams_muted',
+        channel: 'teams',
+        text: `Teams is muted until ${teamsMutedUntil(prefs, now)?.toISOString()}.`
       })
     } else if (!critical && inQuietHours(prefs, now) && !quietOverridden(prefs, category)) {
       reasons.push({

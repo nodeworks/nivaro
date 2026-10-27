@@ -1,0 +1,181 @@
+import Fastify from 'fastify'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const st = vi.hoisted(() => ({
+  verdict: { ok: true } as { ok: boolean; reason?: string },
+  resolved: { user: null } as Record<string, unknown>,
+  session: undefined as string | undefined,
+  tokenOk: true,
+  sessionUser: { id: 'U1', entra_oid: 'OID-1' } as Record<string, unknown>,
+  ask: vi.fn(async (..._a: unknown[]) => undefined),
+  upsert: vi.fn(async (..._a: unknown[]) => ({})),
+  send: vi.fn(async (..._a: unknown[]) => ({ id: 'x' })),
+  mark: vi.fn(async (..._a: unknown[]) => undefined)
+}))
+
+vi.mock('../../../config.js', () => ({
+  config: { PUBLIC_URL: 'https://nivaro.test', SESSION_SECRET: 's'.repeat(40) }
+}))
+vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../services/notification-channels.js', () => ({ bustNotifyPrefsCache: vi.fn() }))
+vi.mock('../../../services/app-links.js', () => ({
+  linkTo: async () => 'https://nivaro.test/my-work'
+}))
+vi.mock('../../../services/users.js', () => ({
+  getUser: async () => st.sessionUser,
+  canSignIn: () => true
+}))
+vi.mock('../../../services/teams-bot/config.js', () => ({
+  getTeamsBotConfig: async () => ({ enabled: true, appId: 'app', tenantId: 'tid' })
+}))
+vi.mock('../../../services/teams-bot/jwt.js', () => ({
+  verifyConnectorToken: async () => st.verdict
+}))
+vi.mock('../../../services/teams-bot/connector.js', () => ({ sendActivity: st.send }))
+vi.mock('../../../services/teams-bot/ask.js', () => ({ answerInTeams: st.ask }))
+vi.mock('../../../services/teams-bot/actions.js', () => ({
+  handleInvoke: async () => ({ type: 'AdaptiveCard' })
+}))
+vi.mock('../../../services/teams-bot/links.js', () => ({
+  resolveTeamsUser: async () => st.resolved,
+  upsertLink: st.upsert,
+  markLink: st.mark,
+  signConnectToken: () => 'SIGNED',
+  readConnectToken: (t: string) =>
+    st.tokenOk && t === 'SIGNED' ? { aadObjectId: 'oid-1', tenantId: 'tid' } : null
+}))
+
+import { teamsBotRoutes } from '../../../routes/teams-bot.js'
+
+async function build() {
+  const app = Fastify()
+  app.addHook('onRequest', async (req) => {
+    ;(req as unknown as { session: { userId?: string } }).session = { userId: st.session }
+  })
+  await app.register(teamsBotRoutes, { prefix: '/api/teams' })
+  return app
+}
+
+const base = {
+  channelId: 'msteams',
+  serviceUrl: 'https://smba.test/',
+  from: { id: '29:x', aadObjectId: 'oid-1' },
+  recipient: { id: '28:bot' },
+  conversation: { id: 'conv-1', conversationType: 'personal' },
+  channelData: { tenant: { id: 'tid' } }
+}
+const post = (app: Awaited<ReturnType<typeof build>>, body: unknown) =>
+  app.inject({
+    method: 'POST',
+    url: '/api/teams/messages',
+    headers: { authorization: 'Bearer t' },
+    payload: body as object
+  })
+const install = { ...base, type: 'conversationUpdate', membersAdded: [{ id: '28:bot' }] }
+const flush = () => new Promise((r) => setTimeout(r, 10))
+
+beforeEach(() => {
+  st.verdict = { ok: true }
+  st.resolved = { user: null }
+  st.session = undefined
+  st.tokenOk = true
+  st.sessionUser = { id: 'U1', entra_oid: 'OID-1' }
+  for (const f of [st.ask, st.upsert, st.send, st.mark]) f.mockReset()
+  st.ask.mockResolvedValue(undefined)
+  st.send.mockResolvedValue({ id: 'x' })
+})
+
+describe('POST /api/teams/messages', () => {
+  it('401 without a token', async () => {
+    st.verdict = { ok: false, reason: 'missing' }
+    const r = await post(await build(), { ...base, type: 'message', id: 'a' })
+    expect(r.statusCode).toBe(401)
+    expect(r.json()).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('401 for another tenant', async () => {
+    st.verdict = { ok: false, reason: 'tenant' }
+    const r = await post(await build(), { ...base, type: 'message', id: 'a' })
+    expect(r.statusCode).toBe(401)
+  })
+
+  it('returns 200 before the answer resolves', async () => {
+    st.resolved = { user: { id: 'U1', first_name: 'Rob' }, link: { conversation_id: 'conv-1' } }
+    st.ask.mockImplementation(() => new Promise(() => {}))
+    const r = await post(await build(), { ...base, type: 'message', id: 'slow', text: 'how many?' })
+    expect(r.statusCode).toBe(200)
+    await flush()
+    expect(st.ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('processes one activity id once', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    const app = await build()
+    const body = { ...base, type: 'message', id: 'dup-1', text: '<at>Nivaro</at> how many?' }
+    await post(app, body)
+    await post(app, body)
+    await flush()
+    expect(st.ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('install by a matched user stores the link', async () => {
+    st.resolved = { user: { id: 'U1', first_name: 'Rob' }, link: null }
+    const r = await post(await build(), install)
+    expect(r.statusCode).toBe(200)
+    expect(st.upsert).toHaveBeenCalledWith(
+      'U1',
+      expect.objectContaining({
+        aadObjectId: 'oid-1',
+        conversationId: 'conv-1',
+        linkedBy: 'entra_oid'
+      })
+    )
+    expect(JSON.stringify(st.send.mock.calls[0])).toContain('Hi Rob.')
+  })
+
+  it('install by an unmatched user gets the Connect card', async () => {
+    await post(await build(), install)
+    expect(st.upsert).not.toHaveBeenCalled()
+    expect(JSON.stringify(st.send.mock.calls[0])).toContain('/api/teams/connect?t=SIGNED')
+  })
+
+  it('uninstall marks the link', async () => {
+    await post(await build(), { ...base, type: 'installationUpdate', action: 'remove' })
+    expect(st.mark).toHaveBeenCalledWith('oid-1', 'uninstalled')
+  })
+})
+
+describe('GET /api/teams/connect', () => {
+  const get = (app: Awaited<ReturnType<typeof build>>, t = 'SIGNED') =>
+    app.inject({ method: 'GET', url: `/api/teams/connect?t=${t}` })
+
+  it('connect without a session redirects to login with returnTo', async () => {
+    const r = await get(await build())
+    expect(r.statusCode).toBe(302)
+    expect(r.headers.location).toContain('https://nivaro.test/api/auth/login?returnTo=')
+    expect(decodeURIComponent(String(r.headers.location))).toContain('/api/teams/connect?t=SIGNED')
+  })
+
+  it('links the signed-in matching account', async () => {
+    st.session = 'U1'
+    const r = await get(await build())
+    expect(r.statusCode).toBe(200)
+    expect(r.body).toContain('Teams connected. You can close this tab.')
+    expect(st.upsert).toHaveBeenCalledWith('U1', expect.objectContaining({ linkedBy: 'sign_in' }))
+  })
+
+  it('refuses a different Microsoft account', async () => {
+    st.session = 'U1'
+    st.sessionUser = { id: 'U1', entra_oid: 'OTHER' }
+    const r = await get(await build())
+    expect(r.statusCode).toBe(403)
+    expect(st.upsert).not.toHaveBeenCalled()
+  })
+
+  it('needs a Microsoft sign-in and a live token', async () => {
+    st.session = 'U1'
+    st.sessionUser = { id: 'U1', entra_oid: null }
+    expect((await get(await build())).statusCode).toBe(400)
+    expect((await get(await build(), 'BAD')).statusCode).toBe(400)
+  })
+})
