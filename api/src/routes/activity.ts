@@ -159,22 +159,60 @@ export async function activityRoutes(app: FastifyInstance) {
     return reply.send({ data: row })
   })
 
+  /**
+   * Client-written activity rows (M3, security audit 2026-10-27). The audit
+   * log is evidence: a signed-in person must not be able to plant a
+   * "delete" / "transition" / "login" row on any record. Only the actions in
+   * CLIENT_ACTIVITY_ACTIONS may be written by non-admins — neither the admin
+   * app nor the shared components post here today (exports report through
+   * /export-log), so the list is empty and the route is administrators-only
+   * in practice. Text is capped; a named record must be visible to a
+   * non-admin writer.
+   */
   app.post('/', async (req, reply) => {
-    const body = req.body as {
-      action: string
-      collection?: string
-      item?: string
-      comment?: string
+    const body = (req.body ?? {}) as {
+      action?: unknown
+      collection?: unknown
+      item?: unknown
+      comment?: unknown
     }
-    await db('nivaro_activity').insert({
-      action: body.action,
+    const action = typeof body.action === 'string' ? body.action.trim() : ''
+    if (!ACTION_RE.test(action)) {
+      return reply.code(400).send({ error: 'action is required (letters, digits, - _ : .)' })
+    }
+    if (!req.isAdmin && !CLIENT_ACTIVITY_ACTIONS.has(action)) {
+      return reply
+        .code(403)
+        .send({ error: 'Activity entries are written by the server for this action' })
+    }
+    const collection = optText(body.collection, 255)
+    const item = optText(body.item, 255)
+    if (!req.isAdmin && collection && item) {
+      const { recordVisibleTo } = await import('../services/revision-access.js')
+      if (!(await recordVisibleTo(req, collection, item))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
+    }
+    await logActivity({
+      action,
       user: req.user!.id,
-      collection: body.collection ?? null,
-      item: body.item ?? null,
-      comment: body.comment ?? null,
-      ip: req.ip,
-      user_agent: req.headers['user-agent'] ?? null
+      collection,
+      item,
+      comment: optText(body.comment, ACTIVITY_COMMENT_MAX),
+      req
     })
     return reply.code(201).send({ ok: true })
   })
+}
+
+/** Actions a non-admin client may record through POST /activity. */
+export const CLIENT_ACTIVITY_ACTIONS: ReadonlySet<string> = new Set<string>([])
+/** Longest comment a client-written activity row keeps. */
+export const ACTIVITY_COMMENT_MAX = 2000
+const ACTION_RE = /^[A-Za-z0-9][A-Za-z0-9_:.-]{0,49}$/
+
+function optText(v: unknown, max: number): string | undefined {
+  if (v == null) return undefined
+  const s = String(v).trim()
+  return s ? s.slice(0, max) : undefined
 }
