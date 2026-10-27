@@ -23,6 +23,7 @@ import {
 } from '../services/bulk-actions.js'
 import { BULK_PUSH_MAX, retryFailedPushes, runItemActionOver } from '../services/bulk-push.js'
 import { recordWriteRefusal } from '../services/edit-lock.js'
+import { canUpdateItem } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import type { User } from '../types.js'
 
@@ -53,6 +54,24 @@ export async function refuseUnwritable(
     result.failed++
     result.errors.push({ item: o.item, error: why })
   }
+}
+
+/** Most records one extension bulk action is handed (same cap as /bulk-actions/run). */
+const EXECUTE_MAX_IDS = 2000
+
+/** The ids (of those given) the caller may NOT update — canUpdateItem per record. */
+export async function notUpdatable(
+  req: FastifyRequest,
+  collection: string,
+  ids: Array<string | number>
+): Promise<string[]> {
+  const out: string[] = []
+  const ws = req.workspaceId ?? undefined
+  for (const id of ids) {
+    const ok = await canUpdateItem(req.user as User, collection, id, ws).catch(() => false)
+    if (!ok) out.push(String(id))
+  }
+  return out
 }
 
 export async function bulkActionsRoutes(app: FastifyInstance) {
@@ -91,6 +110,21 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'Forbidden' })
     if (action.require_reason && !String(reason ?? '').trim())
       return reply.status(400).send({ error: 'A reason is required for this action' })
+    if (ids.length > EXECUTE_MAX_IDS)
+      return reply.status(400).send({ error: `At most ${EXECUTE_MAX_IDS} records per run` })
+    // The extension's code changes the records itself, so every record is
+    // judged here first, as the caller (update policy, update row filter,
+    // write scope): one they may not change refuses the whole run rather than
+    // the action quietly running over a different selection.
+    if (!req.isAdmin) {
+      const refused = await notUpdatable(req, collection, ids)
+      if (refused.length > 0) {
+        return reply.status(403).send({
+          error: `You may not change ${refused.length} of the selected records`,
+          refused: refused.slice(0, 50)
+        })
+      }
+    }
 
     try {
       const result = await action.execute({

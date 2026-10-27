@@ -126,6 +126,24 @@ async function parentReadable(
   return !!parent
 }
 
+/**
+ * Owner actions on an addendum re-check its parent NOW (Low, security audit
+ * 2026-10-27): the author must still see the record (row filter, User
+ * Scopes) and may still change records of its collection — the same gate as
+ * create. Losing access to the record ends their say over the proposal.
+ */
+async function parentStillEditable(
+  req: import('fastify').FastifyRequest,
+  existing: Record<string, unknown>
+): Promise<boolean> {
+  if (req.isAdmin) return true
+  const collection = String(existing.parent_collection)
+  return (
+    (await parentReadable(req, collection, String(existing.parent_id))) &&
+    (await can(req.user!, 'update', collection))
+  )
+}
+
 /** Pipeline ids (upper-cased) a collection's addendums may start: every
  *  addendum layout's pipeline plus the start-state rules' pipelines. */
 async function addendumPipelines(
@@ -674,6 +692,9 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if (!isAdmin && existing.created_by !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    if (!(await parentStillEditable(req, existing))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
 
     const body = req.body as Partial<{
       title: string
@@ -854,6 +875,9 @@ export async function addendumsRoutes(app: FastifyInstance) {
     if (!isAdmin && existing.created_by !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    if (!(await parentStillEditable(req, existing))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
 
     await db('nivaro_addendums').where({ id }).update({ status: 'review', updated_at: new Date() })
 
@@ -963,6 +987,9 @@ export async function addendumsRoutes(app: FastifyInstance) {
     const isAdmin = req.isAdmin ?? false
     if (!isAdmin && existing.created_by !== req.user!.id) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (!(await parentStillEditable(req, existing))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
 
     await db('nivaro_addendums')

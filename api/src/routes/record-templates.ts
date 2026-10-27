@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { can } from '../services/permissions.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -36,6 +37,29 @@ export function visibleTemplates(userId: string, userRole: string | null | undef
     })
     if (userRole) void qb.orWhere({ role_id: userRole })
   }
+}
+
+/**
+ * Who a non-admin may aim a template at (Low, security audit 2026-10-27):
+ * themselves, or the people of their OWN role. Pushing pre-filled values
+ * onto another role's forms, or onto every role, is an administrator's call.
+ * Null = allowed.
+ */
+export function audienceRefusal(
+  isAdmin: boolean,
+  userRole: string | null | undefined,
+  roleId: string | null | undefined,
+  isShared: boolean
+): string | null {
+  if (isAdmin) return null
+  const own = String(userRole ?? '').toUpperCase()
+  if (roleId != null && roleId !== '' && String(roleId).toUpperCase() !== own) {
+    return 'Only administrators can aim a template at another role'
+  }
+  if (isShared && (roleId == null || roleId === '')) {
+    return 'Only administrators can share a template with every role — share it with your own role'
+  }
+  return null
 }
 
 export async function recordTemplatesRoutes(app: FastifyInstance) {
@@ -83,6 +107,17 @@ export async function recordTemplatesRoutes(app: FastifyInstance) {
     if (!body.collection || !body.name || !body.data) {
       return reply.code(400).send({ error: 'collection, name, and data are required' })
     }
+    const isAdmin = req.isAdmin ?? false
+    if (!isAdmin) {
+      if (/^(nivaro_|directus_)/i.test(body.collection)) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      if (!(await can(req.user!, 'create', body.collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+    }
+    const refused = audienceRefusal(isAdmin, req.user!.role, body.role_id, !!body.is_shared)
+    if (refused) return reply.code(403).send({ error: refused })
 
     const now = new Date()
     const [row] = await db('nivaro_record_templates')
@@ -136,6 +171,14 @@ export async function recordTemplatesRoutes(app: FastifyInstance) {
       role_id: string | null
       is_shared: boolean
     }>
+
+    const refused = audienceRefusal(
+      isAdmin,
+      req.user!.role,
+      'role_id' in body ? body.role_id : (existing.role_id as string | null),
+      body.is_shared !== undefined ? body.is_shared : !!existing.is_shared
+    )
+    if (refused) return reply.code(403).send({ error: refused })
 
     const patch: Record<string, unknown> = { updated_at: new Date() }
     if (body.name !== undefined) patch.name = body.name

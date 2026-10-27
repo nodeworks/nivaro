@@ -333,6 +333,19 @@ export function buildWidgetScript(): string {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
+/** The feed's creator while they may still act (active, not redacted); null otherwise. */
+export async function activeFeedCreator(createdBy: unknown): Promise<User | null> {
+  if (createdBy == null || createdBy === '') return null
+  const creator = (await db('nivaro_users')
+    .where({ id: String(createdBy) })
+    .first()
+    .catch(() => null)) as (User & { is_redacted?: boolean | number | null }) | null | undefined
+  if (!creator) return null
+  if (creator.status && creator.status !== 'active') return null
+  if (creator.is_redacted === true || creator.is_redacted === 1) return null
+  return creator
+}
+
 export async function widgetRoutes(app: FastifyInstance) {
   // ── GET /widget.js — the embeddable script (no auth, cached 1h) ────────────
   // Lands at /api/widget/widget.js; a root-level alias in routes/index.ts is
@@ -359,6 +372,12 @@ export async function widgetRoutes(app: FastifyInstance) {
 
       const feed = await db('nivaro_widget_feeds').where({ token }).first()
       if (!feed?.is_active) return reply.code(404).send({ error: 'Feed not found' })
+      // A feed is its creator's curation: it stops when they can no longer
+      // sign in (suspended, deactivated, redacted or removed).
+      // (A legacy collection feed with no recorded creator keeps serving.)
+      const creator = await activeFeedCreator(feed.created_by)
+      const legacy = feed.created_by == null && !feed.queue_id
+      if (!creator && !legacy) return reply.code(404).send({ error: 'Feed not found' })
 
       if (feed.queue_id) {
         // Queue-backed feed: resolved using the FEED CREATOR's identity, not
@@ -368,11 +387,6 @@ export async function widgetRoutes(app: FastifyInstance) {
         // feed once at creation time (canReadQueue gated there), and it is
         // then served identically to every public viewer forever after, with
         // zero per-request RBAC re-check.
-        const creator = (await db('nivaro_users').where({ id: feed.created_by }).first()) as
-          | User
-          | undefined
-        if (!creator) return reply.code(404).send({ error: 'Feed not found' })
-
         try {
           const stored = Number(feed.limit_count) || 20
           const qLimit = req.query.limit ? Number(req.query.limit) : NaN
@@ -383,7 +397,9 @@ export async function widgetRoutes(app: FastifyInstance) {
           // Cap resolution at the small number of rows this public route will
           // actually return, instead of resolving the full QUEUE_SANITY_CEILING
           // (up to 20,000 rows/source) only to discard everything past `limit`.
-          const { items } = await fetchQueueItems(feed.queue_id, creator, 'all', { ceiling: limit })
+          const { items } = await fetchQueueItems(feed.queue_id, creator!, 'all', {
+            ceiling: limit
+          })
           const fields = ['id', 'label', 'state', 'sla_status', 'aging_hours']
           const rows = items.slice(0, limit).map((it) => ({
             id: it.item_id,
