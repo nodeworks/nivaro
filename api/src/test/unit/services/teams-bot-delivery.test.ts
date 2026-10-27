@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   botEnabled: true,
   prefs: null as unknown,
   testTeamsOn: false,
+  build: vi.fn(async (_i: { openUrl: string }) => ({ type: 'AdaptiveCard' })),
   send: vi.fn(async () => ({ id: 'a1' })),
   deliver: vi.fn(async () => 'sent' as string)
 }))
@@ -60,8 +61,15 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
   linkForUser: async () => state.link
 }))
 vi.mock('../../../services/teams-bot/send.js', () => ({ deliverTeams: state.deliver }))
+vi.mock('../../../services/channel-test-mode.js', () => ({
+  getChannelTestConfig: async () => ({ teams: { on: state.testTeamsOn, webhook: null } })
+}))
+vi.mock('../../../services/app-links.js', () => ({
+  linkTo: async () => 'https://nivaro.test/notifications',
+  recordLink: async () => 'https://nivaro.test/record'
+}))
 vi.mock('../../../services/teams-bot/notification-card.js', () => ({
-  buildTeamsNotificationCard: async () => ({ type: 'AdaptiveCard' })
+  buildTeamsNotificationCard: state.build
 }))
 vi.mock('../../../services/web-push.js', () => ({ sendWebPush: vi.fn(async () => 0) }))
 vi.mock('../../../services/chain.js', () => ({
@@ -85,6 +93,8 @@ beforeEach(() => {
   state.link = connected
   state.botEnabled = true
   state.prefs = null
+  state.testTeamsOn = false
+  state.build.mockClear()
   state.inserted.length = 0
   state.updates.length = 0
   state.deliver.mockClear()
@@ -193,5 +203,48 @@ describe('teams in the delivery decision', () => {
       }
     )
     expect(res.id).toBe(41)
+    await vi.waitFor(() => expect(state.deliver).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 10))
+  })
+
+  it('bot off -> teams false, no teams reason, no card built', async () => {
+    state.botEnabled = false
+    state.prefs = { matrix: { workflow: { teams: true } } }
+    const d = await ask(on)
+    expect(d.teams).toBe(false)
+    expect(d.reasons.some((r) => r.channel === 'teams')).toBe(false)
+    await notifyUser(
+      { io: null } as unknown as FastifyInstance,
+      '44444444-4444-4444-4444-444444444444',
+      {
+        subject: 'Approval requested',
+        message: 'm',
+        category: 'workflow'
+      }
+    )
+    expect(state.build).not.toHaveBeenCalled()
+    expect(state.deliver).not.toHaveBeenCalled()
+  })
+
+  it('test mode -> teams false with a teams_test_mode reason', async () => {
+    state.testTeamsOn = true
+    const d = await ask(on)
+    expect(d.teams).toBe(false)
+    expect(d.reasons.find((r) => r.channel === 'teams')?.code).toBe('teams_test_mode')
+  })
+
+  it('a target-less notification gets an absolute open URL', async () => {
+    state.prefs = { matrix: { workflow: { teams: true } } }
+    await notifyUser(
+      { io: null } as unknown as FastifyInstance,
+      '55555555-5555-5555-5555-555555555555',
+      {
+        subject: 'Approval requested',
+        message: 'm',
+        category: 'workflow'
+      }
+    )
+    await vi.waitFor(() => expect(state.build).toHaveBeenCalled())
+    expect(state.build.mock.calls[0]?.[0].openUrl).toMatch(/^https:\/\//)
   })
 })

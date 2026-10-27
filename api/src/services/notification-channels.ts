@@ -337,6 +337,7 @@ export interface DeliveryReason {
     | 'teams_not_connected'
     | 'teams_quiet_hours'
     | 'teams_sent'
+    | 'teams_test_mode'
     | 'quiet_override'
     | 'email_off'
     | 'email_daily'
@@ -519,15 +520,21 @@ export async function decideDelivery(
   // but is opt-in: only a person who turned it on in Notification rules is messaged. Critical
   // subjects bypass quiet hours, never the opt-in.
   let teams = false
-  if (inapp) {
-    if (matrixRow?.teams !== true) {
-      // Said only where a Teams bot exists, so instances without one see no new line.
-      if (await teamsBotEnabled())
-        reasons.push({
-          code: 'teams_off',
-          channel: 'teams',
-          text: 'Teams is off for this kind of notification.'
-        })
+  // No bot (or Teams in test mode, which has no DM recipients) = nothing to say and nothing to
+  // build: links survive the bot being turned off, so this is checked before anything else.
+  if (inapp && (await teamsBotEnabled())) {
+    if (await teamsTestMode()) {
+      reasons.push({
+        code: 'teams_test_mode',
+        channel: 'teams',
+        text: 'Teams is in test mode; only test recipients get messages.'
+      })
+    } else if (matrixRow?.teams !== true) {
+      reasons.push({
+        code: 'teams_off',
+        channel: 'teams',
+        text: 'Teams is off for this kind of notification.'
+      })
     } else if (!(await hasTeamsLink(userId))) {
       reasons.push({
         code: 'teams_not_connected',
@@ -605,6 +612,15 @@ export async function decideDelivery(
   }
 
   return { category, critical, inapp, push, teams, email, sms, reasons, dropped: false }
+}
+
+async function teamsTestMode(): Promise<boolean> {
+  try {
+    const { getChannelTestConfig } = await import('./channel-test-mode.js')
+    return (await getChannelTestConfig()).teams.on
+  } catch {
+    return false
+  }
 }
 
 async function teamsBotEnabled(): Promise<boolean> {
@@ -983,11 +999,16 @@ export async function notifyUser(
       // never blocks the caller, and a failure here is only a delivery stamp.
       if (decision.teams) {
         void (async () => {
+          // Action.OpenUrl needs an absolute URI: the fallbacks use the same builders.
+          const { linkTo, recordLink } = await import('./app-links.js')
           const openUrl =
             (await resolveTargetUrl(target, { recipientUserId: userId }).catch(() => null)) ??
-            (opts.collection && opts.item
-              ? `/collections/${opts.collection}/${opts.item}`
-              : '/notifications')
+            (opts.collection && opts.item && !String(opts.collection).startsWith('__')
+              ? await recordLink(opts.collection, opts.item, { recipientUserId: userId }).catch(
+                  () => null
+                )
+              : null) ??
+            (await linkTo('notifications', {}, { recipientUserId: userId }))
           const { buildTeamsNotificationCard } = await import('./teams-bot/notification-card.js')
           const { deliverTeams } = await import('./teams-bot/send.js')
           const card = await buildTeamsNotificationCard({
