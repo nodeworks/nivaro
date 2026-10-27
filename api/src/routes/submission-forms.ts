@@ -8,6 +8,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
+import type { CMSField, CMSRelation, User } from '../types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,63 @@ function formatForm(row: Record<string, unknown>) {
     is_active: !!row.is_active,
     password_hash: undefined // never expose hashes
   }
+}
+
+const AUDIT_SPECIALS = ['user-created', 'date-created', 'user-updated', 'date-updated']
+const ALIAS_SPECIALS = ['alias', 'o2m', 'm2m', 'm2a', 'files', 'translations', 'no-data']
+
+/**
+ * What an anonymous public submission may write (security audit 2026-10-27).
+ *
+ * The record is created as the form's creator — usually an administrator, for whom the items
+ * service skips its server-set-field pass and accepts nested relation writes. So the payload
+ * is cut down here, before it gets there:
+ *   - only top-level fields the form lists (layout field set or flat list), own keys only;
+ *   - only plain values: string, number, boolean or null — an object or array is refused;
+ *   - never an alias / O2M / M2M / M2A / files / translations field (by relation and by
+ *     type), never the primary key, an audit stamp, a read-only or a computed field;
+ *   - an M2O id stays (a scalar) because the form listed that field explicitly.
+ */
+export function sanitizeSubmission(
+  collection: string,
+  allowedFields: string[],
+  submitted: unknown,
+  fields: CMSField[],
+  relations: CMSRelation[]
+): { data: Record<string, unknown> } | { error: string } {
+  if (submitted == null) return { data: {} }
+  if (typeof submitted !== 'object' || Array.isArray(submitted)) {
+    return { error: 'The submission must be an object of field values.' }
+  }
+  const input = submitted as Record<string, unknown>
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  const out: Record<string, unknown> = {}
+  for (const name of new Set(allowedFields)) {
+    if (typeof name !== 'string' || name.includes('.') || !Object.hasOwn(input, name)) continue
+    const f = byName.get(name)
+    if (!f) continue // not a field of this collection
+    const special = f.special ?? []
+    const isAlias =
+      f.type === 'alias' ||
+      special.some((x) => ALIAS_SPECIALS.includes(x)) ||
+      relations.some(
+        (r) =>
+          (r.one_collection === collection && r.one_field === name) ||
+          (r.many_collection === collection && r.many_field === name && !r.one_collection)
+      )
+    const serverSet =
+      name === 'id' ||
+      special.some((x) => AUDIT_SPECIALS.includes(x)) ||
+      f.readonly === true ||
+      f.computed_type != null
+    if (isAlias || serverSet) continue
+    const v = input[name]
+    if (v !== null && !['string', 'number', 'boolean'].includes(typeof v)) {
+      return { error: `"${name}" must be a single value.` }
+    }
+    out[name] = v
+  }
+  return { data: out }
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -326,7 +384,7 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
   // POST /public/:token — submit the form
   app.post<{ Params: { token: string } }>('/public/:token', async (req, reply) => {
     const { token } = req.params
-    const body = req.body as { data?: Record<string, unknown>; password?: string }
+    const body = (req.body ?? {}) as { data?: unknown; password?: string }
 
     const form = await db('nivaro_submission_forms').where({ token }).first()
 
@@ -383,27 +441,76 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       const layout = await loadFormLayout(Number(form.layout_id), form.collection as string)
       if (layout) allowedFields = layout.field_paths
     }
-    const submittedData = body.data ?? {}
-    const filteredData: Record<string, unknown> = {}
-    for (const field of allowedFields) {
-      if (field in submittedData) {
-        filteredData[field] = submittedData[field]
-      }
+    // Only plain values for the form's own scalar columns reach the items service — see
+    // sanitizeSubmission (nested relation writes, alias fields and server-set fields are
+    // never reachable from an anonymous POST, whoever created the form).
+    const { getFields, getRelations } = await import('../services/collections.js')
+    const [colFields, colRelations] = await Promise.all([
+      getFields(form.collection as string),
+      getRelations(form.collection as string)
+    ])
+    const clean = sanitizeSubmission(
+      form.collection as string,
+      allowedFields,
+      body.data,
+      colFields,
+      colRelations
+    )
+    if ('error' in clean) return reply.code(400).send({ error: clean.error })
+    const filteredData = clean.data
+
+    // The record is created through the items service AS THE FORM'S CREATOR (the admin who
+    // published it — the same "creator configured it" rule as dashboard links and widget
+    // feeds): validation rules, defaults, hooks, rollups, revisions and the audit trail all
+    // run, and the creator's own access bounds what a public form can write. A form whose
+    // creator is no longer active stops accepting submissions.
+    const creator = form.created_by
+      ? ((await db('nivaro_users').where({ id: form.created_by, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
+    if (!creator) {
+      req.log.warn({ form: form.id }, 'public submission refused: the form has no active creator')
+      return reply.code(410).send({ error: 'This form is no longer accepting submissions.' })
     }
 
-    // Insert into the target collection
-    const collectionId = randomUUID()
+    // The per-IP hourly cap, taken atomically (the count above races: N parallel posts all
+    // read the same count). Redis first, this process alone when Redis is down.
+    if (
+      ip &&
+      (await overWindowLimit(
+        app.redis,
+        `subform:${form.id}:${ip}`,
+        Number(form.rate_limit_per_hour) || 0,
+        3600
+      ))
+    ) {
+      return reply.code(429).send({ error: 'Rate limit exceeded. Please try again later.' })
+    }
+
+    let collectionId: string | number | null = null
     try {
-      await db(form.collection).insert({
-        id: collectionId,
-        ...filteredData,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
+      const { createOne } = await import('../services/items.js')
+      const created = (await createOne(
+        creator,
+        form.collection as string,
+        filteredData,
+        undefined,
+        undefined,
+        {
+          callerPayload: true
+        }
+      )) as Record<string, unknown> | null
+      collectionId = (created?.id as string | number | undefined) ?? null
     } catch (err) {
-      // A value that does not fit its column (wrong type, too long) is the
-      // submitter's to fix — never a 500 carrying the driver's text.
-      req.log.warn({ err, form: form.id }, 'public submission insert refused')
+      // A refusal the submitter can act on (a required field, a validation rule) keeps its
+      // message; anything else — a value that does not fit its column, a driver error — is
+      // the generic answer, never the driver's text.
+      const e = err as { statusCode?: number; message?: string; violations?: unknown }
+      req.log.warn({ err, form: form.id }, 'public submission refused')
+      if ((e.statusCode === 400 || e.statusCode === 422) && e.violations) {
+        return reply.code(400).send({ error: e.message, violations: e.violations })
+      }
       return reply
         .code(400)
         .send({ error: 'One of the values does not fit its field. Check the form and try again.' })
@@ -419,16 +526,17 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       created_at: new Date()
     })
 
-    // Public insert bypasses the items service, so log the create directly —
-    // otherwise records created through public forms leave no audit trail.
-    await logActivity({
-      action: 'create',
-      user: null,
-      collection: form.collection,
-      item: collectionId,
-      comment: `public submission via form "${form.name}"`,
-      req
-    })
+    // The items service logged the create; this entry says it came from the public form.
+    if (collectionId != null) {
+      await logActivity({
+        action: 'public-submission',
+        user: null,
+        collection: form.collection,
+        item: String(collectionId),
+        comment: `public submission via form "${form.name}"`,
+        req
+      })
+    }
 
     return reply.code(201).send({
       data: {

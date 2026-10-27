@@ -4,6 +4,9 @@ import fastify, { type FastifyInstance } from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
+import { registerJsonBodyParser } from './lib/json-body.js'
+import { applySecurityHeaders } from './lib/security-headers.js'
+import { trustProxyFromEnv } from './lib/trust-proxy.js'
 import { authenticate } from './middleware/authenticate.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
@@ -63,7 +66,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     )
 
   const app = fastify({
-    trustProxy: config.TRUST_PROXY,
+    trustProxy: trustProxyFromEnv().value,
     logger: {
       level: config.LOG_LEVEL,
       ...(config.NODE_ENV === 'development'
@@ -85,24 +88,16 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
       if (m !== 'HEAD' && m !== 'OPTIONS') served.push(`${m} ${route.url}`)
   })
 
-  app.addHook('onSend', async (_req, reply, payload) => {
+  app.addHook('onSend', async (req, reply, payload) => {
     reply.header('X-Nivaro-Version', NIVARO_VERSION)
     reply.header('X-Nivaro-Role', 'realtime')
+    applySecurityHeaders(req, reply)
     return payload
   })
 
-  // POST /api/graphql/stream carries a JSON body; an empty one is no body (as in server.ts).
-  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
-    if (!body || (body as string).trim() === '') {
-      done(null, undefined)
-      return
-    }
-    try {
-      done(null, JSON.parse(body as string))
-    } catch (err) {
-      done(err as Error, undefined)
-    }
-  })
+  // POST /api/graphql/stream carries a JSON body; same parser as server.ts (empty = no body,
+  // prototype keys stripped).
+  registerJsonBodyParser(app)
 
   const corsOrigins = (process.env.CORS_ORIGINS ?? '')
     .split(',')

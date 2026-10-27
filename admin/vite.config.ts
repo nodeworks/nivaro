@@ -144,7 +144,10 @@ export default defineConfig(({ command }) => ({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Maps are written for debugging but not linked from the bundles ('hidden'), and the
+    // API never serves *.map unless ADMIN_SOURCEMAPS=public — they would publish the
+    // admin's full source to anyone. ADMIN_SOURCEMAPS=public also links them again here.
+    sourcemap: process.env.ADMIN_SOURCEMAPS === 'public' ? true : 'hidden',
     rollupOptions: { output: { manualChunks: vendorChunk } }
   }
 }))

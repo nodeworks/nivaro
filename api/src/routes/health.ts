@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -14,14 +14,38 @@ import {
   judgeReady,
   REDIS_BUDGET_MS,
   type ReadyCheck,
+  type ReadyReport,
   timedCheck
 } from '../services/ready-probe.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { singleFlightStats } from '../services/single-flight.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
-import { checkExtensions, checkMigrations } from './preflight.js'
+import { checkExtensions, checkMigrations, runningAsRoot } from './preflight.js'
 
 let changelogCache: { generated_at?: string | null; releases: unknown[] } | null = null
+
+/** /api/ready for an anonymous caller: ready + each check's id and verdict, no summaries. */
+export function publicReadyReport(report: ReadyReport): ReadyReport {
+  return {
+    ready: report.ready,
+    checks: report.checks.map((c) => ({
+      id: c.id,
+      ok: c.ok,
+      summary: c.ok ? 'ok' : 'not ok'
+    }))
+  }
+}
+
+/** Full /api/ready detail: an administrator, or a probe on loopback no proxy forwarded. */
+async function readyDetailAllowed(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  const peer = req.socket?.remoteAddress ?? ''
+  const loopback = peer === '::1' || peer.startsWith('127.') || peer.startsWith('::ffff:127.')
+  if (loopback && !req.headers['x-forwarded-for']) return true
+  if (!req.headers.authorization && !req.headers.cookie) return false
+  return authenticate(req, reply)
+    .then(() => !!req.isAdmin)
+    .catch(() => false)
+}
 
 export async function healthRoutes(app: FastifyInstance) {
   // GET /version — the cheapest possible "what build is running" probe: no DB,
@@ -102,7 +126,7 @@ export async function healthRoutes(app: FastifyInstance) {
   // Migrations are checked until they read clean once: they cannot become
   // pending again without a new image, so a clean answer is cached.
   let migrationsClean = !!process.env.CLOUD_META_DB_URL
-  app.get('/ready', async (_req, reply) => {
+  app.get('/ready', async (req, reply) => {
     const state = bootState()
     const checks: ReadyCheck[] = []
     if (state.shutting_down) {
@@ -144,7 +168,18 @@ export async function healthRoutes(app: FastifyInstance) {
     checks.push(migrations, { id: 'extensions', ok: ext.status !== 'fail', summary: ext.summary })
     checks.push(database, redis)
     const report = judgeReady(checks)
-    return reply.code(report.ready ? 200 : 503).send(report)
+    // The verdict per check is public (proxies, deploy gates); the summaries name missing
+    // extensions, environment variables and driver errors — administrators and probes from
+    // inside the container only.
+    const full = await readyDetailAllowed(req, reply)
+    // Running as root is a warning, never "not ready": the flag for everyone, the reason
+    // only with the full detail.
+    const asRoot = runningAsRoot()
+    return reply.code(report.ready ? 200 : 503).send({
+      ...(full ? report : publicReadyReport(report)),
+      running_as_root: asRoot.root,
+      ...(full && asRoot.root ? { root_reason: asRoot.reason } : {})
+    })
   })
 
   app.get('/health', async (req, reply) => {

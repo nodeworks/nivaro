@@ -224,6 +224,87 @@ let shapeCheckRegistered = false
 
 /** What a route's :id names: a numeric id as is, a slug resolved to its id,
  *  anything else (or an unknown slug) nobody. Exported for the unit tests. */
+/**
+ * M19 (security audit 2026-10-27) — an anonymous run of a `public` query is served from the
+ * cache for at least this many seconds (PUBLIC_QUERY_MIN_CACHE_S, default 60; 0 = the
+ * query's own cache_ttl only), so repeated anonymous calls cannot turn one page into a
+ * stream of SQL executions. Signed-in callers keep the query's own cache_ttl.
+ */
+export function publicQueryMinCacheS(env: NodeJS.ProcessEnv = process.env): number {
+  const v = env.PUBLIC_QUERY_MIN_CACHE_S
+  if (v === undefined || String(v).trim() === '') return 60
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 60
+}
+
+export function effectiveCacheTtl(cacheTtl: number, anonymous: boolean): number {
+  const own = Number(cacheTtl) > 0 ? Math.floor(Number(cacheTtl)) : 0
+  return anonymous ? Math.max(own, publicQueryMinCacheS()) : own
+}
+
+/** A stored cache entry -> rows + when it was written (null for a legacy bare array). */
+function readCacheEntry(cached: string): { rows: unknown[]; cachedAt: string | null } {
+  const parsed = parseJson<unknown>(cached)
+  if (Array.isArray(parsed)) return { rows: parsed as unknown[], cachedAt: null }
+  const entry = parsed as { cached_at?: string; rows?: unknown[] } | null
+  return { rows: entry?.rows ?? [], cachedAt: entry?.cached_at ?? null }
+}
+
+/** The answer an anonymous caller gets when a public query fails — never the driver text. */
+const PUBLIC_QUERY_FAILED = 'This query could not run right now. Try again later.'
+
+/**
+ * One gated, single-flight run of a query (#2452): concurrent misses on the same final key
+ * share ONE run holding a heavy-read slot, and the result is cached for `ttl` seconds. The
+ * caller has already checked access; only the SQL and its cache write are shared.
+ */
+async function runSharedQuery(
+  app: FastifyInstance,
+  query: Pick<CustomQueryRow, 'id' | 'slug' | 'sql_text'>,
+  finalParams: Record<string, unknown>,
+  opts: {
+    cacheKey: string
+    ttl: number
+    who: string | null | undefined
+    outcome: 'miss' | 'bypass' | 'uncached'
+    signal: AbortSignal
+    label: string
+  }
+) {
+  return sharedGatedRead(
+    opts.cacheKey,
+    opts.who,
+    async () => {
+      const execStarted = Date.now()
+      let ran: unknown[]
+      try {
+        // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
+        ran = await execCustomQuerySql(query.sql_text, finalParams)
+      } catch (err) {
+        recordQueryError(query.slug, err instanceof Error ? err.message : 'Query execution failed')
+        throw err
+      }
+      // #90 — a slow run captures its plan right after (fire-and-forget), so
+      // the editor can explain it without re-running the query.
+      const execMs = Date.now() - execStarted
+      if (execMs >= SLOW_PLAN_MS)
+        captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
+      recordCacheOutcome(query.slug, opts.outcome, { execMs, cacheTtl: opts.ttl })
+      // Cache the result, stamped so a viewer can be told how old it is.
+      const at = new Date().toISOString()
+      if (opts.ttl > 0 && app.redis) {
+        try {
+          await app.redis.setex(opts.cacheKey, opts.ttl, customQueryCacheValue(ran, at))
+        } catch (err) {
+          app.log.warn({ err }, 'Custom query cache write failed')
+        }
+      }
+      return { rows: ran, cachedAt: at }
+    },
+    { signal: opts.signal, label: opts.label }
+  )
+}
+
 export async function resolveQueryIdParam(raw: string): Promise<string | null> {
   if (/^\d{1,9}$/.test(raw)) return raw
   if (!/^[A-Za-z0-9_.-]{1,200}$/.test(raw)) return null
@@ -782,12 +863,39 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
     }
-    const { runCustomQueryBySlug } = await import('../services/custom-query-exec.js')
+    // M19 — anonymous by definition: cached for at least the public floor, and a miss goes
+    // through the read gate + single flight like every other heavy read.
+    const ttl = effectiveCacheTtl(query.cache_ttl, true)
+    const cacheKey = customQueryCacheKey(query.slug, finalParams)
+    if (ttl > 0 && app.redis) {
+      try {
+        const cached = await app.redis.get(cacheKey)
+        if (cached) {
+          recordCacheOutcome(query.slug, 'hit', { cacheTtl: ttl })
+          markCacheHit(req)
+          return reply.send({ data: readCacheEntry(cached).rows })
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'Custom query cache read failed')
+      }
+    }
     try {
-      const rows = await runCustomQueryBySlug(query.slug, finalParams)
-      return reply.send({ data: rows })
+      const out = await runSharedQuery(app, query, finalParams, {
+        cacheKey,
+        ttl,
+        who: null,
+        outcome: query.cache_ttl > 0 ? 'miss' : 'uncached',
+        signal: clientGoneSignal(reply.raw),
+        label: `cq-public:${query.slug}`
+      })
+      if (out.shared) recordSharedRun(query.slug)
+      gateServerTiming(reply, out)
+      return reply.send({ data: out.value.rows })
     } catch (err) {
-      return reply.code(422).send({ error: err instanceof Error ? err.message : 'Query failed' })
+      if ((err as Error)?.name === 'AbortError')
+        return reply.code(499).send({ error: 'Client closed request' })
+      req.log.warn({ err, slug: query.slug }, 'public custom query failed')
+      return reply.code(422).send({ error: PUBLIC_QUERY_FAILED })
     }
   })
 
@@ -807,20 +915,24 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       const query = (await db('nivaro_custom_queries').where({ slug }).first()) as
         | CustomQueryRow
         | undefined
-      if (!query || !query.enabled) return reply.code(404).send({ error: 'Not found' })
 
-      // Enforce access level — explicit allowlist, deny by default.
+      // Enforce access level — explicit allowlist, deny by default. A caller who may not run
+      // a query cannot tell it apart from a missing slug: anonymous callers get 401 for both,
+      // signed-in callers 404 for both (no slug enumeration).
       const VALID_ACCESS = new Set(['admin', 'authenticated', 'public'])
-      if (!VALID_ACCESS.has(query.access)) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
-      if (query.access === 'admin') {
+      const runnable =
+        !!query &&
+        !!query.enabled &&
+        VALID_ACCESS.has(query.access) &&
+        (query.access === 'public' ||
+          (query.access === 'authenticated' && !!req.user) ||
+          (query.access === 'admin' && !!req.user && !!req.isAdmin))
+      if (!query || !runnable) {
         if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
-        if (!req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
-      } else if (query.access === 'authenticated') {
-        if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
+        return reply.code(404).send({ error: 'Not found' })
       }
       // access === 'public' — no auth required.
+      const anonymous = !req.user
 
       const defs = parseJson<ParamDef[]>(query.params) ?? []
       const incoming = (req.body as { params?: Record<string, unknown> })?.params ?? {}
@@ -855,22 +967,19 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       const wantsRefresh =
         (req.body as { refresh?: boolean })?.refresh === true &&
         (query.access !== 'public' || !!req.user)
+      // M19 — anonymous callers are served from the cache for at least the public floor.
+      const ttl = effectiveCacheTtl(query.cache_ttl, anonymous)
 
       const cacheKey = customQueryCacheKey(slug, finalParams)
-      if (query.cache_ttl > 0 && app.redis && !wantsRefresh) {
+      if (ttl > 0 && app.redis && !wantsRefresh) {
         try {
           const cached = await app.redis.get(cacheKey)
           if (cached) {
             // Entries are {cached_at, rows}; a bare array is an older entry
             // written before that shape, whose age is simply unknown.
-            const parsed = parseJson<unknown>(cached)
-            const entry = Array.isArray(parsed)
-              ? { cached_at: null as string | null, rows: parsed as unknown[] }
-              : (parsed as { cached_at?: string; rows?: unknown[] } | null)
-            const rows = Array.isArray(parsed) ? (parsed as unknown[]) : (entry?.rows ?? [])
-            const cachedAt = Array.isArray(parsed) ? null : (entry?.cached_at ?? null)
+            const { rows, cachedAt } = readCacheEntry(cached)
             const expiresIn = await app.redis.ttl(cacheKey).catch(() => -1)
-            recordCacheOutcome(slug, 'hit', { cacheTtl: query.cache_ttl })
+            recordCacheOutcome(slug, 'hit', { cacheTtl: ttl })
             markCacheHit(req)
             const fresh = await queryFreshness(query).catch(() => null)
             return {
@@ -881,7 +990,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
                 ? Math.max(0, Math.round((Date.now() - Date.parse(cachedAt)) / 1000))
                 : null,
               expires_in_seconds: expiresIn >= 0 ? expiresIn : null,
-              cache_ttl: query.cache_ttl,
+              cache_ttl: ttl,
               executed_at: cachedAt,
               data_changed_at: fresh?.data_changed_at ?? null,
               freshness_sources: fresh?.sources ?? [],
@@ -900,42 +1009,14 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       let rows: unknown[]
       let cachedAt: string
       try {
-        const out = await sharedGatedRead(
+        const out = await runSharedQuery(app, query, finalParams, {
           cacheKey,
-          req.user?.id,
-          async () => {
-            const execStarted = Date.now()
-            let ran: unknown[]
-            try {
-              // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
-              ran = await execCustomQuerySql(query.sql_text, finalParams)
-            } catch (err) {
-              recordQueryError(slug, err instanceof Error ? err.message : 'Query execution failed')
-              throw err
-            }
-            // #90 — a slow run captures its plan right after (fire-and-forget), so
-            // the editor can explain it without re-running the query.
-            const execMs = Date.now() - execStarted
-            if (execMs >= SLOW_PLAN_MS)
-              captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
-            recordCacheOutcome(
-              slug,
-              query.cache_ttl > 0 ? (wantsRefresh ? 'bypass' : 'miss') : 'uncached',
-              { execMs, cacheTtl: query.cache_ttl }
-            )
-            // Cache the result, stamped so a viewer can be told how old it is.
-            const at = new Date().toISOString()
-            if (query.cache_ttl > 0 && app.redis) {
-              try {
-                await app.redis.setex(cacheKey, query.cache_ttl, customQueryCacheValue(ran, at))
-              } catch (err) {
-                app.log.warn({ err }, 'Custom query cache write failed')
-              }
-            }
-            return { rows: ran, cachedAt: at }
-          },
-          { signal: clientGoneSignal(reply.raw), label: `cq:${slug}` }
-        )
+          ttl,
+          who: req.user?.id,
+          outcome: ttl > 0 ? (wantsRefresh ? 'bypass' : 'miss') : 'uncached',
+          signal: clientGoneSignal(reply.raw),
+          label: `cq:${slug}`
+        })
         rows = out.value.rows
         cachedAt = out.value.cachedAt
         if (out.shared) recordSharedRun(slug)
@@ -943,6 +1024,11 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       } catch (err) {
         if ((err as Error)?.name === 'AbortError')
           return reply.code(499).send({ error: 'Client closed request' })
+        // An anonymous caller never sees driver text (tables, columns, procedure names).
+        if (anonymous) {
+          req.log.warn({ err, slug }, 'public custom query failed')
+          return reply.code(400).send({ error: PUBLIC_QUERY_FAILED })
+        }
         const message = err instanceof Error ? err.message : 'Query execution failed'
         return reply.code(400).send({ error: message })
       }
@@ -956,14 +1042,14 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         user: req.user?.id,
         req
       })
-      const fresh = query.cache_ttl > 0 ? await queryFreshness(query).catch(() => null) : null
+      const fresh = ttl > 0 ? await queryFreshness(query).catch(() => null) : null
       return {
         data: rows,
         cached: false,
-        cached_at: query.cache_ttl > 0 ? cachedAt : null,
+        cached_at: ttl > 0 ? cachedAt : null,
         age_seconds: 0,
-        expires_in_seconds: query.cache_ttl > 0 ? query.cache_ttl : null,
-        cache_ttl: query.cache_ttl,
+        expires_in_seconds: ttl > 0 ? ttl : null,
+        cache_ttl: ttl,
         executed_at: cachedAt,
         data_changed_at: fresh?.data_changed_at ?? null,
         freshness_sources: fresh?.sources ?? [],

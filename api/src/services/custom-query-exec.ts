@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { tempTableGuards } from './custom-query-dependents.js'
+import { substituteParams } from './custom-query-substitute.js'
 import { trackStatement } from './traffic-inflight.js'
 
 /**
@@ -78,17 +79,8 @@ export async function execCustomQuerySql(
   finalParams: Record<string, unknown>,
   opts: { timeoutMs?: number } = {}
 ): Promise<Array<Record<string, unknown>>> {
-  const resolvedSql = sqlText.replace(/:(\w+)/g, (_, k: string) => {
-    const v = finalParams[k]
-    if (v == null || v === '') return 'NULL'
-    if (typeof v === 'boolean') return v ? '1' : '0'
-    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
-    if (v instanceof Date) {
-      if (Number.isNaN(v.getTime())) return 'NULL'
-      return `'${v.toISOString().slice(0, 23).replace('T', ' ')}'`
-    }
-    return `'${String(v).replace(/'/g, "''")}'`
-  })
+  // Literal-aware: a value can never leave its literal (custom-query-substitute.ts, M23).
+  const resolvedSql = substituteParams(sqlText, finalParams)
 
   // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
   const knexClient = (db as any).client
@@ -212,15 +204,7 @@ export async function explainSqlPlan(
   finalParams: Record<string, unknown>,
   opts: { raw?: boolean } = {}
 ): Promise<string | null> {
-  const resolvedSql = opts.raw
-    ? sqlText
-    : sqlText.replace(/:(\w+)/g, (_, k: string) => {
-        const v = finalParams[k]
-        if (v == null || v === '') return 'NULL'
-        if (typeof v === 'boolean') return v ? '1' : '0'
-        if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
-        return `'${String(v).replace(/'/g, "''")}'`
-      })
+  const resolvedSql = opts.raw ? sqlText : substituteParams(sqlText, finalParams)
 
   // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
   const knexClient = (db as any).client
