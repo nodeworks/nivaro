@@ -778,12 +778,16 @@ export const collabTeamsBot: DocSection = {
         ['TEAMS_BOT_APP_SECRET', 'Bot client secret (a _FILE variant works)', 'MICROSOFT_APP_PASSWORD'],
         ['TEAMS_BOT_TENANT_ID', 'Your Entra tenant id', 'MICROSOFT_APP_TENANT_ID'],
         ['TEAMS_BOT_APP_TYPE', 'MultiTenant or SingleTenant', 'MICROSOFT_APP_TYPE'],
-        ['TEAMS_BOT', 'off disables the bot whatever is saved', '']
+        ['TEAMS_BOT', 'on switches the bot on and off disables it, whatever is saved', '']
       ]
     },
     {
+      type: 'warn',
+      text: 'Configure the bot per instance through the environment (TEAMS_BOT_* or MICROSOFT_APP_*), not only in Settings. Instance settings can be copied from one environment to another by config promotion, so a staging instance could otherwise end up answering as the production bot.'
+    },
+    {
       type: 'note',
-      text: 'When nothing else is set, the bot falls back to the Microsoft sign-in application (as SingleTenant). It still stays off until an administrator switches it on. A MultiTenant bot gets its tokens from botframework.com; inbound messages must still carry the configured tenant id, or they are refused.'
+      text: 'When nothing else is set, the bot falls back to the Microsoft sign-in application (as SingleTenant), provided its issuer names your tenant (not common, organizations or consumers). It still stays off until an administrator switches it on. A MultiTenant bot gets its tokens from botframework.com; inbound messages must still carry the configured tenant id, or they are refused.'
     },
     { type: 'h2', id: 'teams-bot-endpoints', text: 'Endpoints' },
     {
@@ -798,6 +802,10 @@ export const collabTeamsBot: DocSection = {
         ['DELETE /api/teams/link', 'Person', 'Disconnects the caller\'s own Teams link.']
       ]
     },
+    {
+      type: 'note',
+      text: 'Every /api/teams endpoint answers 404 in Nivaro Cloud. The messages, connect and link endpoints also answer 404 while the bot is off; the admin endpoints stay available so the bot can be set up first.'
+    },
     { type: 'h2', id: 'teams-bot-troubleshooting', text: 'Troubleshooting' },
     {
       type: 'ul',
@@ -806,6 +814,7 @@ export const collabTeamsBot: DocSection = {
         'No card arrives: check Profile → Notification rules for the category, quiet hours, and a mute (type "unmute").',
         'A channel answer arrives privately: someone in the channel is not matched to a Nivaro user, may not see the data, or the channel is shared or private. This is by design.',
         'Messages are refused: the messaging endpoint, app type or tenant id does not match the Azure Bot registration. Settings → Microsoft → Teams bot shows which source is in use.',
+        'Every message is refused and the API log shows reason keys_unavailable: Nivaro could not fetch Microsoft\'s signing keys from login.botframework.com. Check outbound HTTPS from the API.',
         'During a maintenance window, card buttons decline with a short notice and work again afterwards.'
       ]
     }
