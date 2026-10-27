@@ -132,11 +132,11 @@ import {
   collabItemLocking,
   collabKeyboardShortcuts,
   collabMessageActions,
-  collabTeamsBot,
   collabNotificationsCenter,
   collabSmsPush,
   collabSupportRequests,
   collabTasks,
+  collabTeamsBot,
   collabUserActivityFeed
 } from './sections/collaboration.js'
 import { commandCenterDocs } from './sections/command-center.js'
