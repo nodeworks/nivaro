@@ -1,11 +1,13 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFields, getPhysicalColumns } from '../services/collections.js'
-import { canUpdateItem, readOne } from '../services/items.js'
-import { can, getAllowedFields } from '../services/permissions.js'
+import { recordWriteRefusal } from '../services/edit-lock.js'
+import { canUpdateItem, describeWriteRefusal, readOne, updateOne } from '../services/items.js'
+import { can, getAllowedFields, isAdminRole } from '../services/permissions.js'
 import { recordToolRefusal } from '../services/record-tool-gate.js'
+import type { User } from '../types.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -56,6 +58,69 @@ async function unschedulableKey(collection: string, keys: string[]): Promise<str
     if ((f.special ?? []).some((s) => AUDIT_SPECIALS.has(s) || s === 'alias')) return key
   }
   return null
+}
+
+type ExecuteOutcome =
+  | { ok: true }
+  | { ok: false; status: number; error: string; extra?: Record<string, unknown> }
+
+/**
+ * Apply a scheduled change as the person who scheduled it. The request is
+ * re-cast as theirs (same headers / server / socket, their user and admin
+ * flag, no workspace header) so every gate that reads the request — the
+ * held-lock guard, the approval edit lock, admin-only exemptions — judges
+ * the creator, never the administrator who pressed Execute.
+ */
+export async function executeAsCreator(
+  req: FastifyRequest,
+  change: { collection: string; item_id: string | number; created_by?: string | null },
+  changes: Record<string, unknown>
+): Promise<ExecuteOutcome> {
+  const creator = change.created_by
+    ? ((await db('nivaro_users')
+        .where({ id: change.created_by })
+        .first()
+        .catch(() => null)) as User | null | undefined)
+    : null
+  if (!creator || (creator.status && creator.status !== 'active')) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'The person who scheduled this change is no longer active'
+    }
+  }
+  const asCreator = Object.create(req) as FastifyRequest
+  Object.assign(asCreator, {
+    user: creator,
+    isAdmin: await isAdminRole(creator),
+    workspaceId: undefined
+  })
+  const itemId = String(change.item_id)
+  const refused = await recordWriteRefusal(asCreator, change.collection, itemId)
+  if (refused) {
+    const body = refused.body as { error?: string; code?: string }
+    return {
+      ok: false,
+      status: refused.status,
+      error: body.error ?? 'The change may not be applied',
+      extra: body.code ? { code: body.code } : {}
+    }
+  }
+  try {
+    await updateOne(creator, change.collection, itemId, changes, asCreator, undefined, {
+      callerPayload: true
+    })
+  } catch (err) {
+    const why = describeWriteRefusal(err)
+    if (why.status >= 500) console.error('Failed to execute scheduled change:', err)
+    return {
+      ok: false,
+      status: why.status >= 500 ? 500 : why.status,
+      error: why.status >= 500 ? 'Failed to apply changes to item' : why.error,
+      extra: why.code ? { code: why.code } : {}
+    }
+  }
+  return { ok: true }
 }
 
 export async function scheduledChangesRoutes(app: FastifyInstance) {
@@ -269,18 +334,28 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: `Change is already ${change.status}` })
     }
 
-    const changesData = parseJsonSafe(change.changes) as Record<string, unknown>
+    const parsed = parseJsonSafe(change.changes)
+    const changesData =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null
     const now = new Date()
-
-    try {
-      await db(change.collection).where({ id: change.item_id }).update(changesData)
-    } catch (err) {
-      console.error('Failed to execute scheduled change:', err)
+    const fail = async (status: number, error: string, extra: Record<string, unknown> = {}) => {
       await db('nivaro_scheduled_changes')
         .where({ id })
-        .update({ status: 'failed', updated_at: now })
-      return reply.code(500).send({ error: 'Failed to apply changes to item' })
+        .update({ status: 'failed', error_message: error.slice(0, 500), updated_at: now })
+      return reply.code(status).send({ error, status: 'failed', ...extra })
     }
+    if (!changesData) return fail(400, 'The stored change is not a set of field values')
+
+    // M4 (security audit 2026-10-27): the change runs AS ITS CREATOR through
+    // the items service — their update policy, row filter, User Scopes, the
+    // record's person-held and approval edit locks, field rules, validation,
+    // hooks, a revision and rollups all apply, exactly as if they saved it
+    // now. A creator who is gone, suspended, or may no longer make the
+    // change marks it failed (with the reason) instead of it being written.
+    const outcome = await executeAsCreator(req, change, changesData)
+    if (!outcome.ok) return fail(outcome.status, outcome.error, outcome.extra)
 
     await db('nivaro_scheduled_changes')
       .where({ id })

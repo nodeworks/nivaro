@@ -20,7 +20,13 @@ const state = vi.hoisted(() => ({
   existing: undefined as Record<string, unknown> | undefined,
   // nivaro_fields rows for 'orders' and the table's physical columns.
   fields: [] as Array<Record<string, unknown>>,
-  columns: new Set<string>()
+  columns: new Set<string>(),
+  // Execute: the creator row, what the record-write gate says, the write.
+  creator: { id: 'U5', role: 'R5', status: 'active' } as Record<string, unknown> | undefined,
+  writeRefusal: null as { status: number; body: Record<string, unknown> } | null,
+  updateThrows: null as Error | null,
+  updateCalls: [] as Array<{ user: unknown; collection: string; id: unknown; data: unknown }>,
+  statusWrites: [] as Array<Record<string, unknown>>
 }))
 
 const FIELDS = [
@@ -42,13 +48,16 @@ vi.mock('../../../db/index.js', () => {
     q.first = async () =>
       table === 'nivaro_scheduled_changes'
         ? (state.existing ?? { id: 1, changes: '{}' })
-        : undefined
+        : table === 'nivaro_users'
+          ? state.creator
+          : undefined
     q.insert = () => {
       state.inserts++
       return { returning: async () => [{ id: 1 }] }
     }
-    q.update = async () => {
+    q.update = async (patch: Record<string, unknown>) => {
       state.updates++
+      if (table === 'nivaro_scheduled_changes') state.statusWrites.push(patch)
       return 1
     }
     // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
@@ -70,7 +79,11 @@ vi.mock('../../../services/collections.js', () => ({
   getFields: vi.fn(async () => state.fields),
   getPhysicalColumns: vi.fn(async () => state.columns)
 }))
+vi.mock('../../../services/edit-lock.js', () => ({
+  recordWriteRefusal: vi.fn(async () => state.writeRefusal)
+}))
 vi.mock('../../../services/permissions.js', () => ({
+  isAdminRole: vi.fn(async () => false),
   can: vi.fn(async () => state.canUpdate),
   getAllowedFields: vi.fn(async (_u: unknown, action: string) =>
     action === 'update' ? state.updateFields : state.readFields
@@ -78,7 +91,16 @@ vi.mock('../../../services/permissions.js', () => ({
 }))
 vi.mock('../../../services/items.js', () => ({
   readOne: vi.fn(async () => (state.visible ? { id: 7 } : null)),
-  canUpdateItem: vi.fn(async () => state.updatable)
+  canUpdateItem: vi.fn(async () => state.updatable),
+  updateOne: vi.fn(async (user: unknown, collection: string, id: unknown, data: unknown) => {
+    state.updateCalls.push({ user, collection, id, data })
+    if (state.updateThrows) throw state.updateThrows
+    return { id }
+  }),
+  describeWriteRefusal: vi.fn((err: { statusCode?: number; message?: string }) => ({
+    status: err.statusCode ?? 500,
+    error: err.message ?? 'failed'
+  }))
 }))
 vi.mock('../../../routes/collection-layouts.js', () => ({
   resolveLayout: vi.fn(async (opts: unknown) => {
@@ -120,6 +142,11 @@ beforeEach(() => {
   state.fields = FIELDS.map((f) => ({ ...f }))
   // 'lines' is an alias (o2m): registered, but no column.
   state.columns = new Set(['id', 'status', 'notes', 'budget', 'locked', 'total', 'user_created'])
+  state.creator = { id: 'U5', role: 'R5', status: 'active' }
+  state.writeRefusal = null
+  state.updateThrows = null
+  state.updateCalls = []
+  state.statusWrites = []
 })
 
 describe('POST /scheduled-changes', () => {
@@ -326,5 +353,71 @@ describe('DELETE /scheduled-changes/:id', () => {
     const res = await (await app()).inject({ method: 'DELETE', url: '/api/scheduled-changes/1' })
     expect(res.statusCode).toBe(204)
     expect(state.updates).toBe(1)
+  })
+})
+
+// M4 (security audit 2026-10-27): execution is a write AS THE CREATOR through
+// the items service, never a raw UPDATE; a refused change is marked failed.
+describe('POST /scheduled-changes/:id/execute', () => {
+  const pending = {
+    id: 1,
+    created_by: 'U5',
+    collection: 'orders',
+    item_id: '7',
+    status: 'pending',
+    changes: '{"status":"closed"}'
+  }
+  const run = async () =>
+    (await app()).inject({ method: 'POST', url: '/api/scheduled-changes/1/execute' })
+
+  it('writes the change through updateOne as its creator', async () => {
+    state.admin = true
+    state.existing = pending
+    const res = await run()
+    expect(res.statusCode).toBe(200)
+    expect(state.updateCalls).toHaveLength(1)
+    expect(state.updateCalls[0]).toMatchObject({
+      user: { id: 'U5' },
+      collection: 'orders',
+      id: '7',
+      data: { status: 'closed' }
+    })
+    expect(state.statusWrites.at(-1)).toMatchObject({ status: 'executed' })
+  })
+
+  it('marks it failed when the creator may no longer change the record', async () => {
+    state.admin = true
+    state.existing = pending
+    state.writeRefusal = { status: 403, body: { error: 'You do not have permission' } }
+    const res = await run()
+    expect(res.statusCode).toBe(403)
+    expect(state.updateCalls).toHaveLength(0)
+    expect(state.statusWrites.at(-1)).toMatchObject({
+      status: 'failed',
+      error_message: 'You do not have permission'
+    })
+  })
+
+  it('marks it failed when the creator is no longer active', async () => {
+    state.admin = true
+    state.existing = pending
+    state.creator = { id: 'U5', role: 'R5', status: 'suspended' }
+    const res = await run()
+    expect(res.statusCode).toBe(409)
+    expect(state.updateCalls).toHaveLength(0)
+    expect(state.statusWrites.at(-1)).toMatchObject({ status: 'failed' })
+  })
+
+  it('marks it failed with the reason when validation refuses the write', async () => {
+    state.admin = true
+    state.existing = pending
+    state.updateThrows = Object.assign(new Error('Status is not allowed'), { statusCode: 422 })
+    const res = await run()
+    expect(res.statusCode).toBe(422)
+    expect(res.json().error).toBe('Status is not allowed')
+    expect(state.statusWrites.at(-1)).toMatchObject({
+      status: 'failed',
+      error_message: 'Status is not allowed'
+    })
   })
 })
