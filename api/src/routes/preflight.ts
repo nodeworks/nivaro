@@ -15,6 +15,7 @@ import {
 } from '../services/media-handoff.js'
 import { hasLocalChromium } from '../services/pdf-layout.js'
 import { judgeRealtimeTier, probeRealtimeRouting, socketsServed } from '../services/process-role.js'
+import { registerReadinessCheck } from '../services/readiness.js'
 import {
   canaryLenient,
   imageVariant,
@@ -210,6 +211,40 @@ export function checkExtensions(): Check {
 }
 
 /**
+ * The image entrypoint steps down to uid 1000 when it can; when it has to stay root (uploads
+ * owned by root, su-exec refused, NIVARO_RUN_AS=root) it exports NIVARO_RUNNING_AS_ROOT=1 and
+ * the reason in NIVARO_ROOT_REASON. A warning, never a failure: the process works, it just
+ * runs with more privilege than it should (security audit 2026-10-27, M31). The reason is
+ * for administrators only — /preflight and /readiness are admin routes; /api/ready shows
+ * anonymous callers the boolean alone.
+ */
+export function runningAsRoot(env: NodeJS.ProcessEnv = process.env): {
+  root: boolean
+  reason: string | null
+} {
+  const root = env.NIVARO_RUNNING_AS_ROOT === '1'
+  return { root, reason: root ? env.NIVARO_ROOT_REASON?.trim() || null : null }
+}
+
+export function checkRunAsRoot(env: NodeJS.ProcessEnv = process.env): Check {
+  const { root, reason } = runningAsRoot(env)
+  if (!root) {
+    return { id: 'run-as-root', status: 'ok', summary: 'The API process runs as a non-root user.' }
+  }
+  return {
+    id: 'run-as-root',
+    status: 'warn',
+    summary:
+      'The API process is running as root' +
+      (reason ? ` (${reason})` : '') +
+      '. Fix the cause so the entrypoint can step down to uid 1000.',
+    detail: { reason }
+  }
+}
+
+let rootReadinessRegistered = false
+
+/**
  * NIVARO_VERSION is overloaded: every compose file uses it as the IMAGE TAG,
  * so it is routinely the literal `latest`. version.ts already refuses to report
  * a non-version-shaped value, but a deployment pinning `latest` cannot tell you
@@ -328,6 +363,25 @@ async function checkConnectivity(app: FastifyInstance): Promise<Check[]> {
 }
 
 export async function preflightRoutes(app: FastifyInstance) {
+  if (!rootReadinessRegistered) {
+    rootReadinessRegistered = true
+    registerReadinessCheck({
+      id: 'run-as-root',
+      label: 'The API process does not run as root',
+      group: 'Infrastructure',
+      description:
+        'The image entrypoint steps down to uid 1000 unless uploads hold files that user cannot write, su-exec is refused (cap_drop ALL) or NIVARO_RUN_AS=root.',
+      run: async () => {
+        const { root, reason } = runningAsRoot()
+        if (!root) return { status: 'pass', detail: 'Running as a non-root user.' }
+        return {
+          status: 'warn',
+          detail: 'The API process is running as root.',
+          blockers: reason ? [reason] : []
+        }
+      }
+    })
+  }
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
     const [migrations, connectivity, render, media, realtime] = await Promise.all([
       checkMigrations(),
@@ -342,6 +396,7 @@ export async function preflightRoutes(app: FastifyInstance) {
       ...connectivity,
       checkExtensions(),
       checkVersion(),
+      checkRunAsRoot(),
       render,
       media,
       realtime

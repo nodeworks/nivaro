@@ -296,6 +296,15 @@ export async function pingIdentity(req: FastifyRequest, reply: FastifyReply): Pr
   }
 }
 
+/** An anonymous visitor's claimed name/email as a label that cannot pass for an account. */
+export function unverifiedLabel(
+  name: string | null | undefined,
+  email: string | null | undefined
+): string | null {
+  const claimed = String(name ?? '').trim() || String(email ?? '').trim()
+  return claimed ? `${claimed.slice(0, 110)} (unverified)` : null
+}
+
 // Public routes — no auth, called from external sites under open CORS scope
 export async function presencePublicRoutes(app: FastifyInstance) {
   // ── POST /ping ───────────────────────────────────────────────────────────
@@ -347,11 +356,13 @@ export async function presencePublicRoutes(app: FastifyInstance) {
 
       const session: PresenceSession = {
         sessionId,
-        // Anonymous pings keep the visitor's self-description for the admin
-        // sessions view, but name no account — people answers skip them.
+        // Identity comes only from a verified session or token. An anonymous ping's
+        // self-description (a tracker on another site may pass its own user) is kept for the
+        // admin sessions view as a marked, unverified label — never an email that reads like
+        // one of this instance's accounts. People answers skip anonymous sessions.
         userId: me?.id ?? null,
-        userEmail: me ? me.email : (body.userEmail ?? null),
-        userName: me ? meName || me.email : (body.userName ?? null),
+        userEmail: me ? me.email : null,
+        userName: me ? meName || me.email : unverifiedLabel(body.userName, body.userEmail),
         pageUrl: body.pageUrl,
         pageTitle: body.pageTitle ?? null,
         referrer: body.referrer ?? null,

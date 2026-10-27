@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { HookAction } from '../hooks/registry.js'
@@ -15,6 +15,7 @@ import {
   registerScheduleResync
 } from '../services/row-schedules.js'
 import { deferEffect } from '../services/unit-of-work.js'
+import { verifyWebhookSignature } from '../services/webhook-signature.js'
 
 interface Flow {
   id: string
@@ -86,6 +87,8 @@ interface WebhookTriggerOptions {
   auth_type?: 'none' | 'bearer' | 'hmac-sha256'
   secret?: string
   return_response?: boolean
+  /** hmac-sha256 only: refuse requests without a signed X-Signature-Timestamp (replays). */
+  require_timestamp?: boolean
 }
 
 // ─── JSON helpers ─────────────────────────────────────────────────────────────
@@ -494,16 +497,14 @@ export async function webhookFlowRoute(app: FastifyInstance) {
           return reply.code(401).send({ error: 'Unauthorized' })
         }
       } else if (opts.auth_type === 'hmac-sha256') {
-        const sigHeader = (req.headers['x-signature-256'] as string) ?? ''
-        const bodyStr = req.body ? JSON.stringify(req.body) : ''
-        const expected = `sha256=${createHmac('sha256', opts.secret).update(bodyStr).digest('hex')}`
-        try {
-          if (!timingSafeEqual(Buffer.from(sigHeader), Buffer.from(expected))) {
-            return reply.code(401).send({ error: 'Invalid signature' })
-          }
-        } catch {
-          return reply.code(401).send({ error: 'Invalid signature' })
-        }
+        const verdict = verifyWebhookSignature({
+          secret: opts.secret,
+          rawBody: req.rawBody ?? '',
+          signature: req.headers['x-signature-256'],
+          timestamp: req.headers['x-signature-timestamp'],
+          requireTimestamp: opts.require_timestamp === true
+        })
+        if (!verdict.ok) return reply.code(401).send({ error: verdict.error })
       }
     }
 

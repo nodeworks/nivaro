@@ -8,6 +8,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
+import type { User } from '../types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -391,19 +392,58 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       }
     }
 
-    // Insert into the target collection
-    const collectionId = randomUUID()
+    // The record is created through the items service AS THE FORM'S CREATOR (the admin who
+    // published it — the same "creator configured it" rule as dashboard links and widget
+    // feeds): validation rules, defaults, hooks, rollups, revisions and the audit trail all
+    // run, and the creator's own access bounds what a public form can write. A form whose
+    // creator is no longer active stops accepting submissions.
+    const creator = form.created_by
+      ? ((await db('nivaro_users').where({ id: form.created_by, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
+    if (!creator) {
+      req.log.warn({ form: form.id }, 'public submission refused: the form has no active creator')
+      return reply.code(410).send({ error: 'This form is no longer accepting submissions.' })
+    }
+
+    // The per-IP hourly cap, taken atomically (the count above races: N parallel posts all
+    // read the same count). Redis first, this process alone when Redis is down.
+    if (
+      ip &&
+      (await overWindowLimit(
+        app.redis,
+        `subform:${form.id}:${ip}`,
+        Number(form.rate_limit_per_hour) || 0,
+        3600
+      ))
+    ) {
+      return reply.code(429).send({ error: 'Rate limit exceeded. Please try again later.' })
+    }
+
+    let collectionId: string | number | null = null
     try {
-      await db(form.collection).insert({
-        id: collectionId,
-        ...filteredData,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
+      const { createOne } = await import('../services/items.js')
+      const created = (await createOne(
+        creator,
+        form.collection as string,
+        filteredData,
+        undefined,
+        undefined,
+        {
+          callerPayload: true
+        }
+      )) as Record<string, unknown> | null
+      collectionId = (created?.id as string | number | undefined) ?? null
     } catch (err) {
-      // A value that does not fit its column (wrong type, too long) is the
-      // submitter's to fix — never a 500 carrying the driver's text.
-      req.log.warn({ err, form: form.id }, 'public submission insert refused')
+      // A refusal the submitter can act on (a required field, a validation rule) keeps its
+      // message; anything else — a value that does not fit its column, a driver error — is
+      // the generic answer, never the driver's text.
+      const e = err as { statusCode?: number; message?: string; violations?: unknown }
+      req.log.warn({ err, form: form.id }, 'public submission refused')
+      if ((e.statusCode === 400 || e.statusCode === 422) && e.violations) {
+        return reply.code(400).send({ error: e.message, violations: e.violations })
+      }
       return reply
         .code(400)
         .send({ error: 'One of the values does not fit its field. Check the form and try again.' })
@@ -419,16 +459,17 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       created_at: new Date()
     })
 
-    // Public insert bypasses the items service, so log the create directly —
-    // otherwise records created through public forms leave no audit trail.
-    await logActivity({
-      action: 'create',
-      user: null,
-      collection: form.collection,
-      item: collectionId,
-      comment: `public submission via form "${form.name}"`,
-      req
-    })
+    // The items service logged the create; this entry says it came from the public form.
+    if (collectionId != null) {
+      await logActivity({
+        action: 'public-submission',
+        user: null,
+        collection: form.collection,
+        item: String(collectionId),
+        comment: `public submission via form "${form.name}"`,
+        req
+      })
+    }
 
     return reply.code(201).send({
       data: {
