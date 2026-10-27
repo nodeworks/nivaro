@@ -1937,12 +1937,13 @@ export const contentOpsGridPresets: DocSection = {
   "closed_through": "2026-09",
   "closed_rule": "A month closes 45 days before its end (payment terms).",
   "status": { "key": "good", "label": "On track", "tone": "ok", "reason": "Every closed month reconciles" },
-  "figures": [{ "label": "Invoiced to date", "value": 4887306.79, "format": "currency" }]
+  "figures": [{ "label": "Invoiced to date", "value": 4887306.79, "format": "currency" }],
+  "facts": [{ "label": "Payment terms", "value": "Net 45 · PO", "tip": "A month closes 45 days before its end." }]
 }`
     },
     {
       type: 'p',
-      text: 'What renders, in both Edit and Summary mode: a second read-only line under every cell (the figure opens a popover listing the detail rows behind it — number, vendor, date, amount, tone and note), a signed delta in role colours where the two disagree (a closed month that disagrees is the reviewable case; an open month already over its plan is the alarming one; an open month still under plan stays quiet), closed months shaded, the verdict chip leading the figure strip with its reason on hover, a "Closed through" lock chip, the endpoint\'s figures as chips, an "Actual · closed" hint under each input in the row editor, a ghost row for any series key the grid has no row for ("No plan for this year"), and the series sum in the footer. An endpoint failure shows one quiet "unavailable" chip and leaves the grid alone.'
+      text: 'What renders, in both Edit and Summary mode: a second read-only line under every cell (the figure opens a popover listing the detail rows behind it — number, vendor, date, amount, tone and note), a signed delta in role colours where the two disagree (a closed month that disagrees is the reviewable case; an open month already over its plan is the alarming one; an open month still under plan stays quiet), closed months shaded, the verdict chip leading the figure strip with its reason on hover, a "Closed through" lock chip, the endpoint\'s figures as chips, its `facts` as text chips (a value that is not a number, such as the payment terms; `tip` shows on hover), an "Actual · closed" hint under each input in the row editor, a ghost row for any series key the grid has no row for ("No plan for this year"), and the series sum in the footer. An endpoint failure shows one quiet "unavailable" chip and leaves the grid alone.'
     },
     {
       type: 'p',

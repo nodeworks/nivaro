@@ -30,6 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
  *   closed_rule      one sentence explaining how a month closes
  *   status           { key, label, tone, reason } | null — the verdict + why
  *   figures[]        { label, value, format } — strip chips beside the grid's own
+ *   facts[]          { label, value, tip? } — text chips (a value that is not a number)
  */
 
 export interface CompareSeriesConfig {
@@ -111,6 +112,8 @@ export interface CompareSeriesData {
   closed_locked_message?: string
   status?: { key: string; label: string; tone: 'ok' | 'warn' | 'danger' | 'neutral'; reason?: string } | null
   figures?: Array<{ label: string; value: number; format?: 'currency' | 'number' }>
+  /** Text facts shown as strip chips beside the figures ("Payment terms · Net 30"). */
+  facts?: Array<{ label: string; value: string; tip?: string }>
   series?: CompareExtraSeries[]
   proposals?: CompareProposal[]
 }
@@ -957,18 +960,24 @@ export function GridStatChip(props: {
   format?: 'currency' | 'number'
   negative?: boolean
   dataKey?: string
+  /** Shown instead of a formatted number (a text fact). */
+  text?: string
+  tip?: string
 }) {
   const n = props.value
   const text =
-    n == null
-      ? '—'
-      : props.format === 'currency'
-        ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
-        : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    props.text != null
+      ? props.text
+      : n == null
+        ? '—'
+        : props.format === 'currency'
+          ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+          : n.toLocaleString('en-US', { maximumFractionDigits: 2 })
   return (
     <div
       data-o2m-stat={props.dataKey ?? props.label}
       data-stat-negative={props.negative ? 'true' : undefined}
+      data-tip={props.tip || undefined}
       className={cn(
         'flex items-baseline gap-2 rounded-md border px-2.5 py-1',
         props.negative
@@ -1045,6 +1054,9 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
       )}
       {(data.figures ?? []).map((f) => (
         <GridStatChip key={f.label} label={f.label} value={f.value} format={f.format} dataKey={`compare:${f.label}`} />
+      ))}
+      {(data.facts ?? []).map((f) => (
+        <GridStatChip key={f.label} label={f.label} value={null} text={f.value} tip={f.tip} dataKey={`compare:${f.label}`} />
       ))}
     </>
   )
