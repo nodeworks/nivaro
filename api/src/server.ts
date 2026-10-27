@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { STATUS_CODES } from 'node:http'
 import { join } from 'node:path'
+import { pipeline } from 'node:stream'
 import fastifyCors from '@fastify/cors'
 import fastifyMultipart from '@fastify/multipart'
 import fastifyStatic from '@fastify/static'
@@ -13,14 +14,17 @@ import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import {
   anonymousBodyTooLarge,
+  capStream,
   defaultBodyLimit,
   largeBodyLimit,
+  needsStreamingCap,
   routeBodyLimit
 } from './lib/body-limits.js'
 import { describeDbRefusal, errorText, isPoolBusy, messageWithoutSql } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
+import { isSourceMapPath, sourceMapsPublic } from './lib/source-maps.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
 import { trustProxyFromEnv } from './lib/trust-proxy.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
@@ -235,6 +239,14 @@ export async function buildServer() {
         code: 'FST_ERR_CTP_BODY_TOO_LARGE'
       })
     }
+  })
+  // A body with no declared size (chunked) from a caller with no credential is counted while
+  // it streams and cut off with 413 past the small ceiling.
+  app.addHook('preParsing', async (req, _reply, payload) => {
+    if (!needsStreamingCap(req, smallBodyLimit)) return payload
+    const capped = capStream(smallBodyLimit)
+    pipeline(payload, capped, () => {})
+    return capped
   })
   await app.register(callerRateLimitPlugin)
 
@@ -717,6 +729,9 @@ export async function buildServer() {
       prefix: '/',
       // scripts/precompress-dist.mjs writes .br/.gz beside each asset at build
       preCompressed: true,
+      // Source maps never leave the server unless ADMIN_SOURCEMAPS=public — checked on the
+      // path @fastify/static is about to resolve, whatever encoding the URL used.
+      allowedPath: (pathName) => sourceMapsPublic() || !isSourceMapPath(pathName),
       // Cache-Control is ours (#2438): vite's hashed files under /assets never change, so a
       // browser keeps them a year without asking; everything else (index.html, the service
       // worker, icons) is revalidated on every load so a release is picked up at once.
@@ -737,10 +752,10 @@ export async function buildServer() {
     })
     // Source maps are built 'hidden' (no sourceMappingURL) and never served unless
     // ADMIN_SOURCEMAPS=public — they would hand anyone the admin's full source.
-    if (process.env.ADMIN_SOURCEMAPS !== 'public') {
+    if (!sourceMapsPublic()) {
       app.addHook('onRequest', async (req, reply) => {
         const path = req.url.split('?')[0] ?? ''
-        if (path.endsWith('.map') && !path.startsWith('/api/')) {
+        if (!path.startsWith('/api/') && isSourceMapPath(path)) {
           return reply.code(404).send({ error: 'Not found' })
         }
       })

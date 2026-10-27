@@ -20,6 +20,8 @@
  * Leaf module.
  */
 
+import { Transform } from 'node:stream'
+
 const MB = 1024 * 1024
 
 /** The global JSON/text body ceiling in bytes (BODY_LIMIT_MB, default 1). */
@@ -135,20 +137,62 @@ export function routeBodyLimit(
   return opts.small
 }
 
+type CredReq = {
+  headers: Record<string, string | string[] | undefined>
+  session?: { userId?: unknown } | null
+}
+
+function hasCredential(req: CredReq): boolean {
+  return !!req.headers.authorization || !!req.session?.userId
+}
+
+/** A Content-Length header that is a plain non-negative integer, else null (unknown). */
+function declaredLength(req: CredReq): number | null {
+  const raw = req.headers['content-length']
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim())) return null
+  return Number(raw)
+}
+
 /**
  * May this request's body pass the default ceiling? Only with a credential — a verified
  * session or an Authorization header (checked by the route's own authenticate later).
+ * True = refuse now (a declared length over the ceiling, no credential).
  */
-export function anonymousBodyTooLarge(
-  req: {
-    headers: Record<string, string | string[] | undefined>
-    session?: { userId?: unknown } | null
-  },
-  small: number
-): boolean {
-  const len = Number(req.headers['content-length'])
-  if (!Number.isFinite(len) || len <= small) return false
-  if (req.headers.authorization) return false
-  if (req.session?.userId) return false
-  return true
+export function anonymousBodyTooLarge(req: CredReq, small: number): boolean {
+  if (hasCredential(req)) return false
+  const len = declaredLength(req)
+  return len !== null && len > small
+}
+
+/**
+ * An anonymous body whose size is not declared (chunked transfer, a missing or malformed
+ * Content-Length) is counted while it streams and cut off past the ceiling.
+ */
+export function needsStreamingCap(req: CredReq & { method?: string }, small: number): boolean {
+  if (hasCredential(req)) return false
+  const m = String(req.method ?? '').toUpperCase()
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return false
+  const len = declaredLength(req)
+  return len === null || len > small
+}
+
+export class BodyTooLargeError extends Error {
+  statusCode = 413
+  code = 'FST_ERR_CTP_BODY_TOO_LARGE'
+  constructor() {
+    super('Sign in to send a request this large.')
+    this.name = 'BodyTooLargeError'
+  }
+}
+
+/** A pass-through stream that errors with 413 once more than `limit` bytes went by. */
+export function capStream(limit: number): Transform {
+  let seen = 0
+  return new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      seen += chunk.length
+      if (seen > limit) cb(new BodyTooLargeError())
+      else cb(null, chunk)
+    }
+  })
 }

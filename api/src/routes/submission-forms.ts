@@ -8,7 +8,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
-import type { User } from '../types.js'
+import type { CMSField, CMSRelation, User } from '../types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +56,63 @@ function formatForm(row: Record<string, unknown>) {
     is_active: !!row.is_active,
     password_hash: undefined // never expose hashes
   }
+}
+
+const AUDIT_SPECIALS = ['user-created', 'date-created', 'user-updated', 'date-updated']
+const ALIAS_SPECIALS = ['alias', 'o2m', 'm2m', 'm2a', 'files', 'translations', 'no-data']
+
+/**
+ * What an anonymous public submission may write (security audit 2026-10-27).
+ *
+ * The record is created as the form's creator — usually an administrator, for whom the items
+ * service skips its server-set-field pass and accepts nested relation writes. So the payload
+ * is cut down here, before it gets there:
+ *   - only top-level fields the form lists (layout field set or flat list), own keys only;
+ *   - only plain values: string, number, boolean or null — an object or array is refused;
+ *   - never an alias / O2M / M2M / M2A / files / translations field (by relation and by
+ *     type), never the primary key, an audit stamp, a read-only or a computed field;
+ *   - an M2O id stays (a scalar) because the form listed that field explicitly.
+ */
+export function sanitizeSubmission(
+  collection: string,
+  allowedFields: string[],
+  submitted: unknown,
+  fields: CMSField[],
+  relations: CMSRelation[]
+): { data: Record<string, unknown> } | { error: string } {
+  if (submitted == null) return { data: {} }
+  if (typeof submitted !== 'object' || Array.isArray(submitted)) {
+    return { error: 'The submission must be an object of field values.' }
+  }
+  const input = submitted as Record<string, unknown>
+  const byName = new Map(fields.map((f) => [f.field, f]))
+  const out: Record<string, unknown> = {}
+  for (const name of new Set(allowedFields)) {
+    if (typeof name !== 'string' || name.includes('.') || !Object.hasOwn(input, name)) continue
+    const f = byName.get(name)
+    if (!f) continue // not a field of this collection
+    const special = f.special ?? []
+    const isAlias =
+      f.type === 'alias' ||
+      special.some((x) => ALIAS_SPECIALS.includes(x)) ||
+      relations.some(
+        (r) =>
+          (r.one_collection === collection && r.one_field === name) ||
+          (r.many_collection === collection && r.many_field === name && !r.one_collection)
+      )
+    const serverSet =
+      name === 'id' ||
+      special.some((x) => AUDIT_SPECIALS.includes(x)) ||
+      f.readonly === true ||
+      f.computed_type != null
+    if (isAlias || serverSet) continue
+    const v = input[name]
+    if (v !== null && !['string', 'number', 'boolean'].includes(typeof v)) {
+      return { error: `"${name}" must be a single value.` }
+    }
+    out[name] = v
+  }
+  return { data: out }
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -327,7 +384,7 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
   // POST /public/:token — submit the form
   app.post<{ Params: { token: string } }>('/public/:token', async (req, reply) => {
     const { token } = req.params
-    const body = req.body as { data?: Record<string, unknown>; password?: string }
+    const body = (req.body ?? {}) as { data?: unknown; password?: string }
 
     const form = await db('nivaro_submission_forms').where({ token }).first()
 
@@ -384,13 +441,23 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       const layout = await loadFormLayout(Number(form.layout_id), form.collection as string)
       if (layout) allowedFields = layout.field_paths
     }
-    const submittedData = body.data ?? {}
-    const filteredData: Record<string, unknown> = {}
-    for (const field of allowedFields) {
-      if (field in submittedData) {
-        filteredData[field] = submittedData[field]
-      }
-    }
+    // Only plain values for the form's own scalar columns reach the items service — see
+    // sanitizeSubmission (nested relation writes, alias fields and server-set fields are
+    // never reachable from an anonymous POST, whoever created the form).
+    const { getFields, getRelations } = await import('../services/collections.js')
+    const [colFields, colRelations] = await Promise.all([
+      getFields(form.collection as string),
+      getRelations(form.collection as string)
+    ])
+    const clean = sanitizeSubmission(
+      form.collection as string,
+      allowedFields,
+      body.data,
+      colFields,
+      colRelations
+    )
+    if ('error' in clean) return reply.code(400).send({ error: clean.error })
+    const filteredData = clean.data
 
     // The record is created through the items service AS THE FORM'S CREATOR (the admin who
     // published it — the same "creator configured it" rule as dashboard links and widget

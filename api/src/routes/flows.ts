@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { HookAction } from '../hooks/registry.js'
 import { hooks } from '../hooks/registry.js'
+import { registerRawCapturingParser } from '../lib/json-body.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { executeFlow } from '../services/flow-executor.js'
@@ -458,6 +459,9 @@ export async function fireSystemEvent(
 // ─── Inbound webhook route (public — no requireAdmin) ─────────────────────────
 
 export async function webhookFlowRoute(app: FastifyInstance) {
+  // Signatures are checked over the exact bytes received: inside this plugin every content
+  // type is read as text and kept on req.rawBody (JSON is still parsed, prototype-safe).
+  registerRawCapturingParser(app)
   app.post<{ Params: { flowId: string } }>('/webhook/:flowId', async (req, reply) => {
     const { flowId } = req.params
     const flow = await db<Flow>('nivaro_flows')
@@ -497,6 +501,10 @@ export async function webhookFlowRoute(app: FastifyInstance) {
           return reply.code(401).send({ error: 'Unauthorized' })
         }
       } else if (opts.auth_type === 'hmac-sha256') {
+        // A body that arrived without its raw bytes cannot be checked — never sign-check ''.
+        if (req.body !== undefined && typeof req.rawBody !== 'string') {
+          return reply.code(401).send({ error: 'Invalid signature' })
+        }
         const verdict = verifyWebhookSignature({
           secret: opts.secret,
           rawBody: req.rawBody ?? '',

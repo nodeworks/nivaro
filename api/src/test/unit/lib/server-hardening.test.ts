@@ -2,13 +2,16 @@ import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import {
   anonymousBodyTooLarge,
+  capStream,
   defaultBodyLimit,
   isLargeBodyRoute,
   largeBodyLimit,
+  needsStreamingCap,
   routeBodyLimit
 } from '../../../lib/body-limits.js'
-import { registerJsonBodyParser, wantsRawBody } from '../../../lib/json-body.js'
+import { registerJsonBodyParser, registerRawCapturingParser } from '../../../lib/json-body.js'
 import { applySecurityHeaders, BASE_CSP, HSTS } from '../../../lib/security-headers.js'
+import { isSourceMapPath } from '../../../lib/source-maps.js'
 import { parseTrustProxy } from '../../../lib/trust-proxy.js'
 
 // Security audit 2026-10-27, cluster D: M14 (TRUST_PROXY), M20 (body limits),
@@ -106,6 +109,44 @@ describe('body limits (M20)', () => {
     await app.close()
   })
 
+  it('caps an anonymous body of unknown size while it streams', async () => {
+    const small = 1024
+    expect(needsStreamingCap({ method: 'POST', headers: {} }, small)).toBe(true)
+    expect(needsStreamingCap({ method: 'POST', headers: { 'content-length': 'abc' } }, small)).toBe(
+      true
+    )
+    expect(needsStreamingCap({ method: 'POST', headers: { 'content-length': '10' } }, small)).toBe(
+      false
+    )
+    expect(
+      needsStreamingCap({ method: 'POST', headers: { authorization: 'Bearer x' } }, small)
+    ).toBe(false)
+    expect(needsStreamingCap({ method: 'GET', headers: {} }, small)).toBe(false)
+
+    const app = Fastify({ bodyLimit: 64 * 1024 })
+    registerJsonBodyParser(app)
+    app.addHook('preParsing', async (req, _reply, payload) => {
+      if (!needsStreamingCap(req, small)) return payload
+      const capped = capStream(small)
+      const { pipeline } = await import('node:stream')
+      pipeline(payload, capped, () => {})
+      return capped
+    })
+    app.post('/x', async () => ({ ok: true }))
+    await app.ready()
+    const { Readable } = await import('node:stream')
+    const chunked = (bytes: number) =>
+      app.inject({
+        method: 'POST',
+        url: '/x',
+        headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' },
+        payload: Readable.from([JSON.stringify({ v: 'x'.repeat(bytes) })])
+      })
+    expect((await chunked(4000)).statusCode).toBe(413)
+    expect((await chunked(100)).statusCode).toBe(200)
+    await app.close()
+  })
+
   it('refuses a large body without a credential before it is read', () => {
     const small = 1024 * 1024
     const big = { 'content-length': String(small + 1) }
@@ -115,6 +156,50 @@ describe('body limits (M20)', () => {
     )
     expect(anonymousBodyTooLarge({ headers: big, session: { userId: 'U1' } }, small)).toBe(false)
     expect(anonymousBodyTooLarge({ headers: { 'content-length': '10' } }, small)).toBe(false)
+  })
+})
+
+describe('source map guard', () => {
+  it('sees through encoding, case and trailing junk', () => {
+    for (const p of [
+      '/assets/index-abc.js.map',
+      '/assets/index-abc.js%2Emap',
+      '/assets/index-abc.js%252Emap',
+      '/assets/INDEX.JS.MAP',
+      '/assets/index.js.map%00',
+      '/assets/index.js.map.',
+      '/assets/index.js.map?x=1',
+      '/assets/index.js%2emap/'
+    ]) {
+      expect(isSourceMapPath(p), p).toBe(true)
+    }
+    expect(isSourceMapPath('/assets/index-abc.js')).toBe(false)
+    expect(isSourceMapPath('/sitemap')).toBe(false)
+    expect(isSourceMapPath('/assets/%E0%A4%A')).toBe(false)
+  })
+
+  it('@fastify/static allowedPath refuses maps by any spelling', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = mkdtempSync(join(tmpdir(), 'nvr-maps-'))
+    writeFileSync(join(root, 'a.js'), 'x')
+    writeFileSync(join(root, 'a.js.map'), '{"sources":[]}')
+    const fastifyStatic = (await import('@fastify/static')).default
+    const app = Fastify()
+    await app.register(fastifyStatic, {
+      root,
+      prefix: '/',
+      allowedPath: (pathName) => !isSourceMapPath(pathName)
+    })
+    await app.ready()
+    expect((await app.inject({ url: '/a.js' })).statusCode).toBe(200)
+    for (const url of ['/a.js.map', '/a.js%2Emap', '/a.js%2emap']) {
+      const res = await app.inject({ url })
+      expect(res.statusCode, url).toBe(404)
+      expect(res.body).not.toContain('sources')
+    }
+    await app.close()
   })
 })
 
@@ -213,25 +298,41 @@ describe('JSON body parser', () => {
     await app.close()
   })
 
-  it('keeps the raw text only for signed webhook paths', async () => {
-    expect(wantsRawBody('/api/flows/webhook/abc?x=1')).toBe(true)
-    expect(wantsRawBody('/api/items/x')).toBe(false)
+  it('the global parser keeps no raw text', async () => {
     const app = await echo()
-    const payload = '{ "b": 2,  "a": 1 }'
-    const hook = await app.inject({
+    const res = await app.inject({
       method: 'POST',
       url: '/api/flows/webhook/f1',
       headers: { 'content-type': 'application/json' },
-      payload
+      payload: '{"a":1}'
     })
-    expect(hook.json().raw).toBe(payload)
-    const other = await app.inject({
+    expect(res.json().raw).toBeNull()
+    await app.close()
+  })
+
+  it('the raw-capturing parser keeps the exact text for every content type', async () => {
+    const app = Fastify()
+    registerJsonBodyParser(app)
+    await app.register(async (f) => {
+      registerRawCapturingParser(f)
+      f.post('/hook', async (req) => ({ body: req.body ?? null, raw: req.rawBody ?? null }))
+    })
+    await app.ready()
+    const json = '{ "b": 2,  "a": 1 }'
+    const a = await app.inject({
       method: 'POST',
-      url: '/api/items/x',
-      headers: { 'content-type': 'application/json' },
-      payload
+      url: '/hook',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      payload: json
     })
-    expect(other.json().raw).toBeNull()
+    expect(a.json()).toEqual({ body: { b: 2, a: 1 }, raw: json })
+    const b = await app.inject({
+      method: 'POST',
+      url: '/hook',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'a=1&b=2'
+    })
+    expect(b.json()).toEqual({ body: 'a=1&b=2', raw: 'a=1&b=2' })
     await app.close()
   })
 })
