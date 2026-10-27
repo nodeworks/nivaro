@@ -188,17 +188,65 @@ export async function issueTokens(
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_S }
 }
 
-/** Rotate: the refresh token is spent; the caller issues a new pair. */
-export async function consumeRefresh(redis: Redis, refresh: string): Promise<TokenRecord | null> {
-  const raw = await redis.getdel(`${P}rt:${hashToken(refresh)}`)
-  if (!raw) return null
+/** A rotated refresh token presented again inside this window is refused but forgiven (a client
+ *  retrying a refresh whose answer it lost); after it, a replay ends the whole connection. */
+export const REFRESH_REUSE_GRACE_S = 30
+
+const spentKey = (hash: string) => `${P}rt-spent:${hash}`
+
+export type ConsumeRefreshResult =
+  | { ok: true; rec: TokenRecord }
+  | { ok: false; reason: 'unknown' | 'reused' | 'revoked' }
+
+/**
+ * Rotate: the refresh token is spent; the caller issues a new pair. A spent token stays
+ * remembered (by hash) for its lifetime, so a REPLAY is detected (security audit M18, OAuth
+ * 2.1 refresh-token reuse): a stolen token used after the real client rotated it — or the real
+ * client after the thief did — revokes the grant, ending every token of that connection.
+ */
+export async function consumeRefreshChecked(
+  redis: Redis,
+  refresh: string
+): Promise<ConsumeRefreshResult> {
+  const h = hashToken(refresh)
+  const raw = await redis.getdel(`${P}rt:${h}`)
+  if (!raw) {
+    const spent = await read<{ grant_id: string; user_id: string; at: number; t: string }>(
+      redis,
+      spentKey(h)
+    )
+    if (!spent || !sameTenant(spent)) return { ok: false, reason: 'unknown' }
+    if (Date.now() - spent.at > REFRESH_REUSE_GRACE_S * 1000) {
+      await revokeGrant(redis, spent.user_id, spent.grant_id).catch(() => false)
+      return { ok: false, reason: 'reused' }
+    }
+    return { ok: false, reason: 'unknown' }
+  }
   try {
     const rec = JSON.parse(raw) as TokenRecord
-    if (!sameTenant(rec)) return null
-    return (await redis.exists(`${P}grant:${rec.grant_id}`)) ? rec : null
+    if (!sameTenant(rec)) return { ok: false, reason: 'unknown' }
+    await redis.setex(
+      spentKey(h),
+      REFRESH_TTL_S,
+      JSON.stringify({
+        grant_id: rec.grant_id,
+        user_id: rec.user_id,
+        at: Date.now(),
+        t: currentTenantKey()
+      })
+    )
+    return (await redis.exists(`${P}grant:${rec.grant_id}`))
+      ? { ok: true, rec }
+      : { ok: false, reason: 'revoked' }
   } catch {
-    return null
+    return { ok: false, reason: 'unknown' }
   }
+}
+
+/** Rotate (the record, or null when the token cannot be used — see consumeRefreshChecked). */
+export async function consumeRefresh(redis: Redis, refresh: string): Promise<TokenRecord | null> {
+  const out = await consumeRefreshChecked(redis, refresh)
+  return out.ok ? out.rec : null
 }
 
 /** The scope a grant carries now (the base scope for a grant stored before scopes). */

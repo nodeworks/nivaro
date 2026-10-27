@@ -828,6 +828,9 @@ async function onlineUserIds(ids: string[]): Promise<Set<string>> {
   return new Set(rows.map((r) => String(r.user_id).toUpperCase()))
 }
 
+/** How long a push notification's Reply token works (security audit Low: was 3 days, reusable). */
+export const REPLY_TOKEN_TTL_S = 24 * 3600
+
 /** One-time token a push notification's inline Reply posts with (#956). */
 export async function mintReplyToken(
   app: FastifyInstance,
@@ -838,7 +841,12 @@ export async function mintReplyToken(
   if (!redis) return null
   const token = randomUUID()
   try {
-    await redis.set(`nvr:chatreply:${token}`, JSON.stringify({ user, room }), 'EX', 3 * 24 * 3600)
+    await redis.set(
+      `nvr:chatreply:${token}`,
+      JSON.stringify({ user, room }),
+      'EX',
+      REPLY_TOKEN_TTL_S
+    )
     return token
   } catch {
     return null
@@ -851,14 +859,15 @@ export async function redeemReplyToken(
 ): Promise<{ user: string; room: string } | null> {
   const redis = (
     app as unknown as {
-      redis?: { get: (k: string) => Promise<string | null>; del: (k: string) => Promise<unknown> }
+      redis?: { getdel: (k: string) => Promise<string | null> }
     }
   ).redis
   if (!redis || !/^[0-9a-f-]{36}$/i.test(token)) return null
   try {
-    const raw = await redis.get(`nvr:chatreply:${token}`)
+    // One reply per notification: the token is spent as it is read (a copied or intercepted
+    // notification payload cannot post again as its recipient).
+    const raw = await redis.getdel(`nvr:chatreply:${token}`)
     if (!raw) return null
-    // Usable for a burst of replies from the same notification, not forever.
     return JSON.parse(raw) as { user: string; room: string }
   } catch {
     return null

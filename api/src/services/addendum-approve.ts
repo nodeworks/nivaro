@@ -519,23 +519,23 @@ async function regenerateParentPdf(
     let headers: Record<string, string> | null =
       authHeaders && (authHeaders.authorization || authHeaders.cookie) ? { ...authHeaders } : null
     if (!headers) {
-      // Pipeline-driven approvals carry no request: try the approver's own
-      // static token, then any admin integration token.
+      // Pipeline-driven approvals carry no request: the PDF is made as the approver, with
+      // their own active account's static token. Never another person's — borrowing some
+      // administrator's token made the render (and its activity rows) act as that admin
+      // with their full access (security audit Low). No token = no automatic PDF this time.
       const tokenRow = approverUserId
         ? ((await db('nivaro_users')
-            .where({ id: approverUserId })
+            .where({ id: approverUserId, status: 'active' })
             .whereNotNull('static_token')
             .first('static_token')) as { static_token: string } | undefined)
         : undefined
-      const fallback =
-        tokenRow ??
-        ((await db('nivaro_users as u')
-          .join('nivaro_roles as r', 'u.role', 'r.id')
-          .where('r.admin_access', true)
-          .whereNotNull('u.static_token')
-          .first('u.static_token')) as { static_token: string } | undefined)
-      if (!fallback?.static_token) return
-      headers = { authorization: `Bearer ${fallback.static_token}` }
+      if (!tokenRow?.static_token) {
+        console.info(
+          `[addendum-approve] auto-PDF skipped for ${collection}/${itemId}: no request and the approver has no API token`
+        )
+        return
+      }
+      headers = { authorization: `Bearer ${tokenRow.static_token}` }
     }
 
     await app.inject({
