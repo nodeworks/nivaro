@@ -7,6 +7,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
+import { normalizeStoredType } from './file-serving-safety.js'
 import { PRIVATE_TAG } from './private-files.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
@@ -72,10 +73,12 @@ export async function uploadFileBuffer(
   user: User,
   buffer: Buffer,
   filename: string,
-  mimeType: string,
+  claimedType: string,
   folderId?: string,
   opts: { private?: boolean } = {}
 ): Promise<StoredFile> {
+  // One bare media type, never a list or header text (H1 follow-up).
+  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
@@ -125,9 +128,11 @@ export async function uploadFileFromPath(
   user: User,
   path: string,
   filename: string,
-  mimeType: string,
+  claimedType: string,
   folderId?: string
 ): Promise<StoredFile> {
+  // One bare media type, never a list or header text (H1 follow-up).
+  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
@@ -171,7 +176,7 @@ export async function uploadFile(
 ): Promise<StoredFile> {
   const buffer = await multipart.toBuffer()
   const filename = cleanDownloadName(multipart.filename)
-  const mimeType = multipart.mimetype || mime.lookup(filename) || 'application/octet-stream'
+  const mimeType = normalizeStoredType(multipart.mimetype || null, () => mime.lookup(filename))
   assertUploadContent(buffer, filename, mimeType)
   return uploadFileBuffer(user, buffer, filename, mimeType, folderId)
 }
@@ -256,7 +261,7 @@ export async function createPresignedFile(
 
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
-  const mimeType = opts.type || mime.lookup(opts.filename) || 'application/octet-stream'
+  const mimeType = normalizeStoredType(opts.type || null, () => mime.lookup(opts.filename))
   const ext =
     extname(opts.filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
   const diskName = buildDiskName(diskId, ext)
@@ -483,9 +488,11 @@ export async function replaceFileContent(
   id: string,
   buffer: Buffer,
   filename: string,
-  mimeType: string,
+  claimedType: string,
   userId?: string
 ): Promise<StoredFile | undefined> {
+  // One bare media type, never a list or header text (H1 follow-up).
+  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
   const existing = await getFile(id)
   if (!existing) return undefined
   const diskId = ulid().toLowerCase()

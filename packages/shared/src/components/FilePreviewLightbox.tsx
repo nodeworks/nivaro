@@ -4,8 +4,10 @@ import { createPortal } from 'react-dom'
 
 /**
  * Inline attachment preview — click a file, see it, without a download round
- * trip. Images, PDFs, video and audio render in an overlay; anything else
- * gets an honest "no preview" panel with the Download action front and center.
+ * trip. Images (SVG too, drawn by an img tag, which runs no script), PDFs,
+ * video, audio and plain text render in an overlay; anything else (HTML, XML,
+ * Office files…) gets an honest "no preview" panel with the Download action
+ * front and center. Plain text loads in a fully sandboxed iframe.
  *
  * Plain portal to document.body at z-[130] (above popovers at 110 and the
  * tooltip layer at 120). The asset URL is the same cookie/session-authed
@@ -20,14 +22,38 @@ export interface PreviewFile {
   size?: number | null
 }
 
+/** Text the server serves inline (as text/plain). HTML, XML and other markup
+ *  are always downloads (the server sends them as attachments), so they get
+ *  the "no preview" panel instead of an iframe that would only download. */
+const PLAIN_TEXT = new Set([
+  'text/plain',
+  'text/csv',
+  'text/tab-separated-values',
+  'text/markdown',
+  'text/x-markdown',
+  'text/x-log'
+])
+
+function essence(type: string | null | undefined): string {
+  return String(type ?? '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase()
+}
+
+function isPlainText(type: string | null | undefined): boolean {
+  return PLAIN_TEXT.has(essence(type))
+}
+
 export function canPreviewFile(type: string | null | undefined): boolean {
   if (!type) return false
+  const t = essence(type)
   return (
-    type.startsWith('image/') ||
-    type === 'application/pdf' ||
-    type.startsWith('video/') ||
-    type.startsWith('audio/') ||
-    type.startsWith('text/')
+    t.startsWith('image/') ||
+    t === 'application/pdf' ||
+    t.startsWith('video/') ||
+    t.startsWith('audio/') ||
+    isPlainText(t)
   )
 }
 
@@ -38,13 +64,7 @@ function fmtBytes(n: number | null | undefined): string | null {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function FilePreviewLightbox({
-  file,
-  onClose
-}: {
-  file: PreviewFile
-  onClose: () => void
-}) {
+export function FilePreviewLightbox({ file, onClose }: { file: PreviewFile; onClose: () => void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -68,11 +88,22 @@ export function FilePreviewLightbox({
         className='max-h-[82vh] max-w-full rounded object-contain'
       />
     )
-  } else if (type === 'application/pdf' || type.startsWith('text/')) {
+  } else if (essence(type) === 'application/pdf') {
+    // Not sandboxed: Chrome refuses to open a PDF inside a sandboxed iframe.
+    // The server sends PDFs with a sandboxing CSP and nosniff.
     body = (
       <iframe
         src={file.url}
         title={file.name}
+        className='h-[82vh] w-[min(920px,92vw)] rounded border-0 bg-white'
+      />
+    )
+  } else if (isPlainText(type)) {
+    body = (
+      <iframe
+        src={file.url}
+        title={file.name}
+        sandbox=''
         className='h-[82vh] w-[min(920px,92vw)] rounded border-0 bg-white'
       />
     )

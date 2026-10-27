@@ -157,6 +157,10 @@ function FormMapPanel({
             ref={frame}
             title='Form map preview'
             srcDoc={html}
+            // No scripts ever run in the map (it holds field labels and rule
+            // text). allow-same-origin lets Print reach contentWindow.print();
+            // allow-modals lets that print dialog open. Checked in Chrome.
+            sandbox='allow-same-origin allow-modals'
             data-form-map-frame=''
             className='mx-auto block h-full w-full max-w-[900px] rounded-md border border-slate-300 bg-white shadow-lg dark:border-border'
           />

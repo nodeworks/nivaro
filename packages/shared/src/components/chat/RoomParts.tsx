@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
+import { safeLinkKind } from '../../lib/safe-href'
 import { cn, formatFileSize, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -184,25 +185,27 @@ export function ChannelIntro({
       </div>
       {!!links?.length && (
         <div className='mt-1 flex flex-wrap gap-1.5'>
-          {links.map((l) => (
-            <a
-              key={l.url}
-              href={l.url}
-              target={l.url.startsWith('/') ? undefined : '_blank'}
-              rel='noopener noreferrer'
-              onClick={(e) => {
-                if (l.url.startsWith('/') && navigate) {
-                  e.preventDefault()
-                  navigate(l.url)
-                }
-              }}
-              className='inline-flex max-w-[200px] items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-200'
-              data-chat-channel-link
-            >
-              <Link2 className='h-3 w-3 shrink-0 opacity-60' />
-              <span className='truncate'>{l.label}</span>
-            </a>
-          ))}
+          {links
+            .filter((l) => safeLinkKind(l.url) !== null)
+            .map((l) => (
+              <a
+                key={l.url}
+                href={l.url}
+                target={safeLinkKind(l.url) === 'internal' ? undefined : '_blank'}
+                rel='noopener noreferrer'
+                onClick={(e) => {
+                  if (safeLinkKind(l.url) === 'internal' && navigate) {
+                    e.preventDefault()
+                    navigate(l.url)
+                  }
+                }}
+                className='inline-flex max-w-[200px] items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-200'
+                data-chat-channel-link
+              >
+                <Link2 className='h-3 w-3 shrink-0 opacity-60' />
+                <span className='truncate'>{l.label}</span>
+              </a>
+            ))}
         </div>
       )}
     </div>

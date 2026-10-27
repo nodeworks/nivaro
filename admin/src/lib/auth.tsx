@@ -59,11 +59,44 @@ export function useAuth() {
   return useContext(AuthContext)
 }
 
+/** IndexedDB database + localStorage prefix of the record-form draft store
+ *  (packages/shared lib/draft-store.ts) — keep in step with it. */
+const DRAFTS_DB = 'nivaro-drafts'
+const DRAFT_CREATED_PREFIX = 'nvr:draft-created:'
+
+/** Unsaved record-form drafts hold record values typed by the person signing
+ *  out; on a shared machine the next person must not find them. Never blocks
+ *  sign-out for long (another open tab can hold the database). */
+export function clearLocalDrafts(timeoutMs = 1500): Promise<void> {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(DRAFT_CREATED_PREFIX)) localStorage.removeItem(k)
+    }
+  } catch {
+    /* storage blocked */
+  }
+  const wipe = new Promise<void>((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined') return resolve()
+      const req = indexedDB.deleteDatabase(DRAFTS_DB)
+      req.onsuccess = () => resolve()
+      req.onerror = () => resolve()
+      // Another tab still has it open: the delete completes when it closes.
+      req.onblocked = () => resolve()
+    } catch {
+      resolve()
+    }
+  })
+  return Promise.race([wipe, new Promise<void>((r) => setTimeout(r, timeoutMs))])
+}
+
 export async function logout() {
   const redirect = window.location.pathname + window.location.search
   await api.post('/auth/logout')
   // Offline saves (#1678) belong to the person signing out — none survive it.
   await clearRecordOutbox()
   await wipeMetadataOnSignOut()
+  // Nor do unsaved form drafts (security audit 2026-10-27).
+  await clearLocalDrafts()
   window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
 }

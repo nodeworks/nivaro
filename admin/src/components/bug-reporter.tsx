@@ -16,6 +16,7 @@ import {
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { maskScreenshotClone, redactConsoleLine } from '@/lib/bug-report-redact'
 import { cn } from '@/lib/utils'
 
 /**
@@ -38,8 +39,8 @@ function patch(kind: 'error' | 'warn') {
           typeof a === 'string' ? a : a instanceof Error ? a.message : JSON.stringify(a)
         )
         .join(' ')
-        .slice(0, 300)
-      consoleTail.push(`[${kind}] ${line}`)
+      // Redacted before it is kept (tokens, tickets, signed URLs), then capped.
+      consoleTail.push(`[${kind}] ${redactConsoleLine(line).slice(0, 300)}`)
       if (consoleTail.length > MAX_TAIL) consoleTail.shift()
     } catch {
       /* never break console */
@@ -58,7 +59,10 @@ async function captureScreenshot(): Promise<string | null> {
     const canvas = await html2canvas(document.body, {
       logging: false,
       scale: Math.min(1, 1280 / window.innerWidth),
-      ignoreElements: (el) => el.hasAttribute('data-bug-reporter')
+      ignoreElements: (el) => el.hasAttribute('data-bug-reporter'),
+      // Password/secret inputs and never-record regions are blanked in the
+      // clone html2canvas draws; the live page is untouched.
+      onclone: (doc) => maskScreenshotClone(doc)
     })
     return canvas.toDataURL('image/jpeg', 0.7)
   } catch (err) {

@@ -9,7 +9,9 @@
  *
  * The token arrives in the URL fragment (`#masq=…`) — a fragment never
  * reaches a server or an access log — and is removed from the address bar
- * the moment it is read.
+ * the moment it is read. It is adopted only in a tab this app opened
+ * (same-origin window.opener); a pasted or clicked link opens as the cookie
+ * session.
  *
  * This file has NO imports: lib/masquerade-boot.ts runs it before any other module (an SDK
  * client keeps the fetch it was created with, and modules create theirs at import time).
@@ -56,6 +58,23 @@ function adoptOpenerMasquerade(): void {
   }
 }
 
+/**
+ * Whether this tab was opened by this app (openViewAsTab's window.open from a
+ * same-origin page). A `#masq=` link that arrives any other way — pasted,
+ * clicked in an email, another site, an in-app link (browsers give
+ * target=_blank links no opener) — is refused: otherwise anyone holding a
+ * View-as token could make a victim's tab act as that identity
+ * (security audit 2026-10-27).
+ */
+export function openedByThisApp(): boolean {
+  try {
+    const opener = window.opener as Window | null
+    return !!opener && opener !== window && opener.location.origin === window.location.origin
+  } catch {
+    return false // cross-origin opener
+  }
+}
+
 /** Run once at boot, before anything fetches. */
 export function captureMasqueradeFromHash(): void {
   if (typeof window === 'undefined') return
@@ -64,7 +83,7 @@ export function captureMasqueradeFromHash(): void {
   if (!hash.includes('masq=')) return
   const params = new URLSearchParams(hash)
   const token = params.get('masq')
-  if (token?.startsWith('nvm_')) {
+  if (token?.startsWith('nvm_') && openedByThisApp()) {
     try {
       sessionStorage.setItem(
         KEY,

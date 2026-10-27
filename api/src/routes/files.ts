@@ -12,6 +12,7 @@ import {
   mayReadFile,
   readableFileIdList
 } from '../services/file-access.js'
+import { STORED_FILE_SECURITY_HEADERS, storedFileServing } from '../services/file-serving-safety.js'
 import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
 import { fileUsageForReader } from '../services/file-usage-visible.js'
 import {
@@ -456,8 +457,14 @@ export async function filesRoutes(app: FastifyInstance) {
     }
     try {
       const buffer = await getStorage().get(storageKey)
-      const contentType = mime.lookup(storageKey) || 'application/octet-stream'
-      return reply.header('Content-Type', contentType).send(buffer)
+      // Inline only for types that run nothing; HTML/SVG/XML and unknown types
+      // download (H1), and the browser keeps the declared type (nosniff).
+      const serving = storedFileServing(mime.lookup(storageKey) || 'application/octet-stream')
+      return reply
+        .headers(STORED_FILE_SECURITY_HEADERS)
+        .header('Content-Type', serving.contentType)
+        .header('Content-Disposition', serving.mode)
+        .send(buffer)
     } catch {
       return reply.code(404).send({ error: 'Not found' })
     }
@@ -473,6 +480,7 @@ export async function filesRoutes(app: FastifyInstance) {
     if (!file.type?.startsWith('image/')) {
       return reply.code(400).send({ error: 'Transformations are only supported for images' })
     }
+    reply.headers(STORED_FILE_SECURITY_HEADERS)
 
     const width = q.w ? Math.min(Math.max(1, Number(q.w) || 0), MAX_DIMENSION) : undefined
     const height = q.h ? Math.min(Math.max(1, Number(q.h) || 0), MAX_DIMENSION) : undefined
@@ -524,16 +532,21 @@ export async function filesRoutes(app: FastifyInstance) {
     const q = req.query as { download?: string }
     const file = await servableFile(id, req)
     if (!file || !file.filename_disk) return reply.code(404).send({ error: 'Not found' })
-    const contentType =
-      file.type ?? (mime.lookup(file.filename_download) || 'application/octet-stream')
     // Report bandwidth usage to gateway (fire-and-forget)
     reportFileBandwidth(file).catch(() => {})
-    const mode = q.download === '1' || q.download === 'true' ? 'attachment' : 'inline'
+    const requested = q.download === '1' || q.download === 'true' ? 'attachment' : 'inline'
+    // The stored type is whatever the uploader's browser claimed: only types
+    // that run nothing are shown inline; HTML/SVG/XML and anything unknown
+    // download (H1). sendStoredObject adds nosniff + the sandboxing CSP.
+    const serving = storedFileServing(
+      file.type || mime.lookup(file.filename_download ?? '') || 'application/octet-stream',
+      requested
+    )
     try {
       return await sendStoredObject(reply, file.filename_disk, {
         rangeHeader: req.headers.range,
-        contentType,
-        disposition: contentDisposition(file.filename_download ?? 'file', mode)
+        contentType: serving.contentType,
+        disposition: contentDisposition(file.filename_download ?? 'file', serving.mode)
       })
     } catch {
       return reply.code(404).send({ error: 'Stored object not found' })
