@@ -105,6 +105,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Support Requests** — people raise requests about a record or for general help; administrators work them from a desk (pick up, reply, close) with request types, team routing and a full history
 - **Item Locking & Presence** — soft edit locks with heartbeat; live viewer indicators
 - **Notifications Center & SMS/Push Channels** — full inbox page; Twilio SMS delivery; Slack/Teams Adaptive Card actions with signed Approve/Reject buttons
+- **Teams Bot** — Microsoft Teams as a delivery channel and a place to ask: opt-in notification cards with Approve/Reject/transition/Acknowledge buttons, DM and channel questions answered with the asker's own access, people matched by Entra object id
 - **Global Search (Cmd+K)** — command palette across collections, pages, and actions
 - **Saved Views** — named filter/sort/column sets, private, shared, or role-scoped
 - **AI Import Mapping & Query Builder** — Claude-suggested CSV column mapping; natural-language → filter DSL

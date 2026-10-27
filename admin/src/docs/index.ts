@@ -132,6 +132,7 @@ import {
   collabItemLocking,
   collabKeyboardShortcuts,
   collabMessageActions,
+  collabTeamsBot,
   collabNotificationsCenter,
   collabSmsPush,
   collabSupportRequests,
@@ -884,6 +885,7 @@ export const navSections: NavGroup[] = [
       collabSmsPush,
       webPushDocs,
       collabMessageActions,
+      collabTeamsBot,
       helpVideosGuide,
       helpVideosApi,
       ideasDocs

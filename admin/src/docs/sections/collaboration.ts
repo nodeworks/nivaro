@@ -705,6 +705,113 @@ POST /api/message-actions/callback
   ]
 }
 
+export const collabTeamsBot: DocSection = {
+  id: 'teams-bot',
+  label: 'Teams Bot',
+  content: [
+    { type: 'h1', id: 'teams-bot', text: 'Teams Bot' },
+    {
+      type: 'p',
+      text: 'The Teams bot puts Nivaro inside Microsoft Teams. People get notifications as cards they can act on, ask questions in a chat or a channel, and run a few commands. Everything the bot does, it does as that person, with their own access: it never sees or changes more than they could in Nivaro itself.'
+    },
+    { type: 'h2', id: 'teams-bot-people', text: 'How people are matched' },
+    {
+      type: 'p',
+      text: 'Nivaro matches a Teams person to a Nivaro user by their Microsoft Entra object id, which Nivaro records the first time that person signs in with Microsoft. It never matches on email address or display name. Someone Nivaro cannot match gets a Connect link in the chat; the link asks them to sign in with the same Microsoft account Teams knows them by, and refuses a different one.'
+    },
+    { type: 'h2', id: 'teams-bot-notifications', text: 'Notifications' },
+    {
+      type: 'p',
+      text: 'Teams is a delivery channel like email or push, and it is opt-in per category: each person turns it on under Profile → Notification rules. Teams notifications follow quiet hours and Do not disturb. In the chat, "mute 1h" pauses them for an hour and "unmute" resumes them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Approve and Reject on an approval card. Reject asks for a reason first.',
+        'Up to three one-click transitions, only the ones the record offers in its list-row menu. A transition that needs the form shows "Open in Nivaro" instead.',
+        'Acknowledge on notifications that ask for it.',
+        'A card whose action was already decided (by anyone, in any app) refreshes to show the result instead of deciding twice.'
+      ]
+    },
+    { type: 'h2', id: 'teams-bot-ask', text: 'Asking questions' },
+    {
+      type: 'p',
+      text: 'Message the bot in a chat and it answers from Nivaro data using the asker\'s access. In a channel, mention the bot. A channel answer is posted in the thread only when the channel is a standard channel, every member is matched to a Nivaro user, and each of them may see the data in the answer. In any other case the bot replies "Sent you the answer privately" and the answer goes to a 1:1 chat with the asker. Shared and private channels always answer privately.'
+    },
+    { type: 'h2', id: 'teams-bot-commands', text: 'Commands' },
+    {
+      type: 'table',
+      head: ['Command', 'What it does'],
+      rows: [
+        ['help', 'Lists the commands. Anything that is not a command is treated as a question.'],
+        ['my work', 'Link to My Work in Nivaro.'],
+        ['mute 1h / unmute', 'Pause or resume Teams notifications.'],
+        ['link', 'Confirms this Teams account is connected.'],
+        ['unlink', 'Disconnects this Teams account from Nivaro.'],
+        ['settings', 'Choose which notifications reach Teams (Profile → Notification rules).']
+      ]
+    },
+    { type: 'h2', id: 'teams-bot-setup', text: 'Setup' },
+    {
+      type: 'p',
+      text: 'The bot is never on by itself. An administrator configures it under Settings → Microsoft → Teams bot and switches it on. It is off in Nivaro Cloud.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Register the bot application in Microsoft Entra (a Teams bot with a client secret) and note the application id, the secret and your tenant id.',
+        'Create an Azure Bot resource for that application. Set its messaging endpoint to https://<your public host>/api/teams/messages and turn on the Teams channel.',
+        'Make sure a public HTTPS path reaches that one URL. Microsoft calls it from the internet; the rest of Nivaro does not need to be exposed.',
+        'In Settings → Microsoft → Teams bot, enter the application id, secret (masked once saved), tenant id and app type (MultiTenant or SingleTenant), then switch the bot on. Use Send test to check it.',
+        'Choose Download Teams app package and have a Teams administrator publish it to the organisation.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The same settings can come from the environment, which wins over the saved values:'
+    },
+    {
+      type: 'table',
+      head: ['Variable', 'Meaning', 'Alias'],
+      rows: [
+        ['TEAMS_BOT_APP_ID', 'Bot application id', 'MICROSOFT_APP_ID'],
+        ['TEAMS_BOT_APP_SECRET', 'Bot client secret (a _FILE variant works)', 'MICROSOFT_APP_PASSWORD'],
+        ['TEAMS_BOT_TENANT_ID', 'Your Entra tenant id', 'MICROSOFT_APP_TENANT_ID'],
+        ['TEAMS_BOT_APP_TYPE', 'MultiTenant or SingleTenant', 'MICROSOFT_APP_TYPE'],
+        ['TEAMS_BOT', 'off disables the bot whatever is saved', '']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'When nothing else is set, the bot falls back to the Microsoft sign-in application (as SingleTenant). It still stays off until an administrator switches it on. A MultiTenant bot gets its tokens from botframework.com; inbound messages must still carry the configured tenant id, or they are refused.'
+    },
+    { type: 'h2', id: 'teams-bot-endpoints', text: 'Endpoints' },
+    {
+      type: 'table',
+      head: ['Endpoint', 'Who', 'Purpose'],
+      rows: [
+        ['POST /api/teams/messages', 'Microsoft', 'Bot messages and card actions. Accepts only Microsoft-signed tokens and only the Teams channel.'],
+        ['GET /api/teams/connect', 'Person', 'The Connect link target; requires the same Microsoft account.'],
+        ['GET /api/teams/status', 'Admin', 'Configuration source, health and link counts.'],
+        ['GET /api/teams/package', 'Admin', 'Downloads the Teams app package.'],
+        ['POST /api/teams/test', 'Admin', 'Sends a test card to the caller.'],
+        ['DELETE /api/teams/link', 'Person', 'Disconnects the caller\'s own Teams link.']
+      ]
+    },
+    { type: 'h2', id: 'teams-bot-troubleshooting', text: 'Troubleshooting' },
+    {
+      type: 'ul',
+      items: [
+        'The bot answers "connect your account": the person has never signed in to Nivaro with Microsoft, or used a different Microsoft account. Have them open the Connect link with the account Teams shows.',
+        'No card arrives: check Profile → Notification rules for the category, quiet hours, and a mute (type "unmute").',
+        'A channel answer arrives privately: someone in the channel is not matched to a Nivaro user, may not see the data, or the channel is shared or private. This is by design.',
+        'Messages are refused: the messaging endpoint, app type or tenant id does not match the Azure Bot registration. Settings → Microsoft → Teams bot shows which source is in use.',
+        'During a maintenance window, card buttons decline with a short notice and work again afterwards.'
+      ]
+    }
+  ]
+}
+
 export const collabChat: DocSection = {
   id: 'collab-chat',
   label: 'Chat & Channels',
