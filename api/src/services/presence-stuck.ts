@@ -9,7 +9,10 @@ import { db } from '../db/index.js'
  *   stuck   — input in the last five minutes, but the same route and nothing
  *             that changed anything (a save, a transition, any write request)
  *             for ten minutes: the person is at the keyboard and not getting
- *             anywhere — the moment someone could help.
+ *             anywhere — the moment someone could help. Only on a record page
+ *             or a new-record form: on a list, reading and filtering without
+ *             saving is the work. A new search or filter (a GET whose query
+ *             the page had not asked before) counts as progress too.
  *
  * Computed from what the server already has, no new state:
  *   route since   — the newest nivaro_admin_journeys row (page:at, admin AND
@@ -116,6 +119,115 @@ const ms = (v: unknown): number | null => {
   return Number.isFinite(t) ? t : null
 }
 
+/** A record page or a new-record form (`/records|collections/<collection>/<id|new>`). */
+export function isRecordPagePath(path: string | null | undefined): boolean {
+  if (!path) return false
+  return /^\/(?:records|collections)\/[A-Za-z0-9_]+\/[^/?#]+/.test(path)
+}
+
+/** How long after arriving a page's own reads count as loading it, not as a search. */
+export const SEARCH_SETTLE_MS = 60_000
+/** How far back the search read looks for what a page already asked. */
+const SEARCH_LOOKBACK_MS = 2 * 3_600_000
+
+/**
+ * The newest search or filter change among one person's reads (rows oldest
+ * first): a GET whose path + query was not asked before since they arrived.
+ * A page re-polling the same filter is not progress; the reads it makes while
+ * loading (the first minute of the window) are its baseline, not a change.
+ */
+export function lastSearchChange(
+  rows: ReadonlyArray<{ path: string; query: string | null; at: number }>,
+  windowStart: number
+): number | null {
+  const seen = new Set<string>()
+  let last: number | null = null
+  for (const r of rows) {
+    if (r.at < windowStart) continue
+    const key = `${r.path}?${r.query ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (r.at > windowStart + SEARCH_SETTLE_MS) last = r.at
+  }
+  return last
+}
+
+/** Upper-cased ids of the people whose current page (newest journey row) is a record page. */
+async function currentRecordPages(
+  ids: string[],
+  routeSince: Map<string, number | null>
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  const times = ids
+    .map((id) => routeSince.get(id.toUpperCase()))
+    .filter((t): t is number => t != null)
+  if (times.length === 0) return out
+  // Rows from the oldest newest-arrival on: for each person that is their newest row (and,
+  // for people who moved since, a few later ones — the newest per person wins below).
+  const rows = (await db('nivaro_admin_journeys')
+    .whereIn('user', ids)
+    .where('entered_at', '>=', new Date(Math.min(...times) - 1000))
+    .select('user', 'path', 'entered_at')) as Array<{
+    user: string
+    path: string
+    entered_at: unknown
+  }>
+  const newest = new Map<string, { at: number; path: string }>()
+  for (const r of rows) {
+    const key = String(r.user).toUpperCase()
+    const at = ms(r.entered_at) ?? 0
+    const cur = newest.get(key)
+    if (!cur || at >= cur.at) newest.set(key, { at, path: String(r.path ?? '') })
+  }
+  for (const [key, v] of newest) if (isRecordPagePath(v.path)) out.add(key)
+  return out
+}
+
+/** Upper-cased id → the newest search/filter change since they arrived on the page. */
+async function lastSearchChanges(
+  ids: string[],
+  routeSince: Map<string, number | null>,
+  now: number
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  try {
+    const start = (id: string) =>
+      Math.max(routeSince.get(id.toUpperCase()) ?? now, now - SEARCH_LOOKBACK_MS)
+    const from = Math.min(...ids.map(start))
+    const rows = (await db('nivaro_api_logs')
+      .whereIn('user', ids)
+      .where('created_at', '>=', new Date(from))
+      .where('method', 'GET')
+      .where('status', '<', 400)
+      .where(
+        (q) => void q.where('query', 'like', '%search=%').orWhere('query', 'like', '%filter=%')
+      )
+      .orderBy('created_at', 'asc')
+      .limit(5000)
+      .select('user', 'path', 'query', 'created_at')) as Array<{
+      user: string
+      path: string
+      query: string | null
+      created_at: unknown
+    }>
+    const byUser = new Map<string, Array<{ path: string; query: string | null; at: number }>>()
+    for (const r of rows) {
+      const key = String(r.user).toUpperCase()
+      const list = byUser.get(key) ?? []
+      list.push({ path: String(r.path ?? ''), query: r.query ?? null, at: ms(r.created_at) ?? 0 })
+      byUser.set(key, list)
+    }
+    for (const id of ids) {
+      const key = id.toUpperCase()
+      const at = lastSearchChange(byUser.get(key) ?? [], start(id))
+      if (at != null) out.set(key, at)
+    }
+  } catch {
+    /* no search signal — writes alone decide */
+  }
+  return out
+}
+
 /**
  * The stuck verdict for people already classified active/idle. Returns
  * upper-cased id → minutes stuck, for the stuck ones only. Never throws: a
@@ -145,8 +257,13 @@ export async function stuckMinutes(
       return t != null && now - t >= STUCK_AFTER_MS
     })
     if (candidates.length === 0) return out
+    // Only a record or form page can read as stuck: on a list, reading and
+    // filtering without saving is the work, not being blocked.
+    const recordPage = await currentRecordPages(candidates, routeSince)
+    const onRecord = candidates.filter((id) => recordPage.has(id.toUpperCase()))
+    if (onRecord.length === 0) return out
     const changeRows = (await db('nivaro_api_logs')
-      .whereIn('user', candidates)
+      .whereIn('user', onRecord)
       .where('created_at', '>', new Date(now - STUCK_AFTER_MS - 60_000))
       .whereIn('method', ['POST', 'PUT', 'PATCH', 'DELETE'])
       .where('status', '<', 400)
@@ -157,15 +274,16 @@ export async function stuckMinutes(
       .select('user')
       .max({ at: 'created_at' })) as Array<{ user: string; at: unknown }>
     const lastChange = new Map(changeRows.map((r) => [String(r.user).toUpperCase(), ms(r.at)]))
+    const lastSearch = await lastSearchChanges(onRecord, routeSince, now)
     for (const p of active) {
       const key = p.id.toUpperCase()
-      if (!candidates.some((c) => c.toUpperCase() === key)) continue
+      if (!onRecord.some((c) => c.toUpperCase() === key)) continue
       const v = classifyPresence({
         now,
         idle: false,
         lastActive: p.lastActive,
         routeSince: routeSince.get(key) ?? null,
-        lastChangeAt: lastChange.get(key) ?? null
+        lastChangeAt: Math.max(lastChange.get(key) ?? 0, lastSearch.get(key) ?? 0) || null
       })
       if (v.state === 'stuck' && v.stuck_minutes != null) out.set(key, v.stuck_minutes)
     }

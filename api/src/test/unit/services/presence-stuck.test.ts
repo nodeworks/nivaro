@@ -31,6 +31,8 @@ vi.mock('../../../db/index.js', () => ({ db: (t: string) => chain(t) }))
 import {
   classifyPresence,
   isChangeRequest,
+  isRecordPagePath,
+  lastSearchChange,
   presenceRowIdle,
   STUCK_AFTER_MS,
   stuckLabel,
@@ -143,9 +145,10 @@ describe('stuckMinutes', () => {
       [
         { user: 'aaaa', since: new Date(min(14)) },
         { user: 'BBBB', since: new Date(min(3)) }
-      ]
+      ],
+      [{ user: 'aaaa', path: '/records/orders/5', entered_at: new Date(min(14)) }]
     ])
-    state.rows.set('nivaro_api_logs', [[{ user: 'AAAA', at: new Date(min(11)) }]])
+    state.rows.set('nivaro_api_logs', [[{ user: 'AAAA', at: new Date(min(11)) }], []])
     const out = await stuckMinutes(
       [
         { id: 'AAAA', idle: false, lastActive: min(1) },
@@ -179,6 +182,105 @@ describe('stuckMinutes', () => {
     const out = await stuckMinutes([{ id: 'AAAA', idle: false, lastActive: min(1) }], NOW)
     expect(out.size).toBe(0)
     expect(state.calls.some(([t]) => t === 'nivaro_api_logs')).toBe(false)
+  })
+
+  it('never flags a list page — reading and filtering there is the work', async () => {
+    state.rows.set('nivaro_admin_journeys', [
+      [{ user: 'AAAA', since: new Date(min(30)) }],
+      [{ user: 'AAAA', path: '/records/workflows', entered_at: new Date(min(30)) }]
+    ])
+    const out = await stuckMinutes([{ id: 'AAAA', idle: false, lastActive: min(1) }], NOW)
+    expect(out.size).toBe(0)
+    expect(state.calls.some(([t]) => t === 'nivaro_api_logs')).toBe(false)
+  })
+
+  it('judges the newest page when the person moved since the oldest arrival read', async () => {
+    state.rows.set('nivaro_admin_journeys', [
+      [
+        { user: 'AAAA', since: new Date(min(20)) },
+        { user: 'BBBB', since: new Date(min(15)) }
+      ],
+      [
+        { user: 'AAAA', path: '/records/orders/5', entered_at: new Date(min(20)) },
+        { user: 'BBBB', path: '/records/orders', entered_at: new Date(min(15)) }
+      ]
+    ])
+    state.rows.set('nivaro_api_logs', [[], []])
+    const out = await stuckMinutes(
+      [
+        { id: 'AAAA', idle: false, lastActive: min(1) },
+        { id: 'BBBB', idle: false, lastActive: min(1) }
+      ],
+      NOW
+    )
+    expect([...out]).toEqual([['AAAA', 20]])
+  })
+
+  it('a new search or filter on the record page is progress; a re-poll is not', async () => {
+    const journeys = () => [
+      [{ user: 'AAAA', since: new Date(min(30)) }],
+      [{ user: 'AAAA', path: '/collections/orders/5', entered_at: new Date(min(30)) }]
+    ]
+    const poll = [0, 10, 20].map((m) => ({
+      user: 'AAAA',
+      path: '/api/items/order_lines',
+      query: 'filter=%7B%22order%22%3A5%7D',
+      created_at: new Date(min(30) + m * 60_000 + 2_000)
+    }))
+    state.rows.set('nivaro_admin_journeys', journeys())
+    state.rows.set('nivaro_api_logs', [[], poll])
+    expect([
+      ...(await stuckMinutes([{ id: 'AAAA', idle: false, lastActive: min(1) }], NOW))
+    ]).toEqual([['AAAA', 30]])
+
+    state.rows.set('nivaro_admin_journeys', journeys())
+    state.rows.set('nivaro_api_logs', [
+      [],
+      [
+        ...poll,
+        {
+          user: 'AAAA',
+          path: '/api/items/vendors',
+          query: 'search=acme',
+          created_at: new Date(min(4))
+        }
+      ]
+    ])
+    expect((await stuckMinutes([{ id: 'AAAA', idle: false, lastActive: min(1) }], NOW)).size).toBe(
+      0
+    )
+  })
+})
+
+describe('isRecordPagePath', () => {
+  it('is a record page or a new-record form in either app', () => {
+    expect(isRecordPagePath('/records/workflows/123')).toBe(true)
+    expect(isRecordPagePath('/collections/orders/new')).toBe(true)
+    expect(isRecordPagePath('/records/workflows')).toBe(false)
+    expect(isRecordPagePath('/records/workflows?search=x')).toBe(false)
+    expect(isRecordPagePath('/queues/4')).toBe(false)
+    expect(isRecordPagePath(null)).toBe(false)
+  })
+})
+
+describe('lastSearchChange', () => {
+  const start = min(30)
+  const row = (path: string, query: string | null, at: number) => ({ path, query, at })
+  it('ignores the page load and repeats, keeps the newest new query', () => {
+    expect(
+      lastSearchChange(
+        [
+          row('/api/items/a', 'filter=1', start + 1_000),
+          row('/api/items/a', 'filter=1', min(20)),
+          row('/api/items/b', 'search=x', min(15)),
+          row('/api/items/b', 'search=xy', min(14)),
+          row('/api/items/a', 'filter=1', min(2))
+        ],
+        start
+      )
+    ).toBe(min(14))
+    expect(lastSearchChange([row('/api/items/a', 'filter=1', start + 1_000)], start)).toBeNull()
+    expect(lastSearchChange([row('/api/items/a', 'filter=1', start - 1_000)], start)).toBeNull()
   })
 })
 
