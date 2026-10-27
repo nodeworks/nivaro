@@ -23,6 +23,12 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
+import {
+  endAdminMasquerades,
+  forgetMasqueradeToken,
+  MASQ_TTL_S,
+  noteMasqueradeToken
+} from '../services/masquerade-tokens.js'
 import { bumpUserAccessVersion } from '../services/permission-cache.js'
 import { recordLogin } from '../services/security.js'
 import {
@@ -742,7 +748,11 @@ export async function authRoutes(app: FastifyInstance) {
 
   // Logout (current session only)
   app.post('/logout', { preHandler: authenticate }, async (req, reply) => {
-    await logActivity({ action: 'logout', user: req.user?.id, req })
+    // Signing out ends every View-as this person started, wherever its tab is. A
+    // logout sent from a View-as tab is the admin signing out, not the viewed person.
+    const principal = req.masqueradeAdminId ?? req.user?.id
+    if (principal) await endAdminMasquerades(app.redis, String(principal))
+    await logActivity({ action: 'logout', user: principal, req })
     await req.session.destroy()
     return reply.send({ ok: true })
   })
@@ -858,9 +868,10 @@ export async function authRoutes(app: FastifyInstance) {
     const token = `nvm_${randomUUID()}`
     await app.redis.setex(
       `masq:${token}`,
-      4 * 3600,
+      MASQ_TTL_S,
       JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
     )
+    await noteMasqueradeToken(app.redis, String(req.user!.id), token)
     void recordLogin(app, String(target.id), 'masquerade', req)
     bumpUserAccessVersion(String(target.id))
     await logActivity({
@@ -891,6 +902,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Not a masquerade session' })
     }
     await app.redis.del(`masq:${token}`)
+    forgetMasqueradeToken(app.redis, String(req.masqueradeAdminId), token)
     bumpUserAccessVersion(String(req.user!.id))
     // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
     endMasqueradeSockets(token)
