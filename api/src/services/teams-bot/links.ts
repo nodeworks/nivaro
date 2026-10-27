@@ -9,6 +9,13 @@ import { canSignIn, getUser } from '../users.js'
 const LINKS = 'nivaro_teams_links'
 const CONNECT_TTL_SECONDS = 10 * 60
 
+export class TeamsLinkTakenError extends Error {
+  constructor() {
+    super('This Teams account is already linked to another Nivaro user')
+    this.name = 'TeamsLinkTakenError'
+  }
+}
+
 export type TeamsLinkStatus = 'active' | 'uninstalled' | 'blocked' | 'unlinked'
 
 export interface TeamsLink {
@@ -99,7 +106,7 @@ export async function upsertLink(
   if (existing) {
     // A live link belongs to its person: another account must not take it over.
     if (existing.status === 'active' && existing.user_id.toLowerCase() !== userId.toLowerCase())
-      throw new Error('This Teams account is already linked to another Nivaro user')
+      throw new TeamsLinkTakenError()
     await db(LINKS)
       .where({ id: existing.id })
       .update({

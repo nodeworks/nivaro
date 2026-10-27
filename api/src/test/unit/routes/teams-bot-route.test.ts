@@ -1,6 +1,8 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const TakenError = vi.hoisted(() => class TakenError extends Error {})
+const logErr = vi.hoisted(() => vi.fn())
 const st = vi.hoisted(() => ({
   verdict: { ok: true } as { ok: boolean; reason?: string },
   resolved: { user: null } as Record<string, unknown>,
@@ -41,6 +43,7 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
   upsertLink: st.upsert,
   markLink: st.mark,
   signConnectToken: () => 'SIGNED',
+  TeamsLinkTakenError: TakenError,
   readConnectToken: (t: string) =>
     st.tokenOk && t === 'SIGNED' ? { aadObjectId: 'oid-1', tenantId: 'tid' } : null
 }))
@@ -48,7 +51,20 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
 import { teamsBotRoutes } from '../../../routes/teams-bot.js'
 
 async function build() {
-  const app = Fastify()
+  const log = {
+    level: 'info',
+    error: logErr,
+    warn: () => {},
+    info: () => {},
+    debug: () => {},
+    trace: () => {},
+    fatal: () => {},
+    silent: () => {},
+    child() {
+      return log
+    }
+  }
+  const app = Fastify({ loggerInstance: log as never })
   app.addHook('onRequest', async (req) => {
     ;(req as unknown as { session: { userId?: string } }).session = { userId: st.session }
   })
@@ -80,6 +96,7 @@ beforeEach(() => {
   st.session = undefined
   st.tokenOk = true
   st.sessionUser = { id: 'U1', entra_oid: 'OID-1' }
+  logErr.mockReset()
   for (const f of [st.ask, st.upsert, st.send, st.mark]) f.mockReset()
   st.ask.mockResolvedValue(undefined)
   st.send.mockResolvedValue({ id: 'x' })
@@ -143,6 +160,16 @@ describe('POST /api/teams/messages', () => {
     await post(await build(), { ...base, type: 'installationUpdate', action: 'remove' })
     expect(st.mark).toHaveBeenCalledWith('oid-1', 'uninstalled')
   })
+
+  it('removing the bot from a team leaves the personal link alone', async () => {
+    await post(await build(), {
+      ...base,
+      type: 'installationUpdate',
+      action: 'remove',
+      conversation: { id: 'team-1', conversationType: 'channel' }
+    })
+    expect(st.mark).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /api/teams/connect', () => {
@@ -170,6 +197,23 @@ describe('GET /api/teams/connect', () => {
     const r = await get(await build())
     expect(r.statusCode).toBe(403)
     expect(st.upsert).not.toHaveBeenCalled()
+  })
+
+  it('an oid held by another user is a 403 page', async () => {
+    st.session = 'U1'
+    st.upsert.mockRejectedValue(new TakenError('x'))
+    const r = await get(await build())
+    expect(r.statusCode).toBe(403)
+    expect(r.body).toContain('already linked')
+  })
+
+  it('any other failure is a 500 page and is logged', async () => {
+    st.session = 'U1'
+    st.upsert.mockRejectedValue(new Error('timeout'))
+    const r = await get(await build())
+    expect(r.statusCode).toBe(500)
+    expect(r.body).toContain('Something went wrong linking Teams')
+    expect(logErr).toHaveBeenCalled()
   })
 
   it('needs a Microsoft sign-in and a live token', async () => {

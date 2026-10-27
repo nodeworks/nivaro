@@ -15,6 +15,7 @@ import {
   readConnectToken,
   resolveTeamsUser,
   signConnectToken,
+  TeamsLinkTakenError,
   upsertLink
 } from '../services/teams-bot/links.js'
 import { canSignIn, getUser } from '../services/users.js'
@@ -230,7 +231,11 @@ export async function teamsBotRoutes(app: FastifyInstance) {
         return reply.code(200).send({})
       }
       case 'installationUpdate': {
-        if (activity.action === 'remove' && activity.from?.aadObjectId) {
+        if (
+          activity.action === 'remove' &&
+          activity.from?.aadObjectId &&
+          activity.conversation?.conversationType === 'personal'
+        ) {
           try {
             await markLink(activity.from.aadObjectId, 'uninstalled')
           } catch (err) {
@@ -275,8 +280,11 @@ export async function teamsBotRoutes(app: FastifyInstance) {
         serviceUrl: null,
         linkedBy: 'sign_in'
       })
-    } catch {
-      return send(page(403, 'This Teams account is already linked to another Nivaro user.'))
+    } catch (err) {
+      if (err instanceof TeamsLinkTakenError)
+        return send(page(403, 'This Teams account is already linked to another Nivaro user.'))
+      req.log.error({ message: (err as Error)?.message }, 'teams bot: connect failed')
+      return send(page(500, 'Something went wrong linking Teams. Try again in a minute.'))
     }
     return send(page(200, 'Teams connected. You can close this tab.'))
   })
