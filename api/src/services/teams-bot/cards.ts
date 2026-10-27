@@ -118,3 +118,15 @@ export function resultCard(text: string, openUrl?: string): AdaptiveCard {
     openUrl ? [{ type: 'Action.OpenUrl', title: 'Open in Nivaro', url: openUrl }] : []
   )
 }
+
+/** Longest answer a Teams card shows; the rest is behind Continue in Nivaro. */
+export const ANSWER_MAX_CHARS = 3500
+
+/** An Ask AI answer: the text (cut at ANSWER_MAX_CHARS) and, always, Continue in Nivaro. */
+export function answerCard(text: string, continueUrl: string): AdaptiveCard {
+  const body = text.length > ANSWER_MAX_CHARS ? `${text.slice(0, ANSWER_MAX_CHARS - 1)}…` : text
+  return shell(
+    [{ type: 'TextBlock', text: body, wrap: true }],
+    [{ type: 'Action.OpenUrl', title: 'Continue in Nivaro', url: continueUrl }]
+  )
+}

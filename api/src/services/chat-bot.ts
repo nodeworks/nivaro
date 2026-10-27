@@ -457,7 +457,7 @@ export interface BotAnswer {
   stopped: boolean
 }
 
-interface AnswerOptions {
+export interface AnswerOptions {
   context: string
   room: string
   record: RoomRecord | null
@@ -493,6 +493,9 @@ export function stripAskBlocks(text: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
+
+/** The room assistant's answer loop, also used by the Teams bot (services/teams-bot/ask.ts). */
+export { answerQuestion as answerAssistantQuestion }
 
 async function answerQuestion(
   app: FastifyInstance,

@@ -165,12 +165,70 @@ export async function getMembers(
     .map((r) => ({ aadObjectId: String(r.aadObjectId), name: r.name ?? '' }))
 }
 
-/** Open (or find) the bot's 1:1 chat with a person and return its conversation id. */
+export interface PagedMember {
+  /** Teams member id ('29:…'). */
+  id: string
+  /** Entra object id; null when Teams gives none (Nivaro can never match that member). */
+  aadObjectId: string | null
+  name: string
+}
+
+const PAGE_SIZE = 100
+
+/**
+ * A team or channel roster, page by page (Get Conversation Paged Members,
+ * `GET /v3/conversations/{id}/pagedmembers?pageSize=&continuationToken=`). Stops once more than
+ * `limit` members have arrived: past that the caller treats the audience as open anyway.
+ * Members without an Entra id are kept (as null) so the caller sees them as unmatched.
+ */
+export async function getPagedMembers(
+  serviceUrl: string,
+  conversationId: string,
+  limit: number
+): Promise<{ members: PagedMember[]; truncated: boolean }> {
+  const members: PagedMember[] = []
+  let token: string | undefined
+  for (;;) {
+    const qs = new URLSearchParams({ pageSize: String(PAGE_SIZE) })
+    if (token) qs.set('continuationToken', token)
+    const res = await call(
+      null,
+      'GET',
+      `${base(serviceUrl)}/v3/conversations/${conv(conversationId)}/pagedmembers?${qs}`,
+      undefined,
+      'get paged members'
+    )
+    const page = (await res.json().catch(() => ({}))) as {
+      members?: Array<{ id?: string; aadObjectId?: string; objectId?: string; name?: string }>
+      continuationToken?: string
+    }
+    for (const m of Array.isArray(page.members) ? page.members : []) {
+      const oid = m.aadObjectId ?? m.objectId
+      members.push({
+        id: String(m.id ?? ''),
+        aadObjectId: oid ? String(oid) : null,
+        name: m.name ?? ''
+      })
+    }
+    if (members.length > limit) return { members, truncated: true }
+    token = page.continuationToken || undefined
+    if (!token) return { members, truncated: false }
+  }
+}
+
+/**
+ * Open (or find) the bot's 1:1 chat with a person and return its conversation id. `memberId` is
+ * the Teams member id ('29:…', activity.from.id); an Entra object id also works, and then rides
+ * along as aadObjectId.
+ */
 export async function createPersonalConversation(
   serviceUrl: string,
   cfg: TeamsBotConfig,
-  aadObjectId: string
+  memberId: string
 ): Promise<string> {
+  const member = memberId.startsWith('29:')
+    ? { id: memberId }
+    : { id: memberId, aadObjectId: memberId }
   const res = await call(
     cfg,
     'POST',
@@ -179,7 +237,7 @@ export async function createPersonalConversation(
       bot: { id: cfg.appId },
       isGroup: false,
       tenantId: cfg.tenantId,
-      members: [{ id: aadObjectId, aadObjectId }],
+      members: [member],
       channelData: { tenant: { id: cfg.tenantId } }
     },
     'create conversation'

@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { linkTo } from '../services/app-links.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
-import type { TeamsActivity } from '../services/teams-bot/activity.js'
+import { messageText, type TeamsActivity } from '../services/teams-bot/activity.js'
 import { answerInTeams } from '../services/teams-bot/ask.js'
 import { type AdaptiveCard, resultCard } from '../services/teams-bot/cards.js'
 import { getTeamsBotConfig } from '../services/teams-bot/config.js'
@@ -59,19 +59,14 @@ function page(status: number, text: string) {
   }
 }
 
-export function stripMentions(text: string | undefined): string {
-  return String(text ?? '')
-    .replace(/<at>[\s\S]*?<\/at>/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 async function reply(activity: TeamsActivity, card: AdaptiveCard): Promise<void> {
   if (!activity.serviceUrl || !activity.conversation?.id) return
   await sendActivity(activity.serviceUrl, activity.conversation.id, {
     attachments: [{ contentType: CARD, content: card }]
   })
 }
+// The handler's own `reply` (Fastify's) shadows this one there.
+const replyTo = reply
 
 const HELP =
   'Ask me anything about your records. Or type: my work (open My Work), mute 1h (pause Teams notifications for an hour), unmute, settings, link, unlink, help.'
@@ -116,7 +111,7 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
       })
   }
 
-  const text = stripMentions(activity.text)
+  const text = messageText(activity)
   switch (text.toLowerCase()) {
     case 'help':
       return reply(activity, resultCard(HELP))
@@ -201,10 +196,22 @@ export async function teamsBotRoutes(app: FastifyInstance) {
         return reply.code(200).send({ statusCode: 200, type: CARD, value: card })
       }
       case 'message': {
-        if (!activity.id || !(await firstTime(app, activity.id))) return reply.code(200).send({})
+        // Activity ids are unique per conversation, not globally.
+        const key = activity.id ? `${activity.conversation?.id ?? ''}:${activity.id}` : ''
+        if (!key || !(await firstTime(app, key))) return reply.code(200).send({})
         void Promise.resolve()
           .then(() => handleMessage(app, activity))
-          .catch((err) => req.log.error({ err }, 'teams bot: message handling failed'))
+          .catch(async (err) => {
+            // Name only: the error may carry the question or the answer.
+            req.log.error(
+              { error: (err as Error)?.name, status: (err as { status?: number })?.status },
+              'teams bot: message handling failed'
+            )
+            await replyTo(
+              activity,
+              resultCard('Something went wrong answering that. Try again in a minute.')
+            ).catch(() => undefined)
+          })
         return reply.code(200).send({})
       }
       case 'conversationUpdate': {

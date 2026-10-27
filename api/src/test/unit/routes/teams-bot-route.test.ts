@@ -135,6 +135,57 @@ describe('POST /api/teams/messages', () => {
     expect(st.ask).toHaveBeenCalledTimes(1)
   })
 
+  it('the same activity id in another conversation is a different message', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    const app = await build()
+    await post(app, { ...base, type: 'message', id: 'same', text: 'hi' })
+    await post(app, {
+      ...base,
+      type: 'message',
+      id: 'same',
+      text: 'hi',
+      conversation: { id: 'conv-2', conversationType: 'personal' }
+    })
+    await flush()
+    expect(st.ask).toHaveBeenCalledTimes(2)
+  })
+
+  it('strips only the bot mention, so @efp help is the help command', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    await post(await build(), {
+      ...base,
+      type: 'message',
+      id: 'help-1',
+      text: '<at>efp</at>&nbsp;help',
+      entities: [
+        { type: 'mention', mentioned: { id: '28:bot', name: 'efp' }, text: '<at>efp</at>' }
+      ]
+    })
+    await flush()
+    expect(st.ask).not.toHaveBeenCalled()
+    expect(JSON.stringify(st.send.mock.calls[0])).toContain('Ask me anything about your records')
+  })
+
+  it('a background failure tells the person something went wrong', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    st.ask.mockRejectedValue(new Error('boom'))
+    await post(await build(), { ...base, type: 'message', id: 'fail-1', text: 'how many?' })
+    await flush()
+    expect(logErr).toHaveBeenCalled()
+    expect(JSON.stringify(st.send.mock.calls.at(-1))).toContain(
+      'Something went wrong answering that. Try again in a minute.'
+    )
+  })
+
+  it('a failure to send the apology is swallowed', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    st.ask.mockRejectedValue(new Error('boom'))
+    st.send.mockRejectedValue(new Error('down'))
+    const r = await post(await build(), { ...base, type: 'message', id: 'fail-2', text: 'q' })
+    await flush()
+    expect(r.statusCode).toBe(200)
+  })
+
   it('install by a matched user stores the link', async () => {
     st.resolved = { user: { id: 'U1', first_name: 'Rob' }, link: null }
     const r = await post(await build(), install)

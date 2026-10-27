@@ -3,6 +3,7 @@ import type { TeamsBotConfig } from '../../../services/teams-bot/config.js'
 import {
   ConnectorError,
   getBotToken,
+  getPagedMembers,
   resetConnectorCache,
   sendActivity
 } from '../../../services/teams-bot/connector.js'
@@ -73,5 +74,73 @@ describe('ConnectorError', () => {
     expect(err).toBeInstanceOf(ConnectorError)
     expect(err.status).toBe(429)
     expect(err.retryAfterMs).toBe(7000)
+  })
+})
+
+describe('getPagedMembers', () => {
+  it('getPagedMembers stops after AUDIENCE_CAP + 1', async () => {
+    const page = (n: number, from: number, token?: string) =>
+      json({
+        members: Array.from({ length: n }, (_, i) => ({
+          id: `29:${from + i}`,
+          aadObjectId: `oid-${from + i}`,
+          name: `P${from + i}`
+        })),
+        ...(token ? { continuationToken: token } : {})
+      })
+    const f = vi.fn(async (url: string) => {
+      if (url.includes('login.microsoftonline.com'))
+        return json({ access_token: 't', expires_in: 3600 })
+      if (!url.includes('continuationToken')) return page(15, 0, 'p2')
+      if (url.includes('continuationToken=p2')) return page(15, 15, 'p3')
+      return page(15, 30)
+    })
+    vi.stubGlobal('fetch', f)
+    const r = await getPagedMembers('https://smba.test/', '19:team@thread.tacv2', 21)
+    expect(r.truncated).toBe(true)
+    expect(r.members).toHaveLength(30)
+    const calls = f.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('pagedmembers'))
+    // The third page is never asked for.
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toBe(
+      'https://smba.test/v3/conversations/19%3Ateam%40thread.tacv2/pagedmembers?pageSize=100'
+    )
+    expect(calls[1]).toContain('continuationToken=p2')
+  })
+
+  it('reads the whole roster when it is small, keeping members without an Entra id', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('login.microsoftonline.com')
+          ? json({ access_token: 't', expires_in: 3600 })
+          : json({ members: [{ id: '29:a', aadObjectId: 'oid-a' }, { id: '29:b' }] })
+      )
+    )
+    const r = await getPagedMembers('https://smba.test', 'team', 21)
+    expect(r).toEqual({
+      truncated: false,
+      members: [
+        { id: '29:a', aadObjectId: 'oid-a', name: '' },
+        { id: '29:b', aadObjectId: null, name: '' }
+      ]
+    })
+  })
+
+  it('refuses a non-https service url and surfaces connector errors', async () => {
+    await expect(getPagedMembers('http://smba.test', 'team', 21)).rejects.toBeInstanceOf(
+      ConnectorError
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('login.microsoftonline.com')
+          ? json({ access_token: 't', expires_in: 3600 })
+          : json({}, { status: 403 })
+      )
+    )
+    await expect(getPagedMembers('https://smba.test', 'team', 21)).rejects.toMatchObject({
+      status: 403
+    })
   })
 })
