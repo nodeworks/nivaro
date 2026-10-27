@@ -198,11 +198,20 @@ export async function getPagedMembers(
       undefined,
       'get paged members'
     )
-    const page = (await res.json().catch(() => ({}))) as {
+    // A body we cannot read is an error, never "nobody is here": an empty roster would let an
+    // answer through as if the asker were alone.
+    let page: {
       members?: Array<{ id?: string; aadObjectId?: string; objectId?: string; name?: string }>
       continuationToken?: string
     }
-    for (const m of Array.isArray(page.members) ? page.members : []) {
+    try {
+      page = (await res.json()) as typeof page
+    } catch {
+      throw new ConnectorError(502, 'get paged members returned a body that is not JSON')
+    }
+    if (!page || typeof page !== 'object' || !Array.isArray(page.members))
+      throw new ConnectorError(502, 'get paged members returned no members list')
+    for (const m of page.members) {
       const oid = m.aadObjectId ?? m.objectId
       members.push({
         id: String(m.id ?? ''),

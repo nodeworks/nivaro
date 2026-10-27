@@ -24,9 +24,9 @@ vi.mock('../../../services/app-links.js', () => ({
   linkTo: async (kind: string, p: { q?: string }) =>
     `https://nivaro.test/${kind}?q=${encodeURIComponent(String(p.q ?? ''))}`
 }))
-vi.mock('../../../services/chat-bot.js', () => ({
-  answerAssistantQuestion: h.answer,
-  stripAskBlocks: (t: string) => t.replace(/```followups[\s\S]*?```/g, '').trim()
+vi.mock('../../../services/chat-bot.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/chat-bot.js')>()),
+  answerAssistantQuestion: h.answer
 }))
 vi.mock('../../../services/chat-bot-audience.js', () => ({ AUDIENCE_CAP: 20, REPLAY_BUDGET: 48 }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
@@ -79,7 +79,7 @@ const channel = {
   channelData: {
     tenant: { id: 'tid' },
     team: { id: '19:team@thread.tacv2', name: 'Facilities' },
-    channel: { id: '19:chan@thread.tacv2', name: 'Ops' }
+    channel: { id: '19:chan@thread.tacv2', name: 'Ops', membershipType: 'standard' }
   },
   text: '<at>efp</at> how many open requests?',
   entities: [{ type: 'mention', mentioned: { id: '28:bot', name: 'efp' }, text: '<at>efp</at>' }]
@@ -212,6 +212,44 @@ describe('answerInTeams', () => {
       { kind: 'open' },
       { kind: 'open' }
     ])
+  })
+
+  it('empty roster is open', async () => {
+    h.paged.mockResolvedValue({ members: [], truncated: false })
+    await answerInTeams(app, channel, ASKER)
+    expect(h.answer.mock.calls[0][3].verify.audience).toEqual({ kind: 'open' })
+  })
+
+  it('roster without the asker is open', async () => {
+    h.paged.mockResolvedValue(members('oid-kim', 'oid-sam'))
+    resolveBy(['oid-asker', 'oid-kim', 'oid-sam'])
+    await answerInTeams(app, channel, ASKER)
+    expect(h.answer.mock.calls[0][3].verify.audience).toEqual({ kind: 'open' })
+  })
+
+  it('a shared or private channel is open', async () => {
+    h.paged.mockResolvedValue(members('oid-asker', 'oid-kim'))
+    resolveBy(['oid-asker', 'oid-kim'])
+    for (const membershipType of ['shared', 'private', undefined]) {
+      await answerInTeams(
+        app,
+        {
+          ...channel,
+          channelData: {
+            ...channel.channelData,
+            channel: { id: '19:chan@thread.tacv2', name: 'Ops', membershipType }
+          }
+        },
+        ASKER
+      )
+    }
+    expect(h.answer.mock.calls.map((c) => c[3].verify.audience)).toEqual([
+      { kind: 'open' },
+      { kind: 'open' },
+      { kind: 'open' }
+    ])
+    // Not even asked for: the team roster says nothing about these channels.
+    expect(h.paged).not.toHaveBeenCalled()
   })
 
   it('private verdict posts the pointer in the thread and the answer in the DM', async () => {

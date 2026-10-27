@@ -45,23 +45,29 @@ export class TeamsStream implements BotStreamLike {
 }
 
 /**
- * Everyone but the asker who reads the channel, as Nivaro users, or `open` when any member
- * cannot be matched (or has no Entra id), the roster cannot be read, or it is too big to replay.
- * The roster is the TEAM's (channelData.team.id): the bot's manifest has no
- * supportsChannelFeatures, so Teams only delivers standard channels, whose readers are the team.
+ * Everyone but the asker who reads the channel, as Nivaro users, or `open` whenever that is not
+ * known for sure: a channel that is not plainly 'standard', a roster that cannot be read, is
+ * empty, lacks the asker or is too big to replay, or any member with no Entra id or no Nivaro
+ * user. The roster is the TEAM's (channelData.team.id), which is the channel's readers only for a
+ * standard channel; private and shared channels have their own members (shared ones may hold
+ * people outside the team), so they are open regardless of what the manifest allows.
  */
 export async function channelAudience(
   activity: TeamsActivity,
   askerId: string
 ): Promise<RoomAudience> {
+  if (activity.channelData?.channel?.membershipType !== 'standard') return OPEN
   const teamId = activity.channelData?.team?.id
-  if (!teamId || !activity.serviceUrl) return OPEN
+  const askerOid = String(activity.from?.aadObjectId ?? '').toLowerCase()
+  if (!teamId || !activity.serviceUrl || !askerOid) return OPEN
   const { members, truncated } = await getPagedMembers(
     activity.serviceUrl,
     teamId,
     AUDIENCE_CAP + 1
   )
-  if (truncated) return OPEN
+  if (truncated || members.length === 0) return OPEN
+  // A roster without the asker is not this channel's: a bad read.
+  if (!members.some((m) => String(m.aadObjectId ?? '').toLowerCase() === askerOid)) return OPEN
   const tenantId = activity.channelData?.tenant?.id ?? activity.conversation?.tenantId ?? ''
   const ids = new Set<string>()
   for (const m of members) {

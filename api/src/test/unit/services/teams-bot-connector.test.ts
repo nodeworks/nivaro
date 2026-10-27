@@ -127,6 +127,22 @@ describe('getPagedMembers', () => {
     })
   })
 
+  it('malformed roster body throws ConnectorError', async () => {
+    for (const body of ['not json', '{}', '{"members":null}', 'null']) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          url.includes('login.microsoftonline.com')
+            ? json({ access_token: 't', expires_in: 3600 })
+            : new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+        )
+      )
+      await expect(getPagedMembers('https://smba.test', 'team', 21)).rejects.toBeInstanceOf(
+        ConnectorError
+      )
+    }
+  })
+
   it('refuses a non-https service url and surfaces connector errors', async () => {
     await expect(getPagedMembers('http://smba.test', 'team', 21)).rejects.toBeInstanceOf(
       ConnectorError

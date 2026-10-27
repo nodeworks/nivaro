@@ -32,7 +32,8 @@ export interface TeamsActivity {
   channelData?: {
     tenant?: { id?: string }
     team?: { id?: string; name?: string }
-    channel?: { id?: string; name?: string }
+    /** membershipType: 'standard' | 'private' | 'shared' (Teams). */
+    channel?: { id?: string; name?: string; membershipType?: string }
   }
   replyToId?: string
 }
