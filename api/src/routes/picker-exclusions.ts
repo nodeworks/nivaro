@@ -3,7 +3,9 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { type RecordToolRequest, recordToolRefusal } from '../services/record-tool-gate.js'
+import { recordVisibleTo } from '../services/revision-access.js'
 
 /**
  * Who may switch one record in or out of pickers: administrators, and anyone
@@ -35,6 +37,10 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       const { collection, itemId } = req.params
+      // A record the caller cannot open has no picker status as far as they know.
+      if (!(await recordVisibleTo(req, collection, String(itemId)))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
       const row = await db('nivaro_picker_exclusions')
         .where({ collection, item_id: String(itemId) })
         .first()
@@ -104,9 +110,20 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
       if (!collection || !Array.isArray(ids))
         return reply.code(400).send({ error: 'collection and ids required' })
       if (ids.length === 0) return reply.send({ data: { excluded: [] } })
-      const unique = [...new Set(ids.map(String))]
-      if (unique.length > BATCH_STATUS_MAX) {
+      const asked = [...new Set(ids.map(String))]
+      if (asked.length > BATCH_STATUS_MAX) {
         return reply.code(400).send({ error: `At most ${BATCH_STATUS_MAX} ids per request` })
+      }
+      // Only ids the caller can see answer (role policy, row filter, User Scopes).
+      let unique = asked
+      if (!req.isAdmin) {
+        if (/^(nivaro_|directus_)/i.test(String(collection))) {
+          return reply.send({ data: { excluded: [] } })
+        }
+        const gates = await compileAccessGates(req.user!, String(collection))
+        const seen = await visibleIds(gates, asked)
+        unique = asked.filter((i) => seen.has(i))
+        if (unique.length === 0) return reply.send({ data: { excluded: [] } })
       }
       // SQL Server takes ~2100 bound parameters per statement.
       const rows = await selectInChunks(

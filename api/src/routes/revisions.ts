@@ -21,6 +21,12 @@ import {
   o2mParentVisibleTo,
   recordVisibleTo
 } from '../services/revision-access.js'
+import {
+  keepReadable,
+  pickFields,
+  readableFieldSet,
+  revisionsForReader
+} from '../services/revision-fields.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
 // Candidate child item ids for a parent's O2M history: rows currently linked
@@ -119,7 +125,13 @@ export async function revisionsRoutes(app: FastifyInstance) {
         .first()) as { latest?: number } | undefined
       return reply.send({ data: { latest: row?.latest ?? null } })
     }
-    const data = await listRevisions(q.collection, q.item)
+    // Snapshots carry every column the row ever had — cut to the fields the
+    // caller's read policy lists (H2), same as opening the record.
+    const data = await revisionsForReader(
+      req.user!,
+      q.collection,
+      await listRevisions(q.collection, q.item)
+    )
     return reply.send({ data })
   })
 
@@ -180,6 +192,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
       query = query.where('a.timestamp', '>=', new Date(Date.now() - days * 86_400_000))
     }
     query = query.where('r.delta', 'like', like)
+    // A hit on a field the caller may not read is no hit (collection-wide is
+    // admin-only, so this narrows per-record searches).
+    const readable = await readableFieldSet(req.user!, collection)
     const rows = (await query) as Array<{
       id: number
       item: string
@@ -200,6 +215,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         const hits = Object.entries(delta)
           .filter(([k, v]) => {
             if (q.field && k !== q.field) return false
+            if (readable && !readable.has(k)) return false
             const str = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
             return str.toLowerCase().includes(needle.toLowerCase())
           })
@@ -296,10 +312,11 @@ export async function revisionsRoutes(app: FastifyInstance) {
         return null
       }
     }
+    const childFields = await readableFieldSet(req.user!, collection)
     const data = rows.slice(0, limit).map((row: Record<string, unknown>) => ({
       ...row,
-      data: parse(row.data) ?? {},
-      delta: parse(row.delta)
+      data: pickFields(parse(row.data) ?? {}, childFields),
+      delta: pickFields(parse(row.delta), childFields)
     }))
     return reply.send({ data, truncated })
   })
@@ -334,6 +351,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
     type Entry = { at: string; who: string; revision_id: number; reason?: string | null }
     const actOrigin = await db.schema.hasColumn('nivaro_activity', 'origin').catch(() => false)
     const out: Record<string, Record<string, Entry>> = {}
+    const childFields = await readableFieldSet(req.user!, collection)
     // Where each row CAME from: the create activity's comment, which an
     // import stamps as "import:<template>:<file id>". Only rows with a
     // comment are returned — a plain add says nothing.
@@ -410,6 +428,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         const bucket = (out[item] ??= {})
         for (const field of Object.keys(delta)) {
           if (field === many_field || field.startsWith('__')) continue
+          if (childFields && !childFields.has(field)) continue
           // Rows arrive newest first — the first sighting of a field wins.
           if (bucket[field]) continue
           const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
@@ -446,6 +465,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await recordVisibleTo(req, q.collection, q.item))) {
       return reply.code(404).send({ error: 'Not found' })
     }
+    // Only fields the caller may read are asked about.
+    const readableFields = keepReadable(fields, await readableFieldSet(req.user!, q.collection))
+    if (readableFields.length === 0) return reply.send({ data: {} })
     const rows = (await db('nivaro_revisions as r')
       .join('nivaro_activity as a', 'r.activity', 'a.id')
       .leftJoin('nivaro_users as u', 'a.user', 'u.id')
@@ -467,7 +489,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         'a.id as activity_id',
         ...(await inboundSelectColumns('a'))
       )) as Array<Record<string, unknown>>
-    const wanted = new Set(fields)
+    const wanted = new Set(readableFields)
     // #617 — a write that arrived on a token or API key names its CALLER
     // (the key's name, else the account's) instead of just "integration",
     // and carries the activity id the client opens the request from.
@@ -727,7 +749,8 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await recordVisibleTo(req, revision.collection, revision.item))) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    return reply.send({ data: revision })
+    const [data] = await revisionsForReader(req.user!, revision.collection, [revision])
+    return reply.send({ data })
   })
 
   // POST /revisions/:id/rollback — restore item state from a revision snapshot

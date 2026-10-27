@@ -53,7 +53,8 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 }))
 vi.mock('../../../services/help-videos.js', () => ({
   isAuthor: vi.fn(async () => true),
-  isUuid: () => false
+  isUuid: (v: unknown) =>
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v))
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/record-events.js', () => ({ announceRecordAspect: vi.fn() }))
@@ -78,6 +79,7 @@ vi.mock('../../../services/edit-lock.js', () => ({
 vi.mock('../../../services/items.js', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   CollectionNotFoundError: class CollectionNotFoundError extends Error {},
+  canUpdateItem: vi.fn(async () => true),
   idFitsCollection: async () => true,
   readItems: vi.fn(
     async (_u: unknown, _c: string, _q: unknown, req: { query: { conditions: string } }) => ({
@@ -87,6 +89,7 @@ vi.mock('../../../services/items.js', () => ({
 }))
 
 import { itemLocksRoutes } from '../../../routes/item-locks.js'
+import { canUpdateItem } from '../../../services/items.js'
 
 async function app() {
   const a = Fastify()
@@ -173,5 +176,84 @@ describe('edit locks follow the approval edit lock', () => {
       payload: {}
     })
     expect(res.statusCode).toBe(200)
+  })
+})
+
+// M2 (security audit 2026-10-27): an edit lock is for someone who could save.
+describe('edit locks need update rights on the record', () => {
+  const OTHER = '3f1c2b3a-1234-4abc-9def-0123456789ab'
+  beforeEach(() => {
+    state.lock = null
+    state.refused = new Set()
+    state.deleted = []
+    state.inserted = []
+    state.notified = []
+    vi.mocked(canUpdateItem).mockReset()
+  })
+
+  it('gives a read-only viewer no lock, no queue place and no request ping', async () => {
+    state.me = 'U-READONLY-1'
+    vi.mocked(canUpdateItem).mockResolvedValue(false)
+    const a = await app()
+    const lock = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/500/lock',
+      payload: {}
+    })
+    expect(lock.statusCode).toBe(403)
+    expect(lock.json().code).toBe('NOT_EDITABLE')
+    expect(state.inserted).toEqual([])
+    state.lock = { ...lockOf('U-BRYAN'), item: '500' }
+    for (const path of ['lock/queue', 'lock/request', 'lock/force']) {
+      const r = await a.inject({
+        method: 'POST',
+        url: `/api/item-locks/workflows/500/${path}`,
+        payload: {}
+      })
+      expect(r.statusCode).toBe(403)
+    }
+    expect(state.notified).toEqual([])
+    expect(state.lock?.user).toBe('U-BRYAN')
+  })
+
+  it('drops the lock of a holder who may no longer change the record', async () => {
+    state.me = 'U-READONLY-2'
+    vi.mocked(canUpdateItem).mockResolvedValue(false)
+    state.lock = { ...lockOf('U-READONLY-2'), item: '501' }
+    const r = await (await app()).inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/501/heartbeat',
+      payload: {}
+    })
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('EDIT_LOCKED')
+    expect(state.lock).toBeNull()
+  })
+
+  it('lets only the holder answer a lock request', async () => {
+    state.me = 'U-STRANGER'
+    vi.mocked(canUpdateItem).mockResolvedValue(true)
+    state.lock = { ...lockOf('U-BRYAN'), item: '502' }
+    const r = await (await app()).inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/502/lock/respond',
+      payload: { to: OTHER, action: 'decline', note: 'spoof' }
+    })
+    expect(r.statusCode).toBe(403)
+    expect(state.notified).toEqual([])
+  })
+
+  it('lets the holder hand the lock to the requester', async () => {
+    state.me = 'U-BRYAN'
+    vi.mocked(canUpdateItem).mockResolvedValue(true)
+    state.lock = { ...lockOf('U-BRYAN'), item: '503' }
+    const r = await (await app()).inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/503/lock/respond',
+      payload: { to: OTHER, action: 'release' }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(state.lock).toBeNull()
+    expect(state.notified).toContain(OTHER)
   })
 })

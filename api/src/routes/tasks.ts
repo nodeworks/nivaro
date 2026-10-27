@@ -4,7 +4,7 @@ import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import {
@@ -312,12 +312,19 @@ export async function tasksRoutes(app: FastifyInstance) {
         reasons.set(k, list)
       }
       for (const id of await currentOwnerIds(collection, item).catch(() => [])) add(id, 'Owner now')
-      const rels = (await db('nivaro_relations')
+      const allRels = (await db('nivaro_relations')
         .where('many_collection', collection)
         .whereIn('one_collection', ['nivaro_users', 'directus_users'])
         .whereNull('junction_field')
         .select('many_field')
         .catch(() => [])) as Array<{ many_field: string }>
+      // Only the user fields the caller may read on this record: a person a
+      // hidden field names is a value of that field.
+      const readable = await getAllowedFields(req.user!, 'read', collection)
+      const rels =
+        readable === null || readable.includes('*')
+          ? allRels
+          : allRels.filter((r) => readable.includes(r.many_field))
       if (rels.length) {
         const labels = new Map(
           (

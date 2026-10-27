@@ -7,8 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const who = vi.hoisted(() => ({ admin: true }))
 vi.mock('../../../middleware/authenticate.js', () => ({
-  authenticate: async (req: { user?: unknown }) => {
+  authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'U-1', role: 'R' }
+    req.isAdmin = who.admin
   },
   requireAdmin: async (
     _req: unknown,
@@ -20,6 +21,10 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 const logActivity = vi.hoisted(() => vi.fn(async () => 1))
 vi.mock('../../../services/activity.js', () => ({ logActivity }))
 vi.mock('../../../db/dialect.js', () => ({ isMssql: () => true }))
+const visible = vi.hoisted(() => ({ yes: true }))
+vi.mock('../../../services/revision-access.js', () => ({
+  recordVisibleTo: vi.fn(async () => visible.yes)
+}))
 
 const calls = vi.hoisted(() => ({ list: [] as Array<{ kind: string; detail: unknown }> }))
 vi.mock('../../../db/index.js', () => {
@@ -166,5 +171,36 @@ describe('GET /api/activity', () => {
     ).json()
     expect(one.total).toBe(5)
     expect(calls.list.some((c) => c.kind === 'raw')).toBe(false)
+  })
+})
+
+// M3 (security audit 2026-10-27): POST /activity is not a way to plant audit rows.
+describe('POST /api/activity', () => {
+  const post = async (payload: Record<string, unknown>) =>
+    (await app()).inject({ method: 'POST', url: '/api/activity', payload })
+
+  it('refuses a non-admin any action outside the client allow-list (empty today)', async () => {
+    who.admin = false
+    for (const action of ['delete', 'transition', 'login', 'update']) {
+      const r = await post({ action, collection: 'workflows', item: '7', comment: 'x' })
+      expect(r.statusCode).toBe(403)
+    }
+    expect(logActivity).not.toHaveBeenCalled()
+  })
+
+  it('wants a well-formed action', async () => {
+    for (const action of ['', 'a b', 'x'.repeat(51), "'; DROP"]) {
+      expect((await post({ action })).statusCode).toBe(400)
+    }
+    expect(logActivity).not.toHaveBeenCalled()
+  })
+
+  it('lets an administrator record an entry, comment capped', async () => {
+    const r = await post({ action: 'note', collection: 'workflows', comment: 'y'.repeat(5000) })
+    expect(r.statusCode).toBe(201)
+    const opts = (logActivity.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+    expect(opts.action).toBe('note')
+    expect(opts.user).toBe('U-1')
+    expect(String(opts.comment)).toHaveLength(2000)
   })
 })

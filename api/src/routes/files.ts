@@ -13,6 +13,7 @@ import {
   readableFileIdList
 } from '../services/file-access.js'
 import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
+import { fileUsageForReader } from '../services/file-usage-visible.js'
 import {
   assertUploadContent,
   cleanDownloadName,
@@ -281,7 +282,8 @@ export async function filesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const file = await servableFile(id, req)
     if (!file) return reply.code(404).send({ error: 'Not found' })
-    const usage = await getFileUsage(id)
+    // Only the sites (collection, field, visible rows) the caller may see.
+    const usage = await fileUsageForReader(req, id, await getFileUsage(id))
     return reply.send({ data: usage })
   })
 
@@ -496,7 +498,9 @@ export async function filesRoutes(app: FastifyInstance) {
 
     reply
       .header('Content-Type', contentType)
-      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      // private: a transform of an access-checked file must never sit in a
+      // shared cache that answers the next person without the check.
+      .header('Cache-Control', 'private, max-age=31536000, immutable')
 
     const cached = await storage.get(cacheKey).catch(() => null)
     if (cached) return reply.send(cached)

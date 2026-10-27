@@ -1,19 +1,22 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
-import { getLabels } from '../services/queues.js'
+import { linkLabelsAsUser } from '../services/ai-link-labels.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { recordVisibleTo } from '../services/revision-access.js'
 
 /**
  * Related records — manual typed links between any two records, shown with
  * backlinks on both sides ("supersedes →" here, "← superseded by" there).
  *
- * Reading a record's links requires read on that record's collection; the
- * OTHER side's label only renders if the viewer can read that collection too
- * (unreadable ends degrade to "collection/id" with no label — existence of a
- * link is metadata the linking user chose to attach, same posture as
- * comments naming a record).
+ * Every end is judged as the caller, record by record (M1, security audit
+ * 2026-10-27): reading a record's links needs that record visible (role
+ * policy, row filter, User Scopes — 404 otherwise); a link whose OTHER end
+ * the viewer cannot see is left out (its id is a fact about a hidden record);
+ * labels are read as the viewer (linkLabelsAsUser), never raw. Creating a
+ * link needs both records visible; removing one needs both ends visible too
+ * — exactly the links the viewer was shown.
  */
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -29,6 +32,16 @@ const INVERSE: Record<string, string> = {
   'caused by': 'caused'
 }
 
+const norm = (v: string) => v.toUpperCase()
+
+/** An unrestricted administrator (no API-key scopes narrowing them) sees every record. */
+function actingAdmin(req: FastifyRequest): boolean {
+  const u = req.user
+  const restricted =
+    (u?.api_key_scope_restrictions?.length ?? 0) > 0 || (u?.api_key_scopes?.length ?? 0) > 0
+  return !!req.isAdmin && !restricted
+}
+
 export async function recordLinkRoutes(app: FastifyInstance) {
   app.get<{ Params: { collection: string; id: string } }>(
     '/record-links/:collection/:id',
@@ -38,8 +51,8 @@ export async function recordLinkRoutes(app: FastifyInstance) {
       if (!IDENT_RE.test(collection) || /^nivaro_/i.test(collection)) {
         return reply.code(400).send({ error: 'Not a valid collection' })
       }
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await recordVisibleTo(req, collection, id))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
 
       const [outgoing, incoming] = await Promise.all([
@@ -56,10 +69,27 @@ export async function recordLinkRoutes(app: FastifyInstance) {
       }
       for (const l of outgoing) addWanted(String(l.to_collection), String(l.to_item))
       for (const l of incoming) addWanted(String(l.from_collection), String(l.from_item))
-      for (const c of [...wanted.keys()]) {
-        if (!(await can(req.user!, 'read', c))) wanted.delete(c)
+      // Only other ends the viewer can see, judged set-based per collection.
+      const visible = new Map<string, Set<string>>()
+      for (const [c, ids] of wanted) {
+        if (/^nivaro_/i.test(c) || !IDENT_RE.test(c)) continue
+        try {
+          const gates = await compileAccessGates(req.user!, c, { actingAdmin: actingAdmin(req) })
+          const seen = await visibleIds(gates, [...ids])
+          if (seen.size > 0) visible.set(c, seen)
+        } catch {
+          /* an end whose collection cannot be judged stays hidden */
+        }
       }
-      const labels = wanted.size > 0 ? await getLabels(wanted).catch(() => ({})) : {}
+      // Ids compare case-insensitively (a uniqueidentifier reads back upper-case).
+      const upper = new Map([...visible].map(([c, ids]) => [c, new Set([...ids].map(norm))]))
+      const isVisible = (c: string, i: string) => upper.get(c)?.has(norm(i)) ?? false
+      const labels: Record<string, string> = {}
+      if (visible.size > 0) {
+        for (const [k, v] of Object.entries(await linkLabelsAsUser(req.user!, visible))) {
+          labels[norm(k)] = v
+        }
+      }
 
       const shape = (l: Record<string, unknown>, direction: 'out' | 'in') => {
         const oc = String(direction === 'out' ? l.to_collection : l.from_collection)
@@ -71,12 +101,19 @@ export async function recordLinkRoutes(app: FastifyInstance) {
           type: direction === 'out' ? type : (INVERSE[type] ?? type),
           collection: oc,
           item: oi,
-          label: (labels as Record<string, string>)[`${oc}:${oi}`] ?? null,
+          label: labels[norm(`${oc}:${oi}`)] ?? null,
           note: (l.note as string | null) ?? null
         }
       }
       return reply.send({
-        data: [...outgoing.map((l) => shape(l, 'out')), ...incoming.map((l) => shape(l, 'in'))]
+        data: [
+          ...outgoing
+            .filter((l) => isVisible(String(l.to_collection), String(l.to_item)))
+            .map((l) => shape(l, 'out')),
+          ...incoming
+            .filter((l) => isVisible(String(l.from_collection), String(l.from_item)))
+            .map((l) => shape(l, 'in'))
+        ]
       })
     }
   )
@@ -107,8 +144,8 @@ export async function recordLinkRoutes(app: FastifyInstance) {
     if (fc === tc && fi === ti) {
       return reply.code(400).send({ error: 'A record cannot link to itself' })
     }
-    if (!(await can(req.user!, 'read', fc)) || !(await can(req.user!, 'read', tc))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await recordVisibleTo(req, fc, fi)) || !(await recordVisibleTo(req, tc, ti))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     const linkType = LINK_TYPES.includes(String(b.link_type)) ? String(b.link_type) : 'relates to'
 
@@ -145,11 +182,12 @@ export async function recordLinkRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const row = await db('nivaro_record_links').where('id', Number(req.params.id)).first()
       if (!row) return reply.code(404).send({ error: 'Not found' })
-      // Anyone who can read the FROM side may unlink — a link is shared
-      // curation, and read access is what let them see it at all.
-      if (!(await can(req.user!, 'read', String(row.from_collection)))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
+      // Anyone who can see BOTH ends may unlink — a link is shared curation,
+      // and seeing both records is what showed it to them at all.
+      const seesBoth =
+        (await recordVisibleTo(req, String(row.from_collection), String(row.from_item))) &&
+        (await recordVisibleTo(req, String(row.to_collection), String(row.to_item)))
+      if (!seesBoth) return reply.code(404).send({ error: 'Not found' })
       await db('nivaro_record_links').where('id', row.id).del()
       void logActivity({
         action: 'record-link-delete',

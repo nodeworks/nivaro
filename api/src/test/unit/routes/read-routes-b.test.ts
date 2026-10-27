@@ -36,6 +36,12 @@ vi.mock('../../../services/items.js', () => ({
   readItems: m.readItems,
   aggregateItems: m.aggregateItems
 }))
+// Picker batch-status judges ids as the caller; every asked id visible here
+// except '13' (the hidden one).
+vi.mock('../../../services/record-access.js', () => ({
+  compileAccessGates: vi.fn(async () => ({})),
+  visibleIds: vi.fn(async (_g: unknown, ids: string[]) => new Set(ids.filter((i) => i !== '13')))
+}))
 vi.mock('../../../services/sla-visibility.js', () => ({
   visibleRecordIds: vi.fn(async () => new Set<string>())
 }))
@@ -286,5 +292,17 @@ describe('picker batch-status', () => {
     })
     expect(r.json().data.excluded).toEqual(['2500'])
     expect(Math.max(...m.whereIns.map((w) => w.n))).toBeLessThanOrEqual(1000)
+  })
+  it('never answers for a record the caller cannot see', async () => {
+    m.tables.nivaro_picker_exclusions = [{ collection: 'vendors', item_id: '13' }]
+    m.whereIns = []
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/picker-exclusions/batch-status',
+      payload: { collection: 'vendors', ids: ['13'] }
+    })
+    expect(r.json().data.excluded).toEqual([])
+    expect(m.whereIns.filter((w) => w.table === 'nivaro_picker_exclusions')).toEqual([])
   })
 })
