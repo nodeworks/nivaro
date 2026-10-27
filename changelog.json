@@ -1,10 +1,217 @@
 {
-  "generated_at": "2026-10-27T14:54:04.390Z",
+  "generated_at": "2026-10-27T21:14:20.030Z",
   "releases": [
+    {
+      "version": "0.3.36",
+      "tag": "v0.3.36",
+      "date": "2026-10-27T17:14:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "Teams column in notification rules",
+              "hash": "ba02ebd8b"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "settings card, status and app package download",
+              "hash": "bed70a457"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "answer questions in DMs and channels with the asker's access",
+              "hash": "3893e013a"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "approve, reject, transition and acknowledge from the card",
+              "hash": "5bbb68cee"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "messages endpoint, install and connect flow, commands",
+              "hash": "21f61b446"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "Teams as a delivery channel",
+              "hash": "d07c0da6d"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "verify Bot Connector tokens and talk to the connector",
+              "hash": "8f4364f7a"
+            },
+            {
+              "section": "Added",
+              "scope": "teams",
+              "text": "bot configuration from settings and env",
+              "hash": "6fc6f7385"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "record Entra object id at sign-in; migration 505 for the Teams bot",
+              "hash": "55d192bba"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "guard migration 505 T-SQL for non-SQL Server tenants",
+              "hash": "2bca2d960"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "harden token checks, tenant fallback and Entra id matching",
+              "hash": "c79de94fb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "no Teams chip without a bot, card label read as the recipient",
+              "hash": "cb8c4ae88"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "read check on the pending link, Teams activity tag, guard connect and link",
+              "hash": "fdd455c34"
+            },
+            {
+              "section": "Fixed",
+              "scope": "profile",
+              "text": "show an error when Teams disconnect fails",
+              "hash": "2e36b49e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "inbound stamp never stops a message",
+              "hash": "00ca4f320"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "status shows saved setup while off, app type stays in its env family",
+              "hash": "938bb3597"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "channel audience fails closed on bad rosters and non-standard channels",
+              "hash": "ffe8cb046"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "honour in_row_menu on cards, retries wait for the first press",
+              "hash": "3d9b73b4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "team-scope uninstall keeps the personal link, connect errors are told apart",
+              "hash": "a1bff5e09"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "absolute Teams open link, bot-off and test-mode decisions",
+              "hash": "e71b1baf2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "teams",
+              "text": "refuse non-Teams channels and unendorsed signing keys",
+              "hash": "407ecaa8e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "stuck only on record pages, searches count as progress",
+              "hash": "5edff38c5"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "pipelines",
+              "text": "record transition as a shared service",
+              "hash": "800c48b44"
+            },
+            {
+              "section": "Changed",
+              "scope": null,
+              "text": "share the zip writer between xlsx and future packages",
+              "hash": "2f60821fe"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "teams",
+              "text": "configure per instance via env, TEAMS_BOT=on, 404 rules",
+              "hash": "83f4290dc"
+            },
+            {
+              "section": "Documentation",
+              "scope": "teams",
+              "text": "Teams bot section, references, cloud note",
+              "hash": "610633d48"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "teams",
+              "text": "format the docs section, sort test imports",
+              "hash": "0f90b32cf"
+            },
+            {
+              "section": "Other",
+              "scope": "config",
+              "text": "classify nivaro_teams_links, column fixture follows migration 505",
+              "hash": "570075433"
+            },
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "sort the Teams bot import",
+              "hash": "41873aa7e"
+            }
+          ]
+        }
+      ],
+      "count": 29
+    },
     {
       "version": "0.3.35",
       "tag": "v0.3.35",
-      "date": "2026-10-27T10:53:51-04:00",
+      "date": "2026-10-27T10:54:04-04:00",
       "sections": [
         {
           "label": "Added",
