@@ -11,9 +11,18 @@ import { db } from './db/index.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
+import {
+  anonymousBodyTooLarge,
+  defaultBodyLimit,
+  largeBodyLimit,
+  routeBodyLimit
+} from './lib/body-limits.js'
 import { describeDbRefusal, errorText, isPoolBusy, messageWithoutSql } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
+import { registerJsonBodyParser } from './lib/json-body.js'
+import { applySecurityHeaders } from './lib/security-headers.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
+import { trustProxyFromEnv } from './lib/trust-proxy.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
@@ -24,7 +33,7 @@ import { registerEtags } from './plugins/etag.js'
 import { graphqlPlugin } from './plugins/graphql.js'
 import { legacyCompatRoutes } from './plugins/legacy-compat.js'
 import { metricsPlugin } from './plugins/metrics.js'
-import { rateLimitPlugin } from './plugins/rate-limit.js'
+import { callerRateLimitPlugin, rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
 import { requestTracePlugin } from './plugins/request-trace.js'
 import { socketioPlugin } from './plugins/socketio.js'
@@ -55,24 +64,43 @@ import { NIVARO_VERSION } from './version.js'
 
 export async function buildServer() {
   // File-size ceiling from settings, read BEFORE the server exists because it
-  // feeds fastify's GLOBAL bodyLimit too. Fastify's default bodyLimit is 1MB
-  // and it 413s on Content-Length BEFORE any content parser runs — so a
-  // multipart upload over 1MB died with "Content Too Large" no matter what
-  // the multipart plugin's own fileSize limit said (found live on staging:
-  // a BID template re-import). Global limit = file ceiling + headroom for
-  // the multipart envelope and large JSON bodies.
+  // feeds fastify's GLOBAL bodyLimit too (the large ceiling = file ceiling +
+  // headroom for big JSON bodies; a BID template re-import once died on a 1MB
+  // global). Core routes are lowered to BODY_LIMIT_MB (default 1MB) by the
+  // onRoute hook below unless their group receives large bodies — see
+  // lib/body-limits.ts (M20, security audit 2026-10-27).
   const _fsMb = process.env.CLOUD_META_DB_URL
     ? null
     : await db('nivaro_settings')
         .first('file_max_size_mb')
         .catch(() => null)
   const _fileSizeMb = (_fsMb?.file_max_size_mb as number | null) ?? 50
+  const smallBodyLimit = defaultBodyLimit()
+  const trustProxy = trustProxyFromEnv()
 
   const app = fastify({
-    bodyLimit: (_fileSizeMb + 8) * 1024 * 1024,
-    trustProxy: config.TRUST_PROXY,
+    bodyLimit: largeBodyLimit(_fileSizeMb),
+    // TRUST_PROXY: true | false | hop count | IP/CIDR list (M14) — lib/trust-proxy.ts.
+    trustProxy: trustProxy.value,
     logger: {
       level: config.LOG_LEVEL,
+      // Request lines never carry the query string: tokens and tickets ride some URLs
+      // (?st=, ?token=, ?code=), and log lines are shipped to the long-history store.
+      serializers: {
+        req: (req: {
+          method?: string
+          url?: string
+          host?: string
+          ip?: string
+          socket?: { remotePort?: number }
+        }) => ({
+          method: req.method,
+          url: String(req.url ?? '').split('?')[0],
+          host: req.host,
+          remoteAddress: req.ip,
+          remotePort: req.socket?.remotePort
+        })
+      },
       // Log viewer (#156): tee every line into the in-process ring buffer.
       hooks: {
         logMethod(args: unknown[], method: (...a: unknown[]) => void, level: number) {
@@ -102,10 +130,27 @@ export async function buildServer() {
     pluginTimeout: 30000
   })
 
-  // Every response names the running build — the fastest way to tell which
-  // release a deployed instance is actually serving (no auth, no /health call).
-  app.addHook('onSend', async (_req, reply, payload) => {
-    reply.header('X-Nivaro-Version', NIVARO_VERSION)
+  if (trustProxy.warning) app.log.warn(`[boot] ${trustProxy.warning}`)
+
+  // M20 — core routes get the small body ceiling unless their group receives large bodies or
+  // they declare their own; routes registered after `coreRoutes` closes (extensions, often
+  // lazily) keep the large global one. lib/body-limits.ts.
+  let coreRoutes = true
+  app.addHook('onRoute', (route) => {
+    const limit = routeBodyLimit(route, { core: coreRoutes, small: smallBodyLimit })
+    if (limit !== undefined) route.bodyLimit = limit
+  })
+
+  // Every response to a signed-in caller names the running build — clients use it to notice a
+  // deploy (client-version.ts). Anonymous answers leave it out; GET /api/version stays the
+  // public "what is running" probe.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (req.user || req.headers.authorization || req.session?.userId) {
+      reply.header('X-Nivaro-Version', NIVARO_VERSION)
+    }
+    // M21 — nosniff, referrer policy, framing (SAMEORIGIN / frame-ancestors), base-uri,
+    // object-src, HSTS over https. A route's own header wins. lib/security-headers.ts.
+    applySecurityHeaders(req, reply)
     return payload
   })
 
@@ -120,19 +165,9 @@ export async function buildServer() {
     await app.register(adminTrafficTenantRoutes)
   }
 
-  // Allow DELETE/PUT/PATCH requests with Content-Type: application/json but no body
-  // (SDK sends the header even on bodyless requests; Fastify v5 rejects empty JSON by default)
-  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
-    if (!body || (body as string).trim() === '') {
-      done(null, undefined)
-      return
-    }
-    try {
-      done(null, JSON.parse(body as string))
-    } catch (err) {
-      done(err as Error, undefined)
-    }
-  })
+  // application/json: empty body = undefined (the SDK sends the header on bodyless writes),
+  // __proto__ / constructor.prototype keys stripped, raw text kept only for signed webhooks.
+  registerJsonBodyParser(app)
 
   // ─── CORS ──────────────────────────────────────────────────────────────────
   // Default: open to all origins, no credentials — tracker runs on external
@@ -187,6 +222,21 @@ export async function buildServer() {
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
   await registerSession(app)
+
+  // ─── Abuse limits that need to know who is signed in (M15 / M20) ──────────
+  // After the session plugin: a verified session is known here, a cookie alone is not.
+  // A body over the small ceiling needs a credential before it is read at all.
+  app.addHook('onRequest', async (req, reply) => {
+    if (anonymousBodyTooLarge(req, smallBodyLimit)) {
+      return reply.code(413).send({
+        statusCode: 413,
+        error: 'Payload Too Large',
+        message: 'Sign in to send a request this large.',
+        code: 'FST_ERR_CTP_BODY_TOO_LARGE'
+      })
+    }
+  })
+  await app.register(callerRateLimitPlugin)
 
   // ─── Socket.io ────────────────────────────────────────────────────────────
   const collectedRoutes: string[] = []
@@ -648,6 +698,8 @@ export async function buildServer() {
   // OAuth for remote MCP clients — well-known documents must sit at the origin root.
   await app.register(oauthPublicRoutes)
   await app.register(statusPublicRoutes)
+  // Routes registered from here on (extensions) keep the large body ceiling.
+  coreRoutes = false
 
   // ─── Serve admin static build (release image) ────────────────────────────
   const adminBuildPath = join(import.meta.dirname, '../../admin/dist')
@@ -669,12 +721,30 @@ export async function buildServer() {
       // browser keeps them a year without asking; everything else (index.html, the service
       // worker, icons) is revalidated on every load so a release is picked up at once.
       cacheControl: false,
+      // @fastify/static 9 passes the raw ServerResponse; 10 passes a reply-like object with
+      // `header` — support both so the major bump cannot break static serving.
       setHeaders: (res, path) => {
+        const out = res as unknown as {
+          header?: (k: string, v: string) => unknown
+          setHeader?: (k: string, v: string) => unknown
+        }
+        const set = (k: string, v: string) =>
+          typeof out.header === 'function' ? out.header(k, v) : out.setHeader?.(k, v)
         // a cache must key the .br/.gz/raw variants apart
-        res.setHeader('Vary', 'Accept-Encoding')
-        res.setHeader('Cache-Control', adminAssetCacheControl(path))
+        set('Vary', 'Accept-Encoding')
+        set('Cache-Control', adminAssetCacheControl(path))
       }
     })
+    // Source maps are built 'hidden' (no sourceMappingURL) and never served unless
+    // ADMIN_SOURCEMAPS=public — they would hand anyone the admin's full source.
+    if (process.env.ADMIN_SOURCEMAPS !== 'public') {
+      app.addHook('onRequest', async (req, reply) => {
+        const path = req.url.split('?')[0] ?? ''
+        if (path.endsWith('.map') && !path.startsWith('/api/')) {
+          return reply.code(404).send({ error: 'Not found' })
+        }
+      })
+    }
     app.setNotFoundHandler((req, reply) => {
       // Segment-exact prefix match: '/api/...' is an API miss, but the admin
       // SPA routes /api-analytics, /api-keys and /api-docs also START WITH

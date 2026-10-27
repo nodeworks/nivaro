@@ -608,6 +608,32 @@ RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default`
       type: 'p',
       text: 'The instance limit counts per signed-in user, per bearer token, or per address for callers without a credential. A record page makes more than a hundred calls, so a low value refuses people using the app.'
     },
+    { type: 'h3', id: 'rate-limits-anonymous', text: 'A limit for callers who are not signed in' },
+    {
+      type: 'pre',
+      code: `# .env
+RATE_LIMIT_ANON_PER_MINUTE=300   # default 300; 0 = off`
+    },
+    {
+      type: 'p',
+      text: 'This one is on by default. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its calls without a signed-in session wait for the next minute. Signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example `TRUST_PROXY=1`) or to their addresses; `TRUST_PROXY=true` lets a caller choose the address it is counted under.'
+    },
+    {
+      type: 'h3',
+      id: 'rate-limits-public',
+      text: 'Public queries, public dashboards and request size'
+    },
+    {
+      type: 'pre',
+      code: `# .env
+PUBLIC_QUERY_MIN_CACHE_S=60   # anonymous runs of a public custom query are cached at least this long
+PUBLIC_LINK_CACHE_S=60        # a public dashboard link computes its widgets at most this often
+BODY_LIMIT_MB=1               # request body ceiling for most routes`
+    },
+    {
+      type: 'p',
+      text: 'Imports, uploads, layout and payload editors, MCP, record writes and other routes that receive large bodies keep the larger ceiling (the file size limit plus 8 MB), and so do extension routes. A body above BODY_LIMIT_MB is only read for a signed-in caller or a request with an Authorization header.'
+    },
     { type: 'h3', id: 'rate-limits-headers', text: 'Response headers' },
     {
       type: 'pre',
