@@ -1029,19 +1029,19 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
         <div
           data-compare-status={data.status.key}
           data-tip={data.status.reason || undefined}
-          className='flex max-w-[420px] items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 dark:border-border dark:bg-card'
+          className='flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1 dark:border-border dark:bg-card'
         >
           <span className={cn('h-2 w-2 shrink-0 rounded-full', TONE_DOT[data.status.tone])} aria-hidden='true' />
           <span className='shrink-0 whitespace-nowrap text-[12px] font-semibold text-slate-800 dark:text-slate-100'>
             {data.status.label}
           </span>
-          {data.status.reason && (
-            <span className='min-w-0 truncate text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {data.status.reason}
-            </span>
-          )}
+          {/* The reason shows on hover (data-tip); screen readers still get it. */}
+          {data.status.reason && <span className='sr-only'>{data.status.reason}</span>}
         </div>
       )}
+      {(data.facts ?? []).map((f) => (
+        <GridStatChip key={f.label} label={f.label} value={null} text={f.value} tip={f.tip} dataKey={`compare:${f.label}`} />
+      ))}
       {closed && (
         <div
           data-compare-closed={data.closed_through ?? ''}
@@ -1054,9 +1054,6 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
       )}
       {(data.figures ?? []).map((f) => (
         <GridStatChip key={f.label} label={f.label} value={f.value} format={f.format} dataKey={`compare:${f.label}`} />
-      ))}
-      {(data.facts ?? []).map((f) => (
-        <GridStatChip key={f.label} label={f.label} value={null} text={f.value} tip={f.tip} dataKey={`compare:${f.label}`} />
       ))}
     </>
   )
