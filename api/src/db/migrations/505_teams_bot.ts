@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
 
 /**
  * Teams bot foundation (spec 2026-10-27-teams-bot §4).
@@ -10,7 +11,9 @@ import type { Knex } from 'knex'
  *    from JS as UTC.
  *  - nivaro_settings: teams_bot_enabled / app_id / app_secret / tenant_id / app_type
  *    (MultiTenant | SingleTenant; null = MultiTenant).
- * Guarded + additive; down() drops only what up() added.
+ * Guarded + additive; down() drops only what up() added. T-SQL (sys.* reads,
+ * filtered index, datetime2) runs on SQL Server only; elsewhere a plain unique
+ * index does the same job (Postgres / MySQL unique indexes allow many NULLs).
  */
 const USERS = 'nivaro_users'
 const LINKS = 'nivaro_teams_links'
@@ -18,24 +21,35 @@ const SETTINGS = 'nivaro_settings'
 const OID_INDEX = 'ux_nivaro_users_entra_oid'
 
 export async function up(knex: Knex): Promise<void> {
+  const mssql = isMssql(knex)
   if (await knex.schema.hasTable(USERS)) {
+    let addedOid = false
     if (!(await knex.schema.hasColumn(USERS, 'entra_oid'))) {
       await knex.schema.alterTable(USERS, (t) => {
         t.string('entra_oid', 64).nullable()
       })
+      addedOid = true
     }
     if (!(await knex.schema.hasColumn(USERS, 'entra_tid'))) {
       await knex.schema.alterTable(USERS, (t) => {
         t.string('entra_tid', 64).nullable()
       })
     }
-    await knex.raw(
-      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${OID_INDEX}' AND object_id = OBJECT_ID('${USERS}'))
-       CREATE UNIQUE INDEX [${OID_INDEX}] ON [${USERS}] ([entra_oid]) WHERE [entra_oid] IS NOT NULL`
-    )
+    if (mssql) {
+      await knex.raw(
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${OID_INDEX}' AND object_id = OBJECT_ID('${USERS}'))
+         CREATE UNIQUE INDEX [${OID_INDEX}] ON [${USERS}] ([entra_oid]) WHERE [entra_oid] IS NOT NULL`
+      )
+    } else if (addedOid) {
+      await knex.schema.alterTable(USERS, (t) => {
+        t.unique(['entra_oid'], { indexName: OID_INDEX })
+      })
+    }
   }
 
   if (!(await knex.schema.hasTable(LINKS))) {
+    const stamp = (t: Knex.CreateTableBuilder, name: string) =>
+      mssql ? t.specificType(name, 'datetime2').nullable() : t.timestamp(name).nullable()
     await knex.schema.createTable(LINKS, (t) => {
       t.increments('id').primary()
       t.uuid('user_id').notNullable().references('id').inTable(USERS).onDelete('NO ACTION')
@@ -45,10 +59,10 @@ export async function up(knex: Knex): Promise<void> {
       t.string('service_url', 400).nullable()
       t.string('status', 20).notNullable().defaultTo('active') // active | uninstalled | blocked | unlinked
       t.string('linked_by', 20).notNullable() // entra_oid | sign_in
-      t.specificType('installed_at', 'datetime2').nullable()
-      t.specificType('linked_at', 'datetime2').nullable()
-      t.specificType('last_inbound_at', 'datetime2').nullable()
-      t.specificType('last_sent_at', 'datetime2').nullable()
+      stamp(t, 'installed_at')
+      stamp(t, 'linked_at')
+      stamp(t, 'last_inbound_at')
+      stamp(t, 'last_sent_at')
       t.string('last_error', 500).nullable()
       t.index(['user_id'], 'ix_nivaro_teams_links_user')
     })
@@ -80,7 +94,7 @@ export async function down(knex: Knex): Promise<void> {
     ]) {
       if (!(await knex.schema.hasColumn(SETTINGS, name))) continue
       // teams_bot_enabled carries a default constraint that must go first
-      if (name === 'teams_bot_enabled') {
+      if (name === 'teams_bot_enabled' && isMssql(knex)) {
         await knex.raw(
           `DECLARE @c nvarchar(256) = (SELECT dc.name FROM sys.default_constraints dc
              JOIN sys.columns c ON c.default_object_id = dc.object_id
@@ -97,10 +111,12 @@ export async function down(knex: Knex): Promise<void> {
   await knex.schema.dropTableIfExists(LINKS)
 
   if (await knex.schema.hasTable(USERS)) {
-    await knex.raw(
-      `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${OID_INDEX}' AND object_id = OBJECT_ID('${USERS}'))
-       DROP INDEX [${OID_INDEX}] ON [${USERS}]`
-    )
+    if (isMssql(knex)) {
+      await knex.raw(
+        `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${OID_INDEX}' AND object_id = OBJECT_ID('${USERS}'))
+         DROP INDEX [${OID_INDEX}] ON [${USERS}]`
+      )
+    }
     for (const name of ['entra_tid', 'entra_oid']) {
       if (!(await knex.schema.hasColumn(USERS, name))) continue
       await knex.schema.alterTable(USERS, (t) => {

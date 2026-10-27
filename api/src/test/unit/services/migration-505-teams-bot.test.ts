@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as m from '../../../db/migrations/505_teams_bot.js'
 
 // Minimal fake knex: records DDL; `has` says which tables/columns exist.
-function fake(has: { tables: string[]; columns: string[] }) {
+function fake(has: { tables: string[]; columns: string[] }, client = 'mssql') {
   const log = {
     raw: [] as string[],
     alter: [] as string[],
@@ -16,7 +16,16 @@ function fake(has: { tables: string[]; columns: string[] }) {
         get(_t, prop: string) {
           return (...args: unknown[]) => {
             if (
-              ['string', 'text', 'boolean', 'uuid', 'specificType', 'increments'].includes(prop)
+              [
+                'string',
+                'text',
+                'boolean',
+                'uuid',
+                'specificType',
+                'increments',
+                'timestamp',
+                'unique'
+              ].includes(prop)
             ) {
               sink.push(`${prop}:${String(args[0])}${args[1] != null ? `:${String(args[1])}` : ''}`)
             }
@@ -26,6 +35,7 @@ function fake(has: { tables: string[]; columns: string[] }) {
       }
     )
   const knex = {
+    client: { config: { client } },
     raw: async (sql: string) => void log.raw.push(sql),
     schema: {
       hasTable: async (t: string) => has.tables.includes(t),
@@ -102,5 +112,24 @@ describe('migration 505', () => {
     await m.up(knex)
     expect(log.alter).toEqual([])
     expect(log.raw).toEqual([])
+  })
+
+  it('runs no T-SQL on Postgres: plain unique index, timestamp columns', async () => {
+    const { knex, log } = fake({ tables: ['nivaro_users', 'nivaro_settings'], columns: [] }, 'pg')
+    await m.up(knex)
+    expect(log.raw).toEqual([])
+    expect(log.cols.some((c) => c.startsWith('unique:entra_oid'))).toBe(true)
+    expect(log.cols).toContain('timestamp:installed_at')
+    expect(log.cols.some((c) => c.includes('datetime2'))).toBe(false)
+  })
+
+  it('leaves an existing Postgres column alone (no second unique index)', async () => {
+    const { knex, log } = fake(
+      { tables: ['nivaro_users'], columns: ['nivaro_users.entra_oid', 'nivaro_users.entra_tid'] },
+      'pg'
+    )
+    await m.up(knex)
+    expect(log.raw).toEqual([])
+    expect(log.alter).toEqual([])
   })
 })
