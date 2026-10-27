@@ -38,11 +38,13 @@ vi.mock('../../../services/teams-bot/ask.js', () => ({ answerInTeams: st.ask }))
 vi.mock('../../../services/teams-bot/actions.js', () => ({
   handleInvoke: async () => ({ type: 'AdaptiveCard' })
 }))
+const inbound = vi.fn(async (..._a: unknown[]): Promise<unknown> => undefined)
 vi.mock('../../../services/teams-bot/links.js', () => ({
   resolveTeamsUser: async () => st.resolved,
   upsertLink: st.upsert,
   markLink: st.mark,
   linkForUser: async () => null,
+  noteLinkInbound: (...a: unknown[]) => inbound(...a),
   signConnectToken: () => 'SIGNED',
   TeamsLinkTakenError: TakenError,
   readConnectToken: (t: string) =>
@@ -98,6 +100,8 @@ beforeEach(() => {
   st.tokenOk = true
   st.sessionUser = { id: 'U1', entra_oid: 'OID-1' }
   logErr.mockReset()
+  inbound.mockReset()
+  inbound.mockResolvedValue(undefined)
   for (const f of [st.ask, st.upsert, st.send, st.mark]) f.mockReset()
   st.ask.mockResolvedValue(undefined)
   st.send.mockResolvedValue({ id: 'x' })
@@ -115,6 +119,23 @@ describe('POST /api/teams/messages', () => {
     st.verdict = { ok: false, reason: 'tenant' }
     const r = await post(await build(), { ...base, type: 'message', id: 'a' })
     expect(r.statusCode).toBe(401)
+  })
+
+  it('a failing inbound stamp still answers the message', async () => {
+    st.resolved = { user: { id: 'U1', first_name: 'Rob' }, link: { conversation_id: 'conv-1' } }
+    inbound.mockImplementation(() => {
+      throw new TypeError('boom')
+    })
+    const app = await build()
+    expect(
+      (await post(app, { ...base, type: 'message', id: 'f1', text: 'how many?' })).statusCode
+    ).toBe(200)
+    inbound.mockImplementation(async () => {
+      throw new Error('db down')
+    })
+    await post(app, { ...base, type: 'message', id: 'f2', text: 'how many?' })
+    await flush()
+    expect(st.ask).toHaveBeenCalledTimes(2)
   })
 
   it('returns 200 before the answer resolves', async () => {

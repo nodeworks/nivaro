@@ -100,7 +100,12 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
   const oid = activity.from?.aadObjectId
   const tenantId = activity.channelData?.tenant?.id ?? ''
   if (!oid) return
-  void noteLinkInbound(oid).catch(() => undefined)
+  // Bookkeeping only: neither a throw nor a rejection may stop the message being handled.
+  try {
+    void Promise.resolve(noteLinkInbound(oid)).catch(() => undefined)
+  } catch {
+    // ignored
+  }
   const who = await resolveTeamsUser(oid, tenantId)
   if (!who.user) {
     await reply(activity, connectCard(oid, tenantId))
