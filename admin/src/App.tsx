@@ -8,6 +8,7 @@ import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
+import { isServerPath, postLoginTarget, refusedLoginRedirect } from '@/lib/post-login-target'
 import { I18nProvider } from '@/lib/i18n'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
@@ -25,22 +26,6 @@ function ThemedToaster() {
   const { resolvedTheme } = useTheme()
   return <Toaster richColors position='bottom-right' theme={resolvedTheme} />
 }
-
-function safeRedirectPath(raw: string | null | undefined, fallback = '/'): string {
-  if (!raw) return fallback
-  try {
-    const url = new URL(raw, window.location.origin)
-    if (url.origin !== window.location.origin) return fallback
-    return url.pathname + url.search + url.hash
-  } catch {
-    if (raw.startsWith('/') && !raw.startsWith('//')) return raw
-    return fallback
-  }
-}
-
-/** A post-login target the SPA does not route (the OAuth consent page, an API
- *  URL) — it must be a full page load, not a client-side navigation. */
-const isServerPath = (path: string) => /^\/(oauth|api)\//.test(path)
 
 const ActivityDetailPage = lazy(() =>
   import('@/pages/ActivityDetail').then((m) => ({ default: m.ActivityDetailPage }))
@@ -296,13 +281,17 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect')
     sessionStorage.removeItem('nivaro_post_login_redirect')
-    const target = safeRedirectPath(raw)
+    const target = postLoginTarget(raw)
     if (isServerPath(target)) {
       window.location.replace(target)
       return <AppShell />
     }
     return <Navigate to={target} replace />
   }
+  // Signed out: the login page keeps ?redirect= and follows it after any sign-in
+  // method (a full page load). Drop a refused server target before it does.
+  const refused = refusedLoginRedirect()
+  if (refused) return <Navigate to={refused} replace />
   return <>{children}</>
 }
 
@@ -318,7 +307,7 @@ function PostLoginRedirect() {
     if (raw) {
       fired.current = true
       sessionStorage.removeItem('nivaro_post_login_redirect')
-      const target = safeRedirectPath(raw)
+      const target = postLoginTarget(raw)
       if (isServerPath(target)) window.location.replace(target)
       else navigate(target, { replace: true })
     }
