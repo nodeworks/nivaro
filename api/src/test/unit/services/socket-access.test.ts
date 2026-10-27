@@ -173,6 +173,23 @@ describe('ws-token binding (#1719, H1)', () => {
     expect(bindFromRequest({ authMethod: 'api_key' })).toBeNull()
     expect(bindFromRequest({})).toBeNull()
   })
+  it('a ws-token value may carry its tenant, and reading it returns it', () => {
+    const v = encodeBoundToken('U1', { kind: 'session', sid: 's' }, 'tenant-a')
+    expect(JSON.parse(v).t).toBe('tenant-a')
+    expect(parseWsTokenValue(v)).toEqual({
+      userId: 'U1',
+      bind: { kind: 'session', sid: 's' },
+      t: 'tenant-a'
+    })
+    expect(parseWsTokenValue(encodeBoundToken('U1', { kind: 'session', sid: 's' }))).toEqual({
+      userId: 'U1',
+      bind: { kind: 'session', sid: 's' }
+    })
+    expect(JSON.parse(encodeBoundToken('U1', { kind: 'session', sid: 's' }))).not.toHaveProperty(
+      't'
+    )
+  })
+
   it('names rooms without putting a masquerade token in them', () => {
     expect(sessionRoom('sid1')).toBe('session:sid1')
     expect(masqRoom('nvm_secret')).toBe(`masq:${sha('nvm_secret')}`)
@@ -395,9 +412,35 @@ describe('sweepSockets (#1719)', () => {
     const live = fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id: 1, sim: 'nvq_live' } })
     const gone = fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id: 1, sim: 'nvq_gone' } })
     const io = fakeIo([live.socket, gone.socket])
-    await sweepSockets(io as never, { redis: redisWith({ 'keysim:nvq_live': '{}' }) as never })
+    await sweepSockets(io as never, {
+      redis: redisWith({ 'keysim:nvq_live': '{"admin_id":"ADM"}' }) as never,
+      adminStillAdmin: async (id) => id === 'ADM'
+    })
     expect(live.emitted).toEqual([])
     expect(gone.emitted).toContainEqual(['session:ended', { reason: 'signed_out' }])
+  })
+
+  it('closes View-as and run-as sockets whose issuing admin is no longer an admin', async () => {
+    mockDb({
+      users: [{ id: 'ANA', role: 'R', status: 'active' }],
+      keys: [{ id: 1, user: 'ANA', is_active: true, expires_at: null }]
+    })
+    const kept = fakeSocket(ANA, [], { nvrBind: { kind: 'masq', token: 'nvm_ok' } })
+    const masq = fakeSocket(ANA, [], { nvrBind: { kind: 'masq', token: 'nvm_demoted' } })
+    const sim = fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id: 1, sim: 'nvq_demoted' } })
+    const io = fakeIo([kept.socket, masq.socket, sim.socket])
+    const closed = await sweepSockets(io as never, {
+      redis: redisWith({
+        'masq:nvm_ok': '{"user_id":"ANA","admin_id":"BOSS"}',
+        'masq:nvm_demoted': '{"user_id":"ANA","admin_id":"EX"}',
+        'keysim:nvq_demoted': '{"key_id":1,"admin_id":"EX"}'
+      }) as never,
+      adminStillAdmin: async (id) => id === 'BOSS'
+    })
+    expect(closed).toBe(2)
+    expect(kept.emitted).toEqual([])
+    expect(masq.emitted).toContainEqual(['session:ended', { reason: 'masquerade_ended' }])
+    expect(sim.emitted).toContainEqual(['session:ended', { reason: 'signed_out' }])
   })
 
   it('never treats a missing or empty bind as "the account alone" (H1)', async () => {

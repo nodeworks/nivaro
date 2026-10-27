@@ -125,7 +125,8 @@ export type User = {
   title?: string | null
   department?: string | null
   status: string
-  static_token: string | null
+  /** /auth/me never sends the token itself (security audit H6), only whether one exists. */
+  has_static_token?: boolean
   last_access: string | null
   created_at: string
   current_workspace: string | null

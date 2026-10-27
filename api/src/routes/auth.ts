@@ -2,6 +2,14 @@ import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
 import {
+  claimTotpCode,
+  clearLoginFailures,
+  type LoginKind,
+  loginBlockedFor,
+  noteLoginFailure,
+  tooManyAttemptsBody
+} from '../auth/login-limits.js'
+import {
   buildDynamicLoginUrl,
   buildLoginUrl,
   type DynamicOidcProvider,
@@ -12,13 +20,24 @@ import {
   oidcConfigured
 } from '../auth/oidc.js'
 import { signInAllowedByRole } from '../auth/role-sign-in.js'
-import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
-import { revokeUserSessions } from '../auth/session.js'
+import {
+  consumeAssertionId,
+  extractSamlIdentity,
+  getSaml,
+  samlEnabled,
+  setSamlRedis
+} from '../auth/saml.js'
+import { regenerateForSignIn, revokeUserSessions } from '../auth/session.js'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
-import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import {
+  authenticate,
+  credentialMintRefusal,
+  requireAdmin,
+  requireAuth
+} from '../middleware/authenticate.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
@@ -36,7 +55,15 @@ import {
   encodeBoundToken,
   endMasqueradeSockets
 } from '../services/socket-access.js'
-import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import {
+  AccountLinkRefusedError,
+  canSignIn,
+  findOrCreateFromOIDC,
+  namespacedSub,
+  updateLastPage,
+  withoutCredentials
+} from '../services/users.js'
 import type { User } from '../types.js'
 
 // Validate returnTo against all configured allowed origins (admin + any APP_URLS).
@@ -118,6 +145,20 @@ async function hashPassword(password: string): Promise<string> {
   })
 }
 
+/**
+ * A well-formed hash nobody's password matches: an unknown email (or an account without a
+ * password) is checked against it, so the answer takes as long as a real wrong password and
+ * the timing no longer says which emails have accounts.
+ */
+let dummyHash: Promise<string> | null = null
+function timingDummyHash(): Promise<string> {
+  if (!dummyHash) dummyHash = hashPassword(randomBytes(24).toString('hex'))
+  return dummyHash
+}
+
+/** TOTP failures one pending sign-in may make before it has to start over (H9). */
+export const TOTP_MAX_FAILURES = 5
+
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [salt, hashHex] = stored.split(':')
   if (!salt || !hashHex) return false
@@ -139,6 +180,8 @@ declare module '@fastify/session' {
   interface FastifySessionObject {
     /** Set after a successful IdP login when the user still needs to pass TOTP. */
     pendingTotpUserId?: string
+    /** Wrong TOTP codes against the pending sign-in; at TOTP_MAX_FAILURES it is cleared. */
+    totpFailures?: number
     /** Multi-IdP (#538): nivaro_sso_providers row id the login started against.
      *  Absent = the primary env-configured issuer. */
     oidcProviderId?: number
@@ -176,14 +219,33 @@ async function loadSsoProvider(idOrKey: string | number): Promise<DynamicOidcPro
 
 type UserWithTotp = User & { totp_enabled?: boolean; totp_secret?: string | null }
 
+/** Only the SAML POST binding arrives form-encoded; every other auth route takes JSON. */
+export function formBodyAllowed(url: string | undefined): boolean {
+  return /\/saml\/callback\/?$/.test(String(url ?? '').split('?')[0])
+}
+
 export async function authRoutes(app: FastifyInstance) {
+  setSamlRedis(app.redis)
+
   // SAML POST bindings arrive as application/x-www-form-urlencoded.
   // Content type parsers are encapsulated per plugin context, so this only
-  // affects routes registered inside authRoutes.
+  // affects routes registered inside authRoutes. Any OTHER auth route refuses a form body
+  // (security audit M17, login CSRF): a cross-site HTML form can post form-encoded data
+  // without a preflight, so /login/* would sign the victim's browser into the attacker's account.
   app.addContentTypeParser(
     'application/x-www-form-urlencoded',
     { parseAs: 'string' },
-    (_req, body, done) => {
+    (req, body, done) => {
+      if (!formBodyAllowed(req.url)) {
+        done(
+          Object.assign(new Error('Send this request as JSON'), {
+            statusCode: 415,
+            code: 'FORM_BODY_NOT_ACCEPTED'
+          }),
+          undefined
+        )
+        return
+      }
       try {
         done(null, Object.fromEntries(new URLSearchParams(body as string)))
       } catch (err) {
@@ -191,6 +253,39 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
   )
+
+  /** Sign a person in on a NEW session id (M13), stamp it and record the sign-in. */
+  async function signInSession(
+    req: FastifyRequest,
+    userId: string,
+    method: 'oidc' | 'saml' | 'password' | 'static_token'
+  ): Promise<void> {
+    await regenerateForSignIn(req, app.redis)
+    req.session.userId = userId
+    req.session.authAt = Date.now()
+    void recordLogin(app, userId, method, req)
+  }
+
+  /** Park a sign-in that still needs its second factor, on a new session id. */
+  async function beginPendingTotp(req: FastifyRequest, userId: string): Promise<void> {
+    await regenerateForSignIn(req, app.redis)
+    req.session.userId = undefined
+    req.session.pendingTotpUserId = userId
+    req.session.totpFailures = 0
+  }
+
+  /** 429 when this address or account is over its failure limit; true = answered. */
+  async function refuseIfThrottled(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    kind: LoginKind,
+    account: string | null
+  ): Promise<boolean> {
+    const wait = await loginBlockedFor(app.redis, kind, req.ip, account)
+    if (wait == null) return false
+    void reply.code(429).header('Retry-After', String(wait)).send(tooManyAttemptsBody(wait))
+    return true
+  }
 
   // Initiate OIDC login
   // Public provider discovery — drives the login page buttons. The OIDC flow
@@ -484,11 +579,14 @@ export async function authRoutes(app: FastifyInstance) {
       // provider's config; the session carries which one. findOrCreateFromOIDC
       // is unchanged — both paths produce the same claims contract.
       const providerId = req.session.oidcProviderId
-      let profile: Awaited<ReturnType<typeof handleCallback>>
+      let profile: Awaited<ReturnType<typeof handleCallback>> & { legacySub?: string }
       if (providerId != null) {
         const provider = await loadSsoProvider(providerId)
         if (!provider) throw new Error(`SSO provider ${providerId} is missing or inactive`)
-        profile = await handleDynamicCallback(provider, requestUrl, oidcState, codeVerifier)
+        const raw = await handleDynamicCallback(provider, requestUrl, oidcState, codeVerifier)
+        // An additional provider's subjects are stored per issuer (H7); accounts it linked
+        // before that still match through legacySub (+ the same email).
+        profile = { ...raw, sub: namespacedSub(provider.issuer, raw.sub), legacySub: raw.sub }
       } else {
         profile = await handleCallback(requestUrl, oidcState, codeVerifier)
       }
@@ -505,14 +603,11 @@ export async function authRoutes(app: FastifyInstance) {
 
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
-        req.session.userId = undefined
-        req.session.pendingTotpUserId = user.id
+        await beginPendingTotp(req, user.id)
         return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
-      req.session.userId = user.id
-      req.session.authAt = Date.now()
-      void recordLogin(app, user.id, 'oidc', req)
+      await signInSession(req, user.id, 'oidc')
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
       req.session.returnTo = undefined
@@ -521,6 +616,12 @@ export async function authRoutes(app: FastifyInstance) {
 
       return reply.redirect(returnTo)
     } catch (err) {
+      if (err instanceof AccountLinkRefusedError) {
+        await logActivity({ action: 'login-refused', user: null, comment: err.message, req }).catch(
+          () => {}
+        )
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=account_link'))
+      }
       app.log.error({ err }, 'OIDC callback error')
       // OIDC failure log (#158): callback/claim errors land as deduped issues
       // — "logins are broken" gets a browsable cause instead of a log grep.
@@ -551,6 +652,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (!/^\d{6}$/.test(token)) {
       return reply.code(400).send({ error: 'Invalid verification code' })
     }
+    // Per account (whichever session the attempts come from) and per address (H9).
+    if (await refuseIfThrottled(req, reply, 'totp', String(pendingUserId))) return
 
     const user = (await db<User>('nivaro_users')
       .where({ id: pendingUserId, status: 'active' })
@@ -570,12 +673,26 @@ export async function authRoutes(app: FastifyInstance) {
     } catch {
       valid = false
     }
-    if (!valid) return reply.code(401).send({ error: 'Invalid verification code' })
+    // A code works once: a code seen by someone else (shoulder, replayed request) is spent.
+    if (valid && !(await claimTotpCode(app.redis, String(user.id), token))) valid = false
+    if (!valid) {
+      await noteLoginFailure(app.redis, 'totp', req.ip, String(user.id))
+      const failures = (req.session.totpFailures ?? 0) + 1
+      if (failures >= TOTP_MAX_FAILURES) {
+        // This pending sign-in is over: the person signs in with their provider again.
+        req.session.pendingTotpUserId = undefined
+        req.session.totpFailures = undefined
+        return reply.code(401).send({
+          error: 'Too many wrong codes. Sign in again.',
+          code: 'TOTP_RESTART'
+        })
+      }
+      req.session.totpFailures = failures
+      return reply.code(401).send({ error: 'Invalid verification code' })
+    }
 
-    req.session.pendingTotpUserId = undefined
-    req.session.userId = user.id
-    req.session.authAt = Date.now()
-    void recordLogin(app, user.id, 'oidc', req)
+    await clearLoginFailures(app.redis, 'totp', String(user.id))
+    await signInSession(req, String(user.id), 'oidc')
 
     const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
     req.session.returnTo = undefined
@@ -611,6 +728,11 @@ export async function authRoutes(app: FastifyInstance) {
       if (loggedOut || !profile) {
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
       }
+      // A captured response cannot be posted again (replay): each assertion id works once.
+      if (!(await consumeAssertionId(profile))) {
+        app.log.warn('SAML assertion refused: replayed or without an ID')
+        return reply.redirect(loginUrlFor(req.session.returnTo, '?error=auth_failed'))
+      }
 
       const identity = extractSamlIdentity(profile)
       if (!identity.email) {
@@ -626,14 +748,11 @@ export async function authRoutes(app: FastifyInstance) {
 
       // Honor TOTP pending flow, same as OIDC
       if (user.totp_enabled) {
-        req.session.userId = undefined
-        req.session.pendingTotpUserId = user.id
+        await beginPendingTotp(req, user.id)
         return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
-      req.session.userId = user.id
-      req.session.authAt = Date.now()
-      void recordLogin(app, user.id, 'saml', req)
+      await signInSession(req, user.id, 'saml')
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
       req.session.returnTo = undefined
@@ -656,18 +775,37 @@ export async function authRoutes(app: FastifyInstance) {
 
   // ─── Email/password auth (cloud tenants) ────────────────────────────────────
 
+  /** First-time setup is a cloud provisioning step (the welcome link). A self-hosted instance
+   *  offers it only with AUTH_SETUP=on: otherwise any static token — a full credential meant for
+   *  integrations — could be turned into a password that outlives the token's revocation. */
+  const setupOffered = () =>
+    !!process.env.CLOUD_META_DB_URL || /^(on|true|1)$/i.test(process.env.AUTH_SETUP ?? '')
+
   // First-time setup: exchange static_token for a password
   app.post('/setup', async (req, reply) => {
-    const { token, password } = req.body as { token?: string; password?: string }
-    if (!token || !password || password.length < 8) {
+    if (!setupOffered())
+      return reply
+        .code(404)
+        .send({ error: 'Password setup is not offered here', code: 'NOT_FOUND' })
+    const { token, password } = (req.body ?? {}) as { token?: unknown; password?: unknown }
+    if (
+      typeof token !== 'string' ||
+      !token ||
+      typeof password !== 'string' ||
+      password.length < 8
+    ) {
       return reply.code(400).send({ error: 'token and password (min 8 chars) required' })
     }
+    if (await refuseIfThrottled(req, reply, 'setup', token)) return
 
     const user = (await db('nivaro_users')
       .where({ static_token: token, status: 'active' })
       .first()) as (User & { password_hash?: string | null }) | undefined
 
-    if (!user) return reply.code(401).send({ error: 'Invalid or expired setup token' })
+    if (!user) {
+      await noteLoginFailure(app.redis, 'setup', req.ip, token)
+      return reply.code(401).send({ error: 'Invalid or expired setup token' })
+    }
     if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
     if (user.password_hash)
       return reply.code(409).send({ error: 'Password already set. Use /api/auth/login.' })
@@ -679,41 +817,41 @@ export async function authRoutes(app: FastifyInstance) {
       updated_at: new Date()
     })
 
-    req.session.userId = user.id
-    req.session.authAt = Date.now()
-    void recordLogin(app, user.id, 'password', req)
+    await signInSession(req, String(user.id), 'password')
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })
 
   // Email + password login (subsequent logins after setup)
   app.post('/login/password', async (req, reply) => {
-    const { email, password } = req.body as { email?: string; password?: string }
-    if (!email || !password) return reply.code(400).send({ error: 'email and password required' })
+    const { email, password } = (req.body ?? {}) as { email?: unknown; password?: unknown }
+    if (typeof email !== 'string' || !email || typeof password !== 'string' || !password)
+      return reply.code(400).send({ error: 'email and password required' })
+    const account = email.toLowerCase().trim()
+    if (await refuseIfThrottled(req, reply, 'password', account)) return
 
-    const user = (await db('nivaro_users')
-      .where({ email: email.toLowerCase().trim(), status: 'active' })
-      .first()) as (UserWithTotp & { password_hash?: string | null }) | undefined
+    const user = (await db('nivaro_users').where({ email: account, status: 'active' }).first()) as
+      | (UserWithTotp & { password_hash?: string | null })
+      | undefined
 
-    if (!user?.password_hash) {
-      // Constant-time rejection to avoid user enumeration
-      await new Promise((r) => setTimeout(r, 200))
+    // An unknown email (or an account without a password) costs the same scrypt as a wrong
+    // password, so the answer's timing does not say which emails have accounts.
+    let valid = false
+    if (user?.password_hash) valid = await verifyPassword(password, user.password_hash)
+    else await verifyPassword(password, await timingDummyHash())
+    if (!user || !valid) {
+      await noteLoginFailure(app.redis, 'password', req.ip, account)
       return reply.code(401).send({ error: 'Invalid email or password' })
     }
-
-    const valid = await verifyPassword(password, user.password_hash)
-    if (!valid) return reply.code(401).send({ error: 'Invalid email or password' })
+    await clearLoginFailures(app.redis, 'password', account)
     if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
 
     if (user.totp_enabled) {
-      req.session.userId = undefined
-      req.session.pendingTotpUserId = user.id
+      await beginPendingTotp(req, user.id)
       return reply.send({ ok: true, totp_required: true })
     }
 
-    req.session.userId = user.id
-    req.session.authAt = Date.now()
-    void recordLogin(app, user.id, 'password', req)
+    await signInSession(req, String(user.id), 'password')
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })
@@ -724,22 +862,23 @@ export async function authRoutes(app: FastifyInstance) {
   // grants nothing new; it just lets the SPA run on session semantics. TOTP
   // is deliberately not challenged: Bearer requests never are.
   app.post('/login/token', async (req, reply) => {
-    const { token } = req.body as { token?: string }
+    const { token } = (req.body ?? {}) as { token?: unknown }
     if (!token || typeof token !== 'string' || token.trim().length < 8) {
       return reply.code(400).send({ error: 'token required' })
     }
+    // Per address only: a guessed token names no account to count against.
+    if (await refuseIfThrottled(req, reply, 'token', null)) return
     const user = (await db<User>('nivaro_users')
       .where({ static_token: token.trim(), status: 'active' })
       .first()) as User | undefined
     if (!user) {
+      await noteLoginFailure(app.redis, 'token', req.ip, null)
       // Constant-time-ish rejection — mirrors the password route.
       await new Promise((r) => setTimeout(r, 200))
       return reply.code(401).send({ error: 'Invalid token' })
     }
     if (!(await signInAllowedByRole(user))) return reply.code(403).send(SIGN_IN_DISABLED)
-    req.session.userId = user.id
-    req.session.authAt = Date.now()
-    void recordLogin(app, user.id, 'static_token', req)
+    await signInSession(req, String(user.id), 'static_token')
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
   })
@@ -773,7 +912,12 @@ export async function authRoutes(app: FastifyInstance) {
         .code(403)
         .send({ error: 'This sign-in cannot open a live connection', code: 'WS_UNBINDABLE' })
     const token = randomUUID()
-    await app.redis.setex(`ws:token:${token}`, 120, encodeBoundToken(String(req.user!.id), bind))
+    // `t` = the tenant it was minted in (cloud: the socket side refuses it on another tenant).
+    await app.redis.setex(
+      `ws:token:${token}`,
+      120,
+      encodeBoundToken(String(req.user!.id), bind, currentTenantKey())
+    )
     return reply.send({ token })
   })
 
@@ -816,8 +960,8 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.get('/me', { preHandler: authenticate }, async (req, reply) => {
-    // Never expose the TOTP secret
-    const { totp_secret: _totpSecret, ...safeUser } = req.user as UserWithTotp
+    // No static token, password hash, TOTP secret or IdP subject (security audit H6).
+    const safeUser = withoutCredentials(req.user as unknown as Record<string, unknown>)
     // preferences is stored as nvarchar JSON — clients expect an object
     if (typeof safeUser.preferences === 'string') {
       try {
@@ -851,6 +995,10 @@ export async function authRoutes(app: FastifyInstance) {
   // Issues a short-lived nvm_ Bearer token that authenticate() resolves to the
   // target user. Redis-backed (masq:<token>), 4h TTL, activity-logged both ways.
   app.post('/masquerade', { preHandler: requireAdmin }, async (req, reply) => {
+    // A View-as inside a View-as (or minted by an API key / connected app) would be issued and
+    // logged as the person being viewed: only an admin signed in as themselves starts one.
+    const refusal = credentialMintRefusal(req)
+    if (refusal) return reply.code(403).send(refusal)
     const { user_id } = (req.body ?? {}) as { user_id?: string }
     if (!user_id) return reply.code(400).send({ error: 'user_id is required' })
     if (String(user_id).toLowerCase() === String(req.user!.id).toLowerCase()) {
@@ -869,7 +1017,8 @@ export async function authRoutes(app: FastifyInstance) {
     await app.redis.setex(
       `masq:${token}`,
       MASQ_TTL_S,
-      JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
+      // `t` = the tenant it was minted in (cloud: the socket side refuses it on another tenant).
+      JSON.stringify({ user_id: target.id, admin_id: req.user!.id, t: currentTenantKey() })
     )
     await noteMasqueradeToken(app.redis, String(req.user!.id), token)
     void recordLogin(app, String(target.id), 'masquerade', req)

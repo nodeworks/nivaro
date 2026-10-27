@@ -52,13 +52,12 @@ export function PresenceLiveMap() {
   const [entries, setEntries] = useState<PresenceEntry[]>([])
   const [connected, setConnected] = useState(false)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect when the signed-in person changes
   useEffect(() => {
     const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
     socket.on('connect', async () => {
-      let token = user?.static_token ?? null
-      if (!token) {
-        token = await mintWsToken()
-      }
+      // A one-time ws token (the static token is never sent to the browser).
+      const token = await mintWsToken()
       if (token) socket.emit('auth', { token })
     })
     socket.on('auth:ok', () => {
@@ -71,7 +70,7 @@ export function PresenceLiveMap() {
       socket.emit('presence-map:leave')
       socket.disconnect()
     }
-  }, [user?.static_token])
+  }, [user?.id])
 
   const byPage = useMemo(() => {
     const groups = new Map<string, PresenceEntry[]>()

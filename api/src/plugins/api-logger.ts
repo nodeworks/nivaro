@@ -6,7 +6,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
-import { maskQueryString } from '../services/secret-mask.js'
+import { MASK, maskBodySecrets, maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
 import { accessLogEnabled, accessLogLine, noteAccessLine } from '../services/telemetry-store.js'
@@ -79,6 +79,42 @@ function graphqlColumns(req: { __nvrGql?: GraphQLStampLike }): Partial<ApiLogRow
   }
 }
 
+/**
+ * Key names whose values are credentials in an inbound write body. Narrower than the call
+ * log's own pattern on purpose: these bodies become inbound-mapping test fixtures, so business
+ * fields that merely contain "key" (item_key, sort_key) must survive.
+ */
+const LOGGED_BODY_SECRET_KEY =
+  /password|passwd|passphrase|^pass$|secret|token|api[_-]?key|private[_-]?key|authorization|cookie|credential/i
+
+/** A JSON request body with every credential-named value (any depth) replaced by `••••••`;
+ *  anything that is not JSON — or JSON already cut off — goes through the shared masker. */
+export function maskLoggedBody(raw: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return maskBodySecrets(raw) ?? raw
+  }
+  let changed = false
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {}
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (LOGGED_BODY_SECRET_KEY.test(k) && x != null && x !== '' && typeof x !== 'object') {
+          out[k] = MASK
+          changed = true
+        } else out[k] = walk(x)
+      }
+      return out
+    }
+    return v
+  }
+  const masked = walk(parsed)
+  return changed ? JSON.stringify(masked) : raw
+}
+
 function captureRequestBody(req: {
   method: string
   authMethod?: string
@@ -95,7 +131,11 @@ function captureRequestBody(req: {
   if (!ct.includes('json')) return null
   if (req.body == null) return null
   try {
-    const str = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    // Values under credential-looking keys (password, token, secret, key…) are masked before
+    // the body is stored: the request log is readable by admins and kept 14 days (security
+    // audit Low). A replay from the log therefore never re-sends a credential.
+    const str = maskLoggedBody(raw)
     return str.length > REQUEST_BODY_CAP ? `${str.slice(0, REQUEST_BODY_CAP)}…` : str
   } catch {
     return null
@@ -146,12 +186,13 @@ function extractCollection(path: string): string | null {
   return match ? match[1] : null
 }
 
+/**
+ * The caller's address as Fastify resolved it: `req.ip` honours TRUST_PROXY, so a forwarded
+ * address is believed only from a trusted proxy. Reading `X-Forwarded-For` directly let any
+ * caller write whatever address they liked into the request log (security audit Low).
+ */
 function clientIp(req: { headers: Record<string, unknown>; ip: string }): string | null {
-  const fwd = req.headers['x-forwarded-for']
-  const first = (Array.isArray(fwd) ? fwd[0] : typeof fwd === 'string' ? fwd : '')
-    .split(',')[0]
-    .trim()
-  return (first || req.ip || null)?.slice(0, 64) ?? null
+  return req.ip ? String(req.ip).slice(0, 64) : null
 }
 
 function shouldSkip(path: string, method: string): boolean {

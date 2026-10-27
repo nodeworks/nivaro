@@ -1,18 +1,25 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import type { Role, User } from '../types.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
+import type { User } from '../types.js'
 
 /**
  * Slack / Teams message actions.
  *
  * Outgoing: sendActionCard() posts an Adaptive Card to a Teams incoming webhook
  * with action buttons that hit GET /api/message-actions/callback?token=<signed>.
- * Tokens are HMAC-SHA256 signed with SESSION_SECRET:
+ * Tokens are HMAC-SHA256 signed with a key derived from SESSION_SECRET for this purpose only:
  *   base64url(JSON payload) + '.' + base64url(hmac)
- * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp }
+ * Payload: { action_id, kind, ref_id, user?, collection?, item?, exp, jti? }
+ *
+ * A card goes to a SHARED channel, so the link alone never decides anything (security audit
+ * H8): an Approve/Reject link works only for the approver it names, signed in to Nivaro in that
+ * browser (anyone else is sent to sign in, or told the link is not theirs); it works once (a
+ * Redis nonce per token) and for 24 hours.
  */
 
 export interface ActionTokenPayload {
@@ -23,16 +30,24 @@ export interface ActionTokenPayload {
   collection?: string | null
   item?: string | null
   exp: number // unix seconds
+  /** One-time id: a decision token is spent when its decision is made. */
+  jti?: string
 }
 
-const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60 // 7 days
+export const TOKEN_TTL_SECONDS = 24 * 60 * 60 // 24 hours
 
 function b64url(buf: Buffer): string {
   return buf.toString('base64url')
 }
 
+/** This feature's own signing key, derived from SESSION_SECRET (a token signed for another
+ *  purpose with the same secret is never accepted here). */
+function actionKey(): Buffer {
+  return createHmac('sha256', config.SESSION_SECRET).update('nivaro:message-actions:v2').digest()
+}
+
 function hmac(data: string): Buffer {
-  return createHmac('sha256', config.SESSION_SECRET).update(data).digest()
+  return createHmac('sha256', actionKey()).update(data).digest()
 }
 
 export function signActionToken(
@@ -40,6 +55,7 @@ export function signActionToken(
 ): string {
   const full: ActionTokenPayload = {
     ...payload,
+    jti: payload.jti ?? randomUUID(),
     exp: payload.exp ?? Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS
   }
   const body = b64url(Buffer.from(JSON.stringify(full), 'utf8'))
@@ -208,6 +224,82 @@ function confirmPage(token: string, decision: 'approve' | 'reject') {
   }
 }
 
+/** Redis key that marks a decision token spent (tenant-scoped, the token's id hashed). */
+function usedKey(jti: string): string {
+  const h = createHash('sha256').update(jti).digest('hex').slice(0, 40)
+  return `nvr:msgact:used:${currentTenantKey()}:${h}`
+}
+
+const sameUser = (a: unknown, b: unknown) =>
+  String(a ?? '').toUpperCase() === String(b ?? '').toUpperCase() && String(a ?? '') !== ''
+
+/**
+ * Who is signed in to Nivaro in this browser — by SESSION only (a decision link is opened from
+ * a chat client; a bearer header there would be someone's integration, not the approver).
+ * Null = nobody (or the session ended / policy expired it).
+ */
+async function sessionUser(
+  req: FastifyRequest,
+  reply: FastifyReply
+): Promise<{ user: User; isAdmin: boolean } | null> {
+  if (req.headers.authorization) return null
+  if (!(req as { session?: { userId?: string } }).session?.userId) return null
+  try {
+    await authenticate(req, reply)
+  } catch {
+    return null
+  }
+  if (req.authMethod !== 'session' || !req.user) return null
+  return { user: req.user as User, isAdmin: !!req.isAdmin }
+}
+
+type Verdict =
+  | { ok: true; user: User; isAdmin: boolean }
+  | { ok: false; status: number; html: string; redirect?: string }
+
+/**
+ * May the person in this browser make this decision? Only the approver the token names, signed
+ * in. `signInRedirect` (GET only) sends a signed-out visitor through sign-in and back here.
+ */
+async function judgeDecision(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  token: string,
+  payload: ActionTokenPayload,
+  signInRedirect: boolean
+): Promise<Verdict> {
+  if (!payload.user)
+    return { ok: false, ...htmlPage('Error', 'This action is not bound to a user', 400) }
+  if (!payload.jti)
+    return {
+      ok: false,
+      ...htmlPage('Expired', 'This link has expired. Open the request in Nivaro to decide.', 410)
+    }
+  const me = await sessionUser(req, reply)
+  if (!me) {
+    if (signInRedirect) {
+      const base = config.PUBLIC_URL.replace(/\/$/, '')
+      const back = `${base}/api/message-actions/callback?token=${encodeURIComponent(token)}`
+      return {
+        ok: false,
+        status: 302,
+        html: '',
+        redirect: `${base}/api/auth/login?returnTo=${encodeURIComponent(back)}`
+      }
+    }
+    return {
+      ok: false,
+      ...htmlPage('Sign in', 'Sign in to Nivaro, then open the link again.', 401)
+    }
+  }
+  if (!sameUser(me.user.id, payload.user))
+    return {
+      ok: false,
+      ...htmlPage('Not yours', 'This link is for another person. Open the request in Nivaro.', 403)
+    }
+  return { ok: true, user: me.user, isAdmin: me.isAdmin }
+}
+
 export async function messageActionsRoutes(app: FastifyInstance) {
   // The confirm page posts its token back as a plain HTML form.
   app.addContentTypeParser(
@@ -222,40 +314,52 @@ export async function messageActionsRoutes(app: FastifyInstance) {
     }
   )
 
-  // Token-authenticated — no session/bearer auth on the callback
-  const handler = async (token: string | undefined) => {
-    if (!token) return { redirect: null, ...htmlPage('Error', 'Missing token', 400) }
+  const send = (reply: FastifyReply, r: { status: number; html: string; redirect?: string }) => {
+    if (r.redirect) return reply.redirect(r.redirect)
+    return reply.code(r.status).header('cache-control', 'no-store').type('text/html').send(r.html)
+  }
 
+  const viewRedirect = (payload: ActionTokenPayload) =>
+    `${config.ADMIN_URL}/collections/${encodeURIComponent(payload.collection ?? '')}/${encodeURIComponent(payload.item ?? '')}`
+
+  const isView = (payload: ActionTokenPayload) =>
+    payload.action_id === 'view' || payload.kind === 'view'
+
+  app.get<{ Querystring: { token?: string } }>('/callback', async (req, reply) => {
+    // A decision never happens on GET: the page asks, the button POSTs.
+    const token = req.query.token
+    if (!token) return send(reply, htmlPage('Error', 'Missing token', 400))
     const payload = verifyActionToken(token)
-    if (!payload) {
-      return { redirect: null, ...htmlPage('Error', 'Invalid or expired link', 401) }
-    }
+    if (!payload) return send(reply, htmlPage('Error', 'Invalid or expired link', 401))
+    if (isView(payload)) return reply.redirect(viewRedirect(payload))
+    if (payload.kind !== 'approval') return send(reply, htmlPage('Error', 'Unknown action', 400))
 
-    // 'view' → redirect into the admin UI
-    if (payload.action_id === 'view' || payload.kind === 'view') {
-      const collection = payload.collection ?? ''
-      const item = payload.item ?? ''
-      return {
-        redirect: `${config.ADMIN_URL}/collections/${collection}/${item}`,
-        status: 302,
-        html: ''
-      }
-    }
+    const verdict = await judgeDecision(req, reply, token, payload, true)
+    if (!verdict.ok) return send(reply, verdict)
+    if (app.redis && (await app.redis.exists(usedKey(payload.jti as string))))
+      return send(reply, htmlPage('Done', 'This link was already used.', 409))
+    return send(reply, confirmPage(token, payload.action_id === 'approve' ? 'approve' : 'reject'))
+  })
 
-    if (payload.kind === 'approval') {
-      if (!payload.user) {
-        return { redirect: null, ...htmlPage('Error', 'This action is not bound to a user', 400) }
-      }
-      const user = (await db<User>('nivaro_users')
-        .where({ id: payload.user, status: 'active' })
-        .first()) as User | undefined
-      if (!user) return { redirect: null, ...htmlPage('Error', 'User not found', 404) }
+  app.post<{ Querystring: { token?: string }; Body: { token?: string } | null }>(
+    '/callback',
+    async (req, reply) => {
+      const token = req.query.token ?? (req.body as { token?: string } | null)?.token
+      if (!token) return send(reply, htmlPage('Error', 'Missing token', 400))
+      const payload = verifyActionToken(token)
+      if (!payload) return send(reply, htmlPage('Error', 'Invalid or expired link', 401))
+      if (isView(payload)) return reply.redirect(viewRedirect(payload))
+      if (payload.kind !== 'approval') return send(reply, htmlPage('Error', 'Unknown action', 400))
 
-      let isAdmin = false
-      if (user.role) {
-        const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
-        isAdmin = role?.admin_access ?? false
-      }
+      const verdict = await judgeDecision(req, reply, token, payload, false)
+      if (!verdict.ok) return send(reply, verdict)
+
+      // Spend the token BEFORE deciding (two quick clicks decide once). No Redis = no way to
+      // prove single use, so no decision by link at all.
+      if (!app.redis) return send(reply, htmlPage('Error', 'Decide this request in Nivaro.', 503))
+      const ttl = Math.max(60, payload.exp - Math.floor(Date.now() / 1000) + 60)
+      const claimed = await app.redis.set(usedKey(payload.jti as string), '1', 'EX', ttl, 'NX')
+      if (claimed !== 'OK') return send(reply, htmlPage('Done', 'This link was already used.', 409))
 
       const decision = payload.action_id === 'approve' ? 'approved' : 'rejected'
       // Lazy import breaks the approvals ↔ message-actions circular dependency
@@ -263,55 +367,26 @@ export async function messageActionsRoutes(app: FastifyInstance) {
       const result = await applyApprovalDecision({
         app,
         instanceId: Number(payload.ref_id),
-        user,
-        isAdmin,
+        user: verdict.user,
+        isAdmin: verdict.isAdmin,
         decision,
         comment: 'Via message action'
       })
 
       if (!result.ok) {
-        return {
-          redirect: null,
-          ...htmlPage('Error', result.error ?? 'Failed', result.status ?? 400)
-        }
+        // Nothing was decided: the link may be used again (e.g. after a transient failure).
+        await app.redis.del(usedKey(payload.jti as string)).catch(() => {})
+        return send(reply, htmlPage('Error', result.error ?? 'Failed', result.status ?? 400))
       }
       await logActivity({
         action: 'message-action',
-        user: user.id,
+        user: verdict.user.id,
         collection: payload.collection ?? undefined,
         item: payload.item ?? undefined,
-        comment: `approval ${decision} via message action`
+        comment: `approval ${decision} via message action`,
+        req
       })
-      return { redirect: null, ...htmlPage('Done', `&#10003; Done — ${decision}`) }
-    }
-
-    return { redirect: null, ...htmlPage('Error', 'Unknown action', 400) }
-  }
-
-  app.get<{ Querystring: { token?: string } }>('/callback', async (req, reply) => {
-    // A decision never happens on GET: the page asks, the button POSTs.
-    const token = req.query.token
-    const payload = token ? verifyActionToken(token) : null
-    if (token && payload?.kind === 'approval' && payload.action_id !== 'view') {
-      const page = confirmPage(token, payload.action_id === 'approve' ? 'approve' : 'reject')
-      return reply
-        .code(page.status)
-        .header('cache-control', 'no-store')
-        .type('text/html')
-        .send(page.html)
-    }
-    const result = await handler(token)
-    if (result.redirect) return reply.redirect(result.redirect)
-    return reply.code(result.status).type('text/html').send(result.html)
-  })
-
-  app.post<{ Querystring: { token?: string }; Body: { token?: string } | null }>(
-    '/callback',
-    async (req, reply) => {
-      const token = req.query.token ?? (req.body as { token?: string } | null)?.token
-      const result = await handler(token)
-      if (result.redirect) return reply.redirect(result.redirect)
-      return reply.code(result.status).type('text/html').send(result.html)
+      return send(reply, htmlPage('Done', `&#10003; Done — ${decision}`))
     }
   )
 }

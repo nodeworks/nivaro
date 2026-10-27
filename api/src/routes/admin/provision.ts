@@ -1,7 +1,22 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import knex from 'knex'
 import { migrationSource } from '../../db/index.js'
+
+/**
+ * The control plane's shared secret, compared in constant time (security audit Low: a plain
+ * `!==` leaks how much of a guess matched). Both sides are hashed first so their lengths match.
+ * No PROVISION_SECRET configured = nothing matches.
+ */
+export function provisionSecretMatches(
+  given: string | string[] | undefined,
+  expected: string | undefined = process.env.PROVISION_SECRET
+): boolean {
+  if (!expected || typeof given !== 'string' || !given) return false
+  const a = createHash('sha256').update(given).digest()
+  const b = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(a, b)
+}
 
 // Only registered in cloud mode (when CLOUD_META_DB_URL is set).
 // Self-hosted users never see this route.
@@ -9,8 +24,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
   // Migrate only — runs pending migrations on an existing tenant DB (no seeding)
   // Migration status — returns applied + pending migration names without running anything
   app.post('/admin/migration-status', async (req, reply) => {
-    const secret = req.headers['x-provision-secret']
-    if (!secret || secret !== process.env.PROVISION_SECRET) {
+    if (!provisionSecretMatches(req.headers['x-provision-secret'])) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 
@@ -54,8 +68,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
   })
 
   app.post('/admin/migrate', async (req, reply) => {
-    const secret = req.headers['x-provision-secret']
-    if (!secret || secret !== process.env.PROVISION_SECRET) {
+    if (!provisionSecretMatches(req.headers['x-provision-secret'])) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 
@@ -88,8 +101,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
   })
 
   app.post('/admin/provision', async (req, reply) => {
-    const secret = req.headers['x-provision-secret']
-    if (!secret || secret !== process.env.PROVISION_SECRET) {
+    if (!provisionSecretMatches(req.headers['x-provision-secret'])) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 
@@ -176,8 +188,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
   // Requires the 003_storage_config migration to have run on the tenant DB first.
   // In self-hosted mode this route is never registered (CLOUD_META_DB_URL not set).
   app.post('/admin/configure-storage', async (req, reply) => {
-    const secret = req.headers['x-provision-secret']
-    if (!secret || secret !== process.env.PROVISION_SECRET) {
+    if (!provisionSecretMatches(req.headers['x-provision-secret'])) {
       return reply.code(401).send({ error: 'Unauthorized' })
     }
 

@@ -62,12 +62,8 @@ export function useRecordPresence(collection: string | undefined, item: string |
 
     if (!shared)
       bind('connect', async () => {
-        // Session-cookie users mint a one-time ws token; static-token users
-        // authenticate directly.
-        let token = user?.static_token ?? null
-        if (!token) {
-          token = await mintWsToken()
-        }
+        // Every sign-in mints a one-time ws token (the static token never reaches the browser).
+        const token = await mintWsToken()
         if (token && !disposed) socket.emit('auth', { token })
       })
 
@@ -238,7 +234,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
       setViewers([])
       setEditing({})
     }
-  }, [collection, item, user?.static_token, user?.id])
+  }, [collection, item, user?.id])
 
   // Imperative outline on remotely-edited fields
   useEffect(() => {

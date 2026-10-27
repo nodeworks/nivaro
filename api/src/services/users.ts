@@ -10,6 +10,60 @@ import { queueOfficeGeocode } from './office-geocode.js'
 import { orderByPeopleRelevance } from './people-search-rank.js'
 import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
 
+/** Credentials and identity-provider links that never leave the server on a user's own row. */
+export const USER_CREDENTIAL_FIELDS = [
+  'static_token',
+  'password_hash',
+  'totp_secret',
+  'external_id'
+] as const
+
+/**
+ * A user row as the API answers it about a person (security audit H6): no static token,
+ * password hash, TOTP secret or IdP subject. A token in a response survives sign-out and is one
+ * XSS away from theft, a narrow API key must not read its owner's full token, and a View-as
+ * admin must not receive the target's hash. `has_static_token` says whether a token exists;
+ * clients that used it for sockets mint a one-time ws token instead.
+ */
+export function withoutCredentials<T extends Record<string, unknown>>(
+  user: T
+): Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> & { has_static_token: boolean } {
+  const out: Record<string, unknown> = { ...user }
+  for (const f of USER_CREDENTIAL_FIELDS) delete out[f]
+  // A row that was already stripped keeps the answer it carries (idempotent).
+  out.has_static_token =
+    'static_token' in user ? !!user.static_token : user.has_static_token === true
+  return out as Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> & { has_static_token: boolean }
+}
+
+/** A sign-in whose identity may not be linked to the account its email names (H7). */
+export class AccountLinkRefusedError extends Error {
+  readonly code = 'ACCOUNT_LINK_REFUSED'
+}
+
+function sameEmail(a: unknown, b: unknown): boolean {
+  const x = String(a ?? '')
+    .trim()
+    .toLowerCase()
+  return (
+    !!x &&
+    x ===
+      String(b ?? '')
+        .trim()
+        .toLowerCase()
+  )
+}
+
+/**
+ * The subject an ADDITIONAL sign-in provider (Settings → Sign-in providers) is stored under:
+ * `oidc:<issuer>|<sub>`, so two issuers that hand out the same subject string can never be the
+ * same account. The primary env-configured provider keeps the raw `sub` (every existing account
+ * keeps matching); SAML already stores `saml:<nameID>`.
+ */
+export function namespacedSub(issuer: string, sub: string): string {
+  return `oidc:${String(issuer).trim().replace(/\/+$/, '')}|${sub}`
+}
+
 /** Only an active, non-redacted account may hold a session. */
 export function canSignIn(user: Pick<User, 'status'> & { is_redacted?: unknown }): boolean {
   return user.status === 'active' && !user.is_redacted
@@ -104,13 +158,41 @@ export async function findOrCreateFromOIDC(profile: {
   // Entra object + tenant id from the ID token (Microsoft issuers only).
   entraOid?: string | null
   entraTid?: string | null
+  /** An additional provider's RAW subject, when `sub` is issuer-namespaced (namespacedSub):
+   *  accounts it linked before namespacing still match, and are re-stamped namespaced. */
+  legacySub?: string | null
 }): Promise<User> {
+  if (!profile.sub) throw new AccountLinkRefusedError('The identity provider sent no subject')
   // Match by the immutable subject first; email only links a pre-provisioned
   // user on their FIRST login (external_id gets stamped immediately below,
   // so subsequent logins always hit the sub match).
   let existing = await db<User>('nivaro_users').where({ external_id: profile.sub }).first()
+  if (!existing && profile.legacySub && profile.email) {
+    // Linked by this provider before subjects were namespaced: the raw subject AND the email
+    // must both match, so another issuer reusing a subject string cannot claim it.
+    const legacy = (await db<User>('nivaro_users')
+      .where({ external_id: profile.legacySub })
+      .first()) as User | undefined
+    if (legacy && sameEmail(legacy.email, profile.email)) existing = legacy
+  }
   if (!existing && profile.email) {
-    existing = await db<User>('nivaro_users').where({ email: profile.email }).first()
+    // Security audit H7: email links ONLY an account no identity has claimed yet (a
+    // pre-provisioned row). An account already bound to another subject is never taken over
+    // by an email claim — a custom IdP, or a mailbox someone renamed, could assert any email.
+    const byEmail = (await db<User>('nivaro_users').where({ email: profile.email }).first()) as
+      | (User & { external_id?: string | null })
+      | undefined
+    if (byEmail) {
+      if (byEmail.external_id) {
+        console.warn(
+          `[oidc] refused: email matches user ${byEmail.id}, which is linked to another sign-in identity`
+        )
+        throw new AccountLinkRefusedError(
+          'This email belongs to an account linked to a different sign-in. Ask an administrator.'
+        )
+      }
+      existing = byEmail
+    }
   }
 
   const adRole = await resolveRoleFromAdGroups(profile.groups ?? [])
@@ -250,7 +332,21 @@ async function configuredNewUserRole(): Promise<string | null> {
   return String(role.id)
 }
 
+/**
+ * One person's row WITHOUT credentials (static token, password hash, TOTP secret, IdP subject;
+ * security audit H6) — what every route answer, revision snapshot and service sees.
+ * `has_static_token` says whether a token exists. Sign-in code that needs the credential
+ * columns themselves uses getUserWithCredentials.
+ */
 export async function getUser(id: string): Promise<User | undefined> {
+  const row = await getUserWithCredentials(id)
+  return row
+    ? (withoutCredentials(row as unknown as Record<string, unknown>) as unknown as User)
+    : row
+}
+
+/** The full row, credentials included — internal sign-in / token code only, never a response. */
+export async function getUserWithCredentials(id: string): Promise<User | undefined> {
   // nivaro_users.id is a uniqueidentifier: anything else is nobody, not a
   // conversion error from SQL Server.
   if (!USER_ID_SHAPE.test(String(id ?? ''))) return undefined

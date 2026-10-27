@@ -107,20 +107,32 @@ function isBind(v: unknown): v is SocketBind {
   return false
 }
 
-/** What a ws-token or SSE ticket stores: `{u, b}` — the user and what signed them in. */
-export function encodeBoundToken(userId: string, bind: SocketBind): string {
-  return JSON.stringify({ u: userId, b: bind })
+/** What a ws-token or SSE ticket stores: `{u, b}` — the user and what signed them in — plus
+ *  `t`, the tenant it was minted in, when given (cloud: the socket side refuses another
+ *  tenant's token; self-hosted ignores it). */
+export function encodeBoundToken(userId: string, bind: SocketBind, tenant?: string): string {
+  return JSON.stringify(tenant ? { u: userId, b: bind, t: tenant } : { u: userId, b: bind })
 }
 
 /**
  * Read a ws-token / SSE ticket value. A value without a valid bind (a bare user id from an
  * older API) gives `bind: null`, which signs nothing in: the client simply asks for a new one.
  */
-export function parseWsTokenValue(raw: string): { userId: string | null; bind: SocketBind | null } {
+export function parseWsTokenValue(raw: string): {
+  userId: string | null
+  bind: SocketBind | null
+  /** The tenant the token was minted in (absent on tokens minted without one). */
+  t?: string
+} {
   if (raw.startsWith('{')) {
     try {
-      const v = JSON.parse(raw) as { u?: string; b?: unknown }
-      if (v.u) return { userId: v.u, bind: isBind(v.b) ? v.b : null }
+      const v = JSON.parse(raw) as { u?: string; b?: unknown; t?: unknown }
+      if (v.u)
+        return {
+          userId: v.u,
+          bind: isBind(v.b) ? v.b : null,
+          ...(typeof v.t === 'string' && v.t ? { t: v.t } : {})
+        }
     } catch {
       /* fall through */
     }
@@ -640,8 +652,36 @@ export async function runLocalRecheck(io: SocketIOServer, target: RecheckTarget)
 
 // ── Sweep (#1719) ──────────────────────────────────────────────────────────
 
+/**
+ * The admin behind a View-as (masq) or run-as-key (apikey + sim) bind, read from the Redis
+ * value the bind already depends on: undefined = not a delegated bind, null = unreadable.
+ */
+export function delegatedAdminId(
+  bind: SocketBind | null | undefined,
+  redisValues: Map<string, string | null>
+): string | null | undefined {
+  let raw: string | null | undefined
+  if (bind?.kind === 'masq') raw = redisValues.get(`masq:${bind.token}`)
+  else if (bind?.kind === 'apikey' && bind.sim) raw = redisValues.get(`keysim:${bind.sim}`)
+  else return undefined
+  try {
+    const v = JSON.parse(String(raw ?? '')) as { admin_id?: unknown }
+    return typeof v.admin_id === 'string' && v.admin_id ? v.admin_id : null
+  } catch {
+    return null
+  }
+}
+
+/** The default issuing-admin check (middleware/authenticate.ts, cached per admin). */
+async function defaultAdminStillAdmin(adminId: string | null): Promise<boolean> {
+  const { issuingAdminStillAdmin } = await import('../middleware/authenticate.js')
+  return issuingAdminStillAdmin(adminId)
+}
+
 export interface SweepDeps {
   redis: Redis
+  /** Is the admin behind a View-as / run-as-key socket still an active administrator? */
+  adminStillAdmin?: (adminId: string | null) => Promise<boolean>
   /** Session policy judgement (idle / max age) over the stored session stamps. */
   judge?: (
     role: string | null,
@@ -654,7 +694,11 @@ export interface SweepDeps {
  * policy, a masquerade that ended, a static token that changed, or an account no longer active
  * closes the socket; a changed role re-gates its rooms. Returns how many sockets were closed.
  */
-export async function sweepSockets(io: SocketIOServer, deps: SweepDeps): Promise<number> {
+export async function sweepSockets(io: SocketIOServer, sweepDeps: SweepDeps): Promise<number> {
+  const deps = {
+    ...sweepDeps,
+    adminStillAdmin: sweepDeps.adminStillAdmin ?? defaultAdminStillAdmin
+  }
   let closed = 0
   for (const group of authedSocketGroups(io)) {
     await inGroupTenant(group, async () => {
@@ -686,6 +730,17 @@ export async function sweepSockets(io: SocketIOServer, deps: SweepDeps): Promise
         const verdict = bindVerdict(b, row, byKey, apiKeys)
         if (verdict) {
           endSocket(socket, verdict)
+          closed++
+          continue
+        }
+        // A View-as / run-as-key socket ends when the admin who started it is no longer an
+        // active administrator (the HTTP side refuses their token on its next request).
+        const issuer = delegatedAdminId(b, byKey)
+        // A database blip judges nothing (never closes every View-as at once).
+        const issuerOk =
+          issuer === undefined || (await deps.adminStillAdmin(issuer).catch(() => true))
+        if (!issuerOk) {
+          endSocket(socket, b?.kind === 'masq' ? 'masquerade_ended' : 'signed_out')
           closed++
           continue
         }

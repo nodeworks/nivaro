@@ -14,20 +14,23 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
+import { mintWsToken } from '@/lib/socket'
 import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 // Socket adapter: same auth handshake + collection:join protocol the page used
 // inline before (joins only after auth:ok — see api/src/plugins/socketio.ts).
-// static_token comes from the authed user; the server gates collection:join on a
-// completed auth handshake (joins only after auth:ok — api/src/plugins/socketio.ts).
-function createSocketRealtime(staticToken: string | null): QueueRealtimeAdapter {
+// The socket signs in with a one-time ws token (the static token never reaches the browser);
+// the server gates collection:join on a completed auth handshake (joins only after auth:ok —
+// api/src/plugins/socketio.ts).
+function createSocketRealtime(): QueueRealtimeAdapter {
   return {
     subscribe(collections, onUpdate) {
       const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
-      socket.on('connect', () => {
-        if (staticToken) socket.emit('auth', { token: staticToken })
+      socket.on('connect', async () => {
+        const token = await mintWsToken()
+        if (token) socket.emit('auth', { token })
       })
       socket.on('auth:ok', () => {
         for (const collection of collections) {
@@ -49,10 +52,8 @@ export function QueueDetailPage() {
   const { user } = useAuth()
 
   const client = useMemo(() => createNivaro(window.location.origin, { timeoutMs: 90_000 }), [])
-  const realtime = useMemo(
-    () => createSocketRealtime(user?.static_token ?? null),
-    [user?.static_token]
-  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new adapter per signed-in person
+  const realtime = useMemo(() => createSocketRealtime(), [user?.id])
 
   const { data: queue } = useQuery<{ name: string; description: string | null }>({
     queryKey: ['queue-meta', id],

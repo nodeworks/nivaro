@@ -21,7 +21,7 @@ import { logActivity } from '../services/activity.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
 import {
   consumeCode,
-  consumeRefresh,
+  consumeRefreshChecked,
   getClient,
   grantScope,
   issueCode,
@@ -444,10 +444,21 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     }
 
     if (grantType === 'refresh_token') {
-      const rec = await consumeRefresh(app.redis, str(b.refresh_token))
-      if (!rec)
-        return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired refresh token')
-      if (b.client_id != null && rec.client_id !== str(b.client_id))
+      // A public client identifies itself on every refresh (OAuth 2.1 §4.3; security audit M18).
+      if (!str(b.client_id))
+        return oauthError(reply, 400, 'invalid_request', 'client_id is required')
+      const out = await consumeRefreshChecked(app.redis, str(b.refresh_token))
+      if (!out.ok)
+        return oauthError(
+          reply,
+          400,
+          'invalid_grant',
+          out.reason === 'reused'
+            ? 'This refresh token was already used — the connection has been ended. Connect again.'
+            : 'Unknown, used or expired refresh token'
+        )
+      const rec = out.rec
+      if (rec.client_id !== str(b.client_id))
         return oauthError(reply, 400, 'invalid_grant', 'The token was issued to another client')
       if (!(await activeUser(rec.user_id)))
         return oauthError(reply, 400, 'invalid_grant', 'The account is not active')

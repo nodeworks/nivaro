@@ -32,10 +32,7 @@ export function usePagePresence() {
     socketRef.current = socket
 
     const onConnect = async () => {
-      let token = user.static_token ?? null
-      if (!token) {
-        token = await mintWsToken()
-      }
+      const token = await mintWsToken()
       if (token) socket.emit('auth', { token })
     }
     const onAuth = () => {

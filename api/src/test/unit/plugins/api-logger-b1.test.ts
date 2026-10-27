@@ -31,8 +31,9 @@ import { apiLoggerPlugin, internalDispatchStamps } from '../../../plugins/api-lo
 import { legacyCompatRoutes } from '../../../plugins/legacy-compat.js'
 import { notePublicHit } from '../../../services/traffic-taps/public-clients.js'
 
-async function app() {
-  const a = Fastify()
+async function app(opts: { trustProxy?: boolean } = { trustProxy: true }) {
+  // The logger reads req.ip, which believes X-Forwarded-For only behind a trusted proxy.
+  const a = Fastify({ trustProxy: opts.trustProxy })
   await a.register(apiLoggerPlugin)
   await a.register(legacyCompatRoutes)
   a.post('/api/graphql', async (req) => {
@@ -90,5 +91,16 @@ describe('public pages', () => {
       signedIn: false
     })
     expect(inserted).toHaveLength(0) // still outside the request log
+  })
+
+  it('never believes X-Forwarded-For from a caller that is not a trusted proxy', async () => {
+    const a = await app({ trustProxy: false })
+    await a.inject({
+      method: 'GET',
+      url: '/share/abc123token',
+      headers: { 'user-agent': 'curl/8', 'x-forwarded-for': '203.0.113.5' }
+    })
+    await a.close()
+    expect(vi.mocked(notePublicHit).mock.calls[0][0]).toMatchObject({ ip: '127.0.0.1' })
   })
 })

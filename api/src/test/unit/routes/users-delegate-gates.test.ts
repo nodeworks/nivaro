@@ -19,7 +19,9 @@ vi.mock('../../../middleware/authenticate.js', () => {
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 vi.mock('../../../services/revisions.js', () => ({ writeRevision: vi.fn(async () => {}) }))
-vi.mock('../../../services/users.js', () => ({
+vi.mock('../../../services/users.js', async (orig) => ({
+  withoutCredentials: (await orig<typeof import('../../../services/users.js')>())
+    .withoutCredentials,
   getUser: vi.fn(async () => ({ id: ME })),
   listUsers: vi.fn(),
   updateUser: vi.fn(async (_id: string, patch: unknown) => {
