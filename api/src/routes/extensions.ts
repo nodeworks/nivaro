@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import { gunzipSync } from 'node:zlib'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
 import {
   extensionRegistry,
@@ -10,7 +10,7 @@ import {
   scanNewExtensions,
   setExtensionEnabled
 } from '../extensions/loader.js'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { safeFetch as guardedFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { callExternalApi } from '../services/external-apis.js'
@@ -76,32 +76,27 @@ function writeExtConfig(config: Record<string, boolean>): void {
 }
 
 /**
- * SSRF-guarded fetch: validates the URL (and every redirect hop, max 3) through
- * assertSafeUrl before following it. Redirects are handled manually so each
- * Location target is re-validated.
+ * SSRF-guarded fetch: the URL and every redirect hop (max 3) are checked, and each connection
+ * is pinned to the address that was checked (lib/ssrf.ts safeFetch — no DNS-rebinding window).
  */
-async function safeFetch(rawUrl: string, timeoutMs = 30_000): Promise<Response> {
-  let currentUrl = rawUrl
-  for (let hop = 0; hop <= 3; hop++) {
-    await assertSafeUrl(currentUrl)
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-    let res: Response
-    try {
-      res = await fetch(currentUrl, { signal: ctrl.signal, redirect: 'manual' })
-    } finally {
-      clearTimeout(timer)
-    }
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get('location')
-      if (!loc) throw new Error('Redirect without Location header')
-      if (hop === 3) throw new Error('Too many redirects')
-      currentUrl = new URL(loc, currentUrl).toString()
-      continue
-    }
-    return res
-  }
-  throw new Error('Too many redirects')
+function safeFetch(rawUrl: string, timeoutMs = 30_000): Promise<Response> {
+  return guardedFetch(rawUrl, { timeoutMs, maxRedirects: 3 })
+}
+
+/**
+ * Cloud tenants share one process (C1, security audit 2026-10-27): code an extension brings
+ * would run with every tenant's pools and the meta DB URL in reach. Installing, promoting,
+ * rolling back and reloading extension code is refused there — the platform ships extensions.
+ */
+export const CLOUD_EXTENSION_CODE_REFUSAL =
+  'Extension code cannot be installed, promoted, rolled back or reloaded on a cloud instance. Extensions are managed by the platform.'
+
+function refuseInCloud(reply: FastifyReply): boolean {
+  if (!process.env.CLOUD_META_DB_URL) return false
+  void reply
+    .code(403)
+    .send({ error: CLOUD_EXTENSION_CODE_REFUSAL, code: 'CLOUD_EXTENSIONS_LOCKED' })
+  return true
 }
 
 /**
@@ -200,7 +195,9 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
-  app.patch('/:id', async (req, reply) => {
+  // Enable/disable, delete and uninstall change the ONE shared process too: refused in cloud.
+  app.patch('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     const body = req.body as { enabled?: boolean }
 
@@ -224,7 +221,8 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data: entry })
   })
 
-  app.delete('/:id', async (req, reply) => {
+  app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     const entry = extensionRegistry.get(id)
     if (!entry) return reply.code(404).send({ error: 'Extension not found' })
@@ -480,6 +478,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   app.post('/:id/promote', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
     const { promoteStagedBuild, stagedBuildStatus } = await import('../extensions/loader.js')
@@ -500,6 +499,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   app.post('/:id/rollback', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
     const { rollbackStagedBuild } = await import('../extensions/loader.js')
@@ -582,6 +582,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   // ─── POST /marketplace/install — copy built-in or download tarball ─────────
 
   app.post('/marketplace/install', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const body = req.body as { name?: string; tarball_url?: string }
     const name = body?.name ?? ''
     if (!SAFE_EXT_NAME.test(name)) {
@@ -672,6 +673,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   // ─── POST /marketplace/uninstall — remove dir + config entry ──────────────
 
   app.post('/marketplace/uninstall', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const body = req.body as { name?: string }
     const name = body?.name ?? ''
     if (!SAFE_EXT_NAME.test(name)) {
@@ -704,7 +706,8 @@ export async function extensionsRoutes(app: FastifyInstance) {
     }
   })
 
-  app.post('/reload', async (req, reply) => {
+  app.post('/reload', { preHandler: requireAdmin }, async (req, reply) => {
+    if (refuseInCloud(reply)) return reply
     const newIds = await scanNewExtensions({
       app,
       database: db,
