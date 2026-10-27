@@ -104,9 +104,10 @@ jobs:
           cache-to: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.variant == 'slim' && 'slim-' || '' }}${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Export digest
+        env:
+          digest: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
@@ -154,8 +155,14 @@ jobs:
           echo "candidate=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
           case "$GITHUB_REF" in
             refs/tags/@app-*)
+              V="${GITHUB_REF_NAME#@app-}"
+              # The tag name is user input: only a plain semver becomes a tag.
+              if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+                echo "tag $GITHUB_REF_NAME does not carry a version" >&2
+                exit 1
+              fi
               echo "release=true" >> "$GITHUB_OUTPUT"
-              echo "version=${GITHUB_REF_NAME#@app-}" >> "$GITHUB_OUTPUT"
+              echo "version=$V" >> "$GITHUB_OUTPUT"
               ;;
             *) echo "release=false" >> "$GITHUB_OUTPUT" ;;
           esac
@@ -168,22 +175,27 @@ jobs:
 
       - name: Create multi-arch manifest (full)
         working-directory: /tmp/digests/full
+        env:
+          C: ${{ steps.meta.outputs.candidate }}
         run: |
           docker buildx imagetools create \
-            -t nodeworks/nivaro:${{ steps.meta.outputs.candidate }} \
+            -t "nodeworks/nivaro:$C" \
             $(printf 'nodeworks/nivaro@sha256:%s ' *)
 
       - name: Create multi-arch manifest (slim)
         working-directory: /tmp/digests/slim
+        env:
+          C: ${{ steps.meta.outputs.candidate }}
         run: |
           docker buildx imagetools create \
-            -t nodeworks/nivaro:${{ steps.meta.outputs.candidate }}-slim \
+            -t "nodeworks/nivaro:$C-slim" \
             $(printf 'nodeworks/nivaro@sha256:%s ' *)
 
       - name: Inspect
         id: index
+        env:
+          C: ${{ steps.meta.outputs.candidate }}
         run: |
-          C="${{ steps.meta.outputs.candidate }}"
           docker buildx imagetools inspect "nodeworks/nivaro:$C"
           docker buildx imagetools inspect "nodeworks/nivaro:$C-slim"
           # The index digests the candidate tags point at — what gets signed.
@@ -200,16 +212,22 @@ jobs:
       # entry) names this workflow file and the ref, which is what the
       # deploy's `cosign verify` pins. By digest, never by tag.
       - name: Sign images
+        env:
+          FULL: ${{ steps.index.outputs.full }}
+          SLIM: ${{ steps.index.outputs.slim }}
         run: |
-          cosign sign --yes --recursive "nodeworks/nivaro@${{ steps.index.outputs.full }}"
-          cosign sign --yes --recursive "nodeworks/nivaro@${{ steps.index.outputs.slim }}"
+          cosign sign --yes --recursive "nodeworks/nivaro@$FULL"
+          cosign sign --yes --recursive "nodeworks/nivaro@$SLIM"
 
       # Only a tag build can pass this (a dispatch run is signed for its
       # branch ref and stops here, with its sha- tags only).
       - name: Verify signatures
         if: steps.meta.outputs.release == 'true'
+        env:
+          FULL: ${{ steps.index.outputs.full }}
+          SLIM: ${{ steps.index.outputs.slim }}
         run: |
-          for d in "${{ steps.index.outputs.full }}" "${{ steps.index.outputs.slim }}"; do
+          for d in "$FULL" "$SLIM"; do
             cosign verify "nodeworks/nivaro@$d" \
               --certificate-identity-regexp '^https://github.com/nodeworks/nivaro/.github/workflows/docker-hub.yml@refs/tags/' \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
@@ -217,12 +235,15 @@ jobs:
 
       # The version and latest tags point at the SAME verified index digests
       # (imagetools with one index source copies it as is); checked after.
+      # Step outputs reach the script through env, never ${{ }} inside run:
+      # (an expression is pasted into the script before the shell parses it).
       - name: Publish release tags
         if: steps.meta.outputs.release == 'true' && startsWith(github.ref, 'refs/tags/@app-')
+        env:
+          V: ${{ steps.meta.outputs.version }}
+          full: ${{ steps.index.outputs.full }}
+          slim: ${{ steps.index.outputs.slim }}
         run: |
-          V="${{ steps.meta.outputs.version }}"
-          full="${{ steps.index.outputs.full }}"
-          slim="${{ steps.index.outputs.slim }}"
           docker buildx imagetools create -t "nodeworks/nivaro:$V" -t nodeworks/nivaro:latest "nodeworks/nivaro@$full"
           docker buildx imagetools create -t "nodeworks/nivaro:$V-slim" -t nodeworks/nivaro:latest-slim "nodeworks/nivaro@$slim"
           for pair in "$V=$full" "latest=$full" "$V-slim=$slim" "latest-slim=$slim"; do
