@@ -6,7 +6,7 @@ import { config } from './config.js'
 import { db } from './db/index.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
-import { trustProxyFromEnv } from './lib/trust-proxy.js'
+import { fastifyTrustProxy, trustProxyFromEnv } from './lib/trust-proxy.js'
 import { authenticate } from './middleware/authenticate.js'
 import { resolveWorkspace } from './middleware/workspace.js'
 import { apiLoggerPlugin } from './plugins/api-logger.js'
@@ -66,7 +66,7 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     )
 
   const app = fastify({
-    trustProxy: trustProxyFromEnv().value,
+    trustProxy: fastifyTrustProxy(trustProxyFromEnv().value),
     logger: {
       level: config.LOG_LEVEL,
       ...(config.NODE_ENV === 'development'

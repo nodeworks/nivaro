@@ -6,6 +6,7 @@ import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 
 interface ApiKeyBody {
   scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }> | null
@@ -280,7 +281,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     await app.redis.setex(
       `keysim:${token}`,
       ttl,
-      JSON.stringify({ key_id: key.id, admin_id: req.user!.id })
+      // `t` = the tenant it was minted in (cloud refuses it on another tenant, authenticate.ts).
+      JSON.stringify({ key_id: key.id, admin_id: req.user!.id, t: currentTenantKey() })
     )
     await logActivity({
       action: 'api_key_simulate',

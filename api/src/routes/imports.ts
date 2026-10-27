@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
@@ -83,7 +83,7 @@ async function fetchRemoteCsv(rawUrl: string): Promise<{ csv: string; fileName: 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertSafeUrl(currentUrl)
 
-    const res = await fetch(currentUrl, {
+    const res = await safeFetch(currentUrl, {
       redirect: 'manual',
       signal: AbortSignal.timeout(30_000),
       headers: { accept: 'text/csv, application/csv, text/plain' }

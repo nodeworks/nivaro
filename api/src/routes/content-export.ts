@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isFilesCollection } from '../services/help-video-files.js'
@@ -51,7 +52,8 @@ export async function readAllAsCaller(
 
 function escapeCsv(v: unknown): string {
   if (v == null) return ''
-  const s = String(v)
+  // A leading = + - @ (or tab/CR) would run as a formula when the file opens in Excel.
+  const s = csvFormulaSafe(v)
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`
   }

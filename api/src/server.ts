@@ -26,7 +26,7 @@ import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
 import { isSourceMapPath, sourceMapsPublic } from './lib/source-maps.js'
 import { adminAssetCacheControl } from './lib/static-cache.js'
-import { trustProxyFromEnv } from './lib/trust-proxy.js'
+import { fastifyTrustProxy, trustProxyFromEnv } from './lib/trust-proxy.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
@@ -85,7 +85,7 @@ export async function buildServer() {
   const app = fastify({
     bodyLimit: largeBodyLimit(_fileSizeMb),
     // TRUST_PROXY: true | false | hop count | IP/CIDR list (M14) — lib/trust-proxy.ts.
-    trustProxy: trustProxy.value,
+    trustProxy: fastifyTrustProxy(trustProxy.value),
     logger: {
       level: config.LOG_LEVEL,
       // Request lines never carry the query string: tokens and tickets ride some URLs

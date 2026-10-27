@@ -77,3 +77,13 @@ export function trustProxyFromEnv(): ParsedTrustProxy {
   if (!cached) cached = parseTrustProxy(process.env.TRUST_PROXY)
   return cached
 }
+
+/** The value Fastify's `trustProxy` option takes. Fastify's types (5.12+) no longer list a
+ *  bare hop count, so a number becomes the same rule proxy-addr applies to one: trust the
+ *  first N hops counting back from the socket. */
+export function fastifyTrustProxy(
+  value: TrustProxySetting
+): boolean | string[] | ((address: string, hop: number) => boolean) {
+  if (typeof value === 'number') return (_address: string, hop: number) => hop < value
+  return value
+}

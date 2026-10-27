@@ -1,7 +1,7 @@
 import { createWriteStream } from 'node:fs'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 
 // Free music for help videos from Openverse (api.openverse.org), the open
 // search over Freesound, Jamendo, Wikimedia and others. Only CC0 and public
@@ -241,7 +241,7 @@ async function safeGet(
     })
     let res: Response
     try {
-      res = await fetch(at, {
+      res = await safeFetch(at, {
         redirect: 'manual',
         headers: { 'User-Agent': UA, Accept: 'audio/*', ...headers },
         signal: AbortSignal.timeout(timeoutMs)

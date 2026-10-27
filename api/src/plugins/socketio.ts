@@ -7,6 +7,7 @@ import type { Knex } from 'knex'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { issuingAdminStillAdmin } from '../middleware/authenticate.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
@@ -1486,6 +1487,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (!raw) return
           const payloadIds = JSON.parse(raw) as { user_id?: string; admin_id?: string }
           if (!(await mintedForThisTenant(raw))) return
+          // Same rule as HTTP: the admin who started the View-as must still be an active admin.
+          if (!(await issuingAdminStillAdmin(payloadIds.admin_id))) return
           const user = await db<User>('nivaro_users')
             .where({ id: payloadIds.user_id, status: 'active' })
             .first()

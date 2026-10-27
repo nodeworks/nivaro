@@ -2357,7 +2357,8 @@ export async function chatPushReplyRoutes(app: FastifyInstance) {
     const user = (await db('nivaro_users').where({ id: claim.user }).first()) as
       | import('../types.js').User
       | undefined
-    if (!user || (user as unknown as { status?: string }).status === 'suspended')
+    // Only an active account may reply (suspended, redacted, placeholder… may not).
+    if (!user || (user as unknown as { status?: string }).status !== 'active')
       return reply.code(401).send({ error: 'This reply link has expired' })
     try {
       const row = await postChatMessage(app, { user }, { room: claim.room, message: text })

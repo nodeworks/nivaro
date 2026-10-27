@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { noteWebhookDelivery } from './traffic-taps/webhooks.js'
 import {
   type ConditionRule,
@@ -238,7 +238,7 @@ export async function dispatchWebhook(
   let res: Response | null = null
   let fetchError: string | null = null
   try {
-    res = await fetch(webhook.url, init)
+    res = await safeFetch(webhook.url, init)
   } catch (err) {
     fetchError =
       err instanceof Error

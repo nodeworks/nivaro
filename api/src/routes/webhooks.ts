@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -91,7 +91,9 @@ function validateConditions(raw: unknown): string | null {
     if (!rule || typeof rule !== 'object') return `Condition ${i + 1} is not an object`
     if (
       typeof rule.field !== 'string' ||
-      !/^(\$origin|\$changed|[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2})$/.test(rule.field)
+      !/^(\$origin|\$changed|[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*){0,2})$/.test(
+        rule.field
+      )
     )
       return `Condition ${i + 1}: field must be a column name, a dotted path of up to three parts, $origin or $changed`
     if (!(WEBHOOK_CONDITION_OPS as readonly string[]).includes(String(rule.op)))
@@ -381,7 +383,7 @@ export async function webhooksRoutes(app: FastifyInstance) {
 
       let res: Response
       try {
-        res = await fetch(row.url, init)
+        res = await safeFetch(row.url, init)
       } finally {
         clearTimeout(timer)
       }

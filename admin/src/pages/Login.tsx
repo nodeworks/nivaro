@@ -602,7 +602,9 @@ export function LoginPage() {
                         ? 'Your session ended — it reached the time limit or sat idle longer than this instance allows. Sign in again to carry on.'
                         : error === 'provider_unavailable'
                           ? 'The sign-in provider is not answering right now. Anyone already signed in keeps working — try again in a few minutes.'
-                          : 'Authentication failed. Please try again or contact IT support.'}
+                          : error === 'account_link'
+                            ? 'This sign-in matches an account that is already linked to a different sign-in. Ask an administrator to check your account.'
+                            : 'Authentication failed. Please try again or contact IT support.'}
                 </div>
               )}
 

@@ -12,7 +12,7 @@ import {
 import { registerJsonBodyParser, registerRawCapturingParser } from '../../../lib/json-body.js'
 import { applySecurityHeaders, BASE_CSP, HSTS } from '../../../lib/security-headers.js'
 import { isSourceMapPath } from '../../../lib/source-maps.js'
-import { parseTrustProxy } from '../../../lib/trust-proxy.js'
+import { fastifyTrustProxy, parseTrustProxy } from '../../../lib/trust-proxy.js'
 
 // Security audit 2026-10-27, cluster D: M14 (TRUST_PROXY), M20 (body limits),
 // M21 (headers), prototype-poisoning-safe JSON parsing.
@@ -48,7 +48,7 @@ describe('parseTrustProxy (M14)', () => {
   })
 
   it('a hop count stops a spoofed X-Forwarded-For entry from becoming req.ip', async () => {
-    const app = Fastify({ trustProxy: parseTrustProxy('1').value })
+    const app = Fastify({ trustProxy: fastifyTrustProxy(parseTrustProxy('1').value) })
     app.get('/ip', async (req) => ({ ip: req.ip }))
     const res = await app.inject({
       url: '/ip',
