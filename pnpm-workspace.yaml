@@ -5,8 +5,32 @@ packages:
 
 overrides:
   '@graphiql/react': '0.37.6-alpha.2'
+  # Security patches for transitive dependencies (pnpm audit, 2026-10-27).
+  # Each lifts only the vulnerable range to the patched release of the SAME
+  # major; drop an entry once every parent depends on a fixed version itself.
+  '@fastify/busboy@>=3.0.0 <3.2.2': '^3.2.2'
+  '@xmldom/xmldom@>=0.7.0 <0.8.15': '^0.8.15'
+  'body-parser@>=2.0.0 <2.4.0': '^2.4.0'
+  'brace-expansion@>=4.0.0 <5.0.12': '^5.0.12'
+  'engine.io@>=6.6.0 <6.6.10': '^6.6.10'
+  'esbuild@>=0.28.0 <0.28.1': '^0.28.1'
+  'fast-copy@>=4.0.0 <4.1.0': '^4.1.0'
+  'fast-uri@>=3.0.0 <3.1.9': '^3.1.9'
+  'find-my-way@>=9.0.0 <9.6.1': '^9.6.1'
+  'follow-redirects@>=1.16.0 <1.16.1': '^1.16.1'
+  'ip-address@>=10.0.0 <10.7.4': '^10.7.4'
+  'linkify-it@>=5.0.0 <5.0.2': '^5.0.2'
+  'markdown-it@>=14.0.0 <14.3.3': '^14.3.3'
+  'nanoid@>=3.0.0 <3.3.18': '^3.3.18'
+  'postcss@>=8.0.0 <8.5.23': '^8.5.23'
+  'postcss-selector-parser@>=6.0.0 <6.1.5': '^6.1.5'
+  'prosemirror-view@>=1.0.0 <1.42.3': '^1.42.3'
+  'qs@>=6.0.0 <6.16.1': '^6.16.1'
+  'socket.io-parser@>=4.0.0 <4.2.7': '^4.2.7'
+  'source-map-js@>=1.0.0 <1.2.2': '^1.2.2'
+  'ws@>=8.0.0 <8.21.0': '^8.21.0'
 allowBuilds:
-  '@scarf/scarf': true
+  '@scarf/scarf': false
   '@tree-sitter-grammars/tree-sitter-yaml': true
   core-js-pure: true
   esbuild: true

@@ -126,31 +126,29 @@ describe('History panel', () => {
   })
 
   it('searches with the structured fields and links the answer to its moment', async () => {
-    vi.spyOn(api, 'get').mockImplementation(
-      async (url: string, cfg?: { params?: Record<string, string> }) => {
-        if (url.endsWith('/history/settings')) return { data: { data: null } } as never
-        if (url.endsWith('/history/search')) {
-          expect(cfg?.params).toEqual({ kind: 'last_hit', days: '7', caller: 'k7' })
-          return {
+    vi.spyOn(api, 'get').mockImplementation(async (url: string, cfg?: { params?: unknown }) => {
+      if (url.endsWith('/history/settings')) return { data: { data: null } } as never
+      if (url.endsWith('/history/search')) {
+        expect(cfg?.params).toEqual({ kind: 'last_hit', days: '7', caller: 'k7' })
+        return {
+          data: {
             data: {
-              data: {
-                kind: 'last_hit',
-                count: 4,
-                more: [],
-                hit: {
-                  at: FROM,
-                  route: 'GET /api/items/workflows/:id',
-                  status: 200,
-                  latency_ms: 40,
-                  caller: 'k7'
-                }
+              kind: 'last_hit',
+              count: 4,
+              more: [],
+              hit: {
+                at: FROM,
+                route: 'GET /api/items/workflows/:id',
+                status: 200,
+                latency_ms: 40,
+                caller: 'k7'
               }
             }
-          } as never
-        }
-        throw new Error(`unexpected ${url}`)
+          }
+        } as never
       }
-    )
+      throw new Error(`unexpected ${url}`)
+    })
     const { container } = wrap(<HistoryPanel />)
     fireEvent.click(screen.getByRole('tab', { name: 'Search' }))
     fireEvent.change(screen.getByLabelText('Caller'), { target: { value: 'k7' } })
