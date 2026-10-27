@@ -31,8 +31,22 @@ function wireDb(rows: { user: Rows; role: Rows; key?: Rows }) {
               ? { id: DEFAULT_WORKSPACE }
               : null
     const chain: Record<string, unknown> = {}
-    for (const m of ['where', 'whereNull', 'orWhere', 'select', 'orderBy']) chain[m] = () => chain
-    chain.first = vi.fn().mockResolvedValue(result)
+    // The View-as issuer ('admin-1', the redis shim's admin) is re-checked as an active admin.
+    let issuer: 'user' | 'role' | null = null
+    for (const m of ['whereNull', 'orWhere', 'select', 'orderBy']) chain[m] = () => chain
+    chain.where = (arg: unknown) => {
+      const id = (arg as { id?: unknown } | null)?.id
+      if (id === 'admin-1') issuer = 'user'
+      if (id === 'admin-role') issuer = 'role'
+      return chain
+    }
+    chain.first = vi.fn(async () =>
+      issuer === 'user'
+        ? { id: 'admin-1', role: 'admin-role', is_redacted: false }
+        : issuer === 'role'
+          ? { admin_access: true }
+          : result
+    )
     chain.update = vi.fn().mockReturnValue({ catch: () => undefined })
     return chain
   })

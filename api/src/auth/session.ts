@@ -1,7 +1,7 @@
 import fastifyCookie from '@fastify/cookie'
 import type { FastifySessionObject } from '@fastify/session'
 import fastifySession from '@fastify/session'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { config } from '../config.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
@@ -135,6 +135,27 @@ export function buildRedisStore(redis: Redis) {
   }
 }
 
+/** Session fields a sign-in carries into the new session id (where to go next). */
+const CARRIED_ON_SIGN_IN = ['returnTo'] as const
+
+/**
+ * Every sign-in gets a NEW session id (security audit M13, session fixation): a session id
+ * planted before sign-in (or seen while signed out) never becomes a signed-in one. The old id
+ * is revoked so a copy of it reads as "no session". Only `returnTo` is carried over; the
+ * caller then stamps userId / authAt on the new session. A store that refuses the new id
+ * fails the sign-in rather than continuing on the old one.
+ */
+export async function regenerateForSignIn(
+  req: FastifyRequest,
+  redis: Redis | null | undefined
+): Promise<void> {
+  const oldSid = req.session.sessionId
+  await req.session.regenerate([...CARRIED_ON_SIGN_IN])
+  if (oldSid && redis && oldSid !== req.session.sessionId) {
+    await revokeSessions(redis, [oldSid]).catch(() => {})
+  }
+}
+
 /** The session cookie's name (the Traffic Map's temporary cache recognises it, #2273). */
 export const SESSION_COOKIE = 'nivaro_session'
 
@@ -144,6 +165,7 @@ export async function registerSession(app: FastifyInstance) {
     secret: config.SESSION_SECRET,
     cookieName: SESSION_COOKIE,
     cookie: {
+      // On by default when PUBLIC_URL / ADMIN_URL is https (config.ts → resolveCookieSecure).
       secure: config.COOKIE_SECURE,
       httpOnly: true,
       sameSite: 'lax',

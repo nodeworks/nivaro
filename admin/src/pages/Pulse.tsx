@@ -62,14 +62,12 @@ export function PulsePage() {
     // biome-ignore lint/correctness/useExhaustiveDependencies: seed once
   }, [seed])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect when the signed-in person changes
   useEffect(() => {
     const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
 
     socket.on('connect', async () => {
-      let token = user?.static_token ?? null
-      if (!token) {
-        token = await mintWsToken()
-      }
+      const token = await mintWsToken()
       if (token) socket.emit('auth', { token })
     })
     socket.on('auth:ok', () => {
@@ -89,7 +87,7 @@ export function PulsePage() {
       socket.disconnect()
       clearInterval(tick)
     }
-  }, [user?.static_token])
+  }, [user?.id])
 
   const spark = useMemo(() => {
     const now = Math.floor(Date.now() / 60_000)

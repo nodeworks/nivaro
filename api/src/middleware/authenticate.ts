@@ -6,11 +6,17 @@ import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
-import { mcpOAuthEnabled, oauthAudienceRefusal, oauthScopeRefusal } from '../services/mcp-config.js'
+import {
+  mcpOAuthEnabled,
+  normalizedPath,
+  oauthAudienceRefusal,
+  oauthScopeRefusal
+} from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
 import { notePrincipalKind } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { callerBreakerCheck } from '../services/traffic-breaker.js'
 import { inflightAuth } from '../services/traffic-inflight.js'
 import type { Role, User } from '../types.js'
@@ -293,6 +299,9 @@ async function authenticateSimulatedKey(req: FastifyRequest, reply: FastifyReply
     | ApiKeyRow
     | undefined
   if (!key) throw httpError(401, 'That API key no longer exists', 'API_KEY_INVALID')
+  // The admin who started the run-as must still be one (a demoted admin's token ends here).
+  if (!(await issuingAdminStillAdmin(payload.admin_id)))
+    throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
   req.apiKeySimulatedId = Number(key.id)
   req.masqueradeAdminId = payload.admin_id
   await applyApiKey(req, reply, key, true)
@@ -399,6 +408,45 @@ export function checkApiKeyScope(req: FastifyRequest, action: string, collection
   return scopeAllows(scopes, action, collection)
 }
 
+// ─── View-as / run-as-key limits (security audit, auth Lows) ──────────────────
+
+/** Credential routes a View-as (nvm_) or run-as-key (nvq_) request may not write to: what they
+ *  minted would belong to — and be logged as — the person or key being viewed. */
+const DELEGATED_NO_WRITE =
+  /^\/api\/(api-keys|oauth|mcp-connections)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/auth\/masquerade\/?$/
+
+export function delegatedWriteRefusal(req: FastifyRequest): string | null {
+  const m = String(req.method ?? 'GET').toUpperCase()
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return null
+  const path = normalizedPath(req.url ?? '')
+  // Ending the View-as itself stays allowed.
+  if (m === 'DELETE' && /^\/api\/auth\/masquerade\/?$/.test(path)) return null
+  return DELEGATED_NO_WRITE.test(path) ? 'Not while viewing as someone else' : null
+}
+
+/**
+ * The admin behind a View-as or run-as-key token must STILL be an active administrator on
+ * every request (the token outlives a demotion or suspension otherwise). Cached a few seconds
+ * per admin and tenant so a busy View-as tab does not read two rows per request.
+ */
+const ADMIN_RECHECK_MS = 15_000
+const adminRecheck = new Map<string, { ok: boolean; at: number }>()
+export async function issuingAdminStillAdmin(adminId: string | null | undefined): Promise<boolean> {
+  if (!adminId) return false
+  const key = `${currentTenantKey()}|${String(adminId).toUpperCase()}`
+  const hit = adminRecheck.get(key)
+  if (hit && Date.now() - hit.at < ADMIN_RECHECK_MS) return hit.ok
+  const ok = await isActiveAdmin(adminId)
+  if (adminRecheck.size > 2000) adminRecheck.clear()
+  adminRecheck.set(key, { ok, at: Date.now() })
+  return ok
+}
+
+/** Test hook: forget cached admin verdicts. */
+export function resetAdminRecheckCache(): void {
+  adminRecheck.clear()
+}
+
 // ─── Main authenticate middleware ─────────────────────────────────────────────
 
 /** Sign-in kind + the credential behind it (key, issuing admin, connected app). */
@@ -453,6 +501,8 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
       // Run-as-key token — admin-issued, Redis-backed, resolves to the key's identity
       if (token.startsWith('nvq_')) {
         await authenticateSimulatedKey(req, reply, token)
+        const refusal = delegatedWriteRefusal(req)
+        if (refusal) throw httpError(403, refusal, 'NOT_WHILE_MASQUERADING')
         return
       }
       // Masquerade token — admin-issued, Redis-backed, resolves to the target user
@@ -474,9 +524,14 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           .first()
         if (!user)
           throw httpError(401, 'Masqueraded user is not active', 'MASQUERADE_TARGET_INACTIVE')
+        // The admin who started the View-as must still be an active administrator.
+        if (!(await issuingAdminStillAdmin(payload.admin_id)))
+          throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
         req.authMethod = 'masquerade'
+        const refusal = delegatedWriteRefusal(req)
+        if (refusal) throw httpError(403, refusal, 'NOT_WHILE_MASQUERADING')
         touchMasqueradeMarker(req.server.redis, String(user.id), payload.admin_id)
         return
       }
@@ -605,6 +660,40 @@ export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
       'This API key is limited to named collections and cannot use administrator routes',
       'API_KEY_SCOPE_MISSING'
     )
+}
+
+/**
+ * requireAdmin's verdict for a request authenticate already ran on (no second authenticate,
+ * which would count an API key's rate limit twice). Null = an administrator, unrestricted.
+ */
+export function adminRefusal(req: FastifyRequest): { error: string; code: string } | null {
+  if (!req.isAdmin) return { error: 'Forbidden', code: 'ADMIN_ONLY' }
+  if (req.user?.api_key_scopes)
+    return {
+      error: 'This API key is limited to named collections and cannot use administrator routes',
+      code: 'API_KEY_SCOPE_MISSING'
+    }
+  return null
+}
+
+/**
+ * May this request mint (or hand out) a lasting credential — a static token, an API key, a
+ * View-as? Only a person signed in as THEMSELVES: a session or their own static token. Never a
+ * named API key (narrow scopes / IP pin), a run-as-key, a View-as (the credential would be the
+ * target's, logged as the target) or a connected app (security audit H3 + nested View-as Low).
+ */
+export function credentialMintRefusal(req: FastifyRequest): { error: string; code: string } | null {
+  if (req.authMethod === 'session' || req.authMethod === 'token') {
+    if (req.masqueradeAdminId)
+      return { error: 'Not while viewing as someone else', code: 'NOT_WHILE_MASQUERADING' }
+    return null
+  }
+  if (req.authMethod === 'masquerade' || req.authMethod === 'key_sim')
+    return { error: 'Not while viewing as someone else', code: 'NOT_WHILE_MASQUERADING' }
+  return {
+    error: 'Sign in as yourself to create a credential — an API key or connected app cannot',
+    code: 'CREDENTIAL_MINT_REFUSED'
+  }
 }
 
 /**

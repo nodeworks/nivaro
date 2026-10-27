@@ -288,8 +288,8 @@ export function GraphQLExplorerPage() {
   const fetcher = async (params: unknown) => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     const sim = runAsRef.current
+    // Otherwise the session cookie signs the request in (credentials: 'include').
     if (sim) headers.Authorization = `Bearer ${sim.token}`
-    else if (user?.static_token) headers.Authorization = `Bearer ${user.static_token}`
     const res = await fetch('/api/graphql', {
       method: 'POST',
       credentials: 'include',

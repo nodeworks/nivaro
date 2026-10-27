@@ -2,7 +2,12 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
-import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import {
+  adminRefusal,
+  authenticate,
+  credentialMintRefusal,
+  requireAdmin
+} from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
@@ -24,7 +29,7 @@ import {
   computeUserStats
 } from '../services/user-profile.js'
 import { announcePrefsChanged } from '../services/user-sync.js'
-import { getUser, listUsers, updateUser } from '../services/users.js'
+import { getUser, listUsers, updateUser, withoutCredentials } from '../services/users.js'
 
 // Dashboard canvas prefs (#848 follow-up): the scope pickers (zone + year)
 // and the density toggle a person leaves the canvas in. Both are per-page UI
@@ -257,13 +262,16 @@ export async function usersRoutes(app: FastifyInstance) {
     if (!user) return reply.code(404).send({ error: 'Not found' })
     // #1804 — Ask AI memory is the person's own; an admin reading another
     // account never gets it.
+    // Credentials (static token, password hash, TOTP secret, IdP subject) never leave in this
+    // answer, for anyone (security audit H6); `has_static_token` says whether a token exists.
+    const safe = withoutCredentials(user as unknown as Record<string, unknown>)
     if (String(userId).toUpperCase() !== String(req.user!.id).toUpperCase()) {
       const { stripAiMemory } = await import('../services/ai-memory.js')
-      return reply.send({ data: stripAiMemory(user) })
+      return reply.send({ data: stripAiMemory(safe) })
     }
     // The person's own Teams facts for Profile → Notification rules. Never shown for another
     // account: a link is the person's own business, so an admin reading someone else gets none.
-    return reply.send({ data: { ...user, ...(await ownTeamsFacts(String(userId))) } })
+    return reply.send({ data: { ...safe, ...(await ownTeamsFacts(String(userId))) } })
   })
 
   // GET /users/:id/card — authenticated (not admin-only); returns safe public fields for the
@@ -1563,9 +1571,17 @@ export async function usersRoutes(app: FastifyInstance) {
 
   // ─── Static token management ──────────────────────────────────────────────
   // POST /users/me/token or /users/:id/token (admin)
+  // A full, permanent credential: only a person signed in as themselves (session or their own
+  // static token) may mint one — never a narrow API key, a run-as-key, a View-as or a connected
+  // app (security audit H3), and another person's only through requireAdmin's checks.
   app.post('/:id/token', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    if (id !== 'me' && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+    const refusal = credentialMintRefusal(req)
+    if (refusal) return reply.code(403).send(refusal)
+    if (id !== 'me') {
+      const notAdmin = adminRefusal(req)
+      if (notAdmin) return reply.code(403).send(notAdmin)
+    }
     const userId = id === 'me' ? req.user!.id : id
 
     const token = randomBytes(32).toString('hex') // 64-char hex
@@ -1583,7 +1599,10 @@ export async function usersRoutes(app: FastifyInstance) {
   // DELETE /users/me/token or /users/:id/token (admin)
   app.delete('/:id/token', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    if (id !== 'me' && !req.isAdmin) return reply.code(403).send({ error: 'Forbidden' })
+    if (id !== 'me') {
+      const notAdmin = adminRefusal(req)
+      if (notAdmin) return reply.code(403).send(notAdmin)
+    }
     const userId = id === 'me' ? req.user!.id : id
 
     await db('nivaro_users').where({ id: userId }).update({ static_token: null })
