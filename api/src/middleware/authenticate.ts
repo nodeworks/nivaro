@@ -474,6 +474,16 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           .first()
         if (!user)
           throw httpError(401, 'Masqueraded user is not active', 'MASQUERADE_TARGET_INACTIVE')
+        // The administrator who started it must still be one: a suspended or demoted
+        // admin's View-as ends now, not when the 4 h token runs out.
+        if (!(await isActiveAdmin(payload.admin_id))) {
+          void Promise.resolve(req.server.redis.del(`masq:${token}`)).catch(() => undefined)
+          throw httpError(
+            401,
+            'The administrator who started this View-as can no longer use it',
+            'MASQUERADE_ADMIN_INACTIVE'
+          )
+        }
         await hydrateRole(req, user, { touch: false })
         req.masqueradeAdminId = payload.admin_id
         req.authMethod = 'masquerade'

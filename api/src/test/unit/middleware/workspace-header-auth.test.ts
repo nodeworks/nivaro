@@ -18,21 +18,34 @@ const WS_OWN = 'aaaaaaaa-0000-0000-0000-00000000000a'
 const WS_OTHER = 'bbbbbbbb-0000-0000-0000-00000000000b'
 
 type Rows = object
+// The administrator behind every nvm_ token in this file (buildApp's admin_id): an active
+// user whose role grants admin access, so the View-as admin re-check passes.
+const MASQ_ADMIN = { id: 'admin-1', role: 'role-admin', status: 'active' }
+const MASQ_ADMIN_ROLE = { id: 'role-admin', admin_access: true, app_access: true }
 function wireDb(rows: { user: Rows; role: Rows; key?: Rows }) {
   vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
-    const result =
+    let id: unknown
+    const result = () =>
       table === 'nivaro_users'
-        ? rows.user
+        ? id === MASQ_ADMIN.id
+          ? MASQ_ADMIN
+          : rows.user
         : table === 'nivaro_roles'
-          ? rows.role
+          ? id === MASQ_ADMIN_ROLE.id
+            ? MASQ_ADMIN_ROLE
+            : rows.role
           : table === 'nivaro_api_keys'
             ? (rows.key ?? null)
             : table === 'nivaro_workspaces'
               ? { id: DEFAULT_WORKSPACE }
               : null
     const chain: Record<string, unknown> = {}
-    for (const m of ['where', 'whereNull', 'orWhere', 'select', 'orderBy']) chain[m] = () => chain
-    chain.first = vi.fn().mockResolvedValue(result)
+    for (const m of ['whereNull', 'orWhere', 'select', 'orderBy']) chain[m] = () => chain
+    chain.where = (arg: unknown) => {
+      if (arg && typeof arg === 'object' && 'id' in arg) id = (arg as { id: unknown }).id
+      return chain
+    }
+    chain.first = vi.fn().mockImplementation(async () => result())
     chain.update = vi.fn().mockReturnValue({ catch: () => undefined })
     return chain
   })
