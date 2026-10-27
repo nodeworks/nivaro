@@ -62,22 +62,31 @@ function parseJson<T>(v: string | null | undefined): T | null {
   }
 }
 
-function getPath(obj: unknown, path: string): unknown {
+// A mapping path segment that would reach an object's prototype (security audit 2026-10-27,
+// Low: `__proto__.isAdmin` in a field mapping polluted Object.prototype for the process).
+const UNSAFE_SEGMENT = new Set(['__proto__', 'prototype', 'constructor'])
+const hasOwn = (o: object, k: string) => Object.hasOwn(o, k)
+
+export function getPath(obj: unknown, path: string): unknown {
   if (!path) return obj
   let cur: unknown = obj
   for (const seg of path.split('.')) {
     if (cur == null || typeof cur !== 'object') return undefined
+    if (UNSAFE_SEGMENT.has(seg) || !hasOwn(cur, seg)) return undefined
     cur = (cur as Record<string, unknown>)[seg]
   }
   return cur
 }
 
-function setPath(obj: Record<string, unknown>, path: string, value: unknown): void {
+/** Writes `value` at a dotted path, creating plain objects on the way; a path with a
+ *  `__proto__` / `prototype` / `constructor` segment is ignored. */
+export function setPath(obj: Record<string, unknown>, path: string, value: unknown): void {
   const segs = path.split('.')
+  if (segs.some((s) => UNSAFE_SEGMENT.has(s))) return
   let cur = obj
   for (let i = 0; i < segs.length - 1; i++) {
     const seg = segs[i]
-    if (cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {}
+    if (!hasOwn(cur, seg) || cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {}
     cur = cur[seg] as Record<string, unknown>
   }
   cur[segs[segs.length - 1]] = value

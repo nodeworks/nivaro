@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readItems } from '../services/items.js'
@@ -261,8 +262,9 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     const safeName = rawName.replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'export'
     if (config.format === 'csv') {
       const esc = (v: unknown) => {
-        const s = String(v ?? '')
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+        // A value starting `=`/`+`/`-`/`@` opens as text, never as a formula (Low, 2026-10-27).
+        const s = csvFormulaSafe(v)
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
       }
       const csv = [header, ...dataRows].map((row) => row.map(esc).join(',')).join('\n')
       return {

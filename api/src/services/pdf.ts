@@ -7,11 +7,13 @@
  * Unknown tags are stripped and their inner text rendered as plain text.
  * Output gets a title header (first <h1>) and "Page X of Y" footers.
  */
-import { Liquid } from 'liquidjs'
+
 import PDFDocument from 'pdfkit'
 import { useZonedDates } from './liquid-dates.js'
+import { liquidWithoutFiles } from './liquid-no-fs.js'
 
-const engine = useZonedDates(new Liquid())
+// No file system: a stored template cannot include files from the process folder.
+const engine = useZonedDates(liquidWithoutFiles())
 
 // ─── Markup parsing ──────────────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { describeDbRefusal, describeValueRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
@@ -123,7 +124,8 @@ const EXPORT_MAX_ROWS = 10_000
 function toCsv(rows: Record<string, unknown>[], fields: string[]): string {
   const escapeCsv = (v: unknown): string => {
     if (v == null) return ''
-    const s = String(v)
+    // `=HYPERLINK(…)` in a record value must open as text, not a formula.
+    const s = csvFormulaSafe(v)
     if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
       return `"${s.replace(/"/g, '""')}"`
     }

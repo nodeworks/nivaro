@@ -182,10 +182,18 @@ export function parseImportFile(buffer: Buffer): Array<Record<string, string>> {
  * in practice it wrote bare values too.
  *
  * With no qualifier available, a value containing the field delimiter or a line
- * break would split the row, so both are neutralised instead.
+ * break would split the row, so both are neutralised instead. A pipe at either
+ * END of a value is neutralised too: `a|` next to the `||` delimiter reads as
+ * `a|||b`, which BULK INSERT splits after `a` — shifting the text into the next
+ * column (security audit 2026-10-27, Low). A single pipe inside a value stays.
  */
 export function toTsv(rows: Array<Record<string, string>>, columns: string[]): string {
-  const cell = (v: string) => (v ?? '').replace(/\r?\n/g, ' ').split('||').join(' ')
+  const cell = (v: string) =>
+    String(v ?? '')
+      .replace(/\r\n|\r|\n/g, ' ')
+      .replace(/\|{2,}/g, ' ')
+      .replace(/^\|/, ' ')
+      .replace(/\|$/, ' ')
   const lines = [columns.map(cell).join('||')]
   for (const r of rows) lines.push(columns.map((c) => cell(r[c] ?? '')).join('||'))
   return `${lines.join('\n')}\n`

@@ -22,6 +22,23 @@ describe('toTsv', () => {
     assert.equal(row, 'x y||z')
   })
 
+  it('neutralises a pipe at either end of a value, which would join the delimiter', () => {
+    // `a|` + `||` + `|b` = `a||||b`: BULK INSERT would read three fields.
+    const out = toTsv([{ a: 'a|', b: '|b', c: 'c' }], ['a', 'b', 'c'])
+    const row = out.split('\n')[1]
+    assert.equal(row, 'a || b||c')
+    assert.equal(row.split('||').length, 3)
+    assert.ok(!/\|{3,}/.test(row))
+  })
+
+  it('keeps a single pipe inside a value', () => {
+    assert.equal(toTsv([{ a: 'A|B', b: 'z' }], ['a', 'b']).split('\n')[1], 'A|B||z')
+  })
+
+  it('flattens a lone carriage return too', () => {
+    assert.equal(toTsv([{ a: 'x\ry' }], ['a']).split('\n')[1], 'x y')
+  })
+
   it('flattens newlines, which would otherwise terminate the row early', () => {
     const out = toTsv([{ note: 'line one\r\nline two' }], ['note'])
     assert.equal(out.split('\n')[1], 'line one line two')
