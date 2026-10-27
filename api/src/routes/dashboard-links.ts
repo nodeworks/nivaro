@@ -5,6 +5,8 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { computeWidgetData } from '../services/dashboard-widgets.js'
+import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
 /**
@@ -38,6 +40,24 @@ async function ownedDashboard(
   if (!dash) return { error: 404 }
   if (!req.isAdmin && dash.user !== req.user?.id) return { error: 403 }
   return { dash }
+}
+
+/**
+ * M19 (security audit 2026-10-27) — a public link's widget figures are computed at most once
+ * per PUBLIC_LINK_CACHE_S seconds (default 60; 0 = every view) per link: anonymous viewers
+ * get the cached answer, concurrent misses share ONE run, and that run holds a heavy-read
+ * slot. The link's own checks (active, expiry, creator) still run on every view.
+ */
+export function publicLinkCacheS(env: NodeJS.ProcessEnv = process.env): number {
+  const v = env.PUBLIC_LINK_CACHE_S
+  if (v === undefined || String(v).trim() === '') return 60
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 60
+}
+
+/** Redis + single-flight key of a link's rendered widgets (tenant first, as every key). */
+export function publicLinkCacheKey(linkId: number, tenant: string = currentTenantKey()): string {
+  return `dlpub:${tenant || '-'}:${linkId}`
 }
 
 export async function dashboardLinkRoutes(app: FastifyInstance) {
@@ -191,23 +211,64 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       if (!role?.admin_access) valid = false
     }
     const viewer = valid ? owner : undefined
-    const resolved = await Promise.all(
-      widgets.map(async (w) => {
-        const result = viewer
-          ? await computeWidgetData(w, [], { user: viewer, public: true })
-          : { error: 'No viewer', status: 403 }
-        return {
-          id: w.id,
-          type: w.type,
-          title: w.title,
-          col: w.col,
-          row: w.row,
-          width: w.width,
-          height: w.height,
-          data: 'data' in result ? result.data : null
-        }
-      })
-    )
+    const computeAll = () =>
+      Promise.all(
+        widgets.map(async (w) => {
+          const result = viewer
+            ? await computeWidgetData(w, [], { user: viewer, public: true })
+            : { error: 'No viewer', status: 403 }
+          return {
+            id: w.id,
+            type: w.type,
+            title: w.title,
+            col: w.col,
+            row: w.row,
+            width: w.width,
+            height: w.height,
+            data: 'data' in result ? result.data : null
+          }
+        })
+      )
+
+    // A link with no valid viewer computes nothing: answered at once, never cached.
+    const ttl = publicLinkCacheS()
+    const key = publicLinkCacheKey(link.id)
+    const redis = (app as unknown as { redis?: RedisLike }).redis
+    const fromCache = async (): Promise<Awaited<ReturnType<typeof computeAll>> | null> => {
+      if (!(ttl > 0 && redis)) return null
+      const raw = await redis.get(key).catch(() => null)
+      if (!raw) return null
+      try {
+        return JSON.parse(raw)
+      } catch {
+        return null
+      }
+    }
+    let resolved: Awaited<ReturnType<typeof computeAll>>
+    try {
+      resolved = !viewer
+        ? await computeAll()
+        : ((await fromCache()) ??
+          (await sharedGatedRead(
+            key,
+            null,
+            async () => {
+              const value = await computeAll()
+              if (ttl > 0 && redis) {
+                await redis.setex(key, ttl, JSON.stringify(value)).catch(() => undefined)
+              }
+              return value
+            },
+            { signal: clientGoneSignal(reply.raw), label: `dashboard-link:${link.id}` }
+          ).then((out) => {
+            gateServerTiming(reply, out)
+            return out.value
+          })))
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError')
+        return reply.code(499).send({ error: 'Client closed request' })
+      throw err
+    }
 
     // fire-and-forget view count
     void db('nivaro_dashboard_links')
@@ -217,4 +278,9 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
 
     return reply.send({ data: { name: dashboard.name, widgets: resolved } })
   })
+}
+
+interface RedisLike {
+  get(key: string): Promise<string | null>
+  setex(key: string, s: number, v: string): Promise<unknown>
 }

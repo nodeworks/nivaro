@@ -16,6 +16,7 @@ import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { customQueryCacheKey } from './custom-query-cache.js'
 import { applyScopeParams } from './custom-query-scope.js'
+import { substituteParams } from './custom-query-substitute.js'
 
 export interface WidgetParamBinding {
   param: string
@@ -89,20 +90,11 @@ export function bindWidgetParams(
 
 /**
  * Full literal substitution (execSqlBatch, not sp_executesql, which swallows
- * stored-procedure result sets). Safe for MSSQL: strings use '' quoting.
+ * stored-procedure result sets). Values never leave their literal (custom-query-substitute.ts).
  */
 export function resolveWidgetSql(sqlText: string, params: Record<string, unknown>): string {
-  return sqlText.replace(/:(\w+)/g, (_, k: string) => {
-    const v = params[k]
-    if (v == null || v === '') return 'NULL'
-    if (typeof v === 'boolean') return v ? '1' : '0'
-    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
-    if (v instanceof Date) {
-      if (Number.isNaN((v as Date).getTime())) return 'NULL'
-      return `'${(v as Date).toISOString().slice(0, 23).replace('T', ' ')}'`
-    }
-    return `'${String(v).replace(/'/g, "''")}'`
-  })
+  // Literal-aware (M23): the same substitution custom queries use.
+  return substituteParams(sqlText, params)
 }
 
 export interface WidgetQueryPlan {
