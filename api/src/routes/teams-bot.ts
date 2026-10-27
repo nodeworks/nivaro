@@ -8,13 +8,13 @@ import type { TeamsActivity } from '../services/teams-bot/activity.js'
 import { answerInTeams } from '../services/teams-bot/ask.js'
 import { type AdaptiveCard, resultCard } from '../services/teams-bot/cards.js'
 import { getTeamsBotConfig } from '../services/teams-bot/config.js'
+import { connectCard } from '../services/teams-bot/connect-card.js'
 import { sendActivity } from '../services/teams-bot/connector.js'
 import { verifyConnectorToken } from '../services/teams-bot/jwt.js'
 import {
   markLink,
   readConnectToken,
   resolveTeamsUser,
-  signConnectToken,
   TeamsLinkTakenError,
   upsertLink
 } from '../services/teams-bot/links.js'
@@ -71,17 +71,6 @@ async function reply(activity: TeamsActivity, card: AdaptiveCard): Promise<void>
   await sendActivity(activity.serviceUrl, activity.conversation.id, {
     attachments: [{ contentType: CARD, content: card }]
   })
-}
-
-function connectCard(aadObjectId: string, tenantId: string): AdaptiveCard {
-  const url = `${config.PUBLIC_URL.replace(/\/$/, '')}/api/teams/connect?t=${encodeURIComponent(
-    signConnectToken(aadObjectId, tenantId)
-  )}`
-  const card = resultCard(
-    "Hi. I couldn't match your Teams account to a Nivaro user. Sign in with Microsoft to connect it."
-  )
-  card.actions = [{ type: 'Action.OpenUrl', title: 'Connect to Nivaro', url }]
-  return card
 }
 
 const HELP =
