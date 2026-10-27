@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { safeFetch } from '../lib/ssrf.js'
 
 /**
  * Link previews for chat (#930): title, description and site name of an
@@ -74,8 +74,9 @@ export function parsePreviewHtml(url: string, html: string): LinkPreview {
 async function fetchPage(url: string): Promise<LinkPreview> {
   let current = url
   for (let hop = 0; hop < 4; hop++) {
-    await assertSafeUrl(current)
-    const res = await fetch(current, {
+    // Checked AND pinned to the checked address (M24: no DNS-rebinding window); each redirect
+    // hop comes back here and is checked again.
+    const res = await safeFetch(current, {
       redirect: 'manual',
       signal: AbortSignal.timeout(5000),
       headers: { 'user-agent': 'NivaroLinkPreview/1.0', accept: 'text/html' }

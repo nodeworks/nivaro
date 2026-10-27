@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { load as yamlLoad } from 'js-yaml'
 import { db } from '../db/index.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -970,15 +971,15 @@ export async function externalApisRoutes(app: FastifyInstance) {
           wire === raw ? reqBodyStr : typeof wire === 'string' ? wire : JSON.stringify(wire)
       }
 
-      // No SSRF guard here — external APIs are admin-only and intentionally reach
-      // internal corporate services (ERPs, ticketing systems, etc.).
+      // Self-hosted: no SSRF guard — external APIs are admin-only and intentionally reach
+      // internal corporate services (ERPs, ticketing). Cloud: guarded (M28, fetchGuardedInCloud).
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 10_000)
       init.signal = controller.signal
 
       let res: Response
       try {
-        res = await fetch(url.toString(), init)
+        res = await fetchGuardedInCloud(url.toString(), init)
       } finally {
         clearTimeout(timer)
       }
@@ -1415,7 +1416,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
 
       let res: Response
       try {
-        res = await fetch(url.toString(), init)
+        res = await fetchGuardedInCloud(url.toString(), init)
       } finally {
         clearTimeout(timer)
       }
@@ -1547,7 +1548,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
 
       let res: Response
       try {
-        res = await fetch(url.toString(), init)
+        res = await fetchGuardedInCloud(url.toString(), init)
       } finally {
         clearTimeout(timer)
       }
