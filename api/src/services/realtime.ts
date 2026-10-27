@@ -25,6 +25,13 @@ import { currentTrafficSource } from './traffic-source.js'
  * field permissions/RLS, the documented reason the payload stays minimal).
  * Clients that want the new data fetch the ONE row through /items, where
  * RBAC applies. Events ride the journal (#266) so reconnects can replay.
+ *
+ * Known and accepted (security audit 2026-10-27, Low): a `collection:<name>` room is gated by
+ * collection read permission only, so a member narrowed by a row filter or User Scopes still
+ * hears the id and the changed field NAMES of rows outside their scope (never values; reading
+ * the row answers 404). Routing every event per record per viewer would cost a permission
+ * query per socket per write. Anything that must not reveal even a row's existence belongs in
+ * a record room (`record:<collection>:<id>`, joined through canSeeRecordRoom), not here.
  */
 export function broadcastCollectionUpdate(
   io: SocketIOServer | undefined,

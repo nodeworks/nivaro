@@ -54,8 +54,9 @@ export function emitRecordEvent(
 ): void {
   if (!collection || item == null || item === '') return
   try {
+    // Cloud: record rooms are per tenant (sockets join `t:<tenant>:record:…`).
     getIo()
-      ?.to(`record:${collection}:${String(item)}`)
+      ?.to(tenantScopedRoom(`record:${collection}:${String(item)}`))
       .emit(event, { ...extra, collection, item: String(item) })
   } catch {
     /* best-effort */

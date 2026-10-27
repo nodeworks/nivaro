@@ -4,6 +4,7 @@ import type { User } from '../types.js'
 import { tenantState } from './ai-tenant-state.js'
 import { canSeeRoom } from './chat.js'
 import { ChatSendError, postChatMessage } from './chat-send.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Chat polls (#2337). A poll is a normal chat message (the question, so it
@@ -275,7 +276,9 @@ export async function createPoll(
     .returning('id')
   const first = Array.isArray(ins) ? ins[0] : ins
   const pollId = Number(typeof first === 'object' && first ? (first as { id: number }).id : first)
-  app.io?.to(`chat:${row.room}`).emit('chat:message', { room: row.room, touch: true })
+  app.io
+    ?.to(tenantScopedRoom(`chat:${row.room}`))
+    .emit('chat:message', { room: row.room, touch: true })
   return { message_id: row.id, poll_id: pollId }
 }
 
@@ -307,7 +310,7 @@ export async function closePoll(app: FastifyInstance, pollId: number): Promise<b
       app.log.warn({ err, pollId }, 'poll summary line failed')
     }
   }
-  app.io?.to(`chat:${p.room}`).emit('chat:message', { room: p.room, touch: true })
+  app.io?.to(tenantScopedRoom(`chat:${p.room}`)).emit('chat:message', { room: p.room, touch: true })
   return true
 }
 
@@ -349,6 +352,6 @@ export async function castVote(
         v.picks.map((option_index) => ({ poll_id: p.id, option_index, user: user.id }))
       )
   })
-  app.io?.to(`chat:${p.room}`).emit('chat:message', { room: p.room, touch: true })
+  app.io?.to(tenantScopedRoom(`chat:${p.room}`)).emit('chat:message', { room: p.room, touch: true })
   return { ok: true }
 }

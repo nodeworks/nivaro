@@ -366,6 +366,16 @@ let unlisten: (() => void) | null = null
 let sweepTimer: ReturnType<typeof setInterval> | null = null
 
 const budget = { windowStart: 0, used: 0 }
+/**
+ * Cloud: each tenant also has its own share of the per-process budget (a quarter of it, at
+ * least 10 a minute), so one tenant's busy dashboards cannot spend every other tenant's live
+ * recomputes. Self-hosted ('' tenant) only the process budget applies, as before.
+ */
+const tenantBudgets = new Map<string, { windowStart: number; used: number }>()
+
+function tenantShare(): number {
+  return Math.max(10, Math.ceil(maxPerMinute() / 4))
+}
 let running = 0
 const waiting: Array<() => void> = []
 
@@ -433,15 +443,32 @@ function schedule(g: Group, at?: number): void {
   g.timer.unref?.()
 }
 
-function takeBudget(): boolean {
+/** Exported for tests: take one recompute from the process budget and the tenant's share. */
+export function takeBudget(tenant = ''): boolean {
   const now = Date.now()
   if (now - budget.windowStart >= 60_000) {
     budget.windowStart = now
     budget.used = 0
   }
   if (budget.used >= maxPerMinute()) return false
+  if (tenant) {
+    let own = tenantBudgets.get(tenant)
+    if (!own || now - own.windowStart >= 60_000) {
+      own = { windowStart: now, used: 0 }
+      tenantBudgets.set(tenant, own)
+    }
+    if (own.used >= tenantShare()) return false
+    own.used++
+  }
   budget.used++
   return true
+}
+
+/** When the next window opens for `tenant` (its share's window, else the process one). */
+function nextWindow(tenant: string): number {
+  const own = tenant ? tenantBudgets.get(tenant) : undefined
+  const at = budget.windowStart + 60_000
+  return own ? Math.max(at, own.windowStart + 60_000) : at
 }
 
 async function slot<T>(fn: () => Promise<T>): Promise<T> {
@@ -474,10 +501,11 @@ async function runGroup(g: Group): Promise<void> {
     const memoKey = `${w.identity()}|${w.paramsHash}`
     let pending = memo.get(memoKey)
     if (!pending) {
-      if (!takeBudget()) {
+      if (!takeBudget(g.tenant)) {
         stats.deferred++
-        // Over the per-process budget: this watch (and the rest) wait for the next window.
-        schedule(g, budget.windowStart + 60_000)
+        // Over the per-process budget (or the tenant's share of it): this watch (and the rest)
+        // wait for the next window.
+        schedule(g, nextWindow(g.tenant))
         return
       }
       pending = new Promise<ComputeResult>((resolve) => {
@@ -733,5 +761,6 @@ export function __resetWidgetLive(): void {
   sweepTimer = null
   budget.windowStart = 0
   budget.used = 0
+  tenantBudgets.clear()
   for (const k of Object.keys(stats) as Array<keyof typeof stats>) stats[k] = 0
 }
