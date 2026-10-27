@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-26T19:34:03.314Z",
+  "generated_at": "2026-10-27T14:54:04.390Z",
   "releases": [
+    {
+      "version": "0.3.35",
+      "tag": "v0.3.35",
+      "date": "2026-10-27T10:53:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "forecast grid",
+              "text": "closed-through chip before the facts",
+              "hash": "e7e361367"
+            },
+            {
+              "section": "Added",
+              "scope": "forecast grid",
+              "text": "compact verdict chip, facts beside it",
+              "hash": "3b93bbad2"
+            },
+            {
+              "section": "Added",
+              "scope": "forecast grid",
+              "text": "text fact chips on the comparison series",
+              "hash": "160a03147"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.34",
       "tag": "v0.3.34",
-      "date": "2026-10-26T15:33:51-04:00",
+      "date": "2026-10-26T15:34:03-04:00",
       "sections": [
         {
           "label": "Fixed",
