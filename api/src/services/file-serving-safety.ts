@@ -44,6 +44,36 @@ export function isInlineSafeType(type: string | null | undefined): boolean {
   return PLAIN_TEXT.has(t)
 }
 
+/** One `type/subtype` token pair (RFC 9110 token characters), nothing else. */
+const MEDIA_TYPE = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/
+
+/** The validated bare type, or null when the value is not exactly one media
+ *  type (a list such as `text/html, image/png`, CR/LF, junk). Parameters
+ *  after the first ';' are dropped whatever they hold (a recorder's
+ *  `video/webm;codecs=vp8,opus` stays `video/webm`). */
+export function validEssence(type: string | null | undefined): string | null {
+  const raw = String(type ?? '')
+  if (/[\r\n\0]/.test(raw)) return null
+  const essence = mediaTypeEssence(raw)
+  return MEDIA_TYPE.test(essence) ? essence : null
+}
+
+/**
+ * The type to STORE for an upload: the bare validated media type the client
+ * claimed, or (when the claim is a list, carries CR/LF, or is not a single
+ * type) the type the file name implies via `lookup`, else octet-stream.
+ * Parameters are never stored.
+ */
+export function normalizeStoredType(
+  claimed: string | null | undefined,
+  lookup?: () => string | false | null | undefined
+): string {
+  const ok = validEssence(claimed)
+  if (ok) return ok
+  const guessed = lookup ? validEssence(lookup() || null) : null
+  return guessed ?? 'application/octet-stream'
+}
+
 export interface StoredFileServing {
   /** The Content-Type to send. */
   contentType: string
@@ -55,22 +85,19 @@ export interface StoredFileServing {
  * The Content-Type and disposition for a stored file. `requested` is what the
  * caller asked for (`?download=1` → attachment). A type that is not
  * inline-safe is always an attachment; plain text served inline is always
- * `text/plain; charset=utf-8`.
+ * `text/plain; charset=utf-8`. The header is built from the validated bare
+ * type only — never the stored string — so what the browser parses is what
+ * was checked; anything that is not exactly one media type is octet-stream.
  */
 export function storedFileServing(
   storedType: string | null | undefined,
   requested: 'inline' | 'attachment' = 'inline'
 ): StoredFileServing {
-  const essence = mediaTypeEssence(storedType)
-  const safe = isInlineSafeType(essence)
-  const mode = requested === 'inline' && safe ? 'inline' : 'attachment'
+  const essence = validEssence(storedType)
+  if (!essence) return { contentType: 'application/octet-stream', mode: 'attachment' }
+  const mode = requested === 'inline' && isInlineSafeType(essence) ? 'inline' : 'attachment'
   if (PLAIN_TEXT.has(essence) && mode === 'inline') {
     return { contentType: 'text/plain; charset=utf-8', mode }
   }
-  // Keep a declared type the browser will honour (nosniff); an empty or
-  // malformed one becomes octet-stream.
-  const contentType = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(essence)
-    ? String(storedType).trim()
-    : 'application/octet-stream'
-  return { contentType, mode }
+  return { contentType: essence, mode }
 }
