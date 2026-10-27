@@ -291,6 +291,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_queue_owner_snapshots',
   'nivaro_ai_proposals',
   'nivaro_push_subscriptions',
+  'nivaro_teams_links', //             per-person Teams link (migration 505) — never promoted
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

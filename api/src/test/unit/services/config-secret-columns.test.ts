@@ -66,7 +66,8 @@ describe('secret columns never ride a snapshot', () => {
       ['nivaro_environment_components', 'api_token'],
       ['nivaro_environment_components', 'git_token'],
       ['nivaro_webhooks', 'secret'],
-      ['nivaro_sso_providers', 'client_secret']
+      ['nivaro_sso_providers', 'client_secret'],
+      ['nivaro_settings', 'teams_bot_app_secret']
     ]) {
       expect(isRedactedColumn(t, c), `${t}.${c}`).toBe(true)
     }
