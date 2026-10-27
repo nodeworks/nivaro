@@ -11,6 +11,7 @@ const cfg: TeamsBotConfig = {
   appId: APP,
   appSecret: 's',
   tenantId: TENANT,
+  appType: 'MultiTenant',
   source: 'env'
 }
 const activity = {

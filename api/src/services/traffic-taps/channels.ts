@@ -59,6 +59,19 @@ export function noteChannel(
   }
 }
 
+/** Attempts on one channel over the last `windowS` seconds, on THIS process (minute buckets). */
+export function channelOutcomeCount(
+  channel: Channel,
+  outcome: ChannelOutcome,
+  windowS: number
+): number {
+  try {
+    return state().counts.sum(`${channel}|${outcome}`, windowS, Math.floor(Date.now() / 1000))
+  } catch {
+    return 0
+  }
+}
+
 /** Sends test mode sent to the test recipient instead of the intended one. */
 export function noteChannelRedirect(channel: Channel, n = 1): void {
   if (process.env.CLOUD_META_DB_URL || n <= 0) return

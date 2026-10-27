@@ -13,6 +13,7 @@ const cfg: TeamsBotConfig = {
   appId: 'app',
   appSecret: 'secret',
   tenantId: 'tenant',
+  appType: 'SingleTenant',
   source: 'env'
 }
 
@@ -50,6 +51,19 @@ describe('getBotToken', () => {
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://login.microsoftonline.com/tenant/oauth2/v2.0/token')
     expect(String(init.body)).toContain('scope=https%3A%2F%2Fapi.botframework.com%2F.default')
+  })
+
+  it('MultiTenant asks the botframework.com authority, SingleTenant the customer tenant', async () => {
+    const f = vi.fn(async () => json({ access_token: 't', expires_in: 3600 }))
+    vi.stubGlobal('fetch', f)
+    await getBotToken({ ...cfg, appType: 'MultiTenant' })
+    expect((f.mock.calls[0] as unknown as [string])[0]).toBe(
+      'https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token'
+    )
+    await getBotToken({ ...cfg, appType: 'SingleTenant', appId: 'other' })
+    expect((f.mock.calls[1] as unknown as [string])[0]).toBe(
+      'https://login.microsoftonline.com/tenant/oauth2/v2.0/token'
+    )
   })
 
   it('two concurrent getBotToken calls make one request', async () => {

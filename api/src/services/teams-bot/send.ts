@@ -5,6 +5,7 @@ import type { AdaptiveCard } from './cards.js'
 import { getTeamsBotConfig } from './config.js'
 import { ConnectorError, sendActivity } from './connector.js'
 import { linkForUser, markLink, noteLinkError, noteLinkSent } from './links.js'
+import { bumpTeamsStat } from './stats.js'
 
 export type TeamsSendOutcome = 'sent' | 'not_connected' | 'disabled' | 'failed'
 
@@ -19,7 +20,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
  * webhook, never people, so a DM has no safe recipient and is dropped ('disabled').
  */
 export async function deliverTeams(
-  _app: FastifyInstance,
+  app: FastifyInstance,
   userId: string,
   card: AdaptiveCard,
   _opts: { notificationId?: number | null } = {}
@@ -52,9 +53,11 @@ export async function deliverTeams(
         // Uninstalled or blocked: stop sending until the person messages the bot again.
         await markLink(link.aad_object_id, 'uninstalled', err.message).catch(() => {})
         noteChannel('teams', 'failed', { ms: Date.now() - started })
+        await bumpTeamsStat(app, 'failed')
         return 'not_connected'
       }
       noteChannel('teams', 'failed', { ms: Date.now() - started })
+      await bumpTeamsStat(app, 'failed')
       await noteLinkError(
         link.aad_object_id,
         err instanceof Error ? err.message : 'send failed'
@@ -62,6 +65,7 @@ export async function deliverTeams(
       return 'failed'
     }
     noteChannel('teams', 'sent', { ms: Date.now() - started })
+    await bumpTeamsStat(app, 'sent')
     await noteLinkSent(link.aad_object_id).catch(() => {})
     return 'sent'
   } catch {

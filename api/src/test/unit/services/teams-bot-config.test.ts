@@ -22,6 +22,11 @@ const KEYS = [
   'TEAMS_BOT_APP_ID',
   'TEAMS_BOT_APP_SECRET',
   'TEAMS_BOT_TENANT_ID',
+  'TEAMS_BOT_APP_TYPE',
+  'MICROSOFT_APP_ID',
+  'MICROSOFT_APP_PASSWORD',
+  'MICROSOFT_APP_TENANT_ID',
+  'MICROSOFT_APP_TYPE',
   'CLOUD_META_DB_URL'
 ]
 const saved: Record<string, string | undefined> = {}
@@ -147,5 +152,74 @@ describe('getTeamsBotConfig', () => {
     expect((await getTeamsBotConfig()).appId).toBe('db-id')
     bustTeamsBotConfig()
     expect((await getTeamsBotConfig()).appId).toBe('changed')
+  })
+
+  it('accepts the Bot Framework SDK env names', async () => {
+    state.row = { teams_bot_enabled: true }
+    process.env.MICROSOFT_APP_ID = 'ms-id'
+    process.env.MICROSOFT_APP_PASSWORD = 'ms-secret'
+    process.env.MICROSOFT_APP_TENANT_ID = 'ms-tenant'
+    const c = await getTeamsBotConfig()
+    expect(c).toMatchObject({
+      enabled: true,
+      appId: 'ms-id',
+      appSecret: 'ms-secret',
+      tenantId: 'ms-tenant',
+      source: 'env'
+    })
+  })
+
+  it('TEAMS_BOT_* beats the SDK names and the families never mix', async () => {
+    state.row = { teams_bot_enabled: true }
+    process.env.TEAMS_BOT_APP_ID = 'tb-id'
+    process.env.MICROSOFT_APP_ID = 'ms-id'
+    process.env.MICROSOFT_APP_PASSWORD = 'ms-secret'
+    process.env.MICROSOFT_APP_TENANT_ID = 'ms-tenant'
+    // TEAMS_BOT_APP_SECRET / TENANT_ID are absent: the id must not borrow the other family's.
+    const c = await getTeamsBotConfig()
+    expect(c.enabled).toBe(false)
+    expect(c.reason).toBe('not_configured')
+    process.env.TEAMS_BOT_APP_SECRET = 'tb-secret'
+    process.env.TEAMS_BOT_TENANT_ID = 'tb-tenant'
+    bustTeamsBotConfig()
+    expect(await getTeamsBotConfig()).toMatchObject({
+      appId: 'tb-id',
+      appSecret: 'tb-secret',
+      tenantId: 'tb-tenant'
+    })
+  })
+
+  it('app type: MultiTenant by default for env and settings, any case from env', async () => {
+    state.row = { ...fullRow }
+    expect((await getTeamsBotConfig()).appType).toBe('MultiTenant')
+    state.row = { ...fullRow, teams_bot_app_type: 'SingleTenant' }
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
+    process.env.TEAMS_BOT_APP_ID = 'e'
+    process.env.TEAMS_BOT_APP_SECRET = 'e'
+    process.env.TEAMS_BOT_TENANT_ID = 'e'
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('MultiTenant')
+    process.env.MICROSOFT_APP_TYPE = 'singletenant'
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
+    process.env.TEAMS_BOT_APP_TYPE = 'MULTITENANT'
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('MultiTenant')
+  })
+
+  it('sign-in app fallback is SingleTenant', async () => {
+    state.row = { teams_bot_enabled: true }
+    cfg.OIDC_ISSUER = 'https://login.microsoftonline.com/tenant-123/v2.0'
+    cfg.OIDC_CLIENT_ID = 'oidc-id'
+    cfg.OIDC_CLIENT_SECRET = 'oidc-secret'
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
+  })
+
+  it('MultiTenant still needs the tenant id (the inbound pin)', async () => {
+    state.row = { ...fullRow, teams_bot_app_type: 'MultiTenant', teams_bot_tenant_id: '' }
+    const c = await getTeamsBotConfig()
+    expect(c.enabled).toBe(false)
+    expect(c.reason).toBe('not_configured')
   })
 })

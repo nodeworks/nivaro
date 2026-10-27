@@ -161,6 +161,13 @@ export async function noteLinkSent(aadObjectId: string): Promise<void> {
     .update({ last_sent_at: new Date(), last_error: null })
 }
 
+/** Stamps the last time this person messaged the bot (admin status strip). */
+export async function noteLinkInbound(aadObjectId: string): Promise<void> {
+  await db(LINKS)
+    .where({ aad_object_id: oidKey(aadObjectId) })
+    .update({ last_inbound_at: new Date() })
+}
+
 export async function noteLinkError(aadObjectId: string, error: string): Promise<void> {
   await db(LINKS)
     .where({ aad_object_id: oidKey(aadObjectId) })

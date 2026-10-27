@@ -50,6 +50,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSSettings, type Role } from '@/lib/api'
 import { ADMIN_LOCALES, useLocale } from '@/lib/i18n'
+import { TeamsBotCard } from '@/pages/settings/TeamsBotCard'
 import { applyThemeSettings, THEME_RADIUS_PRESETS } from '@/lib/theme-settings'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'
@@ -2836,6 +2837,7 @@ export function SettingsPage() {
                     />
                   </Field>
                   <ChannelTestModeCard />
+                  <TeamsBotCard />
 
                   <div className='space-y-2'>
                     <div className='flex items-center justify-between'>

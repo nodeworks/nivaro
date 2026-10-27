@@ -158,6 +158,7 @@ const allowedSettingsKeys = [
   'teams_bot_app_id',
   'teams_bot_app_secret',
   'teams_bot_tenant_id',
+  'teams_bot_app_type',
   // SMS
   'sms_provider',
   'sms_account_sid',
@@ -575,6 +576,12 @@ export async function settingsRoutes(app: FastifyInstance) {
         patch.directory_auth_mode === 'service_account' || patch.directory_auth_mode === 'connected'
           ? patch.directory_auth_mode
           : null
+    }
+
+    if ('teams_bot_app_type' in patch) {
+      const t = String(patch.teams_bot_app_type ?? '').toLowerCase()
+      patch.teams_bot_app_type =
+        t === 'multitenant' ? 'MultiTenant' : t === 'singletenant' ? 'SingleTenant' : null
     }
 
     // Coerce smtp_secure to bit

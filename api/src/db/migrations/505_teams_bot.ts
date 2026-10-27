@@ -8,7 +8,8 @@ import type { Knex } from 'knex'
  *  - nivaro_teams_links: one row per Teams person linked to a Nivaro user.
  *    user_id is uuid -> nivaro_users.id, NO ACTION. Timestamps are written
  *    from JS as UTC.
- *  - nivaro_settings: teams_bot_enabled / app_id / app_secret / tenant_id.
+ *  - nivaro_settings: teams_bot_enabled / app_id / app_secret / tenant_id / app_type
+ *    (MultiTenant | SingleTenant; null = MultiTenant).
  * Guarded + additive; down() drops only what up() added.
  */
 const USERS = 'nivaro_users'
@@ -58,7 +59,8 @@ export async function up(knex: Knex): Promise<void> {
       ['teams_bot_enabled', (t) => void t.boolean('teams_bot_enabled').defaultTo(false)],
       ['teams_bot_app_id', (t) => void t.string('teams_bot_app_id', 100).nullable()],
       ['teams_bot_app_secret', (t) => void t.text('teams_bot_app_secret', 'longtext').nullable()],
-      ['teams_bot_tenant_id', (t) => void t.string('teams_bot_tenant_id', 64).nullable()]
+      ['teams_bot_tenant_id', (t) => void t.string('teams_bot_tenant_id', 64).nullable()],
+      ['teams_bot_app_type', (t) => void t.string('teams_bot_app_type', 20).nullable()]
     ]
     for (const [name, add] of cols) {
       if (await knex.schema.hasColumn(SETTINGS, name)) continue
@@ -70,6 +72,7 @@ export async function up(knex: Knex): Promise<void> {
 export async function down(knex: Knex): Promise<void> {
   if (await knex.schema.hasTable(SETTINGS)) {
     for (const name of [
+      'teams_bot_app_type',
       'teams_bot_tenant_id',
       'teams_bot_app_secret',
       'teams_bot_app_id',

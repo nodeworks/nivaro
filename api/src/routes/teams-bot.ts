@@ -1,25 +1,31 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { requireAdmin } from '../middleware/authenticate.js'
 import { linkTo } from '../services/app-links.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
 import { messageText, type TeamsActivity } from '../services/teams-bot/activity.js'
 import { answerInTeams } from '../services/teams-bot/ask.js'
 import { type AdaptiveCard, resultCard } from '../services/teams-bot/cards.js'
-import { getTeamsBotConfig } from '../services/teams-bot/config.js'
+import { configuredAppId, getTeamsBotConfig } from '../services/teams-bot/config.js'
 import { connectCard } from '../services/teams-bot/connect-card.js'
 import { sendActivity } from '../services/teams-bot/connector.js'
 import { verifyConnectorToken } from '../services/teams-bot/jwt.js'
 import {
   markLink,
+  noteLinkInbound,
   readConnectToken,
   resolveTeamsUser,
   TeamsLinkTakenError,
   upsertLink
 } from '../services/teams-bot/links.js'
+import { buildTeamsPackage } from '../services/teams-bot/manifest.js'
+import { deliverTeams } from '../services/teams-bot/send.js'
+import { readTeamsStat } from '../services/teams-bot/stats.js'
 import { canSignIn, getUser } from '../services/users.js'
 import type { User } from '../types.js'
+import { NIVARO_VERSION } from '../version.js'
 
 // POST /api/teams/messages is called by the Bot Connector, GET /api/teams/connect by a person's
 // browser. Neither has a bearer: the first is authenticated by the Connector JWT (verified before
@@ -93,6 +99,7 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
   const oid = activity.from?.aadObjectId
   const tenantId = activity.channelData?.tenant?.id ?? ''
   if (!oid) return
+  void noteLinkInbound(oid).catch(() => undefined)
   const who = await resolveTeamsUser(oid, tenantId)
   if (!who.user) {
     await reply(activity, connectCard(oid, tenantId))
@@ -178,7 +185,102 @@ async function handleInstall(activity: TeamsActivity): Promise<void> {
   )
 }
 
+const inCloud = () => !!process.env.CLOUD_META_DB_URL
+
+const hostOf = (url: string): string => {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
+const TEST_TEXT: Record<string, string> = {
+  sent: 'Test message sent. Check your Teams chat with the bot.',
+  not_connected:
+    'You have not connected Teams yet. Open the bot in Teams, send it a message, and finish the sign-in link.',
+  disabled:
+    'The Teams bot is off here (or this instance is in Teams test mode), so nothing was sent.',
+  failed: 'Teams refused the message. The status strip shows the last error.'
+}
+
 export async function teamsBotRoutes(app: FastifyInstance) {
+  // ─── Admin: status, test message, app package (off in cloud mode) ───
+  app.get('/status', { preHandler: requireAdmin }, async (_req, reply) => {
+    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    const cfg = await getTeamsBotConfig()
+    const links = (await db('nivaro_teams_links')
+      .where({ status: 'active' })
+      .count({ n: '*' })
+      .first()) as { n?: number | string } | undefined
+    const inbound = (await db('nivaro_teams_links').max({ at: 'last_inbound_at' }).first()) as
+      | { at?: Date | string | null }
+      | undefined
+    const err = (await db('nivaro_teams_links')
+      .whereNotNull('last_error')
+      .orderBy('id', 'desc')
+      .first('last_error')) as { last_error?: string } | undefined
+    const at = inbound?.at ? new Date(inbound.at as string | Date).toISOString() : null
+    return {
+      enabled: cfg.enabled,
+      reason: cfg.reason ?? null,
+      source: cfg.source,
+      app_type: cfg.appType,
+      app_id_set: !!cfg.appId,
+      secret_set: !!cfg.appSecret,
+      tenant_id: cfg.tenantId,
+      linked: Number(links?.n ?? 0),
+      sent_today: await readTeamsStat(app, 'sent'),
+      failed_today: await readTeamsStat(app, 'failed'),
+      last_inbound_at: at,
+      last_error: err?.last_error ?? null
+    }
+  })
+
+  app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {
+    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    const outcome = await deliverTeams(
+      app,
+      (req.user as User).id,
+      resultCard('This is a test message from Nivaro. The Teams bot can reach you.')
+    )
+    return { outcome, message: TEST_TEXT[outcome] ?? outcome }
+  })
+
+  app.get('/package', { preHandler: requireAdmin, compress: false }, async (_req, reply) => {
+    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    const appId = await configuredAppId()
+    if (!appId)
+      return reply
+        .code(409)
+        .send({ error: 'Save the app (client) ID first', code: 'NOT_CONFIGURED' })
+    const publicHost = hostOf(config.PUBLIC_URL)
+    const adminHost = hostOf(config.ADMIN_URL)
+    const row = (await db('nivaro_settings').first('environment_label')) as
+      | { environment_label?: string | null }
+      | undefined
+    const env =
+      String(row?.environment_label || process.env.NODE_ENV || 'production')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'production'
+    const buf = buildTeamsPackage({
+      appId,
+      name: 'Nivaro',
+      shortDescription: 'Notifications and questions about your Nivaro records',
+      fullDescription:
+        'Get your Nivaro notifications in Teams, approve or reject from the card, and ask questions about your records. Everything you see in Teams is limited to what your Nivaro account may see.',
+      publicHost,
+      extraDomains: adminHost && adminHost !== publicHost ? [adminHost] : [],
+      developerUrl: config.PUBLIC_URL.replace(/\/$/, ''),
+      version: NIVARO_VERSION
+    })
+    return reply
+      .header('content-type', 'application/zip')
+      .header('content-disposition', `attachment; filename="nivaro-teams-${env}.zip"`)
+      .send(buf)
+  })
+
   app.post('/messages', async (req, reply) => {
     const cfg = await getTeamsBotConfig()
     if (!cfg.enabled) return reply.code(404).send({ error: 'Not found' })

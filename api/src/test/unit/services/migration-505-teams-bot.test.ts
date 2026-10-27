@@ -71,7 +71,8 @@ describe('migration 505', () => {
     for (const c of [
       'boolean:teams_bot_enabled',
       'string:teams_bot_app_id:100',
-      'string:teams_bot_tenant_id:64'
+      'string:teams_bot_tenant_id:64',
+      'string:teams_bot_app_type:20'
     ])
       expect(log.cols).toContain(c)
     expect(log.cols.some((x) => x.startsWith('text:teams_bot_app_secret'))).toBe(true)
@@ -86,7 +87,8 @@ describe('migration 505', () => {
         'nivaro_settings.teams_bot_enabled',
         'nivaro_settings.teams_bot_app_id',
         'nivaro_settings.teams_bot_app_secret',
-        'nivaro_settings.teams_bot_tenant_id'
+        'nivaro_settings.teams_bot_tenant_id',
+        'nivaro_settings.teams_bot_app_type'
       ]
     })
     await m.up(knex)

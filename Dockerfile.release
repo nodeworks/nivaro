@@ -160,6 +160,8 @@ COPY --from=build-api /app/api/cloud-extensions /app/api/cloud-extensions
 COPY --from=build-admin /app/admin/dist /app/admin/dist
 # Mail templates
 COPY api/templates /app/api/templates
+# Teams app package icons (api/assets/teams, read by services/teams-bot/manifest.ts)
+COPY api/assets /app/api/assets
 # Release notes, generated from git tags at release time. Copied because the
 # container has no git repository to read them from.
 COPY changelog.json /app/changelog.json

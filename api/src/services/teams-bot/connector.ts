@@ -51,7 +51,7 @@ export function resetConnectorCache(): void {
 }
 
 async function fetchToken(cfg: TeamsBotConfig, key: string): Promise<string> {
-  const tenant = cfg.tenantId || 'botframework.com'
+  const tenant = cfg.appType === 'SingleTenant' ? cfg.tenantId : 'botframework.com'
   const res = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
