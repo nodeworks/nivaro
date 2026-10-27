@@ -1,0 +1,90 @@
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { beforeAll, describe, expect, it } from 'vitest'
+import type { TeamsBotConfig } from '../../../services/teams-bot/config.js'
+import { verifyConnectorToken } from '../../../services/teams-bot/jwt.js'
+
+const APP = '11111111-1111-1111-1111-111111111111'
+const TENANT = '22222222-2222-2222-2222-222222222222'
+const SERVICE = 'https://smba.trafficmanager.net/amer/'
+const cfg: TeamsBotConfig = {
+  enabled: true,
+  appId: APP,
+  appSecret: 's',
+  tenantId: TENANT,
+  source: 'env'
+}
+const activity = { serviceUrl: SERVICE, channelData: { tenant: { id: TENANT } } }
+
+let privateKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
+let keys: ReturnType<typeof createLocalJWKSet>
+
+beforeAll(async () => {
+  const pair = await generateKeyPair('RS256')
+  privateKey = pair.privateKey
+  const jwk = { ...(await exportJWK(pair.publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' }
+  keys = createLocalJWKSet({ keys: [jwk] })
+})
+
+async function sign(
+  over: { iss?: string; aud?: string; exp?: number | string; serviceurl?: string } = {}
+): Promise<string> {
+  return new SignJWT({ serviceurl: over.serviceurl ?? SERVICE })
+    .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+    .setIssuer(over.iss ?? 'https://api.botframework.com')
+    .setAudience(over.aud ?? APP)
+    .setIssuedAt()
+    .setExpirationTime(over.exp ?? '1h')
+    .sign(privateKey)
+}
+
+const bearer = (t: string) => `Bearer ${t}`
+
+describe('verifyConnectorToken', () => {
+  it('accepts a good token', async () => {
+    expect(await verifyConnectorToken(bearer(await sign()), activity, cfg, keys)).toEqual({
+      ok: true
+    })
+  })
+  it('rejects wrong audience', async () => {
+    const r = await verifyConnectorToken(bearer(await sign({ aud: 'other' })), activity, cfg, keys)
+    expect(r).toEqual({ ok: false, reason: 'audience' })
+  })
+  it('rejects wrong issuer', async () => {
+    const r = await verifyConnectorToken(
+      bearer(await sign({ iss: 'https://evil.example' })),
+      activity,
+      cfg,
+      keys
+    )
+    expect(r).toEqual({ ok: false, reason: 'issuer' })
+  })
+  it('rejects expired', async () => {
+    const exp = Math.floor(Date.now() / 1000) - 600
+    const r = await verifyConnectorToken(bearer(await sign({ exp })), activity, cfg, keys)
+    expect(r).toEqual({ ok: false, reason: 'expired' })
+  })
+  it('rejects serviceUrl mismatch', async () => {
+    const r = await verifyConnectorToken(
+      bearer(await sign()),
+      { ...activity, serviceUrl: 'https://attacker.example/' },
+      cfg,
+      keys
+    )
+    expect(r).toEqual({ ok: false, reason: 'service_url' })
+  })
+  it('rejects another tenant', async () => {
+    const r = await verifyConnectorToken(
+      bearer(await sign()),
+      { ...activity, channelData: { tenant: { id: 'someone-else' } } },
+      cfg,
+      keys
+    )
+    expect(r).toEqual({ ok: false, reason: 'tenant' })
+  })
+  it('rejects a missing header', async () => {
+    expect(await verifyConnectorToken(undefined, activity, cfg, keys)).toEqual({
+      ok: false,
+      reason: 'missing'
+    })
+  })
+})
