@@ -31,11 +31,12 @@ async function settle(until: () => boolean) {
   }
 }
 
-async function mount(me: Record<string, unknown>) {
+async function mount(me: Record<string, unknown>, failDelete = false) {
   const calls: Cmd[] = []
   const client = {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
+      if (failDelete && cmd._method === 'DELETE') throw new Error('nope')
       if (cmd._method === 'GET' && cmd._path === '/users/me') return { data: me }
       return { data: cmd._method === 'GET' ? [] : {} }
     })
@@ -92,6 +93,24 @@ describe('Profile → Teams column', () => {
     expect(patchCall?._body.notification_prefs.matrix[cat].teams).toBe(true)
     // a save must not wipe a mute set from the bot
     expect(patchCall?._body.notification_prefs.teams_muted_until).toBe('2099-01-01T00:00:00Z')
+  })
+})
+
+describe('Teams disconnect', () => {
+  it('a failed disconnect shows an error', async () => {
+    const calls = await mount(
+      { preferences: {}, teams_available: true, teams_link: { status: 'active', linked_at: null } },
+      true
+    )
+    await settle(() => !!host.querySelector('[data-teams-connected] button'))
+    const btn = () => host.querySelector('[data-teams-connected] button') as HTMLButtonElement
+    await act(async () => btn().click())
+    await act(async () => btn().click())
+    await settle(() => !!host.querySelector('[data-teams-disconnect-error]'))
+    expect(calls.some((c) => c._method === 'DELETE')).toBe(true)
+    expect(host.querySelector('[data-teams-disconnect-error]')?.textContent).toContain(
+      'Could not disconnect Teams'
+    )
   })
 })
 

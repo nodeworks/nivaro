@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del } from '../../lib/commands'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -12,8 +13,13 @@ import { ConfirmButton } from './primitives'
 export function TeamsConnect({ linked, linkedAt }: { linked: boolean; linkedAt?: string | null }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const [failed, setFailed] = useState(false)
   const disconnect = useMutation({
-    mutationFn: () => client.request(del('/teams/link')),
+    mutationFn: () => {
+      setFailed(false)
+      return client.request(del('/teams/link'))
+    },
+    onError: () => setFailed(true),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-teams'] })
     }
@@ -21,22 +27,33 @@ export function TeamsConnect({ linked, linkedAt }: { linked: boolean; linkedAt?:
 
   if (linked) {
     return (
-      <span
-        className='inline-flex flex-wrap items-center justify-center gap-1 text-[10.5px] font-normal normal-case tracking-normal text-emerald-700 dark:text-emerald-400'
-        data-teams-connected=''
-        title={linkedAt ? `Connected ${new Date(linkedAt).toLocaleString()}` : undefined}
-      >
-        Connected ·{' '}
-        <ConfirmButton
-          onConfirm={() => disconnect.mutate()}
-          confirmLabel='Disconnect Teams?'
-          disabled={disconnect.isPending}
-          className='font-medium text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
-          armedClassName='font-medium text-red-600 dark:text-red-400'
+      <>
+        <span
+          className='inline-flex flex-wrap items-center justify-center gap-1 text-[10.5px] font-normal normal-case tracking-normal text-emerald-700 dark:text-emerald-400'
+          data-teams-connected=''
+          title={linkedAt ? `Connected ${new Date(linkedAt).toLocaleString()}` : undefined}
         >
-          Disconnect
-        </ConfirmButton>
-      </span>
+          Connected ·{' '}
+          <ConfirmButton
+            onConfirm={() => disconnect.mutate()}
+            confirmLabel='Disconnect Teams?'
+            disabled={disconnect.isPending}
+            className='font-medium text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+            armedClassName='font-medium text-red-600 dark:text-red-400'
+          >
+            Disconnect
+          </ConfirmButton>
+        </span>
+        {failed && (
+          <p
+            role='alert'
+            data-teams-disconnect-error=''
+            className='mt-0.5 text-[10.5px] font-normal normal-case tracking-normal text-red-600 dark:text-red-400'
+          >
+            Could not disconnect Teams. Try again; if it keeps failing, ask an admin.
+          </p>
+        )}
+      </>
     )
   }
 
