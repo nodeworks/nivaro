@@ -775,7 +775,11 @@ export const collabTeamsBot: DocSection = {
       head: ['Variable', 'Meaning', 'Alias'],
       rows: [
         ['TEAMS_BOT_APP_ID', 'Bot application id', 'MICROSOFT_APP_ID'],
-        ['TEAMS_BOT_APP_SECRET', 'Bot client secret (a _FILE variant works)', 'MICROSOFT_APP_PASSWORD'],
+        [
+          'TEAMS_BOT_APP_SECRET',
+          'Bot client secret (a _FILE variant works)',
+          'MICROSOFT_APP_PASSWORD'
+        ],
         ['TEAMS_BOT_TENANT_ID', 'Your Entra tenant id', 'MICROSOFT_APP_TENANT_ID'],
         ['TEAMS_BOT_APP_TYPE', 'MultiTenant or SingleTenant', 'MICROSOFT_APP_TYPE'],
         ['TEAMS_BOT', 'on switches the bot on and off disables it, whatever is saved', '']
@@ -794,12 +798,20 @@ export const collabTeamsBot: DocSection = {
       type: 'table',
       head: ['Endpoint', 'Who', 'Purpose'],
       rows: [
-        ['POST /api/teams/messages', 'Microsoft', 'Bot messages and card actions. Accepts only Microsoft-signed tokens and only the Teams channel.'],
-        ['GET /api/teams/connect', 'Person', 'The Connect link target; requires the same Microsoft account.'],
+        [
+          'POST /api/teams/messages',
+          'Microsoft',
+          'Bot messages and card actions. Accepts only Microsoft-signed tokens and only the Teams channel.'
+        ],
+        [
+          'GET /api/teams/connect',
+          'Person',
+          'The Connect link target; requires the same Microsoft account.'
+        ],
         ['GET /api/teams/status', 'Admin', 'Configuration source, health and link counts.'],
         ['GET /api/teams/package', 'Admin', 'Downloads the Teams app package.'],
         ['POST /api/teams/test', 'Admin', 'Sends a test card to the caller.'],
-        ['DELETE /api/teams/link', 'Person', 'Disconnects the caller\'s own Teams link.']
+        ['DELETE /api/teams/link', 'Person', "Disconnects the caller's own Teams link."]
       ]
     },
     {
@@ -814,7 +826,7 @@ export const collabTeamsBot: DocSection = {
         'No card arrives: check Profile → Notification rules for the category, quiet hours, and a mute (type "unmute").',
         'A channel answer arrives privately: someone in the channel is not matched to a Nivaro user, may not see the data, or the channel is shared or private. This is by design.',
         'Messages are refused: the messaging endpoint, app type or tenant id does not match the Azure Bot registration. Settings → Microsoft → Teams bot shows which source is in use.',
-        'Every message is refused and the API log shows reason keys_unavailable: Nivaro could not fetch Microsoft\'s signing keys from login.botframework.com. Check outbound HTTPS from the API.',
+        "Every message is refused and the API log shows reason keys_unavailable: Nivaro could not fetch Microsoft's signing keys from login.botframework.com. Check outbound HTTPS from the API.",
         'During a maintenance window, card buttons decline with a short notice and work again afterwards.'
       ]
     }

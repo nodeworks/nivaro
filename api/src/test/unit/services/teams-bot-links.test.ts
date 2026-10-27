@@ -9,8 +9,8 @@ import {
   resolveTeamsUser,
   signConnectToken
 } from '../../../services/teams-bot/links.js'
-import { getUser } from '../../../services/users.js'
 import { buildTeamsNotificationCard } from '../../../services/teams-bot/notification-card.js'
+import { getUser } from '../../../services/users.js'
 
 afterEach(() => vi.useRealTimers())
 
