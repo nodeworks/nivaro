@@ -30,7 +30,9 @@ export function withoutCredentials<T extends Record<string, unknown>>(
 ): Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> & { has_static_token: boolean } {
   const out: Record<string, unknown> = { ...user }
   for (const f of USER_CREDENTIAL_FIELDS) delete out[f]
-  out.has_static_token = !!user.static_token
+  // A row that was already stripped keeps the answer it carries (idempotent).
+  out.has_static_token =
+    'static_token' in user ? !!user.static_token : user.has_static_token === true
   return out as Omit<T, (typeof USER_CREDENTIAL_FIELDS)[number]> & { has_static_token: boolean }
 }
 
@@ -330,7 +332,21 @@ async function configuredNewUserRole(): Promise<string | null> {
   return String(role.id)
 }
 
+/**
+ * One person's row WITHOUT credentials (static token, password hash, TOTP secret, IdP subject;
+ * security audit H6) — what every route answer, revision snapshot and service sees.
+ * `has_static_token` says whether a token exists. Sign-in code that needs the credential
+ * columns themselves uses getUserWithCredentials.
+ */
 export async function getUser(id: string): Promise<User | undefined> {
+  const row = await getUserWithCredentials(id)
+  return row
+    ? (withoutCredentials(row as unknown as Record<string, unknown>) as unknown as User)
+    : row
+}
+
+/** The full row, credentials included — internal sign-in / token code only, never a response. */
+export async function getUserWithCredentials(id: string): Promise<User | undefined> {
   // nivaro_users.id is a uniqueidentifier: anything else is nobody, not a
   // conversion error from SQL Server.
   if (!USER_ID_SHAPE.test(String(id ?? ''))) return undefined

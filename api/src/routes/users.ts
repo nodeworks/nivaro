@@ -136,6 +136,11 @@ async function delegateWriteCheck(
   return { warning }
 }
 
+/** A user row with no credential columns (security audit H6) — every answer and revision. */
+function safeUser<T extends object>(u: T | undefined | null): T | undefined {
+  return u ? (withoutCredentials(u as Record<string, unknown>) as unknown as T) : undefined
+}
+
 export async function usersRoutes(app: FastifyInstance) {
   // Every /:id below names a nivaro_users row (uniqueidentifier). A mistyped
   // or truncated id (/profile/abc) used to reach SQL Server as a conversion
@@ -353,7 +358,7 @@ export async function usersRoutes(app: FastifyInstance) {
           .send({ error: `account_kind must be one of ${ACCOUNT_KINDS.join(', ')}, or null` })
       }
     }
-    const previousUser = await getUser(id)
+    const previousUser = safeUser(await getUser(id))
     const isSelf = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
     if ('preferences' in filtered) {
       // #1804 — nobody writes notes into someone else's Ask AI prompt.
@@ -362,7 +367,8 @@ export async function usersRoutes(app: FastifyInstance) {
       if ('error' in g) return reply.code(400).send({ error: g.error })
       filtered.preferences = g.value
     }
-    const user = await updateUser(id, filtered)
+    // Credentials never ride a response or a revision (getUser strips them; this says so).
+    const user = safeUser(await updateUser(id, filtered))
     const activityId = await logActivity({
       action: 'update',
       user: req.user!.id,
@@ -1447,8 +1453,8 @@ export async function usersRoutes(app: FastifyInstance) {
       ooo_end: oooEnd
     }
 
-    const previousUser = await getUser(userId)
-    const user = await updateUser(userId, updates)
+    const previousUser = safeUser(await getUser(userId))
+    const user = safeUser(await updateUser(userId, updates))
     // Going OOO right now with a delegate → open tasks move immediately (#70).
     if (updates.is_out_of_office && updates.delegate_id) {
       const { delegateOpenTasks } = await import('../services/task-delegation.js')
@@ -1525,7 +1531,7 @@ export async function usersRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
-    const user = await getUser(userId)
+    const user = safeUser(await getUser(userId))
     const activityId = await logActivity({
       action: 'create',
       user: req.user!.id,
@@ -1548,7 +1554,7 @@ export async function usersRoutes(app: FastifyInstance) {
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     if (id === req.user!.id) return reply.code(400).send({ error: 'Cannot delete yourself' })
-    const deletedUser = await getUser(id)
+    const deletedUser = safeUser(await getUser(id))
     await db('nivaro_users').where({ id }).delete()
     const activityId = await logActivity({
       action: 'delete',

@@ -173,10 +173,18 @@ describe('ws-token binding (#1719, H1)', () => {
     expect(bindFromRequest({ authMethod: 'api_key' })).toBeNull()
     expect(bindFromRequest({})).toBeNull()
   })
-  it('a ws-token value may carry its tenant; reading it is unchanged', () => {
+  it('a ws-token value may carry its tenant, and reading it returns it', () => {
     const v = encodeBoundToken('U1', { kind: 'session', sid: 's' }, 'tenant-a')
     expect(JSON.parse(v).t).toBe('tenant-a')
-    expect(parseWsTokenValue(v)).toEqual({ userId: 'U1', bind: { kind: 'session', sid: 's' } })
+    expect(parseWsTokenValue(v)).toEqual({
+      userId: 'U1',
+      bind: { kind: 'session', sid: 's' },
+      t: 'tenant-a'
+    })
+    expect(parseWsTokenValue(encodeBoundToken('U1', { kind: 'session', sid: 's' }))).toEqual({
+      userId: 'U1',
+      bind: { kind: 'session', sid: 's' }
+    })
     expect(JSON.parse(encodeBoundToken('U1', { kind: 'session', sid: 's' }))).not.toHaveProperty(
       't'
     )

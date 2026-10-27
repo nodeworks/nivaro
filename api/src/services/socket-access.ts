@@ -118,11 +118,21 @@ export function encodeBoundToken(userId: string, bind: SocketBind, tenant?: stri
  * Read a ws-token / SSE ticket value. A value without a valid bind (a bare user id from an
  * older API) gives `bind: null`, which signs nothing in: the client simply asks for a new one.
  */
-export function parseWsTokenValue(raw: string): { userId: string | null; bind: SocketBind | null } {
+export function parseWsTokenValue(raw: string): {
+  userId: string | null
+  bind: SocketBind | null
+  /** The tenant the token was minted in (absent on tokens minted without one). */
+  t?: string
+} {
   if (raw.startsWith('{')) {
     try {
-      const v = JSON.parse(raw) as { u?: string; b?: unknown }
-      if (v.u) return { userId: v.u, bind: isBind(v.b) ? v.b : null }
+      const v = JSON.parse(raw) as { u?: string; b?: unknown; t?: unknown }
+      if (v.u)
+        return {
+          userId: v.u,
+          bind: isBind(v.b) ? v.b : null,
+          ...(typeof v.t === 'string' && v.t ? { t: v.t } : {})
+        }
     } catch {
       /* fall through */
     }

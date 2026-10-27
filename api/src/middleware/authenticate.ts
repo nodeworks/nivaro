@@ -289,12 +289,14 @@ async function authenticateSimulatedKey(req: FastifyRequest, reply: FastifyReply
   req.authMethod = 'key_sim'
   const raw = await withAuthDeadline(req.server.redis.get(`keysim:${token}`), 'the key store')
   if (!raw) throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
-  let payload: { key_id?: string | number; admin_id?: string }
+  let payload: { key_id?: string | number; admin_id?: string; t?: unknown }
   try {
-    payload = JSON.parse(raw) as { key_id?: string | number; admin_id?: string }
+    payload = JSON.parse(raw) as { key_id?: string | number; admin_id?: string; t?: unknown }
   } catch {
     throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
   }
+  if (tenantTagRefused(payload.t))
+    throw httpError(401, 'The run-as-key session expired', 'KEY_SIM_EXPIRED')
   const key = (await db<ApiKeyRow>('nivaro_api_keys').where({ id: payload.key_id }).first()) as
     | ApiKeyRow
     | undefined
@@ -442,6 +444,17 @@ export async function issuingAdminStillAdmin(adminId: string | null | undefined)
   return ok
 }
 
+/**
+ * A View-as / run-as-key record carries `t`, the tenant it was minted in. Cloud tenants share
+ * one Redis, so a token minted on one tenant's host must never sign in on another's: refused
+ * when `t` names another tenant, and — in cloud mode — when it names none. Self-hosted records
+ * without `t` keep working.
+ */
+export function tenantTagRefused(t: unknown): boolean {
+  if (typeof t === 'string' && t) return t !== currentTenantKey()
+  return !!process.env.CLOUD_META_DB_URL
+}
+
 /** Test hook: forget cached admin verdicts. */
 export function resetAdminRecheckCache(): void {
   adminRecheck.clear()
@@ -513,12 +526,15 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           'the masquerade store'
         )
         if (!raw) throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
-        let payload: { user_id?: string; admin_id?: string }
+        let payload: { user_id?: string; admin_id?: string; t?: unknown }
         try {
-          payload = JSON.parse(raw) as { user_id?: string; admin_id?: string }
+          payload = JSON.parse(raw) as { user_id?: string; admin_id?: string; t?: unknown }
         } catch {
           throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         }
+        // Minted on another tenant's host (cloud): not a View-as here.
+        if (tenantTagRefused(payload.t))
+          throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
         const user = await db<User>('nivaro_users')
           .where({ id: payload.user_id, status: 'active' })
           .first()

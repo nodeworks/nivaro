@@ -6,7 +6,8 @@ import {
   authenticate,
   credentialMintRefusal,
   delegatedWriteRefusal,
-  resetAdminRecheckCache
+  resetAdminRecheckCache,
+  tenantTagRefused
 } from '../../../middleware/authenticate.js'
 
 // Security audit H3 + auth Lows: a lasting credential is minted only by a person signed in as
@@ -65,8 +66,24 @@ describe('delegatedWriteRefusal', () => {
   })
 })
 
+describe('tenantTagRefused', () => {
+  afterEach(() => {
+    delete process.env.CLOUD_META_DB_URL
+  })
+  it('self-hosted: a record without a tenant works, one naming a tenant does not', () => {
+    expect(tenantTagRefused(undefined)).toBe(false)
+    expect(tenantTagRefused('')).toBe(false)
+    expect(tenantTagRefused('tenant-b')).toBe(true)
+  })
+  it('cloud: a record without a tenant is refused', () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    expect(tenantTagRefused(undefined)).toBe(true)
+    expect(tenantTagRefused('tenant-b')).toBe(true)
+  })
+})
+
 describe('View-as token with a demoted issuer', () => {
-  function app(adminIsAdmin: boolean) {
+  function app(adminIsAdmin: boolean, masqTenant?: string) {
     // nivaro_users: the target (any id) / the issuing admin; nivaro_roles: the role rows.
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: string) => {
       let id: unknown
@@ -93,7 +110,13 @@ describe('View-as token with a demoted issuer', () => {
     const a = Fastify({ logger: false })
     a.decorate('redis', {
       get: async (k: string) =>
-        k.startsWith('masq:') ? JSON.stringify({ user_id: 'TARGET', admin_id: 'ADM' }) : null,
+        k.startsWith('masq:')
+          ? JSON.stringify({
+              user_id: 'TARGET',
+              admin_id: 'ADM',
+              ...(masqTenant ? { t: masqTenant } : {})
+            })
+          : null,
       set: async () => 'OK'
     } as never)
     a.decorateRequest('session', null as never)
@@ -122,6 +145,15 @@ describe('View-as token with a demoted issuer', () => {
 
   it('stops once the issuer is no longer an admin', async () => {
     const res = await app(false).inject({
+      method: 'GET',
+      url: '/api/x',
+      headers: { authorization: 'Bearer nvm_abc' }
+    })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('a View-as minted for another tenant does not sign in', async () => {
+    const res = await app(true, 'tenant-other').inject({
       method: 'GET',
       url: '/api/x',
       headers: { authorization: 'Bearer nvm_abc' }

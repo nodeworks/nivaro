@@ -35,7 +35,10 @@ vi.mock('../../../services/office-geocode.js', () => ({ queueOfficeGeocode: () =
 import {
   AccountLinkRefusedError,
   findOrCreateFromOIDC,
-  namespacedSub
+  getUser,
+  getUserWithCredentials,
+  namespacedSub,
+  updateUser
 } from '../../../services/users.js'
 
 const base = { email: 'victim@example.com', given_name: 'V', family_name: 'Ictim' }
@@ -103,5 +106,34 @@ describe('findOrCreateFromOIDC account linking', () => {
     await expect(findOrCreateFromOIDC({ ...base, sub, legacySub: 'raw-1' })).rejects.toBeInstanceOf(
       AccountLinkRefusedError
     )
+  })
+})
+
+describe('getUser / updateUser never hand out credentials (H6)', () => {
+  const ID = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const raw = () => ({
+    id: ID,
+    email: 'a@x.test',
+    static_token: 'tok',
+    password_hash: 'h',
+    totp_secret: 's',
+    external_id: 'sub',
+    preferences: '{"a":1}'
+  })
+
+  it('getUser strips them and says whether a token exists', async () => {
+    state.rows.set('nivaro_users', [raw()])
+    const u = (await getUser(ID)) as unknown as Record<string, unknown>
+    for (const f of ['static_token', 'password_hash', 'totp_secret', 'external_id'])
+      expect(u).not.toHaveProperty(f)
+    expect(u.has_static_token).toBe(true)
+    expect(u.preferences).toEqual({ a: 1 })
+  })
+
+  it('updateUser returns the stripped row; the internal getter keeps them', async () => {
+    state.rows.set('nivaro_users', [1, raw(), raw()])
+    const u = (await updateUser(ID, { first_name: 'A' })) as unknown as Record<string, unknown>
+    expect(u).not.toHaveProperty('static_token')
+    expect((await getUserWithCredentials(ID))?.static_token).toBe('tok')
   })
 })
