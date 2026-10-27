@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/users.js', () => ({ canSignIn: () => true, getUser: vi.fn() }))
 
-import { readConnectToken, signConnectToken } from '../../../services/teams-bot/links.js'
+import { db } from '../../../db/index.js'
+import {
+  readConnectToken,
+  resolveTeamsUser,
+  signConnectToken
+} from '../../../services/teams-bot/links.js'
+import { getUser } from '../../../services/users.js'
 import { buildTeamsNotificationCard } from '../../../services/teams-bot/notification-card.js'
 
 afterEach(() => vi.useRealTimers())
@@ -53,5 +59,35 @@ describe('notification card actions', () => {
     expect(exec(ack).map((x) => x.data)).toMatchObject([{ kind: 'ack', ref: '7', action: 'ack' }])
     const plain = await buildTeamsNotificationCard({ ...base, target: null })
     expect(exec(plain)).toHaveLength(0)
+  })
+})
+
+describe('resolveTeamsUser', () => {
+  it('matches the stored oid with plain (index-friendly) equality on the lowercased ids', async () => {
+    const calls: Array<[string, string, unknown[]]> = []
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const p: any = new Proxy(
+        {},
+        {
+          get(_t, prop: string) {
+            if (prop === 'then') return undefined
+            if (prop === 'first')
+              return async () => (table === 'nivaro_users' ? { id: 'u1' } : undefined)
+            return (...a: unknown[]) => {
+              calls.push([table, prop, a])
+              return p
+            }
+          }
+        }
+      )
+      return p
+    }) as never)
+    vi.mocked(getUser).mockResolvedValue({ id: 'u1', status: 'active' } as never)
+    const r = await resolveTeamsUser(' ABC-DEF ', 'TENANT-1')
+    expect(r.user?.id).toBe('u1')
+    const users = calls.filter(([t]) => t === 'nivaro_users')
+    expect(users.some(([, m]) => m === 'whereRaw')).toBe(false)
+    expect(users).toContainEqual(['nivaro_users', 'where', [{ entra_oid: 'abc-def' }]])
+    expect(users).toContainEqual(['nivaro_users', 'where', [{ entra_tid: 'tenant-1' }]])
   })
 })

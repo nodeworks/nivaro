@@ -22,9 +22,13 @@ export function canSignIn(user: Pick<User, 'status'> & { is_redacted?: unknown }
  */
 export async function recordEntraIdentity(
   userId: string,
-  oid: string,
-  tid: string
+  rawOid: string,
+  rawTid: string
 ): Promise<'stored' | 'same' | 'conflict'> {
+  // Stored lowercased so lookups compare with plain equality (the filtered unique index on
+  // entra_oid serves them); the Teams side lowercases the incoming aadObjectId the same way.
+  const oid = String(rawOid).trim().toLowerCase()
+  const tid = String(rawTid).trim().toLowerCase()
   const row = (await db('nivaro_users').where({ id: userId }).first('entra_oid', 'entra_tid')) as
     | { entra_oid?: string | null; entra_tid?: string | null }
     | undefined
@@ -45,8 +49,8 @@ export async function recordEntraIdentity(
   return 'stored'
 }
 
-/** Sign-in hook: never blocks the sign-in; a conflict leaves an activity row. */
-async function captureEntraIdentity(
+/** Sign-in hook: never blocks the sign-in; a conflict leaves an activity row. Exported for tests. */
+export async function captureEntraIdentity(
   userId: string,
   profile: { entraOid?: string | null; entraTid?: string | null }
 ): Promise<void> {
@@ -63,8 +67,18 @@ async function captureEntraIdentity(
         comment: 'Sign-in carried an Entra object id that does not match the stored one'
       })
     }
-  } catch {
-    // column missing (behind migration 505) or transient: sign-in proceeds
+  } catch (err) {
+    // Column missing (behind migration 505) or transient: sign-in proceeds. Never log the oid.
+    // SQL Server's duplicate-key message quotes the key value, so the oid is scrubbed out.
+    const e = err as { code?: unknown; number?: unknown; message?: unknown }
+    const oid = String(profile.entraOid).trim()
+    const msg = String(e?.message ?? err)
+      .replace(new RegExp(oid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '<oid>')
+      .replace(/duplicate key value is \([^)]*\)/gi, 'duplicate key value is (<redacted>)')
+      .slice(0, 200)
+    console.warn(
+      `[entra-oid] could not record the Entra identity for user ${userId}: ${String(e?.code ?? e?.number ?? '')} ${msg}`
+    )
   }
 }
 

@@ -46,6 +46,8 @@ function signInApp(): { appId: string; appSecret: string; tenantId: string } | n
   const issuer = config.OIDC_ISSUER
   if (!/microsoftonline\.com|windows\.net/i.test(issuer)) return null
   const tenantId = /\.(?:microsoftonline\.com|windows\.net)\/([^/]+)/i.exec(issuer)?.[1] ?? ''
+  // A multi-tenant sign-in authority names no tenant to pin inbound activities to.
+  if (!tenantId || /^(common|organizations|consumers)$/i.test(tenantId)) return null
   return {
     appId: clean(config.OIDC_CLIENT_ID),
     appSecret: clean(config.OIDC_CLIENT_SECRET),

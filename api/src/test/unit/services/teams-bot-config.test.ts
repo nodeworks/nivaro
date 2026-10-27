@@ -141,6 +141,20 @@ describe('getTeamsBotConfig', () => {
     expect(c.appSecret).toBe('')
   })
 
+  it('a common / organizations / consumers issuer is no tenant: no sign-in app fallback', async () => {
+    for (const t of ['common', 'organizations', 'consumers', 'Common']) {
+      bustTeamsBotConfig()
+      state.row = { teams_bot_enabled: true }
+      cfg.OIDC_ISSUER = `https://login.microsoftonline.com/${t}/v2.0`
+      cfg.OIDC_CLIENT_ID = 'oidc-id'
+      cfg.OIDC_CLIENT_SECRET = 'oidc-secret'
+      const c = await getTeamsBotConfig()
+      expect(c.enabled).toBe(false)
+      expect(c.reason).toBe('not_configured')
+      expect(await teamsBotSetup()).toBeNull()
+    }
+  })
+
   it('does not fall back when the issuer is not Microsoft', async () => {
     state.row = { teams_bot_enabled: true }
     cfg.OIDC_ISSUER = 'https://accounts.google.com'

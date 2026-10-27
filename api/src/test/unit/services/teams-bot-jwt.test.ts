@@ -117,4 +117,27 @@ describe('verifyConnectorToken', () => {
       ok: true
     })
   })
+
+  it('refuses a token without exp', async () => {
+    const t = await new SignJWT({ serviceurl: SERVICE })
+      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+      .setIssuer('https://api.botframework.com')
+      .setAudience(APP)
+      .setIssuedAt()
+      .sign(privateKey)
+    const r = await verifyConnectorToken(bearer(t), activity, cfg, keys)
+    expect(r).toEqual({ ok: false, reason: 'expired' })
+  })
+  it('a key fetch failure is keys_unavailable, not signature', async () => {
+    const set = endorsedKeySet(async () => {
+      throw new Error('bot keys 503')
+    }, 'msteams')
+    const r = await verifyConnectorToken(bearer(await sign()), activity, cfg, set)
+    expect(r).toEqual({ ok: false, reason: 'keys_unavailable' })
+  })
+  it('an unknown kid with keys loaded is still signature', async () => {
+    const set = endorsedKeySet(async () => ({ keys: [] }) as never, 'msteams')
+    const r = await verifyConnectorToken(bearer(await sign()), activity, cfg, set)
+    expect(r).toEqual({ ok: false, reason: 'signature' })
+  })
 })

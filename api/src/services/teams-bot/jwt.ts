@@ -28,6 +28,8 @@ export type TokenRefusal =
   | 'service_url'
   | 'tenant'
   | 'channel'
+  /** The Bot Framework key metadata / JWKS could not be fetched (still a 401). */
+  | 'keys_unavailable'
 
 export type TokenVerdict = { ok: true } | { ok: false; reason: TokenRefusal }
 
@@ -77,6 +79,16 @@ function loadRemoteDoc(force: boolean, metadataUrl = METADATA_URL): Promise<JwkD
 }
 
 class EndorsementError extends Error {}
+class KeysUnavailableError extends Error {}
+
+/** A failed metadata / key fetch is told apart from a bad signature. */
+async function loadKeys(load: (force: boolean) => Promise<JwkDoc>, force: boolean) {
+  try {
+    return await load(force)
+  } catch (e) {
+    throw new KeysUnavailableError((e as Error)?.message ?? 'keys unavailable')
+  }
+}
 
 /**
  * Key selector by kid that also requires the signing key to be endorsed for the activity's
@@ -89,8 +101,8 @@ export function endorsedKeySet(
 ): JWTVerifyGetKey {
   return (async (header: { kid?: string }) => {
     const find = (doc: JwkDoc) => doc.keys.find((k) => k.kid && k.kid === header.kid)
-    let jwk = find(await load(false))
-    if (!jwk) jwk = find(await load(true))
+    let jwk = find(await loadKeys(load, false))
+    if (!jwk) jwk = find(await loadKeys(load, true))
     if (!jwk) throw new errors.JWKSNoMatchingKey()
     const { endorsements, ...pub } = jwk
     if (Array.isArray(endorsements) && !endorsements.includes(channelId)) {
@@ -121,11 +133,13 @@ export async function verifyConnectorToken(
       issuer: ISSUER,
       audience: cfg.appId,
       algorithms: ['RS256'],
-      clockTolerance: CLOCK_TOLERANCE_S
+      clockTolerance: CLOCK_TOLERANCE_S,
+      requiredClaims: ['exp']
     })
     payload = res.payload
   } catch (e) {
     if (e instanceof EndorsementError) return { ok: false, reason: 'channel' }
+    if (e instanceof KeysUnavailableError) return { ok: false, reason: 'keys_unavailable' }
     if (e instanceof errors.JWTExpired) return { ok: false, reason: 'expired' }
     if (e instanceof errors.JWTClaimValidationFailed) {
       if (e.claim === 'aud') return { ok: false, reason: 'audience' }

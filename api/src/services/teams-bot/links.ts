@@ -77,8 +77,9 @@ export async function resolveTeamsUser(
   }
   if (!user) {
     const row = (await db('nivaro_users')
-      .whereRaw('LOWER(entra_oid) = ?', [oid])
-      .whereRaw('LOWER(entra_tid) = ?', [oidKey(tenantId)])
+      // Both stored lowercased (users.ts recordEntraIdentity): plain equality uses the index.
+      .where({ entra_oid: oid })
+      .where({ entra_tid: oidKey(tenantId) })
       .first('id')) as { id: string } | undefined
     user = row ? await getUser(String(row.id)) : undefined
     link = null
