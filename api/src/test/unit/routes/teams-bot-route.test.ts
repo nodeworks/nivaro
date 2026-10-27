@@ -12,7 +12,9 @@ const st = vi.hoisted(() => ({
   ask: vi.fn(async (..._a: unknown[]) => undefined),
   upsert: vi.fn(async (..._a: unknown[]) => ({})),
   send: vi.fn(async (..._a: unknown[]) => ({ id: 'x' })),
-  mark: vi.fn(async (..._a: unknown[]) => undefined)
+  mark: vi.fn(async (..._a: unknown[]) => undefined),
+  invoke: vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ type: 'AdaptiveCard' })),
+  enabled: true
 }))
 
 vi.mock('../../../config.js', () => ({
@@ -28,7 +30,7 @@ vi.mock('../../../services/users.js', () => ({
   canSignIn: () => true
 }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
-  getTeamsBotConfig: async () => ({ enabled: true, appId: 'app', tenantId: 'tid' })
+  getTeamsBotConfig: async () => ({ enabled: st.enabled, appId: 'app', tenantId: 'tid' })
 }))
 vi.mock('../../../services/teams-bot/jwt.js', () => ({
   verifyConnectorToken: async () => st.verdict
@@ -36,7 +38,7 @@ vi.mock('../../../services/teams-bot/jwt.js', () => ({
 vi.mock('../../../services/teams-bot/connector.js', () => ({ sendActivity: st.send }))
 vi.mock('../../../services/teams-bot/ask.js', () => ({ answerInTeams: st.ask }))
 vi.mock('../../../services/teams-bot/actions.js', () => ({
-  handleInvoke: async () => ({ type: 'AdaptiveCard' })
+  handleInvoke: (...a: unknown[]) => st.invoke(...a)
 }))
 const inbound = vi.fn(async (..._a: unknown[]): Promise<unknown> => undefined)
 vi.mock('../../../services/teams-bot/links.js', () => ({
@@ -52,8 +54,9 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
 }))
 
 import { teamsBotRoutes } from '../../../routes/teams-bot.js'
+import { beginTrace, currentTraceCaller } from '../../../services/request-trace.js'
 
-async function build() {
+async function build(opts: { trace?: boolean } = {}) {
   const log = {
     level: 'info',
     error: logErr,
@@ -70,6 +73,8 @@ async function build() {
   const app = Fastify({ loggerInstance: log as never })
   app.addHook('onRequest', async (req) => {
     ;(req as unknown as { session: { userId?: string } }).session = { userId: st.session }
+    // What plugins/request-trace.ts does for every /api request.
+    if (opts.trace) beginTrace(req.url.split('?')[0], req as never)
   })
   await app.register(teamsBotRoutes, { prefix: '/api/teams' })
   return app
@@ -99,6 +104,8 @@ beforeEach(() => {
   st.session = undefined
   st.tokenOk = true
   st.sessionUser = { id: 'U1', entra_oid: 'OID-1' }
+  st.enabled = true
+  st.invoke.mockReset().mockResolvedValue({ type: 'AdaptiveCard' })
   logErr.mockReset()
   inbound.mockReset()
   inbound.mockResolvedValue(undefined)
@@ -234,6 +241,35 @@ describe('POST /api/teams/messages', () => {
     expect(st.mark).toHaveBeenCalledWith('oid-1', 'uninstalled')
   })
 
+  it('an invoke is attributed to Teams in the activity log (auth_method teams)', async () => {
+    let seen: unknown = null
+    st.invoke.mockImplementation(async () => {
+      // logActivity's callerColumns() reads exactly this when no req is handed in.
+      seen = currentTraceCaller()
+      return { type: 'AdaptiveCard' }
+    })
+    const r = await post(await build({ trace: true }), {
+      ...base,
+      type: 'invoke',
+      name: 'adaptiveCard/action',
+      value: { action: { data: {} } }
+    })
+    expect(r.statusCode).toBe(200)
+    expect(seen).toEqual({ auth: 'teams', apiKeyId: null })
+  })
+
+  it('background message handling is attributed to Teams too', async () => {
+    st.resolved = { user: { id: 'U1' }, link: { conversation_id: 'conv-1' } }
+    let seen: unknown = null
+    st.ask.mockImplementation(async () => {
+      seen = currentTraceCaller()
+    })
+    await post(await build({ trace: true }), { ...base, type: 'message', id: 'tag-1', text: 'q' })
+    await flush()
+    expect(st.ask).toHaveBeenCalledTimes(1)
+    expect(seen).toEqual({ auth: 'teams', apiKeyId: null })
+  })
+
   it('removing the bot from a team leaves the personal link alone', async () => {
     await post(await build(), {
       ...base,
@@ -294,5 +330,25 @@ describe('GET /api/teams/connect', () => {
     st.sessionUser = { id: 'U1', entra_oid: null }
     expect((await get(await build())).statusCode).toBe(400)
     expect((await get(await build(), 'BAD')).statusCode).toBe(400)
+  })
+
+  it('404 while the bot is off', async () => {
+    st.enabled = false
+    st.session = 'U1'
+    const r = await get(await build())
+    expect(r.statusCode).toBe(404)
+    expect(st.upsert).not.toHaveBeenCalled()
+  })
+
+  it('404 in cloud mode', async () => {
+    process.env.CLOUD_META_DB_URL = 'x'
+    st.session = 'U1'
+    try {
+      const r = await get(await build())
+      expect(r.statusCode).toBe(404)
+      expect(st.upsert).not.toHaveBeenCalled()
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
   })
 })

@@ -4,7 +4,11 @@ import { applyApprovalDecision } from '../../routes/approvals.js'
 import type { User } from '../../types.js'
 import { isAdminUser } from '../ai-plan-steps.js'
 import { recordLink } from '../app-links.js'
-import { assertInstanceAccess, InstanceAccessError } from '../instance-guard.js'
+import {
+  assertInstanceAccess,
+  InstanceAccessError,
+  instanceAccessAllowed
+} from '../instance-guard.js'
 import { acknowledgeNotification } from '../notification-ack.js'
 import { runRecordTransition } from '../record-transition.js'
 import { maintenanceState } from '../security.js'
@@ -125,22 +129,27 @@ function readPress(activity: TeamsActivity): Pressed | null {
   return p.kind && p.ref && p.action && p.nonce ? p : null
 }
 
-async function pendingLink(p: Pressed, userId: string): Promise<string | undefined> {
+/** The Open link on "Working on it…" — only for a record the presser can read (the nonce may be
+ *  someone else's in-flight press). */
+async function pendingLink(p: Pressed, user: User, isAdmin: boolean): Promise<string | undefined> {
   try {
+    let collection = ''
+    let item = ''
     if (p.kind === 'transition') {
       const cut = p.ref.indexOf('/')
-      return cut > 0
-        ? await recordLink(p.ref.slice(0, cut), p.ref.slice(cut + 1), { recipientUserId: userId })
-        : undefined
-    }
-    if (p.kind === 'approval') {
+      if (cut <= 0) return undefined
+      collection = p.ref.slice(0, cut)
+      item = p.ref.slice(cut + 1)
+    } else if (p.kind === 'approval') {
       const inst = (await db('nivaro_approval_instances')
         .where({ id: Number(p.ref) })
         .first('collection', 'item')) as { collection: string; item: string } | undefined
-      return inst
-        ? await recordLink(inst.collection, String(inst.item), { recipientUserId: userId })
-        : undefined
-    }
+      if (!inst) return undefined
+      collection = inst.collection
+      item = String(inst.item)
+    } else return undefined
+    if (!(await instanceAccessAllowed(user, isAdmin, collection, item, 'read'))) return undefined
+    return await recordLink(collection, item, { recipientUserId: user.id })
   } catch {
     /* no link */
   }
@@ -351,7 +360,7 @@ export async function handleInvoke(
       value = await lookup(app, p.nonce)
     }
     if (value === PENDING) {
-      const link = await pendingLink(p, user.id)
+      const link = await pendingLink(p, user, await isAdminUser(user).catch(() => false))
       return resultCard('Working on it…', link)
     }
     try {

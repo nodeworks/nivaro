@@ -33,7 +33,8 @@ vi.mock('../../../services/instance-guard.js', () => {
     InstanceAccessError,
     assertInstanceAccess: async () => {
       if (h.access === 'denied') throw new InstanceAccessError('nope')
-    }
+    },
+    instanceAccessAllowed: async () => h.access !== 'denied'
   }
 })
 vi.mock('../../../services/notification-ack.js', () => ({ acknowledgeNotification: h.ack }))
@@ -248,6 +249,26 @@ describe('handleInvoke', () => {
       const card = await retry
       expect(text(card)).toContain('Working on it')
       expect(text(card)).toContain('https://n.test/orders/7')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("pending answer for a record the presser can't read has no link", async () => {
+    vi.useFakeTimers()
+    try {
+      h.decide.mockImplementationOnce(() => new Promise(() => undefined) as never)
+      const a = press({ kind: 'approval', ref: '5', action: 'approved', nonce: 'stuck-hidden' })
+      void handleInvoke(app, a)
+      await vi.advanceTimersByTimeAsync(10)
+      // The retry's presser cannot read the record behind the in-flight nonce.
+      h.access = 'denied'
+      const retry = handleInvoke(app, a)
+      await vi.advanceTimersByTimeAsync(9000)
+      const card = await retry
+      expect(text(card)).toContain('Working on it')
+      expect(text(card)).not.toContain('https://n.test/orders/7')
+      expect(text(card)).not.toContain('Action.OpenUrl')
     } finally {
       vi.useRealTimers()
     }

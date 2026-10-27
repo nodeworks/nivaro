@@ -5,7 +5,8 @@ const h = vi.hoisted(() => ({
   signedIn: true,
   link: null as null | { aad_object_id: string },
   marked: [] as unknown[][],
-  asked: [] as string[]
+  asked: [] as string[],
+  enabled: true
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -20,7 +21,7 @@ vi.mock('../../../config.js', () => ({
 }))
 vi.mock('../../../db/index.js', () => ({ db: () => ({}) }))
 vi.mock('../../../services/teams-bot/config.js', () => ({
-  getTeamsBotConfig: async () => ({ enabled: true }),
+  getTeamsBotConfig: async () => ({ enabled: h.enabled }),
   configuredAppId: async () => 'app',
   teamsBotSetup: async () => null
 }))
@@ -65,6 +66,8 @@ beforeEach(() => {
   h.link = null
   h.marked = []
   h.asked = []
+  h.enabled = true
+  delete process.env.CLOUD_META_DB_URL
 })
 
 describe('DELETE /teams/link', () => {
@@ -91,5 +94,25 @@ describe('DELETE /teams/link', () => {
     expect(r.statusCode).toBe(200)
     expect(h.asked).toEqual(['user-1'])
     expect(h.marked).toEqual([['oid-1', 'unlinked']])
+  })
+
+  it('404 while the bot is off, and marks nothing', async () => {
+    h.enabled = false
+    h.link = { aad_object_id: 'oid-1' }
+    const r = await (await app()).inject({ method: 'DELETE', url: '/teams/link' })
+    expect(r.statusCode).toBe(404)
+    expect(h.marked).toHaveLength(0)
+  })
+
+  it('404 in cloud mode', async () => {
+    process.env.CLOUD_META_DB_URL = 'x'
+    h.link = { aad_object_id: 'oid-1' }
+    try {
+      const r = await (await app()).inject({ method: 'DELETE', url: '/teams/link' })
+      expect(r.statusCode).toBe(404)
+      expect(h.marked).toHaveLength(0)
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
   })
 })

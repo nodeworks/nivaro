@@ -193,6 +193,12 @@ async function handleInstall(activity: TeamsActivity): Promise<void> {
 
 const inCloud = () => !!process.env.CLOUD_META_DB_URL
 
+/** The person-facing routes exist only where the bot is on (never in cloud mode). */
+async function botAvailable(): Promise<boolean> {
+  if (inCloud()) return false
+  return (await getTeamsBotConfig()).enabled
+}
+
 const hostOf = (url: string): string => {
   try {
     return new URL(url).host
@@ -247,6 +253,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
 
   // ─── Self: disconnect my own Teams link (never anyone else's) ───
   app.delete('/link', { preHandler: requireAuth }, async (req, reply) => {
+    if (!(await botAvailable())) return reply.code(404).send({ error: 'Not found' })
     const link = await linkForUser((req.user as User).id)
     if (!link) return reply.code(404).send({ error: 'Teams is not connected', code: 'NOT_LINKED' })
     await markLink(link.aad_object_id, 'unlinked')
@@ -306,6 +313,10 @@ export async function teamsBotRoutes(app: FastifyInstance) {
       req.log.warn({ reason: verdict.reason }, 'teams bot: refused')
       return reply.code(401).send({ error: 'Unauthorized' })
     }
+    // Everything this call writes (invoke and the background message handling, which keeps this
+    // request's trace context) is tagged auth_method 'teams' in nivaro_activity; origin stays
+    // 'person' — the linked person acted, through Teams.
+    req.authMethod = 'teams'
 
     switch (activity.type) {
       case 'invoke': {
@@ -366,6 +377,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { t?: string } }>('/connect', async (req, reply) => {
     const send = (p: { status: number; html: string }) =>
       reply.code(p.status).type('text/html; charset=utf-8').send(p.html)
+    if (!(await botAvailable())) return send(page(404, 'Teams is not set up here.'))
     const token = readConnectToken(String(req.query?.t ?? ''))
     if (!token)
       return send(page(400, 'This link has expired. Message the bot again for a new one.'))

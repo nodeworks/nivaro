@@ -37,8 +37,9 @@ declare module 'fastify' {
     /**
      * How this request authenticated — stamped by `authenticate` so the API
      * logger can tell an integration's token call from a person's session.
+     * 'teams' = a Bot Connector call (/api/teams/messages) acting as the linked person.
      */
-    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim' | 'oauth'
+    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim' | 'oauth' | 'teams'
     /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
     oauthClientId?: string
     oauthGrantId?: string
