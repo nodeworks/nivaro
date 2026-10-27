@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
+import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.js'
 import { applyEnvFiles } from './env-files.js'
 
 // Load .env from the repo root (two levels up from api/src/)
@@ -87,14 +88,16 @@ const schema = z.object({
 
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
-  SESSION_SECRET: cloudMode
-    ? z.string().default('cloud-mode-session-secret-placeholder-32ch')
-    : z.string().min(32),
+  // Required in EVERY mode (cloud included): it signs sessions, approval links, help-video
+  // tickets and cursors, so a guessable value lets anyone forge them. Placeholders and short or
+  // repetitive values are refused at boot (auth/secret-policy.ts).
+  SESSION_SECRET: z.string().superRefine((v, ctx) => {
+    const problem = sessionSecretProblem(v)
+    if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem })
+  }),
   SESSION_TTL: z.coerce.number().default(604800),
-  COOKIE_SECURE: z
-    .string()
-    .transform((v) => v === 'true')
-    .default('false'),
+  // true | false; unset = on when PUBLIC_URL or ADMIN_URL is https (resolveCookieSecure).
+  COOKIE_SECURE: z.string().optional(),
   // Behind a TLS-terminating proxy (traefik, nginx, Cloudflare) the app sees
   // plain HTTP; without this, secure session cookies are never set and the
   // OIDC callback fails with "Invalid session state".
@@ -163,5 +166,12 @@ if (!parsed.success) {
   process.exit(1)
 }
 
-export const config = parsed.data
+export const config = {
+  ...parsed.data,
+  COOKIE_SECURE: resolveCookieSecure({
+    COOKIE_SECURE: parsed.data.COOKIE_SECURE,
+    PUBLIC_URL: parsed.data.PUBLIC_URL,
+    ADMIN_URL: parsed.data.ADMIN_URL
+  })
+}
 export type Config = typeof config
