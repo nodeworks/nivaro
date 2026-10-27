@@ -8,6 +8,7 @@ import { isAuthor, isUuid } from '../services/help-videos.js'
 import { isLockingEnabled, lockHolderName } from '../services/item-lock-guard.js'
 import {
   CollectionNotFoundError,
+  canUpdateItem,
   ForbiddenError,
   idFitsCollection,
   readItems
@@ -322,6 +323,35 @@ async function callerCanReadRecord(
   return readable
 }
 
+/**
+ * May this person CHANGE the record a lock route names (M2, security audit
+ * 2026-10-27)? An edit lock keeps everyone else out of a record, so only
+ * someone who could save it may take, extend, force-take, wait for or ask
+ * for one — a read-only viewer holding a lock would lock the editors out.
+ * The gates updateOne applies before it writes (canUpdateItem: update
+ * policy, tree permission, update row filter, write scope). Help videos are
+ * judged by the help-video author gate (lockRefusal). A yes is remembered a
+ * minute per person + record: heartbeats ask every few seconds.
+ */
+const editableCache = new Map<string, number>()
+
+export async function callerCanEditRecord(req: FastifyRequest, collection: string, item: string) {
+  if (collection === HELP_VIDEO_LOCK_COLLECTION) return true
+  if (req.isAdmin) return true
+  const user = req.user!
+  const key = `${currentTenantKey()}:${user.id}:${collection}:${item}`
+  const until = editableCache.get(key)
+  if (until && until > Date.now()) return true
+  const ok = await canUpdateItem(user, collection, item, req.workspaceId ?? undefined)
+  if (ok) {
+    if (editableCache.size >= 5000) editableCache.clear()
+    editableCache.set(key, Date.now() + READABLE_TTL_MS)
+  }
+  return ok
+}
+
+const NOT_EDITABLE = { error: 'You may not change this record', code: 'NOT_EDITABLE' }
+
 /** Takeover permission (#256): admins, and roles in settings.lock_takeover_roles. */
 async function mayTakeOver(
   user: { role?: string | null } | undefined,
@@ -554,6 +584,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await isLockingEnabled(collection))) {
         return reply.send({ data: null, locking_disabled: true })
       }
+      // A person who may not save the record gets no lock on it.
+      if (!(await callerCanEditRecord(req, collection, item))) {
+        return reply.code(403).send(NOT_EDITABLE)
+      }
 
       const existing = await getCurrentLock(collection, item)
       // Someone the approval edit lock refuses gets no lock: they could not
@@ -669,6 +703,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await isLockingEnabled(collection))) {
         return reply.send({ data: null, locking_disabled: true })
       }
+      // Waiting for a lock one could never use only pings the holder.
+      if (!(await callerCanEditRecord(req, collection, item))) {
+        return reply.code(403).send(NOT_EDITABLE)
+      }
       const existing = await getCurrentLock(collection, item)
       if (existing && existing.user === me.id) {
         return reply.code(400).send({ error: 'You already hold this lock' })
@@ -747,6 +785,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await mayTakeOver(req.user, !!req.isAdmin))) {
         return reply.code(403).send({ error: 'Your role may not take over locks' })
       }
+      if (!(await callerCanEditRecord(req, collection, item))) {
+        return reply.code(403).send(NOT_EDITABLE)
+      }
       const waiting = await approvalRefusal(req, collection, item)
       if (waiting) return reply.code(403).send(waiting)
       const existing = await getCurrentLock(collection, item)
@@ -814,6 +855,19 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           locked_by: existing?.user ?? null,
           locked_by_name: existing ? await lockHolderName(existing.user) : null,
           note: existing?.note ?? null
+        })
+      }
+
+      // A holder who may no longer change the record (role or row filter
+      // changed since) keeps no lock on it.
+      if (!(await callerCanEditRecord(req, collection, item))) {
+        await db('nivaro_item_locks').where({ id: existing.id }).del()
+        emitLockEvent(app, collection, item, me, false)
+        await handOffToQueue(app, collection, item)
+        // EDIT_LOCKED: the client stops holding, says why and re-reads who may edit.
+        return reply.code(403).send({
+          error: 'You can no longer change this record — your edit lock was let go',
+          code: EDIT_LOCKED
         })
       }
 
@@ -914,6 +968,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, item } = req.params
       const me = req.user!
+      if (!(await callerCanEditRecord(req, collection, item))) {
+        return reply.code(403).send(NOT_EDITABLE)
+      }
       const existing = await getCurrentLock(collection, item)
       if (!existing) return reply.code(404).send({ error: 'Nobody holds this lock' })
       if (existing.user === me.id)
@@ -948,8 +1005,14 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     const action = req.body?.action === 'release' ? 'release' : 'decline'
     const note = String(req.body?.note ?? '').slice(0, 300)
     if (!to) return reply.code(400).send({ error: 'to (requester id) is required' })
+    if (!isUuid(to)) return reply.code(400).send({ error: 'to must be a user id' })
     const existing = await getCurrentLock(collection, item)
-    if (existing && existing.user === me.id && action === 'release') {
+    // Only the person holding the lock answers a request for it — otherwise
+    // anyone could send anyone a "lock released / declined" notification.
+    if (!existing || String(existing.user).toUpperCase() !== String(me.id).toUpperCase()) {
+      return reply.code(403).send({ error: 'You do not hold a lock on this item' })
+    }
+    if (action === 'release') {
       await db('nivaro_item_locks').where({ id: existing.id }).delete()
       emitLockEvent(app, collection, item, me.id, false)
       // The explicit requester is the intended recipient (they get
@@ -959,7 +1022,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       await leaveQueue(collection, item, to)
       await handOffToQueue(app, collection, item)
       // The history names the person, never their raw id.
-      const toName = isUuid(to) ? await lockHolderName(to).catch(() => null) : null
+      const toName = await lockHolderName(to).catch(() => null)
       await logActivity({
         action: 'lock-release',
         user: me.id,

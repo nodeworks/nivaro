@@ -53,6 +53,7 @@ vi.mock('../../../services/record-events.js', () => ({ announceRecordAspect: vi.
 vi.mock('../../../services/items.js', () => ({
   ForbiddenError: class ForbiddenError extends Error {},
   CollectionNotFoundError: class CollectionNotFoundError extends Error {},
+  canUpdateItem: vi.fn(async () => true),
   idFitsCollection: async (_c: string, id: unknown) => /^\d+$/.test(String(id)),
   readItems: vi.fn(
     async (_u: unknown, _c: string, _q: unknown, req: { query: { conditions: string } }) => {
