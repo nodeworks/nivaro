@@ -1039,9 +1039,6 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
           {data.status.reason && <span className='sr-only'>{data.status.reason}</span>}
         </div>
       )}
-      {(data.facts ?? []).map((f) => (
-        <GridStatChip key={f.label} label={f.label} value={null} text={f.value} tip={f.tip} dataKey={`compare:${f.label}`} />
-      ))}
       {closed && (
         <div
           data-compare-closed={data.closed_through ?? ''}
@@ -1052,6 +1049,9 @@ export function CompareStripChips(props: { data: CompareSeriesData | null | unde
           Closed through <b className='font-semibold'>{closed}</b>
         </div>
       )}
+      {(data.facts ?? []).map((f) => (
+        <GridStatChip key={f.label} label={f.label} value={null} text={f.value} tip={f.tip} dataKey={`compare:${f.label}`} />
+      ))}
       {(data.figures ?? []).map((f) => (
         <GridStatChip key={f.label} label={f.label} value={f.value} format={f.format} dataKey={`compare:${f.label}`} />
       ))}
