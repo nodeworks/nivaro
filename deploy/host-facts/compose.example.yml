@@ -21,6 +21,10 @@ services:
       # The read-only Docker socket proxy Nivaro already reads (GET only; CONTAINERS section on).
       # The collector only runs `docker ps` and `docker inspect`.
       DOCKER_HOST: tcp://docker-proxy:2375
+    # uid 0 but with no capabilities: the host's /var/lib/docker/containers and
+    # /var/lib/docker/volumes are root-only (0700/0710), and without CAP_DAC_* only their
+    # owner may list them. Remove those two mounts and the collector can run as any uid
+    # (`user: "65534:65534"`), at the cost of the log-size and volume-write facts.
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

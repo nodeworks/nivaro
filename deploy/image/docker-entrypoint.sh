@@ -13,8 +13,9 @@
 #    NIVARO_HEAP_FROM_CGROUP=off.
 # 2. Who runs it (postgres/redis style). The image has no USER: it starts as
 #    root, prepares /app/work (TMPDIR, HOME) and /app/uploads for uid 1000,
-#    then steps down with `su-exec node`. Two cases stay root, each with one
-#    line in the log, so an upgrade never breaks writes:
+#    then steps down with `su-exec node`. Two cases stay root, each with a
+#    WARNING banner in the log (root_warning), so an upgrade never breaks
+#    writes but nobody runs as root without being told:
 #      - /app/uploads holds files uid 1000 cannot write (a volume an older
 #        image wrote as root; NFS with root_squash). It is never chown -R'd
 #        here: that can take hours on a big share and root_squash refuses it.
@@ -37,6 +38,26 @@ APP_UID="${NIVARO_APP_UID:-1000}"
 APP_GID="${NIVARO_APP_GID:-1000}"
 
 say() { echo "nivaro: $*" >&2; }
+
+# Staying root is never silent (M31, security audit 2026-10-27): a banner on
+# stderr at every start, and NIVARO_RUNNING_AS_ROOT=1 + NIVARO_ROOT_REASON in
+# the process environment for the API to report. It never refuses to start —
+# an upgrade must keep working; the banner says how to fix it.
+root_warning() {
+  NIVARO_RUNNING_AS_ROOT=1
+  NIVARO_ROOT_REASON="$1"
+  export NIVARO_RUNNING_AS_ROOT NIVARO_ROOT_REASON
+  {
+    echo "nivaro: ************************************************************"
+    echo "nivaro: WARNING: RUNNING AS ROOT (uid 0)"
+    echo "nivaro: reason: $1"
+    echo "nivaro: A bug in the API, an extension or Chromium then has root in the"
+    echo "nivaro: container. Fix it so the server steps down to uid $APP_UID:"
+    echo "nivaro:   chown -R $APP_UID:$APP_GID on the uploads volume, give back"
+    echo "nivaro:   CAP_SETUID/CAP_SETGID, or set user: $APP_UID:$APP_GID."
+    echo "nivaro: ************************************************************"
+  } >&2
+}
 
 # ── 1. heap ────────────────────────────────────────────────────────────────
 
@@ -132,6 +153,11 @@ if [ "${1:-}" = "--uploads-plan" ]; then
   uploads_plan "$2"
   exit 0
 fi
+if [ "${1:-}" = "--root-warning" ]; then
+  root_warning "$2"
+  echo "$NIVARO_RUNNING_AS_ROOT $NIVARO_ROOT_REASON"
+  exit 0
+fi
 
 # Can THIS process write the dir? Tried for real: root without
 # CAP_DAC_OVERRIDE cannot write uid 1000's dirs, whatever `test -w` says.
@@ -185,6 +211,7 @@ if [ "$uid" != 0 ]; then
 fi
 
 if [ "${NIVARO_RUN_AS:-}" = root ]; then
+  root_warning "NIVARO_RUN_AS=root is set"
   root_dirs
   exec "$@"
 fi
@@ -215,11 +242,13 @@ if [ -n "$stay" ]; then
   say "/app/uploads $why — RUNNING AS ROOT so uploads keep working." \
     "Fix once: chown -R $APP_UID:$APP_GID on that volume" \
     "(docker run --rm -v <volume>:/app/uploads alpine chown -R $APP_UID:$APP_GID /app/uploads), or set user: $APP_UID:$APP_GID."
+  root_warning "/app/uploads $why"
 elif su-exec node true 2>/dev/null; then
   # su-exec resets HOME from /etc/passwd (/home/node, read-only): keep ours.
   exec su-exec node env HOME="$HOME" "$@"
 else
   say "could not switch to uid $APP_UID (no CAP_SETUID/CAP_SETGID, e.g. cap_drop: ALL) — running as root."
+  root_warning "could not switch to uid $APP_UID (no CAP_SETUID/CAP_SETGID)"
 fi
 root_dirs
 exec "$@"

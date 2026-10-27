@@ -461,7 +461,9 @@ Key variables — see `.env.example` for the full list.
 |---|---|
 | `DB_HOST` / `DB_DATABASE` | MSSQL connection |
 | `DB_ENCRYPT=true` | Required for Azure SQL / most cloud MSSQL |
-| `NODE_TLS_REJECT_UNAUTHORIZED=0` | Required for self-signed or corporate-CA certs with the `tedious` MSSQL driver (it doesn't use the system CA store). Omit in production if your SQL Server has a publicly-trusted cert. |
+| `DB_TRUST_SERVER_CERT=true` | Accept a self-signed SQL Server certificate. It affects the database connection only. |
+| `NODE_EXTRA_CA_CERTS` | Path to a PEM file with your corporate CA, so outbound TLS (SQL Server, OIDC, partner APIs, SMTP, AI) trusts it. |
+| `NODE_TLS_REJECT_UNAUTHORIZED=0` | **Avoid.** It turns off certificate checks for every outbound connection the API makes (sign-in, partner APIs, mail, AI), not only the database. Use `DB_TRUST_SERVER_CERT` or `NODE_EXTRA_CA_CERTS` instead; set it only on a throwaway local setup. |
 | `REDIS_URL` | e.g. `redis://localhost:6379` |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | Microsoft OIDC |
 | `OIDC_REDIRECT_URI` | e.g. `http://localhost:3055/api/auth/callback` |

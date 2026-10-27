@@ -1,6 +1,9 @@
 services:
   nivaro:
     image: nodeworks/nivaro:latest
+    # Plain HTTP on every interface. For anything other people reach, put a
+    # TLS proxy (Traefik, Caddy, nginx) in front, bind this to
+    # "127.0.0.1:3055:3055" and set PUBLIC_URL/ADMIN_URL to the https:// URL.
     ports:
       - "3055:3055"
     env_file: .env
@@ -8,10 +11,18 @@ services:
       # Override with docker-internal hostnames
       REDIS_URL: redis://redis:6379
     volumes:
-      # Mount your compiled extensions — each subfolder is one extension
+      # Mount your compiled extensions — each subfolder is one extension.
+      # Writable so the admin Extensions page can enable, disable and install
+      # extensions. Once extensions are managed by your deployment instead,
+      # mount it read-only (append :ro): code the server can write is code an
+      # attacker who gets into the server can plant.
       - ./extensions:/app/api/extensions
       # Persist uploaded files
       - uploads:/app/uploads
+    # The image starts as root only to prepare its folders, then steps down to
+    # uid 1000; no-new-privileges keeps setuid binaries from climbing back.
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     depends_on:
       redis:
@@ -20,9 +31,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Reached only on the compose network (no ports published). To require a
+    # password, add `--requirepass <secret>` here and use
+    # REDIS_URL: redis://:<secret>@redis:6379 above.
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

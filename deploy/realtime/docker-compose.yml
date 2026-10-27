@@ -25,6 +25,10 @@ x-nivaro: &nivaro
   # Covers SHUTDOWN_DRAIN_DELAY_MS + the 8 s drain (the proxy has routed around a stopping task
   # before it closes its connections; clients reconnect to the other realtime task).
   stop_grace_period: 30s
+  # The image starts as root only to prepare its folders, then steps down to uid 1000;
+  # no-new-privileges keeps setuid binaries from climbing back.
+  security_opt:
+    - no-new-privileges:true
 
 x-env: &env
   REDIS_URL: redis://redis:6379
@@ -70,7 +74,10 @@ services:
       DB_POOL_MAX: '25'
       DB_POOL_BACKGROUND_MAX: '5'
     volumes:
-      - ./extensions:/app/api/extensions
+      # Read-only: extensions are deployed with the stack, and code the server can write is
+      # code an attacker inside it can plant. (The admin Extensions page cannot enable,
+      # disable or install extensions on a read-only mount — drop :ro if you rely on that.)
+      - ./extensions:/app/api/extensions:ro
       - uploads:/app/uploads
     labels:
       - traefik.enable=true
@@ -139,12 +146,17 @@ services:
       DB_POOL_MAX: '15'
       DB_POOL_BACKGROUND_MAX: '10'
     volumes:
-      - ./extensions:/app/api/extensions
+      # Read-only: extensions are deployed with the stack, and code the server can write is
+      # code an attacker inside it can plant. (The admin Extensions page cannot enable,
+      # disable or install extensions on a read-only mount — drop :ro if you rely on that.)
+      - ./extensions:/app/api/extensions:ro
       - uploads:/app/uploads
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Reached only on the stack network (no ports published). To require a password, add
+    # `--requirepass <secret>` and set REDIS_URL: redis://:<secret>@redis:6379 in x-env.
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data

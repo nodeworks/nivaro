@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -145,5 +145,29 @@ describe('docker-entrypoint uploads plan', () => {
     chmodSync(d, 0o777)
     expect(plan(d, '4242')).toBe('ok')
     expect(plan(join(d, 'missing'))).toBe('ok')
+  })
+})
+
+// M31 (security audit 2026-10-27) — staying root is never silent: every path
+// that keeps uid 0 prints a WARNING banner and exports NIVARO_RUNNING_AS_ROOT
+// + NIVARO_ROOT_REASON for the API. It never refuses to start.
+describe('docker-entrypoint root warning', () => {
+  it('prints a banner with the reason and exports the flag', () => {
+    const out = spawnSync('sh', [SCRIPT, '--root-warning', 'NIVARO_RUN_AS=root is set'], {
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', NIVARO_APP_UID: '1000' }
+    })
+    expect(out.status).toBe(0)
+    const stderr = out.stderr.toString()
+    expect(stderr).toContain('WARNING: RUNNING AS ROOT')
+    expect(stderr).toContain('reason: NIVARO_RUN_AS=root is set')
+    expect(stderr).toContain('user: 1000:1000')
+    expect(out.stdout.toString().trim()).toBe('1 NIVARO_RUN_AS=root is set')
+  })
+
+  it('every stay-root path calls it', () => {
+    const src = readFileSync(SCRIPT, 'utf8')
+    expect(src).toContain('root_warning "NIVARO_RUN_AS=root is set"')
+    expect(src).toContain('root_warning "/app/uploads $why"')
+    expect(src).toMatch(/root_warning "could not switch to uid/)
   })
 })
