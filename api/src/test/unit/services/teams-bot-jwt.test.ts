@@ -1,7 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type { TeamsBotConfig } from '../../../services/teams-bot/config.js'
-import { verifyConnectorToken } from '../../../services/teams-bot/jwt.js'
+import { endorsedKeySet, verifyConnectorToken } from '../../../services/teams-bot/jwt.js'
 
 const APP = '11111111-1111-1111-1111-111111111111'
 const TENANT = '22222222-2222-2222-2222-222222222222'
@@ -13,9 +13,14 @@ const cfg: TeamsBotConfig = {
   tenantId: TENANT,
   source: 'env'
 }
-const activity = { serviceUrl: SERVICE, channelData: { tenant: { id: TENANT } } }
+const activity = {
+  channelId: 'msteams',
+  serviceUrl: SERVICE,
+  channelData: { tenant: { id: TENANT } }
+}
 
 let privateKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey']
+let jwkDoc: { keys: Array<Record<string, unknown>> }
 let keys: ReturnType<typeof createLocalJWKSet>
 
 beforeAll(async () => {
@@ -23,6 +28,7 @@ beforeAll(async () => {
   privateKey = pair.privateKey
   const jwk = { ...(await exportJWK(pair.publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' }
   keys = createLocalJWKSet({ keys: [jwk] })
+  jwkDoc = { keys: [jwk] }
 })
 
 async function sign(
@@ -85,6 +91,29 @@ describe('verifyConnectorToken', () => {
     expect(await verifyConnectorToken(undefined, activity, cfg, keys)).toEqual({
       ok: false,
       reason: 'missing'
+    })
+  })
+
+  it('rejects a good token from directline', async () => {
+    const r = await verifyConnectorToken(
+      bearer(await sign()),
+      { ...activity, channelId: 'directline' },
+      cfg,
+      keys
+    )
+    expect(r).toEqual({ ok: false, reason: 'channel' })
+  })
+  it('rejects a key whose endorsements lack msteams', async () => {
+    const doc = { keys: [{ ...jwkDoc.keys[0], endorsements: ['webchat', 'directline'] }] }
+    const set = endorsedKeySet(async () => doc as never, 'msteams')
+    const r = await verifyConnectorToken(bearer(await sign()), activity, cfg, set)
+    expect(r).toEqual({ ok: false, reason: 'channel' })
+  })
+  it('accepts a key endorsed for msteams', async () => {
+    const doc = { keys: [{ ...jwkDoc.keys[0], endorsements: ['msteams'] }] }
+    const set = endorsedKeySet(async () => doc as never, 'msteams')
+    expect(await verifyConnectorToken(bearer(await sign()), activity, cfg, set)).toEqual({
+      ok: true
     })
   })
 })

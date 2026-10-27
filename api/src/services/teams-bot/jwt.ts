@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, errors, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from 'jose'
+import { errors, importJWK, type JWK, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from 'jose'
 import type { TeamsBotConfig } from './config.js'
 
 // Source: https://learn.microsoft.com/en-us/azure/bot-service/rest-api/bot-framework-rest-connector-authentication
@@ -14,6 +14,7 @@ import type { TeamsBotConfig } from './config.js'
 
 export const METADATA_URL = 'https://login.botframework.com/v1/.well-known/openidconfiguration'
 const ISSUER = 'https://api.botframework.com'
+const REQUIRED_CHANNEL = 'msteams'
 const CLOCK_TOLERANCE_S = 300
 const FETCH_TIMEOUT_MS = 10_000
 const METADATA_TTL_MS = 24 * 60 * 60 * 1000
@@ -26,42 +27,76 @@ export type TokenRefusal =
   | 'expired'
   | 'service_url'
   | 'tenant'
+  | 'channel'
 
 export type TokenVerdict = { ok: true } | { ok: false; reason: TokenRefusal }
 
 interface ActivityShape {
+  channelId?: string
   serviceUrl?: string
   channelData?: { tenant?: { id?: string } }
 }
 
-// One key set per metadata URL, built once; jose caches the JWKS and refetches on an unknown kid.
-const remoteSets = new Map<string, { at: number; set: Promise<JWTVerifyGetKey> }>()
+interface BotJwk extends JWK {
+  endorsements?: string[]
+}
+export interface JwkDoc {
+  keys: BotJwk[]
+}
 
-async function buildRemoteSet(metadataUrl: string): Promise<JWTVerifyGetKey> {
+// jose's createRemoteJWKSet drops the Bot Framework "endorsements" property, so the key
+// document is fetched here: module-level, one entry per metadata URL, refreshed every 24 h
+// (and once, at most every 30 s, when a token names an unknown kid).
+const REFETCH_MIN_MS = 30_000
+const jwkDocs = new Map<string, { at: number; doc: Promise<JwkDoc> }>()
+
+async function fetchJwkDoc(metadataUrl: string): Promise<JwkDoc> {
   const res = await fetch(metadataUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`bot metadata ${res.status}`)
   const meta = (await res.json()) as { jwks_uri?: string }
   const uri = meta.jwks_uri ?? ''
   if (!uri.startsWith('https://')) throw new Error('bot metadata: no jwks_uri')
-  return createRemoteJWKSet(new URL(uri), {
-    timeoutDuration: FETCH_TIMEOUT_MS,
-    cooldownDuration: 30_000,
-    cacheMaxAge: METADATA_TTL_MS
-  })
+  const kres = await fetch(uri, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+  if (!kres.ok) throw new Error(`bot keys ${kres.status}`)
+  const doc = (await kres.json()) as JwkDoc
+  if (!Array.isArray(doc.keys)) throw new Error('bot keys: malformed')
+  return doc
 }
 
-function remoteKeys(metadataUrl = METADATA_URL): JWTVerifyGetKey {
-  return (async (header, token) => {
-    let entry = remoteSets.get(metadataUrl)
-    if (!entry || Date.now() - entry.at > METADATA_TTL_MS) {
-      const set = buildRemoteSet(metadataUrl)
-      entry = { at: Date.now(), set }
-      remoteSets.set(metadataUrl, entry)
-      set.catch(() => {
-        if (remoteSets.get(metadataUrl) === entry) remoteSets.delete(metadataUrl)
-      })
+function loadRemoteDoc(force: boolean, metadataUrl = METADATA_URL): Promise<JwkDoc> {
+  const entry = jwkDocs.get(metadataUrl)
+  const age = entry ? Date.now() - entry.at : Number.POSITIVE_INFINITY
+  if (entry && age < METADATA_TTL_MS && !(force && age > REFETCH_MIN_MS)) return entry.doc
+  const doc = fetchJwkDoc(metadataUrl)
+  const fresh = { at: Date.now(), doc }
+  jwkDocs.set(metadataUrl, fresh)
+  doc.catch(() => {
+    if (jwkDocs.get(metadataUrl) === fresh) jwkDocs.delete(metadataUrl)
+  })
+  return doc
+}
+
+class EndorsementError extends Error {}
+
+/**
+ * Key selector by kid that also requires the signing key to be endorsed for the activity's
+ * channel (docs: "endorsements" must contain the activity's channelId). A key with no
+ * endorsements property is refused too only when it is present and lacks the channel.
+ */
+export function endorsedKeySet(
+  load: (force: boolean) => Promise<JwkDoc>,
+  channelId: string
+): JWTVerifyGetKey {
+  return (async (header: { kid?: string }) => {
+    const find = (doc: JwkDoc) => doc.keys.find((k) => k.kid && k.kid === header.kid)
+    let jwk = find(await load(false))
+    if (!jwk) jwk = find(await load(true))
+    if (!jwk) throw new errors.JWKSNoMatchingKey()
+    const { endorsements, ...pub } = jwk
+    if (Array.isArray(endorsements) && !endorsements.includes(channelId)) {
+      throw new EndorsementError('key not endorsed for channel')
     }
-    return (await entry.set)(header, token)
+    return importJWK(pub, 'RS256')
   }) as JWTVerifyGetKey
 }
 
@@ -77,10 +112,12 @@ export async function verifyConnectorToken(
   const m = /^Bearer\s+([^\s]+)$/i.exec((authHeader ?? '').trim())
   if (!m) return { ok: false, reason: 'missing' }
   if (!cfg.appId) return { ok: false, reason: 'audience' }
+  // Direct Line / Web Chat are enabled on every Azure Bot and let clients set channelData freely.
+  if (activity.channelId !== REQUIRED_CHANNEL) return { ok: false, reason: 'channel' }
 
   let payload: JWTPayload
   try {
-    const res = await jwtVerify(m[1], keys ?? remoteKeys(), {
+    const res = await jwtVerify(m[1], keys ?? endorsedKeySet(loadRemoteDoc, REQUIRED_CHANNEL), {
       issuer: ISSUER,
       audience: cfg.appId,
       algorithms: ['RS256'],
@@ -88,6 +125,7 @@ export async function verifyConnectorToken(
     })
     payload = res.payload
   } catch (e) {
+    if (e instanceof EndorsementError) return { ok: false, reason: 'channel' }
     if (e instanceof errors.JWTExpired) return { ok: false, reason: 'expired' }
     if (e instanceof errors.JWTClaimValidationFailed) {
       if (e.claim === 'aud') return { ok: false, reason: 'audience' }
