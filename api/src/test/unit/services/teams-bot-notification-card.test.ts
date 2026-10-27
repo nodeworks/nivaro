@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const h = vi.hoisted(() => ({ menu: [] as Array<{ id: string; in_row_menu: unknown }> }))
+const h = vi.hoisted(() => ({
+  menu: [] as Array<{ id: string; in_row_menu: unknown }>,
+  labelCalls: [] as unknown[][]
+}))
 
 vi.mock('../../../db/index.js', () => ({
   db: () => ({ where: () => ({ select: async () => h.menu }) })
@@ -10,7 +13,15 @@ vi.mock('../../../services/users.js', () => ({
 }))
 vi.mock('../../../services/instance-guard.js', () => ({ instanceAccessAllowed: async () => true }))
 vi.mock('../../../services/permissions.js', () => ({ isAdminRole: async () => false }))
-vi.mock('../../../services/queues.js', () => ({ getLabels: async () => ({}) }))
+vi.mock('../../../services/queues.js', () => ({
+  getLabels: async () => ({ 'orders:7': 'Unscoped label' })
+}))
+vi.mock('../../../services/ai-link-labels.js', () => ({
+  linkLabelsAsUser: async (...a: unknown[]) => {
+    h.labelCalls.push(a)
+    return { 'orders:7': 'Order 7 as you see it' }
+  }
+}))
 vi.mock('../../../services/branch-instances.js', () => ({
   findRecordInstance: async () => ({
     id: 'i1',
@@ -53,5 +64,16 @@ describe('buildTeamsNotificationCard', () => {
     const json = JSON.stringify(await buildTeamsNotificationCard(input))
     expect(json).toContain('Fast')
     expect(json).not.toContain('Form only')
+  })
+
+  it('the record label is read as the recipient', async () => {
+    h.menu = []
+    h.labelCalls = []
+    const json = JSON.stringify(await buildTeamsNotificationCard(input))
+    expect(json).toContain('Order 7 as you see it')
+    expect(json).not.toContain('Unscoped label')
+    const [user, map] = h.labelCalls[0] as [{ id: string }, Map<string, Set<string>>]
+    expect(user.id).toBe('u1')
+    expect([...(map.get('orders') ?? [])]).toEqual(['7'])
   })
 })

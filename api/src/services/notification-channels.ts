@@ -907,11 +907,15 @@ export async function notifyUser(
         ? { status: 'skipped', reason: 'pending' }
         : { status: 'skipped', reason: reasonText('push') }
       : { status: 'skipped', reason: reasonText('inapp') },
-    teams: decision.inapp
-      ? decision.teams
-        ? { status: 'skipped', reason: 'pending' }
-        : { status: 'skipped', reason: reasonText('teams') }
-      : { status: 'skipped', reason: reasonText('inapp') },
+    // Only where the bot had something to say (it is on): an instance without a bot shows no
+    // "Teams · skipped" chip.
+    ...(decision.teams || decision.reasons.some((r) => r.channel === 'teams')
+      ? {
+          teams: decision.teams
+            ? { status: 'skipped' as const, reason: 'pending' }
+            : { status: 'skipped' as const, reason: reasonText('teams') }
+        }
+      : {}),
     email:
       decision.email === 'not_requested'
         ? { status: 'not_requested' }

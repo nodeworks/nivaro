@@ -100,8 +100,9 @@ async function recordExtras(
   // As the recipient: a record they cannot read contributes no label, state or button.
   if (!(await instanceAccessAllowed(user, isAdmin, collection, item, 'read'))) return none
 
-  const { getLabels } = await import('../queues.js')
-  const labels = await getLabels(new Map([[collection, new Set([item])]])).catch(
+  // Read AS the recipient: only label columns their policy allows, no hop into another record.
+  const { linkLabelsAsUser } = await import('../ai-link-labels.js')
+  const labels = await linkLabelsAsUser(user, new Map([[collection, new Set([item])]])).catch(
     () => ({}) as Record<string, string>
   )
   const recordLabel = labels[`${collection}:${item}`] ?? null

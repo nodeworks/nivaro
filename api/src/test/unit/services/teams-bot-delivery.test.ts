@@ -235,6 +235,19 @@ describe('teams in the delivery decision', () => {
     expect(state.deliver).not.toHaveBeenCalled()
   })
 
+  it('bot off -> the delivery record has no teams key (no "Teams · skipped" chip)', async () => {
+    state.botEnabled = false
+    state.prefs = { matrix: { workflow: { teams: true } } }
+    await notifyUser(
+      { io: null } as unknown as FastifyInstance,
+      '66666666-6666-6666-6666-666666666666',
+      { subject: 'Approval requested', message: 'm', category: 'workflow' }
+    )
+    const delivery = JSON.parse(String(state.inserted[0]?.delivery))
+    expect(delivery).not.toHaveProperty('teams')
+    expect(delivery.inapp.status).toBe('delivered')
+  })
+
   it('test mode -> teams false with a teams_test_mode reason', async () => {
     state.testTeamsOn = true
     const d = await ask(on)
