@@ -8,7 +8,14 @@ import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
-import { isServerPath, postLoginTarget, refusedLoginRedirect } from '@/lib/post-login-target'
+import {
+  isLoginPath,
+  isServerPath,
+  POST_LOGIN_KEY,
+  postLoginTarget,
+  refusedLoginRedirect,
+  takePostLoginTarget
+} from '@/lib/post-login-target'
 import { I18nProvider } from '@/lib/i18n'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
@@ -271,17 +278,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 /** `/login?reauth=1`: someone already signed in must sign in again (an AI app's
  *  consent page wants a recent sign-in) — show the form, do not bounce them. */
 const isReauth = () =>
-  window.location.pathname === '/login' &&
+  isLoginPath(window.location.pathname) &&
   new URLSearchParams(window.location.search).get('reauth') === '1'
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return <AppShell />
   if (user && !isReauth()) {
-    const params = new URLSearchParams(window.location.search)
-    const raw = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect')
-    sessionStorage.removeItem('nivaro_post_login_redirect')
-    const target = postLoginTarget(raw)
+    const fromUrl = new URLSearchParams(window.location.search).get('redirect')
+    const stored = takePostLoginTarget()
+    const target = fromUrl ? postLoginTarget(fromUrl) : stored
     if (isServerPath(target)) {
       window.location.replace(target)
       return <AppShell />
@@ -303,11 +309,15 @@ function PostLoginRedirect() {
     if (loading || !user || fired.current) return
     // The re-sign-in page redirects itself once the person signs in again.
     if (isReauth()) return
-    const raw = sessionStorage.getItem('nivaro_post_login_redirect')
-    if (raw) {
+    let pending = false
+    try {
+      pending = !!sessionStorage.getItem(POST_LOGIN_KEY)
+    } catch {
+      /* storage blocked */
+    }
+    if (pending) {
       fired.current = true
-      sessionStorage.removeItem('nivaro_post_login_redirect')
-      const target = postLoginTarget(raw)
+      const target = takePostLoginTarget()
       if (isServerPath(target)) window.location.replace(target)
       else navigate(target, { replace: true })
     }
