@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
-import { assertSafeUrl } from '../lib/ssrf.js'
+import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import {
   protectTemplatePlaceholders,
   scrubbedBodyMessage,
@@ -11,7 +11,16 @@ import {
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { callExternalApi } from './external-apis.js'
+import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
+import {
+  getByPath,
+  resolveBodyTemplate,
+  resolveHtmlTemplate,
+  resolveJsonTemplate,
+  resolveTemplate,
+  resolveUrlTemplate
+} from './flow-template-render.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
 import { roomListeners } from './realtime-board.js'
@@ -60,26 +69,8 @@ type FlowData = Record<string, unknown>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getByPath(obj: unknown, path: string): unknown {
-  const keys = path.split('.')
-  let cur: unknown = obj
-  for (let i = 0; i < keys.length; i++) {
-    if (cur === null || cur === undefined || typeof cur !== 'object') return undefined
-    // Literal dotted keys win — item-read results store relation paths flat
-    // ('creator.email'), so check the remaining path as one key first.
-    const rest = keys.slice(i).join('.')
-    if (rest in (cur as Record<string, unknown>)) return (cur as Record<string, unknown>)[rest]
-    cur = (cur as Record<string, unknown>)[keys[i]]
-  }
-  return cur
-}
-
-function resolveTemplate(template: string, data: FlowData): string {
-  return template.replace(/\{\{([^}]+)\}\}/g, (_, path: string) => {
-    const val = getByPath(data, path.trim())
-    return val !== undefined && val !== null ? String(val) : ''
-  })
-}
+// getByPath + the per-destination renderers (text / URL / JSON / form / HTML) live in
+// flow-template-render.ts (M26).
 
 function parseOpts(op: FlowOperation): Record<string, unknown> {
   if (!op.options) return {}
@@ -174,6 +165,9 @@ async function runCondition(op: FlowOperation, data: FlowData, ctx: ExecutionCon
   return { status: (result ? 'resolve' : 'reject') as 'resolve' | 'reject', output: data }
 }
 
+export const EXEC_SCRIPT_CLOUD_REFUSAL =
+  'Script operations are not available on a cloud instance. Use a Transform, Condition or Item operation instead.'
+
 async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const code = (opts.code as string) ?? ''
@@ -181,24 +175,25 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
 
   if (!code.trim()) return { status: 'resolve' as const, output: data }
 
+  // C2 (security audit 2026-10-27): cloud tenants share one process — no tenant runs code in it.
+  if (process.env.CLOUD_META_DB_URL) {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
+    return {
+      status: 'reject' as const,
+      output: { ...data, $error: EXEC_SCRIPT_CLOUD_REFUSAL }
+    }
+  }
+
   const scriptLog = {
     info: (msg: string) => ctx.log.info({ flowId: ctx.flowId, key: op.key }, `[script] ${msg}`),
     warn: (msg: string) => ctx.log.warn({ flowId: ctx.flowId, key: op.key }, `[script] ${msg}`),
-    error: (msg: string) => ctx.log.error({ flowId: ctx.flowId, key: op.key }, `[script] ${msg}`)
+    error: (msg: string) => ctx.log.error({ flowId: ctx.flowId, key: op.key }, `[script] ${msg}`),
+    debug: (msg: string) => ctx.log.debug({ flowId: ctx.flowId, key: op.key }, `[script] ${msg}`)
   }
 
   try {
-    const fn = new Function('data', 'log', `"use strict"; ${code}`)
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Script timed out after ${timeoutMs}ms`)), timeoutMs)
-    )
-    const run = Promise.resolve().then(() => fn(data, scriptLog) as unknown)
-    const result = await Promise.race([run, timeout])
-
-    const output =
-      result !== null && result !== undefined && typeof result === 'object'
-        ? (result as FlowData)
-        : data
+    // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox).
+    const output = (await runSandboxedScript(code, data, scriptLog, timeoutMs)) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')
     return { status: 'resolve' as const, output }
@@ -273,7 +268,8 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
   // the FULL flow data as its context, replacing the plain-text body. A plain
   // body still gets the branded chrome via sendRawMail's auto-wrap.
   const renderBody = async (context: Record<string, unknown>) => {
-    let body = resolveTemplate((opts.body as string) ?? '', context as FlowData)
+    // The body is admin-written HTML: values land HTML-escaped (`{{ path | raw }}` opts out).
+    let body = resolveHtmlTemplate((opts.body as string) ?? '', context as FlowData)
     if (templateName) {
       try {
         body = await renderMailTemplate(templateName, context)
@@ -472,10 +468,17 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
 
 async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
-  const url = resolveTemplate((opts.url as string) ?? '', data)
+  // Values land percent-encoded in the path/query (M26); the target is SSRF-guarded (M25).
+  const url = resolveUrlTemplate((opts.url as string) ?? '', data)
   if (!url) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Webhook operation missing url')
     return { status: 'reject' as const, output: { ...data, $error: 'missing url' } }
+  }
+  try {
+    await assertSafeUrl(url)
+  } catch {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key, url }, 'Webhook blocked by SSRF guard')
+    return { status: 'reject' as const, output: { ...data, $error: 'URL not allowed' } }
   }
 
   const method = ((opts.method as string) ?? 'POST').toUpperCase()
@@ -495,7 +498,8 @@ async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionConte
   }
 
   const doFetch = async () => {
-    const res = await fetch(url, { method, headers, body })
+    // Checked + pinned connection; every redirect hop re-checked (lib/ssrf.ts).
+    const res = await safeFetch(url, { method, headers, body })
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
     ctx.log.info({ flowId: ctx.flowId, key: op.key, status: res.status }, 'Webhook executed')
     return { ok: res.ok, json }
@@ -642,7 +646,9 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
 
     if (opts.endpoint !== undefined) callOpts.endpoint = opts.endpoint as string | number
     if (opts.method_override) callOpts.method = opts.method_override as string
-    if (opts.path_override) callOpts.path = resolveTemplate(opts.path_override as string, data)
+    // M26: values in the path are percent-encoded; query values go in as data (searchParams
+    // encodes them); the JSON body renders every value as data, never as JSON syntax.
+    if (opts.path_override) callOpts.path = resolveUrlTemplate(opts.path_override as string, data)
     if (opts.query) {
       const raw = opts.query as Record<string, string>
       callOpts.query = Object.fromEntries(
@@ -652,7 +658,7 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     if (opts.body) {
       try {
         const tpl = protectTemplatePlaceholders(opts.body as string)
-        callOpts.body = tpl.finish(JSON.parse(resolveTemplate(tpl.text, data)))
+        callOpts.body = tpl.finish(JSON.parse(resolveJsonTemplate(tpl.text, data)))
       } catch {
         callOpts.body = opts.body as string
       }
@@ -696,10 +702,10 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
       return { status: 'reject' as const, output: { ...data, $error: 'missing url' } }
     }
 
-    const url = resolveTemplate(rawUrl, data)
+    const url = resolveUrlTemplate(rawUrl, data)
     try {
       await assertSafeUrl(url)
-    } catch (err) {
+    } catch {
       ctx.log.warn({ flowId: ctx.flowId, key: op.key, url }, 'external-api blocked by SSRF guard')
       return { status: 'reject' as const, output: { ...data, $error: 'URL not allowed' } }
     }
@@ -711,15 +717,14 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     const init: RequestInit = { method, headers: reqHeaders }
 
     if (opts.body && method !== 'GET' && method !== 'HEAD') {
-      const resolved = resolveTemplate(opts.body as string, data)
-      try {
-        init.body = resolved
-        if (!Object.keys(reqHeaders).some((h) => h.toLowerCase() === 'content-type')) {
-          reqHeaders['Content-Type'] = 'application/json'
-        }
-      } catch {
-        init.body = resolved
-      }
+      const typeHeader = Object.keys(reqHeaders).find((h) => h.toLowerCase() === 'content-type')
+      if (!typeHeader) reqHeaders['Content-Type'] = 'application/json'
+      // M26: rendered for the body's content type (JSON by default) — values stay data.
+      init.body = resolveBodyTemplate(
+        opts.body as string,
+        data,
+        typeHeader ? reqHeaders[typeHeader] : 'application/json'
+      )
     }
 
     if (ctx.dryRun) {
@@ -743,7 +748,8 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     init.signal = controller.signal
 
     try {
-      const res = await fetch(url, init)
+      // M25: a redirect to a private host is refused — every hop is re-checked and pinned.
+      const res = await safeFetch(url, init as Parameters<typeof safeFetch>[1])
       clearTimeout(timer)
       const text = await res.text()
       let parsed: unknown = text
