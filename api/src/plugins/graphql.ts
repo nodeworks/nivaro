@@ -6,7 +6,9 @@ import {
   type GraphQLSchema,
   getOperationAST,
   Kind,
+  NoSchemaIntrospectionCustomRule,
   parse,
+  specifiedRules,
   subscribe,
   TypeInfo,
   validate,
@@ -15,6 +17,7 @@ import {
 } from 'graphql'
 import { CloseCode, makeServer as makeWsServer } from 'graphql-ws'
 import { WebSocket, WebSocketServer } from 'ws'
+import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
@@ -29,83 +32,68 @@ import {
   recheckStreamIdentity,
   redeemStreamTicket
 } from '../services/stream-ticket.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { openStream } from '../services/traffic-taps/realtime.js'
 import type { User } from '../types.js'
 import { graphqlSseRoutes } from './graphql-sse.js'
 
-const GRAPHIQL_HTML = /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Nivaro GraphQL</title>
-  <link rel="stylesheet" href="https://esm.sh/graphiql@3/graphiql.min.css" />
-  <style>body { margin: 0; height: 100vh; overflow: hidden; }</style>
-</head>
-<body>
-  <div id="graphiql" style="height:100vh;"></div>
-  <script type="importmap">{"imports":{"react":"https://esm.sh/react@18","react-dom/client":"https://esm.sh/react-dom@18/client","graphiql":"https://esm.sh/graphiql@3"}}</script>
-  <script type="module">
-    import React from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { GraphiQL } from 'graphiql';
-
-    const fetcher = async (params) => {
-      const token = localStorage.getItem('nivaro-token');
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = 'Bearer ' + token;
-      const res = await fetch('/api/graphql', {
-        method: 'POST',
-        credentials: 'include',
-        headers,
-        body: JSON.stringify(params),
-      });
-      return res.json();
-    };
-
-    createRoot(document.getElementById('graphiql')).render(
-      React.createElement(GraphiQL, {
-        fetcher,
-        defaultEditorToolsVisibility: true,
-        defaultQuery: \`# Nivaro GraphQL API
-# Authenticate via session cookie or Bearer token.
-# Token: localStorage.setItem('nivaro-token', 'your-token-here')
-#
-# Example:
-# { articles(limit: 10) { data { id name status } total } }
-\`,
-      })
-    );
-  </script>
-</body>
-</html>`
-
-let _schema: GraphQLSchema | null = null
-// One build at a time: a request arriving mid-build awaits the same promise
+/**
+ * The built schema, per tenant (H15). Self-hosted there is one key (''); in cloud each tenant's
+ * collections, fields and relations make its own schema, so a schema built from one tenant's
+ * database never serves another's requests and a rebuild touches only the caller's tenant. The
+ * map is bounded: the least recently used tenant schema is dropped past SCHEMA_CACHE_MAX.
+ */
+const SCHEMA_CACHE_MAX = 64
+const _schemas = new Map<string, GraphQLSchema>()
+// One build at a time per tenant: a request arriving mid-build awaits the same promise
 // instead of starting a second scan of every collection.
-let _building: Promise<GraphQLSchema> | null = null
+const _building = new Map<string, Promise<GraphQLSchema>>()
 let _everBuilt = false
 
+function rememberSchema(key: string, schema: GraphQLSchema): void {
+  _schemas.delete(key)
+  _schemas.set(key, schema)
+  while (_schemas.size > SCHEMA_CACHE_MAX) {
+    const oldest = _schemas.keys().next().value
+    if (oldest === undefined) break
+    _schemas.delete(oldest)
+  }
+}
+
+/** Exported for tests: the schema cache key for the current context ('' self-hosted). */
+export function schemaTenantKey(): string {
+  return currentTenantKey()
+}
+
 async function getSchema(): Promise<GraphQLSchema> {
-  if (_schema) return _schema
-  if (!_building) {
+  const key = schemaTenantKey()
+  const hit = _schemas.get(key)
+  if (hit) {
+    // Most recently used last, so the LRU trim drops idle tenants first.
+    _schemas.delete(key)
+    _schemas.set(key, hit)
+    return hit
+  }
+  let building = _building.get(key)
+  if (!building) {
     const began = Date.now()
-    _building = buildGraphQLSchema()
+    building = buildGraphQLSchema()
       .then(async (schema) => {
         if (!_everBuilt) {
           _everBuilt = true
           markBootPhase('GraphQL schema', Date.now() - began, { background: true })
         }
-        _schema = schema
+        rememberSchema(key, schema)
         const { recordGraphQLSchema } = await import('../services/api-changelog.js')
         void recordGraphQLSchema(schema)
         return schema
       })
       .finally(() => {
-        _building = null
+        _building.delete(key)
       })
+    _building.set(key, building)
   }
-  return _building
+  return building
 }
 
 // ─── Persisted queries ───────────────────────────────────────────────────────
@@ -117,7 +105,8 @@ const PQ_CACHE_TTL_MS = 60_000
 const pqCache = new Map<string, { query: string | null; expires: number }>()
 
 async function lookupPersistedQuery(key: { id?: unknown; hash?: string }): Promise<string | null> {
-  const cacheKey = key.hash ? `h:${key.hash}` : `i:${String(key.id)}`
+  // Per tenant (H15): each tenant's registry lives in its own database.
+  const cacheKey = `${currentTenantKey()}|${key.hash ? `h:${key.hash}` : `i:${String(key.id)}`}`
   const cached = pqCache.get(cacheKey)
   if (cached && cached.expires > Date.now()) return cached.query
 
@@ -159,11 +148,14 @@ export function getGraphQLSchema(): Promise<GraphQLSchema> {
   return getSchema()
 }
 
+/** Rebuild the CURRENT tenant's schema (self-hosted: the one schema). */
 export async function rebuildGraphQLSchema(): Promise<void> {
-  _schema = await buildGraphQLSchema()
+  const key = schemaTenantKey()
+  const schema = await buildGraphQLSchema()
+  rememberSchema(key, schema)
   {
     const { recordGraphQLSchema } = await import('../services/api-changelog.js')
-    void recordGraphQLSchema(_schema)
+    void recordGraphQLSchema(schema)
   }
 }
 
@@ -238,7 +230,17 @@ export async function graphqlPlugin(
 
   // graphql-ws server — handles subscription WebSocket connections
   const wsServer = makeWsServer({
-    schema: () => getSchema(),
+    // M8: a connection that signs nothing in is refused (4403) — anonymous callers get neither
+    // introspection nor any operation over the socket.
+    onConnect: async (ctx) =>
+      !!(await connectionSignIn(ctx.extra as WsExtra, ctx.connectionParams).catch(() => null)),
+    // Cloud: the connection's own tenant schema (the upgrade runs outside any tenant context).
+    schema: async (ctx) => {
+      const signIn = await connectionSignIn(ctx.extra as WsExtra, ctx.connectionParams).catch(
+        () => null
+      )
+      return signIn?.withTenant ? signIn.withTenant(() => getSchema()) : getSchema()
+    },
     context: async (ctx) => {
       const extra = ctx.extra as WsExtra
       try {
@@ -352,8 +354,10 @@ export async function graphqlPlugin(
   }
 
   // ── GraphiQL explorer ────────────────────────────────────────────────────
+  // M22: the API no longer serves its own GraphiQL page (it loaded unpinned scripts from a CDN on
+  // this origin). The admin app bundles GraphiQL at /graphql; send a browser there.
   app.get('/graphql', async (_req, reply) => {
-    return reply.type('text/html').send(GRAPHIQL_HTML)
+    return reply.redirect(graphiqlLocation(), 302)
   })
 
   // ── GraphQL endpoint ─────────────────────────────────────────────────────
@@ -416,7 +420,12 @@ export async function graphqlPlugin(
     const gqlStamp = describeOperation(schema, document, body.operationName)
     ;(req as unknown as { __nvrGql?: GraphQLStamp }).__nvrGql = gqlStamp
 
-    const validationErrors = validate(schema, document)
+    // M8: introspection (the whole collection + field list) only for a signed-in caller.
+    const validationErrors = validate(
+      schema,
+      document,
+      req.user ? undefined : [...specifiedRules, NoSchemaIntrospectionCustomRule]
+    )
     if (validationErrors.length > 0) {
       gqlStamp.errors = validationErrors.length
       return reply.send({ errors: validationErrors })
@@ -539,6 +548,11 @@ export async function graphqlPlugin(
   )
 
   app.log.info('GraphQL API registered at /api/graphql')
+}
+
+/** Where GET /api/graphql sends a browser: the admin app's bundled GraphiQL explorer. */
+export function graphiqlLocation(): string {
+  return `${adminBaseUrl() ?? ''}/graphql`
 }
 
 /** How often a graphql-ws connection re-checks its sign-in (GRAPHQL_WS_SIGNIN_CHECK_MS). */

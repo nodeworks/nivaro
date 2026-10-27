@@ -4029,7 +4029,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <p class="doc-p">Nivaro auto-generates a GraphQL schema from the live <code class="doc-code">nivaro_collections</code> + <code class="doc-code">nivaro_fields</code> metadata — the same source used to build the OpenAPI spec. Every non-hidden collection gets query and mutation fields automatically. Schema is rebuilt in the <code class="doc-code">onReady</code> hook when the server starts, and can be manually rebuilt at runtime.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>GET /api/graphql</td><td>GraphiQL explorer — interactive browser IDE. Administrators can run it as any named API key (Security → API keys → Run the playground as a key).</td></tr>
+            <tbody><tr><tr><td>GET /api/graphql</td><td>Redirects a browser to the admin app&#39;s bundled GraphiQL explorer (<code class="doc-code">/graphql</code>). Administrators can run it as any named API key (Security → API keys → Run the playground as a key).</td></tr>
               <tr><td>POST /api/graphql</td><td>GraphQL endpoint. Body: { query, variables?, operationName? }.</td></tr>
               <tr><td>POST /api/graphql/rebuild</td><td>Admin — rebuild the schema from current nivaro_collections/fields.</td></tr></tr></tbody>
           </table></div>
@@ -4312,7 +4312,7 @@ unsub()</code></pre>
           <h3 class="doc-h3">Authentication</h3>
           <p class="doc-p">Pass a static token via <code class="doc-code">connectionParams.authorization</code>, or a one-shot ticket via <code class="doc-code">connectionParams.ticket</code>. A ticket comes from <code class="doc-code">GET /api/events/ticket</code>, called with any sign-in the HTTP API accepts (session cookie, static token, View-as, or a named API key — whose scopes, row restrictions and depth cap then apply to the connection). A ticket works once and expires after 60 seconds.</p>
           <p class="doc-p">A connection stays tied to what signed it in. When that sign-in ends — logout, a revoked session or API key, a rotated token, or an account that is no longer active — the connection closes with code 4401 within 30 seconds.</p>
-          <div class="doc-note">The GraphiQL explorer at <code class="doc-code">GET /api/graphql</code> does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.</div>
+          <div class="doc-note">The GraphiQL explorer (admin <code class="doc-code">/graphql</code>, which <code class="doc-code">GET /api/graphql</code> redirects to) does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.</div>
           <h2 class="doc-h2" id="graphql-sse">Subscriptions over Server-Sent Events</h2>
           <p class="doc-p">For clients whose proxies block WebSockets, every subscription (and every live query) is also served over Server-Sent Events at <code class="doc-code">/api/graphql/stream</code>. It uses the graphql-sse "distinct connections" shape: one operation per stream, each result as <code class="doc-code">event: next</code> with the execution result as data, then <code class="doc-code">event: complete</code>. A plain query answers once and completes. Mutations are refused with 405 — send them to <code class="doc-code">POST /api/graphql</code>.</p>
           <pre class="doc-pre"><code>// fetch-based clients (headers allowed): POST with the usual body
@@ -4590,7 +4590,7 @@ query {
           <h1 class="doc-h1" id="graphql-auth">GraphQL Authentication</h1>
           <p class="doc-p">GraphQL requests authenticate the same way as REST requests — session cookie or static token Bearer header. Unauthenticated requests are allowed to reach the endpoint but all resolvers return <code class="doc-code">UNAUTHENTICATED</code> errors.</p>
           <h3 class="doc-h3">Using GraphiQL</h3>
-          <p class="doc-p">Open <code class="doc-code">GET /api/graphql</code> in a browser. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:</p>
+          <p class="doc-p">Open <code class="doc-code">GET /api/graphql</code> in a browser — it redirects to the admin app&#39;s GraphiQL explorer at <code class="doc-code">/graphql</code>. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:</p>
           <pre class="doc-pre"><code>{ "Authorization": "Bearer 3a7f2b9c1d4e..." }</code></pre>
           <h3 class="doc-h3">Programmatic requests</h3>
           <pre class="doc-pre"><code>// With fetch

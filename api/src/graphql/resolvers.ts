@@ -11,7 +11,8 @@ import {
 import { db } from '../db/index.js'
 import { findRecordInstance } from '../services/branch-instances.js'
 import { chainFields } from '../services/chain-columns.js'
-import { assertInstanceAccess } from '../services/instance-guard.js'
+import { readableFileIds } from '../services/file-access.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
@@ -27,6 +28,7 @@ import {
   type WorkflowState,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { User } from '../types.js'
@@ -158,6 +160,53 @@ function requireAdmin(ctx: GQLContext): User {
   const user = requireUser(ctx)
   if (!ctx.isAdmin) throw new Error('Admin access required')
   return user
+}
+
+/**
+ * May the caller READ this record (role, row filter, User Scopes, addendum parent)? The same
+ * gate the subscriptions and the REST instance routes apply. False = the record is invisible
+ * (answer as "nothing there"); a collection the caller may not read at all is FORBIDDEN.
+ */
+export async function mayReadRecord(
+  ctx: GQLContext,
+  collection: string,
+  item: string,
+  guard: typeof assertInstanceAccess = assertInstanceAccess
+): Promise<boolean> {
+  const user = requireUser(ctx)
+  try {
+    await guard(user, ctx.isAdmin ?? false, collection, String(item), undefined, 'read')
+    return true
+  } catch (err) {
+    if (err instanceof InstanceAccessError) {
+      if (err.statusCode === 404) return false
+      throw new GraphQLError('Forbidden', { extensions: { code: 'FORBIDDEN', status: 403 } })
+    }
+    throw err
+  }
+}
+
+/**
+ * The instances of `collection` whose record the caller may read: system collections are
+ * admin-only, a collection the caller cannot read gives nothing, and row filters + User Scopes
+ * narrow the rest in one set-based pass.
+ */
+async function visibleInstances(
+  ctx: GQLContext,
+  user: User,
+  collection: string,
+  instances: WorkflowInstance[]
+): Promise<WorkflowInstance[]> {
+  if (ctx.isAdmin) return instances
+  if (/^(nivaro_|directus_)/i.test(collection)) return []
+  if (instances.length === 0) return instances
+  const gates = await compileAccessGates(user, collection)
+  const seen = await visibleIds(
+    gates,
+    instances.map((i) => String(i.item))
+  )
+  const lower = new Set([...seen].map((id) => id.toLowerCase()))
+  return instances.filter((i) => lower.has(String(i.item).toLowerCase()))
 }
 
 // ─── Data loaders ─────────────────────────────────────────────────────────────
@@ -331,7 +380,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
   workflow_templates: {
     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(WorkflowTemplateType))),
     resolve: async (_src, _args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       const templates = await db('nivaro_workflow_templates').orderBy('name')
       return Promise.all(
         templates.map((t: Record<string, unknown>) => loadWorkflowTemplate(t.id as string))
@@ -343,7 +392,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     type: WorkflowTemplateType,
     args: { id: { type: new GraphQLNonNull(GraphQLID) } },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       return loadWorkflowTemplate(args.id)
     }
   },
@@ -355,7 +404,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      if (!(await mayReadRecord(ctx, args.collection, args.item))) return null
       const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance) return null
       return buildInstancePayload(instance, ctx.user?.role, ctx.isAdmin ?? false)
@@ -366,10 +415,11 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(WorkflowInstanceType))),
     args: { collection: { type: new GraphQLNonNull(GraphQLString) } },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
-      const instances = await db<WorkflowInstance>('nivaro_workflow_instances').where({
+      const user = requireUser(ctx)
+      const all = await db<WorkflowInstance>('nivaro_workflow_instances').where({
         collection: args.collection
       })
+      const instances = await visibleInstances(ctx, user, args.collection, all)
       return Promise.all(
         instances.map((i) => buildInstancePayload(i, ctx.user?.role, ctx.isAdmin ?? false))
       )
@@ -381,7 +431,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
   pipeline_templates: {
     type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(PipelineTemplateType))),
     resolve: async (_src, _args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       const templates = await db('nivaro_workflow_templates').orderBy('name')
       return Promise.all(
         templates.map((t: Record<string, unknown>) => loadPipelineTemplate(t.id as string))
@@ -393,7 +443,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     type: PipelineTemplateType,
     args: { id: { type: new GraphQLNonNull(GraphQLID) } },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       return loadPipelineTemplate(args.id)
     }
   },
@@ -402,7 +452,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     type: PipelineMatrixType,
     args: { template_id: { type: new GraphQLNonNull(GraphQLID) } },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       const template = await loadPipelineTemplate(args.template_id)
       if (!template) return null
       const matrix: Record<string, unknown[]> = {}
@@ -418,7 +468,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      if (!(await mayReadRecord(ctx, args.collection, args.item))) return null
       const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance) return null
 
@@ -464,7 +514,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      if (!(await mayReadRecord(ctx, args.collection, args.item))) return { byState: [] }
       const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance?.current_state) return { byState: [] }
 
@@ -498,7 +548,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      if (!(await mayReadRecord(ctx, args.collection, args.item))) return { byState: [] }
       const binding = await db('nivaro_workflow_bindings')
         .where({ collection: args.collection })
         .first()
@@ -537,7 +587,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       state_id: { type: new GraphQLNonNull(GraphQLID) }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      if (!(await mayReadRecord(ctx, args.collection, args.item))) return null
       const state = await db<WorkflowState>('nivaro_workflow_states')
         .where({ id: args.state_id })
         .first()
@@ -571,7 +621,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       offset: { type: GraphQLInt, defaultValue: 0 }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       let q = db('nivaro_activity as a')
         .leftJoin('nivaro_users as u', 'a.user', 'u.id')
         .orderBy('a.timestamp', 'desc')
@@ -622,7 +672,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     type: ActivityEntryType,
     args: { id: { type: new GraphQLNonNull(GraphQLID) } },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      requireAdmin(ctx)
       const r = await db('nivaro_activity as a')
         .leftJoin('nivaro_users as u', 'a.user', 'u.id')
         .where('a.id', args.id)
@@ -673,7 +723,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
       folder: { type: GraphQLID }
     },
     resolve: async (_src, args, ctx) => {
-      requireUser(ctx)
+      const user = requireUser(ctx)
       let q = db('nivaro_files as f')
         .leftJoin('nivaro_users as u', 'f.uploaded_by', 'u.id')
         .orderBy('f.uploaded_on', 'desc')
@@ -687,13 +737,22 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
           'f.filesize',
           'f.folder',
           'f.uploaded_on',
+          'f.uploaded_by',
           'u.id as uploader_id',
           'u.email as uploader_email',
           'u.first_name as uploader_first_name',
           'u.last_name as uploader_last_name'
         )
       if (args.folder) q = q.where('f.folder', args.folder)
-      const rows = await q
+      const page = (await q) as Array<Record<string, unknown> & { id: unknown }>
+      // The /api/files rule (services/file-access.ts): a file reads only where it is used —
+      // never a DM attachment, a help-video file or another person's unattached upload.
+      const readable = await readableFileIds(page, {
+        user,
+        isAdmin: ctx.isAdmin ?? false,
+        workspaceId: null
+      })
+      const rows = page.filter((r) => readable.has(String(r.id).toLowerCase()))
       return rows.map((r: Record<string, unknown>) => ({
         id: r.id,
         filenameDownload: r.filename_download,

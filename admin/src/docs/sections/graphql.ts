@@ -15,7 +15,7 @@ export const graphqlOverview: DocSection = {
       rows: [
         [
           'GET /api/graphql',
-          'GraphiQL explorer — interactive browser IDE. Administrators can run it as any named API key (Security → API keys → Run the playground as a key).'
+          'Redirects a browser to the admin app\'s bundled GraphiQL explorer (`/graphql`). Administrators can run it as any named API key (Security → API keys → Run the playground as a key).'
         ],
         ['POST /api/graphql', 'GraphQL endpoint. Body: { query, variables?, operationName? }.'],
         [
@@ -818,7 +818,7 @@ unsub()`
     },
     {
       type: 'note',
-      text: 'The GraphiQL explorer at `GET /api/graphql` does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.'
+      text: 'The GraphiQL explorer (admin `/graphql`, which `GET /api/graphql` redirects to) does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.'
     },
     { type: 'h2', id: 'graphql-sse', text: 'Subscriptions over Server-Sent Events' },
     {
@@ -904,12 +904,12 @@ export const graphqlAuth: DocSection = {
     { type: 'h1', id: 'graphql-auth', text: 'GraphQL Authentication' },
     {
       type: 'p',
-      text: 'GraphQL requests authenticate the same way as REST requests — session cookie or static token Bearer header. Unauthenticated requests are allowed to reach the endpoint but all resolvers return `UNAUTHENTICATED` errors.'
+      text: 'GraphQL requests authenticate the same way as REST requests — session cookie or static token Bearer header. Unauthenticated requests are allowed to reach the endpoint but all resolvers return `UNAUTHENTICATED` errors, and schema introspection (`__schema`, `__type`) is refused. A graphql-ws connection that signs nothing in is closed with 4403. Nested lists are capped per request: `GRAPHQL_MAX_NESTED_QUERIES` (default 25,000 nested reads) and `GRAPHQL_MAX_NESTED_ROWS` (default 250,000 nested rows), 0 = off; past either the request answers `QUERY_TOO_COSTLY`. A nested `filter` or `sort` may name only fields the caller can read, and never a credential.'
     },
     { type: 'h3', text: 'Using GraphiQL' },
     {
       type: 'p',
-      text: 'Open `GET /api/graphql` in a browser. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:'
+      text: 'Open `GET /api/graphql` in a browser — it redirects to the admin app\'s GraphiQL explorer at `/graphql`. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:'
     },
     {
       type: 'pre',

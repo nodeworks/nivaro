@@ -32,6 +32,11 @@ import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
 import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
+import {
+  assertNestedArgsAllowed,
+  chargeNestedRows,
+  takeNestedQuery
+} from './graphql-nested-guard.js'
 import { graphqlStrictMutations, missingIds, notFoundError } from './graphql-strict.js'
 import {
   AGGREGATE_FUNCTIONS,
@@ -903,6 +908,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       const parent = source as Record<string, unknown>
                       const fkVal = parent[col]
                       if (fkVal == null) return null
+                      if (!takeNestedQuery(ctx)) return null
                       const gate = await timedGate(ctx, target, () => nestedGate(ctx, target))
                       const q = db(target).where(`${target}.id`, fkVal as string | number)
                       if (!applyNestedGate(q, target, gate, ctx.user as User)) return null
@@ -945,6 +951,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
                     if (await parentFieldHidden(ctx, colName, f.field)) return []
+                    if (!takeNestedQuery(ctx)) return []
                     const q = db(info.junction)
                       .where(info.fkToParent, parentId as string | number)
                       .orderBy('id', 'asc')
@@ -954,6 +961,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                     if (typeof args.limit === 'number' && args.limit > 0) q.limit(args.limit)
                     if (typeof args.offset === 'number' && args.offset > 0) q.offset(args.offset)
                     const links = (await q) as Array<Record<string, unknown>>
+                    if (!chargeNestedRows(ctx, links.length)) return []
                     // One read per collection the links name, each gated as the caller.
                     const byCollection = new Map<string, Set<string>>()
                     for (const l of links) {
@@ -1049,16 +1057,20 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       const parentId = (source as Record<string, unknown>)['id']
                       if (parentId == null) return []
                       if (await parentFieldHidden(ctx, colName, f.field)) return []
+                      if (!takeNestedQuery(ctx)) return []
                       const gate = await timedGate(ctx, otherCol, () => nestedGate(ctx, otherCol))
                       const q = db(`${info.junction} as _j`)
                         .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
                         .where(`_j.${info.fkToParent}`, parentId as string | number)
                         .select(`${otherCol}.*`, '_j.id as __junction_id')
                       if (!applyNestedGate(q, otherCol, gate, ctx.user as User)) return []
-                      await applyNestedListArgs(q, otherCol, args as never, (fk) =>
-                        m2oMap.get(`${otherCol}.${fk}`)
+                      const m2oOfOther = (fk: string) => m2oMap.get(`${otherCol}.${fk}`)
+                      await assertNestedArgsAllowed(ctx, otherCol, gate, args, m2oOfOther, (c) =>
+                        timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
+                      await applyNestedListArgs(q, otherCol, args as never, m2oOfOther)
                       const rows = (await q) as Array<Record<string, unknown>>
+                      if (!chargeNestedRows(ctx, rows.length)) return []
                       return rows.map(({ __junction_id, ...target }) => ({
                         __junction_id,
                         __target: narrowNestedRow(target, gate)
@@ -1092,15 +1104,19 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       const parentId = (source as Record<string, unknown>)['id']
                       if (parentId == null) return []
                       if (await parentFieldHidden(ctx, colName, f.field)) return []
+                      if (!takeNestedQuery(ctx)) return []
                       const gate = await timedGate(ctx, manyCol, () => nestedGate(ctx, manyCol))
                       const q = db(manyCol)
                         .where(`${manyCol}.${info.manyField}`, parentId as string | number)
                         .select(`${manyCol}.*`)
                       if (!applyNestedGate(q, manyCol, gate, ctx.user as User)) return []
-                      await applyNestedListArgs(q, manyCol, args as never, (fk) =>
-                        m2oMap.get(`${manyCol}.${fk}`)
+                      const m2oOfMany = (fk: string) => m2oMap.get(`${manyCol}.${fk}`)
+                      await assertNestedArgsAllowed(ctx, manyCol, gate, args, m2oOfMany, (c) =>
+                        timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
+                      await applyNestedListArgs(q, manyCol, args as never, m2oOfMany)
                       const rows = (await q) as Array<Record<string, unknown>>
+                      if (!chargeNestedRows(ctx, rows.length)) return []
                       return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows
                     }
                   )
