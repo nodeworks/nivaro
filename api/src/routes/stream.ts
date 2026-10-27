@@ -4,6 +4,10 @@ import { hooks } from '../hooks/registry.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { type JournalListenerEntry, onJournalEntry } from '../services/journal-listeners.js'
 import { scopeAllows } from '../services/permissions.js'
+import { bindFromRequest, type SocketBind } from '../services/socket-access.js'
+import { recheckStreamIdentity, type StreamIdentity } from '../services/stream-ticket.js'
+import { captureTenant } from '../services/tenant-capture.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { trackSse } from '../services/traffic-taps/realtime.js'
 
 /**
@@ -22,21 +26,39 @@ import { trackSse } from '../services/traffic-taps/realtime.js'
  * imports) reach neither.
  *
  * An admin API key narrowed to named collections sees only those collections' events.
+ *
+ * Cloud (H13): every stream remembers the tenant it was opened under and hears only that
+ * tenant's writes. Every heartbeat re-reads the sign-in: a stream ends when its session, token
+ * or key ends, or when its account is no longer an administrator.
  */
 
-/** Open streams → the collection scopes of the API key that opened them (null = none). */
-const clients = new Map<ServerResponse, Array<{ collection: string; actions: string[] }> | null>()
+type Scopes = Array<{ collection: string; actions: string[] }> | null
+
+interface StreamClient {
+  /** The collection scopes of the API key that opened it (null = none). */
+  scopes: Scopes
+  /** The tenant it was opened under ('' self-hosted). */
+  tenant: string
+}
+
+/** Open streams. */
+const clients = new Map<ServerResponse, StreamClient>()
 let hooksRegistered = false
 
-function broadcast(event: {
-  type: string
-  collection: string
-  id: string | null
-  timestamp: string
-}) {
+/** Exported for tests: send an event to every open stream of `tenant` its scopes allow. */
+export function broadcast(
+  event: {
+    type: string
+    collection: string
+    id: string | null
+    timestamp: string
+  },
+  tenant: string = currentTenantKey()
+) {
   if (clients.size === 0) return
   const frame = `data: ${JSON.stringify(event)}\n\n`
-  for (const [res, scopes] of clients) {
+  for (const [res, { scopes, tenant: own }] of clients) {
+    if (own !== tenant) continue
     if (scopes && !scopeAllows(scopes, 'read', event.collection)) continue
     try {
       res.write(frame)
@@ -55,7 +77,7 @@ function registerStreamHooks() {
   if (!process.env.CLOUD_META_DB_URL)
     onJournalEntry((entry, origin, at) => {
       if (origin !== 'remote' || clients.size === 0) return
-      for (const ev of streamEventsOf(entry, at)) broadcast(ev)
+      for (const ev of streamEventsOf(entry, at)) broadcast(ev, '')
     })
 
   for (const action of ['create', 'update', 'delete'] as const) {
@@ -125,17 +147,49 @@ export async function streamRoutes(app: FastifyInstance) {
     res.write(': connected\n\n')
 
     // An admin key narrowed to named collections keeps to them here too.
-    clients.set(res, req.user?.api_key_scopes ?? null)
+    const client: StreamClient = {
+      scopes: req.user?.api_key_scopes ?? null,
+      tenant: currentTenantKey()
+    }
+    clients.set(res, client)
 
+    // The sign-in this stream rides, re-checked on every heartbeat (inside its own tenant).
+    const bind = bindFromRequest(req)
+    const userId = req.user ? String(req.user.id) : null
+    const inTenant = captureTenant()
+    let last: StreamIdentity = { user: req.user as never, isAdmin: req.isAdmin ?? false }
+    const stillAdmin = async (): Promise<boolean> => {
+      if (!userId || !bind) return true
+      const r = await inTenant(() =>
+        recheckStreamIdentity(app.redis, userId, bind as SocketBind, last)
+      )
+      if (!r.identity || !r.identity.isAdmin) return false
+      last = r.identity
+      client.scopes = r.identity.user.api_key_scopes ?? null
+      return true
+    }
+
+    let closed = false
     const heartbeat = setInterval(() => {
-      try {
-        res.write(': heartbeat\n\n')
-      } catch {
-        cleanup()
-      }
+      void stillAdmin()
+        .catch(() => true)
+        .then((ok) => {
+          if (closed) return
+          try {
+            if (ok) res.write(': heartbeat\n\n')
+            else {
+              res.write('event: session.ended\ndata: {"reason":"signed_out"}\n\n')
+              cleanup()
+            }
+          } catch {
+            cleanup()
+          }
+        })
     }, 25_000)
+    heartbeat.unref?.()
 
     function cleanup() {
+      closed = true
       clearInterval(heartbeat)
       clients.delete(res)
       try {

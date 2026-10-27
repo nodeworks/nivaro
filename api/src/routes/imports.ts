@@ -7,6 +7,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { createOne, updateOne } from '../services/items.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -210,6 +211,28 @@ function sameCell(was: unknown, next: unknown): boolean {
   return String(was).trim() === text
 }
 
+/**
+ * A collection-import job's progress (`import:progress:<id>`): to the job creator's own room and
+ * the tenant's admin watch room (`watch:imports`, administrators only) — never to every socket
+ * (H14: a plain io.emit reached every tenant's sockets, unauthenticated ones included).
+ */
+export function emitJobProgress(
+  app: FastifyInstance,
+  creatorId: unknown,
+  jobId: string,
+  data: object
+): void {
+  try {
+    const io = (app as unknown as { io?: import('socket.io').Server }).io
+    if (!io) return
+    let target = io.to(tenantScopedRoom('watch:imports'))
+    if (creatorId != null && creatorId !== '') target = target.to(`user:${String(creatorId)}`)
+    target.emit(`import:progress:${jobId}`, data)
+  } catch {
+    /* progress is decoration */
+  }
+}
+
 async function processImportJob(jobId: string, app: FastifyInstance) {
   try {
     await db('nivaro_import_jobs').where({ id: jobId }).update({
@@ -246,14 +269,7 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
 
     await db('nivaro_import_jobs').where({ id: jobId }).update({ total_rows: dataLines.length })
 
-    const emitProgress = (data: object) => {
-      if ((app as unknown as { io?: { emit: (event: string, data: object) => void } }).io) {
-        ;(app as unknown as { io: { emit: (event: string, data: object) => void } }).io.emit(
-          `import:progress:${jobId}`,
-          data
-        )
-      }
-    }
+    const emitProgress = (data: object) => emitJobProgress(app, job.created_by, jobId, data)
 
     // #748 — opt-in per job: rows go through the items service (field rules,
     // validation, hooks, revisions, activity attributed to whoever queued the
@@ -409,14 +425,10 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
         completed_at: new Date(),
         errors: JSON.stringify([{ row: 0, error: (err as Error).message }])
       })
-    if ((app as unknown as { io?: { emit: (event: string, data: object) => void } }).io) {
-      ;(app as unknown as { io: { emit: (event: string, data: object) => void } }).io.emit(
-        `import:progress:${jobId}`,
-        { jobId, failed: true, error: (err as Error).message }
-      )
-    }
-
     const failedJob = await db('nivaro_import_jobs').where({ id: jobId }).first()
+    // The failure text stays behind the authenticated job routes (it can quote SQL).
+    emitJobProgress(app, failedJob?.created_by, jobId, { jobId, failed: true, error: true })
+
     await logActivity({
       action: 'import-failed',
       user: (failedJob?.created_by as string | null) ?? null,
