@@ -6,6 +6,8 @@
  * Excel, Numbers and Google Sheets all open it.
  */
 
+import { buildZip } from './zip-writer.js'
+
 export type Cell = string | number | boolean | null | undefined
 
 /** A header or body cell look. */
@@ -125,69 +127,6 @@ function sheetXml(sheet: Sheet, selected: boolean): string {
 
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FF1E293B"/><name val="Calibri"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF334155"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFCD34D"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs></styleSheet>`
 
-// ── Stored zip ──────────────────────────────────────────────────────────────
-
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256)
-  for (let n = 0; n < 256; n++) {
-    let c = n
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-    t[n] = c >>> 0
-  }
-  return t
-})()
-
-function crc32(buf: Buffer): number {
-  let c = 0xffffffff
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
-  return (c ^ 0xffffffff) >>> 0
-}
-
-function zip(files: Array<{ name: string; data: Buffer }>): Buffer {
-  const local: Buffer[] = []
-  const central: Buffer[] = []
-  let offset = 0
-  for (const f of files) {
-    const name = Buffer.from(f.name)
-    const crc = crc32(f.data)
-    const h = Buffer.alloc(30)
-    h.writeUInt32LE(0x04034b50, 0)
-    h.writeUInt16LE(20, 4) // version needed
-    h.writeUInt16LE(0x0800, 6) // UTF-8 names
-    h.writeUInt16LE(0, 8) // stored
-    h.writeUInt16LE(0, 10) // time
-    h.writeUInt16LE(0x21, 12) // date 1980-01-01
-    h.writeUInt32LE(crc, 14)
-    h.writeUInt32LE(f.data.length, 18)
-    h.writeUInt32LE(f.data.length, 22)
-    h.writeUInt16LE(name.length, 26)
-    local.push(h, name, f.data)
-    const c = Buffer.alloc(46)
-    c.writeUInt32LE(0x02014b50, 0)
-    c.writeUInt16LE(20, 4)
-    c.writeUInt16LE(20, 6)
-    c.writeUInt16LE(0x0800, 8)
-    c.writeUInt16LE(0, 10)
-    c.writeUInt16LE(0, 12)
-    c.writeUInt16LE(0x21, 14)
-    c.writeUInt32LE(crc, 16)
-    c.writeUInt32LE(f.data.length, 20)
-    c.writeUInt32LE(f.data.length, 24)
-    c.writeUInt16LE(name.length, 28)
-    c.writeUInt32LE(offset, 42)
-    central.push(c, name)
-    offset += 30 + name.length + f.data.length
-  }
-  const centralBuf = Buffer.concat(central)
-  const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0)
-  end.writeUInt16LE(files.length, 8)
-  end.writeUInt16LE(files.length, 10)
-  end.writeUInt32LE(centralBuf.length, 12)
-  end.writeUInt32LE(offset, 16)
-  return Buffer.concat([...local, centralBuf, end])
-}
-
 /** The workbook as .xlsx bytes. The first visible sheet opens selected. */
 export function buildXlsx(sheets: Sheet[]): Buffer {
   const firstVisible = sheets.findIndex((s) => !s.hidden)
@@ -231,5 +170,5 @@ export function buildXlsx(sheets: Sheet[]): Buffer {
   add('xl/styles.xml', STYLES_XML)
   for (const [i, s] of sheets.entries())
     add(`xl/worksheets/sheet${i + 1}.xml`, sheetXml(s, i === firstVisible))
-  return zip(files)
+  return buildZip(files)
 }
