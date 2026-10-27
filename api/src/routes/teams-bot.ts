@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { linkTo } from '../services/app-links.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
@@ -13,6 +13,7 @@ import { connectCard } from '../services/teams-bot/connect-card.js'
 import { sendActivity } from '../services/teams-bot/connector.js'
 import { verifyConnectorToken } from '../services/teams-bot/jwt.js'
 import {
+  linkForUser,
   markLink,
   noteLinkInbound,
   readConnectToken,
@@ -237,6 +238,14 @@ export async function teamsBotRoutes(app: FastifyInstance) {
       last_inbound_at: at,
       last_error: err?.last_error ?? null
     }
+  })
+
+  // ─── Self: disconnect my own Teams link (never anyone else's) ───
+  app.delete('/link', { preHandler: requireAuth }, async (req, reply) => {
+    const link = await linkForUser((req.user as User).id)
+    if (!link) return reply.code(404).send({ error: 'Teams is not connected', code: 'NOT_LINKED' })
+    await markLink(link.aad_object_id, 'unlinked')
+    return reply.send({ data: { status: 'unlinked' } })
   })
 
   app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {

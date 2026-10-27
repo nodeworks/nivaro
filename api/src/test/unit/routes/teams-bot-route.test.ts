@@ -42,6 +42,7 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
   resolveTeamsUser: async () => st.resolved,
   upsertLink: st.upsert,
   markLink: st.mark,
+  linkForUser: async () => null,
   signConnectToken: () => 'SIGNED',
   TeamsLinkTakenError: TakenError,
   readConnectToken: (t: string) =>

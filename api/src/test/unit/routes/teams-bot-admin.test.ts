@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({ admin: false, cfg: {} as Record<string, unknown> }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
+  requireAuth: async () => {},
   requireAdmin: async (req: { user?: unknown }) => {
     if (!h.admin) throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     req.user = { id: 'admin-1' }
@@ -53,6 +54,7 @@ vi.mock('../../../services/teams-bot/connect-card.js', () => ({ connectCard: () 
 vi.mock('../../../services/teams-bot/jwt.js', () => ({ verifyConnectorToken: async () => ({}) }))
 vi.mock('../../../services/teams-bot/links.js', () => ({
   markLink: async () => {},
+  linkForUser: async () => null,
   noteLinkInbound: async () => {},
   readConnectToken: () => null,
   resolveTeamsUser: async () => ({}),

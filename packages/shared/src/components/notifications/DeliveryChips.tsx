@@ -1,4 +1,4 @@
-import { Bell, Inbox, Mail, MessageSquare } from 'lucide-react'
+import { Bell, Inbox, Mail, MessageSquare, Users } from 'lucide-react'
 import type { NotificationDeliveryRecord } from '../../lib/notification-target'
 
 /**
@@ -103,6 +103,21 @@ function describe(delivery: NotificationDeliveryRecord | null | undefined): Arra
           : ''
       }`,
       mailLogId: d.escalation.email_log_id ?? null
+    })
+  }
+  if (d.teams) {
+    const s = d.teams.status
+    out.push({
+      key: 'teams',
+      icon: Users,
+      label: s === 'sent' ? 'Teams' : `Teams · ${s.replace(/_/g, ' ')}`,
+      tone: s === 'sent' ? 'ok' : s === 'failed' ? 'bad' : 'muted',
+      tip:
+        s === 'sent'
+          ? 'Sent in Microsoft Teams'
+          : s === 'not_connected'
+            ? 'Teams not connected'
+            : (d.teams.reason ?? `Teams ${s}`)
     })
   }
   if (d.sms && d.sms.status !== 'not_requested') {

@@ -14,6 +14,7 @@ import {
   runBulkUserAction
 } from '../services/people-access.js'
 import { writeRevision } from '../services/revisions.js'
+import { ownTeamsFacts } from '../services/teams-bot/profile.js'
 import { avatarEtag, readUserCards, USER_CARD_BATCH_MAX } from '../services/user-cards.js'
 import {
   buildTeamLoad,
@@ -260,7 +261,9 @@ export async function usersRoutes(app: FastifyInstance) {
       const { stripAiMemory } = await import('../services/ai-memory.js')
       return reply.send({ data: stripAiMemory(user) })
     }
-    return reply.send({ data: user })
+    // The person's own Teams facts for Profile → Notification rules. Never shown for another
+    // account: a link is the person's own business, so an admin reading someone else gets none.
+    return reply.send({ data: { ...user, ...(await ownTeamsFacts(String(userId))) } })
   })
 
   // GET /users/:id/card — authenticated (not admin-only); returns safe public fields for the

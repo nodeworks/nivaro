@@ -42,6 +42,7 @@ import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
 import { MailSuppressedPill } from './profile/MailSuppressedPill'
 import { TeamLoadCard } from './profile/PersonExtras'
+import { TeamsConnect } from './profile/TeamsConnect'
 
 export { DelegationCard }
 
@@ -287,14 +288,40 @@ export function NotificationRulesCard() {
         .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
         .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
   })
+  // The caller's own Teams facts (bot on for this instance? their link?). Same GET as above, so
+  // the shared client coalesces the two reads.
+  const { data: teamsFacts } = useQuery({
+    queryKey: ['nvr-profile-teams'],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            teams_available?: boolean
+            teams_link?: { status: string; linked_at: string | null } | null
+          }
+        }>(get('/users/me'))
+        .then((r) => ({
+          available: r.data?.teams_available === true,
+          link: r.data?.teams_link ?? null
+        }))
+  })
+  const teamsAvailable = teamsFacts?.available === true
+  const teamsLinked = teamsFacts?.link?.status === 'active'
   type EmailMode = 'instant' | 'daily' | 'off'
   type EscalationRule = { push_after_min?: number; email_after_min?: number }
   const np = (prefs?.notification_prefs ?? {}) as {
     quiet_start?: string
     quiet_end?: string
+    teams_muted_until?: string
     matrix?: Record<
       string,
-      { inapp?: boolean; push?: boolean; email?: EmailMode; quiet_override?: boolean }
+      {
+        inapp?: boolean
+        push?: boolean
+        email?: EmailMode
+        quiet_override?: boolean
+        teams?: boolean
+      }
     >
     escalation?: Record<string, EscalationRule>
   }
@@ -355,7 +382,9 @@ export function NotificationRulesCard() {
       quiet_start: overrides.quiet_start ?? (effStart || undefined),
       quiet_end: overrides.quiet_end ?? (effEnd || undefined),
       matrix: overrides.matrix ?? np.matrix ?? {},
-      escalation: overrides.escalation ?? np.escalation ?? {}
+      escalation: overrides.escalation ?? np.escalation ?? {},
+      // Kept as-is: "mute 1h" said to the bot lives here, and a save must not wipe it.
+      ...(np.teams_muted_until ? { teams_muted_until: np.teams_muted_until } : {})
     }
     previewMut.mutate(next)
     save.mutate(next)
@@ -420,6 +449,11 @@ export function NotificationRulesCard() {
     commit({
       matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, [channel]: cur[channel] === false } }
     })
+  }
+  // Teams is opt-in: absent = off, so the first tick turns it on.
+  const toggleTeams = (cat: string) => {
+    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
+    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, teams: cur.teams !== true } } })
   }
   const setEmail = (cat: string, email: EmailMode) => {
     const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
@@ -633,6 +667,15 @@ export function NotificationRulesCard() {
                 Email
                 <HeaderHelp text='Individual email = one message as each event happens. Daily summary = held and delivered once a day in your action summary (deliver-at time below). No email = never emailed for this category (in-app and push are unaffected).' />
               </th>
+              {teamsAvailable && (
+                <th className='py-1 text-center font-semibold' data-teams-column=''>
+                  Teams
+                  <HeaderHelp text='A message from the Nivaro bot in Microsoft Teams. Off by default: connect Teams, then turn on the categories you want there. Say "mute 1h" to the bot to pause them for a while.' />
+                  <div className='mt-0.5'>
+                    <TeamsConnect linked={teamsLinked} linkedAt={teamsFacts?.link?.linked_at} />
+                  </div>
+                </th>
+              )}
               <th className='py-1 text-center font-semibold'>
                 Sound
                 <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above.' />
@@ -675,6 +718,20 @@ export function NotificationRulesCard() {
                       />
                     </div>
                   </td>
+                  {teamsAvailable && (
+                    <td className='py-1.5 text-center'>
+                      <input
+                        type='checkbox'
+                        checked={row.teams === true}
+                        onChange={() => toggleTeams(c.key)}
+                        disabled={save.isPending || !teamsLinked}
+                        aria-label={`Teams for ${c.label}`}
+                        title={teamsLinked ? undefined : 'Connect Teams first'}
+                        data-notify-channel={`${c.key}:teams`}
+                        className='h-3.5 w-3.5'
+                      />
+                    </td>
+                  )}
                   <td className='py-1 text-center'>
                     <div className='inline-block'>
                       <SimpleSelectXs

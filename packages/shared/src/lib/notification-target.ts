@@ -112,6 +112,11 @@ export interface NotificationDeliveryRecord {
     at?: string
   }
   sms?: { status: 'sent' | 'failed' | 'skipped' | 'not_requested'; reason?: string }
+  teams?: {
+    status: 'sent' | 'failed' | 'skipped' | 'disabled' | 'not_connected'
+    reason?: string
+    at?: string
+  }
   escalation?: { push_at?: string; email_at?: string; email_log_id?: number | null }
 }
 
