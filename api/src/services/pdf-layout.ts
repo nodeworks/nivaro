@@ -772,9 +772,10 @@ export async function generatePdfFromLayout(params: {
   if (layout.pdf_theme === 'custom' && layout.pdf_template_id) {
     const tmpl = await db('nivaro_pdf_templates').where({ id: layout.pdf_template_id }).first()
     if (tmpl?.template) {
-      const { Liquid } = await import('liquidjs')
+      const { liquidWithoutFiles } = await import('./liquid-no-fs.js')
       const { useZonedDates } = await import('./liquid-dates.js')
-      const engine = useZonedDates(new Liquid())
+      // No file system: the stored template cannot include files from the process folder.
+      const engine = useZonedDates(liquidWithoutFiles())
       html = await engine.parseAndRender(tmpl.template as string, {
         cover_title: data.coverTitle,
         cover_subtitle: data.coverSubtitle,

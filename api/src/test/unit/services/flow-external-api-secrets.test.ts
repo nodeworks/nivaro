@@ -116,7 +116,8 @@ describe('flow external-api op — body secrets', () => {
     const wire = JSON.parse(String(init.body)) as Record<string, string>
     expect(wire.auth).toBe('S3CRET-TOKEN')
     expect(wire.note).toBe('x ⟦nvr-secret\u200b:token⟧ y')
-    expect(wire.esc).toBe('⟦nvr-secret\u200b:token⟧')
+    // M26: the value lands JSON-escaped, so its backslashes stay text (never decoded into a marker).
+    expect(wire.esc).toBe('\\u27e6nvr-secret:token\\u27e7')
     expect(wire.joined).toBe('⟦nvr-secret\u200b:token⟧')
     expect(JSON.stringify({ ...wire, auth: null })).not.toContain('S3CRET-TOKEN')
   })

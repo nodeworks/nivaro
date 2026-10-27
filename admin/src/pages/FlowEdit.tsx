@@ -1108,7 +1108,8 @@ function EditOperationDialog({
                     <Code className='inline h-3 w-3 mr-1' />
                     Available: <code className='font-mono'>data</code> (flow data),{' '}
                     <code className='font-mono'>log</code> (logger). Return{' '}
-                    <code className='font-mono'>data</code> to pass downstream.
+                    <code className='font-mono'>data</code> to pass downstream. Runs isolated: no
+                    network, timers, files or Node modules. Not available on cloud instances.
                   </div>
                   <div className='space-y-1.5'>
                     <Label>JavaScript Code</Label>
@@ -1146,7 +1147,8 @@ function EditOperationDialog({
                       placeholder='https://example.com/webhook'
                     />
                     <p className='text-[11px] text-slate-400'>
-                      Supports {'{{variable}}'} templates.
+                      Supports {'{{variable}}'} templates (values in the path or query are
+                      URL-encoded). Private and internal addresses are refused.
                     </p>
                   </div>
                   <div className='space-y-1.5'>
@@ -1244,6 +1246,10 @@ function EditOperationDialog({
                       spellCheck={false}
                       placeholder='<p>Hello {{name}}</p>'
                     />
+                    <p className='text-[11px] text-slate-400'>
+                      Values are HTML-escaped. Write {'{{ field | raw }}'} for a field that already
+                      holds trusted HTML.
+                    </p>
                   </div>
                   <div className='space-y-1.5'>
                     <Label>Notification category</Label>

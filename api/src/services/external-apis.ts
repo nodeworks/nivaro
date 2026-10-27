@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { CallOptions, CallResult } from '@nivaro/extension-kit'
 import { db } from '../db/index.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { isRecord, responseLogScrubber, substituteBodySecrets } from './body-secrets.js'
 import { chainFields } from './chain-columns.js'
 import { partnerChaosFetch, partnerFault, readChaosResponse } from './chaos/faults/partner.js'
@@ -369,7 +370,11 @@ export async function resolveAuth(
         }
         let res: Response
         try {
-          res = await fetch(c.token_url, { method: 'POST', headers: tokenHeaders, body: form })
+          res = await fetchGuardedInCloud(c.token_url, {
+            method: 'POST',
+            headers: tokenHeaders,
+            body: form
+          })
         } catch (err) {
           note(null, err instanceof Error ? err.message : String(err))
           throw err
@@ -783,8 +788,12 @@ export async function callExternalApi(
       // #1773 — a partner chaos fault answers instead of the network (decided per attempt).
       const chaos = partnerFault(row)
       res = chaos
-        ? await partnerChaosFetch(chaos, () => fetch(url.toString(), init), ctl.signal)
-        : await fetch(url.toString(), init)
+        ? await partnerChaosFetch(
+            chaos,
+            () => fetchGuardedInCloud(url.toString(), init),
+            ctl.signal
+          )
+        : await fetchGuardedInCloud(url.toString(), init)
     } catch (err) {
       fetchError =
         err instanceof Error

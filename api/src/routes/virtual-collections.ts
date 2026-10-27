@@ -173,7 +173,10 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
     }
 
     try {
-      await db.raw(`SET NOEXEC ON; ${sqlToValidate}; SET NOEXEC OFF;`)
+      // Compile-only and bound as a value: sp_describe_first_result_set never executes the
+      // text. The old `SET NOEXEC ON; <sql>; SET NOEXEC OFF` ran anything written after an
+      // embedded `SET NOEXEC OFF` (and read a literal `?` as a binding).
+      await db.raw('EXEC sys.sp_describe_first_result_set @tsql = ?', [String(sqlToValidate)])
       return reply.send({ valid: true })
     } catch (err) {
       return reply.send({ valid: false, error: String(err) })
