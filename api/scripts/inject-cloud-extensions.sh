@@ -3,8 +3,20 @@
 # into api/dist/cloud-extensions/ before the API starts (or during Docker build).
 #
 # Required env vars:
-#   CLOUD_EXTENSIONS_REPO   — GitHub repo slug, e.g. "acme/nivaro-cloud"
-#   CLOUD_EXTENSIONS_TOKEN  — GitHub PAT with read access to the private repo
+#   CLOUD_EXTENSIONS_REPO        — GitHub repo slug, e.g. "acme/nivaro-cloud"
+#   CLOUD_EXTENSIONS_TOKEN_FILE  — file holding a GitHub token with read access
+#                                  to the private repo (a BuildKit secret mount:
+#                                  Dockerfile.release mounts the build secret
+#                                  CLOUD_EXTENSIONS_TOKEN at
+#                                  /run/secrets/CLOUD_EXTENSIONS_TOKEN)
+#   CLOUD_EXTENSIONS_TOKEN       — the same token as a plain value; DEPRECATED
+#                                  (a build ARG is recorded in the build
+#                                  metadata and cache). Used only when no
+#                                  token file is readable.
+#
+# The token reaches git through GIT_CONFIG_* environment variables (an
+# Authorization header for github.com only): never on argv, never in a clone
+# URL, never written to .git/config.
 #
 # Fail-safe: any error exits 0 so the API builds/starts without extensions.
 # The loadCloudExtensions() loader already handles a missing directory gracefully.
@@ -12,7 +24,16 @@
 set -euo pipefail
 
 REPO="${CLOUD_EXTENSIONS_REPO:-}"
-TOKEN="${CLOUD_EXTENSIONS_TOKEN:-}"
+TOKEN=""
+TOKEN_FILE="${CLOUD_EXTENSIONS_TOKEN_FILE:-}"
+if [ -n "$TOKEN_FILE" ] && [ -r "$TOKEN_FILE" ]; then
+  TOKEN="$(tr -d '\r\n' < "$TOKEN_FILE")"
+fi
+if [ -z "$TOKEN" ] && [ -n "${CLOUD_EXTENSIONS_TOKEN:-}" ]; then
+  TOKEN="$CLOUD_EXTENSIONS_TOKEN"
+  echo "[cloud-ext] WARNING: CLOUD_EXTENSIONS_TOKEN came in as a build ARG;" \
+    "pass it as a build secret (id CLOUD_EXTENSIONS_TOKEN) instead" >&2
+fi
 # Destination: api/dist/cloud-extensions/ (where loader.js resolves at runtime)
 DEST="${CLOUD_EXTENSIONS_DEST:-$(dirname "$0")/../cloud-extensions}"
 
@@ -31,9 +52,21 @@ TMPDIR_WORK=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR_WORK"; }
 trap cleanup EXIT
 
+case "$REPO" in
+  *[!A-Za-z0-9._/-]* | */*/* | /* | */ | *..*)
+    warn "CLOUD_EXTENSIONS_REPO is not an owner/name slug — skipping cloud extensions"
+    exit 0
+    ;;
+esac
+
 log "Cloning $REPO (depth=1)..."
-if ! git clone --quiet --depth=1 \
-    "https://x-access-token:${TOKEN}@github.com/${REPO}.git" \
+AUTH_B64="$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')"
+if ! GIT_TERMINAL_PROMPT=0 \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+    GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH_B64}" \
+    git clone --quiet --depth=1 \
+    "https://github.com/${REPO}.git" \
     "$TMPDIR_WORK/repo" 2>&1; then
   warn "Clone failed — deploying without cloud extensions"
   exit 0

@@ -93,11 +93,18 @@ RUN pnpm --filter @nivaro/extension-kit build
 # The API hosts the MCP server (/api/mcp) from the same package the npm stdio server ships.
 RUN pnpm --filter @nivaro/mcp build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
-# Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway service env vars.
-# Both are declared as ARGs so Railway passes them in at build time.
+# CLOUD_EXTENSIONS_REPO is a plain build ARG. The token is a BuildKit SECRET
+# with id CLOUD_EXTENSIONS_TOKEN (`docker build --secret
+# id=CLOUD_EXTENSIONS_TOKEN,env=CLOUD_EXTENSIONS_TOKEN`; Railway mounts a
+# service variable of that name the same way): a secret never enters the
+# build metadata, the layer cache or `docker history`. The CLOUD_EXTENSIONS_TOKEN
+# build ARG still works as a fallback for builders that cannot pass secrets
+# yet, and the script warns when it is used.
 ARG CLOUD_EXTENSIONS_REPO=""
 ARG CLOUD_EXTENSIONS_TOKEN=""
-RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+RUN --mount=type=secret,id=CLOUD_EXTENSIONS_TOKEN,required=false \
+    CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
+    CLOUD_EXTENSIONS_TOKEN_FILE=/run/secrets/CLOUD_EXTENSIONS_TOKEN \
     CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
     bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build
@@ -222,8 +229,12 @@ RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chown -R node:node /app/uploads /app/work \
   && chmod 1777 /app/work \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
+# NODE_ENV=production: the image is a deployment, never a dev server. Unset,
+# config.ts falls back to development (chaos gate open, dev-only routes and
+# behaviour). A deployment that really wants another value still sets it.
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
+    NODE_ENV=production \
     NIVARO_IMAGE_VARIANT=slim
 LABEL org.opencontainers.image.title="Nivaro (slim)" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
@@ -251,6 +262,7 @@ RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
+    NODE_ENV=production \
     NIVARO_IMAGE_VARIANT=full
 LABEL org.opencontainers.image.title="Nivaro" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"

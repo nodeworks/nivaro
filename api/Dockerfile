@@ -1,3 +1,7 @@
+# DEPRECATED — build Dockerfile.release (the published nodeworks/nivaro image,
+# which docker-compose.yml also uses). This file predates the packages/ layout
+# and is kept only for reference; it runs as the unprivileged `node` user.
+#
 # ─── Stage 1: base ───────────────────────────────────────────────────────────
 FROM node:22-alpine AS base
 RUN corepack enable pnpm
@@ -106,8 +110,12 @@ COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 # Copy runtime assets (mail templates, etc.)
 COPY api/templates ./api/templates
 
-# Uploads directory — will be mounted as a volume in compose
-RUN mkdir -p /app/uploads
+# Uploads directory — will be mounted as a volume in compose. Owned by node, so
+# a new named volume mounted there copies that ownership.
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
+
+ENV NODE_ENV=production
+USER node
 
 EXPOSE 3055
 CMD ["node", "api/dist/index.js"]

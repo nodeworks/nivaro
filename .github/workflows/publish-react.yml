@@ -5,21 +5,33 @@ on:
     tags:
       - '@react-*'
 
+  # A manual run must be started ON a release tag (Use workflow from → Tags →
+  # @react-x.y.z): from a branch the jobs below skip, so a branch can never
+  # publish to npm.
   workflow_dispatch:
+
+# Nothing by default; each job asks for what it needs.
+permissions: {}
 
 jobs:
   publish:
     # The dev repo receives the same tags a minute earlier; only the public
     # mirror publishes, or the two runs race for one version.
-    if: github.repository == 'nodeworks/nivaro'
+    if: github.repository == 'nodeworks/nivaro' && startsWith(github.ref, 'refs/tags/@react-')
     name: Publish @nivaro/react to npm
     runs-on: ubuntu-latest
+    # Read-only checkout; id-token for npm provenance (the published package
+    # links back to this workflow run and commit).
     permissions:
-      contents: write
+      contents: read
       id-token: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4  # version comes from package.json "packageManager"
 
@@ -47,11 +59,16 @@ jobs:
         id: meta
         run: |
           VERSION="${GITHUB_REF_NAME#@react-}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Only a plain semver goes further (the tag name is user input).
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "tag $GITHUB_REF_NAME does not carry a version" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           # Idempotency: a delayed push-event run may already have published
           # this version — skip instead of failing the re-run.
-          if npm view @nivaro/react@$VERSION version >/dev/null 2>&1; then
-            echo "already=true" >> $GITHUB_OUTPUT
+          if npm view "@nivaro/react@$VERSION" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
             echo "@nivaro/react@$VERSION already on npm — skipping publish"
           fi
 
@@ -64,9 +81,11 @@ jobs:
         working-directory: packages/react
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # npm provenance attestation (npm and pnpm both read it).
+          NPM_CONFIG_PROVENANCE: 'true'
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          if npm publish --access public; then exit 0; fi
+          if npm publish --access public --provenance; then exit 0; fi
           # `npm view` (full metadata) and the tarball URL both lag a fresh
           # publish; the abbreviated install-metadata document reflects it at
           # once. Cache-bust the query so a CDN copy can't answer.
@@ -81,6 +100,29 @@ jobs:
           done
           exit 1
 
+  # Separate job: only creating the GitHub Release needs a token that can write
+  # to the repository, and it never sees the npm token.
+  release:
+    needs: publish
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Generate changelog
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -92,7 +134,7 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.publish.outputs.version }}
         run: |
           if gh release view "@react-${VERSION}" >/dev/null 2>&1; then
             echo "release @react-${VERSION} already exists — skipping"

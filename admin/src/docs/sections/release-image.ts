@@ -37,18 +37,22 @@ export const releaseImageDocs: DocSection = {
         ['New or empty volume on `/app/uploads`', 'Handed to uid 1000; the API runs as `node`.'],
         [
           'Volume with files uid 1000 cannot write (made by an image older than 0.3.5, or NFS with root_squash)',
-          'Nothing is changed and the API keeps running as root, so uploads keep working. One line in the log names the fix.'
+          'Nothing is changed and the API keeps running as root, so uploads keep working. A WARNING banner in the log, at every start, names the reason and the fix.'
         ],
         [
           'The switch is refused (`cap_drop: ALL` removes CAP_SETUID and CAP_SETGID)',
-          "The API keeps running as root with one warning line. TMPDIR and HOME move under `/tmp` when root may not write uid 1000's folders."
+          "The API keeps running as root, with the same WARNING banner. TMPDIR and HOME move under `/tmp` when root may not write uid 1000's folders."
         ],
         [
           'The deployment sets `user:` (for example `user: 1000:1000`)',
           'That user is used as is; the entrypoint only creates TMPDIR and HOME and warns when `/app/uploads` is not writable.'
         ],
-        ['`NIVARO_RUN_AS=root`', 'Stays root on purpose.']
+        ['`NIVARO_RUN_AS=root`', 'Stays root on purpose (the banner still prints).']
       ]
+    },
+    {
+      type: 'p',
+      text: 'The entrypoint never refuses to start over this. Whenever it stays root it also sets `NIVARO_RUNNING_AS_ROOT=1` and `NIVARO_ROOT_REASON` in the process environment. Both runners set `NODE_ENV=production`; a deployment that sets NODE_ENV itself still wins.'
     },
     {
       type: 'warn',
