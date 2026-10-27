@@ -31,9 +31,67 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const CORE_TEMPLATE_ROOT = join(__dirname, '../../templates/mail')
 let templateRoots: string[] = [CORE_TEMPLATE_ROOT]
 
+// ─── Output escaping (M27, security audit 2026-10-27) ────────────────────────
+// Every `{{ value }}` a mail template prints is HTML-escaped, so a record value, a comment or a
+// name can never add markup to an email. What the APP built as HTML (the `html` fragment
+// sendRawMail wraps, the brand values mail-branding.ts already escaped) travels as SafeHtml and
+// prints as is — in core templates, extension templates and DB overrides alike — and core
+// templates also mark those spots `| raw`. `| escape` stays a single escape (it is registered
+// as a raw-marking filter). MAIL_OUTPUT_ESCAPE=off restores the old unescaped engine.
+
+/** An app-built HTML fragment (or a value the app already escaped): printed as is. */
+export class SafeHtml {
+  constructor(readonly html: string) {}
+  toString(): string {
+    return this.html
+  }
+}
+
+/** Marks a trusted, app-built HTML string so the escaping mail engine prints it as is. */
+export function safeHtml(html: string): SafeHtml {
+  return new SafeHtml(html)
+}
+
+export function mailOutputEscapeEnabled(): boolean {
+  return (process.env.MAIL_OUTPUT_ESCAPE ?? '').trim().toLowerCase() !== 'off'
+}
+
+type FilterFn = (this: unknown, v: unknown, ...args: unknown[]) => unknown
+
+/** The mail Liquid engine over `roots`. Exported for the template-parity test. */
+export function buildMailEngine(roots: string[], escapeOutput = mailOutputEscapeEnabled()): Liquid {
+  if (!escapeOutput) return useZonedDates(new Liquid({ root: [...roots], extname: '.liquid' }))
+  let builtinEscape: FilterFn | null = null
+  const outputEscape = function (this: unknown, v: unknown): string {
+    if (v instanceof SafeHtml) return v.html
+    return String((builtinEscape as FilterFn).call(this, v))
+  }
+  const engine = new Liquid({ root: [...roots], extname: '.liquid', outputEscape })
+  builtinEscape = engine.filters.escape as FilterFn
+  const builtinEscapeOnce = engine.filters.escape_once as FilterFn
+  // `{{ x | escape }}` already escaped: the auto-escape must not run a second time.
+  engine.registerFilter('escape', { handler: builtinEscape, raw: true })
+  engine.registerFilter('escape_once', { handler: builtinEscapeOnce, raw: true })
+  return useZonedDates(engine)
+}
+
+/** Brand values arrive escaped by mail-branding.ts: carry them as SafeHtml. */
+function trustedBrand(ctx: Record<string, unknown>): Record<string, unknown> {
+  const brand = ctx.brand as Record<string, unknown> | undefined
+  if (!brand || typeof brand !== 'object') return ctx
+  const out: Record<string, unknown> = { ...brand }
+  for (const key of ['logo', 'sender_name', 'footer']) {
+    const v = out[key]
+    if (typeof v === 'string' && v !== '') out[key] = safeHtml(v)
+  }
+  return { ...ctx, brand: out }
+}
+
+const brandCtx = (brand: MailBrand) => trustedBrand(brandTemplateContext(brand))
+
 // Dates format in the instance zone, never the container's UTC (liquid-dates.ts).
 function buildEngine(): Liquid {
-  return useZonedDates(new Liquid({ root: [...templateRoots], extname: '.liquid' }))
+  return buildMailEngine(templateRoots)
 }
 
 let engine = buildEngine()
@@ -95,7 +153,7 @@ async function withBrand(
   lookup: MailBrandingLookup,
   brand?: MailBrand
 ): Promise<Record<string, unknown>> {
-  const ctx = brand ? brandTemplateContext(brand) : await brandContextFor(lookup)
+  const ctx = trustedBrand(brand ? brandTemplateContext(brand) : await brandContextFor(lookup))
   return { ...(data ?? {}), ...ctx }
 }
 
@@ -110,7 +168,11 @@ export async function wrapMailFragment(
   if (/<html[\s>]/i.test(html)) return html
   try {
     const ctx = await withBrand(extra, {})
-    return await engine.renderFile('message', { ...ctx, html, title: title ?? null })
+    return await engine.renderFile('message', {
+      ...ctx,
+      html: safeHtml(html),
+      title: title ?? null
+    })
   } catch {
     return html
   }
@@ -716,7 +778,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   const brand = await resolveMailBranding(brandLookupFor(opts))
   // The resolved brand is spread LAST so caller data can never smuggle an
   // unescaped `brand` object into the chrome.
-  const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandTemplateContext(brand) }
+  const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandCtx(brand) }
   let html: string
   try {
     html = await engine.renderFile(opts.template, renderData)
@@ -734,10 +796,10 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
     )
     html = await engine.renderFile('message', {
-      ...brandTemplateContext(brand),
+      ...brandCtx(brand),
       ...whyCtx,
       title: opts.subject,
-      html: safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : ''
+      html: safeHtml(safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : '')
     })
   }
   // Digest deferral FIRST, against the ORIGINAL recipients — the preference
@@ -894,9 +956,9 @@ export async function sendRawMail(opts: {
     try {
       const whyCtx = await whyContext(opts.to, opts.why)
       html = await engine.renderFile('message', {
-        ...brandTemplateContext(brand),
+        ...brandCtx(brand),
         ...whyCtx,
-        html,
+        html: safeHtml(html),
         title: opts.title ?? null
       })
     } catch {

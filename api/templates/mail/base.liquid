@@ -9,7 +9,7 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <title>{{ brand_name }}</title>
+  <title>{{ brand_name | raw }}</title>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -43,7 +43,7 @@
 </head>
 <body style="margin:0;padding:0;background-color:#eef2f6;" bgcolor="#eef2f6">
 
-<div style="display:none;font-size:1px;color:#eef2f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}{{ brand_name }}{% endblock %}&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;</div>
+<div style="display:none;font-size:1px;color:#eef2f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}{{ brand_name | raw }}{% endblock %}&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;</div>
 
 <table id="page-bg" role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#eef2f6" style="background-color:#eef2f6;">
   <tr>
@@ -58,7 +58,7 @@
             <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
               <tr>
                 <td valign="middle">
-                  {% block brand %}{% if brand.logo %}<img id="brand-logo" src="{{ brand.logo }}" alt="{{ brand_name }}" height="32" style="display:block;height:32px;max-height:32px;width:auto;max-width:220px;border:0;">{% else %}<span style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:#ffffff;letter-spacing:0.2px;">{{ brand_name }}</span>{% endif %}{% endblock %}
+                  {% block brand %}{% if brand.logo %}<img id="brand-logo" src="{{ brand.logo | raw }}" alt="{{ brand_name | raw }}" height="32" style="display:block;height:32px;max-height:32px;width:auto;max-width:220px;border:0;">{% else %}<span style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:#ffffff;letter-spacing:0.2px;">{{ brand_name | raw }}</span>{% endif %}{% endblock %}
                 </td>
                 <td align="right" valign="middle">
                   {% block brandmark %}<span style="display:inline-block;width:10px;height:10px;background-color:{{ brand_color }};border-radius:50%;font-size:0;line-height:0;">&nbsp;</span>{% endblock %}
@@ -74,7 +74,7 @@
         <!-- ─── Body content ─── -->
         <tr>
           <td id="card-body" class="card-pad" style="background-color:#ffffff;padding:40px 36px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:26px;color:#1e293b;" bgcolor="#ffffff">
-            {% block content %}{{ html }}{% endblock %}
+            {% block content %}{{ html | raw }}{% endblock %}
           </td>
         </tr>
 
@@ -82,7 +82,7 @@
         <tr>
           <td id="card-ftr" class="ftr-pad" style="background-color:#f4f7fa;border-top:1px solid #dde3ea;padding:18px 36px;" bgcolor="#f4f7fa">
             <p class="ftr-text" style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;line-height:20px;">
-              Sent by <strong style="color:#334155;">{% block brandname %}{{ brand_name }}{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if brand.footer %}<br><span id="brand-footer" style="display:block;margin-top:6px;">{{ brand.footer }}</span>{% endif %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
+              Sent by <strong style="color:#334155;">{% block brandname %}{{ brand_name | raw }}{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if brand.footer %}<br><span id="brand-footer" style="display:block;margin-top:6px;">{{ brand.footer | raw }}</span>{% endif %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
             </p>
           </td>
         </tr>
