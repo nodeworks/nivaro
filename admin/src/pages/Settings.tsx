@@ -50,10 +50,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { api, type CMSSettings, type Role } from '@/lib/api'
 import { ADMIN_LOCALES, useLocale } from '@/lib/i18n'
-import { TeamsBotCard } from '@/pages/settings/TeamsBotCard'
 import { applyThemeSettings, THEME_RADIUS_PRESETS } from '@/lib/theme-settings'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'
+import { TeamsBotCard } from '@/pages/settings/TeamsBotCard'
 
 const LANGUAGES = [
   { value: 'en-US', label: 'English (US)' },

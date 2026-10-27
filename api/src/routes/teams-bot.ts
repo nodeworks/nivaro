@@ -8,7 +8,7 @@ import { handleInvoke } from '../services/teams-bot/actions.js'
 import { messageText, type TeamsActivity } from '../services/teams-bot/activity.js'
 import { answerInTeams } from '../services/teams-bot/ask.js'
 import { type AdaptiveCard, resultCard } from '../services/teams-bot/cards.js'
-import { configuredAppId, getTeamsBotConfig } from '../services/teams-bot/config.js'
+import { configuredAppId, getTeamsBotConfig, teamsBotSetup } from '../services/teams-bot/config.js'
 import { connectCard } from '../services/teams-bot/connect-card.js'
 import { sendActivity } from '../services/teams-bot/connector.js'
 import { verifyConnectorToken } from '../services/teams-bot/jwt.js'
@@ -209,6 +209,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   app.get('/status', { preHandler: requireAdmin }, async (_req, reply) => {
     if (inCloud()) return reply.code(404).send({ error: 'Not found' })
     const cfg = await getTeamsBotConfig()
+    const setup = await teamsBotSetup()
     const links = (await db('nivaro_teams_links')
       .where({ status: 'active' })
       .count({ n: '*' })
@@ -224,11 +225,12 @@ export async function teamsBotRoutes(app: FastifyInstance) {
     return {
       enabled: cfg.enabled,
       reason: cfg.reason ?? null,
-      source: cfg.source,
-      app_type: cfg.appType,
-      app_id_set: !!cfg.appId,
-      secret_set: !!cfg.appSecret,
-      tenant_id: cfg.tenantId,
+      // What is saved, whether or not the switch is on. The secret itself is never returned.
+      source: setup?.source ?? null,
+      app_type: setup?.appType ?? cfg.appType,
+      app_id_set: !!setup?.appId,
+      secret_set: !!setup?.appSecret,
+      tenant_id: setup?.tenantId ?? '',
       linked: Number(links?.n ?? 0),
       sent_today: await readTeamsStat(app, 'sent'),
       failed_today: await readTeamsStat(app, 'failed'),

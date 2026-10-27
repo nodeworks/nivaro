@@ -36,12 +36,15 @@ export interface TeamsPackageInput {
   version?: string
 }
 
+// Teams wants plain x.y.z: a prerelease tag or '0.0.0-dev' is cut back to its numbers.
+const plainSemver = (v?: string) => /^\d+\.\d+\.\d+/.exec(v ?? '')?.[0] ?? '1.0.0'
+
 export function buildManifest(i: TeamsPackageInput): Record<string, unknown> {
   const domains = [...new Set([i.publicHost, ...(i.extraDomains ?? [])].filter(Boolean))]
   return {
     $schema: SCHEMA_URL,
     manifestVersion: MANIFEST_VERSION,
-    version: i.version ?? '1.0.0',
+    version: plainSemver(i.version),
     id: i.appId,
     developer: {
       name: i.name,

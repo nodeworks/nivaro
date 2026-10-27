@@ -35,7 +35,14 @@ vi.mock('../../../services/teams-bot/config.js', () => ({
     source: 'env',
     ...h.cfg
   }),
-  configuredAppId: async () => 'app'
+  configuredAppId: async () => 'app',
+  teamsBotSetup: async () => ({
+    appId: 'app',
+    appSecret: 'shh-secret',
+    tenantId: 't',
+    appType: 'SingleTenant',
+    source: 'settings'
+  })
 }))
 vi.mock('../../../services/app-links.js', () => ({ linkTo: async () => '' }))
 vi.mock('../../../services/notification-channels.js', () => ({ bustNotifyPrefsCache: () => {} }))
@@ -91,13 +98,31 @@ describe('teams admin routes', () => {
     const a = await app()
     const s = await a.inject({ method: 'GET', url: '/teams/status' })
     expect(s.statusCode).toBe(200)
-    expect(s.json()).toMatchObject({ enabled: true, app_type: 'MultiTenant', linked: 2 })
+    expect(s.json()).toMatchObject({ enabled: true, app_type: 'SingleTenant', linked: 2 })
     const p = await a.inject({ method: 'GET', url: '/teams/package' })
     expect(p.statusCode).toBe(200)
     expect(p.headers['content-type']).toBe('application/zip')
     expect(p.headers['content-disposition']).toBe('attachment; filename="nivaro-teams-staging.zip"')
     const t = await a.inject({ method: 'POST', url: '/teams/test' })
     expect(t.json()).toMatchObject({ outcome: 'sent' })
+  })
+
+  it('status shows what is saved while the switch is off, never the secret', async () => {
+    h.admin = true
+    h.cfg = { enabled: false, reason: 'disabled', appId: '', appSecret: '' }
+    const a = await app()
+    const s = await a.inject({ method: 'GET', url: '/teams/status' })
+    const body = s.json()
+    expect(body).toMatchObject({
+      enabled: false,
+      reason: 'disabled',
+      source: 'settings',
+      app_id_set: true,
+      secret_set: true,
+      tenant_id: 't'
+    })
+    expect(s.body).not.toContain('shh-secret')
+    h.cfg = {}
   })
 
   it('all three are 404 in cloud mode', async () => {

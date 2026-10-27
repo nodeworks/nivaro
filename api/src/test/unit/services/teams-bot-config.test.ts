@@ -15,7 +15,11 @@ vi.mock('../../../services/settings-overrides.js', () => ({
   overlaySettings: async (r: unknown) => r
 }))
 
-import { bustTeamsBotConfig, getTeamsBotConfig } from '../../../services/teams-bot/config.js'
+import {
+  bustTeamsBotConfig,
+  getTeamsBotConfig,
+  teamsBotSetup
+} from '../../../services/teams-bot/config.js'
 
 const KEYS = [
   'TEAMS_BOT',
@@ -200,12 +204,23 @@ describe('getTeamsBotConfig', () => {
     process.env.TEAMS_BOT_TENANT_ID = 'e'
     bustTeamsBotConfig()
     expect((await getTeamsBotConfig()).appType).toBe('MultiTenant')
+    // MICROSOFT_APP_TYPE belongs to the MICROSOFT_* family: beside TEAMS_BOT_* ids it is ignored
     process.env.MICROSOFT_APP_TYPE = 'singletenant'
     bustTeamsBotConfig()
-    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
-    process.env.TEAMS_BOT_APP_TYPE = 'MULTITENANT'
-    bustTeamsBotConfig()
     expect((await getTeamsBotConfig()).appType).toBe('MultiTenant')
+    process.env.TEAMS_BOT_APP_TYPE = 'SINGLETENANT'
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
+    delete process.env.TEAMS_BOT_APP_ID
+    delete process.env.TEAMS_BOT_APP_TYPE
+    process.env.MICROSOFT_APP_ID = 'ms'
+    process.env.MICROSOFT_APP_PASSWORD = 'ms'
+    process.env.MICROSOFT_APP_TENANT_ID = 'ms'
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
+    process.env.TEAMS_BOT_APP_TYPE = 'MultiTenant' // TEAMS_BOT_* type never rides a MICROSOFT_* id
+    bustTeamsBotConfig()
+    expect((await getTeamsBotConfig()).appType).toBe('SingleTenant')
   })
 
   it('sign-in app fallback is SingleTenant', async () => {
@@ -221,5 +236,17 @@ describe('getTeamsBotConfig', () => {
     const c = await getTeamsBotConfig()
     expect(c.enabled).toBe(false)
     expect(c.reason).toBe('not_configured')
+  })
+
+  it('teamsBotSetup reports what is saved while the switch is off', async () => {
+    state.row = { ...fullRow, teams_bot_enabled: false, teams_bot_app_type: 'SingleTenant' }
+    expect((await getTeamsBotConfig()).enabled).toBe(false)
+    expect(await teamsBotSetup()).toMatchObject({
+      appId: 'db-id',
+      appSecret: 'db-secret',
+      tenantId: 'db-tenant',
+      appType: 'SingleTenant',
+      source: 'settings'
+    })
   })
 })

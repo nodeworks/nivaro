@@ -50,6 +50,15 @@ describe('teams app manifest', () => {
     expect(m.webApplicationInfo).toBeUndefined()
   })
 
+  it('manifest version is plain x.y.z even for prerelease builds', () => {
+    const v = (version?: string) =>
+      (buildManifest({ ...input, version }) as { version: string }).version
+    expect(v('0.3.35-rc1')).toBe('0.3.35')
+    expect(v('0.0.0-dev')).toBe('0.0.0')
+    expect(v('dev')).toBe('1.0.0')
+    expect(v(undefined)).toBe('1.0.0')
+  })
+
   it('package zip contains manifest.json, color.png, outline.png', () => {
     const z = buildTeamsPackage(input)
     expect(zipNames(z).sort()).toEqual(['color.png', 'manifest.json', 'outline.png'])

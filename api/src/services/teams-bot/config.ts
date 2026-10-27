@@ -53,6 +53,73 @@ function signInApp(): { appId: string; appSecret: string; tenantId: string } | n
   }
 }
 
+type Picked = {
+  appId: string
+  appSecret: string
+  tenantId: string
+  appType: TeamsBotAppType
+  source: TeamsBotSource
+}
+
+async function readRow(): Promise<Record<string, unknown> | undefined> {
+  try {
+    return await overlaySettings(
+      (await db('nivaro_settings')
+        .select(
+          'teams_bot_enabled',
+          'teams_bot_app_id',
+          'teams_bot_app_secret',
+          'teams_bot_tenant_id',
+          'teams_bot_app_type'
+        )
+        .first()) as Record<string, unknown> | undefined
+    )
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The one source pick, independent of the enable switch: first source that supplies an app id
+ * wins and its secret, tenant and app type come with it (env TEAMS_BOT_* family, else the Bot
+ * Framework SDK's MICROSOFT_APP_* family, else settings, else the sign-in app). Families never
+ * mix: an id from one is never paired with a secret, tenant or type from another.
+ */
+function pickSource(row: Record<string, unknown> | undefined): Picked | null {
+  if (clean(process.env.TEAMS_BOT_APP_ID))
+    return {
+      appId: clean(process.env.TEAMS_BOT_APP_ID),
+      appSecret: clean(process.env.TEAMS_BOT_APP_SECRET),
+      tenantId: clean(process.env.TEAMS_BOT_TENANT_ID),
+      appType: parseAppType(process.env.TEAMS_BOT_APP_TYPE) ?? 'MultiTenant',
+      source: 'env'
+    }
+  if (clean(process.env.MICROSOFT_APP_ID))
+    return {
+      appId: clean(process.env.MICROSOFT_APP_ID),
+      appSecret: clean(process.env.MICROSOFT_APP_PASSWORD),
+      tenantId: clean(process.env.MICROSOFT_APP_TENANT_ID),
+      appType: parseAppType(process.env.MICROSOFT_APP_TYPE) ?? 'MultiTenant',
+      source: 'env'
+    }
+  if (clean(row?.teams_bot_app_id))
+    return {
+      appId: clean(row?.teams_bot_app_id),
+      appSecret: clean(row?.teams_bot_app_secret),
+      tenantId: clean(row?.teams_bot_tenant_id),
+      appType: parseAppType(row?.teams_bot_app_type) ?? 'MultiTenant',
+      source: 'settings'
+    }
+  const s = signInApp()
+  return s?.appId ? { ...s, appType: 'SingleTenant', source: 'sign_in_app' } : null
+}
+
+/** What is saved/supplied for the bot, whether or not it is switched on (admin status, package). */
+export async function teamsBotSetup(): Promise<Picked | null> {
+  if (process.env.CLOUD_META_DB_URL) return null
+  return pickSource(await readRow())
+}
+
 async function load(): Promise<TeamsBotConfig> {
   const none = {
     appId: '',
@@ -65,69 +132,11 @@ async function load(): Promise<TeamsBotConfig> {
   const flag = clean(process.env.TEAMS_BOT).toLowerCase()
   if (flag === 'off') return { ...none, enabled: false, reason: 'off' }
 
-  let row: Record<string, unknown> | undefined
-  try {
-    row = await overlaySettings(
-      (await db('nivaro_settings')
-        .select(
-          'teams_bot_enabled',
-          'teams_bot_app_id',
-          'teams_bot_app_secret',
-          'teams_bot_tenant_id',
-          'teams_bot_app_type'
-        )
-        .first()) as Record<string, unknown> | undefined
-    )
-  } catch {
-    row = undefined
-  }
-
+  const row = await readRow()
   const on = flag === 'on' || row?.teams_bot_enabled === true || row?.teams_bot_enabled === 1
   if (!on) return { ...none, enabled: false, reason: 'disabled' }
 
-  // First source that supplies an app id wins; its secret and tenant come with it.
-  let picked: {
-    appId: string
-    appSecret: string
-    tenantId: string
-    appType: TeamsBotAppType
-    source: TeamsBotSource
-  } | null = null
-  // Env: TEAMS_BOT_* first, else the Bot Framework SDK's own names. One family supplies the whole
-  // triple (an id from one family is never paired with a secret from the other).
-  const envAppType =
-    parseAppType(process.env.TEAMS_BOT_APP_TYPE) ??
-    parseAppType(process.env.MICROSOFT_APP_TYPE) ??
-    'MultiTenant'
-  if (clean(process.env.TEAMS_BOT_APP_ID)) {
-    picked = {
-      appId: clean(process.env.TEAMS_BOT_APP_ID),
-      appSecret: clean(process.env.TEAMS_BOT_APP_SECRET),
-      tenantId: clean(process.env.TEAMS_BOT_TENANT_ID),
-      appType: envAppType,
-      source: 'env'
-    }
-  } else if (clean(process.env.MICROSOFT_APP_ID)) {
-    picked = {
-      appId: clean(process.env.MICROSOFT_APP_ID),
-      appSecret: clean(process.env.MICROSOFT_APP_PASSWORD),
-      tenantId: clean(process.env.MICROSOFT_APP_TENANT_ID),
-      appType: envAppType,
-      source: 'env'
-    }
-  } else if (clean(row?.teams_bot_app_id)) {
-    picked = {
-      appId: clean(row?.teams_bot_app_id),
-      appSecret: clean(row?.teams_bot_app_secret),
-      tenantId: clean(row?.teams_bot_tenant_id),
-      appType: parseAppType(row?.teams_bot_app_type) ?? 'MultiTenant',
-      source: 'settings'
-    }
-  } else {
-    const s = signInApp()
-    if (s?.appId) picked = { ...s, appType: 'SingleTenant', source: 'sign_in_app' }
-  }
-
+  const picked = pickSource(row)
   // tenantId is required for both app types: it is the inbound tenant pin.
   if (!picked?.appId || !picked.appSecret || !picked.tenantId)
     return { ...none, enabled: false, reason: 'not_configured' }
@@ -151,23 +160,7 @@ export async function getTeamsBotConfig(): Promise<TeamsBotConfig> {
   return inflight
 }
 
-/**
- * The app id the package should carry: the same pick order as the config, but regardless of the
- * enable switch or a missing secret (an admin downloads the package while still setting up).
- */
+/** The app id the package should carry (an admin downloads it while still setting up). */
 export async function configuredAppId(): Promise<string> {
-  const env = clean(process.env.TEAMS_BOT_APP_ID) || clean(process.env.MICROSOFT_APP_ID)
-  if (env) return env
-  try {
-    const row = overlaySettings(
-      (await db('nivaro_settings').select('teams_bot_app_id').first()) as
-        | Record<string, unknown>
-        | undefined
-    )
-    const id = clean((await row)?.teams_bot_app_id)
-    if (id) return id
-  } catch {
-    // fall through
-  }
-  return signInApp()?.appId ?? ''
+  return (await teamsBotSetup())?.appId ?? ''
 }

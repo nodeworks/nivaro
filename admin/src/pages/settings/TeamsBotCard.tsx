@@ -139,7 +139,12 @@ export function TeamsBotCard() {
       a.click()
       URL.revokeObjectURL(url)
     },
-    onError: () => toast.error('Save the app (client) ID first, then download the package')
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { status?: number } })?.response?.status === 409
+          ? 'Save the app (client) ID first, then download the package'
+          : 'Could not build the Teams app package. Try again; the API log has the reason.'
+      )
   })
 
   // The endpoints answer 404 in cloud mode: the card is simply not offered there.
@@ -165,6 +170,11 @@ export function TeamsBotCard() {
 
       {status.isLoading || settings.isLoading ? (
         <Skeleton className='h-20 w-full' />
+      ) : status.isError ? (
+        <p className='text-[12px] text-red-600 dark:text-red-400' data-teams-bot-status-error>
+          Could not load the Teams bot status. Reload the page; if it keeps failing, check the API
+          log.
+        </p>
       ) : (
         st && (
           <div
