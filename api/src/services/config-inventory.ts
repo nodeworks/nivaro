@@ -402,6 +402,7 @@ const REDACTED: Record<string, string[]> = {
     'vapid_private_key',
     'sms_auth_token',
     'sms_account_sid',
+    'teams_bot_app_secret',
     // #2803 review — credentials the list had missed (stored in clear text, not enc:v1).
     'ai_gateway_client_secret',
     'storage_s3_access_key',

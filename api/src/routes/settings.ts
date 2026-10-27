@@ -33,7 +33,8 @@ const SECRET_KEYS = [
   'storage_s3_secret',
   'provision_secret',
   'teams_webhook_url',
-  'teams_test_webhook_url'
+  'teams_test_webhook_url',
+  'teams_bot_app_secret'
 ] as const
 
 function maskSettings(settings: Record<string, unknown>) {
@@ -152,6 +153,11 @@ const allowedSettingsKeys = [
   'push_test_allowlist',
   'teams_test_mode',
   'teams_test_webhook_url',
+  // Teams bot (migration 505); the secret is masked via SECRET_KEYS
+  'teams_bot_enabled',
+  'teams_bot_app_id',
+  'teams_bot_app_secret',
+  'teams_bot_tenant_id',
   // SMS
   'sms_provider',
   'sms_account_sid',
@@ -269,6 +275,11 @@ export async function settingsRoutes(app: FastifyInstance) {
 
   app.patch('/', { preHandler: requireAdmin }, async (req, reply) => {
     bustFormulaContextCache()
+    {
+      const { bustTeamsBotConfig } = await import('../services/teams-bot/config.js')
+      bustTeamsBotConfig()
+      reply.raw.once('finish', () => bustTeamsBotConfig())
+    }
     // Maintenance flag edits must apply immediately, not after the 15s cache.
     {
       const { bustMaintenanceCache } = await import('../services/security.js')

@@ -37,6 +37,7 @@ vi.mock('../../../middleware/authenticate.js', () => {
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/formula-context.js', () => ({ bustFormulaContextCache: vi.fn() }))
 vi.mock('../../../services/mail.js', () => ({ sendRawMail: vi.fn() }))
+vi.mock('../../../services/teams-bot/config.js', () => ({ bustTeamsBotConfig: vi.fn() }))
 vi.mock('../../../services/sms.js', () => ({ sendSms: vi.fn() }))
 vi.mock('../../../services/mail-branding.js', () => ({ bustMailBrandingCache: vi.fn() }))
 vi.mock('../../../services/session-replay-settings.js', () => ({
@@ -71,6 +72,8 @@ const ROW = {
   storage_s3_secret: 's3-secret',
   provision_secret: 'prov',
   teams_webhook_url: 'https://teams.example/hook',
+  teams_bot_app_secret: 'BOT-SECRET-VALUE',
+  teams_bot_app_id: 'bot-app-id',
   smtp_pass: 'pw',
   smtp_host: 'smtp.internal',
   ai_gateway_base_url: 'https://gateway.internal',
@@ -137,9 +140,12 @@ describe('GET /settings', () => {
       'storage_s3_secret',
       'provision_secret',
       'teams_webhook_url',
+      'teams_bot_app_secret',
       'smtp_pass'
     ])
       expect(data[k]).toBe('••••••')
+    expect(data.teams_bot_app_id).toBe('bot-app-id')
+    expect(res.body).not.toContain('BOT-SECRET-VALUE')
     expect(res.body).not.toContain('PRIVATE-SIGNING-KEY')
     await app.close()
   })
@@ -158,6 +164,23 @@ describe('PATCH /settings', () => {
     const update = sql.ran.find((q) => q.method === 'update')!
     expect(update.sql).toContain('[project_name]')
     expect(update.sql).not.toContain('[teams_webhook_url]')
+    await app.close()
+  })
+
+  it('keeps the Teams bot secret when its mask is sent back, saves the other bot columns', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { 'x-test-user': 'admin' },
+      payload: { teams_bot_app_secret: '••••••', teams_bot_app_id: 'new-id' }
+    })
+    expect(res.statusCode).toBe(200)
+    const update = sql.ran.find((q) => q.method === 'update')!
+    expect(update.sql).toContain('[teams_bot_app_id]')
+    expect(update.sql).not.toContain('[teams_bot_app_secret]')
+    const { bustTeamsBotConfig } = await import('../../../services/teams-bot/config.js')
+    expect(bustTeamsBotConfig).toHaveBeenCalled()
     await app.close()
   })
 
