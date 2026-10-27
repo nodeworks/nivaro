@@ -61,6 +61,26 @@ function serializeComponent(row: ComponentRow) {
 }
 
 /** Masked values in a PATCH mean "keep what's stored". */
+/** base_url and git_url must be http(s) URLs (or empty): the admin page
+ *  renders base_url as a link, and both are fetched by the probes
+ *  (security audit 2026-10-27). Returns the error message, or null. */
+export function urlFieldError(b: Record<string, unknown>): string | null {
+  for (const f of ['base_url', 'git_url'] as const) {
+    const v = b[f]
+    if (v === undefined || v === null || v === '') continue
+    if (typeof v !== 'string') return `${f} must be a URL`
+    try {
+      const u = new URL(v.trim())
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        return `${f} must start with http:// or https://`
+      }
+    } catch {
+      return `${f} must be a full URL starting with http:// or https://`
+    }
+  }
+  return null
+}
+
 function resolveSecret(incoming: unknown, stored: string | null): string | null {
   if (incoming === undefined) return stored
   if (incoming === null || incoming === '') return null
@@ -438,6 +458,8 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
     const env = await db('nivaro_environments').where('id', req.params.id).first()
     if (!env) return reply.code(404).send({ error: 'Environment not found' })
     const b = req.body as Record<string, unknown>
+    const badUrl = urlFieldError(b)
+    if (badUrl) return reply.code(400).send({ error: badUrl })
     const name = String(b.name ?? '').trim()
     if (!name) return reply.code(400).send({ error: 'name is required' })
     const [inserted] = await db('nivaro_environment_components')
@@ -477,6 +499,8 @@ export async function environmentRoutes(app: FastifyInstance): Promise<void> {
     const row = await loadComponent(req.params.cid)
     if (!row) return reply.code(404).send({ error: 'Not found' })
     const b = req.body as Record<string, unknown>
+    const badUrl = urlFieldError(b)
+    if (badUrl) return reply.code(400).send({ error: badUrl })
     const patch: Record<string, unknown> = { updated_at: new Date() }
     for (const f of COMPONENT_FIELDS) {
       if (b[f] !== undefined) patch[f] = b[f] === '' ? null : b[f]

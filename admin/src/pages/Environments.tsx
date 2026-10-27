@@ -75,6 +75,12 @@ const COLOR_DOT: Record<string, string> = {
 const KIND_ICON = { api: Server, frontend: AppWindow, service: Boxes } as const
 const KIND_LABEL = { api: 'API', frontend: 'Frontend', service: 'Service' } as const
 
+/** Only http(s) URLs become links — a stored `javascript:` base URL or a
+ *  provider-supplied web_url must never run on click (security audit 2026-10-27). */
+function httpHref(url: string | null | undefined): string | undefined {
+  return url && /^https?:\/\//i.test(url.trim()) ? url : undefined
+}
+
 function fmtDuration(sec: number | null | undefined): string {
   if (sec == null) return ''
   if (sec < 60) return `${sec}s`
@@ -610,7 +616,7 @@ function ComponentCard({ component, onChanged }: { component: Component; onChang
         </span>
         {component.base_url && (
           <a
-            href={component.base_url}
+            href={httpHref(component.base_url)}
             target='_blank'
             rel='noreferrer'
             className='truncate font-mono text-[11px] text-slate-400 transition-colors hover:text-nvr-cyan'
@@ -876,7 +882,7 @@ function CiPanel({ component }: { component: Component }) {
               </span>
               {d.web_url && (
                 <a
-                  href={d.web_url}
+                  href={httpHref(d.web_url)}
                   target='_blank'
                   rel='noreferrer'
                   className='shrink-0 text-slate-400 hover:text-nvr-cyan'
@@ -943,7 +949,7 @@ function PipelineRow({
         </span>
         {p.web_url && (
           <a
-            href={p.web_url}
+            href={httpHref(p.web_url)}
             target='_blank'
             rel='noreferrer'
             onClick={(e) => e.stopPropagation()}
@@ -1022,7 +1028,7 @@ function JobList({
           {s.jobs.map((j) => (
             <a
               key={j.id}
-              href={j.web_url ?? '#'}
+              href={httpHref(j.web_url) ?? '#'}
               target='_blank'
               rel='noreferrer'
               data-tip={j.failure_reason ?? undefined}
