@@ -24,6 +24,7 @@ describe('postLoginTarget', () => {
       '/collections/projects/12?tab=a#x'
     )
     expect(postLoginTarget('/graphql')).toBe('/graphql') // the GraphiQL page is an SPA route
+    expect(postLoginTarget('/files')).toBe('/files') // the Files page (the server's /files is POST-only)
     expect(postLoginTarget(null)).toBe('/')
   })
 
@@ -61,6 +62,8 @@ describe('postLoginTarget', () => {
       '/API/users/me/token',
       '/api/message-actions/other',
       '/api/message-actions/callbackx',
+      '/items/workflows/1',
+      '/ITEMS/workflows',
       '/oauth/token',
       '/.well-known/oauth-authorization-server',
       '/share/abc',

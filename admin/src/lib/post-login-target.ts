@@ -9,8 +9,20 @@
 
 export const POST_LOGIN_KEY = 'nivaro_post_login_redirect'
 
-/** Root-level paths the API server answers itself (not the SPA). */
-const SERVER_PREFIXES = ['api', 'oauth', '.well-known', 'share', 'form', 'status', 'socket.io']
+/** Root-level paths the API server answers on GET (not the SPA): the /api tree, the
+ *  public pages (oauth, share, form, status), sockets, and legacy-compat's /items/*
+ *  alias. legacy-compat's /files and /graphql are POST-only, so a GET there is the
+ *  admin's own Files and GraphiQL pages. */
+const SERVER_PREFIXES = [
+  'api',
+  'oauth',
+  '.well-known',
+  'share',
+  'form',
+  'status',
+  'socket.io',
+  'items'
+]
 
 /** The server pages a sign-in may return to. */
 const SERVER_RETURN_PATHS = [
