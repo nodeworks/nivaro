@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
 import { ReplayPlayer } from '@/components/replay-player'
 import { ChapterCountChip } from '@/components/replay-player/ChapterList'
+import type { ReplayControls } from '@/components/replay-player/controls'
 import {
   closeFloatingReplay,
   floatReplay,
@@ -20,6 +21,7 @@ import {
   writeRecordingSort
 } from '@/components/replay-player/ListStats'
 import { RecordingExport } from '@/components/replay-player/RecordingExport'
+import { ShareRecordingLink } from '@/components/replay-player/ShareRecordingLink'
 import { setWatchSession, WATCH_KEY_RE } from '@/components/replay-player/watch-together'
 import { ScrollTabStrip } from '@/components/tab-strip'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -282,6 +284,8 @@ function SessionReplaysAdmin() {
   const queryClient = useQueryClient()
   const [playing, setPlaying] = useState<Recording | null>(null)
   const [startAt, setStartAt] = useState<number | null>(null)
+  // The open player's playhead, for Share's "Copy link at m:ss".
+  const playerControls = useRef<ReplayControls | null>(null)
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   // ?recording=<id> deep link — the chat online list links straight to
   // someone's live session, which is worthless if it only opens the list.
@@ -930,7 +934,12 @@ function SessionReplaysAdmin() {
               <span className='text-[12px] font-normal text-slate-400'>
                 {playing && formatRelative(playing.started_at)}
               </span>
-              {playing && <RecordingExport recordingId={playing.id} className='ml-auto mr-8' />}
+              {playing && (
+                <span className='ml-auto mr-8 flex items-center gap-2'>
+                  <ShareRecordingLink recordingId={playing.id} controlsRef={playerControls} />
+                  <RecordingExport recordingId={playing.id} />
+                </span>
+              )}
             </SheetTitle>
           </SheetHeader>
           {playing && (
@@ -938,6 +947,7 @@ function SessionReplaysAdmin() {
               recordingId={playing.id}
               startAt={startAt}
               live={isLive(playing)}
+              controlsRef={playerControls}
               onFloat={(at) => {
                 floatReplay({
                   recording: playing,
