@@ -30,13 +30,7 @@ import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
-import {
-  ColResizeHandle,
-  fitWidth,
-  ResetColumnsButton,
-  textWidth,
-  useColumnWidths
-} from './catalog-columns'
+import { ColResizeHandle, fitWidth, ResetColumnsButton, useColumnWidths } from './catalog-columns'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import {
@@ -2218,7 +2212,6 @@ export function CatalogPickerField({
                 addQty={(id, total, row) => commitQty(id, String(total), row)}
                 qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
                 readOnly={readOnly}
-                colStoreKey={colStoreBase && `${colStoreBase}:builder:${b.label}`}
               />
             ))}
         </>
@@ -2636,8 +2629,7 @@ function BuilderCard({
   currentQty,
   addQty,
   qtyStep,
-  readOnly,
-  colStoreKey
+  readOnly
 }: {
   builder: CatalogBuilderConfig
   defaultItemField: string
@@ -2649,13 +2641,10 @@ function BuilderCard({
   addQty: (catalogId: string, qty: number, catalogRow: Record<string, unknown>) => Promise<void>
   qtyStep: number | 'any'
   readOnly?: boolean
-  /** Where this builder's dropdown widths are remembered (catalog-columns.tsx). */
-  colStoreKey: string | null
 }) {
   const client = useNivaroClient()
   const itemField = builder.item_field ?? defaultItemField
   const [expanded, setExpanded] = useState(false)
-  const cols = useColumnWidths(colStoreKey)
   const [sel, setSel] = useState<Record<string, string>>({})
   const [qty, setQty] = useState('1')
   const [adding, setAdding] = useState(false)
@@ -2784,7 +2773,7 @@ function BuilderCard({
               <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
             </div>
           ) : (
-            <div className='flex flex-wrap items-end gap-4'>
+            <div className='flex flex-wrap items-end gap-3'>
               {builder.attributes.map((a, i) => {
                 const opts = new Map<string, string>()
                 for (const row of matchingRows(i)) {
@@ -2797,19 +2786,6 @@ function BuilderCard({
                 return (
                   <AttrSelect
                     key={a.field}
-                    width={cols.widths[a.field]}
-                    onResize={(px) => cols.setWidth(a.field, px, 96)}
-                    onFit={(font) =>
-                      cols.setWidth(
-                        a.field,
-                        // the longest choice + the box's padding, chevron and gap
-                        textWidth(
-                          [titleCase(a.field), 'Select…', ...sorted.map(([, l]) => l)],
-                          font
-                        ) + 44,
-                        96
-                      )
-                    }
                     label={titleCase(a.field)}
                     value={sel[a.field] ?? null}
                     valueLabel={sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null}
@@ -2830,11 +2806,6 @@ function BuilderCard({
                   />
                 )
               })}
-              <ResetColumnsButton
-                show={cols.customized}
-                onReset={cols.reset}
-                className='mb-[5px]'
-              />
               <div className='flex min-h-[28px] flex-1 items-center gap-2'>
                 {resolvedItemId && resolvedCatalogRow ? (
                   <>
@@ -2919,10 +2890,7 @@ function AttrSelect({
   valueLabel,
   options,
   disabled,
-  onChange,
-  width,
-  onResize,
-  onFit
+  onChange
 }: {
   label: string
   value: string | null
@@ -2930,11 +2898,6 @@ function AttrSelect({
   options: Array<[string, string]>
   disabled?: boolean
   onChange: (id: string | null) => void
-  /** The person's width for this dropdown (px); unset = the default. */
-  width?: number
-  onResize?: (px: number) => void
-  /** Fit to the longest choice, measured in the box's own font. */
-  onFit?: (font: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -2947,41 +2910,21 @@ function AttrSelect({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
   return (
-    <div ref={rootRef} className='relative' style={width != null ? { width } : undefined}>
+    <div ref={rootRef} className='relative'>
       <p className='mb-1 text-[10px] font-medium text-slate-500 dark:text-slate-400'>{label}</p>
       <button
         type='button'
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className={cn(
-          'flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-background dark:text-slate-200',
-          width != null ? 'w-full' : 'w-44'
-        )}
+        className='flex w-44 items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-background dark:text-slate-200'
       >
         <span className={cn('truncate', !valueLabel && 'text-slate-400')}>
           {valueLabel ?? 'Select…'}
         </span>
         <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
       </button>
-      {onResize && onFit && (
-        <ColResizeHandle
-          label={label}
-          min={96}
-          onResize={onResize}
-          onFit={() => {
-            const box = rootRef.current?.querySelector('button')
-            const cs = box ? getComputedStyle(box) : null
-            onFit(cs ? `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}` : '12px sans-serif')
-          }}
-        />
-      )}
       {open && (
-        <div
-          className={cn(
-            'absolute z-50 mt-1 max-h-52 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-md',
-            width != null ? 'w-full min-w-44' : 'w-44'
-          )}
-        >
+        <div className='absolute z-50 mt-1 max-h-52 w-44 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-md'>
           {value && (
             <button
               type='button'

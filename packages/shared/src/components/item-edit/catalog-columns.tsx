@@ -133,16 +133,6 @@ export function fitWidth(root: HTMLElement | null, col: string): number | null {
   return max > 0 ? clamp(max + 6) : null
 }
 
-let measureCanvas: HTMLCanvasElement | null = null
-/** Pixel width of the longest text in `font` (for dropdowns, whose options are not on screen). */
-export function textWidth(texts: string[], font: string): number {
-  measureCanvas ??= document.createElement('canvas')
-  const ctx = measureCanvas.getContext('2d')
-  if (!ctx) return 0
-  ctx.font = font
-  return Math.max(0, ...texts.map((t) => ctx.measureText(t).width))
-}
-
 /**
  * The drag handle on a header cell's right edge (the cell must be `relative`).
  * Drag to resize, double-click to fit, or focus it and use ← / → (Shift for
