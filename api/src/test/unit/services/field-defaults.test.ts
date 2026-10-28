@@ -76,12 +76,15 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 
 import { logActivity } from '../../../services/activity.js'
 import {
+  allowedFieldsByCollection,
+  allowedForPerson,
   contextKey,
   deleteDefault,
   FieldDefaultRefusal,
   fieldAllowedOnSomeLayout,
   listDefaults,
-  saveDefault
+  saveDefault,
+  withFormState
 } from '../../../services/field-defaults.js'
 import { readOne } from '../../../services/items.js'
 import { can, getAllowedFields, isAdminRole } from '../../../services/permissions.js'
@@ -501,6 +504,73 @@ describe('fieldAllowedOnSomeLayout', () => {
   it('ignores file / table layouts', async () => {
     tables.nivaro_collection_layouts[0].layout_type = 'file'
     expect(await fieldAllowedOnSomeLayout(BOB, 'orders', 'ship_to')).toBe(false)
+  })
+})
+
+describe('allowedFieldsByCollection', () => {
+  it('lists every toggled field per collection the person can be given', async () => {
+    const map = await allowedFieldsByCollection(BOB)
+    expect([...(map.get('orders') ?? [])].sort()).toEqual(['notes', 'ship_to'])
+  })
+
+  it("lets a child layout's own placement beat its parent's", async () => {
+    tables.nivaro_collection_layouts[0].conditions = JSON.stringify({ role_ids: ['role-x'] })
+    tables.nivaro_collection_layouts.push({
+      id: 11,
+      collection: 'orders',
+      layout_type: 'grouped',
+      conditions: null,
+      parent_layout_id: 10
+    })
+    tables.nivaro_layout_field_assignments.push({
+      layout_id: 11,
+      field: 'notes',
+      overrides: JSON.stringify({ personal_default: false })
+    })
+    const map = await allowedFieldsByCollection(BOB)
+    expect([...(map.get('orders') ?? [])]).toEqual(['ship_to'])
+  })
+
+  it('narrows to the collections and fields asked for', async () => {
+    const map = await allowedFieldsByCollection(BOB, ['orders'], ['notes'])
+    expect([...(map.get('orders') ?? [])]).toEqual(['notes'])
+  })
+})
+
+describe('withFormState', () => {
+  it('marks a default whose field no form allows any more', async () => {
+    const rows = [
+      { id: 1, collection: 'orders', field: 'ship_to', value: 7, context: {} },
+      { id: 2, collection: 'orders', field: 'gone', value: 'x', context: {} },
+      { id: 3, collection: 'invoices', field: 'ship_to', value: 1, context: {} }
+    ].map((r) => ({ ...r, updated_at: '', updated_by: null }))
+    const out = await withFormState(BOB, rows)
+    expect(out.map((r) => [r.id, r.on_layout])).toEqual([
+      [1, true],
+      [2, false],
+      [3, false]
+    ])
+  })
+
+  it('reads nothing for an empty list', async () => {
+    expect(await withFormState(BOB, [])).toEqual([])
+  })
+})
+
+describe('allowedForPerson', () => {
+  it('names each collection with the fields the person may set, judged as them', async () => {
+    tables.nivaro_collections = [{ collection: 'orders', display_name: 'Orders' }]
+    expect(await allowedForPerson(BOB)).toEqual([
+      { collection: 'orders', label: 'Orders', fields: ['notes', 'ship_to'] }
+    ])
+    expect(vi.mocked(can)).toHaveBeenCalledWith(BOB, 'create', 'orders')
+  })
+
+  it('leaves out fields outside the create field list and collections they cannot create in', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['ship_to'])
+    expect((await allowedForPerson(BOB))[0]?.fields).toEqual(['ship_to'])
+    vi.mocked(can).mockResolvedValue(false)
+    expect(await allowedForPerson(BOB)).toEqual([])
   })
 })
 

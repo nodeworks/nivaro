@@ -1,22 +1,28 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
+  allowedForPerson,
   deleteDefault,
   type FieldDefaultInput,
   FieldDefaultRefusal,
   listDefaults,
-  saveDefault
+  saveDefault,
+  withFormState
 } from '../services/field-defaults.js'
 import { getUser } from '../services/users.js'
+import type { User } from '../types.js'
 
 /**
  * Personal field defaults (spec 2026-10-28-personal-field-defaults-design).
  *
- * GET    /field-defaults/mine?collection=      the caller's own defaults
+ * GET    /field-defaults/mine?collection=      the caller's own defaults (?on_layout=1 adds
+ *                                              on_layout: some form they get still allows it)
+ * GET    /field-defaults/mine/allowed          [{collection, label, fields}] they may keep one for
  * PUT    /field-defaults/mine                  { collection, field, value, context } upsert
  * DELETE /field-defaults/mine/:id
  * Admin (validated AS the person, logged as the admin):
- * GET    /field-defaults/users/:userId?collection=
+ * GET    /field-defaults/users/:userId?collection=   (?on_layout=1 as above)
+ * GET    /field-defaults/users/:userId/allowed
  * PUT    /field-defaults/users/:userId
  * DELETE /field-defaults/users/:userId/:id
  */
@@ -40,6 +46,17 @@ function collectionQuery(q: unknown): string | undefined {
   return typeof c === 'string' && c.trim() ? c.trim() : undefined
 }
 
+function wantsFormState(q: unknown): boolean {
+  const v = (q as { on_layout?: unknown } | undefined)?.on_layout
+  return v === '1' || v === 'true'
+}
+
+/** The list as answered: on_layout added only when asked (the form's read skips that cost). */
+async function listFor(user: User, query: unknown) {
+  const rows = await listDefaults(user.id, collectionQuery(query))
+  return wantsFormState(query) ? withFormState(user, rows) : rows
+}
+
 function refuse(reply: FastifyReply, err: unknown) {
   if (err instanceof FieldDefaultRefusal)
     return reply.code(err.status).send({ error: err.message, code: err.code })
@@ -48,7 +65,11 @@ function refuse(reply: FastifyReply, err: unknown) {
 
 export async function fieldDefaultsRoutes(app: FastifyInstance) {
   app.get('/mine', { preHandler: requireAuth }, async (req, reply) => {
-    return reply.send({ data: await listDefaults(req.user!.id, collectionQuery(req.query)) })
+    return reply.send({ data: await listFor(req.user!, req.query) })
+  })
+
+  app.get('/mine/allowed', { preHandler: requireAuth }, async (req, reply) => {
+    return reply.send({ data: await allowedForPerson(req.user!) })
   })
 
   app.put('/mine', { preHandler: requireAuth }, async (req, reply) => {
@@ -74,7 +95,13 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
   app.get('/users/:userId', { preHandler: requireAdmin }, async (req, reply) => {
     const target = await getUser((req.params as { userId: string }).userId)
     if (!target) return reply.code(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
-    return reply.send({ data: await listDefaults(target.id, collectionQuery(req.query)) })
+    return reply.send({ data: await listFor(target, req.query) })
+  })
+
+  app.get('/users/:userId/allowed', { preHandler: requireAdmin }, async (req, reply) => {
+    const target = await getUser((req.params as { userId: string }).userId)
+    if (!target) return reply.code(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
+    return reply.send({ data: await allowedForPerson(target) })
   })
 
   app.put('/users/:userId', { preHandler: requireAdmin }, async (req, reply) => {

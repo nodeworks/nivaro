@@ -49,7 +49,13 @@ vi.mock('../../../services/field-defaults.js', async () => {
       updated_at: '2026-10-28T00:00:00.000Z',
       updated_by: null
     })),
-    deleteDefault: vi.fn(async () => true)
+    deleteDefault: vi.fn(async () => true),
+    withFormState: vi.fn(async (_u: unknown, rows: unknown[]) =>
+      rows.map((r) => ({ ...(r as object), on_layout: true }))
+    ),
+    allowedForPerson: vi.fn(async () => [
+      { collection: 'orders', label: 'Orders', fields: ['ship_to'] }
+    ])
   }
 })
 
@@ -62,10 +68,12 @@ vi.mock('../../../services/users.js', () => ({
 
 import { fieldDefaultsRoutes } from '../../../routes/field-defaults.js'
 import {
+  allowedForPerson,
   deleteDefault,
   FieldDefaultRefusal,
   listDefaults,
-  saveDefault
+  saveDefault,
+  withFormState
 } from '../../../services/field-defaults.js'
 
 async function buildApp() {
@@ -89,6 +97,38 @@ describe('/field-defaults/mine', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ data: [] })
     expect(listDefaults).toHaveBeenCalledWith('bob', 'orders')
+  })
+
+  it('adds on_layout only when asked (?on_layout=1), judged as the caller', async () => {
+    vi.mocked(listDefaults).mockResolvedValue([{ id: 3 } as never])
+    const app = await buildApp()
+    const plain = await app.inject({
+      method: 'GET',
+      url: '/field-defaults/mine',
+      headers: { 'x-test-user': 'bob' }
+    })
+    expect(plain.json()).toEqual({ data: [{ id: 3 }] })
+    expect(withFormState).not.toHaveBeenCalled()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/field-defaults/mine?on_layout=1',
+      headers: { 'x-test-user': 'bob' }
+    })
+    expect(res.json()).toEqual({ data: [{ id: 3, on_layout: true }] })
+    expect((vi.mocked(withFormState).mock.calls[0][0] as { id: string }).id).toBe('bob')
+    vi.mocked(listDefaults).mockResolvedValue([])
+  })
+
+  it('lists the fields the caller may keep a default for', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/field-defaults/mine/allowed',
+      headers: { 'x-test-user': 'bob' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data[0].fields).toEqual(['ship_to'])
+    expect((vi.mocked(allowedForPerson).mock.calls[0][0] as { id: string }).id).toBe('bob')
   })
 
   it('saves as the caller, for the caller', async () => {
@@ -160,7 +200,8 @@ describe('/field-defaults/users/:userId (admin)', () => {
     for (const [method, url] of [
       ['GET', `/field-defaults/users/${TARGET}`],
       ['PUT', `/field-defaults/users/${TARGET}`],
-      ['DELETE', `/field-defaults/users/${TARGET}/5`]
+      ['DELETE', `/field-defaults/users/${TARGET}/5`],
+      ['GET', `/field-defaults/users/${TARGET}/allowed`]
     ] as const) {
       const res = await app.inject({
         method,
@@ -187,6 +228,24 @@ describe('/field-defaults/users/:userId (admin)', () => {
     const [target, actor] = vi.mocked(saveDefault).mock.calls[0]
     expect((target as { id: string }).id).toBe(TARGET)
     expect((actor as { id: string }).id).toBe('admin')
+  })
+
+  it("answers the target's allowed fields and form state, judged as the target", async () => {
+    const app = await buildApp()
+    const allowed = await app.inject({
+      method: 'GET',
+      url: `/field-defaults/users/${TARGET}/allowed`,
+      headers: { 'x-test-user': 'admin' }
+    })
+    expect(allowed.statusCode).toBe(200)
+    expect((vi.mocked(allowedForPerson).mock.calls[0][0] as { id: string }).id).toBe(TARGET)
+    const list = await app.inject({
+      method: 'GET',
+      url: `/field-defaults/users/${TARGET}?on_layout=1`,
+      headers: { 'x-test-user': 'admin' }
+    })
+    expect(list.statusCode).toBe(200)
+    expect((vi.mocked(withFormState).mock.calls[0][0] as { id: string }).id).toBe(TARGET)
   })
 
   it('404s an unknown person', async () => {

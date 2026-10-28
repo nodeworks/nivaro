@@ -19,6 +19,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { selectInChunks } from './db-batch.js'
 import { readOne } from './items.js'
 import { roleAllows } from './layout-patch.js'
 import { todayInInstance, windowOpen } from './layout-resolve-rules.js'
@@ -145,31 +146,48 @@ export async function listDefaults(userId: string, collection?: string): Promise
 
 // ── Layout toggle ────────────────────────────────────────────────────────────
 
+type LayoutRow = {
+  id: unknown
+  collection: unknown
+  layout_type: unknown
+  conditions: unknown
+  parent_layout_id: unknown
+}
+
 /**
- * True when some record form of the collection this person can be given turns the
- * field's personal_default toggle on. Candidates = the grouped layouts the resolver
- * would consider for them (role-allowed and inside their active dates — record-rule,
- * A/B and phone versions included, since each can be served); a child layout's own
- * placement wins, else its parent's (layout inheritance, #424).
+ * The fields, per collection, that some record form this person can be given turns the
+ * personal_default toggle on for. Candidates = the grouped layouts the resolver would
+ * consider for them (role-allowed and inside their active dates — record-rule, A/B and
+ * phone versions included, since each can be served); a child layout's own placement wins,
+ * else its parent's (layout inheritance, #424). `collections` / `fields` narrow the read.
+ * Two reads whatever the size: the layouts, then their placements.
  */
-export async function fieldAllowedOnSomeLayout(
+export async function allowedFieldsByCollection(
   user: User,
-  collection: string,
-  field: string
-): Promise<boolean> {
+  collections?: string[],
+  fields?: string[]
+): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>()
+  if (collections?.length === 0 || fields?.length === 0) return out
   const isAdmin = await isAdminRole(user)
   const today = todayInInstance()
+  let lq = db('nivaro_collection_layouts')
+  if (collections) lq = lq.whereIn('collection', collections)
   const layouts = (
-    (await db('nivaro_collection_layouts')
-      .where({ collection })
-      .select('id', 'layout_type', 'conditions', 'parent_layout_id')) as Record<string, unknown>[]
+    (await lq.select(
+      'id',
+      'collection',
+      'layout_type',
+      'conditions',
+      'parent_layout_id'
+    )) as LayoutRow[]
   ).filter(
     (l) =>
       (l.layout_type == null || l.layout_type === 'grouped') &&
-      roleAllows(l, user.role, isAdmin) &&
+      roleAllows(l as Record<string, unknown>, user.role, isAdmin) &&
       windowOpen(l.conditions, today)
   )
-  if (layouts.length === 0) return false
+  if (layouts.length === 0) return out
   const ids = [
     ...new Set(
       layouts.flatMap((l) => [
@@ -178,18 +196,100 @@ export async function fieldAllowedOnSomeLayout(
       ])
     )
   ]
-  const placements = (await db('nivaro_layout_field_assignments')
-    .whereIn('layout_id', ids)
-    .where({ field })
-    .select('layout_id', 'overrides')) as Array<{ layout_id: unknown; overrides: unknown }>
-  const byLayout = new Map(placements.map((p) => [Number(p.layout_id), p]))
-  return layouts.some((l) => {
-    const p =
-      byLayout.get(Number(l.id)) ??
-      (l.parent_layout_id ? byLayout.get(Number(l.parent_layout_id)) : undefined)
-    const o = parseJson(p?.overrides) as { personal_default?: unknown } | null
-    return o?.personal_default === true
+  // Layouts are configuration (hundreds at most), but chunk anyway: the parameter cap is hard.
+  const placements = await selectInChunks(ids, 1000, async (chunk) => {
+    let pq = db('nivaro_layout_field_assignments').whereIn('layout_id', chunk)
+    if (fields) pq = pq.whereIn('field', fields)
+    return (await pq.select('layout_id', 'field', 'overrides')) as Array<{
+      layout_id: unknown
+      field: unknown
+      overrides: unknown
+    }>
   })
+  const own = new Map<number, Map<string, boolean>>()
+  for (const p of placements) {
+    const o = parseJson(p.overrides) as { personal_default?: unknown } | null
+    const byField = own.get(Number(p.layout_id)) ?? new Map<string, boolean>()
+    byField.set(String(p.field), o?.personal_default === true)
+    own.set(Number(p.layout_id), byField)
+  }
+  for (const l of layouts) {
+    const mine = own.get(Number(l.id))
+    const parent = l.parent_layout_id ? own.get(Number(l.parent_layout_id)) : undefined
+    const names = new Set([...(mine?.keys() ?? []), ...(parent?.keys() ?? [])])
+    for (const f of names) {
+      const on = mine?.has(f) ? mine.get(f) : parent?.get(f)
+      if (!on) continue
+      const c = String(l.collection)
+      const set = out.get(c) ?? new Set<string>()
+      set.add(f)
+      out.set(c, set)
+    }
+  }
+  return out
+}
+
+/** True when some record form of the collection this person can be given turns the
+ *  field's personal_default toggle on (allowedFieldsByCollection for one field). */
+export async function fieldAllowedOnSomeLayout(
+  user: User,
+  collection: string,
+  field: string
+): Promise<boolean> {
+  const map = await allowedFieldsByCollection(user, [collection], [field])
+  return map.get(collection)?.has(field) ?? false
+}
+
+/**
+ * The person's defaults with `on_layout`: false when no form they can be given allows a
+ * personal default for that field any more (the form ignores such a row; My defaults lists
+ * it as "No longer on any form" with Clear — spec call 10).
+ */
+export async function withFormState(
+  user: User,
+  rows: FieldDefault[]
+): Promise<Array<FieldDefault & { on_layout: boolean }>> {
+  if (rows.length === 0) return []
+  const map = await allowedFieldsByCollection(
+    user,
+    [...new Set(rows.map((r) => r.collection))],
+    [...new Set(rows.map((r) => r.field))]
+  )
+  return rows.map((r) => ({ ...r, on_layout: map.get(r.collection)?.has(r.field) ?? false }))
+}
+
+export type AllowedCollection = { collection: string; label: string | null; fields: string[] }
+
+/**
+ * Where this person could keep a default (an administrator's "Add default"): per collection,
+ * the toggled fields they may also set — create + read permission and the create field list,
+ * judged as them, the same checks saveDefault runs. System collections never appear.
+ */
+export async function allowedForPerson(user: User): Promise<AllowedCollection[]> {
+  const map = await allowedFieldsByCollection(user)
+  const out: AllowedCollection[] = []
+  for (const [collection, set] of map) {
+    if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection)) continue
+    if (!(await can(user, 'create', collection)) || !(await can(user, 'read', collection))) continue
+    const allowed = await getAllowedFields(user, 'create', collection)
+    const fields = [...set]
+      .filter((f) => allowed === null || allowed.includes('*') || allowed.includes(f))
+      .sort()
+    if (fields.length) out.push({ collection, label: null, fields })
+  }
+  if (out.length === 0) return out
+  const names = (await db('nivaro_collections')
+    .whereIn(
+      'collection',
+      out.map((c) => c.collection)
+    )
+    .select('collection', 'display_name')) as Array<{ collection: string; display_name: unknown }>
+  const label = new Map(names.map((n) => [n.collection, n.display_name]))
+  for (const c of out) {
+    const l = label.get(c.collection)
+    c.label = typeof l === 'string' && l.trim() ? l : null
+  }
+  return out.sort((a, b) => (a.label ?? a.collection).localeCompare(b.label ?? b.collection))
 }
 
 // ── Value check ──────────────────────────────────────────────────────────────
