@@ -506,6 +506,7 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
+export { SearchHighlight } from './components/SearchHighlight'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
 export {
@@ -887,6 +888,20 @@ export {
 } from './lib/safe-error'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/search-log'
+export {
+  expandTokens,
+  foldSearchText,
+  type HighlightPart,
+  highlightParts,
+  matchesSearch,
+  SEARCH_RANK_MAX_WORDS,
+  type SearchTextOptions,
+  type SynonymGroups,
+  searchRankPhrase,
+  searchRankTier,
+  searchRankWords,
+  tokenize
+} from './lib/search-text'
 export {
   type ClockSample,
   measureClockOffset,

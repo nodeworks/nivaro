@@ -92,6 +92,8 @@ export type {
 // Presence, do not disturb and cross-tab sync (a host mounts useUserSync once in its shell)
 // Browser chaos mode (#2840), the personal chaos toolbar (#2856) and "Pretend down" (#2858).
 // A host calls installClientChaosFetch() first thing at boot and mounts <ClientChaosToolbar>.
+// Search text vocabulary (2026-10-28 search program #22): one tokenizer / matcher /
+// highlighter for pickers, palettes and search pages.
 export {
   ACTIVE_GAMEDAYS_KEY,
   ACTIVE_USER_OPTION_FILTER,
@@ -242,6 +244,7 @@ export {
   evaluateBoolean,
   evaluateExpression,
   evaluateNumeric,
+  expandTokens,
   extractExpressionTokens,
   extSlotKey,
   FieldRenderer,
@@ -261,6 +264,7 @@ export {
   fiscalQuarterOf,
   fiscalYearOf,
   focusRecordTarget,
+  foldSearchText,
   forgetSettledReads,
   formatDate,
   formatDateTime,
@@ -294,12 +298,14 @@ export {
   HelpVideoRecordingProvider,
   HelpVideoSheet,
   HelpVideoWalkHost,
+  type HighlightPart,
   HouseStyleButton,
   HScrollProxy,
   HuddleCallLayer,
   hasUnsavedWork,
   helpVideoApi,
   helpVideoKeys,
+  highlightParts,
   holdNotification,
   huddleCallLayerMounted,
   huddleHolds,
@@ -386,6 +392,7 @@ export {
   type MetadataQueryClient,
   MyWorkView,
   maskInputsIn,
+  matchesSearch,
   matchScopeDimension,
   measureClockOffset,
   NavigationContext,
@@ -547,6 +554,8 @@ export {
   rumRouteChange,
   rumWidget,
   runNotificationTarget,
+  SearchHighlight,
+  type SearchTextOptions,
   SignalCard,
   type SignalCardProps,
   SkipReportCard,
@@ -567,6 +576,8 @@ export {
   type SupportTicket,
   type SupportTicketDetail,
   SupportView,
+  type SynonymGroups,
+  searchRankTier,
   seedQuickPickerSteps,
   serverNow,
   setDisplayTimezone,
@@ -606,6 +617,7 @@ export {
   type TuningSummary,
   tapReplaySocket,
   titleCase,
+  tokenize,
   toneForOutcome,
   trackActivity,
   translateScopeValues,
