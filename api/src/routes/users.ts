@@ -9,6 +9,7 @@ import {
   requireAdmin
 } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { deleteDefaultsForUser } from '../services/field-defaults.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import {
@@ -1555,6 +1556,8 @@ export async function usersRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     if (id === req.user!.id) return reply.code(400).send({ error: 'Cannot delete yourself' })
     const deletedUser = safeUser(await getUser(id))
+    // Personal field defaults go first: their FK to the user is NO ACTION.
+    await deleteDefaultsForUser(id)
     await db('nivaro_users').where({ id }).delete()
     const activityId = await logActivity({
       action: 'delete',

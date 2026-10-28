@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { execCustomQuerySql } from './custom-query-exec.js'
+import { deleteDefaultsForUser } from './field-defaults.js'
 import { isMachineAccount } from './machine-accounts.js'
 
 export const DEFAULT_REDACT_FIELDS = [
@@ -92,6 +93,7 @@ export async function executeRetentionPolicy(
     for (const user of candidates) {
       try {
         if (policy.action === 'delete') {
+          await deleteDefaultsForUser(user.id, trx)
           await trx('nivaro_users').where({ id: user.id }).delete()
           continue
         }

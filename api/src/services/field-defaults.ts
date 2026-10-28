@@ -1,0 +1,441 @@
+/**
+ * Personal field defaults (spec docs/superpowers/specs/2026-10-28-personal-field-defaults-design.md).
+ *
+ * One row of nivaro_user_field_defaults = the value a person wants a new record of
+ * `collection` prefilled with for `field`, optionally only under certain parent values
+ * (`context`, e.g. { zone: 5 }). context_key hashes the canonical context so the unique
+ * index (user, collection, field, context_key) treats "no context" as one slot.
+ *
+ * Saving is judged AS the person the default belongs to (`target`), never as the admin
+ * saving it for them: create permission on the collection, the field in their create
+ * field list, a layout they can get that turns the field's personal_default toggle on,
+ * and every id in the value readable by them (readOne as the target). A default must
+ * never become a way to set a field, or pick a value, the person couldn't themselves.
+ * Picker filters / cascades stay client-side (curation, not security); the form re-checks
+ * on apply.
+ */
+import { createHash } from 'node:crypto'
+import type { Knex } from 'knex'
+import { db } from '../db/index.js'
+import type { User } from '../types.js'
+import { logActivity } from './activity.js'
+import { readOne } from './items.js'
+import { roleAllows } from './layout-patch.js'
+import { todayInInstance, windowOpen } from './layout-resolve-rules.js'
+import { can, getAllowedFields, isAdminRole } from './permissions.js'
+
+const TABLE = 'nivaro_user_field_defaults'
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** Contexts one person may keep for one field (spec call 10). */
+export const MAX_CONTEXTS = 20
+const MAX_CONTEXT_KEYS = 10
+const MAX_JSON_CHARS = 4000
+const MAX_IDS = 100
+
+export type FieldDefault = {
+  id: number
+  collection: string
+  field: string
+  value: unknown
+  context: Record<string, unknown>
+  updated_at: string
+  updated_by: string | null
+}
+
+export type FieldDefaultInput = {
+  collection: string
+  field: string
+  value: unknown
+  context: Record<string, unknown>
+}
+
+export class FieldDefaultRefusal extends Error {
+  constructor(
+    public status: 400 | 403 | 409,
+    public code: string,
+    message: string
+  ) {
+    super(message)
+    this.name = 'FieldDefaultRefusal'
+  }
+}
+
+// ── Context ──────────────────────────────────────────────────────────────────
+
+function isEmpty(v: unknown): boolean {
+  return v == null || v === '' || (Array.isArray(v) && v.length === 0)
+}
+
+/** The context as stored: empty parents left out (they constrain nothing). */
+function cleanContext(
+  context: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!context || typeof context !== 'object' || Array.isArray(context)) return out
+  for (const [k, v] of Object.entries(context)) if (!isEmpty(v)) out[k] = v
+  return out
+}
+
+/** Key-sorted, scalars as strings (5 and '5' are the same parent), id lists order-free. */
+function canonical(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonical).sort((a, b) => (String(a) < String(b) ? -1 : 1))
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return Object.fromEntries(
+      Object.keys(o)
+        .sort()
+        .map((k) => [k, canonical(o[k])])
+    )
+  }
+  return v == null ? null : String(v)
+}
+
+/** sha1 hex of the canonical context; an empty context hashes as `{}`. */
+export function contextKey(context: Record<string, unknown>): string {
+  const json = JSON.stringify(canonical(cleanContext(context)))
+  return createHash('sha1').update(json).digest('hex')
+}
+
+// ── Reads ────────────────────────────────────────────────────────────────────
+
+function parseJson(v: unknown): unknown {
+  if (typeof v !== 'string') return v ?? null
+  try {
+    return JSON.parse(v)
+  } catch {
+    return null
+  }
+}
+
+function toIso(v: unknown): string {
+  if (v instanceof Date) return v.toISOString()
+  return v == null ? '' : String(v)
+}
+
+function toDefault(row: Record<string, unknown>): FieldDefault {
+  const ctx = parseJson(row.context)
+  return {
+    id: Number(row.id),
+    collection: String(row.collection),
+    field: String(row.field),
+    value: parseJson(row.value),
+    context:
+      ctx && typeof ctx === 'object' && !Array.isArray(ctx) ? (ctx as Record<string, unknown>) : {},
+    updated_at: toIso(row.updated_at),
+    updated_by: row.updated_by == null ? null : String(row.updated_by)
+  }
+}
+
+const COLUMNS = ['id', 'collection', 'field', 'value', 'context', 'updated_at', 'updated_by']
+
+/** A person's defaults, every collection or one. */
+export async function listDefaults(userId: string, collection?: string): Promise<FieldDefault[]> {
+  let q = db(TABLE).where({ user: userId })
+  if (collection) q = q.where({ collection })
+  const rows = (await q
+    .select(...COLUMNS)
+    .orderBy([{ column: 'collection' }, { column: 'field' }, { column: 'id' }])) as Record<
+    string,
+    unknown
+  >[]
+  return rows.map(toDefault)
+}
+
+// ── Layout toggle ────────────────────────────────────────────────────────────
+
+/**
+ * True when some record form of the collection this person can be given turns the
+ * field's personal_default toggle on. Candidates = the grouped layouts the resolver
+ * would consider for them (role-allowed and inside their active dates — record-rule,
+ * A/B and phone versions included, since each can be served); a child layout's own
+ * placement wins, else its parent's (layout inheritance, #424).
+ */
+export async function fieldAllowedOnSomeLayout(
+  user: User,
+  collection: string,
+  field: string
+): Promise<boolean> {
+  const isAdmin = await isAdminRole(user)
+  const today = todayInInstance()
+  const layouts = (
+    (await db('nivaro_collection_layouts')
+      .where({ collection })
+      .select('id', 'layout_type', 'conditions', 'parent_layout_id')) as Record<string, unknown>[]
+  ).filter(
+    (l) =>
+      (l.layout_type == null || l.layout_type === 'grouped') &&
+      roleAllows(l, user.role, isAdmin) &&
+      windowOpen(l.conditions, today)
+  )
+  if (layouts.length === 0) return false
+  const ids = [
+    ...new Set(
+      layouts.flatMap((l) => [
+        Number(l.id),
+        ...(l.parent_layout_id ? [Number(l.parent_layout_id)] : [])
+      ])
+    )
+  ]
+  const placements = (await db('nivaro_layout_field_assignments')
+    .whereIn('layout_id', ids)
+    .where({ field })
+    .select('layout_id', 'overrides')) as Array<{ layout_id: unknown; overrides: unknown }>
+  const byLayout = new Map(placements.map((p) => [Number(p.layout_id), p]))
+  return layouts.some((l) => {
+    const p =
+      byLayout.get(Number(l.id)) ??
+      (l.parent_layout_id ? byLayout.get(Number(l.parent_layout_id)) : undefined)
+    const o = parseJson(p?.overrides) as { personal_default?: unknown } | null
+    return o?.personal_default === true
+  })
+}
+
+// ── Value check ──────────────────────────────────────────────────────────────
+
+type FieldShape =
+  | { kind: 'plain' }
+  | { kind: 'm2o' | 'm2m'; related: string }
+  | { kind: 'unsupported' }
+
+/** What the field holds: a plain column, an id of / ids from a related collection, or a shape
+ *  personal defaults don't cover (one-to-many child rows, many-to-any). */
+async function fieldShape(collection: string, field: string): Promise<FieldShape> {
+  const m2o = (await db('nivaro_relations')
+    .where({ many_collection: collection, many_field: field })
+    .first('one_collection')) as { one_collection: string | null } | undefined
+  if (m2o) {
+    return m2o.one_collection && IDENT.test(m2o.one_collection)
+      ? { kind: 'm2o', related: m2o.one_collection }
+      : { kind: 'unsupported' }
+  }
+  const alias = (await db('nivaro_relations')
+    .where({ one_collection: collection, one_field: field })
+    .first('many_collection', 'junction_field')) as
+    | { many_collection: string; junction_field: string | null }
+    | undefined
+  if (!alias) return { kind: 'plain' }
+  if (!alias.junction_field) return { kind: 'unsupported' } // one-to-many child rows
+  const leg = (await db('nivaro_relations')
+    .where({ many_collection: alias.many_collection, many_field: alias.junction_field })
+    .first('one_collection')) as { one_collection: string | null } | undefined
+  return leg?.one_collection && IDENT.test(leg.one_collection)
+    ? { kind: 'm2m', related: leg.one_collection }
+    : { kind: 'unsupported' }
+}
+
+function idOf(v: unknown): string | number | null {
+  if (typeof v === 'number' || typeof v === 'string') return v
+  if (v && typeof v === 'object' && 'id' in v) {
+    const id = (v as { id: unknown }).id
+    if (typeof id === 'number' || typeof id === 'string') return id
+  }
+  return null
+}
+
+async function readable(user: User, collection: string, id: string | number): Promise<boolean> {
+  try {
+    return (await readOne(user, collection, id, undefined, ['id'])) != null
+  } catch {
+    return false
+  }
+}
+
+async function assertValuePickable(target: User, input: FieldDefaultInput): Promise<void> {
+  const shape = await fieldShape(input.collection, input.field)
+  if (shape.kind === 'plain') return
+  if (shape.kind === 'unsupported')
+    throw new FieldDefaultRefusal(
+      400,
+      'UNSUPPORTED_FIELD',
+      'This kind of field cannot have a personal default'
+    )
+  const list = shape.kind === 'm2m' ? input.value : [input.value]
+  if (!Array.isArray(list))
+    throw new FieldDefaultRefusal(400, 'BAD_VALUE', 'A many-to-many default is a list of ids')
+  const ids = list.map(idOf)
+  if (ids.some((id) => id == null))
+    throw new FieldDefaultRefusal(400, 'BAD_VALUE', 'The default must be a record id')
+  const unique = [...new Set(ids as Array<string | number>)]
+  if (unique.length > MAX_IDS)
+    throw new FieldDefaultRefusal(400, 'BAD_VALUE', `At most ${MAX_IDS} records`)
+  const seen = await Promise.all(unique.map((id) => readable(target, shape.related, id)))
+  if (seen.some((ok) => !ok))
+    throw new FieldDefaultRefusal(
+      400,
+      'VALUE_NOT_AVAILABLE',
+      'That value is not available to this person'
+    )
+}
+
+// ── Save / delete ────────────────────────────────────────────────────────────
+
+function assertShape(input: FieldDefaultInput): Record<string, unknown> {
+  const { collection, field, value } = input
+  if (
+    typeof collection !== 'string' ||
+    !IDENT.test(collection) ||
+    /^(nivaro|directus)_/i.test(collection)
+  )
+    throw new FieldDefaultRefusal(400, 'BAD_COLLECTION', 'Unknown collection')
+  if (typeof field !== 'string' || !IDENT.test(field))
+    throw new FieldDefaultRefusal(400, 'BAD_FIELD', 'Unknown field')
+  if (isEmpty(value)) throw new FieldDefaultRefusal(400, 'NO_VALUE', 'A default needs a value')
+  if (JSON.stringify(value).length > MAX_JSON_CHARS)
+    throw new FieldDefaultRefusal(400, 'VALUE_TOO_LARGE', 'That value is too large to keep')
+  const raw = input.context ?? {}
+  if (typeof raw !== 'object' || Array.isArray(raw))
+    throw new FieldDefaultRefusal(400, 'BAD_CONTEXT', 'context must be an object')
+  const context = cleanContext(raw)
+  const keys = Object.keys(context)
+  if (keys.length > MAX_CONTEXT_KEYS || keys.some((k) => !IDENT.test(k)))
+    throw new FieldDefaultRefusal(400, 'BAD_CONTEXT', 'context names unknown parent fields')
+  for (const v of Object.values(context)) {
+    const scalars = Array.isArray(v) ? v : [v]
+    if (scalars.some((s) => typeof s === 'object' && s !== null))
+      throw new FieldDefaultRefusal(400, 'BAD_CONTEXT', 'context values are ids or plain values')
+  }
+  if (JSON.stringify(context).length > MAX_JSON_CHARS)
+    throw new FieldDefaultRefusal(400, 'BAD_CONTEXT', 'context is too large')
+  return context
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  const n = (err as { number?: number } | null)?.number
+  return (
+    n === 2627 || n === 2601 || /duplicate key|UNIQUE KEY/i.test(String((err as Error)?.message))
+  )
+}
+
+function sameUser(a: User, b: User): boolean {
+  return String(a.id).toUpperCase() === String(b.id).toUpperCase()
+}
+
+/**
+ * Save (upsert) `target`'s default, judged as `target`. `actor` is who is saving: an
+ * administrator saving for someone else is logged in activity.
+ */
+export async function saveDefault(
+  target: User,
+  actor: User,
+  input: FieldDefaultInput
+): Promise<FieldDefault> {
+  const context = assertShape(input)
+  const { collection, field } = input
+
+  if (!(await can(target, 'create', collection)))
+    throw new FieldDefaultRefusal(
+      403,
+      'NO_CREATE',
+      `This person cannot create ${collection} records`
+    )
+  if (!(await can(target, 'read', collection)))
+    throw new FieldDefaultRefusal(403, 'NO_READ', `This person cannot read ${collection} records`)
+  const allowed = await getAllowedFields(target, 'create', collection)
+  if (allowed !== null && !allowed.includes('*') && !allowed.includes(field))
+    throw new FieldDefaultRefusal(403, 'FIELD_NOT_SETTABLE', 'This person cannot set that field')
+  if (!(await fieldAllowedOnSomeLayout(target, collection, field)))
+    throw new FieldDefaultRefusal(
+      403,
+      'FIELD_NOT_ALLOWED',
+      'No form this person gets allows a personal default for that field'
+    )
+  await assertValuePickable(target, input)
+
+  const key = contextKey(context)
+  const now = new Date()
+  const write = {
+    value: JSON.stringify(input.value),
+    context: JSON.stringify(context),
+    updated_at: now,
+    updated_by: sameUser(target, actor) ? null : actor.id
+  }
+  const slot = { user: target.id, collection, field }
+  const others = (await db(TABLE).where(slot).select('id', 'context_key')) as Array<{
+    id: unknown
+    context_key: string
+  }>
+  const existing = others.find((r) => r.context_key === key)
+  let id: number
+  if (existing) {
+    id = Number(existing.id)
+    await db(TABLE).where({ id }).update(write)
+  } else {
+    if (others.length >= MAX_CONTEXTS)
+      throw new FieldDefaultRefusal(
+        409,
+        'TOO_MANY_CONTEXTS',
+        `At most ${MAX_CONTEXTS} defaults for one field; clear one first`
+      )
+    try {
+      const rows = (await db(TABLE)
+        .insert({ ...slot, context_key: key, created_at: now, ...write })
+        .returning('id')) as unknown[]
+      const r = rows[0] as { id: unknown } | number
+      id = Number(typeof r === 'object' && r !== null ? r.id : r)
+    } catch (err) {
+      // Two saves of the same slot at once: the other one inserted first.
+      if (!isDuplicateKey(err)) throw err
+      const row = (await db(TABLE)
+        .where({ ...slot, context_key: key })
+        .first('id')) as { id: unknown } | undefined
+      if (!row) throw err
+      id = Number(row.id)
+      await db(TABLE).where({ id }).update(write)
+    }
+  }
+
+  if (!sameUser(target, actor)) {
+    await logActivity({
+      action: 'field_default_set',
+      user: actor.id,
+      collection: TABLE,
+      item: String(id),
+      comment: JSON.stringify({ target: target.id, collection, field, value: input.value })
+    })
+  }
+  const row = (await db(TABLE)
+    .where({ id })
+    .first(...COLUMNS)) as Record<string, unknown> | undefined
+  return row
+    ? toDefault(row)
+    : {
+        id,
+        collection,
+        field,
+        value: input.value,
+        context,
+        updated_at: now.toISOString(),
+        updated_by: write.updated_by
+      }
+}
+
+/**
+ * Remove one of the person's defaults. False when no such row is theirs. `actor` (when an
+ * administrator clears someone else's) is logged in activity.
+ */
+export async function deleteDefault(userId: string, id: number, actor?: User): Promise<boolean> {
+  if (!Number.isInteger(id) || id <= 0) return false
+  const row = (await db(TABLE).where({ id, user: userId }).first('collection', 'field')) as
+    | { collection: string; field: string }
+    | undefined
+  if (!row) return false
+  const n = Number(await db(TABLE).where({ id, user: userId }).delete())
+  if (n > 0 && actor && String(actor.id).toUpperCase() !== String(userId).toUpperCase()) {
+    await logActivity({
+      action: 'field_default_clear',
+      user: actor.id,
+      collection: TABLE,
+      item: String(id),
+      comment: JSON.stringify({ target: userId, collection: row.collection, field: row.field })
+    })
+  }
+  return n > 0
+}
+
+/** Every default a person holds — removed before their user row (the FK is NO ACTION). */
+export async function deleteDefaultsForUser(
+  userId: string,
+  conn: Knex | Knex.Transaction = db as unknown as Knex
+): Promise<void> {
+  await conn(TABLE).where({ user: userId }).delete()
+}
