@@ -24,7 +24,8 @@ import {
   readReportWidgetData,
   resolveReportAlert,
   saveReportFilterPreset,
-  toggleReportAlert
+  toggleReportAlert,
+  withSignal
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -702,10 +703,14 @@ export function shapeQueryRows(
 function queryWidgetRows(
   client: ReturnType<typeof useNivaroClient>,
   slug: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  signal?: AbortSignal
 ) {
+  // The query's signal: when the filters change, the old key loses its last observer and
+  // TanStack Query aborts it, so a person flipping filters three times does not leave three
+  // full report sets queued on the server (2026-10-28 demo: 36 report queries in 30 s, all run).
   return client
-    .request(executeCustomQuery(slug, params))
+    .request(withSignal(executeCustomQuery(slug, params), signal))
     .then((r) => ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>)
 }
 
@@ -735,7 +740,7 @@ export function QueryWidgetBody({
   const params = resolveQueryParams(cfg, dateRange, entityFilters)
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['nivaro-report-query', cfg.slug, params],
-    queryFn: () => queryWidgetRows(client, cfg.slug, params),
+    queryFn: ({ signal }) => queryWidgetRows(client, cfg.slug, params, signal),
     staleTime: 60_000,
     refetchInterval,
     retry: false
@@ -3552,7 +3557,7 @@ const WidgetCard = memo(function WidgetCard({
                         template: hasPrev ? 'report-compare' : 'report-explain',
                         instructions: hasPrev
                           ? 'Compare the current period against the previous one in 2-4 plain sentences: overall direction, the biggest movers up and down, and anything anomalous. No preamble.'
-                            : 'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
+                          : 'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
                       })
                     )
                   })

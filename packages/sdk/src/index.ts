@@ -571,6 +571,7 @@ export interface NivaroRuntime {
 import { type Command, cmd } from './command.js'
 
 export type { Command } from './command.js'
+export { withSignal } from './command.js'
 
 // ─── Items ────────────────────────────────────────────────────────────────────
 
@@ -1936,6 +1937,14 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     const timed = command._method === 'GET' && timeoutMs > 0
     const ctrl = timed ? new AbortController() : null
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
+    // The caller's own signal (withSignal) and the read timeout both cancel the fetch.
+    const callerSignal = command._signal
+    const onCallerAbort = () => ctrl?.abort()
+    if (callerSignal && ctrl) {
+      if (callerSignal.aborted) ctrl.abort()
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
+    }
+    const signal = ctrl ? ctrl.signal : callerSignal
     let res: Response
     try {
       res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
@@ -1943,9 +1952,10 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
         headers: authHeaders(),
         credentials: credentialsMode(),
         body: command._body != null ? JSON.stringify(command._body) : undefined,
-        ...(ctrl ? { signal: ctrl.signal } : {})
+        ...(signal ? { signal } : {})
       })
     } catch (e) {
+      if (callerSignal?.aborted) throw e
       if (ctrl?.signal.aborted)
         throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
           name: 'TimeoutError'
@@ -1953,6 +1963,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       throw e
     } finally {
       if (timer) clearTimeout(timer)
+      callerSignal?.removeEventListener('abort', onCallerAbort)
     }
 
     if (command._method === 'DELETE' && res.status === 204) {

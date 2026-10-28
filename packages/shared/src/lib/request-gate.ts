@@ -491,6 +491,10 @@ export function withGetCoalescing(
         return res
       })
     }
+    // A read the caller may cancel (withSignal) is its own request: sharing it would let one
+    // caller's abort fail another's answer.
+    if ((command as { _signal?: unknown })._signal)
+      return watchSignedOut(client.request<T>(command), false)
     const key = commandKey(c)
     const settles = isSettledRead(c)
     if (settles) {

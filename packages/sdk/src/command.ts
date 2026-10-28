@@ -12,6 +12,8 @@ export interface Command<TResult> {
   readonly _path: string
   readonly _params?: Record<string, unknown>
   readonly _body?: unknown
+  /** Cancels the request when it aborts (never serialized; see withSignal). */
+  readonly _signal?: AbortSignal
   readonly _phantom?: TResult
 }
 
@@ -22,4 +24,16 @@ export function cmd<T>(
   body?: unknown
 ): Command<T> {
   return { _method: method, _path: path, _params: params, _body: body }
+}
+
+/**
+ * The same command, cancelled when `signal` aborts — e.g. TanStack Query's queryFn signal, so a
+ * report widget whose filters changed stops waiting for the answer to the old filters (the
+ * server then drops it from its read queue). Without a signal the command is returned as is.
+ */
+export function withSignal<T>(
+  command: Command<T>,
+  signal: AbortSignal | null | undefined
+): Command<T> {
+  return signal ? { ...command, _signal: signal } : command
 }

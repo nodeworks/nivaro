@@ -1,5 +1,50 @@
-import { type NivaroClient, readItem, readItems, readMany } from '@nivaro/sdk'
+import {
+  executeCustomQuery,
+  type NivaroClient,
+  readItem,
+  readItems,
+  readMany,
+  withSignal
+} from '@nivaro/sdk'
 import { describe, expect, it, vi } from 'vitest'
+
+describe('withGetCoalescing and cancellable reads (withSignal, 2026-10-28)', () => {
+  function counting() {
+    const calls: unknown[] = []
+    const client = {
+      request: vi.fn(async (c: unknown) => {
+        calls.push(c)
+        return { data: [] }
+      })
+    } as unknown as NivaroClient
+    return { client, calls }
+  }
+
+  it('never shares a read that carries its own AbortSignal', async () => {
+    const { client, calls } = counting()
+    const c = withGetCoalescing(client)
+    const plain = readItems('regions', { limit: 5 })
+    await Promise.all([
+      c.request(withSignal(plain, new AbortController().signal)),
+      c.request(withSignal(plain, new AbortController().signal))
+    ])
+    expect(calls.length).toBe(2)
+  })
+
+  it('passes the signal through on POST reads', async () => {
+    const { client, calls } = counting()
+    const c = withGetCoalescing(client)
+    const ac = new AbortController()
+    await c.request(withSignal(executeCustomQuery('rpt-x', { a: 1 }), ac.signal))
+    expect((calls[0] as { _signal?: AbortSignal })._signal).toBe(ac.signal)
+  })
+
+  it('leaves a command without a signal unchanged', () => {
+    const plain = readItems('regions', { limit: 5 })
+    expect(withSignal(plain, undefined)).toBe(plain)
+  })
+})
+
 import {
   batchableRead,
   createGatedClient,
