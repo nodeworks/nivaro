@@ -101,6 +101,7 @@ const CustomQueryEditPage = lazy(() =>
   import('@/pages/CustomQueryEdit').then((m) => ({ default: m.CustomQueryEditPage }))
 )
 const AskPage = lazy(() => import('@/pages/Ask').then((m) => ({ default: m.AskPage })))
+const SearchPage = lazy(() => import('@/pages/Search').then((m) => ({ default: m.SearchPage })))
 const ChatPage = lazy(() => import('@/pages/Chat').then((m) => ({ default: m.ChatPage })))
 const WallboardPage = lazy(() =>
   import('@/pages/Wallboard').then((m) => ({ default: m.WallboardPage }))
@@ -478,6 +479,7 @@ export default function App() {
                   <Route path='rules/:id' element={<RuleEditPage />} />
                   <Route path='dashboards' element={<DashboardsPage />} />
                   <Route path='ask' element={<AskPage />} />
+                  <Route path='search' element={<SearchPage />} />
                   <Route path='chat' element={<ChatPage />} />
                   <Route path='dashboards/draft' element={<DashboardDraftPage />} />
                   <Route path='dashboards/:id' element={<DashboardEditPage />} />
