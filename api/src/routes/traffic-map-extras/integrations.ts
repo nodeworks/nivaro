@@ -45,7 +45,6 @@ import type { TrafficSnapshot } from '../../services/traffic-map.js'
 import { roleOf, splitByRole } from '../../services/traffic-role-split.js'
 import { currentStoreId } from '../../services/traffic-taps.js'
 import { getUser } from '../../services/users.js'
-import { LOCK_TTL_MS } from '../item-locks.js'
 import { localSnapshot } from './cluster.js'
 
 const WINDOWS = new Set([60, 300, 900])
@@ -65,7 +64,7 @@ export function readNode(kind: CardKind, node: string): Reading | null {
 }
 
 export async function integrationsRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/edit-locks', async () => ({ data: await editLockLens(LOCK_TTL_MS) }))
+  app.get('/edit-locks', async () => ({ data: await editLockLens() }))
 
   app.get<{ Querystring: { window?: string } }>('/role-split', async (req, reply) => {
     const window = Number(req.query.window ?? 60)

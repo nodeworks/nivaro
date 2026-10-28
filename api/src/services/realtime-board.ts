@@ -130,6 +130,8 @@ let statsReadAt = 0
 const STATS_FRESH_MS = 30_000
 let readerOn = false
 let peersOn = false
+/** When a socket-serving process last asked the registry and found nobody else (0 = never). */
+let loneConfirmedAt = 0
 let peerChange: ((rooms: string[]) => void) | null = null
 
 /**
@@ -359,6 +361,7 @@ export function startBoard(
     }
     if (stopped) return
     if (present && present.length > 0) lastOthers = now
+    loneConfirmedAt = present && present.length === 0 ? now : 0
     if (present && present.length > 0 && !active && opts.collect) {
       active = true
       startBoardPublisher(redis, opts.collect)
@@ -386,6 +389,24 @@ export function startBoard(
 /** Is this process merging the board — a SOCKETS=off reader, or a socket-serving peer? */
 export function boardMergeOn(): boolean {
   return readerOn || peersOn
+}
+
+/**
+ * Does this process know EVERY signed-in socket of the deployment right now? Yes when it reads
+ * the board (fresh, and — on a SOCKETS=off reader — at least one realtime process answered), or
+ * when it serves sockets and the registry said a moment ago that it is alone. No otherwise
+ * (Redis away, cloud mode, no board): then nobody may be judged absent from it — the edit-lock
+ * presence check (services/lock-presence.ts) falls back to the heartbeat window alone.
+ */
+export function boardKnowsEveryone(now = Date.now()): boolean {
+  if (readerOn) return liveView(now).length > 0
+  if (peersOn) return now - liveReadAt <= FRESH_MS
+  return loneConfirmedAt > 0 && now - loneConfirmedAt <= DISCOVER_MS * 2 + 1_000
+}
+
+/** Tests: this process serves sockets and the registry just said it is alone. */
+export function setLoneForTests(at: number | null = Date.now()): void {
+  loneConfirmedAt = at ?? 0
 }
 
 /** Is this process reading the board (a SOCKETS=off process with Redis)? */
@@ -449,6 +470,7 @@ export function resetBoard(): void {
   statsBoards = []
   liveReadAt = 0
   statsReadAt = 0
+  loneConfirmedAt = 0
 }
 
 // ── Views over the board (the socket plugin's getters fall back to these) ───────────────────
@@ -581,9 +603,13 @@ export function boardRoomSize(room: string): number {
   return n
 }
 
-/** Is `userId` signed in on a realtime process? */
-export function boardHasUser(userId: string): boolean {
-  for (const b of liveView()) if (b.users?.includes(userId)) return true
+/** Is `userId` signed in on a realtime process? (`anyCase`: compare ids case-insensitively.) */
+export function boardHasUser(userId: string, anyCase = false): boolean {
+  const want = String(userId).toUpperCase()
+  for (const b of liveView()) {
+    if (b.users?.includes(userId)) return true
+    if (anyCase && b.users?.some((u) => String(u).toUpperCase() === want)) return true
+  }
   return false
 }
 

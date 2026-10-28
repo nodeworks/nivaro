@@ -313,17 +313,29 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       .select(
         'l.collection',
         'l.item',
+        'l.user',
         'l.locked_at',
+        'l.expires_at',
         db.raw("CONCAT(u.first_name, ' ', u.last_name) as editor")
-      )) as Array<{ collection: string; item: string; locked_at: Date; editor: string | null }>
+      )) as Array<{
+      collection: string
+      item: string
+      user: string
+      locked_at: Date
+      expires_at: Date
+      editor: string | null
+    }>
+    const { lockIsLive } = await import('../services/lock-presence.js')
     return {
       data: {
-        editing: locks.map((l) => ({
-          collection: l.collection,
-          item: l.item,
-          editor: l.editor?.trim() || 'unknown',
-          since: l.locked_at
-        })),
+        editing: locks
+          .filter((l) => lockIsLive(l))
+          .map((l) => ({
+            collection: l.collection,
+            item: l.item,
+            editor: l.editor?.trim() || 'unknown',
+            since: l.locked_at
+          })),
         viewing: getRecordViewerSnapshot().map((v) => ({
           collection: v.collection,
           item: v.item,

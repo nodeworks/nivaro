@@ -10,10 +10,18 @@ import { announceRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
-const HEARTBEAT_MS = 60_000
-/** A lock held by a form that is off screen (hidden browser tab, background
- *  workspace tab) is let go after this long; it comes back on return. */
-const OFF_SCREEN_RELEASE_MS = 2 * 60_000
+/** A held lock is a 30 s lease on the server (lock-presence.ts): beat every
+ *  10 s so one lost beat never drops it, and a crashed or sleeping browser
+ *  frees the record within half a minute. Sent as `beat_ms` — the server only
+ *  grants the short lease to a client that says it beats this often. */
+const HEARTBEAT_MS = 10_000
+/** The window must stay unfocused this long before the lock goes: focus moving
+ *  into an in-page iframe, a native picker opening, a popover — blips, not
+ *  the person leaving. A hidden tab lets go at once. */
+const BLUR_RELEASE_MS = 1_500
+/** While focus sits inside an iframe the top window hears no blur when it
+ *  moves on to another app: ask `document.hasFocus()` this often instead. */
+const IFRAME_FOCUS_POLL_MS = 2_000
 /** How often a viewer locked out re-reads the lock when no live notice came. */
 const HOLDER_RECHECK_MS = 30_000
 /** How often a viewer who knows of no holder re-reads the lock: a `$lock`
@@ -41,6 +49,59 @@ export interface LockQueueEntry {
   user: string
   name: string | null
   requested_at: string
+}
+
+/**
+ * Is this browser window the focused one? Turns false only after the window
+ * has been without focus for BLUR_RELEASE_MS (never on an element blur), true
+ * again the moment it is focused.
+ */
+function useWindowFocused(): boolean {
+  const [focused, setFocused] = useState(true)
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
+    let settle: ReturnType<typeof setTimeout> | null = null
+    let poll: ReturnType<typeof setInterval> | null = null
+    const hasFocus = () => (typeof document.hasFocus === 'function' ? document.hasFocus() : true)
+    const stopPoll = () => {
+      if (poll) clearInterval(poll)
+      poll = null
+    }
+    const onBlur = () => {
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => {
+        settle = null
+        if (!hasFocus()) {
+          stopPoll()
+          setFocused(false)
+          return
+        }
+        // Still focused = focus went into an iframe of this page. Keep asking:
+        // leaving the iframe for another app fires nothing up here.
+        stopPoll()
+        poll = setInterval(() => {
+          if (hasFocus()) return
+          stopPoll()
+          setFocused(false)
+        }, IFRAME_FOCUS_POLL_MS)
+      }, BLUR_RELEASE_MS)
+    }
+    const onFocus = () => {
+      if (settle) clearTimeout(settle)
+      settle = null
+      stopPoll()
+      setFocused(true)
+    }
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('focus', onFocus)
+      if (settle) clearTimeout(settle)
+      stopPoll()
+    }
+  }, [])
+  return focused
 }
 
 function useDocumentVisible(): boolean {
@@ -142,7 +203,9 @@ export function useItemLock(
     if (!collection || !item || notVisibleRef.current) return false
     lastRefusalRef.current = null
     try {
-      await client.request(post(`/item-locks/${collection}/${item}/lock`, {}))
+      await client.request(
+        post(`/item-locks/${collection}/${item}/lock`, { beat_ms: HEARTBEAT_MS })
+      )
       acquiredRef.current = true
       setAcquired(true)
       setReleased(false)
@@ -156,7 +219,12 @@ export function useItemLock(
           Math.floor((Date.now() - new Date(idleState().last_active).getTime()) / 1000)
         )
         client
-          .request(post(`/item-locks/${collection}/${item}/heartbeat`, { idle_seconds: idleSecs }))
+          .request(
+            post(`/item-locks/${collection}/${item}/heartbeat`, {
+              idle_seconds: idleSecs,
+              beat_ms: HEARTBEAT_MS
+            })
+          )
           .then((r) => {
             if (!(r as { idle_released?: boolean } | null)?.idle_released) return
             stopHeartbeat()
@@ -372,32 +440,79 @@ export function useItemLock(
     return () => window.removeEventListener('online', online)
   }, [])
 
-  // Off screen (hidden browser tab, background workspace tab): stop holding
-  // the record for others after a while; take it back on return.
+  // Let go of the caller's OWN lock with a request that survives the page
+  // going away (close, reload, hidden-then-discarded): an ordinary request from
+  // a leaving page rarely makes it out. lock/release never releases anyone
+  // else's lock — safe to fire blind. Best effort: the 30 s lease frees it anyway.
+  const releaseOnExit = useCallback(() => {
+    if (!collection || !item) return
+    try {
+      const token = client.getToken?.()
+      const base = (client as { url?: string }).url ?? ''
+      void fetch(
+        `${base}/api/item-locks/${encodeURIComponent(collection)}/${encodeURIComponent(item)}/lock/release`,
+        {
+          method: 'POST',
+          keepalive: true,
+          credentials: token ? 'omit' : 'include',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      )
+        .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
+        .catch(() => {})
+    } catch {
+      /* best effort — the lease still frees it */
+    }
+  }, [client, collection, item, userId])
+
+  // A lock is held only while this form is the person's focused, visible edit
+  // surface (2026-10-28): the moment the tab is hidden, the window loses focus
+  // (debounced — useWindowFocused) or the form goes to a background workspace
+  // tab, the lock is let go; it is taken back silently on return. Someone who
+  // took it meanwhile keeps it — this form turns read-only with their name and
+  // keeps its unsaved edits (only the lock moved).
   const visible = useDocumentVisible()
-  const onScreen = active && visible
+  const focused = useWindowFocused()
+  const onScreen = active && visible && focused
   useEffect(() => {
     if (!enabled || !collection || !item) return
     if (onScreen) {
       if (offScreenReleasedRef.current) {
         offScreenReleasedRef.current = false
-        void acquire()
+        void acquire().then((ok) => {
+          if (!ok && lastRefusalRef.current === 409)
+            toast.warning(
+              'Someone else started editing while you were away — your changes are still here, but can’t be saved until they release it'
+            )
+        })
       }
       return
     }
-    const t = setTimeout(() => {
-      if (!acquiredRef.current) return
-      stopHeartbeat()
-      acquiredRef.current = false
-      setAcquired(false)
-      offScreenReleasedRef.current = true
+    if (!acquiredRef.current) return
+    stopHeartbeat()
+    acquiredRef.current = false
+    setAcquired(false)
+    offScreenReleasedRef.current = true
+    // A hidden page may be frozen or discarded next: the keepalive release
+    // outlives it. A blurred but still running page uses the client.
+    if (!visible) releaseOnExit()
+    else
       client
         .request(del(`/item-locks/${collection}/${item}/lock`))
         .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
         .catch(() => {})
-    }, OFF_SCREEN_RELEASE_MS)
-    return () => clearTimeout(t)
-  }, [enabled, onScreen, collection, item, acquire, client, stopHeartbeat, userId])
+  }, [
+    enabled,
+    onScreen,
+    visible,
+    collection,
+    item,
+    acquire,
+    client,
+    stopHeartbeat,
+    userId,
+    releaseOnExit
+  ])
 
   // Nobody known to hold it, and not holding it ourselves: re-read now and
   // then while the form is on screen, so a missed `$lock` notice corrects
@@ -411,8 +526,7 @@ export function useItemLock(
   }, [enabled, lazy, collection, item, lockedById, onScreen, refreshLockInfo])
 
   // Leaving the page (close, reload, cross-document navigation): an unmount
-  // cleanup's request rarely makes it out, so the lock sat until its TTL ran
-  // out. A keepalive DELETE survives the page going away.
+  // cleanup's request rarely makes it out — the keepalive release does.
   useEffect(() => {
     if (!enabled || !collection || !item) return
     const onPageHide = () => {
@@ -420,23 +534,7 @@ export function useItemLock(
       stopHeartbeat()
       acquiredRef.current = false
       offScreenReleasedRef.current = true // a back/forward-cache restore retakes it
-      try {
-        const token = client.getToken?.()
-        const base = (client as { url?: string }).url ?? ''
-        // lock/release lets go of the caller's OWN lock only — safe to fire
-        // blind from a page that is going away.
-        void fetch(
-          `${base}/api/item-locks/${encodeURIComponent(collection)}/${encodeURIComponent(item)}/lock/release`,
-          {
-            method: 'POST',
-            keepalive: true,
-            credentials: token ? 'omit' : 'include',
-            headers: token ? { Authorization: `Bearer ${token}` } : {}
-          }
-        ).catch(() => {})
-      } catch {
-        /* best effort — the TTL still frees it */
-      }
+      releaseOnExit()
     }
     const onPageShow = (e: PageTransitionEvent) => {
       if (e.persisted && offScreenReleasedRef.current) {
@@ -450,7 +548,7 @@ export function useItemLock(
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
     }
-  }, [enabled, collection, item, client, stopHeartbeat, acquire])
+  }, [enabled, collection, item, stopHeartbeat, acquire, releaseOnExit])
 
   // #2131: the same person's other window (a popped-out record, another tab)
   // just released the lock while this one still edits — take it straight back.
@@ -648,7 +746,9 @@ export function useItemLock(
     try {
       // Takeover permission (#256): the force route enforces WHO may — admins
       // always, plus roles in settings.lock_takeover_roles. A 403 explains.
-      await client.request(post(`/item-locks/${collection}/${item}/lock/force`, {}))
+      await client.request(
+        post(`/item-locks/${collection}/${item}/lock/force`, { beat_ms: HEARTBEAT_MS })
+      )
       toast.success('You now hold the edit lock')
       // The server already gave us the lock: refreshing it clears the holder
       // (so the read-only state lifts) and starts the heartbeat.

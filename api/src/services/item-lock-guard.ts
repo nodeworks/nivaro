@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { lockIsLive } from './lock-presence.js'
 
 /** Returns true when item_locking_enabled is 1/true for the collection. */
 export async function isLockingEnabled(collection: string): Promise<boolean> {
@@ -55,7 +56,8 @@ export class RecordLockedError extends Error {
  * Edit locks are enforced, not advisory: a person's write to a record another
  * person holds a live lock on is refused (409 RECORD_LOCKED, naming the
  * holder). Without it, someone who released the lock (or never took it) could
- * still Save over the new holder's work. No lock, an expired one, the
+ * still Save over the new holder's work. No lock, an expired one (no heartbeat
+ * inside the lease), one whose holder is known to have left (lock-presence.ts), the
  * writer's own (any of their tabs) or locking turned off = no refusal.
  * Admins are no exception: Take over (POST …/lock/force) makes the lock
  * theirs first. A lock its holder may no longer use (the record moved into
@@ -74,9 +76,17 @@ export async function editLockRefusal(
   const lock = (await db('nivaro_item_locks')
     .where({ collection, item: String(item) })
     .where('expires_at', '>', new Date())
-    .first('user')
-    .catch(() => null)) as { user?: string } | null | undefined
+    .first('user', 'locked_at', 'expires_at')
+    .catch(() => null)) as
+    | { user?: string; locked_at?: Date | string | null; expires_at?: Date | string }
+    | null
+    | undefined
   if (!lock?.user) return null
+  // Held only while its holder is still here: a lapsed heartbeat (the lease is
+  // 30 s for current clients) or a holder known to have no socket left
+  // (lock-presence.ts) refuses nobody. Unknown presence = the lease decides.
+  if (!lockIsLive({ user: lock.user, locked_at: lock.locked_at, expires_at: lock.expires_at ?? 0 }))
+    return null
   if (String(lock.user).toUpperCase() === String(me).toUpperCase()) return null
   if (!(await isLockingEnabled(collection))) return null
   const { lockHolderVerdict } = await import('./edit-lock.js')

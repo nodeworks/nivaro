@@ -100,7 +100,7 @@ describe('useItemLock (lazy)', () => {
     expect(lock?.isReadOnly).toBe(false)
   })
 
-  it('a form off screen lets its lock go after two minutes and takes it back when shown', async () => {
+  it('a form off screen (background workspace tab) lets its lock go at once and takes it back when shown', async () => {
     vi.useFakeTimers()
     const { client, calls } = fakeClient(() => ({ data: null }))
     const render = (active: boolean) =>
@@ -118,18 +118,147 @@ describe('useItemLock (lazy)', () => {
     })
     expect(said(calls, 'POST')).toHaveLength(1)
     render(false)
-    await act(async () => {
-      vi.advanceTimersByTime(119_000)
-    })
-    expect(said(calls, 'DELETE')).toHaveLength(0)
-    await act(async () => {
-      vi.advanceTimersByTime(2_000)
-    })
+    await flush()
     expect(said(calls, 'DELETE')).toHaveLength(1)
     expect(lock?.acquired).toBe(false)
     render(true)
     await flush()
     expect(said(calls, 'POST')).toHaveLength(2)
+  })
+})
+
+describe('useItemLock — held only while this tab is the focused edit surface (2026-10-28)', () => {
+  let focus = true
+  let hasFocusSpy: { mockRestore: () => void } | null = null
+  beforeEach(() => {
+    focus = true
+    hasFocusSpy = vi.spyOn(document, 'hasFocus').mockImplementation(() => focus)
+  })
+  afterEach(() => {
+    hasFocusSpy?.mockRestore()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+  })
+
+  async function claimed() {
+    vi.useFakeTimers()
+    const answer = { holder: null as null | Record<string, unknown> }
+    const { client, calls } = fakeClient((cmd) => {
+      if (cmd._method === 'POST' && cmd._path === '/item-locks/workflows/7/lock' && answer.holder)
+        throw { status: 409, response: answer.holder }
+      if (cmd._method === 'GET' && answer.holder) return { data: answer.holder }
+      return { data: null }
+    })
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      await lock?.claim()
+    })
+    expect(lock?.acquired).toBe(true)
+    return { calls, answer, client }
+  }
+
+  it('beats every 10 s and says so (the server grants the 30 s lease)', async () => {
+    const { calls } = await claimed()
+    const lockPost = calls.find((c) => c._method === 'POST' && c._path.endsWith('/lock')) as
+      | (Cmd & { _body?: { beat_ms?: number } })
+      | undefined
+    expect(lockPost?._body?.beat_ms).toBe(10_000)
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+    })
+    const beats = calls.filter((c) => c._path.endsWith('/heartbeat')) as Array<
+      Cmd & { _body?: { beat_ms?: number } }
+    >
+    expect(beats).toHaveLength(1)
+    expect(beats[0]._body?.beat_ms).toBe(10_000)
+  })
+
+  it('window blur releases after the debounce; an in-page iframe or popover blur does not', async () => {
+    const { calls } = await claimed()
+    // Focus moved into an iframe of this page: the window blurs but still has focus.
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+      vi.advanceTimersByTime(1_600)
+    })
+    expect(said(calls, 'DELETE')).toHaveLength(0)
+    expect(lock?.acquired).toBe(true)
+    // …and then on to another app: no event up here — the poll notices.
+    focus = false
+    await act(async () => {
+      vi.advanceTimersByTime(2_100)
+    })
+    expect(said(calls, 'DELETE')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+    // Back: taken again silently.
+    focus = true
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await flush()
+    expect(said(calls, 'POST')).toHaveLength(2)
+    expect(lock?.acquired).toBe(true)
+  })
+
+  it('a quick blur-and-back inside the debounce keeps the lock', async () => {
+    const { calls } = await claimed()
+    focus = false
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+      vi.advanceTimersByTime(800)
+    })
+    focus = true
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      vi.advanceTimersByTime(2_000)
+    })
+    expect(said(calls, 'DELETE')).toHaveLength(0)
+    expect(lock?.acquired).toBe(true)
+  })
+
+  it('a hidden tab lets go at once with a keepalive release', async () => {
+    const fetchSpy = vi.fn(async () => new Response(null, { status: 204 }))
+    const orig = globalThis.fetch
+    globalThis.fetch = fetchSpy as never
+    try {
+      await claimed()
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await flush()
+      expect(lock?.acquired).toBe(false)
+      const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+      expect(url).toContain('/api/item-locks/workflows/7/lock/release')
+      expect(init.keepalive).toBe(true)
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
+  it('someone took it while I was away: read-only with their name, my edits untouched', async () => {
+    const { calls, answer } = await claimed()
+    focus = false
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+      vi.advanceTimersByTime(1_600)
+    })
+    expect(lock?.acquired).toBe(false)
+    answer.holder = { locked_by: 'u-2', locked_by_name: 'Hector' }
+    focus = true
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await flush()
+    expect(said(calls, 'POST')).toHaveLength(2)
+    expect(lock?.acquired).toBe(false)
+    expect(lock?.isReadOnly).toBe(true)
+    expect(lock?.lockHolder?.locked_by_name).toBe('Hector')
   })
 })
 
