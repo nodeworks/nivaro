@@ -50,6 +50,7 @@ import { blackoutDatesRoutes } from './blackout-dates.js'
 import { blueprintsRoutes } from './blueprints.js'
 import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
+import { cacheConfigRoutes } from './cache-config.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { chaosRoutes } from './chaos.js'
 import { chaosFredisRoutes } from './chaos-fredis.js'
@@ -687,6 +688,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(telemetryRoutes, { prefix: '/telemetry' })
   await app.register(infrastructureRoutes, { prefix: '/infrastructure' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
+  // Cache switches as configuration (Database → Caches); also starts their 15 s re-read.
+  await app.register(cacheConfigRoutes, { prefix: '/cache-config' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
   await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })
   await app.register(commandCenterRoutes, { prefix: '/command-center' })

@@ -6,9 +6,12 @@
  * under the TARGET's identity by design.
  */
 import type { Redis } from 'ioredis'
+import { currentTenantKey } from './tenant-rooms.js'
 
 const TTL_SECONDS = 120
 const THROTTLE_MS = 20_000
+/** Throttle stamps, per tenant + target + admin; capped (expired stamps go first). */
+const LAST_TOUCH_MAX = 5_000
 const lastTouch = new Map<string, number>()
 
 export function masqueradeMarkerKey(userId: string): string {
@@ -22,9 +25,14 @@ export function touchMasqueradeMarker(
   adminId: string | undefined
 ): void {
   if (!redis || !adminId) return
-  const k = `${userId}|${adminId}`
+  const k = `${currentTenantKey()}|${userId}|${adminId}`
   const now = Date.now()
   if ((lastTouch.get(k) ?? 0) > now - THROTTLE_MS) return
+  if (lastTouch.size >= LAST_TOUCH_MAX) {
+    for (const [key, at] of lastTouch) if (at <= now - THROTTLE_MS) lastTouch.delete(key)
+    if (lastTouch.size >= LAST_TOUCH_MAX) lastTouch.clear()
+  }
+  lastTouch.delete(k)
   lastTouch.set(k, now)
   void redis
     .set(masqueradeMarkerKey(userId), String(adminId).toUpperCase(), 'EX', TTL_SECONDS)

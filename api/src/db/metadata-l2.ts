@@ -31,7 +31,8 @@
  *     landed yet) — the entries it would read or store belong to the epoch it is leaving;
  *   - while the database incarnation is unknown;
  *   - for a database other than the primary pool's (a read replica may lag the epoch);
- *   - for an entry larger than METADATA_L2_MAX_BYTES compressed.
+ *   - for an entry larger than METADATA_L2_MAX_BYTES compressed;
+ *   - while switched off (METADATA_L2=off, or the instance's cache config — env wins).
  * Redis slow, down or erroring → straight to the database, counted, never thrown.
  *
  * Leaf module: no import from db/index.ts.
@@ -39,6 +40,7 @@
 import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { deflateRaw, inflateRaw } from 'node:zlib'
+import { cacheSetting } from '../services/cache-config.js'
 import { NIVARO_VERSION } from '../version.js'
 import { configEpochForRead, configEpochNow, onEpochReset } from './config-epoch.js'
 import { getTenantId } from './tenant-context.js'
@@ -74,8 +76,11 @@ type RawRunner = { raw: (sql: string) => unknown }
 const FORMAT = 'v1'
 const PREFIX = 'nvr:mdl2'
 
-const ENABLED = process.env.METADATA_L2 !== 'off'
-const TTL_S = Math.max(10, Number(process.env.METADATA_L2_TTL_S) || 600)
+/** METADATA_L2 (env wins) / this instance's cache config (services/cache-config.ts) / on.
+ *  Read per call: switching it off at run time only stops reads and stores (what Redis holds
+ *  is keyed by epoch + incarnation and expires on its own). */
+const enabled = (): boolean => cacheSetting('metadata_l2.enabled')
+const ttlS = (): number => cacheSetting('metadata_l2.ttl_s')
 const MAX_BYTES = Math.max(1024, Number(process.env.METADATA_L2_MAX_BYTES) || 256 * 1024)
 const TIMEOUT_MS = Math.max(5, Number(process.env.METADATA_L2_TIMEOUT_MS) || 150)
 /** After a Redis error or timeout, skip this level for a moment instead of paying the timeout on
@@ -179,9 +184,9 @@ export function resetMetadataL2ForTests(
 export function metadataL2Stats(): Record<string, number | boolean | string | null> {
   const lookups = counters.hits + counters.misses
   return {
-    enabled: ENABLED,
+    enabled: enabled(),
     connected: !!redis && isReady(redis),
-    ttl_s: TTL_S,
+    ttl_s: ttlS(),
     max_bytes: MAX_BYTES,
     timeout_ms: TIMEOUT_MS,
     epoch: epochs.now(),
@@ -339,7 +344,7 @@ function isCurrent(gen: L2Gen): boolean {
 }
 
 function usable(scope: string): L2Redis | null {
-  if (!ENABLED || !redis) return null
+  if (!redis || !enabled()) return null
   if (primaryScope == null || scope !== primaryScope) return null
   if (!isReady(redis) || Date.now() < downUntil) {
     counters.skipped_unavailable++
@@ -533,8 +538,9 @@ export function metadataL2Put(
     const key = l2KeyOf(scope, gen, statementKey)
     const idx = indexKeyOf(scope, gen)
     try {
+      const ttl = ttlS()
       await withTimeout(
-        Promise.all([r.set(key, buf, 'EX', TTL_S), r.sadd(idx, key), r.expire(idx, TTL_S + 60)])
+        Promise.all([r.set(key, buf, 'EX', ttl), r.sadd(idx, key), r.expire(idx, ttl + 60)])
       )
       noteGen(gen)
       counters.stores++
@@ -566,7 +572,7 @@ export function dropMetadataL2(): Promise<void> {
 function dropGenerations(gens: L2Gen[]): Promise<void> {
   const r = redis
   const scope = primaryScope
-  if (!ENABLED || !r || scope == null || !isReady(r)) return Promise.resolve()
+  if (!r || scope == null || !isReady(r) || !enabled()) return Promise.resolve()
   if (gens.length === 0) return Promise.resolve()
   counters.drops++
   return (async () => {

@@ -875,12 +875,24 @@ const SEARCH_PATTERN_BUDGET = 1200
 
 const INTEGRATIONS_FIELD = '$integrations'
 
-// Per-process cache of actual DB columns per table. Schema is fixed at runtime.
-const columnCache = new Map<string, Set<string>>()
+// Per-process cache of actual DB columns per table, per tenant (cloud: one process serves many
+// databases). Columns do change at run time (the schema editor adds fields): every reader that
+// meets an unknown name forgets the entry and looks once more, and an entry is at most
+// COLUMN_CACHE_TTL_MS old. Capped so a stream of made-up table names cannot grow it unbounded.
+const COLUMN_CACHE_TTL_MS = 5 * 60_000
+const COLUMN_CACHE_MAX = 5_000
+const columnCache = new Map<string, { at: number; set: Set<string> }>()
+const columnCacheKey = (table: string) => `${getTenantId() ?? ''}:${table}`
+
+/** Forget one table's cached columns (this tenant) — a column added since it was read. */
+export function forgetActualColumns(table: string): void {
+  columnCache.delete(columnCacheKey(table))
+}
 
 export async function getActualColumns(table: string): Promise<Set<string>> {
-  const cached = columnCache.get(table)
-  if (cached) return cached
+  const key = columnCacheKey(table)
+  const cached = columnCache.get(key)
+  if (cached && Date.now() - cached.at < COLUMN_CACHE_TTL_MS) return cached.set
   const rows = rawRows<{ COLUMN_NAME: string }>(
     await db.raw(
       `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
@@ -888,8 +900,28 @@ export async function getActualColumns(table: string): Promise<Set<string>> {
     )
   )
   const set = new Set(rows.map((r) => r.COLUMN_NAME))
-  columnCache.set(table, set)
+  columnCache.delete(key)
+  while (columnCache.size >= COLUMN_CACHE_MAX) {
+    const oldest = columnCache.keys().next().value
+    if (oldest === undefined) break
+    columnCache.delete(oldest)
+  }
+  columnCache.set(key, { at: Date.now(), set })
   return set
+}
+
+/** The table's physical column named `column` (any case), through the column cache: looked up
+ *  once more on a miss when the cached copy is older than 5 s (a column added since). Null when
+ *  the table has no such column. */
+export async function actualColumnName(table: string, column: string): Promise<string | null> {
+  const want = column.toLowerCase()
+  const find = (set: Set<string>) => [...set].find((c) => c.toLowerCase() === want) ?? null
+  const hit = find(await getActualColumns(table))
+  if (hit) return hit
+  const entry = columnCache.get(columnCacheKey(table))
+  if (entry && Date.now() - entry.at < 5_000) return null
+  forgetActualColumns(table)
+  return find(await getActualColumns(table))
 }
 
 const NON_UNICODE_TYPES = new Set(['varchar', 'char', 'text'])
@@ -909,7 +941,10 @@ async function getColumnTypes(table: string): Promise<Map<string, string>> {
     )
   )
   const map = new Map(rows.map((r) => [r.COLUMN_NAME, String(r.DATA_TYPE ?? '').toLowerCase()]))
-  if (map.size > 0) columnTypeCache.set(key, { at: Date.now(), types: map })
+  if (map.size > 0) {
+    if (columnTypeCache.size >= COLUMN_CACHE_MAX) columnTypeCache.clear()
+    columnTypeCache.set(key, { at: Date.now(), types: map })
+  }
   return map
 }
 
@@ -929,7 +964,7 @@ async function assertKnownFields(collection: string, fields: string[]): Promise<
   const missing = () =>
     fields.filter((f) => typeof f === 'string' && f !== '*' && !cols.has(f.toLowerCase()))
   if (missing().length === 0) return
-  columnCache.delete(collection)
+  forgetActualColumns(collection)
   cols = await lookup()
   const unknown = missing()
   if (unknown.length === 0) return
@@ -1071,13 +1106,16 @@ function filterToActualColumns(payload: Record<string, unknown>, cols: Set<strin
 
 const WORKSPACE_COLUMN = 'workspace_id'
 
-// 60s TTL cache — workspace_id columns can be added at runtime via the data model.
+// 60s TTL cache — workspace_id columns can be added at runtime via the data model. Per tenant,
+// and capped (a collection name comes from the request path).
 const wsColumnCache = new Map<string, { exists: boolean; at: number }>()
 const WS_COLUMN_TTL_MS = 60_000
+const WS_COLUMN_MAX = 5_000
 
 /** True when the collection's physical table has a `workspace_id` column. */
 export async function workspaceColumnExists(collection: string): Promise<boolean> {
-  const hit = wsColumnCache.get(collection)
+  const key = `${getTenantId() ?? ''}:${collection}`
+  const hit = wsColumnCache.get(key)
   if (hit && Date.now() - hit.at < WS_COLUMN_TTL_MS) return hit.exists
   let exists = false
   try {
@@ -1086,7 +1124,13 @@ export async function workspaceColumnExists(collection: string): Promise<boolean
   } catch {
     exists = false
   }
-  wsColumnCache.set(collection, { exists, at: Date.now() })
+  wsColumnCache.delete(key)
+  while (wsColumnCache.size >= WS_COLUMN_MAX) {
+    const oldest = wsColumnCache.keys().next().value
+    if (oldest === undefined) break
+    wsColumnCache.delete(oldest)
+  }
+  wsColumnCache.set(key, { exists, at: Date.now() })
   return exists
 }
 
@@ -2436,7 +2480,7 @@ async function assertFilterCompiles(
           [...set].some((c) => c.toLowerCase() === key.toLowerCase())
         const virtual = peekVirtualSql(collection)?.has(key) ?? false
         if (!virtual && !has(cols)) {
-          columnCache.delete(collection)
+          forgetActualColumns(collection)
           if (!has(await getActualColumns(collection))) {
             throw filterRefusal(
               'UNKNOWN_FIELD',
@@ -3142,7 +3186,7 @@ async function assertNamedFieldsExist(
     missing().filter((n) => !registered.has(n.toLowerCase()) && !virtual.has(n))
   if (unresolved().length === 0) return
   // Looked up once more before refusing: a column added since the cache filled.
-  columnCache.delete(collection)
+  forgetActualColumns(collection)
   cols = await lookup()
   const unknown = unresolved()
   if (unknown.length === 0) return

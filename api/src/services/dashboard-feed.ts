@@ -7,6 +7,7 @@ import { can, getRowFilter } from './permissions.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Per-viewer reads behind the dashboard canvas (/api/dashboard/*): what was
@@ -1887,6 +1888,22 @@ const PULSE_SCAN = 20_000
 const PULSE_BREACH_CAP = 2000
 const RECENT_COLUMNS = ['date_updated', 'changed', 'updated_at']
 const pulseCache = new Map<string, { at: number; value: ZonePulse }>()
+/** Both caches are per process and keyed per viewer / scope signature: capped, expired first. */
+const PULSE_CACHE_MAX = 2_000
+
+function setCapped<V>(map: Map<string, { at: number; value: V }>, key: string, value: V): void {
+  const now = Date.now()
+  if (map.size >= PULSE_CACHE_MAX) {
+    for (const [k, e] of map) if (now - e.at >= PULSE_TTL) map.delete(k)
+    while (map.size >= PULSE_CACHE_MAX) {
+      const oldest = map.keys().next().value
+      if (oldest === undefined) break
+      map.delete(oldest)
+    }
+  }
+  map.delete(key)
+  map.set(key, { at: now, value })
+}
 interface CollectionTally {
   open: Map<string, number>
   breached: Map<string, number>
@@ -1908,7 +1925,8 @@ export async function tallyCollection(
   enforcement: import('./user-scopes.js').ScopeEnforcement,
   computeStatusBatch: typeof import('../routes/sla.js').computeStatusBatch
 ): Promise<CollectionTally> {
-  const hit = tallyCache.get(cacheKey)
+  const key = `${currentTenantKey()}|${cacheKey}`
+  const hit = tallyCache.get(key)
   if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
   let truncated = false
   const visible = (qb: import('knex').Knex.QueryBuilder) =>
@@ -1990,7 +2008,7 @@ export async function tallyCollection(
   }
 
   const value = { open, breached, recent, truncated }
-  tallyCache.set(cacheKey, { at: Date.now(), value })
+  setCapped(tallyCache, key, value)
   return value
 }
 
@@ -2014,7 +2032,7 @@ export async function zonePulse(opts: {
   const dim = opts.dimension ? dims.find((d) => d.name === opts.dimension) : dims[0]
   if (!dim || !IDENT.test(dim.target_collection) || SYSTEM.test(dim.target_collection)) return null
   const userId = String(opts.user.id)
-  const cacheKey = `${userId.toUpperCase()}|${dim.name}`
+  const cacheKey = `${currentTenantKey()}|${userId.toUpperCase()}|${dim.name}`
   const hit = pulseCache.get(cacheKey)
   if (hit && Date.now() - hit.at < PULSE_TTL) return hit.value
 
@@ -2101,6 +2119,6 @@ export async function zonePulse(opts: {
     partial,
     truncated
   }
-  if (!partial) pulseCache.set(cacheKey, { at: Date.now(), value })
+  if (!partial) setCapped(pulseCache, cacheKey, value)
   return value
 }

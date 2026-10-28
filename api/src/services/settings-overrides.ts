@@ -51,7 +51,14 @@ function envOverrides(): Record<string, unknown> | null {
  * owns (Traffic Map detector settings, #2223). Never overlaid onto a settings row, never shown or
  * written by Settings → Instance (which keeps them when it saves).
  */
-export const INSTANCE_RESERVED_KEYS = ['traffic_detectors', 'huddle', 'chaos', 'recovery'] as const
+export const INSTANCE_RESERVED_KEYS = [
+  'traffic_detectors',
+  'huddle',
+  'chaos',
+  'recovery',
+  // Cache switches (services/cache-config.ts): per-instance, never a settings column.
+  'cache'
+] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {
   const out = { ...map }

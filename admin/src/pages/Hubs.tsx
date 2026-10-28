@@ -25,7 +25,8 @@ const SCREENS: Record<string, Screens> = {
     '': page(() => import('@/pages/DbHealth'), 'DbHealthPage'),
     tuning: lazy(() => import('@/pages/DbTuning')),
     'sql-checks': lazy(() => import('@/pages/SqlChecks')),
-    redis: page(() => import('@/pages/OpsRedis'), 'OpsRedisPage')
+    redis: page(() => import('@/pages/OpsRedis'), 'OpsRedisPage'),
+    caches: lazy(() => import('@/pages/CacheSettings'))
   },
   '/health': {
     '': page(() => import('@/pages/HealthDashboard'), 'HealthDashboardPage'),

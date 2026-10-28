@@ -31,6 +31,7 @@ import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
 import { editLockRefusal } from '../services/item-lock-guard.js'
 import {
+  actualColumnName,
   aggregateItems,
   CollectionNotFoundError,
   type CreateOutcome,
@@ -58,6 +59,7 @@ import {
 } from '../services/manual-transition-gate.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { parseJson, type WorkflowTransition } from '../services/pipeline-engine.js'
+import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -175,6 +177,21 @@ export async function itemsRoutes(app: FastifyInstance) {
   // #2273 — a Traffic Map temporary cache (off unless an admin switched one on for a collection):
   // after every guard above, so a cached answer is only ever one the same caller already got.
   registerTempCacheHooks(app)
+
+  // Heavy read bodies (aggregates, exports, distinct values, child summaries, path
+  // resolution) hold a read-gate slot (services/read-gate.ts) so a page that fires many at
+  // once queues instead of taking every pool connection; a caller who leaves while queued
+  // drops out. Validation and permission checks stay outside the gate.
+  const gated = <T>(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    label: string,
+    fn: () => Promise<T>
+  ) =>
+    withReadGate(req.user?.id ? String(req.user.id) : null, fn, {
+      signal: clientGoneSignal(reply.raw),
+      label
+    })
 
   // #1304: several reads in one round trip. Each runs through readItems /
   // readOne as the caller and answers its own status; the batch itself only
@@ -309,28 +326,30 @@ export async function itemsRoutes(app: FastifyInstance) {
             .filter(Boolean)
         : undefined
     try {
-      const result = await aggregateItems(
-        req.user!,
-        collection,
-        {
-          filter: parsedFilter,
-          search: q.search,
-          aggregate: {
-            groupBy: list(q.groupBy ?? q.group_by),
-            countAll: q.countAll === '1' || q.countAll === 'true' || q.count_all === '1',
-            count: list(q.count),
-            countDistinct: list(q.countDistinct ?? q.count_distinct),
-            sum: list(q.sum),
-            avg: list(q.avg),
-            min: list(q.min),
-            max: list(q.max),
-            sort: list(q.sort),
-            limit: q.limit ? Number(q.limit) : undefined,
-            offset: q.offset ? Number(q.offset) : undefined
-          }
-        },
-        req,
-        req.workspaceId ?? undefined
+      const result = await gated(req, reply, `items:aggregate:${collection}`, () =>
+        aggregateItems(
+          req.user!,
+          collection,
+          {
+            filter: parsedFilter,
+            search: q.search,
+            aggregate: {
+              groupBy: list(q.groupBy ?? q.group_by),
+              countAll: q.countAll === '1' || q.countAll === 'true' || q.count_all === '1',
+              count: list(q.count),
+              countDistinct: list(q.countDistinct ?? q.count_distinct),
+              sum: list(q.sum),
+              avg: list(q.avg),
+              min: list(q.min),
+              max: list(q.max),
+              sort: list(q.sort),
+              limit: q.limit ? Number(q.limit) : undefined,
+              offset: q.offset ? Number(q.offset) : undefined
+            }
+          },
+          req,
+          req.workspaceId ?? undefined
+        )
       )
       return reply.send(result)
     } catch (err) {
@@ -368,31 +387,39 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
 
     try {
-      const rows: Record<string, unknown>[] = []
-      let truncated = false
-      for (let offset = 0; ; offset += LIST_READ_MAX) {
-        if (rows.length >= EXPORT_MAX_ROWS) {
-          const more = await readItems(
-            req.user!,
-            collection,
-            { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS },
-            req,
-            req.workspaceId ?? undefined
-          )
-          truncated = more.data.length > 0
-          break
+      const { rows, truncated } = await gated(
+        req,
+        reply,
+        `items:export:${collection}`,
+        async () => {
+          const rows: Record<string, unknown>[] = []
+          let truncated = false
+          for (let offset = 0; ; offset += LIST_READ_MAX) {
+            if (rows.length >= EXPORT_MAX_ROWS) {
+              const more = await readItems(
+                req.user!,
+                collection,
+                { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS },
+                req,
+                req.workspaceId ?? undefined
+              )
+              truncated = more.data.length > 0
+              break
+            }
+            const page = await readItems(
+              req.user!,
+              collection,
+              { ...query, offset },
+              req,
+              req.workspaceId ?? undefined
+            )
+            const data = page.data as Record<string, unknown>[]
+            rows.push(...data)
+            if (data.length < LIST_READ_MAX) break
+          }
+          return { rows, truncated }
         }
-        const page = await readItems(
-          req.user!,
-          collection,
-          { ...query, offset },
-          req,
-          req.workspaceId ?? undefined
-        )
-        const data = page.data as Record<string, unknown>[]
-        rows.push(...data)
-        if (data.length < LIST_READ_MAX) break
-      }
+      )
       // More rows matched than one export holds: say so rather than cut silently.
       if (truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
 
@@ -965,24 +992,25 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     if (!field || !/^[a-zA-Z0-9_]+$/.test(field))
       return reply.code(400).send({ error: 'Invalid field' })
-    const colCheck = (await db.raw(
-      'SELECT 1 AS ok FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
-      [collection, field]
-    )) as unknown as Array<{ ok: number }>
-    if (!colCheck?.length) return reply.code(400).send({ error: 'Unknown column' })
+    // The column cache (per tenant, a few minutes; looked up again for a name it lacks)
+    // instead of an INFORMATION_SCHEMA read on every dropdown open.
+    if (!(await actualColumnName(collection, field)))
+      return reply.code(400).send({ error: 'Unknown column' })
     const cap = Math.min(Math.max(Number(limit) || 200, 1), 500)
     try {
       // The values of the rows a list read would give this caller: a grouped
       // aggregate runs the row filter, User Scopes and the field list.
-      const result = await aggregateItems(
-        req.user!,
-        collection,
-        {
-          filter: { [field]: { _nnull: true } },
-          aggregate: { groupBy: [field], sort: [field], limit: cap }
-        },
-        req,
-        req.workspaceId ?? undefined
+      const result = await gated(req, reply, `items:distinct:${collection}`, () =>
+        aggregateItems(
+          req.user!,
+          collection,
+          {
+            filter: { [field]: { _nnull: true } },
+            aggregate: { groupBy: [field], sort: [field], limit: cap }
+          },
+          req,
+          req.workspaceId ?? undefined
+        )
       )
       return reply.send({ data: result.data.map((r) => r.group[field]) })
     } catch (err) {
@@ -1026,15 +1054,23 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Formula does not parse' })
     }
     try {
-      const parent = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id'])
-      if (!parent) return reply.code(404).send({ error: 'Not found' })
-      const { data: rows } = await readItems(
-        req.user!,
-        rel.many_collection,
-        { filter: { [rel.many_field]: { _eq: id } }, limit: 1000 },
-        req,
-        req.workspaceId ?? undefined
-      )
+      const manyCollection = rel.many_collection
+      const manyField = rel.many_field
+      const read = await gated(req, reply, `items:child-summary:${collection}`, async () => {
+        const parent = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, [
+          'id'
+        ])
+        if (!parent) return null
+        return readItems(
+          req.user!,
+          manyCollection,
+          { filter: { [manyField]: { _eq: id } }, limit: 1000 },
+          req,
+          req.workspaceId ?? undefined
+        )
+      })
+      if (!read) return reply.code(404).send({ error: 'Not found' })
+      const rows = read.data
       const positiveOnly = body.positive_only !== false
       const contributing: Array<{ id: string; value: number }> = []
       let total = 0
@@ -1119,16 +1155,18 @@ export async function itemsRoutes(app: FastifyInstance) {
     // would let this user read (policies + row_filter applied by readItems).
     let idList: string[]
     try {
-      const visible = await readItems(
-        req.user!,
-        collection,
-        {
-          filter: { id: { _in: requestedIds } },
-          fields: ['id'],
-          limit: requestedIds.length
-        } as ItemsQuery,
-        req,
-        req.workspaceId ?? undefined
+      const visible = await gated(req, reply, `items:resolve-paths:${collection}`, () =>
+        readItems(
+          req.user!,
+          collection,
+          {
+            filter: { id: { _in: requestedIds } },
+            fields: ['id'],
+            limit: requestedIds.length
+          } as ItemsQuery,
+          req,
+          req.workspaceId ?? undefined
+        )
       )
       const visibleIds = new Set(visible.data.map((r) => String((r as { id?: unknown }).id)))
       idList = requestedIds.filter((id) => visibleIds.has(id))
@@ -1141,26 +1179,28 @@ export async function itemsRoutes(app: FastifyInstance) {
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
     const rowsOut: Record<string, Record<string, { value: string; ids: string[] }>> = {}
     const targets: Record<string, string | null> = {}
-    await Promise.all(
-      pathList.map(async (path) => {
-        try {
-          const segments = path.split('.')
-          const hops = await pathHopsReadable(req.user!, collection, segments)
-          if (!hops.readable) return
-          targets[path] = hops.target
-          const byRow = await keepReadable(
-            req,
-            hops.target,
-            await resolvePathValues(collection, idList, segments, relationsCache)
-          )
-          for (const [rowId, pv] of byRow) {
-            rowsOut[rowId] ??= {}
-            rowsOut[rowId][path] = { value: pv.value, ids: pv.ids }
+    await gated(req, reply, `items:resolve-paths:${collection}`, () =>
+      Promise.all(
+        pathList.map(async (path) => {
+          try {
+            const segments = path.split('.')
+            const hops = await pathHopsReadable(req.user!, collection, segments)
+            if (!hops.readable) return
+            targets[path] = hops.target
+            const byRow = await keepReadable(
+              req,
+              hops.target,
+              await resolvePathValues(collection, idList, segments, relationsCache)
+            )
+            for (const [rowId, pv] of byRow) {
+              rowsOut[rowId] ??= {}
+              rowsOut[rowId][path] = { value: pv.value, ids: pv.ids }
+            }
+          } catch {
+            // skip broken path
           }
-        } catch {
-          // skip broken path
-        }
-      })
+        })
+      )
     )
     return reply.send({ data: { rows: rowsOut, targets } })
   })
@@ -1192,23 +1232,25 @@ export async function itemsRoutes(app: FastifyInstance) {
     const relationsCache = new Map<string, import('../types.js').CMSRelation[]>()
     const out: Record<string, { value: string; ids: string[]; target_collection: string | null }> =
       {}
-    await Promise.all(
-      pathList.map(async (path) => {
-        try {
-          const segments = path.split('.')
-          const hops = await pathHopsReadable(req.user!, collection, segments)
-          if (!hops.readable) return
-          const byRow = await keepReadable(
-            req,
-            hops.target,
-            await resolvePathValues(collection, [String(id)], segments, relationsCache)
-          )
-          const pv = byRow.get(String(id))
-          if (pv) out[path] = { ...pv, target_collection: hops.target }
-        } catch {
-          // Stale/deleted path config — skip this path, resolve the rest.
-        }
-      })
+    await gated(req, reply, `items:resolve-paths:${collection}`, () =>
+      Promise.all(
+        pathList.map(async (path) => {
+          try {
+            const segments = path.split('.')
+            const hops = await pathHopsReadable(req.user!, collection, segments)
+            if (!hops.readable) return
+            const byRow = await keepReadable(
+              req,
+              hops.target,
+              await resolvePathValues(collection, [String(id)], segments, relationsCache)
+            )
+            const pv = byRow.get(String(id))
+            if (pv) out[path] = { ...pv, target_collection: hops.target }
+          } catch {
+            // Stale/deleted path config — skip this path, resolve the rest.
+          }
+        })
+      )
     )
     return reply.send({ data: out })
   })

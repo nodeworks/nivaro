@@ -4,6 +4,8 @@ import { roleAllowsSignIn } from '../auth/role-sign-in.js'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
+import { cacheSetting } from '../services/cache-config.js'
+import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import {
@@ -13,7 +15,7 @@ import {
   oauthScopeRefusal
 } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
-import { notePrincipalKind } from '../services/permission-cache.js'
+import { notePrincipalKind, onPermissionCacheReset } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -157,14 +159,145 @@ const LAST_ACCESS_TOUCH_MS = 5 * 60_000
 const lastAccessTouched = new Map<string, number>()
 function touchLastAccess(userId: string) {
   const now = Date.now()
-  const prev = lastAccessTouched.get(userId) ?? 0
+  const key = `${currentTenantKey()}|${userId}`
+  const prev = lastAccessTouched.get(key) ?? 0
   if (now - prev < LAST_ACCESS_TOUCH_MS) return
-  lastAccessTouched.set(userId, now)
+  lastAccessTouched.set(key, now)
   if (lastAccessTouched.size > 5000) lastAccessTouched.clear()
   void db('nivaro_users')
     .where({ id: userId })
     .update({ last_access: new Date(now) })
     .catch(() => undefined)
+}
+
+// ─── Identity rows (#C2, 2026-10-27) ─────────────────────────────────────────
+/**
+ * The active user row a request signs in with (session, View-as target, OAuth grant owner,
+ * API key owner), shared by the requests of the next few seconds: a record page fires ~20
+ * calls at once and each read the same row, often twice (the maintenance hook and the
+ * route's own authenticate). Only rows FOUND active are kept — an inactive or missing
+ * account is always read fresh — and every caller gets its own copy (authenticate
+ * decorates the user object per request).
+ *
+ * Only where attachIdentitySeam ran (the cache-config route plugin, at boot).
+ * Keyed by tenant + user id; at most IDENTITY_CACHE_TTL_MS / the instance's cache config
+ * (≤ 5 s, Database → Caches; IDENTITY_CACHE=off turns it off). This process forgets rows
+ * on any write to nivaro_users it sends (attachIdentitySeam — except the last_access
+ * touch), when the permission cache's access versions move, on a configuration epoch move
+ * and from the cache console; a write on ANOTHER replica (a suspension, a role change)
+ * shows within the TTL. The role row is not kept here: it comes through the driver-seam
+ * configuration cache, busted by role writes.
+ */
+const IDENTITY_MAX = 5_000
+type IdentityEntry = { at: number; row: User }
+const identityRows = new Map<string, IdentityEntry>()
+const identityInflight = new Map<string, Promise<User | undefined>>()
+let identityGen = 0
+const identityCounters = { hits: 0, misses: 0, busts: 0 }
+
+function identityTtlMs(): number {
+  return cacheSetting('identity.enabled') ? cacheSetting('identity.ttl_ms') : 0
+}
+
+function identityKey(id: unknown): string {
+  return `${currentTenantKey()}|${String(id).toLowerCase()}`
+}
+
+/** Forget kept identity rows: one person's (any tenant), or everyone's. */
+export function forgetIdentityRows(userId?: string | number | null): void {
+  identityCounters.busts++
+  identityGen++
+  if (userId == null || userId === '') {
+    identityRows.clear()
+    return
+  }
+  const suffix = `|${String(userId).toLowerCase()}`
+  for (const k of identityRows.keys()) if (k.endsWith(suffix)) identityRows.delete(k)
+}
+
+export function identityCacheStats(): Record<string, number> {
+  return { entries: identityRows.size, ttl_ms: identityTtlMs(), ...identityCounters }
+}
+
+let identityRegistered = false
+function registerIdentityBusts(): void {
+  if (identityRegistered) return
+  identityRegistered = true
+  registerCache('identity-rows', 'Active user rows requests sign in with (≤ 5 s)', () =>
+    forgetIdentityRows()
+  )
+  onPermissionCacheReset((userId) => forgetIdentityRows(userId))
+}
+
+/** The one write to nivaro_users that never changes who someone is (touchLastAccess). */
+const LAST_ACCESS_TOUCH_RE =
+  /^\s*update\s+\[?nivaro_users\]?\s+set\s+\[?last_access\]?\s*=\s*@p0\s+where\s+\[?id\]?\s*=\s*@p1\s*$/i
+const USERS_WRITE_RE = /\b(?:insert|update|delete|merge|truncate|drop|alter)\b/i
+const USERS_RE = /\bnivaro_users\b/i
+
+/** Exported for tests: does this statement change a kept identity row? */
+export function isIdentityWrite(sql: string): boolean {
+  if (!sql || !USERS_RE.test(sql) || !USERS_WRITE_RE.test(sql)) return false
+  return !LAST_ACCESS_TOUCH_RE.test(sql)
+}
+
+type IdentityEmitter = { on: (ev: string, fn: (...a: unknown[]) => void) => unknown }
+const identitySeams = new WeakSet<object>()
+/** No seam, no cache: a process that cannot hear its own nivaro_users writes keeps nothing. */
+let identitySeamAttached = false
+/** Forget identity rows when this process writes nivaro_users (a knex client; the
+ *  cache-config route plugin attaches the request and background pools). */
+export function attachIdentitySeam(client: IdentityEmitter | null | undefined): void {
+  if (!client || typeof client.on !== 'function' || identitySeams.has(client)) return
+  identitySeams.add(client)
+  identitySeamAttached = true
+  registerIdentityBusts()
+  const seen = (q: unknown) => {
+    const sql = (q as { sql?: unknown } | null)?.sql
+    if (typeof sql === 'string' && identityRows.size > 0 && isIdentityWrite(sql))
+      forgetIdentityRows()
+  }
+  client.on('query', seen)
+  // After the statement too: a read that started before the write must not keep its row.
+  client.on('query-response', (_r: unknown, q: unknown) => seen(q))
+}
+
+/** The active user row with this id (a copy), through the identity cache. */
+async function activeUserById(id: unknown): Promise<User | undefined> {
+  const ttl = identityTtlMs()
+  if (ttl <= 0 || !identitySeamAttached || id == null || id === '') {
+    return db<User>('nivaro_users').where({ id, status: 'active' }).first()
+  }
+  registerIdentityBusts()
+  const key = identityKey(id)
+  const now = Date.now()
+  const hit = identityRows.get(key)
+  if (hit && now - hit.at < ttl) {
+    identityCounters.hits++
+    return { ...hit.row }
+  }
+  identityCounters.misses++
+  let p = identityInflight.get(key)
+  if (!p) {
+    const gen = identityGen
+    const started = Date.now()
+    p = Promise.resolve(db<User>('nivaro_users').where({ id, status: 'active' }).first())
+      .then((row) => {
+        if (row && gen === identityGen) {
+          if (identityRows.size >= IDENTITY_MAX) {
+            const oldest = identityRows.keys().next().value
+            if (oldest !== undefined) identityRows.delete(oldest)
+          }
+          identityRows.delete(key)
+          identityRows.set(key, { at: started, row: { ...row } })
+        }
+        return row
+      })
+      .finally(() => identityInflight.delete(key))
+    identityInflight.set(key, p)
+  }
+  const row = await p
+  return row ? { ...row } : undefined
 }
 
 /** The administrator test every request makes (req.isAdmin): the role grants admin access. */
@@ -343,7 +476,7 @@ async function applyApiKey(
   if (!simulated && Number.isFinite(limit) && limit > 0)
     await enforceKeyRateLimit(req, reply, key.id, limit)
 
-  const user = await db<User>('nivaro_users').where({ id: key.user, status: 'active' }).first()
+  const user = await activeUserById(key.user)
   if (!user)
     throw httpError(401, 'The account behind this API key is not active', 'API_KEY_OWNER_INACTIVE')
 
@@ -535,9 +668,7 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         // Minted on another tenant's host (cloud): not a View-as here.
         if (tenantTagRefused(payload.t))
           throw httpError(401, 'Masquerade session expired', 'MASQUERADE_EXPIRED')
-        const user = await db<User>('nivaro_users')
-          .where({ id: payload.user_id, status: 'active' })
-          .first()
+        const user = await activeUserById(payload.user_id)
         if (!user)
           throw httpError(401, 'Masqueraded user is not active', 'MASQUERADE_TARGET_INACTIVE')
         // The administrator who started it must still be one (cached briefly): a suspended
@@ -569,9 +700,7 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           ? await withAuthDeadline(resolveAccessToken(req.server.redis, token), 'the token store')
           : null
         if (!rec) throw httpError(401, 'The access token is invalid or expired', 'TOKEN_INVALID')
-        const user = await db<User>('nivaro_users')
-          .where({ id: rec.user_id, status: 'active' })
-          .first()
+        const user = await activeUserById(rec.user_id)
         if (!user)
           throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
         const refusal = oauthAudienceRefusal(req)
@@ -608,7 +737,7 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
   const userId = req.session.userId
   if (!userId) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
 
-  const user = await db<User>('nivaro_users').where({ id: userId, status: 'active' }).first()
+  const user = await activeUserById(userId)
   if (!user) {
     await req.session.destroy()
     throw httpError(401, 'Unauthorized', 'ACCOUNT_NOT_ACTIVE')
