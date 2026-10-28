@@ -57,7 +57,10 @@ const MARKERS: Array<{ re: RegExp; part: PromptPart }> = [
   { re: /(?:^|\n)Saved queries you may run/, part: 'catalogues' },
   { re: /(?:^|\n)Queues you may ask about/, part: 'catalogues' },
   { re: /(?:^|\n)Saved views you may use/, part: 'catalogues' },
-  { re: /(?:^|\n)Answered before — similar questions/, part: 'playbooks' },
+  {
+    re: /(?:^|\n)(?:Answered before — similar questions|Tool plans that answered similar questions)/,
+    part: 'playbooks'
+  },
   { re: /(?:^|\n)Documents the person attached to the question/, part: 'attachments' }
 ]
 

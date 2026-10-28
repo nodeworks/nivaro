@@ -336,7 +336,8 @@ export function bustAiBudgetCache(): void {
 }
 
 async function roleOf(userId: string): Promise<string | null> {
-  const hit = roleCache.get(userId)
+  const ck = `${currentTenantKey()}|${userId}`
+  const hit = roleCache.get(ck)
   if (hit && Date.now() - hit.at < 300_000) return hit.role
   const row = (await db('nivaro_users')
     .where({ id: userId })
@@ -344,13 +345,13 @@ async function roleOf(userId: string): Promise<string | null> {
     .first()
     .catch(() => null)) as { role?: string | null } | null
   const role = row?.role ? String(row.role) : null
-  roleCache.set(userId, { at: Date.now(), role })
+  roleCache.set(ck, { at: Date.now(), role })
   return role
 }
 
 /** Today's spend (USD, UTC day) for a cap, from the call log. */
 async function spendFor(cap: BudgetCap, subject: BudgetSubject, start: Date): Promise<number> {
-  const key = `${cap.id}|${cap.pooled ? '*' : subject.userId}|${start.getTime()}`
+  const key = `${currentTenantKey()}|${cap.id}|${cap.pooled ? '*' : subject.userId}|${start.getTime()}`
   const hit = spendCache.get(key)
   if (hit && Date.now() - hit.at < SPEND_TTL_MS) return hit.value
   const q = db('nivaro_ai_calls').where('created_at', '>=', start).sum({ total: 'cost_usd' })
@@ -639,7 +640,8 @@ export interface LiveAiCall {
 const nameCache = new Map<string, { at: number; name: string }>()
 
 async function nameOf(userId: string): Promise<string> {
-  const hit = nameCache.get(userId)
+  const ck = `${currentTenantKey()}|${userId}`
+  const hit = nameCache.get(ck)
   if (hit && Date.now() - hit.at < 600_000) return hit.name
   const r = (await db('nivaro_users')
     .where({ id: userId })
@@ -647,7 +649,7 @@ async function nameOf(userId: string): Promise<string> {
     .first()
     .catch(() => null)) as { first_name?: string; last_name?: string; email?: string } | null
   const name = r ? [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || '' : ''
-  nameCache.set(userId, { at: Date.now(), name })
+  nameCache.set(ck, { at: Date.now(), name })
   return name
 }
 

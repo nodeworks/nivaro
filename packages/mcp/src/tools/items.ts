@@ -19,6 +19,12 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from '../annotations.js'
+import {
+  CONFIRM_TTL_MS,
+  checkConfirmToken,
+  confirmSecretFor,
+  mintConfirmToken
+} from '../confirm.js'
 import { fail, ok, refuse } from '../result.js'
 import {
   clampLimit,
@@ -50,7 +56,24 @@ const filterInput = jsonObject
     'Filter object: { status: { _eq: "active" }, owner: { last_name: { _contains: "Smith" } }, tags: { _some: { name: { _eq: "x" } } }, _and/_or: [...] }. Operators: _eq _neq _gt _gte _lt _lte _in _nin _null _nnull _contains _starts_with _ends_with.'
   )
 
-export function registerItemTools(server: McpServer, client: NivaroClient) {
+/** A short preview of the record a rehearsal would delete (scalars only, a dozen fields). */
+function previewOf(row: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!row || typeof row !== 'object') return out
+  for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+    if (Object.keys(out).length >= 12) break
+    if (v == null || typeof v === 'object') continue
+    out[k] = typeof v === 'string' && v.length > 120 ? `${v.slice(0, 120)}…` : v
+  }
+  return out
+}
+
+export function registerItemTools(
+  server: McpServer,
+  client: NivaroClient,
+  opts: { confirmSecret?: string } = {}
+) {
+  const confirmSecret = opts.confirmSecret ?? confirmSecretFor(null)
   server.registerTool(
     'read_items',
     {
@@ -242,24 +265,61 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
     {
       title: 'Delete a record',
       description:
-        'Delete one record (it lands in the trash where the instance keeps one). Refused unless confirm is true — ask the person before confirming.',
+        'Delete one record (it lands in the trash where the instance keeps one). Two steps: first call WITHOUT confirm_token (a rehearsal, dry_run: true by default) — it checks the record, shows what would be deleted and returns a confirm_token. Show the person what will be deleted and ask; only after they agree, call again with dry_run: false and that confirm_token (valid 10 minutes, for this record only).',
       inputSchema: {
         collection: collectionName,
         id: recordId,
-        confirm: z.boolean().optional().describe('Must be true to delete.')
+        dry_run: z
+          .boolean()
+          .default(true)
+          .describe('true (default) rehearses and returns a confirm_token; false deletes.'),
+        confirm_token: z
+          .string()
+          .optional()
+          .describe('The token a rehearsal of this exact delete returned. Required to delete.'),
+        confirm: z
+          .boolean()
+          .optional()
+          .describe('Deprecated: no longer enough on its own — a confirm_token is required.')
       },
       annotations: DESTRUCTIVE
     },
-    async ({ collection, id, confirm }) => {
-      if (confirm !== true) {
+    async ({ collection, id, dry_run, confirm_token, confirm }) => {
+      const action = `delete_item|${collection}|${String(id)}`
+      const wantsDelete = dry_run === false || confirm === true
+      if (wantsDelete && confirm_token != null) {
+        const verdict = checkConfirmToken(confirmSecret, action, confirm_token)
+        if (verdict !== 'ok') {
+          return refuse(
+            verdict === 'expired'
+              ? `The confirm_token for ${collection}/${id} has expired. Rehearse again (dry_run: true) and ask the person once more. Nothing was deleted.`
+              : `That confirm_token does not belong to deleting ${collection}/${id}. Rehearse this delete (dry_run: true) to get one. Nothing was deleted.`,
+            verdict === 'expired' ? 'CONFIRM_TOKEN_EXPIRED' : 'CONFIRM_TOKEN_INVALID'
+          )
+        }
+        try {
+          await client.request(deleteItem(collection, id))
+          return ok({ deleted: true, collection, id })
+        } catch (err) {
+          return fail(err)
+        }
+      }
+      if (wantsDelete) {
         return refuse(
-          `Deleting ${collection}/${id} needs confirm: true. Nothing was deleted.`,
-          'CONFIRM_REQUIRED'
+          `Deleting ${collection}/${id} needs the confirm_token from a rehearsal: call delete_item with dry_run: true first, show the person what would be deleted, and pass its confirm_token with dry_run: false once they agree. Nothing was deleted.`,
+          'CONFIRM_TOKEN_REQUIRED'
         )
       }
+      // The rehearsal: the record must be readable as the key's user.
       try {
-        await client.request(deleteItem(collection, id))
-        return ok({ deleted: true, collection, id })
+        const res = await client.request(readItemFields(collection, id))
+        return ok({
+          dry_run: true,
+          would_delete: { collection, id, record: previewOf(res?.data) },
+          confirm_token: mintConfirmToken(confirmSecret, action),
+          expires_in_seconds: CONFIRM_TTL_MS / 1000,
+          note: 'Nothing was deleted. Ask the person; to delete, call again with dry_run: false and this confirm_token.'
+        })
       } catch (err) {
         return fail(err)
       }

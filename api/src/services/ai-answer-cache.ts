@@ -24,9 +24,51 @@ export function normalizeAskQuestion(question: string): string {
   return question.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-export function personalAnswerKey(userId: string, command: string | null, question: string) {
+/** What a personal answer's access depends on, beyond the person (review 2026-10-27). */
+export interface AnswerScope {
+  tenant?: string | null
+  /** The workspace the question was asked in (x-workspace). */
+  workspace?: string | null
+  /** accessSignature(user): role + API-key scopes + sandbox. */
+  access?: string | null
+  /** The configuration epoch (moves on role / policy writes); null = unknown. */
+  epoch?: number | null
+}
+
+/** Role, API-key scopes and sandbox flag — a change to any gives a new key. */
+export function accessSignature(user: {
+  role?: unknown
+  api_key_scopes?: unknown
+  api_key_scope_restrictions?: unknown
+  api_key_sandbox?: unknown
+}): string {
+  return createHash('sha1')
+    .update(
+      JSON.stringify([
+        user.role ?? null,
+        user.api_key_scopes ?? null,
+        user.api_key_scope_restrictions ?? null,
+        user.api_key_sandbox ? 1 : 0
+      ])
+    )
+    .digest('hex')
+    .slice(0, 16)
+}
+
+export function personalAnswerKey(
+  userId: string,
+  command: string | null,
+  question: string,
+  scope: AnswerScope = {}
+) {
+  const where = [
+    scope.tenant ?? '',
+    scope.workspace ?? '',
+    scope.access ?? '',
+    scope.epoch == null ? '' : String(scope.epoch)
+  ].join('|')
   return `nvr:aichat:${userId}:${createHash('sha1')
-    .update(`${command ?? ''}|${normalizeAskQuestion(question)}`)
+    .update(`${command ?? ''}|${normalizeAskQuestion(question)}|${where}`)
     .digest('hex')}`
 }
 

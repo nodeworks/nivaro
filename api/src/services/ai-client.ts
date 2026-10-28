@@ -21,6 +21,7 @@ import {
   type StreamOptions,
   streamMessage
 } from './ai-stream.js'
+import { checkUserAiLimits, currentAiUser, noteUserTokens, tokensOf } from './ai-user-limits.js'
 import { withAiChaos } from './chaos/outbound-points.js'
 import { overlaySettings } from './settings-overrides.js'
 import { noteAiFallback } from './traffic-taps/ai.js'
@@ -249,10 +250,15 @@ export function withPromptCaching(params: MessageParams): MessageParams {
     if (params.system.trim())
       out.system = [{ type: 'text', text: params.system, cache_control: EPHEMERAL }]
   } else if (Array.isArray(params.system) && params.system.length) {
-    const blocks = [...params.system]
-    const last = blocks[blocks.length - 1]
-    blocks[blocks.length - 1] = { ...last, cache_control: last.cache_control ?? EPHEMERAL }
-    out.system = blocks
+    // A caller that marked its own stable block (Ask AI: the long rules +
+    // catalogue, then a per-question block) keeps exactly that marker — a
+    // second one on the per-question tail would pay a cache write every call.
+    if (!params.system.some((b) => b.cache_control)) {
+      const blocks = [...params.system]
+      const last = blocks[blocks.length - 1]
+      blocks[blocks.length - 1] = { ...last, cache_control: EPHEMERAL }
+      out.system = blocks
+    }
   }
   if (params.tools?.length) {
     const tools = [...params.tools]
@@ -288,6 +294,25 @@ export function withPromptCaching(params: MessageParams): MessageParams {
   return out
 }
 
+// ─── timeouts ────────────────────────────────────────────────────────────────
+
+/** The OAuth token exchange: a gateway's token endpoint answers in well under this. */
+export const BEARER_TIMEOUT_MS = 10_000
+
+/**
+ * How long one provider call may take before it is abandoned. The base
+ * (AI_CALL_TIMEOUT_MS, default 60 s) grows with max_tokens for long answers
+ * (~30 ms per token asked for, at most 5 minutes) so a 4,000-token extraction
+ * is not cut at a minute. For a streamed call it bounds the wait for the
+ * answer to start.
+ */
+export function callTimeoutMs(params?: { max_tokens?: number | null } | null): number {
+  const raw = Number(process.env.AI_CALL_TIMEOUT_MS)
+  const base = Number.isFinite(raw) && raw >= 1000 ? raw : 60_000
+  const byTokens = Math.min(300_000, Math.max(0, Number(params?.max_tokens) || 0) * 30)
+  return Math.max(base, byTokens)
+}
+
 /** The SDK's own stream as an event source (`abort` cancels the request). */
 function sdkStream(
   inner: Anthropic,
@@ -300,7 +325,8 @@ function sdkStream(
     else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
   }
   const stream = inner.messages.stream({ ...params, stream: true } as never, {
-    signal: controller.signal
+    signal: controller.signal,
+    timeout: callTimeoutMs(params)
   })
   return {
     events: stream as unknown as AsyncIterable<AiStreamEvent>,
@@ -315,6 +341,15 @@ function sdkStream(
   }
 }
 
+/** Prompt caching switched off: drop a caller's own system markers too. */
+export function withoutCacheMarkers(params: MessageParams): MessageParams {
+  if (!Array.isArray(params.system) || !params.system.some((b) => b.cache_control)) return params
+  return {
+    ...params,
+    system: params.system.map(({ cache_control: _c, ...rest }) => rest)
+  }
+}
+
 /** `messages.create` with the caching markers applied on the way in. */
 function cachingClient(
   inner: Anthropic,
@@ -326,7 +361,9 @@ function cachingClient(
   const create = loggedCreate(
     provider,
     (params: MessageParams) =>
-      inner.messages.create(prepare(params) as never) as Promise<Anthropic.Message>
+      inner.messages.create(prepare(params) as never, {
+        timeout: callTimeoutMs(params)
+      }) as Promise<Anthropic.Message>
   )
   const createStream = loggedStream(provider, async (params, opts) =>
     sdkStream(inner, prepare(params), opts)
@@ -340,11 +377,14 @@ function loggedClient(
   provider: 'anthropic' | 'gateway-anthropic',
   model?: string
 ): Anthropic {
-  const prepare = (params: MessageParams) => (model ? { ...params, model } : params)
+  const prepare = (params: MessageParams) =>
+    withoutCacheMarkers(model ? { ...params, model } : params)
   const create = loggedCreate(
     provider,
     (params: MessageParams) =>
-      inner.messages.create(prepare(params) as never) as Promise<Anthropic.Message>
+      inner.messages.create(prepare(params) as never, {
+        timeout: callTimeoutMs(params)
+      }) as Promise<Anthropic.Message>
   )
   const createStream = loggedStream(provider, async (params, opts) =>
     sdkStream(inner, prepare(params), opts)
@@ -390,7 +430,8 @@ export async function gatewayBearer(api: GatewayApi): Promise<string> {
       'X-Client-Id': api.client_id,
       'X-Client-Secret': api.client_secret
     },
-    body: new URLSearchParams({ grant_type: 'client_credentials' })
+    body: new URLSearchParams({ grant_type: 'client_credentials' }),
+    signal: AbortSignal.timeout(BEARER_TIMEOUT_MS)
   })
   const body = (await res.json().catch(() => ({}))) as {
     access_token?: string
@@ -538,12 +579,31 @@ export function toOpenAi(
   const systemMarked =
     Array.isArray(params.system) &&
     (params.system as Array<{ cache_control?: unknown }>).some((b) => b.cache_control)
+  // A system prompt split into a marked stable block and an unmarked
+  // per-question tail rides as separate parts, the marker on the stable one
+  // only — the cached prefix then survives a change of question.
+  const sysBlocks = Array.isArray(params.system)
+    ? (params.system as Array<{ text?: string; cache_control?: unknown }>)
+    : null
+  const splitSystem =
+    !!sysBlocks &&
+    sysBlocks.length > 1 &&
+    sysBlocks.slice(0, -1).some((b) => b.cache_control) &&
+    !sysBlocks[sysBlocks.length - 1].cache_control
   if (system)
     messages.push({
       role: 'system',
-      content: systemMarked
-        ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
-        : system
+      content: splitSystem
+        ? (sysBlocks ?? [])
+            .filter((b) => typeof b.text === 'string' && b.text)
+            .map((b) => ({
+              type: 'text',
+              text: b.text,
+              ...(b.cache_control ? { cache_control: { type: 'ephemeral' } } : {})
+            }))
+        : systemMarked
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+          : system
     })
   for (const m of params.messages) {
     if (typeof m.content === 'string') {
@@ -681,7 +741,7 @@ function fromOpenAi(res: OpenAiResponse, model: string): Anthropic.Message {
 function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): Anthropic {
   const url = `${api.base_url}/openai/v1/chat/completions`
   const create = async (raw: MessageParams): Promise<Anthropic.Message> => {
-    const params = caching ? withPromptCaching(raw) : raw
+    const params = caching ? withPromptCaching(raw) : withoutCacheMarkers(raw)
     const attempt = async (retryOn401: boolean, images: boolean): Promise<Anthropic.Message> => {
       const bearer = await gatewayBearer(api)
       const res = await fetch(url, {
@@ -690,7 +750,9 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
           'Content-Type': 'application/json',
           Authorization: `Bearer ${bearer}`
         },
-        body: JSON.stringify(toOpenAi(params, model, false, { images }))
+        body: JSON.stringify(toOpenAi(params, model, false, { images })),
+        // covers the body read below too (res.text() honours the signal)
+        signal: AbortSignal.timeout(callTimeoutMs(params))
       })
       if (res.status === 401 && retryOn401) {
         bustGatewayBearer()
@@ -718,7 +780,7 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
     raw: MessageParams,
     opts: StreamOptions
   ): Promise<{ events: AsyncIterable<AiStreamEvent>; abort: () => void }> => {
-    const params = caching ? withPromptCaching(raw) : raw
+    const params = caching ? withPromptCaching(raw) : withoutCacheMarkers(raw)
     const controller = new AbortController()
     if (opts.signal) {
       if (opts.signal.aborted) controller.abort()
@@ -726,16 +788,25 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
     }
     const attempt = async (retryOn401: boolean, images: boolean): Promise<Response> => {
       const bearer = await gatewayBearer(api)
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          Authorization: `Bearer ${bearer}`
-        },
-        body: JSON.stringify(toOpenAi(params, model, true, { images })),
-        signal: controller.signal
-      })
+      // The answer must START within the call timeout; once headers arrive the
+      // stream runs as long as events keep coming (the caller can still stop it).
+      const startTimer = setTimeout(() => controller.abort(), callTimeoutMs(params))
+      startTimer.unref?.()
+      let res: Response
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+            Authorization: `Bearer ${bearer}`
+          },
+          body: JSON.stringify(toOpenAi(params, model, true, { images })),
+          signal: controller.signal
+        })
+      } finally {
+        clearTimeout(startTimer)
+      }
       if (res.status === 401 && retryOn401) {
         bustGatewayBearer()
         return attempt(false, images)
@@ -802,7 +873,8 @@ async function anthropicGatewayClient(
   const inner = new Anthropic({
     apiKey: null,
     authToken: bearer,
-    baseURL: `${api.base_url}/anthropic`
+    baseURL: `${api.base_url}/anthropic`,
+    timeout: callTimeoutMs()
   })
   return caching
     ? cachingClient(inner, 'gateway-anthropic', model)
@@ -811,7 +883,28 @@ async function anthropicGatewayClient(
 
 // ─── model fallback (#761) ───────────────────────────────────────────────────
 
-const MODEL_REFUSED = /model|not found|unsupported|unknown|does not exist|not available|forbidden/i
+/** Explicit provider codes for "that model id is not available here". */
+const MODEL_REFUSAL_CODE =
+  /model_not_found|invalid_model|unknown_model|model_not_available|unsupported_model|model_not_supported|no such model/i
+/** A refusal phrase — only counted when the message is ABOUT the model. */
+const REFUSAL_PHRASE =
+  /not[ _-]?found|unsupported|not supported|unknown|does not exist|not available|unavailable|not allowed|not permitted|forbidden|no access|access denied|invalid|deprecated|retired|decommissioned/i
+/** Refusals that name a model but are about the REQUEST (size, tokens, pictures,
+ *  tools): another model would not fix them, and silently changing model hides them. */
+const REQUEST_PROBLEM =
+  /context (?:length|window)|too (?:long|large|many)|max(?:imum)?[_ ]?tokens|token limit|prompt is too|image|vision|content (?:policy|filter)|safety|tool[_ ]?(?:use|choice|call)|schema|rate limit|quota/i
+
+/** Does this error mean the gateway refused the MODEL id (so the next model in
+ *  the chain may answer)? Narrow on purpose (review 2026-10-27): a 400 that
+ *  merely contains the word "model" is not a model refusal. */
+export function isModelRefusal(status: string, msg: string, model?: string): boolean {
+  if (!['400', '403', '404', '422'].includes(status)) return false
+  if (MODEL_REFUSAL_CODE.test(msg)) return true
+  if (REQUEST_PROBLEM.test(msg)) return false
+  const aboutModel =
+    /\bmodels?\b/i.test(msg) || (!!model && model.length > 2 && msg.includes(model))
+  return aboutModel && REFUSAL_PHRASE.test(msg)
+}
 
 /** A gateway that refuses the pinned model (a retired id, one this
  *  deployment's key does not cover) answers 400/403/404 naming the model.
@@ -842,7 +935,7 @@ export function withModelFallback(
         const msg = String((err as Error)?.message ?? '')
         const status =
           /AI gateway (\d{3})/.exec(msg)?.[1] ?? String((err as { status?: number })?.status ?? '')
-        const refused = ['400', '403', '404', '422'].includes(status) && MODEL_REFUSED.test(msg)
+        const refused = isModelRefusal(status, msg, chain[i])
         if (!refused || i === chain.length - 1) throw err
         // biome-ignore lint/suspicious/noConsole: the fallback must be visible in the server log
         console.warn(
@@ -914,8 +1007,14 @@ function guardClient(
   type Run<A extends unknown[]> = (c: Anthropic) => (...a: A) => Promise<unknown>
   const wrap = <A extends [MessageParams, ...unknown[]]>(run: Run<A>) => {
     return async (...args: A): Promise<unknown> => {
+      // Default per-person limits (ai-user-limits.ts) — outside the try, so a
+      // 429 of our own is never mistaken for a provider failure.
+      const who = currentAiUser()
+      await checkUserAiLimits(who)
       try {
-        return await run(client)(...args)
+        const out = await run(client)(...args)
+        if (who) noteUserTokens(who, tokensOf(out))
+        return out
       } catch (err) {
         if (!isProviderFailure(err)) throw err
         const first = args[0]?.model ?? model ?? ''
@@ -999,7 +1098,7 @@ async function buildAiClient(
   }
   const key = config.ANTHROPIC_API_KEY || s.anthropic_api_key
   if (!key) return null
-  const inner = new Anthropic({ apiKey: key })
+  const inner = new Anthropic({ apiKey: key, timeout: callTimeoutMs() })
   return withAiChaos(
     caching ? cachingClient(inner, 'anthropic') : loggedClient(inner, 'anthropic'),
     opts?.model?.trim() || 'anthropic',

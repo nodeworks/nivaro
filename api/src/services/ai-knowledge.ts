@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { tenantState } from './ai-tenant-state.js'
 import { type DocsIndexSection, loadDocsIndex, normalizeQuery, rankDocs } from './docs-search.js'
 import { searchTerms } from './help-video-search-rank.js'
 
@@ -122,12 +123,16 @@ function toEntry(r: Record<string, unknown>): GlossaryEntry {
   }
 }
 
-let glossaryCache: { at: number; rows: GlossaryEntry[] } | null = null
-let guideCache: { at: number; rows: DataGuide[] } | null = null
+// Per tenant: cloud mode serves many tenants from one process.
+const knowledgeCaches = tenantState<{
+  glossary: { at: number; rows: GlossaryEntry[] } | null
+  guide: { at: number; rows: DataGuide[] } | null
+}>(() => ({ glossary: null, guide: null }))
 
 export function bustKnowledgeCaches(): void {
-  glossaryCache = null
-  guideCache = null
+  const c = knowledgeCaches()
+  c.glossary = null
+  c.guide = null
 }
 
 export async function knowledgeTablesReady(): Promise<boolean> {
@@ -135,6 +140,7 @@ export async function knowledgeTablesReady(): Promise<boolean> {
 }
 
 export async function listGlossary(opts: { fresh?: boolean } = {}): Promise<GlossaryEntry[]> {
+  const glossaryCache = knowledgeCaches().glossary
   if (!opts.fresh && glossaryCache && Date.now() - glossaryCache.at < CACHE_MS)
     return glossaryCache.rows
   if (!(await knowledgeTablesReady())) return []
@@ -143,7 +149,7 @@ export async function listGlossary(opts: { fresh?: boolean } = {}): Promise<Glos
     .orderBy('term', 'asc')
     .catch(() => [])) as Array<Record<string, unknown>>
   const entries = rows.map(toEntry)
-  glossaryCache = { at: Date.now(), rows: entries }
+  knowledgeCaches().glossary = { at: Date.now(), rows: entries }
   return entries
 }
 
@@ -213,6 +219,7 @@ export function normalizeGuideInput(
 }
 
 export async function listDataGuides(opts: { fresh?: boolean } = {}): Promise<DataGuide[]> {
+  const guideCache = knowledgeCaches().guide
   if (!opts.fresh && guideCache && Date.now() - guideCache.at < CACHE_MS) return guideCache.rows
   if (!(await knowledgeTablesReady())) return []
   const rows = (await db('nivaro_ai_data_guides')
@@ -229,7 +236,7 @@ export async function listDataGuides(opts: { fresh?: boolean } = {}): Promise<Da
       }
     })
     .filter((g) => g.hints || g.examples.length)
-  guideCache = { at: Date.now(), rows: guides }
+  knowledgeCaches().guide = { at: Date.now(), rows: guides }
   return guides
 }
 

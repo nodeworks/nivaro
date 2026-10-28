@@ -9,6 +9,7 @@ import {
   matchGlossary
 } from './ai-knowledge.js'
 import { evidenceFromCalls, extractQuestion } from './ai-quality.js'
+import { tenantState } from './ai-tenant-state.js'
 import { cosineSim, embeddingProvider, embedText } from './embeddings.js'
 
 // #2734 — Ask AI topic map. Recent Ask AI questions are embedded and grouped
@@ -375,8 +376,10 @@ async function nameTopics(
   return { names: new Map(), by: 'keywords' }
 }
 
-let cache: { key: string; at: number; map: TopicMap & { samples: Map<string, string[]> } } | null =
-  null
+// Per tenant: cloud mode serves many tenants from one process.
+const topicCache = tenantState<{
+  v: { key: string; at: number; map: TopicMap & { samples: Map<string, string[]> } } | null
+}>(() => ({ v: null }))
 
 /** The topic map for the last `days` days. Cached ten minutes. */
 export async function buildTopicMap(
@@ -386,6 +389,7 @@ export async function buildTopicMap(
   const prov = await embeddingProvider()
   const tag = prov.model ? `${prov.provider}:${prov.model}` : prov.provider
   const key = `${days}|${tag}`
+  const cache = topicCache().v
   if (!opts.fresh && cache && cache.key === key && Date.now() - cache.at < CACHE_MS)
     return shape(cache.map, !!opts.withQuestions)
 
@@ -458,7 +462,7 @@ export async function buildTopicMap(
     topics,
     samples
   }
-  cache = { key, at: Date.now(), map }
+  topicCache().v = { key, at: Date.now(), map }
   return shape(map, !!opts.withQuestions)
 }
 
