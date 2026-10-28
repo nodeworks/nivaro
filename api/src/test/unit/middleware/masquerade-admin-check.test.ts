@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
-import { authenticate } from '../../../middleware/authenticate.js'
+import { authenticate, resetAdminRecheckCache } from '../../../middleware/authenticate.js'
 
 // A View-as (nvm_) token is only as good as the administrator who started it: a
 // suspended or demoted admin's View-as ends on the next request, not when the 4 h
@@ -67,6 +67,7 @@ async function call(admin: Row) {
 
 afterEach(() => {
   vi.clearAllMocks()
+  resetAdminRecheckCache()
 })
 
 describe('View-as token re-checks the administrator', () => {

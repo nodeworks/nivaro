@@ -7,7 +7,10 @@ vi.mock('../../../lib/ssrf.js', () => ({
   assertSafeUrl: vi.fn(async (u: string) => {
     if (/internal|127\.0\.0\.1/.test(u)) throw new Error('blocked')
     return new URL(u)
-  })
+  }),
+  // safeFetch pins the checked address on a real socket; here it hands off to the stubbed
+  // global fetch so the download tests drive it the same way.
+  safeFetch: vi.fn((u: string | URL, init?: RequestInit) => fetch(String(u), init))
 }))
 
 import {

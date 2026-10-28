@@ -543,7 +543,9 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         // The administrator who started it must still be one (cached briefly): a suspended
         // or demoted admin's View-as ends now, not when the 4 h token runs out.
         if (!(await issuingAdminStillAdmin(payload.admin_id))) {
-          void Promise.resolve(req.server.redis.del(`masq:${token}`)).catch(() => undefined)
+          void Promise.resolve()
+            .then(() => req.server.redis.del(`masq:${token}`))
+            .catch(() => undefined)
           throw httpError(
             401,
             'The administrator who started this View-as can no longer use it',
