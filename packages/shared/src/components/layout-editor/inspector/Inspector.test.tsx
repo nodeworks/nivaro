@@ -804,6 +804,15 @@ describe('Inspector', () => {
       expect(opts2.label).toBe('Stop personal defaults for Title')
     })
 
+    it('Personal default is offered on an M2M picker but not on an O2M list', async () => {
+      await mount(field('tags'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      expect(host.querySelector('[data-setting="field.personal_default"]')).not.toBeNull()
+      await mount(field('lines'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      expect(host.querySelector('[data-setting="field.personal_default"]')).toBeNull()
+    })
+
     it('Look tab: a label rule and a counter', async () => {
       const { apply } = await mount(field('title'))
       await click(

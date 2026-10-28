@@ -44,13 +44,17 @@ export function takesText(info: Pick<FieldInfo, 'type' | 'relKind' | 'isPath' | 
   )
 }
 
-/** A field a person types or picks a value into (the field's own column). */
-function takesValue(info: FieldInfo, field: string) {
+/**
+ * A field a person types or picks a value into (the field's own column).
+ * `allowM2M` also lets a many-to-many picker through: its id list is a value
+ * the person picks (O2M lists, aliases, paths and computed fields stay out).
+ */
+function takesValue(info: FieldInfo, field: string, opts: { allowM2M?: boolean } = {}) {
+  const m2m = opts.allowM2M === true && info.relKind === 'M2M'
   return (
     !field.startsWith('__') &&
     !info.isPath &&
-    info.type !== 'alias' &&
-    info.relKind !== 'M2M' &&
+    (m2m || (info.type !== 'alias' && info.relKind !== 'M2M')) &&
     info.relKind !== 'O2M' &&
     info.computedType !== 'virtual' &&
     info.computedType !== 'read'
@@ -385,7 +389,7 @@ export function RepeatLastToggle() {
 export function PersonalDefaultToggle() {
   const ctx = useFieldCtx()
   const { ov, info, row } = ctx
-  if (!takesValue(info, row.field) || info.computedType) return null
+  if (!takesValue(info, row.field, { allowM2M: true }) || info.computedType) return null
   return (
     <Toggle
       k='field.personal_default'
