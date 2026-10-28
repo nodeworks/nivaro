@@ -51,7 +51,8 @@ export async function fileUsageForReader(
       ]
       if (ids.length === 0) continue
       const seen = await visibleIds(await compileAccessGates(user, site.table), ids)
-      if (seen.size > 0) usages.push({ table: site.table, column: site.column, count: seen.size })
+      if (seen.size > 0)
+        usages.push({ table: site.table, column: site.column ?? u.column, count: seen.size })
     } catch {
       /* a site that cannot be judged stays hidden */
     }
