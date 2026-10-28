@@ -1800,6 +1800,15 @@
     "layout_types": ["grouped", "addendum", "detail", "summary"]
   },
   {
+    "key": "field.personal_default",
+    "label": "Let people save their own starting value for this field on new records",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
     "key": "field.readonly",
     "label": "Read-only on this form",
     "home": "inspector",

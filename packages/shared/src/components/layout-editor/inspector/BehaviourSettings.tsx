@@ -381,6 +381,30 @@ export function RepeatLastToggle() {
   )
 }
 
+/** Lets people save their own starting value for this field on new records. */
+export function PersonalDefaultToggle() {
+  const ctx = useFieldCtx()
+  const { ov, info, row } = ctx
+  if (!takesValue(info, row.field) || info.computedType) return null
+  return (
+    <Toggle
+      k='field.personal_default'
+      label='Personal default'
+      effect='People can save their own starting value for this field on new records.'
+      checked={ov.personal_default === true}
+      onChange={(v) =>
+        ctx.setOverride(
+          'personal_default',
+          v ? true : undefined,
+          v
+            ? `Allow personal defaults for ${info.label}`
+            : `Stop personal defaults for ${info.label}`
+        )
+      }
+    />
+  )
+}
+
 // ── #2712 Display formula (its own inspector) ────────────────────────────────
 
 const FORMAT_OPTIONS: Array<{ value: DisplayFormat; label: string }> = [
