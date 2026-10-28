@@ -179,7 +179,7 @@ function TotpForm() {
 
       <a
         href='/login'
-        className='mt-5 block text-center text-[12px] text-slate-400 hover:text-slate-600'
+        className='mt-5 block text-center text-[12px] text-slate-600 hover:text-slate-800 dark:hover:text-white'
       >
         Start over with a different account
       </a>
@@ -224,7 +224,7 @@ function TokenLoginFallback() {
       <button
         type='button'
         onClick={() => setOpen(true)}
-        className='mt-4 w-full text-center text-[12px] font-medium text-slate-400 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-slate-600'
+        className='mt-4 w-full text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-slate-800 dark:hover:text-white'
       >
         Sign in with an access token instead
       </button>
@@ -252,7 +252,7 @@ function TokenLoginFallback() {
       >
         {submitting ? 'Signing in…' : 'Sign in with token'}
       </button>
-      <p className='mt-2 text-center text-[11px] leading-relaxed text-slate-400'>
+      <p className='mt-2 text-center text-[11px] leading-relaxed text-slate-600'>
         Your static token is on your user record — an administrator can issue one.
       </p>
     </form>
@@ -555,7 +555,9 @@ export function LoginPage() {
                   <button
                     type='button'
                     onClick={() => setTab('microsoft')}
-                    className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
+                    className={`flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors${
+                      tab === 'microsoft' ? '' : ' text-slate-600'
+                    }`}
                     style={
                       tab === 'microsoft'
                         ? {
@@ -563,7 +565,7 @@ export function LoginPage() {
                             color: '#0f172a',
                             boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
                           }
-                        : { color: '#64748b' }
+                        : undefined
                     }
                   >
                     SSO
@@ -572,7 +574,9 @@ export function LoginPage() {
                 <button
                   type='button'
                   onClick={() => setTab('password')}
-                  className='flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors'
+                  className={`flex-1 rounded-lg py-2 text-[13px] font-medium transition-colors${
+                    tab === 'password' ? '' : ' text-slate-600'
+                  }`}
                   style={
                     tab === 'password'
                       ? {
@@ -580,7 +584,7 @@ export function LoginPage() {
                           color: '#0f172a',
                           boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
                         }
-                      : { color: '#64748b' }
+                      : undefined
                   }
                 >
                   Email / Password
@@ -613,7 +617,7 @@ export function LoginPage() {
                   {oidcOn && (
                     <a
                       href={`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`}
-                      className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                      className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                       style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
                     >
                       {isMicrosoft ? <MicrosoftIcon /> : <KeyIcon />}
@@ -637,7 +641,7 @@ export function LoginPage() {
                       href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(returnTo)}`}
                       className={
                         resolveButtonColor(p.button_color)
-                          ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
+                          ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-[#fff] shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                           : 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
                       }
                       style={
@@ -654,7 +658,7 @@ export function LoginPage() {
                       Continue with {p.label}
                     </a>
                   ))}
-                  <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-400'>
+                  <p className='mt-6 text-center text-[12px] leading-relaxed text-slate-600'>
                     Access is restricted to authorized users. If you need access, contact your
                     administrator.
                   </p>
@@ -670,7 +674,7 @@ export function LoginPage() {
         </div>
 
         <div className='mt-16 text-center' style={{ animation: 'login-fade 1s ease 0.4s both' }}>
-          <p className='text-[11px] text-slate-400'>© 2026 Nivaro · All rights reserved</p>
+          <p className='text-[11px] text-slate-600'>© 2026 Nivaro · All rights reserved</p>
         </div>
       </div>
     </div>
