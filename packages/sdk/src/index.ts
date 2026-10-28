@@ -1945,54 +1945,58 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
     }
     const signal = ctrl ? ctrl.signal : callerSignal
-    let res: Response
+    // The caller's abort stays wired to the read-timeout controller until the body is read.
     try {
-      res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
-        method: command._method,
-        headers: authHeaders(),
-        credentials: credentialsMode(),
-        body: command._body != null ? JSON.stringify(command._body) : undefined,
-        ...(signal ? { signal } : {})
-      })
-    } catch (e) {
-      if (callerSignal?.aborted) throw e
-      if (ctrl?.signal.aborted)
-        throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
-          name: 'TimeoutError'
+      let res: Response
+      try {
+        res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
+          method: command._method,
+          headers: authHeaders(),
+          credentials: credentialsMode(),
+          body: command._body != null ? JSON.stringify(command._body) : undefined,
+          ...(signal ? { signal } : {})
         })
-      throw e
+      } catch (e) {
+        if (callerSignal?.aborted) throw e
+        if (ctrl?.signal.aborted)
+          throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
+            name: 'TimeoutError'
+          })
+        throw e
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+
+      if (command._method === 'DELETE' && res.status === 204) {
+        return undefined as T
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }))
+        throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
+          status: res.status,
+          response: err
+        })
+      }
+
+      // Non-JSON responses:
+      //  - binary (e.g. renderPdfTemplate() → application/pdf) resolve to an ArrayBuffer
+      //  - text (e.g. getTypes() → text/plain, exportContent csv) resolve to the raw text
+      const contentType = res.headers.get('content-type') ?? ''
+      if (!contentType.includes('application/json')) {
+        if (
+          contentType.includes('application/pdf') ||
+          contentType.includes('application/octet-stream')
+        ) {
+          return (await res.arrayBuffer()) as unknown as T
+        }
+        return (await res.text()) as unknown as T
+      }
+
+      return (await res.json()) as T
     } finally {
-      if (timer) clearTimeout(timer)
       callerSignal?.removeEventListener('abort', onCallerAbort)
     }
-
-    if (command._method === 'DELETE' && res.status === 204) {
-      return undefined as T
-    }
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }))
-      throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
-        status: res.status,
-        response: err
-      })
-    }
-
-    // Non-JSON responses:
-    //  - binary (e.g. renderPdfTemplate() → application/pdf) resolve to an ArrayBuffer
-    //  - text (e.g. getTypes() → text/plain, exportContent csv) resolve to the raw text
-    const contentType = res.headers.get('content-type') ?? ''
-    if (!contentType.includes('application/json')) {
-      if (
-        contentType.includes('application/pdf') ||
-        contentType.includes('application/octet-stream')
-      ) {
-        return (await res.arrayBuffer()) as unknown as T
-      }
-      return (await res.text()) as unknown as T
-    }
-
-    return res.json() as Promise<T>
   }
 
   async function upload(

@@ -1,14 +1,10 @@
-import {
-  executeCustomQuery,
-  type NivaroClient,
-  readItem,
-  readItems,
-  readMany,
-  withSignal
-} from '@nivaro/sdk'
+import { executeCustomQuery, type NivaroClient, readItem, readItems, readMany } from '@nivaro/sdk'
 import { describe, expect, it, vi } from 'vitest'
 
-describe('withGetCoalescing and cancellable reads (withSignal, 2026-10-28)', () => {
+describe('withGetCoalescing and cancellable reads (Command._signal, 2026-10-28)', () => {
+  // How shared builds a cancellable command (ReportView): inline, no SDK helper import.
+  const withSignal = <C extends object>(c: C, signal?: AbortSignal): C =>
+    signal ? { ...c, _signal: signal } : c
   function counting() {
     const calls: unknown[] = []
     const client = {
@@ -31,7 +27,8 @@ describe('withGetCoalescing and cancellable reads (withSignal, 2026-10-28)', () 
     expect(calls.length).toBe(2)
   })
 
-  it('passes the signal through on POST reads', async () => {
+  // execute is a POST, so it takes the wrapper's write path: the field must survive it.
+  it('passes the signal through on the write path (POST custom-query execute)', async () => {
     const { client, calls } = counting()
     const c = withGetCoalescing(client)
     const ac = new AbortController()

@@ -50,7 +50,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --out-dir dist",
     "dev": "tsup src/index.ts --format esm --dts --out-dir dist --watch",
-    "test": "node --test bin/lib/*.test.mjs"
+    "test": "node --test bin/lib/*.test.mjs test/*.test.mjs"
   },
   "dependencies": {
     "socket.io-client": "^4.8.4"

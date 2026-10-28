@@ -24,10 +24,9 @@ import {
   readReportWidgetData,
   resolveReportAlert,
   saveReportFilterPreset,
-  toggleReportAlert,
-  withSignal
+  toggleReportAlert
 } from '@nivaro/sdk'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { isCancelledError, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
   Camera,
@@ -709,8 +708,12 @@ function queryWidgetRows(
   // The query's signal: when the filters change, the old key loses its last observer and
   // TanStack Query aborts it, so a person flipping filters three times does not leave three
   // full report sets queued on the server (2026-10-28 demo: 36 report queries in 30 s, all run).
+  // The signal rides the command as `_signal` (what the SDK's request() reads). Built inline,
+  // not with the SDK's withSignal: @nivaro/react takes the SDK as a peer, and a host on an
+  // older SDK must load this module and simply ignore the field.
+  const command = executeCustomQuery(slug, params)
   return client
-    .request(withSignal(executeCustomQuery(slug, params), signal))
+    .request(signal ? { ...command, _signal: signal } : command)
     .then((r) => ((r as { data: unknown[] }).data ?? []) as Array<Record<string, unknown>>)
 }
 
@@ -3623,7 +3626,11 @@ const WidgetCard = memo(function WidgetCard({
                   staleTime: 60_000
                 })
                 .then((raw) => downloadWidgetCsv(widget, undefined, shapeQueryRows(cfg, raw)))
-                .catch((err) => toast.error(loadErrorText(err, 'this widget')))
+                .catch((err) => {
+                  // The widget's own query was cancelled (its filters changed): no error.
+                  if (isCancelledError(err)) return
+                  toast.error(loadErrorText(err, 'this widget'))
+                })
             }}
           >
             <Download className='h-3 w-3' />
