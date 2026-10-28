@@ -2043,8 +2043,10 @@ export function CatalogPickerField({
                 catalogCol={catalogCol}
                 catalogFields={catalogFields}
                 tmpl={tmpl}
-                qtyInput={qtyInput}
                 currentQty={currentQty}
+                addQty={(id, total, row) => commitQty(id, String(total), row)}
+                qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
+                readOnly={readOnly}
               />
             ))}
         </>
@@ -2404,11 +2406,8 @@ export function CatalogPickerField({
 // One attribute-driven item builder: the resolver collection holds one row per
 // valid attribute combination with an FK to the catalog item. Picking every
 // attribute (options cascade: only combinations that exist remain) resolves the
-// item, which then takes a quantity like any other catalog row. A section holds
-// any number of picks: every picked combination keeps its own row, and
-// "Add another" opens a fresh row (a request often needs several jumper types).
-
-type BuilderSel = Record<string, string>
+// item; Add puts it in the Summary with the quantity typed (on top of any
+// already there) and clears the picks for the next one.
 
 function BuilderCard({
   builder,
@@ -2416,26 +2415,28 @@ function BuilderCard({
   catalogCol,
   catalogFields,
   tmpl,
-  qtyInput,
-  currentQty
+  currentQty,
+  addQty,
+  qtyStep,
+  readOnly
 }: {
   builder: CatalogBuilderConfig
   defaultItemField: string
   catalogCol: string
   catalogFields: string
   tmpl: string | undefined
-  qtyInput: (catalogId: string, catalogRow: Record<string, unknown>) => ReactNode
   currentQty: (catalogId: string) => number | null
+  /** Put `qty` of the item in the Summary (the total it should hold). */
+  addQty: (catalogId: string, qty: number, catalogRow: Record<string, unknown>) => Promise<void>
+  qtyStep: number | 'any'
+  readOnly?: boolean
 }) {
   const client = useNivaroClient()
   const itemField = builder.item_field ?? defaultItemField
   const [expanded, setExpanded] = useState(false)
-  // Rows still being picked; a row whose combination gets a quantity moves to
-  // the picked list (it is then shown from the pick itself).
-  const nextKey = useRef(1)
-  const [drafts, setDrafts] = useState<Array<{ key: number; sel: BuilderSel }>>([
-    { key: 0, sel: {} }
-  ])
+  const [sel, setSel] = useState<Record<string, string>>({})
+  const [qty, setQty] = useState('1')
+  const [adding, setAdding] = useState(false)
 
   const resolverFields = useMemo(
     () =>
@@ -2480,59 +2481,61 @@ function BuilderCard({
     }
     return { id: String(v), label: String(v) }
   }
-  const itemIdOf = (row: Record<string, unknown>): string | null => {
-    const v = row[itemField]
-    if (v == null) return null
-    return typeof v === 'object' ? String((v as Record<string, unknown>).id ?? '') || null : String(v)
-  }
-  const resolve = (sel: BuilderSel): string | null => {
-    if (!builder.attributes.every((a) => sel[a.field])) return null
-    const row = resolverRows.find((r) =>
-      builder.attributes.every((a) => attrOf(r, a.field)?.id === sel[a.field])
-    )
-    return row ? itemIdOf(row) : null
-  }
 
-  // Every combination already picked (quantity > 0), one row per catalog item.
-  const picked: Array<{ itemId: string; row: Record<string, unknown> }> = []
-  {
-    const seen = new Set<string>()
-    for (const row of resolverRows) {
-      const id = itemIdOf(row)
-      if (!id || seen.has(id) || (currentQty(id) ?? 0) <= 0) continue
-      seen.add(id)
-      picked.push({ itemId: id, row })
-    }
-  }
-  const pickedIds = new Set(picked.map((p) => p.itemId))
-  const openDrafts = drafts.filter((d) => {
-    const id = resolve(d.sel)
-    return !id || !pickedIds.has(id)
-  })
-  // A draft that became a pick is done; with none open, one fresh row stays.
-  const consumed = openDrafts.length !== drafts.length
-  useEffect(() => {
-    if (!consumed) return
-    setDrafts((prev) => {
-      const left = prev.filter((d) => {
-        const id = resolve(d.sel)
-        return !id || !pickedIds.has(id)
+  // Rows matching the selections made for attributes BEFORE index i
+  const matchingRows = (uptoIdx: number): Record<string, unknown>[] =>
+    resolverRows.filter((row) =>
+      builder.attributes.slice(0, uptoIdx).every((a) => {
+        const chosen = sel[a.field]
+        if (!chosen) return true
+        return attrOf(row, a.field)?.id === chosen
       })
-      return left.length > 0 ? left : [{ key: nextKey.current++, sel: {} }]
-    })
-  })
-  const addDraft = () => setDrafts((prev) => [...prev, { key: nextKey.current++, sel: {} }])
+    )
 
-  const rowProps = {
-    builder,
-    resolverRows,
-    attrOf,
-    resolve,
-    catalogCol,
-    catalogFields,
-    tmpl,
-    qtyInput,
-    currentQty
+  const allSelected = builder.attributes.every((a) => sel[a.field])
+  const resolvedRow = allSelected
+    ? resolverRows.find((row) =>
+        builder.attributes.every((a) => attrOf(row, a.field)?.id === sel[a.field])
+      )
+    : undefined
+  const resolvedItemId = resolvedRow?.[itemField] != null ? String(resolvedRow[itemField]) : null
+
+  const { data: resolvedCatalogRow } = useQuery<Record<string, unknown> | null>({
+    queryKey: ['catalog-builder-item', catalogCol, catalogFields, resolvedItemId],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${catalogCol}`, {
+            filter: JSON.stringify({ id: { _eq: resolvedItemId } }),
+            fields: catalogFields,
+            limit: 1
+          })
+        )
+        .then((r) => r.data?.[0] ?? null),
+    enabled: !!resolvedItemId,
+    staleTime: 60_000
+  })
+
+  const qtyNum = Number(qty)
+  const canAdd =
+    !!resolvedItemId &&
+    !!resolvedCatalogRow &&
+    !adding &&
+    qty.trim() !== '' &&
+    Number.isFinite(qtyNum) &&
+    qtyNum > 0 &&
+    (qtyStep === 'any' || Number.isInteger(qtyNum))
+  async function add() {
+    if (!canAdd || !resolvedItemId || !resolvedCatalogRow) return
+    setAdding(true)
+    try {
+      await addQty(resolvedItemId, (currentQty(resolvedItemId) ?? 0) + qtyNum, resolvedCatalogRow)
+      // Ready for the next combination.
+      setSel({})
+      setQty('1')
+    } finally {
+      setAdding(false)
+    }
   }
 
   return (
@@ -2551,11 +2554,6 @@ function BuilderCard({
         <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
           {builder.label}
         </span>
-        {expanded && picked.length > 0 && (
-          <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
-            {picked.length} picked
-          </span>
-        )}
       </button>
       {expanded && (
         <div className='space-y-2 border-t border-slate-200 p-3 dark:border-border'>
@@ -2563,185 +2561,94 @@ function BuilderCard({
             <div className='flex items-center gap-2 py-2 text-slate-400'>
               <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
             </div>
-          ) : resolverRows.length === 0 ? (
-            <p className='py-1 text-slate-400'>No options available for this section.</p>
           ) : (
-            <>
-              {picked.map((p) => (
-                <BuilderRow
-                  key={`picked-${p.itemId}`}
-                  {...rowProps}
-                  sel={Object.fromEntries(
-                    builder.attributes.map((a) => [a.field, attrOf(p.row, a.field)?.id ?? ''])
-                  )}
-                  readOnly
-                />
-              ))}
-              {openDrafts.map((d) => (
-                <BuilderRow
-                  key={d.key}
-                  {...rowProps}
-                  sel={d.sel}
-                  onSel={(sel) =>
-                    setDrafts((prev) => prev.map((x) => (x.key === d.key ? { ...x, sel } : x)))
-                  }
-                  onRemove={
-                    openDrafts.length > 1 || picked.length > 0
-                      ? () => setDrafts((prev) => prev.filter((x) => x.key !== d.key))
-                      : undefined
-                  }
-                />
-              ))}
-              <button
-                type='button'
-                onClick={addDraft}
-                className='flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium text-[#009abe] hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-nvr-cyan'
-              >
-                <Plus className='h-3.5 w-3.5' />
-                Add another
-              </button>
-            </>
+            <div className='flex flex-wrap items-end gap-3'>
+              {builder.attributes.map((a, i) => {
+                const opts = new Map<string, string>()
+                for (const row of matchingRows(i)) {
+                  const av = attrOf(row, a.field)
+                  if (av?.id) opts.set(av.id, av.label)
+                }
+                const sorted = [...opts.entries()].sort(([, la], [, lb]) =>
+                  la.localeCompare(lb, undefined, { numeric: true })
+                )
+                return (
+                  <AttrSelect
+                    key={a.field}
+                    label={titleCase(a.field)}
+                    value={sel[a.field] ?? null}
+                    valueLabel={sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null}
+                    options={sorted}
+                    disabled={i > 0 && !sel[builder.attributes[i - 1].field]}
+                    onChange={(id) =>
+                      setSel((prev) => {
+                        const next: Record<string, string> = {}
+                        // keep selections up to this attr; clear later ones
+                        for (let j = 0; j < i; j++) {
+                          const f = builder.attributes[j].field
+                          if (prev[f]) next[f] = prev[f]
+                        }
+                        if (id) next[a.field] = id
+                        return next
+                      })
+                    }
+                  />
+                )
+              })}
+              <div className='flex min-h-[28px] flex-1 items-center gap-2'>
+                {resolvedItemId && resolvedCatalogRow ? (
+                  <>
+                    <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
+                      {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
+                    </span>
+                    {(currentQty(resolvedItemId) ?? 0) > 0 && (
+                      <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                        {currentQty(resolvedItemId)} in summary
+                      </span>
+                    )}
+                    {!readOnly && (
+                      <>
+                        <input
+                          type='number'
+                          min={0}
+                          step={qtyStep}
+                          value={qty}
+                          aria-label='Quantity to add'
+                          onChange={(e) => setQty(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              void add()
+                            }
+                          }}
+                          className='h-7 w-20 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+                        />
+                        <button
+                          type='button'
+                          onClick={() => void add()}
+                          disabled={!canAdd}
+                          className='flex h-7 shrink-0 items-center gap-1 rounded bg-nvr-cyan px-2.5 text-[12px] font-medium text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-1 disabled:opacity-50'
+                        >
+                          {adding ? (
+                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                          ) : (
+                            <Plus className='h-3.5 w-3.5' />
+                          )}
+                          Add
+                        </button>
+                      </>
+                    )}
+                  </>
+                ) : allSelected ? (
+                  <span className='text-slate-400'>No matching item for this combination</span>
+                ) : (
+                  <span className='text-slate-400'>Pick each attribute to resolve an item</span>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-/** One combination in a builder section: the attribute picks, the item they
- *  resolve to and its quantity. A picked row shows its picks read-only (change
- *  the quantity, or set it to 0 to drop it). */
-function BuilderRow({
-  builder,
-  resolverRows,
-  attrOf,
-  resolve,
-  catalogCol,
-  catalogFields,
-  tmpl,
-  qtyInput,
-  currentQty,
-  sel,
-  onSel,
-  onRemove,
-  readOnly
-}: {
-  builder: CatalogBuilderConfig
-  resolverRows: Record<string, unknown>[]
-  attrOf: (row: Record<string, unknown>, field: string) => { id: string; label: string } | null
-  resolve: (sel: BuilderSel) => string | null
-  catalogCol: string
-  catalogFields: string
-  tmpl: string | undefined
-  qtyInput: (catalogId: string, catalogRow: Record<string, unknown>) => ReactNode
-  currentQty: (catalogId: string) => number | null
-  sel: BuilderSel
-  onSel?: (sel: BuilderSel) => void
-  onRemove?: () => void
-  readOnly?: boolean
-}) {
-  const client = useNivaroClient()
-  // Rows matching the selections made for attributes BEFORE index i
-  const matchingRows = (uptoIdx: number): Record<string, unknown>[] =>
-    resolverRows.filter((row) =>
-      builder.attributes.slice(0, uptoIdx).every((a) => {
-        const chosen = sel[a.field]
-        if (!chosen) return true
-        return attrOf(row, a.field)?.id === chosen
-      })
-    )
-  const allSelected = builder.attributes.every((a) => sel[a.field])
-  const resolvedItemId = resolve(sel)
-
-  const { data: resolvedCatalogRow } = useQuery<Record<string, unknown> | null>({
-    queryKey: ['catalog-builder-item', catalogCol, catalogFields, resolvedItemId],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${catalogCol}`, {
-            filter: JSON.stringify({ id: { _eq: resolvedItemId } }),
-            fields: catalogFields,
-            limit: 1
-          })
-        )
-        .then((r) => r.data?.[0] ?? null),
-    enabled: !!resolvedItemId,
-    staleTime: 60_000
-  })
-
-  return (
-    <div className='flex flex-wrap items-end gap-3'>
-      {builder.attributes.map((a, i) => {
-        const opts = new Map<string, string>()
-        for (const row of matchingRows(i)) {
-          const av = attrOf(row, a.field)
-          if (av?.id) opts.set(av.id, av.label)
-        }
-        const sorted = [...opts.entries()].sort(([, la], [, lb]) =>
-          la.localeCompare(lb, undefined, { numeric: true })
-        )
-        const valueLabel = sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null
-        if (readOnly)
-          return (
-            <div key={a.field} className='w-44'>
-              <p className='mb-1 text-[10px] font-medium text-slate-500 dark:text-slate-400'>
-                {titleCase(a.field)}
-              </p>
-              <p className='truncate rounded border border-transparent px-2 py-1.5 text-slate-700 dark:text-slate-200'>
-                {valueLabel ?? '—'}
-              </p>
-            </div>
-          )
-        return (
-          <AttrSelect
-            key={a.field}
-            label={titleCase(a.field)}
-            value={sel[a.field] ?? null}
-            valueLabel={valueLabel}
-            options={sorted}
-            disabled={i > 0 && !sel[builder.attributes[i - 1].field]}
-            onChange={(id) => {
-              const next: BuilderSel = {}
-              // keep selections up to this attr; clear later ones
-              for (let j = 0; j < i; j++) {
-                const f = builder.attributes[j].field
-                if (sel[f]) next[f] = sel[f]
-              }
-              if (id) next[a.field] = id
-              onSel?.(next)
-            }}
-          />
-        )
-      })}
-      <div className='flex min-h-[28px] flex-1 items-center gap-2'>
-        {resolvedItemId && resolvedCatalogRow ? (
-          <>
-            <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
-              {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
-            </span>
-            {(currentQty(resolvedItemId) ?? 0) > 0 && (
-              <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
-                picked
-              </span>
-            )}
-            {qtyInput(resolvedItemId, resolvedCatalogRow)}
-          </>
-        ) : allSelected ? (
-          <span className='flex-1 text-slate-400'>No matching item for this combination</span>
-        ) : (
-          <span className='flex-1 text-slate-400'>Pick each attribute to resolve an item</span>
-        )}
-        {onRemove && (
-          <button
-            type='button'
-            onClick={onRemove}
-            aria-label='Remove this row'
-            className='rounded p-1 text-slate-400 hover:bg-muted hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:text-slate-300'
-          >
-            <X className='h-3.5 w-3.5' />
-          </button>
-        )}
-      </div>
     </div>
   )
 }
