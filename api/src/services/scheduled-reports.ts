@@ -260,7 +260,7 @@ async function gatherOpsFacts(): Promise<Record<string, unknown>> {
     const stats = await getStateDurationStats()
     const rows = (await db.raw(`
       SELECT TOP 200 wi.collection, wi.item, wi.current_state, s.label AS state_label,
-             DATEDIFF(hour, h.entered_at, GETDATE()) AS age_hours
+             DATEDIFF(hour, h.entered_at, GETUTCDATE()) AS age_hours
       FROM nivaro_workflow_instances wi
       JOIN nivaro_workflow_states s ON s.id = wi.current_state
       CROSS APPLY (

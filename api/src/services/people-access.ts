@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { selectInChunks } from './db-batch.js'
 import {
   bustUserScopeCache,
   getUserScopes,
@@ -63,10 +64,16 @@ async function labelValues(
 ): Promise<Array<{ id: ScopeValue; label: string }>> {
   if (ids.length === 0) return []
   const field = dim.display_field || 'id'
-  const rows = (await db(dim.target_collection)
-    .whereIn('id', ids as string[])
-    .select('id', `${field} as label`)
-    .catch(() => [])) as Array<{ id: ScopeValue; label: unknown }>
+  // A scope can hold thousands of target ids — chunked under the ~2100
+  // bound-parameter cap.
+  const rows = (await selectInChunks(
+    [...new Set(ids)] as string[],
+    1000,
+    (chunk) =>
+      db(dim.target_collection).whereIn('id', chunk).select('id', `${field} as label`) as Promise<
+        Array<{ id: ScopeValue; label: unknown }>
+      >
+  ).catch(() => [])) as Array<{ id: ScopeValue; label: unknown }>
   const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r.label]))
   return ids.map((id) => ({
     id,
@@ -239,18 +246,25 @@ export async function runBulkUserAction(
   actorId: string
 ): Promise<{ results: BulkUserResult[]; changed: number; skipped: number; failed: number }> {
   const unique = [...new Set(ids.map((i) => String(i).toUpperCase()))]
-  const rows = (await db('nivaro_users')
-    .whereIn('id', unique)
-    .select(
-      'id',
-      'first_name',
-      'last_name',
-      'email',
-      'role',
-      'status',
-      'delegate_id',
-      'account_kind'
-    )) as Array<Record<string, unknown>>
+  // Bulk selections come straight from the request — chunked under the
+  // ~2100 bound-parameter cap.
+  const rows = (await selectInChunks(
+    unique,
+    1000,
+    (chunk) =>
+      db('nivaro_users')
+        .whereIn('id', chunk)
+        .select(
+          'id',
+          'first_name',
+          'last_name',
+          'email',
+          'role',
+          'status',
+          'delegate_id',
+          'account_kind'
+        ) as Promise<Array<Record<string, unknown>>>
+  )) as Array<Record<string, unknown>>
   const byId = new Map(rows.map((r) => [String(r.id).toUpperCase(), r]))
 
   // Validate the action's own argument once, before touching anyone.

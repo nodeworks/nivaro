@@ -5,6 +5,7 @@ import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
 import { getSlaScheduleSync } from './business-hours.js'
 import { parseColumnFilterOp } from './column-filter-ops.js'
+import { selectInChunks } from './db-batch.js'
 import { parseJson } from './pipeline-engine.js'
 import {
   applyCacheVisibility,
@@ -273,6 +274,9 @@ function computeSla(row: {
   return { status, aging_hours }
 }
 
+/** Most owner ids one queue read may filter by (one IN list, ~2100 parameter cap). */
+export const OWNER_FILTER_MAX = 1000
+
 /**
  * Breached-count per queue over the materialized cache — the badges endpoint's
  * SLA figure. Narrow scan of only rule-carrying rows (sla_duration_hours set),
@@ -280,17 +284,22 @@ function computeSla(row: {
  */
 export async function breachedCountsByQueue(queueIds: string[]): Promise<Record<string, number>> {
   if (queueIds.length === 0) return {}
-  const rows = (await db('nivaro_queue_items')
-    .whereIn('queue_id', queueIds)
-    .whereNotNull('sla_duration_hours')
-    .select(
-      'queue_id',
-      'entered_state_at',
-      'sla_duration_hours',
-      'sla_warning_pct',
-      'sla_business_hours_only',
-      'sla_timezone'
-    )) as Array<{
+  const rows = (await selectInChunks(
+    [...new Set(queueIds)],
+    1000,
+    (chunk) =>
+      db('nivaro_queue_items')
+        .whereIn('queue_id', chunk)
+        .whereNotNull('sla_duration_hours')
+        .select(
+          'queue_id',
+          'entered_state_at',
+          'sla_duration_hours',
+          'sla_warning_pct',
+          'sla_business_hours_only',
+          'sla_timezone'
+        ) as Promise<any[]>
+  )) as Array<{
     queue_id: string
     entered_state_at: Date | null
     sla_duration_hours: number | null
@@ -897,7 +906,14 @@ export async function fetchMaterializedQueueItems(
     // Array = user-id multiselect (ANY match, via the owners M2M); string =
     // legacy substring match on the denormalized name string.
     if (Array.isArray(filters.owners)) {
-      const ids = filters.owners.map(String).filter(Boolean)
+      const ids = [...new Set(filters.owners.map(String).filter(Boolean))]
+      // The list comes from the request and lands in ONE statement's IN list:
+      // past SQL Server's ~2100 bound parameters the whole read would fail (8003).
+      if (ids.length > OWNER_FILTER_MAX) {
+        throw Object.assign(new Error(`Filter by at most ${OWNER_FILTER_MAX} owners at a time`), {
+          statusCode: 400
+        })
+      }
       if (ids.length > 0) {
         baseNoState.whereExists(function () {
           this.select('*')
@@ -1166,19 +1182,21 @@ export async function fetchMaterializedQueueItems(
 
   const ownerRows =
     rows.length > 0
-      ? ((await db('nivaro_queue_item_owners as qio')
-          .join('nivaro_users as u', 'qio.user_id', 'u.id')
-          .whereIn(
-            'qio.queue_item_id',
-            rows.map((r) => r.id)
-          )
-          .select(
-            'qio.queue_item_id',
-            'u.id as user_id',
-            'u.first_name',
-            'u.last_name',
-            'u.email'
-          )) as Array<{
+      ? ((await selectInChunks(
+          rows.map((r) => r.id),
+          1000,
+          (chunk) =>
+            db('nivaro_queue_item_owners as qio')
+              .join('nivaro_users as u', 'qio.user_id', 'u.id')
+              .whereIn('qio.queue_item_id', chunk)
+              .select(
+                'qio.queue_item_id',
+                'u.id as user_id',
+                'u.first_name',
+                'u.last_name',
+                'u.email'
+              ) as Promise<any[]>
+        )) as Array<{
           queue_item_id: number
           user_id: string
           first_name: string | null
@@ -1205,9 +1223,14 @@ export async function fetchMaterializedQueueItems(
   )
   const claimantNameById = new Map<string, string>()
   if (claimedByIds.length > 0) {
-    const claimantRows = (await db('nivaro_users')
-      .whereIn('id', claimedByIds)
-      .select('id', 'first_name', 'last_name', 'email')) as Array<{
+    const claimantRows = (await selectInChunks(
+      claimedByIds,
+      1000,
+      (chunk) =>
+        db('nivaro_users')
+          .whereIn('id', chunk)
+          .select('id', 'first_name', 'last_name', 'email') as Promise<any[]>
+    )) as Array<{
       id: string
       first_name: string | null
       last_name: string | null

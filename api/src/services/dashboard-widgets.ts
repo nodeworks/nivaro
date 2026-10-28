@@ -359,7 +359,7 @@ export async function computeWidgetData(
       const q = db(col)
         .select(db.raw('CAST(created_at AS DATE) as date'))
         .count('* as count')
-        .whereRaw('created_at >= DATEADD(day, -30, GETDATE())')
+        .whereRaw('created_at >= DATEADD(day, -30, GETUTCDATE())')
         .groupByRaw('CAST(created_at AS DATE)')
         .orderBy('date', 'asc')
       const rowFilter = await getRowFilter(user, 'read', col)
