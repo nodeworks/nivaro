@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as LucideIcons from 'lucide-react'
 import { ChevronDown, ChevronRight, Loader2, Mail, User } from 'lucide-react'
-import React, { type ReactNode, useEffect, useRef, useState } from 'react'
+import React, { memo, type ReactNode, useEffect, useRef, useState } from 'react'
 import {
   type FieldDrilldownConfig,
   fieldDrilldownConfig,
@@ -26,10 +26,12 @@ import {
 } from '../ui/dropdown-menu'
 import { type InputBinding, WidgetSlot } from '../WidgetSlot'
 import { FieldRow } from './FieldRow'
-import { FoldArea, RowGroupCell, rowMemberField } from './form-structure-ui'
 import { FormHelpVideoButton, useFormHelpVideos } from './FormHelpVideoButton'
+import { FoldArea, RowGroupCell, rowMemberField } from './form-structure-ui'
 import { applyDisplayTemplate, resolveColSpan, useContainerWidth } from './helpers'
 import { SectionIntro } from './LayoutContentBlock'
+import { invalidateM2MFor } from './m2m-invalidate'
+import { groupSectionPropsEqual } from './render-stability'
 import type {
   CMSField,
   CMSRelation,
@@ -497,7 +499,7 @@ function PdfGenerateButton({
           filename_template: filenameTemplate ?? undefined
         })
       )
-      qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      invalidateM2MFor(qc, [itemId])
       qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
     } catch {
       // silent — API errors surface via existing error handling
@@ -1050,7 +1052,10 @@ function SummaryStrip({
   )
 }
 
-export function GroupSection({
+/** One section of the record form. Memoized with a content comparator
+ *  (groupSectionPropsEqual): the form rebuilds several of its props on every
+ *  render, so identity alone would never skip. */
+export const GroupSection = memo(function GroupSection({
   group,
   fields,
   draft,
@@ -1758,7 +1763,7 @@ export function GroupSection({
       )}
     </div>
   )
-}
+}, groupSectionPropsEqual)
 
 /** Says once, on mount, that a section rendered (#2730 section use). */
 function SectionShown({

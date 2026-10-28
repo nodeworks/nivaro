@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
+import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { playNotificationSound } from '../../lib/notification-sound'
 import { announceLocalPrefs } from '../../lib/user-sync'
 import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
@@ -1169,6 +1170,14 @@ export function useTypingIndicator(room: string | null) {
 
   useEffect(() => clearTyping, [clearTyping])
 
+  // Presence writes invalidate this list over the socket (below); the 6 s poll
+  // is only for while that cannot happen (no chat realtime hook, no socket, or
+  // reconnecting). With a live socket a 30 s safety poll clears a stale
+  // "is typing…" whose clearing event was missed.
+  const typingRefetch = useLiveRefetchInterval(6_000, {
+    safetyMs: 30_000,
+    enabled: !!cfg.realtime
+  })
   const { data } = useQuery({
     queryKey: ['nvr-chat-typing', room],
     queryFn: async () => {
@@ -1188,7 +1197,7 @@ export function useTypingIndicator(room: string | null) {
       return res.data ?? []
     },
     enabled: !!room && !!cfg.setTypingRoom,
-    refetchInterval: 6_000,
+    refetchInterval: typingRefetch,
     staleTime: 2_000
   })
   useRealtimeInvalidate(cfg.collections.presence, [['nvr-chat-typing']])

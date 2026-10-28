@@ -12,7 +12,7 @@ import {
   Sparkles
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useId, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
@@ -54,6 +54,7 @@ import {
   RepeatLastButton,
   usePlacementTextContext
 } from './placement-behaviour'
+import { jsonEqual, keepIfEqual } from './render-stability'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
@@ -579,7 +580,11 @@ function primaryControl(root: HTMLElement | null): HTMLElement | null {
   )
 }
 
-export function FieldRow({
+/** One field of the record form. Memoized: the form re-renders for many
+ *  reasons that change nothing a row shows (presence, lock polls, save
+ *  state), and every prop it passes is kept stable for that. A row still
+ *  re-renders on every draft change through ParentDraftContext. */
+export const FieldRow = memo(function FieldRow({
   field,
   draft,
   onChange,
@@ -661,9 +666,30 @@ export function FieldRow({
     if (active instanceof HTMLElement && el.contains(active)) active.blur()
     el.setAttribute('inert', '')
   }, [inputLocked, autoFillTick])
-  const commit = (v: unknown) => {
-    if (!locked) onChange(field.field, v)
-  }
+  const fieldKey = field.field
+  // Stable for the memoized FieldRenderer below (a fresh closure per render
+  // made it re-render with every row).
+  const commit = useCallback(
+    (v: unknown) => {
+      if (!locked) onChange(fieldKey, v)
+    },
+    [locked, onChange, fieldKey]
+  )
+  const rendererCountChange = useCallback(
+    (count: number) => onCountChange?.(fieldKey, count),
+    [onCountChange, fieldKey]
+  )
+  // Keep-if-same refs for values computed after the early return below.
+  const cascadeFilterRef = useRef<Record<string, unknown> | undefined>(undefined)
+  const narrowedByRef = useRef<
+    | {
+        sig: string
+        onChange: typeof onChange
+        value: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
+      }
+    | undefined
+  >(undefined)
+  const readonlyFileFieldRef = useRef<{ src: CMSField; value: CMSField } | undefined>(undefined)
   const {
     onContextMenu: onFieldContextMenu,
     onKeyDown: onFieldMenuKeyDown,
@@ -904,7 +930,11 @@ export function FieldRow({
       return raw ? resolveOptionFilterTokens(raw, draft, itemId) : undefined
     }
   })
+  // Same filter content keeps the same object (the memoized renderer and the
+  // cascade controller compare by identity).
   const cascadeFilter = cascadeCompiled.filter
+    ? keepIfEqual(cascadeFilterRef, cascadeCompiled.filter as Record<string, unknown>, jsonEqual)
+    : cascadeCompiled.filter
   const cascadeParentLabels = cascadeCompiled.satisfiedParents.map(parentFieldLabel)
   const cascadeParentFieldKeys = cascadeCompiled.satisfiedParents
   const unsatisfiedParentLabel: string | null = cascadeCompiled.unsatisfiedParents.length
@@ -917,6 +947,27 @@ export function FieldRow({
   const requiredParentLabel: string | null = missingRequiredParents.length
     ? parentFieldLabel(missingRequiredParents[0])
     : null
+
+  // The renderer's derived props, kept the same object while unchanged.
+  function readonlyFileField(): CMSField {
+    const cur = readonlyFileFieldRef.current
+    if (cur && cur.src === field) return cur.value
+    const value = { ...field, readonly: true }
+    readonlyFileFieldRef.current = { src: field, value }
+    return value
+  }
+  function narrowedBy() {
+    const sig = JSON.stringify([cascadeParentLabels, cascadeParentFieldKeys])
+    const cur = narrowedByRef.current
+    if (cur && cur.sig === sig && cur.onChange === onChange) return cur.value
+    const value = {
+      labels: cascadeParentLabels,
+      keys: cascadeParentFieldKeys,
+      onClear: (k: string) => onChange(k, null)
+    }
+    narrowedByRef.current = { sig, onChange, value }
+    return value
+  }
 
   function flashParentFields() {
     for (const key of cascadeParentFieldKeys) {
@@ -1220,7 +1271,7 @@ export function FieldRow({
               })
             ) : (
               <FieldRenderer
-                field={locked && isFileField ? { ...field, readonly: true } : field}
+                field={locked && isFileField ? readonlyFileField() : field}
                 value={value}
                 onChange={commit}
                 relations={relations}
@@ -1228,18 +1279,8 @@ export function FieldRow({
                 itemId={itemId}
                 cascadeFilter={cascadeFilter}
                 requiredParentLabel={requiredParentLabel}
-                narrowedBy={
-                  cascadeParentLabels.length > 0
-                    ? {
-                        labels: cascadeParentLabels,
-                        keys: cascadeParentFieldKeys,
-                        onClear: (k) => onChange(k, null)
-                      }
-                    : undefined
-                }
-                onCountChange={
-                  onCountChange ? (count) => onCountChange(field.field, count) : undefined
-                }
+                narrowedBy={cascadeParentLabels.length > 0 ? narrowedBy() : undefined}
+                onCountChange={onCountChange ? rendererCountChange : undefined}
               />
             )}
           </div>
@@ -1259,7 +1300,7 @@ export function FieldRow({
       )}
     </div>
   )
-}
+})
 
 // ─── re-export getColSpanClass for GroupSection usage ─────────────────────────
 export { getColSpanClass }

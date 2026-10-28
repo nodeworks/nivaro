@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
@@ -18,7 +18,9 @@ const NON_DISPLAY_TYPES = new Set([
   'divider'
 ])
 
-export function InlineGridField({
+/** Memoized: every prop is a primitive, so a grid skips the record form's
+ *  keystroke and presence re-renders (its rows still follow the contexts). */
+export const InlineGridField = memo(function InlineGridField({
   relatedCollection,
   manyField,
   parentId,
@@ -611,4 +613,4 @@ export function InlineGridField({
       )}
     </div>
   )
-}
+})

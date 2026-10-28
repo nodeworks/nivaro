@@ -202,6 +202,7 @@ import {
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
+import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
 import {
   LiveRowsContext,
   type LiveRowsCtx,
@@ -240,6 +241,8 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
+import { useStableFieldAffordances } from './item-edit/render-stability'
 import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
@@ -4730,16 +4733,17 @@ function ItemEditFormView({
   const summaryNeedsRole = !isNew && summaryRulesNeedRole(summaryRules)
   const summaryNeedsState = !isNew && summaryRulesNeedState(summaryRules)
 
+  const fetchCurrentUserMe = () =>
+    client.request<{ data: { role?: string | null } }>(get('/users/me')).then((r) => r.data ?? null)
+  const roleLookupNeeded =
+    hasLockConditions || addendumEnabled || summaryNeedsRole || behaviourNeeds.role
   const { data: currentUserData, isError: currentUserError } = useQuery<{
     role?: string | null
   } | null>({
     queryKey: ['current-user-me'],
-    queryFn: () =>
-      client
-        .request<{ data: { role?: string | null } }>(get('/users/me'))
-        .then((r) => r.data ?? null),
+    queryFn: fetchCurrentUserMe,
     staleTime: 5 * 60_000,
-    enabled: hasLockConditions || addendumEnabled || summaryNeedsRole || behaviourNeeds.role
+    enabled: roleLookupNeeded
   })
   // #2596: the exact rule behind a lock (and, for admins, what rules hide) —
   // fetched on the first hover of a locked field; admins with the form.
@@ -4751,28 +4755,55 @@ function ItemEditFormView({
   // Layout editor "preview by state" (#2599): the chosen state stands in for
   // the record's own, so locks and summary rules evaluate for that step.
   const designStateKey = design?.stateKey ?? null
+  const fetchPipelineInstanceLock = () =>
+    client
+      .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
+      .then(
+        (r) =>
+          r.data as {
+            instance?: { current_state?: string | null } | null
+            states?: Array<{ id: string; key: string; label?: string | null }>
+          }
+      )
+      .catch(() => null)
+  const stateLookupNeeded =
+    hasLockConditions || addendumEnabled || summaryNeedsState || behaviourNeeds.state
   const { data: pipelineInstanceQueried, isError: pipelineInstanceError } = useQuery<{
     instance?: { current_state?: string | null } | null
     states?: Array<{ id: string; key: string; label?: string | null }>
   } | null>({
     queryKey: ['pipeline-instance-lock', collection, itemId],
-    queryFn: () =>
-      client
-        .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
-        .then(
-          (r) =>
-            r.data as {
-              instance?: { current_state?: string | null } | null
-              states?: Array<{ id: string; key: string; label?: string | null }>
-            }
-        )
-        .catch(() => null),
+    queryFn: fetchPipelineInstanceLock,
     staleTime: 30_000,
-    enabled:
-      (hasLockConditions || addendumEnabled || summaryNeedsState || behaviourNeeds.state) &&
-      !isNew &&
-      !designStateKey
+    enabled: stateLookupNeeded && !isNew && !designStateKey
   })
+  // Record-page waterfall (#C5): both lookups above wait for the layout (and
+  // the collection meta) to say they are needed. A collection whose last
+  // opened record needed them gets them asked for at entry instead, beside
+  // the layout read — same keys, so the queries above pick the answers up.
+  const layoutKnown = activeLayoutData !== undefined
+  useEffect(() => {
+    if (!layoutKnown || designCtx) return
+    rememberRecordLookups(collection, { role: roleLookupNeeded, state: stateLookupNeeded })
+  }, [layoutKnown, designCtx, collection, roleLookupNeeded, stateLookupNeeded])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: entry only — once per record opened
+  useEffect(() => {
+    if (isNew || designCtx) return
+    const want = recordLookupsFor(collection)
+    if (!want) return
+    if (want.state)
+      void qc.prefetchQuery({
+        queryKey: ['pipeline-instance-lock', collection, itemId],
+        queryFn: fetchPipelineInstanceLock,
+        staleTime: 30_000
+      })
+    if (want.role)
+      void qc.prefetchQuery({
+        queryKey: ['current-user-me'],
+        queryFn: fetchCurrentUserMe,
+        staleTime: 5 * 60_000
+      })
+  }, [collection, itemId])
   const pipelineInstanceData = useMemo(
     () =>
       designStateKey
@@ -6504,7 +6535,10 @@ function ItemEditFormView({
       // An automatic regeneration is a side effect of saving, not its own
       // event — announcing it every time would be noise.
       if (!opts?.silent) toast.success('PDF generated and attached')
-      qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      // The file lands on this record (an addendum render may attach to the
+      // addendum: refresh every list then).
+      if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      else invalidateM2MFor(qc, [targetItem])
       qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
       if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] })
     } catch {
@@ -8417,12 +8451,17 @@ function ItemEditFormView({
         qc.invalidateQueries({ queryKey: ['o2m-rows', rc, mf, id] })
       }
       setPendingO2MRows(new Map(remainingO2MRowsRef.current))
+      // Grandchild ops (a grid row's own relations) may have changed any row's
+      // M2M list: refresh them all then; otherwise only this record's lists
+      // and the rows this save edited refetch now (the rest are marked stale).
+      const hadGrandchildOps = stagedRelsSigRef.current.size > 0
       // Staged grandchild ops just flushed — the widget registry must stop
       // reporting them (a grid unmounted on another tab can't re-report).
       stagedRelsSigRef.current.clear()
       setStagedRelsByGrid(new Map())
       qc.invalidateQueries({ queryKey: ['item', collection] })
-      qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      if (hadGrandchildOps) qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      else invalidateM2MFor(qc, [id, ...editedRowIds(pendingO2MEdits)])
       // Record Insights caches (audience, integrations, owner history, mail,
       // mentions) go stale the moment a save lands — refresh them so the
       // popover answers with current data.
@@ -8437,9 +8476,8 @@ function ItemEditFormView({
       // Fire-and-forget: the save is already committed and the record must not
       // appear to fail because a PDF could not be produced.
       if (pdfAutoGenerate && pdfAttachField) {
-        void handleGenerateAndAttach({ itemId: String(id), silent: true }).then(() => {
-          qc.invalidateQueries({ queryKey: ['m2m-items'] })
-        })
+        // handleGenerateAndAttach refreshes the record's M2M lists itself.
+        void handleGenerateAndAttach({ itemId: String(id), silent: true })
       }
       // The record was created from a document proposal: report which
       // proposed values were changed before Create (the corrections memory).
@@ -9027,7 +9065,7 @@ function ItemEditFormView({
         : it.onRevert
     }
   }
-  const fieldAffordances = {
+  const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) =>
       setRemoteChanges((cur) => {
@@ -9061,6 +9099,22 @@ function ItemEditFormView({
     glossaryHelp: entryCfg.glossary !== false,
     placementText: placementTextCtx
   }
+  // The same context object while nothing a field reads changed — a fresh
+  // object here re-rendered every (memoized) field row on every form render.
+  const fieldAffordances = useStableFieldAffordances(fieldAffordancesRaw)
+  // One object per draft / label / filter change: an inline literal re-rendered
+  // every consumer (each field row and picker) on every form render.
+  // dirtyFields is the live Set; its writes always come with a draft change.
+  const parentDraftCtxValue = useMemo(
+    () => ({
+      draft: parentDraftWithAliases,
+      collection,
+      dirtyFields: userTouchedRef.current,
+      fieldLabels: parentFieldLabels,
+      fieldOptionFilters: parentFieldOptionFilters
+    }),
+    [parentDraftWithAliases, collection, parentFieldLabels, parentFieldOptionFilters]
+  )
 
   // ── Design mode shells ─────────────────────────────────────────────────────
   // Every placement/group gets a selectable DesignNode in the layout editor's
@@ -9993,9 +10047,7 @@ function ItemEditFormView({
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.
                 if (pdfAutoGenerate && pdfAttachField) {
-                  void handleGenerateAndAttach({ silent: true }).then(() => {
-                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                  })
+                  void handleGenerateAndAttach({ silent: true })
                 }
               }}
             />
@@ -10407,9 +10459,7 @@ function ItemEditFormView({
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.
                 if (pdfAutoGenerate && pdfAttachField) {
-                  void handleGenerateAndAttach({ silent: true }).then(() => {
-                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                  })
+                  void handleGenerateAndAttach({ silent: true })
                 }
               }}
             />
@@ -10580,9 +10630,7 @@ function ItemEditFormView({
                 // An approved addendum rewrites the record, so the attached
                 // document is now stale — regenerate it the same way a save does.
                 if (pdfAutoGenerate && pdfAttachField) {
-                  void handleGenerateAndAttach({ silent: true }).then(() => {
-                    qc.invalidateQueries({ queryKey: ['m2m-items'] })
-                  })
+                  void handleGenerateAndAttach({ silent: true })
                 }
               }}
             />
@@ -10781,15 +10829,7 @@ function ItemEditFormView({
         <AddendumO2MContext.Provider value={addendumO2MMap}>
           <AddendumViewContext.Provider value={addendumViewId}>
             <AddendumFieldContext.Provider value={addendumFieldMap}>
-              <ParentDraftContext.Provider
-                value={{
-                  draft: parentDraftWithAliases,
-                  collection,
-                  dirtyFields: userTouchedRef.current,
-                  fieldLabels: parentFieldLabels,
-                  fieldOptionFilters: parentFieldOptionFilters
-                }}
-              >
+              <ParentDraftContext.Provider value={parentDraftCtxValue}>
                 <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
                   <StaleFieldReportContext.Provider value={reportStaleField}>
                     <O2MStagingContext.Provider value={o2mStagingCtx}>
