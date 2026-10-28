@@ -3,9 +3,12 @@
  * #2162 — the Edit lock lens: records whose edit lock is held a long time or is wanted by someone
  * else. Reads `nivaro_item_locks` (holder, heartbeat) and `nivaro_item_lock_queue` (the wait
  * queue, i.e. the lock requests). Idle time = now minus the holder's last heartbeat, which is
- * `expires_at - ttl` (every heartbeat pushes expires_at forward by the ttl).
+ * `expires_at - window` (every heartbeat pushes expires_at forward by its window —
+ * lock-presence.ts lastHeartbeatAt tells the 30 s and legacy windows apart). A lock whose holder
+ * is known to have left (lock-presence.ts) is not live and is not listed.
  */
 import { db } from '../db/index.js'
+import { lastHeartbeatAt, lockIsLive } from './lock-presence.js'
 
 /** A lock held this long is "long-held" even when nobody waits. */
 export const LONG_HELD_MS = 15 * 60_000
@@ -54,7 +57,8 @@ export function shapeLocks(
   locks: LockRow[],
   queue: QueueRow[],
   now: number,
-  ttlMs: number,
+  /** Fixed lease length; omitted = per lock (lastHeartbeatAt). */
+  ttlMs?: number,
   longHeldMs = LONG_HELD_MS
 ): LockLens {
   const byKey = new Map<string, QueueRow[]>()
@@ -69,6 +73,11 @@ export function shapeLocks(
   for (const l of locks) {
     const exp = ms(l.expires_at)
     if (!Number.isFinite(exp) || exp <= now) continue
+    if (
+      l.user &&
+      !lockIsLive({ user: l.user, locked_at: l.locked_at, expires_at: l.expires_at }, now)
+    )
+      continue
     active++
     const heldMs = Math.max(0, now - ms(l.locked_at))
     const waiting = (byKey.get(`${l.collection}\u0000${l.item}`) ?? [])
@@ -83,7 +92,10 @@ export function shapeLocks(
       item: l.item,
       holder: { id: l.user, name: l.holder_name || l.user || 'Unknown' },
       held_ms: heldMs,
-      idle_ms: Math.max(0, now - (exp - ttlMs)),
+      idle_ms: Math.max(
+        0,
+        now - (ttlMs === undefined ? lastHeartbeatAt(exp, now).getTime() : exp - ttlMs)
+      ),
       note: l.note ?? null,
       waiting: waiting.map((q) => ({
         id: q.user,
@@ -109,7 +121,7 @@ const nameOf = (r: {
 }) => [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email || null
 
 /** Read the live lock + queue tables and shape them. */
-export async function editLockLens(ttlMs: number, now = Date.now()): Promise<LockLens> {
+export async function editLockLens(ttlMs?: number, now = Date.now()): Promise<LockLens> {
   if (!(await db.schema.hasTable('nivaro_item_locks'))) {
     return { at: now, active: 0, rows: [], truncated: false }
   }

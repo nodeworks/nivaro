@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
@@ -13,6 +14,12 @@ import {
   idFitsCollection,
   readItems
 } from '../services/items.js'
+import {
+  holderKnownGone,
+  LEGACY_LOCK_TTL_MS,
+  lastHeartbeatAt,
+  lockWindowMs
+} from '../services/lock-presence.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
@@ -71,7 +78,15 @@ async function lockSubject(
   }
 }
 
-export const LOCK_TTL_MS = 5 * 60 * 1000 // 5 minutes
+/**
+ * A lock is a short lease the holder's open form keeps alive (2026-10-28 — a
+ * 5-minute lease kept refusing everyone after its holder had left). Each
+ * acquire/heartbeat grants `lockWindowMs(body)`: 30 s for a client that says
+ * it beats every ≤15 s (`beat_ms`, current clients beat every 10 s), 150 s for
+ * an older client that beats every 60 s. The client also lets go the moment
+ * its form stops being the focused, visible edit surface. See lock-presence.ts.
+ */
+export const LOCK_TTL_MS = LEGACY_LOCK_TTL_MS
 
 interface ItemLock {
   id: number
@@ -89,6 +104,15 @@ function isExpired(lock: ItemLock): boolean {
   return new Date(lock.expires_at).getTime() <= Date.now()
 }
 
+/** Not live: lapsed lease, or (for anyone but the holder) a holder known to have left. */
+function isStale(lock: ItemLock, askedBy?: string): boolean {
+  if (isExpired(lock)) return true
+  // The holder's own request is proof they are here (their socket may be the
+  // thing that is down): only others judge them by presence.
+  if (askedBy && String(askedBy).toUpperCase() === String(lock.user).toUpperCase()) return false
+  return holderKnownGone(lock)
+}
+
 function cleanNote(raw: unknown): string | null {
   if (raw == null) return null
   const s = String(raw).trim().slice(0, NOTE_MAX)
@@ -99,14 +123,24 @@ function cleanNote(raw: unknown): string | null {
 // closure (an expired lock discovered by getCurrentLock). Set in itemLocksRoutes.
 let _app: FastifyInstance | null = null
 
-async function getCurrentLock(collection: string, item: string): Promise<ItemLock | null> {
+/**
+ * The live lock on a record, or null. A stale one (no heartbeat inside its
+ * lease, or a holder known to have left — not judged for `askedBy` = the
+ * holder) is released on the spot: free to take silently, refuses nobody.
+ */
+async function getCurrentLock(
+  collection: string,
+  item: string,
+  askedBy?: string
+): Promise<ItemLock | null> {
   const lock = (await db('nivaro_item_locks').where({ collection, item }).first()) as
     | ItemLock
     | undefined
   if (!lock) return null
-  if (isExpired(lock)) {
+  if (isStale(lock, askedBy)) {
     await db('nivaro_item_locks').where({ id: lock.id }).delete()
-    noteLockAnnounced(collection, item, false)
+    if (_app && !isExpired(lock)) emitLockEvent(_app, collection, item, lock.user, false)
+    else noteLockAnnounced(collection, item, false)
     // An expiry IS a release — the next person in line should hear about it.
     if (_app) await handOffToQueue(_app, collection, item)
     return null
@@ -135,6 +169,77 @@ async function getCurrentLock(collection: string, item: string): Promise<ItemLoc
     return null
   }
   return lock
+}
+
+// ── View-as locks ──────────────────────────────────────────────────────────
+// A lock taken through a View-as (nvm_) token is held in the viewed person's
+// name. When the View-as stops, the tab's own release goes out with a token
+// that no longer works — so the server remembers which records each View-as
+// token locked (Redis set, keyed by a hash of the token, lives as long as a
+// View-as can) and DELETE /api/auth/masquerade lets go of them.
+
+const MASQ_LOCKS_TTL_S = 4 * 3600
+const SEP = '\u0000'
+
+function masqueradeLocksKey(token: string): string {
+  const h = createHash('sha256').update(token).digest('hex').slice(0, 32)
+  return `nvr:lockmq:${currentTenantKey()}:${h}`
+}
+
+function masqueradeTokenOf(req: FastifyRequest): string | null {
+  if (req.authMethod !== 'masquerade') return null
+  const h = req.headers?.authorization
+  const token = h?.startsWith('Bearer ') ? h.slice(7).trim() : ''
+  return token.startsWith('nvm_') ? token : null
+}
+
+/** Remember that this View-as token holds the record's lock. Never fails the request. */
+export function noteMasqueradeLock(req: FastifyRequest, collection: string, item: string): void {
+  const token = masqueradeTokenOf(req)
+  const redis = (req.server as { redis?: FastifyInstance['redis'] } | undefined)?.redis
+  if (!token || !redis) return
+  const key = masqueradeLocksKey(token)
+  void Promise.resolve()
+    .then(async () => {
+      await redis.sadd(key, `${collection}${SEP}${item}`)
+      await redis.expire(key, MASQ_LOCKS_TTL_S)
+    })
+    .catch(() => undefined)
+}
+
+/**
+ * The View-as `token` ended: release every lock it took that `userId` (the
+ * viewed person) still holds — announced, and handed to the wait queue, like
+ * any release. Returns how many were released. Never throws.
+ */
+export async function releaseMasqueradeLocks(
+  app: FastifyInstance,
+  token: string,
+  userId: string
+): Promise<number> {
+  let released = 0
+  try {
+    const key = masqueradeLocksKey(token)
+    const members = ((await app.redis.smembers(key)) ?? []) as string[]
+    await app.redis.del(key)
+    for (const m of members) {
+      const at = m.indexOf(SEP)
+      if (at <= 0) continue
+      const collection = m.slice(0, at)
+      const item = m.slice(at + 1)
+      const n = await db('nivaro_item_locks')
+        .where({ collection, item })
+        .whereRaw('UPPER([user]) = ?', [String(userId).toUpperCase()])
+        .delete()
+      if (!n) continue
+      released++
+      emitLockEvent(app, collection, item, userId, false)
+      await handOffToQueue(app, collection, item)
+    }
+  } catch {
+    /* best effort — the 30 s lease frees the rest */
+  }
+  return released
 }
 
 /** 403 for a person the approval edit lock refuses: a lock they could not use. */
@@ -465,11 +570,18 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         .where({ collection })
         .whereIn('item', ids)
         .where('expires_at', '>', new Date())
-        .select('item', 'user')) as Array<{ item: string; user: string }>
-      if (locks.length === 0) return reply.send({ data: [] })
+        .select('item', 'user', 'locked_at', 'expires_at')) as Array<{
+        item: string
+        user: string
+        locked_at: Date
+        expires_at: Date
+      }>
+      // Live locks only: a holder known to have left holds nothing (lock-presence.ts).
+      const live = locks.filter((l) => !holderKnownGone(l))
+      if (live.length === 0) return reply.send({ data: [] })
       const fakeReq = {
         query: {
-          conditions: JSON.stringify([{ path: ['id'], op: '_in', value: locks.map((l) => l.item) }])
+          conditions: JSON.stringify([{ path: ['id'], op: '_in', value: live.map((l) => l.item) }])
         }
       } as never
       let readable: Set<string>
@@ -477,14 +589,14 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         const res = (await readItems(
           req.user!,
           collection,
-          { fields: ['id'], limit: locks.length + 1 },
+          { fields: ['id'], limit: live.length + 1 },
           fakeReq
         )) as { data?: Array<Record<string, unknown>> }
         readable = new Set((res.data ?? []).map((r) => String(r.id)))
       } catch {
         return reply.send({ data: [] })
       }
-      const shown = locks.filter((l) => readable.has(String(l.item)))
+      const shown = live.filter((l) => readable.has(String(l.item)))
       const names = new Map<string, string | null>()
       for (const uid of new Set(shown.map((l) => l.user))) names.set(uid, await lockHolderName(uid))
       return reply.send({
@@ -506,7 +618,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       return reply.send({ data: null, locking_disabled: true })
     }
 
-    const lock = await getCurrentLock(collection, item)
+    const lock = await getCurrentLock(collection, item, req.user!.id)
     const queue = await queueFor(collection, item)
     const my_position = queuePosition(queue, req.user!.id)
     // Free record: `data` stays null (clients read null = free) but the queue
@@ -530,8 +642,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         // "held by X, idle 12m" instead of just "held by X".
         locked_by_idle_minutes,
         // nivaro_item_locks has no heartbeat column — the heartbeat only slides
-        // expires_at forward, so expires_at − LOCK_TTL is the last heartbeat.
-        locked_by_last_heartbeat: new Date(new Date(lock.expires_at).getTime() - LOCK_TTL_MS),
+        // expires_at forward, so expires_at − its window is the last heartbeat.
+        locked_by_last_heartbeat: lastHeartbeatAt(lock.expires_at),
         note: lock.note ?? null,
         locked_at: lock.locked_at,
         expires_at: lock.expires_at,
@@ -567,7 +679,16 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         db.raw("CONCAT(u.first_name, ' ', u.last_name) as holder_name"),
         'u.email as holder_email'
       )) as Array<Record<string, unknown>>
-    return reply.send({ data: rows })
+    return reply.send({
+      data: rows.filter(
+        (r) =>
+          !holderKnownGone({
+            user: String(r.user),
+            locked_at: r.locked_at as Date,
+            expires_at: r.expires_at as Date
+          })
+      )
+    })
   })
 
   app.post<{ Params: { collection: string; item: string } }>(
@@ -589,7 +710,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         return reply.code(403).send(NOT_EDITABLE)
       }
 
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, me)
       // Someone the approval edit lock refuses gets no lock: they could not
       // save, and holding it would lock out the people who may.
       const waiting = await approvalRefusal(req, collection, item)
@@ -613,7 +734,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       }
 
       const now = new Date()
-      const expiresAt = new Date(now.getTime() + LOCK_TTL_MS)
+      const expiresAt = new Date(now.getTime() + lockWindowMs(req.body))
 
       if (existing) {
         await db('nivaro_item_locks')
@@ -630,7 +751,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
             note
           })
         } catch {
-          const winner = await getCurrentLock(collection, item)
+          const winner = await getCurrentLock(collection, item, me)
           if (winner && winner.user !== me) {
             return reply.code(409).send({
               error: 'Item is locked by another user',
@@ -644,6 +765,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         }
       }
 
+      noteMasqueradeLock(req, collection, item)
       // Holding the lock means no longer waiting for it.
       await leaveQueue(collection, item, me)
       emitLockEvent(app, collection, item, me, true, !existing)
@@ -658,7 +780,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         })
       }
 
-      const lock = await getCurrentLock(collection, item)
+      const lock = await getCurrentLock(collection, item, me)
       return reply.send({
         data: lock
           ? {
@@ -682,7 +804,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection, item } = req.params
       const me = req.user!.id
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, me)
       if (!existing || existing.user !== me) {
         return reply.code(403).send({ error: 'You do not hold a lock on this item' })
       }
@@ -707,7 +829,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await callerCanEditRecord(req, collection, item))) {
         return reply.code(403).send(NOT_EDITABLE)
       }
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, me.id)
       if (existing && existing.user === me.id) {
         return reply.code(400).send({ error: 'You already hold this lock' })
       }
@@ -790,7 +912,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       }
       const waiting = await approvalRefusal(req, collection, item)
       if (waiting) return reply.code(403).send(waiting)
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, req.user!.id)
       if (existing && existing.user !== req.user!.id) {
         await db('nivaro_item_locks').where({ collection, item }).del()
         const { notifyUser } = await import('../services/notification-channels.js')
@@ -809,8 +931,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         item,
         user: req.user!.id,
         locked_at: new Date(),
-        expires_at: new Date(Date.now() + 5 * 60_000)
+        expires_at: new Date(Date.now() + lockWindowMs(req.body))
       })
+      noteMasqueradeLock(req, collection, item)
       // The taker now holds it — they are no longer waiting. The rest of the
       // queue stays: the lock was not released, it changed hands.
       await leaveQueue(collection, item, req.user!.id)
@@ -837,7 +960,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         return reply.send({ data: null, locking_disabled: true })
       }
 
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, me)
       // The record moved into a step this person may not change: their lock
       // was dropped (getCurrentLock) — say so, so the form turns read-only
       // instead of re-acquiring.
@@ -890,8 +1013,9 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         }
       }
 
-      const expiresAt = new Date(Date.now() + LOCK_TTL_MS)
+      const expiresAt = new Date(Date.now() + lockWindowMs(req.body))
       await db('nivaro_item_locks').where({ id: existing.id }).update({ expires_at: expiresAt })
+      noteMasqueradeLock(req, collection, item)
 
       return reply.send({ data: { collection, item, user: me, expires_at: expiresAt } })
     }
@@ -906,7 +1030,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     force: boolean
   ) => {
     const me = req.user!.id
-    const existing = await getCurrentLock(collection, item)
+    const existing = await getCurrentLock(collection, item, me)
     if (!existing) return reply.code(204).send()
 
     if (existing.user !== me && !force) {
@@ -971,7 +1095,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (!(await callerCanEditRecord(req, collection, item))) {
         return reply.code(403).send(NOT_EDITABLE)
       }
-      const existing = await getCurrentLock(collection, item)
+      const existing = await getCurrentLock(collection, item, me.id)
       if (!existing) return reply.code(404).send({ error: 'Nobody holds this lock' })
       if (existing.user === me.id)
         return reply.code(400).send({ error: 'You already hold this lock' })
@@ -1006,7 +1130,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     const note = String(req.body?.note ?? '').slice(0, 300)
     if (!to) return reply.code(400).send({ error: 'to (requester id) is required' })
     if (!isUuid(to)) return reply.code(400).send({ error: 'to must be a user id' })
-    const existing = await getCurrentLock(collection, item)
+    const existing = await getCurrentLock(collection, item, me.id)
     // Only the person holding the lock answers a request for it — otherwise
     // anyone could send anyone a "lock released / declined" notification.
     if (!existing || String(existing.user).toUpperCase() !== String(me.id).toUpperCase()) {

@@ -297,7 +297,7 @@ export const collabItemLocking: DocSection = {
     { type: 'h1', id: 'item-locking', text: 'Item Locking & Presence' },
     {
       type: 'p',
-      text: 'Prevent simultaneous editing conflicts with soft item locks. When a user opens a record for editing, a 5-minute TTL lock is acquired. Other users attempting to edit see an amber banner and the form switches to read-only. Locks auto-release after 5 minutes without activity, preventing stale locks from crashed tabs.'
+      text: "Prevent simultaneous editing conflicts with record edit locks. A lock is held only while the person is actually editing: their first real edit takes it, and it is let go the moment they leave — the tab is hidden, the browser window loses focus (for more than about 1.5 seconds; focus moving into a popover or an embedded frame on the page does not count), they switch to Summary mode, navigate away, close the page, or an administrator's View-as ends. Coming back to the tab in Edit mode takes it back silently; if someone else took it meanwhile, the form turns read-only naming them and keeps the unsaved changes. On the server a lock is a 30-second lease the open form renews every 10 seconds, so a crashed or sleeping browser frees the record within half a minute, and where the server can see every live connection (the realtime board) a holder with no connection left holds nothing at all. Other users attempting to edit a held record see an amber banner and the form switches to read-only; saves and transitions over a live lock are refused with 409 RECORD_LOCKED."
     },
     { type: 'h3', id: 'draft-recovery', text: 'Unsaved-draft recovery' },
     {
@@ -312,12 +312,14 @@ export const collabItemLocking: DocSection = {
     {
       type: 'ul',
       items: [
-        'User opens item editor → client POSTs to acquire lock',
-        'Lock created in `nivaro_item_locks` with 5-minute TTL',
-        'Client heartbeat endpoint called every 2.5 minutes to refresh TTL',
-        'On close/navigate away, lock is deleted via DELETE',
-        'If lock already held, acquiring user gets 409 Conflict with holder info',
-        'After 5 minutes of no heartbeat, lock auto-expires'
+        'User makes the first real edit → client POSTs to acquire the lock with `beat_ms: 10000`',
+        'Lock created in `nivaro_item_locks` with a 30-second lease (`expires_at`); a client that does not send `beat_ms` (built before 2026-10-28, 60 s heartbeat) gets 150 s',
+        'Client heartbeat every 10 seconds pushes `expires_at` forward by the lease',
+        'Tab hidden, window blurred (~1.5 s), Summary mode, navigate away or page close → the lock is released (a keepalive `POST …/lock/release` when the page may be going away)',
+        'Back in Edit mode on the focused tab → the lock is taken again silently',
+        'If the lock is held by someone live, the acquiring user gets 409 Conflict with holder info',
+        'A lock with no heartbeat inside its lease, or whose holder the realtime board knows has no connection left, holds nothing: it reads as free, is free to take, and refuses no save or transition',
+        'Stopping a View-as (DELETE /api/auth/masquerade) releases the locks taken through that View-as'
       ]
     },
     {
@@ -380,7 +382,8 @@ export const collabItemLocking: DocSection = {
     {
       type: 'pre',
       code: `POST /api/item-locks/:collection/:item/heartbeat
-  # Extend TTL by 5 minutes (called every 2.5 min while editing)
+  # Body { idle_seconds, beat_ms } — renews the lease (30 s when beat_ms ≤ 15000, else 150 s).
+  # Called every 10 s while the form is the focused, visible edit surface
 
 DELETE /api/item-locks/:collection/:item/lock
   # Release lock (called on close/navigate away)
@@ -419,7 +422,7 @@ PATCH /api/item-locks/config/:collection
         'Amber banner: "Being edited by Sarah Chen (expires in 4 min 30 sec)"',
         'Form switches to read-only when locked by someone else',
         'Admin sees "Take over" button in banner to force-acquire lock',
-        'Heartbeat interval: 2.5 minutes; TTL: 5 minutes (prevents stale locks)',
+        'Heartbeat interval: 10 seconds; lease: 30 seconds (a crashed or sleeping browser frees the record within half a minute)',
         'If disabled returns true, all lock UI is suppressed silently'
       ]
     },

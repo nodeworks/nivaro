@@ -1055,6 +1055,10 @@ export async function authRoutes(app: FastifyInstance) {
     bumpUserAccessVersion(String(req.user!.id))
     // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
     endMasqueradeSockets(token)
+    // The View-as tab's own lock release goes out after this, with a token
+    // that no longer works: let go of the edit locks it held here.
+    const { releaseMasqueradeLocks } = await import('./item-locks.js')
+    await releaseMasqueradeLocks(app, token, String(req.user!.id))
     await logActivity({
       action: 'masquerade-stop',
       user: req.masqueradeAdminId,

@@ -31,6 +31,7 @@ import { fieldFocusTracker } from '../services/field-focus.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
+import { setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
@@ -68,7 +69,9 @@ import { emitterOnlyAdapter, socketsServed } from '../services/process-role.js'
 import {
   type BoardCollector,
   boardConcurrency,
+  boardHasUser,
   boardIsViewing,
+  boardKnowsEveryone,
   boardMergeOn,
   boardPeerViewers,
   boardReaderOn,
@@ -204,6 +207,19 @@ export function isUserViewing(collection: string, item: string, userId: string):
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
 }
+
+/**
+ * Has `userId` a signed-in socket anywhere in the deployment? null = this process cannot tell
+ * (it does not see every process's sockets right now). The edit-lock presence check
+ * (services/lock-presence.ts) voids a lock only on a definite false.
+ */
+export function isUserConnected(userId: string): boolean | null {
+  const want = String(userId).toUpperCase()
+  for (const m of socketMeta.values()) if (m.user && m.user.id.toUpperCase() === want) return true
+  if (!boardKnowsEveryone()) return null
+  return boardMergeOn() ? boardHasUser(userId, true) : false
+}
+setLockPresenceProbe(isUserConnected)
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
 export interface SocketMeta {

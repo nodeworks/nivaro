@@ -147,10 +147,11 @@ export async function explainDenied(
       .leftJoin('nivaro_users as u', 'u.id', 'l.user')
       .where({ 'l.collection': collection, 'l.item': String(id) })
       .where('l.expires_at', '>', new Date())
-      .first('l.user', 'l.expires_at', 'u.first_name', 'u.last_name', 'u.email')
+      .first('l.user', 'l.locked_at', 'l.expires_at', 'u.first_name', 'u.last_name', 'u.email')
       .catch(() => null)) as
       | {
           user: string
+          locked_at: Date
           expires_at: Date
           first_name: string | null
           last_name: string | null
@@ -158,7 +159,14 @@ export async function explainDenied(
         }
       | null
       | undefined
-    if (lock && String(lock.user).toUpperCase() !== String(user.id).toUpperCase()) {
+    // The same liveness rule as the write guard (lock-presence.ts): a holder
+    // who left holds nothing.
+    const { lockIsLive } = await import('./lock-presence.js')
+    if (
+      lock &&
+      lockIsLive(lock) &&
+      String(lock.user).toUpperCase() !== String(user.id).toUpperCase()
+    ) {
       lockHolder = personName(lock)
       const at = new Date(lock.expires_at).toLocaleTimeString('en-US', {
         hour: 'numeric',
