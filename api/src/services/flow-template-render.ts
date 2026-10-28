@@ -3,8 +3,9 @@
  * security audit 2026-10-27). A record value must never change the SHAPE of what it lands in:
  *
  *  - plain text (log lines, subjects, transform templates): the value as text — unchanged;
- *  - URLs: a value in the path / query / fragment is percent-encoded; a placeholder that
- *    supplies the scheme + host (at the very start, or inside `scheme://host`) stays as is;
+ *  - URLs: a value inside one path segment / query key or value / the fragment is
+ *    percent-encoded; a placeholder that fills a whole part (origin, whole path, whole query)
+ *    stays usable — see `resolveUrlTemplate`; `{{ path | raw }}` opts one placeholder out;
  *  - JSON bodies: inside a string literal the value is JSON-escaped; outside one it becomes
  *    exactly ONE JSON value (a string that already is a JSON value — `12`, `true`, `{"a":1}` —
  *    is kept, so templates that build whole objects from a value keep working);
@@ -40,7 +41,27 @@ export function resolveTemplate(template: string, data: FlowData): string {
   return template.replace(PLACEHOLDER_RE, (_, path: string) => text(getByPath(data, path.trim())))
 }
 
-/** A URL template: values in the path/query/fragment are percent-encoded. */
+/** `{{ path | raw }}` → { path, raw: true }. */
+function splitRaw(inner: string): { path: string; raw: boolean } {
+  const m = /\|\s*raw\s*$/.exec(inner)
+  return { path: (m ? inner.slice(0, m.index) : inner).trim(), raw: Boolean(m) }
+}
+
+/** A value that is a whole path: each segment percent-encoded, the slashes kept. */
+const encodePath = (value: string): string => value.split('/').map(encodeURIComponent).join('/')
+
+/**
+ * A URL template. A value lands percent-encoded where it fills part of the URL — one path
+ * segment, a query key or value, the fragment — so it can never add a segment or a parameter.
+ * A placeholder that fills a whole part keeps working (review A4, 2026-10-27):
+ *
+ *  - the scheme + host, or the whole origin (`https://{{host}}/…`, `{{base}}/…`): as is;
+ *  - right after the origin with nothing between (`{{base}}{{path}}`): as is;
+ *  - the whole query (`?{{qs}}`, `&{{more}}` up to the next `&`/`#`/end): as is;
+ *  - the whole path after the root slash (`https://h/{{path}}`, `/{{path}}`): slashes kept,
+ *    each segment encoded;
+ *  - `{{ path | raw }}` anywhere: as is.
+ */
 export function resolveUrlTemplate(template: string, data: FlowData): string {
   let rawUntil = 0
   const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(template)
@@ -52,9 +73,26 @@ export function resolveUrlTemplate(template: string, data: FlowData): string {
     const close = template.indexOf('}}')
     rawUntil = close < 0 ? 0 : close + 2
   }
-  return template.replace(PLACEHOLDER_RE, (match: string, path: string, offset: number) => {
-    const value = text(getByPath(data, path.trim()))
-    return offset + match.length <= rawUntil ? value : encodeURIComponent(value)
+  const queryAt = template.indexOf('?', rawUntil)
+  const hashAt = template.indexOf('#', rawUntil)
+  const endsPart = (ch: string | undefined, chars: string) => ch === undefined || chars.includes(ch)
+  return template.replace(PLACEHOLDER_RE, (match: string, inner: string, offset: number) => {
+    const { path, raw } = splitRaw(inner)
+    const value = text(getByPath(data, path))
+    const end = offset + match.length
+    if (raw || end <= rawUntil) return value
+    // Right after the origin: the data supplies the whole path (and maybe the query).
+    if (offset === rawUntil && rawUntil > 0) return value
+    const before = template[offset - 1]
+    const after = template[end]
+    const beforeHash = hashAt < 0 || offset < hashAt
+    const inQuery = queryAt >= 0 && offset > queryAt && beforeHash
+    if (inQuery && (before === '?' || before === '&') && endsPart(after, '&#')) return value
+    const inPath = (queryAt < 0 || offset < queryAt) && beforeHash
+    if (inPath && offset === rawUntil + 1 && template[rawUntil] === '/' && endsPart(after, '?#')) {
+      return encodePath(value)
+    }
+    return encodeURIComponent(value)
   })
 }
 
@@ -73,13 +111,174 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": '&#39;'
 }
 
-/** An HTML fragment (mail body): values HTML-escaped unless written `{{ path | raw }}`. */
-export function resolveHtmlTemplate(template: string, data: FlowData): string {
+const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c])
+
+// Rich-text allow-list — the server twin of packages/shared lib/sanitize-html.ts (which needs a
+// DOMParser). Tags outside the list are dropped (text kept), the DROP list loses its content
+// too, and every attribute is dropped except href (http/https/mailto/tel/relative) and a few
+// inert ones. Text between tags is re-escaped, so a half-written tag can never open one.
+const RICH_TAGS = new Set([
+  'p',
+  'br',
+  'b',
+  'strong',
+  'i',
+  'em',
+  'u',
+  's',
+  'strike',
+  'del',
+  'ins',
+  'mark',
+  'small',
+  'sub',
+  'sup',
+  'code',
+  'pre',
+  'blockquote',
+  'hr',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'a',
+  'span',
+  'div',
+  'table',
+  'thead',
+  'tbody',
+  'tfoot',
+  'tr',
+  'th',
+  'td',
+  'caption'
+])
+const RICH_DROP_RE =
+  /<(script|style|iframe|object|embed|form|svg|math|template|noscript|textarea|title)\b[\s\S]*?<\/\1\s*>/gi
+const RICH_ATTRS = new Set(['href', 'title', 'colspan', 'rowspan', 'start', 'type'])
+const TAG_RE = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^<>]*)>/g
+const ATTR_RE = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g
+
+const NAMED_REFS: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  colon: ':',
+  tab: '\t',
+  newline: '\n',
+  sol: '/',
+  nbsp: ' '
+}
+
+/** An attribute value as the browser reads it (character references decoded). */
+function decodeRefs(v: string): string {
+  return v.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);?/gi, (m, ref: string) => {
+    const r = ref.toLowerCase()
+    if (r.startsWith('#x')) return String.fromCodePoint(Number.parseInt(r.slice(2), 16) || 0)
+    if (r.startsWith('#')) return String.fromCodePoint(Number(r.slice(1)) || 0)
+    return NAMED_REFS[r] ?? m
+  })
+}
+
+function safeHref(raw: string): boolean {
+  const decoded = decodeRefs(raw)
+  // An unknown reference could hide a scheme: refuse rather than guess.
+  if (/&[a-z]+;/i.test(decoded)) return false
+  let v = ''
+  for (const ch of decoded) if (ch.charCodeAt(0) > 32) v += ch
+  v = v.toLowerCase()
+  if (!v) return true
+  if (/^(https?:|mailto:|tel:)/.test(v)) return true
+  return !/^[a-z][a-z0-9+.-]*:/.test(v)
+}
+
+/** Escape text between tags, but leave existing character references (`&amp;`) alone. */
+const escapeText = (t: string): string =>
+  t
+    .replace(/&(?![a-zA-Z][a-zA-Z0-9]*;|#\d+;|#x[0-9a-fA-F]+;)/g, '&amp;')
+    .replace(/[<>]/g, (c) => (c === '<' ? '&lt;' : '&gt;'))
+const escapeAttr = (t: string): string => escapeText(t).replace(/"/g, '&quot;')
+
+/** Stored rich text (WYSIWYG / markdown fields) made safe to place in an HTML mail body. */
+export function sanitizeRichHtml(html: string): string {
+  const src = html.replace(/<!--[\s\S]*?-->/g, '').replace(RICH_DROP_RE, '')
+  let out = ''
+  let last = 0
+  for (const m of src.matchAll(TAG_RE)) {
+    out += escapeText(src.slice(last, m.index))
+    last = (m.index ?? 0) + m[0].length
+    const closing = m[1] === '/'
+    const tag = m[2].toLowerCase()
+    if (!RICH_TAGS.has(tag)) continue
+    if (closing) {
+      out += `</${tag}>`
+      continue
+    }
+    let attrs = ''
+    for (const a of (m[3] ?? '').matchAll(ATTR_RE)) {
+      const name = a[1].toLowerCase()
+      const value = a[2] ?? a[3] ?? a[4] ?? ''
+      if (!RICH_ATTRS.has(name) || (name === 'href' && !safeHref(value))) continue
+      attrs += ` ${name}="${escapeAttr(value)}"`
+    }
+    if (tag === 'a') attrs += ' rel="noopener noreferrer" target="_blank"'
+    out += `<${tag}${attrs}>`
+  }
+  return out + escapeText(src.slice(last))
+}
+
+/** Field `type` / `interface` values that store rich text (HTML or markdown). */
+const RICH_INTERFACES = new Set([
+  'input-rich-text-html',
+  'input-rich-text-md',
+  'rich_text',
+  'rich-text',
+  'rich-text-html',
+  'richtext',
+  'wysiwyg',
+  'markdown'
+])
+
+/** Is this field (by its type / interface) a rich-text field? */
+export function isRichTextField(field: {
+  type?: string | null
+  interface?: string | null
+}): boolean {
+  return (
+    RICH_INTERFACES.has(String(field.interface ?? '')) ||
+    RICH_INTERFACES.has(String(field.type ?? ''))
+  )
+}
+
+export interface HtmlTemplateOptions {
+  /** Rich-text field names: a placeholder whose path ends in one is sanitized, not escaped. */
+  richFields?: ReadonlySet<string>
+}
+
+/**
+ * An HTML fragment (mail body): values HTML-escaped unless written `{{ path | raw }}`. A value
+ * from a rich-text field (`richFields`, matched on the path's last segment) is passed through
+ * the rich-text allow-list instead, so its formatting shows (review A5, 2026-10-27).
+ */
+export function resolveHtmlTemplate(
+  template: string,
+  data: FlowData,
+  opts: HtmlTemplateOptions = {}
+): string {
   return template.replace(PLACEHOLDER_RE, (_, inner: string) => {
-    const raw = /\|\s*raw\s*$/.exec(inner)
-    const path = (raw ? inner.slice(0, raw.index) : inner).trim()
+    const { path, raw } = splitRaw(inner)
     const value = text(getByPath(data, path))
-    return raw ? value : value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c])
+    if (raw) return value
+    const leaf = path.slice(path.lastIndexOf('.') + 1)
+    if (opts.richFields?.has(leaf)) return sanitizeRichHtml(value)
+    return escapeHtml(value)
   })
 }
 

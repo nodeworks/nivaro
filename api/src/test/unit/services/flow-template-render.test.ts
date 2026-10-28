@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isRichTextField,
   resolveBodyTemplate,
   resolveHtmlTemplate,
   resolveJsonTemplate,
@@ -109,9 +110,89 @@ describe('resolveUrlTemplate (M26)', () => {
     const tpl = 'https://x.example/a/{{$data.count}}?h={{$data.host}}'
     expect(resolveUrlTemplate(tpl, data)).toBe(resolveTemplate(tpl, data))
   })
+
+  // review A4: placeholders that fill a whole part keep working
+  const parts = {
+    base: 'https://p.example',
+    path: '/api/v2/orders?full=1',
+    rel: 'api/v2/orders',
+    qs: 'a=1&b=two',
+    key: 'k&x',
+    val: 'v w&z=1'
+  }
+  it('a placeholder right after the origin is the whole path, as is', () => {
+    expect(resolveUrlTemplate('{{base}}{{path}}', parts)).toBe(
+      'https://p.example/api/v2/orders?full=1'
+    )
+  })
+
+  it('a whole query part is as is; keys and values inside one are encoded', () => {
+    expect(resolveUrlTemplate('https://h.example/x?{{qs}}', parts)).toBe(
+      'https://h.example/x?a=1&b=two'
+    )
+    expect(resolveUrlTemplate('https://h.example/x?z=1&{{qs}}#f', parts)).toBe(
+      'https://h.example/x?z=1&a=1&b=two#f'
+    )
+    expect(resolveUrlTemplate('https://h.example/x?{{key}}={{val}}', parts)).toBe(
+      'https://h.example/x?k%26x=v%20w%26z%3D1'
+    )
+  })
+
+  it('a whole path after the root slash keeps its slashes, segments encoded', () => {
+    expect(resolveUrlTemplate('https://h.example/{{rel}}?q={{val}}', parts)).toBe(
+      'https://h.example/api/v2/orders?q=v%20w%26z%3D1'
+    )
+    expect(resolveUrlTemplate('/{{$data.id}}', data)).toBe('/7/../../admin%3Fx%3D1%26y%3D2')
+  })
+
+  it('| raw opts one placeholder out anywhere', () => {
+    expect(resolveUrlTemplate('https://h.example/a/{{ val | raw }}', parts)).toBe(
+      'https://h.example/a/v w&z=1'
+    )
+  })
 })
 
 describe('resolveHtmlTemplate (mail body)', () => {
+  it('rich-text fields are sanitized, not escaped (review A5)', () => {
+    const rec = {
+      body: '<p class="x" onclick="steal()">Hi <b>there</b><script>alert(1)</script></p>',
+      link: '<a href="javascript:alert(1)">x</a><a href="https://ok.example/?a=1&amp;b=2">y</a>',
+      broken: '<img src=x onerror=alert(1)',
+      plain: '<b>not rich</b>'
+    }
+    const rich = new Set(['body', 'link', 'broken'])
+    expect(
+      resolveHtmlTemplate('<div>{{$data.body}}</div>', { $data: rec }, { richFields: rich })
+    ).toBe('<div><p>Hi <b>there</b></p></div>')
+    expect(resolveHtmlTemplate('{{link}}', rec, { richFields: rich })).toBe(
+      '<a rel="noopener noreferrer" target="_blank">x</a>' +
+        '<a href="https://ok.example/?a=1&amp;b=2" rel="noopener noreferrer" target="_blank">y</a>'
+    )
+    // a scheme hidden behind character references is still refused
+    expect(
+      resolveHtmlTemplate(
+        '{{x}}',
+        { x: '<a href="java&#115;cript&colon;alert(1)">z</a>' },
+        {
+          richFields: new Set(['x'])
+        }
+      )
+    ).toBe('<a rel="noopener noreferrer" target="_blank">z</a>')
+    // a half-written tag can never open one with the template's next tag
+    expect(resolveHtmlTemplate('<p>{{broken}}</p>', rec, { richFields: rich })).toBe(
+      '<p>&lt;img src=x onerror=alert(1)</p>'
+    )
+    expect(resolveHtmlTemplate('{{plain}}', rec, { richFields: rich })).toBe(
+      '&lt;b&gt;not rich&lt;/b&gt;'
+    )
+  })
+
+  it('knows rich-text fields by interface or type', () => {
+    expect(isRichTextField({ type: 'text', interface: 'input-rich-text-html' })).toBe(true)
+    expect(isRichTextField({ type: 'wysiwyg', interface: null })).toBe(true)
+    expect(isRichTextField({ type: 'text', interface: 'input-multiline' })).toBe(false)
+  })
+
   it('escapes values; | raw opts one out', () => {
     expect(
       resolveHtmlTemplate('<p>{{$data.html}}</p><div>{{ $data.rich | raw }}</div>', data)

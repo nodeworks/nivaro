@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
-import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
+import { assertSafeUrl, fetchGuardedInCloud } from '../lib/ssrf.js'
 import {
   protectTemplatePlaceholders,
   scrubbedBodyMessage,
@@ -15,6 +15,7 @@ import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
   getByPath,
+  isRichTextField,
   resolveBodyTemplate,
   resolveHtmlTemplate,
   resolveJsonTemplate,
@@ -241,6 +242,34 @@ function reasonForRecipient(email: string, data: Record<string, unknown>): strin
   return null
 }
 
+/**
+ * May a flow call this URL? Cloud mode: only when the SSRF guard passes (private hosts and the
+ * metadata endpoint refused). Self-hosted: always — admin-authored flows, like external API
+ * configs, reach internal services on purpose (`fetchGuardedInCloud`).
+ */
+async function outboundUrlAllowed(url: string): Promise<boolean> {
+  if (!process.env.CLOUD_META_DB_URL) return true
+  try {
+    await assertSafeUrl(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The flow record's rich-text field names (WYSIWYG / markdown), or an empty set. */
+async function richTextFieldsOf(dataRec: Record<string, unknown>): Promise<Set<string>> {
+  const col = dataRec.subject_collection ?? dataRec.collection
+  if (typeof col !== 'string' || !col) return new Set()
+  try {
+    const { getFields } = await import('./collections.js')
+    const fields = await getFields(col)
+    return new Set(fields.filter(isRichTextField).map((f) => f.field))
+  } catch {
+    return new Set()
+  }
+}
+
 async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const to = resolveTemplate((opts.to as string) ?? '', data)
@@ -267,9 +296,13 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
   // Optional named mail template (core or extension-registered): rendered with
   // the FULL flow data as its context, replacing the plain-text body. A plain
   // body still gets the branded chrome via sendRawMail's auto-wrap.
+  const richFields = await richTextFieldsOf(dataRec)
   const renderBody = async (context: Record<string, unknown>) => {
-    // The body is admin-written HTML: values land HTML-escaped (`{{ path | raw }}` opts out).
-    let body = resolveHtmlTemplate((opts.body as string) ?? '', context as FlowData)
+    // The body is admin-written HTML: values land HTML-escaped (`{{ path | raw }}` opts out);
+    // the record's rich-text fields pass through the rich-text allow-list instead (A5).
+    let body = resolveHtmlTemplate((opts.body as string) ?? '', context as FlowData, {
+      richFields
+    })
     if (templateName) {
       try {
         body = await renderMailTemplate(templateName, context)
@@ -468,15 +501,15 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
 
 async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
-  // Values land percent-encoded in the path/query (M26); the target is SSRF-guarded (M25).
+  // Values land percent-encoded in the path/query (M26). The target is SSRF-guarded in cloud
+  // mode only, like external API configs: self-hosted flows reach internal services on
+  // purpose (review A3, 2026-10-27).
   const url = resolveUrlTemplate((opts.url as string) ?? '', data)
   if (!url) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Webhook operation missing url')
     return { status: 'reject' as const, output: { ...data, $error: 'missing url' } }
   }
-  try {
-    await assertSafeUrl(url)
-  } catch {
+  if (!(await outboundUrlAllowed(url))) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key, url }, 'Webhook blocked by SSRF guard')
     return { status: 'reject' as const, output: { ...data, $error: 'URL not allowed' } }
   }
@@ -498,8 +531,8 @@ async function runWebhook(op: FlowOperation, data: FlowData, ctx: ExecutionConte
   }
 
   const doFetch = async () => {
-    // Checked + pinned connection; every redirect hop re-checked (lib/ssrf.ts).
-    const res = await safeFetch(url, { method, headers, body })
+    // Cloud: checked + pinned connection, every redirect hop re-checked (lib/ssrf.ts).
+    const res = await fetchGuardedInCloud(url, { method, headers, body })
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>
     ctx.log.info({ flowId: ctx.flowId, key: op.key, status: res.status }, 'Webhook executed')
     return { ok: res.ok, json }
@@ -703,9 +736,7 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     }
 
     const url = resolveUrlTemplate(rawUrl, data)
-    try {
-      await assertSafeUrl(url)
-    } catch {
+    if (!(await outboundUrlAllowed(url))) {
       ctx.log.warn({ flowId: ctx.flowId, key: op.key, url }, 'external-api blocked by SSRF guard')
       return { status: 'reject' as const, output: { ...data, $error: 'URL not allowed' } }
     }
@@ -748,8 +779,8 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     init.signal = controller.signal
 
     try {
-      // M25: a redirect to a private host is refused — every hop is re-checked and pinned.
-      const res = await safeFetch(url, init as Parameters<typeof safeFetch>[1])
+      // M25 (cloud): a redirect to a private host is refused — every hop re-checked and pinned.
+      const res = await fetchGuardedInCloud(url, init)
       clearTimeout(timer)
       const text = await res.text()
       let parsed: unknown = text
