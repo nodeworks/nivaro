@@ -92,6 +92,7 @@ import {
   RealtimeStatusBanner,
   RecordOutboxHost,
   SOMETHING_WENT_WRONG,
+  TipLayer,
   useClientChaosGate,
   useLiveQueryBridge
 } from '@nivaro/shared'
@@ -876,6 +877,9 @@ export function AppLayout() {
         </div>
         {/* Outside the animated page wrapper on purpose — see bug-reporter.tsx. */}
         <BugReporter />
+        {/* Instant `data-tip` tooltips on every page (profile, people pages, Traffic Map…).
+            Pages that mount their own stay fine: one live instance owns the listener. */}
+        <TipLayer />
         <CommandPalette />
         <KeyboardShortcuts />
         <ForceRefreshBanner />

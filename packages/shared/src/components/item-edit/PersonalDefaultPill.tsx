@@ -27,13 +27,17 @@ export function PersonalDefaultPill({
         onClick={onUndo}
         aria-label={label ? `Undo your default for ${label}` : 'Undo your default'}
         data-personal-default-undo={field}
-        className='relative inline-flex h-4 w-4 items-center justify-center rounded text-sky-700 before:absolute before:-inset-1 before:content-[""] transition-colors duration-150 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nvr-cyan dark:text-sky-300 dark:hover:bg-sky-800/50 dark:hover:text-white'
+        className='relative inline-flex h-4 w-4 items-center justify-center rounded text-sky-700 before:absolute before:-inset-1 before:content-[""] transition-colors duration-150 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 dark:text-sky-300 dark:focus-visible:ring-sky-300 dark:hover:bg-sky-800/50 dark:hover:text-white'
       >
         <Undo2 className='h-3 w-3' aria-hidden />
       </button>
     </span>
   )
 }
+
+/** The quiet Cancel shared by My defaults' Save / Cancel and the field menu's confirm. */
+export const PERSONAL_DEFAULT_GHOST_BUTTON =
+  'inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:text-slate-100'
 
 /** Why a saved default was not applied ("Your default is for Zone 2"). Quiet, under the field. */
 export function PersonalDefaultHint({ field, text }: { field: string; text: string }) {

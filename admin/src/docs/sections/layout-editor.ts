@@ -1138,7 +1138,7 @@ export const layoutPersonalDefaults: DocSection = {
     {
       type: 'ul',
       items: [
-        'Open the field menu (the ⋯ on a field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it.',
+        "Open the field menu (the ⋯ beside the field's label, or right-click the field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it, and its toast offers Undo.",
         'On a **new** record the saved value is filled in automatically and the field shows a small pill. **Undo** on the pill clears it again.',
         'If the person changes a parent field (for example the zone), children that still hold a default are re-picked for the new context. Anything the person typed or picked themselves is never touched.',
         'A default is saved together with the parent values it was chosen under (its context), so one person can keep a different default per zone. Up to 20 contexts per field.'

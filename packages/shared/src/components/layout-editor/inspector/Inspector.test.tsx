@@ -774,7 +774,7 @@ describe('Inspector', () => {
       await click(host.querySelector('[data-inspector-tab="rules"]'))
       const sw = () => host.querySelector('[data-setting="field.personal_default"] [role="switch"]')
       expect(host.querySelector('[data-setting="field.personal_default"]')?.textContent).toContain(
-        'People can save their own starting value for this field on new records.'
+        'On this form, people can save their own starting value for this field, and new records start with it.'
       )
       await click(sw())
       expect(apply).toHaveBeenCalledTimes(1)

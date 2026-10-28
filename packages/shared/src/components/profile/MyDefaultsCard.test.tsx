@@ -135,6 +135,8 @@ let calls: Cmd[] = []
 let rows: Array<Omit<(typeof ROWS)[number], 'context'> & { context: Record<string, unknown> }> =
   ROWS
 let anyAllowed = true
+let allowedNone = false
+let holdPut: Promise<void> | null = null
 let listFailures = 0
 
 function respond(cmd: Cmd): unknown {
@@ -149,6 +151,7 @@ function respond(cmd: Cmd): unknown {
     return { data: rows }
   }
   if (p.endsWith('/allowed') && cmd._params?.any) return { data: { any: anyAllowed } }
+  if (p.endsWith('/allowed') && allowedNone) return { data: [] }
   if (p.endsWith('/allowed'))
     return {
       data: [
@@ -189,6 +192,7 @@ async function mount(opts: { userId?: string; isAdmin?: boolean } = {}) {
   const client = {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
+      if (cmd._method === 'PUT' && holdPut) await holdPut
       return respond(cmd)
     })
   }
@@ -226,6 +230,8 @@ beforeEach(() => {
   calls = []
   rows = ROWS
   anyAllowed = true
+  allowedNone = false
+  holdPut = null
   listFailures = 0
 })
 afterEach(() => {
@@ -365,9 +371,12 @@ describe('MyDefaultsCard', () => {
     expect(btn?.getAttribute('data-tip')).toBe('Clear the default for Notes')
     expect(btn?.getAttribute('aria-label')).toBe('Clear the default for Notes')
     await click(btn)
-    expect(btn?.getAttribute('aria-label')).toBe(
-      'Clear the default for Notes? Press again to confirm'
-    )
+    expect(btn?.getAttribute('aria-label')).toBe('Clear the default for Notes?')
+    // Armed: no tip over "Clear?", the cluster stays shown, and screen readers hear the step.
+    expect(btn?.hasAttribute('data-tip')).toBe(false)
+    expect(btn?.hasAttribute('data-armed')).toBe(true)
+    expect(btn?.parentElement?.className).toContain('[&:has([data-armed])]:opacity-100')
+    expect(btn?.querySelector('[aria-live=polite]')?.textContent).toBe('Press again to confirm')
   })
 
   it('explains a stale row to screen readers, not only in a tooltip', async () => {
@@ -414,6 +423,31 @@ describe('MyDefaultsCard', () => {
     )
   })
 
+  it('an admin with nothing to add is told about the person, never "add one here"', async () => {
+    rows = []
+    allowedNone = true
+    await mount({ userId: 'bob-1', isAdmin: true })
+    await settle(() => !!host.querySelector('[data-default-empty]'))
+    const text = host.querySelector('[data-default-empty]')?.textContent ?? ''
+    expect(text).toMatch(/^This person hasn’t saved any defaults yet\./)
+    expect(text).not.toMatch(/add one here/)
+    expect(host.querySelector('[data-default-add]')).toBeNull()
+  })
+
+  it('an admin with forms to add from is offered "add one here"', async () => {
+    rows = []
+    await mount({ userId: 'bob-1', isAdmin: true })
+    await settle(() => !!host.querySelector('[data-default-add]'))
+    expect(host.querySelector('[data-default-empty]')?.textContent).toMatch(/or add one here\./)
+  })
+
+  it('the Add form: Field waits for a collection', async () => {
+    await mount({ userId: 'bob-1', isAdmin: true })
+    await click(host.querySelector('[data-default-add]'))
+    const fieldPick = host.querySelector<HTMLButtonElement>('[data-default-pick="field"]')
+    expect(fieldPick?.disabled).toBe(true)
+  })
+
   it('an admin reads and clears through /users/:id and can add a default', async () => {
     await mount({ userId: 'bob-1', isAdmin: true })
     expect(calls.some((c) => c._path === '/field-defaults/users/bob-1')).toBe(true)
@@ -453,7 +487,16 @@ describe('MyDefaultsCard', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Hold')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    let release = () => {}
+    holdPut = new Promise<void>((r) => {
+      release = r
+    })
     await click(host.querySelector('[data-default-add-form] [data-default-save]'))
+    await settle(() => !!host.querySelector('[data-default-add-form] [data-default-save]:disabled'))
+    expect(host.querySelector('[data-default-add-form] [data-default-save]')?.textContent).toBe(
+      'Saving…'
+    )
+    release()
     await settle()
     const putCall = calls.find((c) => c._method === 'PUT')
     expect(putCall?._path).toBe('/field-defaults/users/bob-1')

@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookmarkCheck, Check, ChevronsUpDown, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { BookmarkCheck, Check, ChevronsUpDown, Pencil, Plus, UserRoundX, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ParentDraftContext, useItemEditAuth, useNivaroClient } from '../../context'
@@ -10,6 +10,7 @@ import { cn, formatDate, titleCase } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
 import { buildCascadeFilter, getCascadeFilters } from '../item-edit/helpers'
 import { M2MStagingContext, type M2MStagingCtx } from '../item-edit/M2MStagingContext'
+import { PERSONAL_DEFAULT_GHOST_BUTTON } from '../item-edit/PersonalDefaultPill'
 import { pickedCollection } from '../item-edit/personal-default-checks'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { personalDefaultsKey } from '../item-edit/usePersonalDefaults'
@@ -342,10 +343,14 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
         </div>
       ) : (rows ?? []).length === 0 ? (
         <p data-default-empty className='text-[12px] text-slate-500 dark:text-slate-400'>
-          {forOther ? `${firstName} has no saved defaults yet.` : 'No defaults yet.'} On a record
-          form, open a field’s ⋯ menu and choose{' '}
+          {forOther ? `${firstName} hasn’t saved any defaults yet.` : 'No defaults yet.'} On a
+          record form, open a field’s ⋯ menu and choose{' '}
           <span className='font-medium text-slate-700 dark:text-slate-200'>Save as my default</span>
-          {forOther ? ' — or add one here.' : ' — new records then start with that value.'}
+          {forOther
+            ? (allowed?.length ?? 0) > 0
+              ? ' — or add one here.'
+              : '.'
+            : ' — new records then start with that value.'}
         </p>
       ) : (
         <div className='space-y-4'>
@@ -524,8 +529,9 @@ function DefaultRowItem({
           className={cn(
             'flex shrink-0 items-center gap-0.5 transition-opacity duration-150',
             // Reserve the slot; show on hover / keyboard focus, always on touch and when stale.
+            // …and while Clear is armed (the pointer may have left before the second press).
             !stale &&
-              'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100'
+              'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 [&:has([data-armed])]:opacity-100'
           )}
         >
           {!stale && fc && (
@@ -545,7 +551,7 @@ function DefaultRowItem({
             onConfirm={onClear}
             disabled={clearing}
             title={`Clear the default for ${fieldLabel(meta, row.field)}`}
-            confirmTitle={`Clear the default for ${fieldLabel(meta, row.field)}? Press again to confirm`}
+            confirmTitle={`Clear the default for ${fieldLabel(meta, row.field)}?`}
             confirmLabel={
               <span data-default-clear className='px-1 text-[11.5px] font-semibold'>
                 Clear?
@@ -555,7 +561,7 @@ function DefaultRowItem({
             armedClassName='bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/15'
           >
             <span data-default-clear className='inline-flex items-center'>
-              <Trash2 className='h-3.5 w-3.5' />
+              <UserRoundX className='h-3.5 w-3.5' />
             </span>
           </ConfirmButton>
         </div>
@@ -652,11 +658,7 @@ function SaveCancel({
 }) {
   return (
     <span className='flex items-center gap-1.5'>
-      <button
-        type='button'
-        onClick={onCancel}
-        className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:text-slate-100'
-      >
+      <button type='button' onClick={onCancel} className={PERSONAL_DEFAULT_GHOST_BUTTON}>
         <X className='h-3 w-3' /> Cancel
       </button>
       <button
@@ -666,7 +668,13 @@ function SaveCancel({
         onClick={onSave}
         className='inline-flex h-7 items-center gap-1 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:opacity-50'
       >
-        <Check className='h-3 w-3' /> Save
+        {pending ? (
+          'Saving…'
+        ) : (
+          <>
+            <Check className='h-3 w-3' /> Save
+          </>
+        )}
       </button>
     </span>
   )
@@ -777,7 +785,8 @@ function Pick({
   placeholder,
   label,
   onChange,
-  testId
+  testId,
+  disabled
 }: {
   value: string
   options: Array<{ value: string; label: string }>
@@ -785,6 +794,7 @@ function Pick({
   label: string
   onChange: (v: string) => void
   testId: string
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const selected = options.find((o) => o.value === value)
@@ -797,7 +807,8 @@ function Pick({
           aria-expanded={open}
           aria-label={label}
           data-default-pick={testId}
-          className='flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:border-slate-600'
+          disabled={disabled}
+          className='flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:hover:border-slate-200 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:border-slate-600 dark:disabled:bg-muted/40 dark:disabled:hover:border-border'
         >
           <span className={cn('truncate', !selected && 'text-slate-500 dark:text-slate-400')}>
             {selected?.label ?? placeholder}
@@ -887,6 +898,7 @@ function AddDefault({
         <Pick
           testId='field'
           label='Field'
+          disabled={!collection}
           placeholder={collection ? 'Choose a field' : 'Choose a collection first'}
           value={field}
           options={(entry?.fields ?? []).map((f) => ({

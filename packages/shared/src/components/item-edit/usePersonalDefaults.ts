@@ -19,6 +19,7 @@ import {
   pickDefault,
   type SavedDefault
 } from '../../lib/personal-defaults'
+import { titleCase } from '../../lib/utils'
 import type { CascadeRule } from './helpers'
 
 // Personal field defaults on the record form (spec 2026-10-28-personal-field-defaults-design,
@@ -34,8 +35,10 @@ export type PersonalDefaultsApi = {
   defaultFor(field: string): SavedDefault | null
   /** Saves the field's current value (with its context) and every allowed parent that has one. */
   save(field: string): Promise<void>
-  /** Deletes the default `defaultFor(field)` answers. */
-  clear(field: string): Promise<void>
+  /** Deletes the default `defaultFor(field)` answers; resolves with what it removed (for Undo). */
+  clear(field: string): Promise<SavedDefault | null>
+  /** Saves a removed default back exactly as it was (value + context): the Clear toast's Undo. */
+  restore(saved: SavedDefault): Promise<void>
   refresh(): void
   /** The field has a value to save (reads M2M ids too, which are not in the draft). */
   hasValue(field: string): boolean
@@ -242,7 +245,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       const name = optsRef.current.fieldLabel?.(parent) ?? parent
       const l = await label(parent, want)
       return l
-        ? `Your default is for ${name} ${l}`
+        ? `Your default is for ${name} “${l}”`
         : `Your saved default is for a different ${name}`
     },
     [label]
@@ -568,10 +571,10 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         field
       ]
       return Promise.all(
-        fields.map(async (f) => {
-          const v = currentValue(f)
-          return (await label(f, v)) ?? asList(plain(v)).map(String).join(', ')
-        })
+        // A value with no label says which field it is, never its stored id ("Save 4521 · …").
+        fields.map(
+          async (f) => (await label(f, currentValue(f))) ?? o.fieldLabel?.(f) ?? titleCase(f)
+        )
       )
     },
     [currentValue, label]
@@ -605,11 +608,27 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const clear = useCallback(
     async (field: string) => {
       const d = defaultFor(field)
-      if (!d) return
+      if (!d) return null
       await client.request(del(`/field-defaults/mine/${d.id}`))
       await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+      return d
     },
     [client, qc, collection, defaultFor]
+  )
+
+  const restore = useCallback(
+    async (saved: SavedDefault) => {
+      await client.request(
+        put('/field-defaults/mine', {
+          collection,
+          field: saved.field,
+          value: saved.value,
+          context: saved.context ?? {}
+        })
+      )
+      await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+    },
+    [client, qc, collection]
   )
 
   const context = useMemo<PersonalDefaultsApi>(
@@ -618,6 +637,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       defaultFor,
       save,
       clear,
+      restore,
       refresh,
       hasValue,
       describeSave,
@@ -625,7 +645,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       hintFor,
       undo
     }),
-    [defaultFor, save, clear, refresh, hasValue, describeSave, ledger, hintFor, undo]
+    [defaultFor, save, clear, restore, refresh, hasValue, describeSave, ledger, hintFor, undo]
   )
 
   return { ledger, hintFor, undo, onPersonChange, release, appliedNow, context }

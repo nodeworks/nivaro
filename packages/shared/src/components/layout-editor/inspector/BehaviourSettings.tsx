@@ -394,7 +394,7 @@ export function PersonalDefaultToggle() {
     <Toggle
       k='field.personal_default'
       label='Personal default'
-      effect='People can save their own starting value for this field on new records.'
+      effect='On this form, people can save their own starting value for this field, and new records start with it.'
       checked={ov.personal_default === true}
       onChange={(v) =>
         ctx.setOverride(

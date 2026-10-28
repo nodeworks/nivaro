@@ -16,6 +16,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react'
@@ -24,6 +25,7 @@ import { toast } from 'sonner'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
+import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
 
@@ -258,12 +260,40 @@ export function useFieldContextMenu({
   const [parts, setParts] = useState<string[] | null>(null)
   const [saving, setSaving] = useState(false)
   const openAt = useCallback((x: number, y: number) => setAt({ x, y }), [])
+  // Opened from the ⋯ button: focus goes back there when the menu closes (unless the person
+  // clicked into something else that took focus).
+  const returnFocusRef = useRef<HTMLElement | null>(null)
   const close = useCallback(() => {
     setAt(null)
     setConfirming(false)
     setParts(null)
     setSaving(false)
+    const back = returnFocusRef.current
+    returnFocusRef.current = null
+    if (back)
+      window.setTimeout(() => {
+        if (
+          back.isConnected &&
+          (!document.activeElement || document.activeElement === document.body)
+        )
+          back.focus()
+      }, 0)
   }, [])
+  const isOpen = at !== null
+  /** The ⋯ button in the label row (touch has no right-click): toggles the same menu under it. */
+  const openFrom = useCallback(
+    (el: HTMLElement) => {
+      if (isOpen) {
+        close()
+        return
+      }
+      const r = el.getBoundingClientRect()
+      targetRef.current = null
+      returnFocusRef.current = el
+      openAt(r.left, r.bottom + 4)
+    },
+    [isOpen, close, openAt]
+  )
   // The element under the cursor when the menu opened. "Copy value" reads
   // THIS, not the field's draft value: an inline grid is one FieldRow whose
   // alias value is never in the draft (rows live in their own query), so the
@@ -408,9 +438,27 @@ export function useFieldContextMenu({
             key: 'clear-default',
             label: 'Clear my default',
             icon: <UserRoundX className='h-3.5 w-3.5' />,
+            // Runs at once (a menu pick is deliberate); the toast's Undo saves it back.
             run: () => {
               personalDefaults.clear(field.field).then(
-                () => toast.success('Your default was cleared'),
+                (removed) =>
+                  toast.success(
+                    'Your default was cleared',
+                    removed
+                      ? {
+                          action: {
+                            label: 'Undo',
+                            onClick: () => {
+                              personalDefaults.restore(removed).then(
+                                () => toast.success('Your default is back'),
+                                (e) =>
+                                  toast.error(refusalText(e, 'Could not put your default back'))
+                              )
+                            }
+                          }
+                        }
+                      : undefined
+                  ),
                 (e) => toast.error(refusalText(e, 'Could not clear your default'))
               )
             }
@@ -426,13 +474,16 @@ export function useFieldContextMenu({
             ? `Save ${parts.join(' · ')} as your ${parts.length > 1 ? 'defaults' : 'default'}?`
             : 'Save as your default?',
           ready: parts !== null && !saving,
+          saving,
           onCancel: close,
           onSave: () => {
             setSaving(true)
             personalDefaults.save(field.field).then(
               () => {
                 toast.success(
-                  parts?.length ? `Saved ${parts.join(' · ')}` : 'Your default was saved'
+                  parts?.length
+                    ? `Saved ${parts.join(' · ')} as your default${parts.length > 1 ? 's' : ''}`
+                    : 'Your default was saved'
                 )
                 close()
               },
@@ -445,21 +496,42 @@ export function useFieldContextMenu({
         }
       : null
   const menu = at ? (
-    <FieldContextMenu at={at} items={items} onClose={close} confirm={confirm} />
+    <FieldContextMenu
+      at={at}
+      items={items}
+      onClose={close}
+      confirm={confirm}
+      anchor={wrapperRef.current}
+    />
   ) : null
-  return { onContextMenu, onKeyDown, menu }
+  // The ⋯ button shows only where the menu offers something about this field beyond the copy
+  // items every field has: today, Save / Clear my default.
+  const hasFieldItems = items.some((i) => i.key === 'save-default' || i.key === 'clear-default')
+  return { onContextMenu, onKeyDown, menu, openFrom, isOpen, hasFieldItems }
+}
+
+type MenuConfirm = {
+  text: string
+  ready: boolean
+  saving?: boolean
+  onSave: () => void
+  onCancel: () => void
 }
 
 function FieldContextMenu({
   at,
   items,
   onClose,
-  confirm
+  confirm,
+  anchor
 }: {
   at: { x: number; y: number }
   items: MenuItem[]
   onClose: () => void
-  confirm?: { text: string; ready: boolean; onSave: () => void; onCancel: () => void } | null
+  confirm?: MenuConfirm | null
+  /** The field wrapper: inside a modal sheet the panel portals into that [role=dialog]
+   *  (a body portal inherits the modal lock's pointer-events:none and the focus trap). */
+  anchor?: HTMLElement | null
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [cursor, setCursor] = useState(0)
@@ -467,7 +539,11 @@ function FieldContextMenu({
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
+      const t = e.target as HTMLElement | null
+      if (ref.current?.contains(t)) return
+      // This field's own ⋯ button toggles the menu itself (closing here would reopen it).
+      if (t?.closest?.('[data-field-menu-trigger]') && anchor?.contains(t)) return
+      onClose()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -508,7 +584,7 @@ function FieldContextMenu({
       window.removeEventListener('mousedown', onDown, true)
       window.removeEventListener('keydown', onKey, true)
     }
-  }, [onClose, enabled, cursor, confirm])
+  }, [onClose, enabled, cursor, confirm, anchor])
   const saveRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const confirmOpen = !!confirm
@@ -524,28 +600,41 @@ function FieldContextMenu({
       saveRef.current?.focus()
   }, [confirmReady])
 
-  // Keep the panel on screen.
+  // Keep the panel on screen: its real height once drawn (the confirm line wraps to 1–3 rows).
   const w = 240
-  const h = confirm ? 96 : items.length * 30 + 12
-  const x = Math.min(at.x, window.innerWidth - w - 8)
-  const y = Math.min(at.y, window.innerHeight - h - 8)
+  const [h, setH] = useState(() => (confirm ? 96 : items.length * 30 + 12))
+  useLayoutEffect(() => {
+    const drawn = ref.current?.offsetHeight
+    if (drawn && drawn !== h) setH(drawn)
+  })
+  const x = Math.max(8, Math.min(at.x, window.innerWidth - w - 8))
+  const y = Math.max(8, Math.min(at.y, window.innerHeight - h - 8))
+  const host = (anchor?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+  const place: React.CSSProperties =
+    host === document.body
+      ? { position: 'fixed', left: x, top: y }
+      : (() => {
+          const c = host.getBoundingClientRect()
+          return {
+            position: 'absolute',
+            left: x - c.left + host.scrollLeft - host.clientLeft,
+            top: y - c.top + host.scrollTop - host.clientTop
+          }
+        })()
   return createPortal(
     <div
       ref={ref}
-      role='menu'
+      // While it asks "Save … as your default?" the panel is a small non-modal dialog, not a menu.
+      {...(confirm
+        ? { role: 'dialog', 'aria-modal': false, 'aria-label': 'Save as my default' }
+        : { role: 'menu', 'aria-label': 'Field options' })}
       tabIndex={-1}
       data-field-context-menu
-      style={{ position: 'fixed', left: x, top: y, width: w, zIndex: 110 }}
+      style={{ ...place, width: w, zIndex: 110 }}
       className='rounded-lg border border-slate-200 bg-white p-1 shadow-xl outline-none dark:border-border dark:bg-card'
     >
       {confirm ? (
-        // biome-ignore lint/a11y/useSemanticElements: a fieldset would add border/legend chrome to the menu panel
-        <div
-          data-personal-default-confirm
-          role='group'
-          aria-label='Save as my default'
-          className='space-y-2 px-2 py-1.5'
-        >
+        <div data-personal-default-confirm className='space-y-2 px-2 py-1.5'>
           <p
             aria-live='polite'
             className='text-[12.5px] leading-snug text-slate-700 dark:text-slate-200'
@@ -557,18 +646,18 @@ function FieldContextMenu({
               ref={cancelRef}
               type='button'
               onClick={confirm.onCancel}
-              className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'
+              className={PERSONAL_DEFAULT_GHOST_BUTTON}
             >
-              Cancel
+              <X className='h-3 w-3' aria-hidden /> Cancel
             </button>
             <button
               ref={saveRef}
               type='button'
               disabled={!confirm.ready}
               onClick={confirm.onSave}
-              className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-semibold text-white hover:bg-nvr-cyan/90 disabled:cursor-not-allowed disabled:opacity-50'
+              className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50'
             >
-              Save
+              {confirm.saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
@@ -606,7 +695,7 @@ function FieldContextMenu({
             )
           })}
     </div>,
-    document.body
+    host
   )
 }
 

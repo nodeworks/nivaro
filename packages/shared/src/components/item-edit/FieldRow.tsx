@@ -7,6 +7,7 @@ import {
   Info,
   Loader2,
   Lock,
+  MoreHorizontal,
   Sigma,
   SlidersHorizontal,
   Sparkles
@@ -23,6 +24,7 @@ import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
+import { FOCUSABLE } from './entry/entry-keys'
 import {
   LockReasonBadge,
   PresenceSoftLockStrip,
@@ -695,7 +697,10 @@ export const FieldRow = memo(function FieldRow({
   const {
     onContextMenu: onFieldContextMenu,
     onKeyDown: onFieldMenuKeyDown,
-    menu: fieldContextMenu
+    menu: fieldContextMenu,
+    openFrom: openFieldMenuFrom,
+    isOpen: fieldMenuOpen,
+    hasFieldItems: fieldMenuHasItems
   } = useFieldContextMenu({
     wrapperRef,
     field,
@@ -1125,7 +1130,16 @@ export const FieldRow = memo(function FieldRow({
             <PersonalDefaultPill
               field={field.field}
               label={label}
-              onUndo={() => personalDefaults?.undo(field.field)}
+              onUndo={() => {
+                personalDefaults?.undo(field.field)
+                // The pill (and its button) goes: focus lands on the field, not on <body>.
+                requestAnimationFrame(() => {
+                  const target =
+                    controlRef.current?.querySelector<HTMLElement>(FOCUSABLE) ??
+                    wrapperRef.current?.querySelector<HTMLElement>(FOCUSABLE)
+                  target?.focus()
+                })
+              }}
             />
           )}
           {swapButton}
@@ -1233,6 +1247,25 @@ export const FieldRow = memo(function FieldRow({
                 </TooltipProvider>
               )
             })()}
+          {fieldMenuHasItems && (
+            // The field menu for touch and pointer people (right-click / Shift+F10 still work).
+            // Shown on hover, focus and touch; opacity (not `hidden`) keeps its slot and its tab stop.
+            <button
+              type='button'
+              data-field-menu-trigger={field.field}
+              aria-label='Field options'
+              aria-haspopup='menu'
+              aria-expanded={fieldMenuOpen}
+              data-tip='Field options'
+              onClick={(e) => openFieldMenuFrom(e.currentTarget)}
+              className={cn(
+                'inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-muted hover:text-slate-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 group-hover/fieldrow:opacity-100 group-focus-within/fieldrow:opacity-100 [@media(hover:none)]:opacity-100 dark:text-slate-400 dark:hover:text-slate-100',
+                fieldMenuOpen && 'opacity-100'
+              )}
+            >
+              <MoreHorizontal className='h-3.5 w-3.5' aria-hidden />
+            </button>
+          )}
         </div>
       )}
       {softLock.editor && !locked && (

@@ -244,7 +244,7 @@ describe('usePersonalDefaults: applying on a new record', () => {
       canFill: (f) => f !== 'zone'
     })
     expect(draft().region).toBeUndefined()
-    expect(api.hintFor('region')).toBe('Your default is for Zone North')
+    expect(api.hintFor('region')).toBe('Your default is for Zone “North”')
     expect(api.ledger.size).toBe(0)
   })
 
@@ -261,7 +261,7 @@ describe('usePersonalDefaults: applying on a new record', () => {
       allowed: ['ship_to']
     })
     expect(draft().ship_to).toBeUndefined()
-    expect(api.hintFor('ship_to')).toBe('Your default is for Region Boston')
+    expect(api.hintFor('ship_to')).toBe('Your default is for Region “Boston”')
   })
 
   it('a value no longer available is skipped with a hint (Review Focus 3)', async () => {

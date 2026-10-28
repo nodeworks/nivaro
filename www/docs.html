@@ -11435,7 +11435,7 @@ PATCH/DELETE /api/bulk-actions/defs/:id
           <p class="doc-p">Select the field on the canvas and turn on **Personal default** under Rules in the inspector. The switch is part of the placement, so it applies to that field on that form only, and it is offered for fields that hold a value (not computed fields). Only fields a person may set on create, and may read, can be saved.</p>
           <h2 class="doc-h2" id="layout-personal-defaults-use">Saving and using a default</h2>
           <ul class="doc-ul">
-            <li>Open the field menu (the ⋯ on a field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it.</li>
+            <li>Open the field menu (the ⋯ beside the field's label, or right-click the field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it, and its toast offers Undo.</li>
             <li>On a **new** record the saved value is filled in automatically and the field shows a small pill. **Undo** on the pill clears it again.</li>
             <li>If the person changes a parent field (for example the zone), children that still hold a default are re-picked for the new context. Anything the person typed or picked themselves is never touched.</li>
             <li>A default is saved together with the parent values it was chosen under (its context), so one person can keep a different default per zone. Up to 20 contexts per field.</li>

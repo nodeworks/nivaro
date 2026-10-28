@@ -180,7 +180,10 @@ export function ConfirmButton({
   return (
     <button
       type='button'
-      data-tip={title}
+      // Armed: no tip (it would cover "Clear?"), and a hover-revealed cluster holding the
+      // button stays shown while it waits for the second press (`[&:has([data-armed])]`).
+      data-tip={armed ? undefined : title}
+      data-armed={armed ? '' : undefined}
       aria-label={
         armed
           ? (confirmTitle ??
@@ -199,6 +202,10 @@ export function ConfirmButton({
       className={cn(className, armed && armedClassName)}
     >
       {armed ? confirmLabel : children}
+      {/* Inside the button (no extra sibling in callers' flex rows); the aria-label is the name. */}
+      <span className='sr-only' aria-live='polite'>
+        {armed ? 'Press again to confirm' : ''}
+      </span>
     </button>
   )
 }

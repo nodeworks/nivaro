@@ -31,17 +31,23 @@ let failWith: string | null
 let root: Root
 let host: HTMLDivElement
 let saved: SavedDefault[]
+/** false = the picker knows no label (a record the person cannot read, a failed lookup). */
+let labelsKnown: boolean
+const FIELD_LABELS: Record<string, string> = { zone: 'Zone', region: 'Region', ship_to: 'Ship to' }
 
 function Harness({
   field,
   draft,
   allowed,
-  editable
+  editable,
+  inDialog = false
 }: {
   field: string
   draft: Record<string, unknown>
   allowed: string[]
   editable: boolean
+  /** Render the row inside a modal sheet's [role=dialog]. */
+  inDialog?: boolean
 }) {
   const draftRef = useRef(draft)
   draftRef.current = draft
@@ -55,11 +61,19 @@ function Harness({
     revalidate: async () => true,
     disabled: true,
     rulesFor: (f) => RULES[f] ?? [],
-    valueLabel: (_f, v) => LABELS[String(v)] ?? String(v)
+    valueLabel: (_f, v) => (labelsKnown ? (LABELS[String(v)] ?? String(v)) : null),
+    fieldLabel: (f) => FIELD_LABELS[f] ?? f
   })
+  const row = <Row field={field} draft={draft} editable={editable} />
   return (
     <PersonalDefaultsContext.Provider value={pd.context}>
-      <Row field={field} draft={draft} editable={editable} />
+      {inDialog ? (
+        <div role='dialog' aria-modal='true' data-testid='sheet'>
+          {row}
+        </div>
+      ) : (
+        row
+      )}
     </PersonalDefaultsContext.Provider>
   )
 }
@@ -74,7 +88,7 @@ function Row({
   editable: boolean
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
-  const { onContextMenu, menu } = useFieldContextMenu({
+  const { onContextMenu, menu, openFrom, hasFieldItems } = useFieldContextMenu({
     wrapperRef,
     field: { field, interface: null } as unknown as CMSField,
     value: draft[field],
@@ -88,6 +102,14 @@ function Row({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: test host for the context menu */}
       <div ref={wrapperRef} data-testid='row' onContextMenu={onContextMenu}>
         row
+        {hasFieldItems && (
+          <button
+            type='button'
+            data-field-menu-trigger
+            aria-label='Field options'
+            onClick={(e) => openFrom(e.currentTarget)}
+          />
+        )}
       </div>
       {menu}
     </>
@@ -150,6 +172,7 @@ beforeEach(() => {
   requests = []
   failWith = null
   saved = []
+  labelsKnown = true
   vi.clearAllMocks()
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -220,8 +243,12 @@ describe('field menu: Save as my default', () => {
     await click(item('Save as my default'))
     expect(document.activeElement).toBe(button('Save'))
     const group = document.querySelector('[data-personal-default-confirm]')
-    expect(group?.getAttribute('role')).toBe('group')
-    expect(group?.getAttribute('aria-label')).toBeTruthy()
+    // A menu holds only menu items: while it asks, the panel is a small non-modal dialog.
+    const panel = document.querySelector('[data-field-context-menu]')
+    expect(panel?.getAttribute('role')).toBe('dialog')
+    expect(panel?.getAttribute('aria-modal')).toBe('false')
+    expect(panel?.getAttribute('aria-label')).toBe('Save as my default')
+    expect(group?.hasAttribute('role')).toBe(false)
     expect(group?.querySelector('[aria-live=polite]')).not.toBeNull()
   })
 
@@ -242,6 +269,26 @@ describe('field menu: Save as my default', () => {
     expect(document.activeElement).toBe(button('Cancel'))
   })
 
+  it('never shows a stored id when a value has no label: the field name stands in', async () => {
+    labelsKnown = false
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to', 'zone'], editable: true })
+    await click(item('Save as my default'))
+    const text = document.querySelector('[data-personal-default-confirm] p')?.textContent ?? ''
+    expect(text).toBe('Save Zone · Ship to as your defaults?')
+    expect(text).not.toMatch(/\d/)
+    await click(button('Save'))
+    expect(toastMock.success).toHaveBeenCalledWith('Saved Zone · Ship to as your defaults')
+  })
+
+  it('Save says Saving… while the write runs', async () => {
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    await click(item('Save as my default'))
+    const save = button('Save')
+    await act(async () => save?.click())
+    expect(save?.textContent).toBe('Saving…')
+    await flush()
+  })
+
   it('Cancel saves nothing', async () => {
     await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
     await click(item('Save as my default'))
@@ -255,6 +302,56 @@ describe('field menu: Save as my default', () => {
     await click(item('Save as my default'))
     await click(button('Save'))
     expect(toastMock.error).toHaveBeenCalledWith('That field cannot carry a default')
+  })
+})
+
+describe('field menu: the ⋯ button and where the panel goes', () => {
+  it('shows a ⋯ trigger only where the menu has Save / Clear my default', async () => {
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(host.querySelector('[data-field-menu-trigger]')).not.toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await open({ field: 'ship_to', draft: FULL, allowed: [], editable: true })
+    expect(host.querySelector('[data-field-menu-trigger]')).toBeNull()
+  })
+
+  it('the ⋯ trigger opens the same menu and toggles it shut', async () => {
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    // open() right-clicked; close with Escape, then use the button.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(document.querySelector('[data-field-context-menu]')).toBeNull()
+    const trigger = host.querySelector<HTMLElement>('[data-field-menu-trigger]') ?? undefined
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      trigger?.click()
+    })
+    expect(items()).toContain('Save as my default')
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      trigger?.click()
+    })
+    expect(document.querySelector('[data-field-context-menu]')).toBeNull()
+  })
+
+  it('portals into the hosting [role=dialog] inside a modal sheet, else into body', async () => {
+    await open({
+      field: 'ship_to',
+      draft: FULL,
+      allowed: ['ship_to'],
+      editable: true,
+      inDialog: true
+    })
+    const panel = document.querySelector<HTMLElement>('[data-field-context-menu]')
+    expect(panel?.parentElement).toBe(host.querySelector('[data-testid=sheet]'))
+    expect(panel?.style.position).toBe('absolute')
+    act(() => root.unmount())
+    root = createRoot(host)
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    const bodyPanel = document.querySelector<HTMLElement>('[data-field-context-menu]')
+    expect(bodyPanel?.parentElement).toBe(document.body)
+    expect(bodyPanel?.style.position).toBe('fixed')
   })
 })
 
@@ -275,6 +372,27 @@ describe('field menu: Clear my default', () => {
       ['DELETE', '/field-defaults/mine/7']
     ])
     expect(toastMock.success).toHaveBeenCalled()
+  })
+  it('the cleared toast offers Undo, which saves the same value and context back', async () => {
+    saved = [row]
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    await click(item('Clear my default'))
+    const [text, opts] = toastMock.success.mock.calls[0] as [
+      string,
+      { action: { label: string; onClick: () => void } }
+    ]
+    expect(text).toBe('Your default was cleared')
+    expect(opts.action.label).toBe('Undo')
+    await act(async () => opts.action.onClick())
+    await flush()
+    const put = writes().find((r) => r._method === 'PUT')
+    expect(put?._body).toEqual({
+      collection: 'orders',
+      field: 'ship_to',
+      value: 100,
+      context: { zone: 2, region: 10 }
+    })
+    expect(toastMock.success).toHaveBeenLastCalledWith('Your default is back')
   })
   it('is hidden with no default', async () => {
     await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
