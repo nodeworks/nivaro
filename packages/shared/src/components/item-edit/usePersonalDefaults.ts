@@ -239,16 +239,16 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     o.markAutoFilled([field])
   }, [])
 
-  /** Step 3–5 for one field. True = applied. */
+  /** Step 3–5 for one field. Answers the fields it wrote (parents first), [] when none. */
   const applyField = useCallback(
-    async (field: string): Promise<boolean> => {
+    async (field: string): Promise<string[]> => {
       const o = optsRef.current
       const cands = byFieldRef.current.get(field) ?? []
-      if (cands.length === 0 || !o.layoutAllows(field)) return false
-      if (undoneRef.current.has(field) || !(o.canFill?.(field) ?? true)) return false
+      if (cands.length === 0 || !o.layoutAllows(field)) return []
+      if (undoneRef.current.has(field) || !(o.canFill?.(field) ?? true)) return []
       const start = currentValue(field)
       const replacing = !isEmptyValue(start)
-      if (replacing && !(o.replaceable?.(field, start) ?? false)) return false
+      if (replacing && !(o.replaceable?.(field, start) ?? false)) return []
       const keys = new Set(cands.flatMap((c) => Object.keys(c.context ?? {})))
       const view = viewOf(keys)
       const { pick, fillParents, blockedBy } = pickDefault(cands, view)
@@ -262,7 +262,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
           )?.context[blockedBy]
           await setHint(field, blockedHint(blockedBy, want))
         }
-        return false
+        return []
       }
       // Parents from the same saved set, farthest first (Zone before Region).
       const order = cascadeParents(field, o.rulesFor).reverse()
@@ -280,7 +280,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         if (!fillable || !(await o.revalidate(p, want)) || !isEmptyValue(currentValue(p))) {
           rollback()
           await setHint(field, blockedHint(p, want))
-          return false
+          return []
         }
         write(p, want)
         filled.push([p, want])
@@ -291,15 +291,15 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
           field,
           label(field, pick.value).then((l) => `Your default "${l}" is no longer available`)
         )
-        return false
+        return []
       }
       // The person (or a prefill) got there while the checks ran: theirs stays.
       if (!sameDefaultValue(currentValue(field), start) || !(o.canFill?.(field) ?? true)) {
         rollback()
-        return false
+        return []
       }
       write(field, pick.value, replacing ? start : undefined)
-      return true
+      return [...filled.map(([p]) => p), field]
     },
     [currentValue, viewOf, setHint, blockedHint, label, write]
   )
@@ -307,18 +307,12 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   /** Applies fields in order, then lets rules / cross-record defaults run for what landed. */
   const runPass = useCallback(
     async (fields: string[]) => {
-      const applied: string[] = []
+      // Parents filled from a child's saved set count too, in the order they were written.
+      const landed = new Set<string>()
       for (const f of fields) {
         if (!mountedRef.current) return
-        if (await applyField(f)) applied.push(f)
+        for (const w of await applyField(f)) landed.add(w)
         publish()
-      }
-      // Parents filled along the way count too (they are in the ledger).
-      const landed = new Set<string>()
-      for (const f of applied) {
-        for (const p of cascadeParents(f, optsRef.current.rulesFor).reverse())
-          if (ledgerRef.current.has(p)) landed.add(p)
-        landed.add(f)
       }
       for (const f of landed) {
         if (ledgerRef.current.has(f)) optsRef.current.afterApply?.(f, ledgerRef.current.get(f))
