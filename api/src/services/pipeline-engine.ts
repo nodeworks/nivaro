@@ -1537,6 +1537,60 @@ export interface OwnerGapCluster {
  * carrying the proposed filters is offered alongside no competitors, so
  * "matches" means exactly what it will mean at runtime.
  */
+/**
+ * The columns an owner-group match reads off a record: `id`, every plain
+ * filter field, the first segment of every dotted filter (the FK the prefix
+ * lookup compares) and any `extra` columns — narrowed to the columns that
+ * physically exist (an M2M/O2M alias has none). Null = read the whole row
+ * (the physical column list could not be read).
+ */
+export function matchColumns(
+  filterFields: string[],
+  extra: string[],
+  physical: Set<string> | null
+): string[] | null {
+  if (!physical?.has('id')) return null
+  const wanted = new Set<string>(['id'])
+  for (const f of filterFields) {
+    const col = f.includes('.') ? f.split('.')[0] : f
+    if (col) wanted.add(col)
+  }
+  for (const c of extra) if (c) wanted.add(c)
+  return [...wanted].filter((c) => physical.has(c.toLowerCase()))
+}
+
+/**
+ * Records for an owner-group match, read with only the columns the match
+ * needs (matchColumns) and chunked under the ~2100 bound-parameter cap. The
+ * old `select('*')` dragged every column (workflows: 100+, several
+ * nvarchar(max)) across for each record. A failed narrow read falls back to
+ * the full row, like resolveStateOwnersBatch does.
+ */
+async function readMatchRecords(
+  collection: string,
+  ids: string[],
+  filterFields: string[],
+  extra: string[] = [],
+  database: typeof db = db
+): Promise<Record<string, unknown>[]> {
+  if (ids.length === 0) return []
+  const cols = matchColumns(filterFields, extra, await getPhysicalColumns(collection, database))
+  try {
+    return (await selectInChunks(ids, 1000, (chunk) =>
+      database(collection)
+        .whereIn('id', chunk)
+        .select(cols ?? '*')
+    )) as Record<string, unknown>[]
+  } catch {
+    return (await selectInChunks(ids, 1000, (chunk) =>
+      database(collection).whereIn('id', chunk).select('*')
+    )) as Record<string, unknown>[]
+  }
+}
+
+/** Columns the impact preview's sample label is read from. */
+const PREVIEW_LABEL_COLS = ['workflow_id', 'name', 'title', 'label']
+
 export interface OwnerImpactPreview {
   state_key: string
   matched: number
@@ -1582,14 +1636,14 @@ export async function previewOwnerGroupImpact(
   let matched = 0
   const sample: Array<{ item: string; label: string }> = []
   for (const [collection, items] of byCollection) {
-    const rows = (await db(collection).whereIn('id', items.slice(0, 1000)).select('*')) as Array<
-      Record<string, unknown>
-    >
+    const [rows, relations] = await Promise.all([
+      readMatchRecords(collection, items.slice(0, 1000), prepared.filterFields, PREVIEW_LABEL_COLS),
+      db('nivaro_relations')
+        .where({ many_collection: collection })
+        .select('many_collection', 'many_field', 'one_collection')
+        .catch(() => []) as Promise<RelationInfo[]>
+    ])
     const records = new Map(rows.map((r) => [String(r.id), r]))
-    const relations = (await db('nivaro_relations')
-      .where({ many_collection: collection })
-      .select('many_collection', 'many_field', 'one_collection')
-      .catch(() => [])) as RelationInfo[]
     const resolved = await resolveFilterValues(collection, records, prepared.filterFields, db)
     for (const [id, record] of records) {
       const winners = pickWinningGroupsPrepared(prepared, record, relations, resolved.get(id))
@@ -1662,14 +1716,28 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
     }
     const groupData = await getOwnerGroupsForStates([...byState.keys()], db)
 
+    // One record read per binding (not one per state), with only the columns
+    // the states' filters read — up to 500 records per state, as before.
+    const itemsByState = new Map<string, string[]>()
+    const allItems = new Set<string>()
+    const allFields = new Set<string>()
+    for (const [sid, insts] of byState) {
+      const items = insts.map((i) => String(i.item)).slice(0, 500)
+      itemsByState.set(sid, items)
+      for (const it of items) allItems.add(it)
+      for (const f of groupData.get(sid)?.prepared?.filterFields ?? []) allFields.add(f)
+    }
+    const allRows = await readMatchRecords(b.collection, [...allItems], [...allFields])
+    const rowById = new Map(allRows.map((r) => [String(r.id), r]))
+
     for (const [sid, insts] of byState) {
       const prepared = groupData.get(sid)?.prepared
       const fields = prepared?.filterFields ?? []
-      const items = insts.map((i) => String(i.item)).slice(0, 500)
-      const rows = (await db(b.collection).whereIn('id', items).select('*')) as Array<
-        Record<string, unknown>
-      >
-      const records = new Map(rows.map((r) => [String(r.id), r]))
+      const records = new Map<string, Record<string, unknown>>()
+      for (const it of itemsByState.get(sid) ?? []) {
+        const row = rowById.get(it)
+        if (row) records.set(it, row)
+      }
       const resolved = await resolveFilterValues(b.collection, records, fields, db)
 
       const displayOf = (v: ResolvedFilterValue | undefined): string => {

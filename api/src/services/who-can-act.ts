@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { listPhrase } from './access-words.js'
+import { selectInChunks } from './db-batch.js'
 import { explainRecordOwners } from './owner-explain.js'
 import { UNAVAILABLE_TEXT, type Unavailability } from './record-access.js'
 
@@ -40,11 +41,19 @@ const ONLINE_WINDOW_MS = 70_000
 async function onlineSet(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set()
   try {
-    const rows = (await db('user_presence')
-      .whereIn('user_id', ids)
-      .where('last_seen', '>=', new Date(Date.now() - ONLINE_WINDOW_MS))
-      .where((q) => void q.where('is_online', true).orWhereNull('is_online'))
-      .select('user_id')) as Array<{ user_id: string }>
+    // A wide owner group can name more people than SQL Server's ~2100 bound
+    // parameters allow in one IN list — chunked.
+    const since = new Date(Date.now() - ONLINE_WINDOW_MS)
+    const rows = await selectInChunks(
+      [...new Set(ids)],
+      1000,
+      (chunk) =>
+        db('user_presence')
+          .whereIn('user_id', chunk)
+          .where('last_seen', '>=', since)
+          .where((q) => void q.where('is_online', true).orWhereNull('is_online'))
+          .select('user_id') as Promise<Array<{ user_id: string }>>
+    )
     return new Set(rows.map((r) => String(r.user_id).toUpperCase()))
   } catch {
     return new Set()

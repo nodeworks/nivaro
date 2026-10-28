@@ -1,6 +1,8 @@
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
 import { getCollection, getFields } from './collections.js'
+import { selectInChunks } from './db-batch.js'
 import { resolveDisplayValue } from './display-value.js'
 import { readItems } from './items.js'
 import { can } from './permissions.js'
@@ -104,6 +106,49 @@ export function scoreRow(
   return { score: 10, matched: null }
 }
 
+/**
+ * Text columns that physically exist, per collection — the "which collections
+ * can actually match" answer (see globalSearch). Two catalog reads that used
+ * to run on EVERY search (every registered text field, plus every column of
+ * every table in the database from information_schema); now cached per tenant
+ * for the same ~30 s as the rest of the schema metadata, and the catalog read
+ * is limited to the tables that have a registered text field.
+ */
+const TEXT_COLUMNS_TTL_MS = 30_000
+const textColumnsCache = new Map<string, { at: number; value: Map<string, string[]> }>()
+
+export function clearSearchableTextColumnsCache(): void {
+  textColumnsCache.clear()
+}
+
+export async function searchableTextColumns(): Promise<Map<string, string[]>> {
+  const key = getTenantId() ?? ''
+  const hit = textColumnsCache.get(key)
+  if (hit && Date.now() - hit.at < TEXT_COLUMNS_TTL_MS) return hit.value
+  const textFields = (await db('nivaro_fields')
+    .whereIn('type', ['string', 'text'])
+    .select('collection', 'field')) as Array<{ collection: string; field: string }>
+  const tables = [...new Set(textFields.map((f) => f.collection))]
+  const physicalCols = await selectInChunks(
+    tables,
+    1000,
+    (chunk) =>
+      db('information_schema.columns')
+        .whereIn('table_name', chunk)
+        .select('table_name as t', 'column_name as c') as Promise<Array<{ t: string; c: string }>>
+  )
+  const physical = new Set(physicalCols.map((r) => `${r.t}.${r.c}`.toLowerCase()))
+  const value = new Map<string, string[]>()
+  for (const f of textFields) {
+    if (!physical.has(`${f.collection}.${f.field}`.toLowerCase())) continue
+    const list = value.get(f.collection) ?? []
+    list.push(f.field)
+    value.set(f.collection, list)
+  }
+  textColumnsCache.set(key, { at: Date.now(), value })
+  return value
+}
+
 export async function globalSearch(
   user: User,
   q: string,
@@ -150,22 +195,7 @@ export async function globalSearch(
   // clause when a collection has no searchable physical column, returning
   // every row as though it matched. Searching such a collection would fill the
   // results with rows that have nothing to do with the query.
-  const [textFields, physicalCols] = await Promise.all([
-    db('nivaro_fields')
-      .whereIn('type', ['string', 'text'])
-      .select('collection', 'field') as Promise<Array<{ collection: string; field: string }>>,
-    db('information_schema.columns').select('table_name as t', 'column_name as c') as Promise<
-      Array<{ t: string; c: string }>
-    >
-  ])
-  const physical = new Set(physicalCols.map((r) => `${r.t}.${r.c}`.toLowerCase()))
-  const textByCollection = new Map<string, string[]>()
-  for (const f of textFields) {
-    if (!physical.has(`${f.collection}.${f.field}`.toLowerCase())) continue
-    const list = textByCollection.get(f.collection) ?? []
-    list.push(f.field)
-    textByCollection.set(f.collection, list)
-  }
+  const textByCollection = await searchableTextColumns()
 
   /**
    * The columns worth searching: what the collection calls a row, not every
