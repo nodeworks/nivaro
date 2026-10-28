@@ -16,6 +16,7 @@ import type { ReplayControls } from './controls'
 import { EventRail } from './EventRail'
 import { type InspectableReplayer, ReplayInspector } from './Inspector'
 import { findInactiveGaps, type InactiveGap } from './inactivity'
+import { REPLAY_FRAME_STYLE_RULES, startLiveFollow } from './live'
 import { fetchRecordingEvents } from './load-events'
 import {
   activeIndex,
@@ -35,6 +36,7 @@ import { RangeActions, RangeTrack } from './RangeBar'
 import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
 import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
+import { boundsChanged, fitScale, type ViewportSize, viewportBounds } from './viewport'
 import { WatchTogetherBar } from './WatchTogether'
 
 const SPEEDS = [1, 2, 4, 8]
@@ -170,6 +172,8 @@ export function ReplayPlayer({
   const sideReserveRef = useRef(0)
   sideReserveRef.current = sideBySide && hasPanel ? SIDE_PANEL_PX : 0
   const rescaleRef = useRef<(() => void) | null>(null)
+  // The largest viewport the recording has: one steady scale for all of it (./viewport).
+  const viewportRef = useRef<ViewportSize | null>(null)
   // #1356 event rail: the person's requests / errors / page changes /
   // transitions from the server, placed against the first event's clock.
   const [rail, setRail] = useState<{
@@ -196,20 +200,25 @@ export function ReplayPlayer({
     spanDoneRef.current = false
     prevTimeRef.current = 0
     setGaps([])
+    viewportRef.current = null
 
     function rescale() {
       const rep = replayerRef.current
       const host = frameRef.current
       if (!rep || !host) return
-      const w = rep.iframe.offsetWidth || 1280
-      const h = rep.iframe.offsetHeight || 720
+      // Fit the recording's largest viewport, not the current one: a person
+      // resizing their window (or moving it to a smaller screen) must not
+      // make the frame jump in scale. A smaller viewport sits top-left in it.
+      const box = viewportRef.current
+      const w = Math.max(box?.width ?? 0, rep.iframe.offsetWidth) || 1280
+      const h = Math.max(box?.height ?? 0, rep.iframe.offsetHeight) || 720
       // Width budget from the sheet itself — the host div can be mid-animation
       // (or grown by the giant iframe), so never trust host.clientWidth alone.
       // The Console / Network column, when it sits beside the frame, comes off.
       const sheetW = window.innerWidth * 0.85 - 56 - sideReserveRef.current
       const budget = Math.min(host.parentElement?.clientWidth || sheetW, sheetW)
       // Fill the sheet: scale up as well as down, bounded by width and viewport height
-      const scale = Math.min(budget / w, (window.innerHeight - 170) / h)
+      const scale = fitScale({ width: w, height: h }, budget, window.innerHeight - 170)
       rep.wrapper.style.transform = `scale(${scale})`
       rep.wrapper.style.transformOrigin = 'top left'
       host.style.width = `${Math.ceil(w * scale)}px`
@@ -242,6 +251,7 @@ export function ReplayPlayer({
         setFromStorage(false)
         const events = loaded.events
         lastSeqRef.current = loaded.last_seq ?? -1
+        viewportRef.current = viewportBounds(events)
         {
           const first = Number(
             (events as Array<{ timestamp?: unknown } | null>).find(
@@ -272,7 +282,9 @@ export function ReplayPlayer({
           // pinned to the tail of the stream.
           liveMode: following,
           speed: 1,
-          mouseTail: { strokeStyle: '#00ceff' }
+          mouseTail: { strokeStyle: '#00ceff' },
+          // A paused frame shows animations at rest, never mid-entrance (./live).
+          insertStyleRules: REPLAY_FRAME_STYLE_RULES
         }) as unknown as NonNullable<typeof replayerRef.current>
         replayerRef.current = replayer
         setTotal(replayer.getMetaData().totalTime)
@@ -294,11 +306,13 @@ export function ReplayPlayer({
         })
         setReady(true)
         if (following) {
-          // Start at the live edge: a small lag budget absorbs poll jitter so
-          // playback never overruns the buffered stream and stalls.
-          const liveRep = replayer as unknown as { startLive: (t?: number) => void }
-          const lastTs = (events[events.length - 1] as { timestamp?: number })?.timestamp
-          liveRep.startLive(lastTs ? lastTs - 4_000 : undefined)
+          // Start at the live edge with the page as it is now: play() applies
+          // everything since the last full snapshot and leaves rrweb playing.
+          // Not startLive(): it applied nothing already loaded and kept the
+          // frame paused, so the content view stayed blank (./live). A small
+          // lag budget absorbs poll jitter so playback never overruns the
+          // buffered stream and stalls.
+          startLiveFollow(replayer, events)
           setPlaying(true)
         } else {
           // ?t= deep link (issue log's Watch-replay): open AT the error moment,
@@ -380,6 +394,12 @@ export function ReplayPlayer({
           addEvent?: (e: unknown) => void
         } | null
         if (rep?.addEvent) for (const e of fresh) rep.addEvent(e)
+        // A streamed window larger than any so far: one re-fit to the new box.
+        const box = viewportBounds(fresh, viewportRef.current)
+        if (boundsChanged(viewportRef.current, box)) {
+          viewportRef.current = box
+          rescaleRef.current?.()
+        }
         // The Console / Network panel follows the stream too (#1357).
         if (fresh.length && firstTsRef.current) {
           const more = parseReplayContext(fresh, firstTsRef.current)
