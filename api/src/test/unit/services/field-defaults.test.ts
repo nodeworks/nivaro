@@ -84,7 +84,7 @@ import {
   saveDefault
 } from '../../../services/field-defaults.js'
 import { readOne } from '../../../services/items.js'
-import { can, getAllowedFields } from '../../../services/permissions.js'
+import { can, getAllowedFields, isAdminRole } from '../../../services/permissions.js'
 import type { User } from '../../../types.js'
 
 const BOB = { id: 'user-bob', role: 'role-buyer' } as User
@@ -119,6 +119,32 @@ function seedLayouts(opts: { toggle?: boolean; roleIds?: string[] } = {}) {
       junction_field: null
     }
   ]
+}
+
+function seedTags() {
+  tables.nivaro_layout_field_assignments.push({
+    layout_id: 10,
+    field: 'tags',
+    overrides: JSON.stringify({ personal_default: true })
+  })
+  tables.nivaro_relations.push(
+    {
+      id: 2,
+      many_collection: 'orders_tags',
+      many_field: 'orders_id',
+      one_collection: 'orders',
+      one_field: 'tags',
+      junction_field: 'tags_id'
+    },
+    {
+      id: 3,
+      many_collection: 'orders_tags',
+      many_field: 'tags_id',
+      one_collection: 'tags',
+      one_field: null,
+      junction_field: 'orders_id'
+    }
+  )
 }
 
 async function refusal(p: Promise<unknown>): Promise<FieldDefaultRefusal> {
@@ -226,37 +252,132 @@ describe('saveDefault', () => {
   })
 
   it('treats a forbidden read as not available', async () => {
-    vi.mocked(readOne).mockRejectedValue(new Error('Forbidden'))
+    vi.mocked(readOne).mockRejectedValue(
+      Object.assign(new Error('Forbidden'), { name: 'ForbiddenError' })
+    )
     const r = await refusal(
       saveDefault(BOB, BOB, { collection: 'orders', field: 'ship_to', value: 7, context: {} })
     )
     expect(r.code).toBe('VALUE_NOT_AVAILABLE')
   })
 
-  it('checks every id of an M2M list as the person', async () => {
+  it('rethrows a read failure that is not a visibility answer', async () => {
+    vi.mocked(readOne).mockRejectedValue(
+      new Error('Timeout: Request failed to complete in 15000ms')
+    )
+    await expect(
+      saveDefault(BOB, BOB, { collection: 'orders', field: 'ship_to', value: 7, context: {} })
+    ).rejects.toThrow(/Timeout/)
+  })
+
+  it('runs at most 4 readOne calls at once for an id list', async () => {
+    seedTags()
+    let inFlight = 0
+    let peak = 0
+    vi.mocked(readOne).mockImplementation((async (_u: User, _c: string, id: unknown) => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 2))
+      inFlight--
+      return { id }
+    }) as never)
+    const ids = Array.from({ length: 12 }, (_, i) => i + 1)
+    await saveDefault(BOB, BOB, { collection: 'orders', field: 'tags', value: ids, context: {} })
+    expect(readOne).toHaveBeenCalledTimes(12)
+    expect(peak).toBeLessThanOrEqual(4)
+    expect(peak).toBeGreaterThan(1)
+  })
+
+  it('refuses more than 50 ids before reading any', async () => {
+    seedTags()
+    const ids = Array.from({ length: 51 }, (_, i) => i + 1)
+    const r = await refusal(
+      saveDefault(BOB, BOB, { collection: 'orders', field: 'tags', value: ids, context: {} })
+    )
+    expect(r.code).toBe('BAD_VALUE')
+    expect(readOne).not.toHaveBeenCalled()
+  })
+
+  it('refuses BAD_VALUE for a non-list M2M value and a non-id M2O value', async () => {
+    seedTags()
+    expect(
+      (
+        await refusal(
+          saveDefault(BOB, BOB, { collection: 'orders', field: 'tags', value: 3, context: {} })
+        )
+      ).code
+    ).toBe('BAD_VALUE')
+    expect(
+      (
+        await refusal(
+          saveDefault(BOB, BOB, {
+            collection: 'orders',
+            field: 'ship_to',
+            value: { name: 'x' },
+            context: {}
+          })
+        )
+      ).code
+    ).toBe('BAD_VALUE')
+  })
+
+  it('refuses 403 NO_READ when the person may create but not read', async () => {
+    vi.mocked(can).mockImplementation(async (_u, action) => action !== 'read')
+    const r = await refusal(
+      saveDefault(BOB, BOB, { collection: 'orders', field: 'ship_to', value: 7, context: {} })
+    )
+    expect(r.status).toBe(403)
+    expect(r.code).toBe('NO_READ')
+  })
+
+  it('refuses UNSUPPORTED_FIELD for one-to-many child rows', async () => {
     tables.nivaro_layout_field_assignments.push({
       layout_id: 10,
-      field: 'tags',
+      field: 'lines',
       overrides: JSON.stringify({ personal_default: true })
     })
-    tables.nivaro_relations.push(
-      {
-        id: 2,
-        many_collection: 'orders_tags',
-        many_field: 'orders_id',
-        one_collection: 'orders',
-        one_field: 'tags',
-        junction_field: 'tags_id'
-      },
-      {
-        id: 3,
-        many_collection: 'orders_tags',
-        many_field: 'tags_id',
-        one_collection: 'tags',
-        one_field: null,
-        junction_field: 'orders_id'
-      }
+    tables.nivaro_relations.push({
+      id: 4,
+      many_collection: 'order_lines',
+      many_field: 'order_id',
+      one_collection: 'orders',
+      one_field: 'lines',
+      junction_field: null
+    })
+    const r = await refusal(
+      saveDefault(BOB, BOB, { collection: 'orders', field: 'lines', value: [1], context: {} })
     )
+    expect(r.status).toBe(400)
+    expect(r.code).toBe('UNSUPPORTED_FIELD')
+  })
+
+  it('refuses BAD_CONTEXT for a bad parent name or a nested value', async () => {
+    for (const context of [{ 'zone-id': 2 }, { zone: { id: 2 } }]) {
+      const r = await refusal(
+        saveDefault(BOB, BOB, { collection: 'orders', field: 'ship_to', value: 7, context })
+      )
+      expect(r.code).toBe('BAD_CONTEXT')
+    }
+  })
+
+  it('judges every check as the target when an admin saves for them', async () => {
+    await saveDefault(BOB, ADMIN, { collection: 'orders', field: 'ship_to', value: 7, context: {} })
+    for (const call of vi.mocked(can).mock.calls) expect(call[0]).toBe(BOB)
+    expect(
+      vi
+        .mocked(can)
+        .mock.calls.map((c) => c[1])
+        .sort()
+    ).toEqual(['create', 'read'])
+    for (const call of vi.mocked(getAllowedFields).mock.calls) expect(call[0]).toBe(BOB)
+    expect(getAllowedFields).toHaveBeenCalled()
+    // isAdminRole is the layout check's role test (fieldAllowedOnSomeLayout).
+    expect(vi.mocked(isAdminRole).mock.calls).toEqual([[BOB]])
+    expect(vi.mocked(readOne).mock.calls[0][0]).toBe(BOB)
+  })
+
+  it('checks every id of an M2M list as the person', async () => {
+    seedTags()
     vi.mocked(readOne).mockImplementation((async (_u: User, col: string, id: unknown) =>
       col === 'tags' && id === 2 ? null : { id }) as never)
     const r = await refusal(

@@ -65,7 +65,7 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
   app.delete('/mine/:id', { preHandler: requireAuth }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id)
     if (!(await deleteDefault(req.user!.id, id)))
-      return reply.code(404).send({ error: 'Default not found' })
+      return reply.code(404).send({ error: 'Default not found', code: 'DEFAULT_NOT_FOUND' })
     return reply.send({ data: { id } })
   })
 
@@ -73,7 +73,7 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
 
   app.get('/users/:userId', { preHandler: requireAdmin }, async (req, reply) => {
     const target = await getUser((req.params as { userId: string }).userId)
-    if (!target) return reply.code(404).send({ error: 'User not found' })
+    if (!target) return reply.code(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
     return reply.send({ data: await listDefaults(target.id, collectionQuery(req.query)) })
   })
 
@@ -82,7 +82,7 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
     if (!input)
       return reply.code(400).send({ error: 'collection and field are required', code: 'BAD_BODY' })
     const target = await getUser((req.params as { userId: string }).userId)
-    if (!target) return reply.code(404).send({ error: 'User not found' })
+    if (!target) return reply.code(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
     try {
       return reply.send({ data: await saveDefault(target, req.user!, input) })
     } catch (err) {
@@ -93,10 +93,10 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
   app.delete('/users/:userId/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const params = req.params as { userId: string; id: string }
     const target = await getUser(params.userId)
-    if (!target) return reply.code(404).send({ error: 'User not found' })
+    if (!target) return reply.code(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' })
     const id = Number(params.id)
     if (!(await deleteDefault(target.id, id, req.user!)))
-      return reply.code(404).send({ error: 'Default not found' })
+      return reply.code(404).send({ error: 'Default not found', code: 'DEFAULT_NOT_FOUND' })
     return reply.send({ data: { id } })
   })
 }

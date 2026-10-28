@@ -150,6 +150,7 @@ describe('/field-defaults/mine', () => {
       headers: { 'x-test-user': 'bob' }
     })
     expect(miss.statusCode).toBe(404)
+    expect(miss.json().code).toBe('DEFAULT_NOT_FOUND')
   })
 })
 
@@ -196,6 +197,7 @@ describe('/field-defaults/users/:userId (admin)', () => {
       headers: { 'x-test-user': 'admin' }
     })
     expect(res.statusCode).toBe(404)
+    expect(res.json().code).toBe('USER_NOT_FOUND')
   })
 
   it('clears for the target with the admin as actor', async () => {

@@ -30,7 +30,9 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 export const MAX_CONTEXTS = 20
 const MAX_CONTEXT_KEYS = 10
 const MAX_JSON_CHARS = 4000
-const MAX_IDS = 100
+const MAX_IDS = 50
+/** readOne calls one save runs at once: each is several permission queries on the request pool. */
+export const READ_CONCURRENCY = 4
 
 export type FieldDefault = {
   id: number
@@ -200,6 +202,8 @@ type FieldShape =
 /** What the field holds: a plain column, an id of / ids from a related collection, or a shape
  *  personal defaults don't cover (one-to-many child rows, many-to-any). */
 async function fieldShape(collection: string, field: string): Promise<FieldShape> {
+  // A column with no nivaro_relations row is plain on purpose: the person could send that
+  // value in a create anyway, and the form re-validates every default on apply.
   const m2o = (await db('nivaro_relations')
     .where({ many_collection: collection, many_field: field })
     .first('one_collection')) as { one_collection: string | null } | undefined
@@ -232,12 +236,52 @@ function idOf(v: unknown): string | number | null {
   return null
 }
 
+/** What readOne throws for a collection or row the person can't see (judged by name and
+ *  status: the items service's own error classes), plus SQL Server's conversion errors for an
+ *  id of the wrong shape. Anything else (a timeout, a lost connection) is not an answer. */
+const NOT_VISIBLE_ERRORS = new Set([
+  'ForbiddenError',
+  'CollectionNotFoundError',
+  'CollectionTableMissingError',
+  'RouteOnlyCollectionError',
+  'ItemNotFoundError'
+])
+const SQL_CONVERSION_ERRORS = new Set([245, 8114, 8169])
+
+function meansNotVisible(err: unknown): boolean {
+  const e = err as { name?: unknown; statusCode?: unknown; number?: unknown } | null
+  if (!e) return false
+  if (typeof e.name === 'string' && NOT_VISIBLE_ERRORS.has(e.name)) return true
+  if (e.statusCode === 403 || e.statusCode === 404) return true
+  return typeof e.number === 'number' && SQL_CONVERSION_ERRORS.has(e.number)
+}
+
 async function readable(user: User, collection: string, id: string | number): Promise<boolean> {
   try {
     return (await readOne(user, collection, id, undefined, ['id'])) != null
-  } catch {
-    return false
+  } catch (err) {
+    if (meansNotVisible(err)) return false
+    throw err
   }
+}
+
+/** True when every id reads for the person — readOne (tree permission included, which list
+ *  reads skip) at most READ_CONCURRENCY at a time, stopping at the first that doesn't. */
+async function allReadable(
+  user: User,
+  collection: string,
+  ids: Array<string | number>
+): Promise<boolean> {
+  let next = 0
+  let ok = true
+  const worker = async () => {
+    while (ok && next < ids.length) {
+      const id = ids[next++]
+      if (!(await readable(user, collection, id))) ok = false
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, ids.length) }, worker))
+  return ok
 }
 
 async function assertValuePickable(target: User, input: FieldDefaultInput): Promise<void> {
@@ -258,8 +302,7 @@ async function assertValuePickable(target: User, input: FieldDefaultInput): Prom
   const unique = [...new Set(ids as Array<string | number>)]
   if (unique.length > MAX_IDS)
     throw new FieldDefaultRefusal(400, 'BAD_VALUE', `At most ${MAX_IDS} records`)
-  const seen = await Promise.all(unique.map((id) => readable(target, shape.related, id)))
-  if (seen.some((ok) => !ok))
+  if (!(await allReadable(target, shape.related, unique)))
     throw new FieldDefaultRefusal(
       400,
       'VALUE_NOT_AVAILABLE',
@@ -306,7 +349,7 @@ function isDuplicateKey(err: unknown): boolean {
   )
 }
 
-function sameUser(a: User, b: User): boolean {
+function sameUser(a: Pick<User, 'id'>, b: Pick<User, 'id'>): boolean {
   return String(a.id).toUpperCase() === String(b.id).toUpperCase()
 }
 
@@ -420,7 +463,7 @@ export async function deleteDefault(userId: string, id: number, actor?: User): P
     | undefined
   if (!row) return false
   const n = Number(await db(TABLE).where({ id, user: userId }).delete())
-  if (n > 0 && actor && String(actor.id).toUpperCase() !== String(userId).toUpperCase()) {
+  if (n > 0 && actor && !sameUser({ id: userId }, actor)) {
     await logActivity({
       action: 'field_default_clear',
       user: actor.id,
