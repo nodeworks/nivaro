@@ -1,10 +1,59 @@
 {
-  "generated_at": "2026-10-28T13:01:14.265Z",
+  "generated_at": "2026-10-28T14:48:32.182Z",
   "releases": [
+    {
+      "version": "0.3.39",
+      "tag": "v0.3.39",
+      "date": "2026-10-28T10:48:18-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "edit locks are held only while the holder is actually editing",
+              "hash": "e01399b46"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync item locking (30 s lease, focus rule)",
+              "hash": "9aed66b3f"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
+    {
+      "version": "0.3.38",
+      "tag": "v0.3.38",
+      "date": "2026-10-28T10:37:36-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "people search reads person columns only, pickers rank matches",
+              "hash": "6eb8501ef"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.37",
       "tag": "v0.3.37",
-      "date": "2026-10-28T09:00:57-04:00",
+      "date": "2026-10-28T09:01:14-04:00",
       "sections": [
         {
           "label": "Fixed",
