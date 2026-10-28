@@ -157,6 +157,14 @@ export function usersOnPath(path: string): Array<{ id: string; name: string; sin
 }
 
 let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
+
+let presenceNoter: ((tenant: string, userId: string) => void) | null = null
+/** Tell every open Online list that these people changed (role, name, zones) — the coalesced
+ *  presence:changed. A no-op on a process without the socket plugin. */
+export function notePresenceChanged(tenant: string, userIds: string[]): void {
+  if (!presenceNoter) return
+  for (const id of userIds) presenceNoter(tenant, id)
+}
 /**
  * #1371 — users whose latest page ping sits under any of `prefixes` (this
  * replica's sockets): who an auto-record signal about a route reaches.
@@ -758,6 +766,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const presenceChanged = createPresenceChangedCoalescer((tenant, payload) =>
     emitToTenant(tenant, 'presence:changed', payload as unknown as Record<string, unknown>)
   )
+  presenceNoter = (tenant, userId) => presenceChanged.note(tenant, userId)
 
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)

@@ -15,7 +15,11 @@ const state = vi.hoisted(() => ({
   /** listed person → manager */
   managers: {} as Record<string, string>,
   /** account names, for rows with no presence name yet */
-  accounts: {} as Record<string, { first_name?: string; last_name?: string; email?: string }>
+  accounts: {} as Record<
+    string,
+    { first_name?: string; last_name?: string; email?: string; role?: string }
+  >,
+  roles: [] as Array<{ id: string; name: string }>
 }))
 
 vi.mock('../../../db/index.js', () => {
@@ -61,6 +65,7 @@ vi.mock('../../../db/index.js', () => {
         return state.listedScopes
       }
       if (table === 'nivaro_users as u') return state.adminIds.map((id) => ({ id }))
+      if (table === 'nivaro_roles') return state.roles
       if (table === 'nivaro_users')
         return state.presenceRows.map((r) => ({
           id: r.user_id,
@@ -105,6 +110,7 @@ vi.mock('../../../plugins/socketio.js', () => ({
 }))
 
 import {
+  presenceIdentityChange,
   presenceOnlineCounters,
   presenceOnlineFor,
   resetPresenceOnlineCache,
@@ -128,6 +134,7 @@ beforeEach(() => {
   state.adminIds = []
   state.managers = {}
   state.accounts = {}
+  state.roles = []
   stuck.minutes = new Map()
   labelCalls.viewers = []
   presenceOnlineCounters.signatures = 0
@@ -194,6 +201,24 @@ describe('GET /presence/online cache', () => {
     const a = await presenceOnlineFor(app, user('U1'), false)
     const names = Object.fromEntries(a.data.map((r) => [r.user_id, r.display_name]))
     expect(names).toEqual({ A: 'Ann', B: 'Bob', C: 'Eddy Rodriguez', D: 'd@x.test' })
+  })
+
+  it("shows the role and name from the user row, not the heartbeat's stale copy", async () => {
+    state.presenceRows[0].role_name = 'Viewer'
+    state.presenceRows[1].role_name = 'Viewer'
+    state.presenceRows[1].display_name = null
+    state.accounts = {
+      A: { first_name: 'Ann', last_name: 'Lee', role: 'r-creator' },
+      B: { email: 'bob@x.test' }
+    }
+    state.roles = [{ id: 'R-CREATOR', name: 'Workflow Creator' }]
+    const a = await presenceOnlineFor(app, user('U1'), false)
+    const byId = Object.fromEntries(a.data.map((r) => [r.user_id, r]))
+    expect(byId.A.display_name).toBe('Ann Lee')
+    expect(byId.A.role_name).toBe('Workflow Creator')
+    // No role on the account: no role shown, whatever the heartbeat stamped.
+    expect(byId.B.display_name).toBe('bob@x.test')
+    expect(byId.B.role_name).toBeNull()
   })
 
   it('retries the presence read once when it loses a deadlock', async () => {
@@ -322,5 +347,63 @@ describe('GET /presence/online — visibility signature', () => {
     )
     expect(s([])).toBe('open')
     expect(visibilitySignature(true, new Map([['zone', new Set(['1'])]]))).toBe('admin')
+  })
+})
+
+describe('presenceIdentityChange', () => {
+  const ID = '3FB3DE8C-C6D7-4C5A-95E0-E7E9C851533D'
+  const admin = { isAdmin: true, user: { id: 'ADM' } }
+  const plain = { isAdmin: false, user: { id: ID } }
+
+  it("names the person when an administrator changes one user's role, name or zones", () => {
+    expect(presenceIdentityChange({ method: 'PATCH', url: `/api/users/${ID}`, ...admin })).toEqual([
+      ID
+    ])
+    expect(
+      presenceIdentityChange({ method: 'PUT', url: `/api/user-scopes/${ID}`, ...admin })
+    ).toEqual([ID])
+    expect(
+      presenceIdentityChange({ method: 'PATCH', url: `/api/items/nivaro_users/${ID}`, ...admin })
+    ).toEqual([ID])
+  })
+
+  it('refreshes everyone for role, dimension and bulk changes', () => {
+    expect(presenceIdentityChange({ method: 'PATCH', url: '/api/roles/R1', ...admin })).toEqual([
+      '*'
+    ])
+    expect(presenceIdentityChange({ method: 'POST', url: '/api/users/bulk', ...admin })).toEqual([
+      '*'
+    ])
+    expect(
+      presenceIdentityChange({ method: 'POST', url: '/api/scope-dimensions', ...admin })
+    ).toEqual(['*'])
+  })
+
+  it('a person editing their own name or zones refreshes only them', () => {
+    expect(presenceIdentityChange({ method: 'PATCH', url: '/api/users/me', ...plain })).toEqual([
+      ID
+    ])
+    expect(
+      presenceIdentityChange({ method: 'PUT', url: '/api/users/me/scopes/zone', ...plain })
+    ).toEqual([ID])
+    expect(presenceIdentityChange({ method: 'PATCH', url: `/api/users/${ID}`, ...plain })).toEqual([
+      ID
+    ])
+    // Someone else's row, or a role, is not theirs to change: nothing to announce.
+    expect(
+      presenceIdentityChange({ method: 'PATCH', url: '/api/users/OTHER', ...plain })
+    ).toBeNull()
+    expect(presenceIdentityChange({ method: 'PATCH', url: '/api/roles/R1', ...plain })).toBeNull()
+  })
+
+  it('ignores reads and unrelated writes', () => {
+    expect(presenceIdentityChange({ method: 'GET', url: `/api/users/${ID}`, ...admin })).toBeNull()
+    expect(presenceIdentityChange({ method: 'POST', url: '/api/users/cards', ...admin })).toBeNull()
+    expect(
+      presenceIdentityChange({ method: 'POST', url: `/api/users/${ID}/token`, ...admin })
+    ).toBeNull()
+    expect(
+      presenceIdentityChange({ method: 'PATCH', url: '/api/items/user_presence/70', ...admin })
+    ).toBeNull()
   })
 })

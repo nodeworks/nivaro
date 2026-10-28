@@ -687,6 +687,9 @@ interface PresenceBase {
   scopesByUser: Map<string, Map<string, string[]>>
   statusByUser: Map<string, { text: string; emoji: string | null }>
   awayByUser: Set<string>
+  /** Name and role from the user row: the heartbeat's copy goes stale when an administrator
+   *  changes someone's role or name (it lasts until that person's tab reloads). */
+  identityByUser: Map<string, { name: string | null; role_name: string | null }>
   huddling: Set<string>
   masqByUser: Map<string, string>
   adminNames: Map<string, string>
@@ -750,6 +753,54 @@ const restrictionsCache = createShortCache<Map<string, Set<string>>>(
 const viewerCache = createShortCache<OnlineAnswer>('presence-online-viewer', ONLINE_TTL_MS, {
   max: 2000
 })
+
+/** Write routes that may change what the Online list says about a person: their role, name or
+ *  zones (an administrator's access writes — see ACCESS_ROUTES — plus a person editing their own
+ *  name, and admin writes through /items). */
+const IDENTITY_ROUTES =
+  /^\/api\/(roles|user-scopes|scope-dimensions|access-requests\/[^/?]+\/resolve|items\/(nivaro_users|nivaro_user_scopes)\b|users\/(bulk|me\/(scopes|preferences)|[^/?]+\/copy-access)|users\/(?!cards(?:[?]|$))[^/?]+(?:[?]|$))/
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Whose Online-list entry a successful write may have changed: the person's id when the route
+ * names one, '*' when it may be anyone (a role, a dimension, a bulk change). null = nothing.
+ * Exported for tests.
+ */
+export function presenceIdentityChange(req: {
+  method: string
+  url: string
+  isAdmin?: boolean
+  user?: { id?: string } | null
+}): string[] | null {
+  if (req.method === 'GET' || req.method === 'HEAD' || !IDENTITY_ROUTES.test(req.url)) return null
+  const path = req.url.split('?')[0]
+  const self = req.user?.id ? String(req.user.id) : null
+  const m =
+    /^\/api\/(?:users|user-scopes|items\/nivaro_users)\/([^/]+)(?:\/(?:scopes|preferences)(?:\/.*)?)?$/.exec(
+      path
+    )
+  if (m?.[1] === 'me') return self ? [self] : null
+  // Anyone but an administrator changes only themself.
+  if (!req.isAdmin) return self && m && m[1].toUpperCase() === self.toUpperCase() ? [self] : null
+  if (m && UUID_RE.test(m[1])) return [m[1]]
+  return ['*']
+}
+
+/**
+ * Refresh every open Online list after a person's role, name or zones changed. Each replica keeps
+ * its answer for ONLINE_TTL_MS, so the event goes out once those have expired everywhere — a
+ * client refetching sooner could read the old answer from another replica.
+ */
+export function schedulePresenceIdentityRefresh(ids: string[], tenant = currentTenantKey()): void {
+  resetPresenceOnlineCache()
+  const timer = setTimeout(() => {
+    resetPresenceOnlineCache()
+    void import('../plugins/socketio.js')
+      .then(({ notePresenceChanged }) => notePresenceChanged(tenant, ids))
+      .catch(() => {})
+  }, ONLINE_TTL_MS + 250)
+  timer.unref?.()
+}
 
 /** Tests: drop every cached presence answer. */
 export function resetPresenceOnlineCache(): void {
@@ -861,17 +912,46 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
   const statusByUser = new Map<string, { text: string; emoji: string | null }>()
   const awayByUser = new Set<string>()
   const managerByUser = new Map<string, string>()
+  const identityByUser = new Map<string, { name: string | null; role_name: string | null }>()
   if (userIds.length > 0) {
     try {
       const prefRows = (await db('nivaro_users')
         .whereIn('id', userIds)
-        .select('id', 'preferences', 'manager_id')) as Array<{
+        .select(
+          'id',
+          'preferences',
+          'manager_id',
+          'first_name',
+          'last_name',
+          'email',
+          'role'
+        )) as Array<{
         id: string
         preferences: unknown
         manager_id?: string | null
+        first_name?: string | null
+        last_name?: string | null
+        email?: string | null
+        role?: string | null
       }>
+      const roleIds = [...new Set(prefRows.map((pr) => pr.role).filter(Boolean))] as string[]
+      const roleNames = new Map<string, string>()
+      if (roleIds.length > 0) {
+        const roles = (await db('nivaro_roles')
+          .whereIn('id', roleIds)
+          .select('id', 'name')) as Array<{
+          id: string
+          name: string | null
+        }>
+        for (const r of roles) if (r.name) roleNames.set(upper(r.id), r.name)
+      }
       for (const pr of prefRows) {
         const uid = String(pr.id).toUpperCase()
+        const name = [pr.first_name, pr.last_name].filter(Boolean).join(' ') || pr.email || null
+        identityByUser.set(uid, {
+          name,
+          role_name: pr.role ? (roleNames.get(upper(pr.role)) ?? null) : null
+        })
         if (pr.manager_id) managerByUser.set(uid, String(pr.manager_id).toUpperCase())
         const prefs = parsePrefs(pr.preferences)
         if (awayOverride(prefs)) awayByUser.add(uid)
@@ -989,6 +1069,7 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
     scopesByUser,
     statusByUser,
     awayByUser,
+    identityByUser,
     huddling,
     masqByUser,
     adminNames,
@@ -1041,10 +1122,12 @@ function buildRows(base: PresenceBase, isAdmin: boolean, extras: PresenceAdminEx
   return base.rows.map((r) => {
     const uid = upper(r.user_id)
     const idle = presenceRowIdle(r, awayByUser.has(uid))
+    // The user row wins over the heartbeat's copy; the copy covers a row the read missed.
+    const who = base.identityByUser.get(uid)
     const out: Record<string, unknown> = {
       user_id: r.user_id,
-      display_name: r.display_name,
-      role_name: r.role_name,
+      display_name: who?.name ?? r.display_name,
+      role_name: who ? who.role_name : r.role_name,
       // The raw route can carry a record id the viewer may not read; everyone gets `page`
       // (labelled only through their own read access). Administrators keep the route.
       current_path: isAdmin ? r.current_path : undefined,

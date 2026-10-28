@@ -200,7 +200,13 @@ import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
 import { pipelinesRoutes } from './pipelines.js'
 import { preflightRoutes } from './preflight.js'
-import { buildScript, presenceAdminRoutes, presenceOnlineRoutes } from './presence.js'
+import {
+  buildScript,
+  presenceAdminRoutes,
+  presenceIdentityChange,
+  presenceOnlineRoutes,
+  schedulePresenceIdentityRefresh
+} from './presence.js'
 import { presetsRoutes } from './presets.js'
 import { procedureRoutes } from './procedures.js'
 import { profileFieldsRoutes } from './profile-fields.js'
@@ -418,6 +424,13 @@ export async function registerRoutes(app: FastifyInstance) {
     if (reply.statusCode >= 400) return
     const who = accessAnnouncement(req)
     if (who) announceAccessChanged(who === 'tenant' ? {} : who)
+  })
+  // The Online list shows each person's role, name and zones from their user row: a write that
+  // may change them refreshes every open list (after each replica's short answer cache).
+  app.addHook('onResponse', async (req, reply) => {
+    if (reply.statusCode >= 400) return
+    const ids = presenceIdentityChange(req)
+    if (ids) schedulePresenceIdentityRefresh(ids)
   })
 
   await app.register(healthRoutes)
