@@ -97,6 +97,24 @@ export function forgetLiveMode(collection?: string): void {
 const PRESENCE_COLLECTION = 'user_presence'
 const PRESENCE_LIVE_FIELDS = new Set(['typing_room'])
 
+/** Presence fields the Online list shows that only a heartbeat writes: the page a person is
+ *  on and which app. Their changes still send no collection:update — they ride the coalesced
+ *  presence:changed (services/presence-page-notes.ts). */
+const PRESENCE_PAGE_FIELDS = ['current_path', 'app']
+
+/** An update that really moved someone to another page (or app): heartbeats resend the page,
+ *  so the write's own keys say nothing — compare with the row before it. */
+export function isPresencePageChange(
+  collection: string,
+  written: Record<string, unknown> | null | undefined,
+  previous: Record<string, unknown> | null | undefined
+): boolean {
+  if (collection !== PRESENCE_COLLECTION || !written || !previous) return false
+  return PRESENCE_PAGE_FIELDS.some(
+    (f) => f in written && String(written[f] ?? '') !== String(previous[f] ?? '')
+  )
+}
+
 export function isQuietPresenceWrite(
   collection: string,
   extra?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }

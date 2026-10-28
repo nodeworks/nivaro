@@ -41,6 +41,7 @@ import {
   recomputeAutoIdPrefix,
   resolveAutoIdPattern
 } from './auto-ids.js'
+import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { assertNotEditLocked } from './edit-lock.js'
@@ -68,6 +69,7 @@ import { orderByPeopleRelevance } from './people-search-rank.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from './permissions.js'
 import { liveRelations, tableIsMissing } from './physical-tables.js'
 import { enforcePickerRules } from './picker-rules.js'
+import { notePresencePageChange } from './presence-page-notes.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import {
   gateIsSelfContained,
@@ -6694,6 +6696,11 @@ export async function updateOne(
       changeReason: changeReason || undefined
     })
   )
+
+  // A presence heartbeat sends no collection:update, but a move to another page still
+  // reaches open Online lists through the coalesced presence:changed.
+  if (isPresencePageChange(collection, columnPayload, previousData))
+    notePresencePageChange(String(id))
 
   void deferEffect('realtime:update', async () => {
     broadcastCollectionUpdate(req?.server?.io, collection, id, {
