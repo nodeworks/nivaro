@@ -167,6 +167,8 @@ export async function findOrCreateFromOIDC(profile: {
   // user on their FIRST login (external_id gets stamped immediately below,
   // so subsequent logins always hit the sub match).
   let existing = await db<User>('nivaro_users').where({ external_id: profile.sub }).first()
+  // True when the account was linked through an A7 exception: its subject stays as stored.
+  let keepSubject = false
   if (!existing && profile.legacySub && profile.email) {
     // Linked by this provider before subjects were namespaced: the raw subject AND the email
     // must both match, so another issuer reusing a subject string cannot claim it.
@@ -184,12 +186,24 @@ export async function findOrCreateFromOIDC(profile: {
       | undefined
     if (byEmail) {
       if (byEmail.external_id) {
-        console.warn(
-          `[oidc] refused: email matches user ${byEmail.id}, which is linked to another sign-in identity`
+        // Review A7: a few narrow exceptions (same Entra person, same IdP under another provider
+        // config, or a provider allowed to link by email) — auth/account-link-policy.ts. Such a
+        // link keeps the account's subject, so the first provider keeps matching by subject.
+        const { decideEmailLink } = await import('../auth/account-link-policy.js')
+        const decision = await decideEmailLink(
+          byEmail as User & { entra_oid?: string | null; entra_tid?: string | null },
+          profile
         )
-        throw new AccountLinkRefusedError(
-          'This email belongs to an account linked to a different sign-in. Ask an administrator.'
-        )
+        if (!decision.allow) {
+          console.warn(
+            `[oidc] refused (${decision.reason}): email matches user ${byEmail.id}, which is linked to another sign-in identity`
+          )
+          throw new AccountLinkRefusedError(
+            'This email belongs to an account linked to a different sign-in. Ask an administrator.'
+          )
+        }
+        console.info(`[oidc] linked by email to user ${byEmail.id} (${decision.reason})`)
+        keepSubject = true
       }
       existing = byEmail
     }
@@ -203,10 +217,10 @@ export async function findOrCreateFromOIDC(profile: {
 
   if (existing) {
     const updates: Record<string, unknown> = {
-      external_id: profile.sub,
       last_access: new Date(),
       updated_at: new Date()
     }
+    if (!keepSubject) updates.external_id = profile.sub
     if (profile.given_name) updates.first_name = profile.given_name
     if (profile.family_name) updates.last_name = profile.family_name
     if (profile.title) updates.title = profile.title
@@ -230,7 +244,7 @@ export async function findOrCreateFromOIDC(profile: {
     return {
       ...existing,
       ...updates,
-      external_id: profile.sub,
+      external_id: keepSubject ? existing.external_id : profile.sub,
       first_name: (profile.given_name ?? existing.first_name) as string,
       last_name: (profile.family_name ?? existing.last_name) as string,
       role: adRole ?? existing.role

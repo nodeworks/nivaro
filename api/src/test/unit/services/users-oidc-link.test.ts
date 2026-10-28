@@ -33,6 +33,11 @@ vi.mock('../../../services/microsoft.js', () => ({ resolveRoleFromAdGroups: asyn
 vi.mock('../../../services/office-geocode.js', () => ({ queueOfficeGeocode: () => undefined }))
 
 import {
+  issuerFamily,
+  providerKeyFor,
+  resetAccountLinkPolicyCache
+} from '../../../auth/account-link-policy.js'
+import {
   AccountLinkRefusedError,
   findOrCreateFromOIDC,
   getUser,
@@ -106,6 +111,99 @@ describe('findOrCreateFromOIDC account linking', () => {
     await expect(findOrCreateFromOIDC({ ...base, sub, legacySub: 'raw-1' })).rejects.toBeInstanceOf(
       AccountLinkRefusedError
     )
+  })
+})
+
+describe('email links to an account held elsewhere — review A7 exceptions', () => {
+  const TID = '11111111-2222-4333-8444-555555555555'
+  const msA = `oidc:https://login.microsoftonline.com/${TID}/v2.0|sub-app-a`
+  const msB = `oidc:https://sts.windows.net/${TID}/|sub-app-b`
+
+  beforeEach(() => {
+    resetAccountLinkPolicyCache()
+    delete process.env.SSO_LINK_BY_EMAIL
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+  })
+
+  it('same Microsoft tenant under another provider config links, keeping the stored subject', async () => {
+    state.rows.set('nivaro_users', [
+      undefined,
+      { id: 'T', email: base.email, external_id: msA, status: 'active' }
+    ])
+    const user = await findOrCreateFromOIDC({ ...base, sub: msB })
+    expect(user.id).toBe('T')
+    expect(user.external_id).toBe(msA)
+    expect(updates()[0]).not.toHaveProperty('external_id')
+  })
+
+  it('another tenant is a different identity provider: refused', async () => {
+    const other = `oidc:https://login.microsoftonline.com/99999999-2222-4333-8444-555555555555/v2.0|x`
+    state.rows.set('nivaro_users', [
+      undefined,
+      { id: 'T', email: base.email, external_id: msA, status: 'active' }
+    ])
+    await expect(findOrCreateFromOIDC({ ...base, sub: other })).rejects.toBeInstanceOf(
+      AccountLinkRefusedError
+    )
+  })
+
+  it('the same Entra object id links whatever the provider; a different one never does', async () => {
+    state.rows.set('nivaro_users', [
+      undefined,
+      {
+        id: 'E',
+        email: base.email,
+        external_id: 'saml:victim',
+        entra_oid: 'OID-1',
+        entra_tid: TID,
+        status: 'active'
+      },
+      undefined, // update
+      { entra_oid: 'oid-1', entra_tid: TID } // captureEntraIdentity read
+    ])
+    const ok = await findOrCreateFromOIDC({ ...base, sub: 'raw', entraOid: 'oid-1', entraTid: TID })
+    expect(ok.id).toBe('E')
+
+    state.rows.set('nivaro_users', [
+      undefined,
+      { id: 'E', email: base.email, external_id: msA, entra_oid: 'OID-1', status: 'active' }
+    ])
+    // even the same tenant family cannot override a different stored Entra person
+    await expect(
+      findOrCreateFromOIDC({ ...base, sub: msB, entraOid: 'oid-2', entraTid: TID })
+    ).rejects.toBeInstanceOf(AccountLinkRefusedError)
+  })
+
+  it('a provider switched on for email linking links; others stay refused', async () => {
+    process.env.SSO_LINK_BY_EMAIL = 'saml'
+    state.rows.set('nivaro_users', [
+      undefined,
+      { id: 'S', email: base.email, external_id: 'primary-sub', status: 'active' }
+    ])
+    const user = await findOrCreateFromOIDC({ ...base, sub: 'saml:victim@example.com' })
+    expect(user.id).toBe('S')
+    expect(updates()[0]).not.toHaveProperty('external_id')
+
+    resetAccountLinkPolicyCache()
+    state.rows.set('nivaro_users', [
+      undefined,
+      { id: 'S', email: base.email, external_id: 'saml:victim@example.com', status: 'active' }
+    ])
+    await expect(findOrCreateFromOIDC({ ...base, sub: 'other-primary' })).rejects.toBeInstanceOf(
+      AccountLinkRefusedError
+    )
+  })
+
+  it('reads provider keys and families', () => {
+    expect(issuerFamily(`https://login.microsoftonline.com/${TID}/v2.0`)).toBe(`ms:${TID}`)
+    expect(issuerFamily('https://login.microsoftonline.com/common/v2.0')).toBeNull()
+    expect(issuerFamily('https://idp.example.com/realms/x/')).toBe(
+      'https://idp.example.com/realms/x'
+    )
+    const providers = new Map([['https://idp.example.com', 'okta']])
+    expect(providerKeyFor('oidc:https://idp.example.com/|s', providers)).toBe('okta')
+    expect(providerKeyFor('saml:n', providers)).toBe('saml')
+    expect(providerKeyFor('raw', providers)).toBe('primary')
   })
 })
 
