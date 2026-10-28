@@ -1,5 +1,5 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import { userErrorMessage } from '@nivaro/shared'
+import { UserChip, userErrorMessage } from '@nivaro/shared'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { del, get, post } from '../../../lib/commands'
 import { initials } from './HistoryTimeline'
@@ -7,6 +7,8 @@ import type { PState } from './StateTrack'
 
 type POwner = {
   id: number
+  /** The owner's user id (`id` is the owner seat). */
+  user: string
   first_name: string | null
   last_name: string | null
   email: string
@@ -189,13 +191,23 @@ export function OwnersSection({
         <div data-nf-owner-list>
           {owners.map((o) => (
             <div key={o.id} data-nf-owner-row>
-              <span data-nf-owner-avatar>{initials(o.first_name, o.last_name, o.email)}</span>
-              <div data-nf-owner-info>
-                <span data-nf-owner-name>
-                  {[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
-                </span>
-                <span data-nf-owner-email>{o.email}</span>
-              </div>
+              {/* Avatar + name open the shared user card (same as chat / header). */}
+              <UserChip userId={o.user}>
+                <button
+                  type='button'
+                  data-nf-owner-person
+                  aria-label={`${[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email} — profile`}
+                  className='flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent p-0 text-left text-inherit [font:inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                >
+                  <span data-nf-owner-avatar>{initials(o.first_name, o.last_name, o.email)}</span>
+                  <span data-nf-owner-info>
+                    <span data-nf-owner-name>
+                      {[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
+                    </span>
+                    <span data-nf-owner-email>{o.email}</span>
+                  </span>
+                </button>
+              </UserChip>
               <span data-nf-owner-scope>{o.state ? stateLabelFor(o.state) : 'all states'}</span>
               <button
                 type='button'

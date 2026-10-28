@@ -30,6 +30,7 @@ import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
+import { UserChip } from '../item-edit/UserChip'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
@@ -941,6 +942,49 @@ function AsyncUserPicker({ value, onChange }: { value: string; onChange: (v: str
 
 // ─── Owners section ───────────────────────────────────────────────────────────
 
+/** An owner's avatar + name as one button that opens the shared user card
+ *  (UserChip with a custom trigger — the same card chat and the header use). */
+function OwnerPersonButton({
+  userId,
+  name,
+  email,
+  initials
+}: {
+  userId: string
+  name: string
+  email: string
+  initials: string
+}) {
+  return (
+    <UserChip userId={userId}>
+      <button
+        type='button'
+        aria-label={`${name} — profile`}
+        className='group/owner flex min-w-0 flex-1 items-center gap-2.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+      >
+        <UserAvatar
+          userId={userId}
+          alt={name}
+          className='h-6 w-6'
+          fallback={
+            <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+              {initials}
+            </span>
+          }
+        />
+        <span className='min-w-0 flex-1'>
+          <span className='block truncate text-[12px] font-medium text-slate-700 underline-offset-2 group-hover/owner:underline dark:text-slate-200'>
+            {name}
+          </span>
+          <span className='block truncate text-[11px] text-slate-400 dark:text-slate-500'>
+            {email}
+          </span>
+        </span>
+      </button>
+    </UserChip>
+  )
+}
+
 function OwnersSection({
   collection,
   item,
@@ -1127,9 +1171,15 @@ function OwnersSection({
       ) : withCreator ? (
         <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
           {returned ? 'Back with' : 'With'}{' '}
-          <span className='font-medium text-slate-700 dark:text-foreground'>
-            {withCreator.name}
-          </span>
+          <UserChip userId={withCreator.id}>
+            <button
+              type='button'
+              aria-label={`${withCreator.name} — profile`}
+              className='rounded font-medium text-slate-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
+            >
+              {withCreator.name}
+            </button>
+          </UserChip>
         </p>
       ) : resolvedCount === 0 ? (
         <p className='text-[12px] text-slate-400'>No owners assigned.</p>
@@ -1145,24 +1195,9 @@ function OwnersSection({
             return (
               <div
                 key={`group-${o.id}`}
-                className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50'
+                className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
               >
-                <UserAvatar
-                  userId={o.id}
-                  alt={name}
-                  className='h-6 w-6'
-                  fallback={
-                    <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80'>
-                      {initials}
-                    </span>
-                  }
-                />
-                <div className='min-w-0 flex-1'>
-                  <span className='block truncate text-[12px] font-medium text-slate-700'>
-                    {name}
-                  </span>
-                  <span className='block truncate text-[11px] text-slate-400'>{o.email}</span>
-                </div>
+                <OwnerPersonButton userId={o.id} name={name} email={o.email} initials={initials} />
                 {o.queue_only ? (
                   <span
                     className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
@@ -1181,17 +1216,14 @@ function OwnersSection({
           {(owners ?? []).map((o) => (
             <div
               key={o.id}
-              className='group -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50'
+              className='group -mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
             >
-              <span className='flex h-6 w-6 shrink-0 select-none items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy/80'>
-                {ownerInitials(o)}
-              </span>
-              <div className='min-w-0 flex-1'>
-                <span className='block truncate text-[12px] font-medium text-slate-700'>
-                  {[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
-                </span>
-                <span className='block truncate text-[11px] text-slate-400'>{o.email}</span>
-              </div>
+              <OwnerPersonButton
+                userId={o.user}
+                name={[o.first_name, o.last_name].filter(Boolean).join(' ') || o.email}
+                email={o.email}
+                initials={ownerInitials(o)}
+              />
               <span className='shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'>
                 manual
               </span>
