@@ -422,7 +422,7 @@ export function useFieldContextMenu({
   const confirm =
     confirming && personalDefaults
       ? {
-          text: parts
+          text: parts?.length
             ? `Save ${parts.join(' · ')} as your ${parts.length > 1 ? 'defaults' : 'default'}?`
             : 'Save as your default?',
           ready: parts !== null && !saving,
@@ -474,7 +474,17 @@ function FieldContextMenu({
         e.preventDefault()
         onClose()
       } else if (confirm) {
-        // The confirm panel's own buttons take Enter / Space / Tab.
+        // Enter / Space act on the focused button; Tab stays between Cancel and Save.
+        if (e.key === 'Tab') {
+          e.preventDefault()
+          const btns = [cancelRef.current, saveRef.current].filter(
+            (b): b is HTMLButtonElement => !!b && !b.disabled
+          )
+          if (btns.length === 0) return
+          const i = btns.indexOf(document.activeElement as HTMLButtonElement)
+          const next = e.shiftKey ? i - 1 : i + 1
+          btns[((next % btns.length) + btns.length) % btns.length]?.focus()
+        }
         return
       } else if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -500,14 +510,23 @@ function FieldContextMenu({
     }
   }, [onClose, enabled, cursor, confirm])
   const saveRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
   const confirmOpen = !!confirm
+  const confirmReady = !!confirm?.ready
+  // Cancel is never disabled: focus lands there at once, then moves to Save when it enables.
   useEffect(() => {
-    if (confirmOpen) saveRef.current?.focus()
+    if (confirmOpen) cancelRef.current?.focus()
   }, [confirmOpen])
+  useEffect(() => {
+    if (!confirmReady) return
+    const a = document.activeElement
+    if (a === cancelRef.current || a === ref.current || a === document.body)
+      saveRef.current?.focus()
+  }, [confirmReady])
 
   // Keep the panel on screen.
   const w = 240
-  const h = items.length * 30 + 12
+  const h = confirm ? 96 : items.length * 30 + 12
   const x = Math.min(at.x, window.innerWidth - w - 8)
   const y = Math.min(at.y, window.innerHeight - h - 8)
   return createPortal(
@@ -520,12 +539,21 @@ function FieldContextMenu({
       className='rounded-lg border border-slate-200 bg-white p-1 shadow-xl outline-none dark:border-border dark:bg-card'
     >
       {confirm ? (
-        <div data-personal-default-confirm className='space-y-2 px-2 py-1.5'>
-          <p className='text-[12.5px] leading-snug text-slate-700 dark:text-slate-200'>
+        <div
+          data-personal-default-confirm
+          role='group'
+          aria-label='Save as my default'
+          className='space-y-2 px-2 py-1.5'
+        >
+          <p
+            aria-live='polite'
+            className='text-[12.5px] leading-snug text-slate-700 dark:text-slate-200'
+          >
             {confirm.text}
           </p>
           <div className='flex justify-end gap-1.5'>
             <button
+              ref={cancelRef}
               type='button'
               onClick={confirm.onCancel}
               className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:text-slate-200'

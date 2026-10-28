@@ -215,6 +215,33 @@ describe('field menu: Save as my default', () => {
     )
   })
 
+  it('moves focus into the confirm: Save once labels resolve; the panel is a labelled group', async () => {
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    await click(item('Save as my default'))
+    expect(document.activeElement).toBe(button('Save'))
+    const group = document.querySelector('[data-personal-default-confirm]')
+    expect(group?.getAttribute('role')).toBe('group')
+    expect(group?.getAttribute('aria-label')).toBeTruthy()
+    expect(group?.querySelector('[aria-live=polite]')).not.toBeNull()
+  })
+
+  it('keeps Tab inside the confirm (Cancel <-> Save)', async () => {
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    await click(item('Save as my default'))
+    const tab = async (shiftKey = false) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true })
+        )
+      })
+    await tab()
+    expect(document.activeElement).toBe(button('Cancel'))
+    await tab()
+    expect(document.activeElement).toBe(button('Save'))
+    await tab(true)
+    expect(document.activeElement).toBe(button('Cancel'))
+  })
+
   it('Cancel saves nothing', async () => {
     await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
     await click(item('Save as my default'))
