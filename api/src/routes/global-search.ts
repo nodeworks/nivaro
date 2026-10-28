@@ -1345,8 +1345,11 @@ export async function globalSearchRoutes(app: FastifyInstance) {
 
     // `@jane` — people only.
     if (parsed.scope === PEOPLE_SCOPE) {
-      const people = q.length >= 1 ? await searchPeople(q, req.isAdmin === true) : []
-      // [A2 hook: extra/commands/people] — people-scope answers get A2's people fields here too.
+      const found = q.length >= 1 ? await searchPeople(q, req.isAdmin === true) : []
+      const { searchPeopleExtras } = await import('../services/search-extra.js')
+      const people = await searchPeopleExtras(req.user as User, q, found, {
+        isAdmin: req.isAdmin === true
+      }).catch(() => found)
       return reply.send({ data: { ...base, people } })
     }
 
@@ -1429,17 +1432,34 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       }
     }
 
+    // Extra kinds (comments/notes/files/videos/docs/chat/config), confirmable
+    // commands and people role/zones (services/search-extra.ts). Each part judges
+    // its own hits as the caller and never fails the search. Unscoped words only:
+    // `wf: …` and field filters ask for records.
+    const plain = !scoped && !hasFilterTokens(parsed)
+    const { searchExtra, searchCommands, searchPeopleExtras } = await import(
+      '../services/search-extra.js'
+    )
+    const opts = { isAdmin: req.isAdmin === true, req }
+    const [extra, commands, peopleOut] = await Promise.all([
+      plain ? searchExtra(user as User, q, opts).catch(() => ({})) : Promise.resolve({}),
+      searchCommands(user as User, q, records, opts).catch(() => []),
+      searchPeopleExtras(user as User, q, people, { isAdmin: req.isAdmin === true }).catch(
+        () => people
+      )
+    ])
+
     const data: Record<string, unknown> = {
       ...base,
       records,
-      people,
+      people: peopleOut,
       semantic,
       exact: found.exact,
       suggestions: found.suggestions,
-      query
+      query,
+      extra,
+      commands
     }
-    // [A2 hook: extra/commands/people] — merge `extra`, `commands` and the extra
-    // people fields (role_name, zones, title) into `data` here, before the send.
     return reply.send({ data })
   })
 
