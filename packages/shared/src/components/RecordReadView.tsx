@@ -1597,7 +1597,7 @@ function RecordReadViewBody({
     if (groupEmpty && !design) return null
     // A grid with no rows / an alias with no links is empty too (once its
     // count has reported); it stays mounted so the count keeps reporting.
-    const relEmpty = (a: LayoutAssignment) =>
+    const relEmptyByLayout = (a: LayoutAssignment) =>
       hideEmpty &&
       !showAll &&
       (isGrid(a) || isM2M(a)) &&
@@ -1605,6 +1605,19 @@ function RecordReadViewBody({
     const scalars = items.filter((a) => !isGrid(a))
     const grids = items.filter(isGrid)
     const shownWidgets = groupWidgets.filter((w) => widgetHasContent(w.field))
+    // The layout's hide_empty trims empty grids / links / files out of a section that still
+    // has something to show; it never removes a whole section on its own. Whether a section
+    // goes when everything in it is empty is the section's own "Hide when all its fields are
+    // empty" (hide_when_empty, below) — so a Files tab with that off stays and says it has no
+    // files, rather than vanishing.
+    const keepEmptyRels =
+      !g.hide_when_empty &&
+      groupLive.length === 0 &&
+      shownWidgets.length === 0 &&
+      items.length > 0 &&
+      items.some((a) => isGrid(a) || isM2M(a)) &&
+      items.every(relEmptyByLayout)
+    const relEmpty = (a: LayoutAssignment) => !keepEmptyRels && relEmptyByLayout(a)
     const shownItems = items.filter((a) => !relEmpty(a))
     // A section whose visible content is gone (empty widgets, empty grids,
     // empty links) collapses; everything stays mounted inside so it can

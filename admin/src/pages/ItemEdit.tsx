@@ -655,6 +655,13 @@ export function ItemEditPage() {
   // layout /active resolves for this record, and the editor must not jump.
   const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null)
   const editableLayoutId = user?.is_admin && layoutMeta?.id != null ? Number(layoutMeta.id) : null
+  // Summary view with a Summary layout: Edit layout opens that layout instead of the form's.
+  const [formView, setFormView] = useState<{
+    mode: 'summary' | 'edit'
+    summaryLayoutId: number | null
+  }>({ mode: 'edit', summaryLayoutId: null })
+  const editingSummary =
+    !!user?.is_admin && formView.mode === 'summary' && formView.summaryLayoutId != null
   // The editor re-reads the record's layout queries itself once its last save lands; until
   // then (plus the push gap) its own config pushes leave the record form alone (N1).
   const layoutQuiet = useLayoutEditingQuiet(editingLayoutId != null)
@@ -1159,8 +1166,22 @@ export function ItemEditPage() {
               <ItemEditForm
                 collection={collection!}
                 itemId={isNew ? undefined : id}
+                onViewModeChange={setFormView}
                 moreMenuItems={
-                  editableLayoutId != null ? (
+                  editingSummary ? (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='gap-1.5'
+                      data-nvr-menu-close
+                      data-tip='Edit the Summary layout this record shows'
+                      onClick={() => setEditingLayoutId(formView.summaryLayoutId)}
+                    >
+                      <LayoutTemplate className='h-3.5 w-3.5' />
+                      Edit summary
+                    </Button>
+                  ) : editableLayoutId != null ? (
                     <Button
                       type='button'
                       variant='outline'

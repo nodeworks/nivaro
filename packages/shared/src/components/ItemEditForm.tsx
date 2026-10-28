@@ -634,6 +634,10 @@ export interface ItemEditFormProps {
   /** Extra rows for the record's More menu, above Delete (e.g. a host's Edit layout).
    *  Rows that open something outside the menu set `data-nvr-menu-close`. */
   moreMenuItems?: ReactNode
+  /** Which view the record shows (Summary or Edit) and the collection's Summary layout id
+   *  (null = none; Summary then renders the edit layout read-only). Hosts use it so their
+   *  Edit layout opens the layout the person is looking at. */
+  onViewModeChange?: (view: { mode: 'summary' | 'edit'; summaryLayoutId: number | null }) => void
   /** Scroll to + flash a field on load (deep links: ?focus=<field>). */
   focusField?: string | null
   /**
@@ -1586,6 +1590,7 @@ function ItemEditFormView({
   showItemActions = false,
   showGrantedTools = false,
   moreMenuItems,
+  onViewModeChange,
   onDirtyChange,
   documentTitle = true,
   active = true,
@@ -2035,6 +2040,18 @@ function ItemEditFormView({
   // rule-resolution effect. The toggle then flips it for this mount only.
   const [readMode, setReadModeRaw] = useState<boolean>(false)
   const setReadMode = (v: boolean) => setReadModeRaw(v)
+  // Tell the host which view is showing (and the Summary layout behind it) so its Edit
+  // layout opens that layout, not always the edit form's.
+  const onViewModeChangeRef = useRef(onViewModeChange)
+  onViewModeChangeRef.current = onViewModeChange
+  const summaryLayoutIdForHost =
+    summaryLayoutData?.layout?.id != null ? Number(summaryLayoutData.layout.id) : null
+  useEffect(() => {
+    onViewModeChangeRef.current?.({
+      mode: readMode && !isNew ? 'summary' : 'edit',
+      summaryLayoutId: summaryLayoutIdForHost
+    })
+  }, [readMode, isNew, summaryLayoutIdForHost])
   const summaryRules = useMemo(
     () =>
       colMeta?.read_mode_toggle ? normalizeSummaryModeRules(colMeta.summary_mode_rules) : null,
@@ -5545,6 +5562,27 @@ function ItemEditFormView({
     if (readDesignSummaryCollapsed(authUserId) !== null) return
     if (width - 256 < DESIGN_SUMMARY_MIN_CANVAS) setSummaryCollapsed(true)
   }, [designOn, summaryEnabled, railHost, authUserId])
+  // Design mode: the canvas grows with the form and its scroller is an ancestor, so a long
+  // summary rail used to stretch the whole row and leave blank canvas under the last section
+  // ("scrolls past the bottom"). The rail instead sticks to the top of the canvas scroller,
+  // capped at its visible height, and scrolls inside itself — as it does on the record page.
+  const [railViewportH, setRailViewportH] = useState<number | null>(null)
+  useEffect(() => {
+    if (!designOn || !summaryEnabled || !railHost) {
+      setRailViewportH(null)
+      return
+    }
+    let scroller: HTMLElement | null = railHost.parentElement
+    while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY))
+      scroller = scroller.parentElement
+    if (!scroller) return
+    const target = scroller
+    const measure = () => setRailViewportH(target.clientHeight || null)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(target)
+    return () => ro.disconnect()
+  }, [designOn, summaryEnabled, railHost])
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
   const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
@@ -13260,7 +13298,17 @@ function ItemEditFormView({
                                     {extraBottomContent}
                                   </div>
                                   {summaryEnabled && (
-                                    <div className='flex shrink-0 border-l border-slate-200'>
+                                    <div
+                                      className={cn(
+                                        'flex shrink-0 border-l border-slate-200',
+                                        designOn && railViewportH && 'sticky top-0 self-start'
+                                      )}
+                                      style={
+                                        designOn && railViewportH
+                                          ? { height: railViewportH }
+                                          : undefined
+                                      }
+                                    >
                                       <button
                                         type='button'
                                         onClick={() => {
