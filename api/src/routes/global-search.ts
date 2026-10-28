@@ -711,7 +711,23 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       }
     }
 
-    return reply.send({ data: { records, people, pages, actions, semantic } })
+    // [A2 hook: extra/commands/people] — comments/notes/files/videos/docs/chat/config,
+    // confirmable commands and people role/zones (services/search-extra.ts). Each part
+    // judges its own hits as the caller and never fails the search.
+    const { searchExtra, searchCommands, searchPeopleExtras } = await import(
+      '../services/search-extra.js'
+    )
+    const [extra, commands, peopleOut] = await Promise.all([
+      searchExtra(user as User, q, { isAdmin: req.isAdmin === true, req }).catch(() => ({})),
+      searchCommands(user as User, q, records, { isAdmin: req.isAdmin === true, req }),
+      searchPeopleExtras(user as User, q, people, { isAdmin: req.isAdmin === true }).catch(
+        () => people
+      )
+    ])
+
+    return reply.send({
+      data: { records, people: peopleOut, pages, actions, semantic, extra, commands }
+    })
   })
 
   // GET /counts?q=&collections=a,b — each listed collection's match count as the caller
