@@ -53,6 +53,7 @@ vi.mock('../../../services/field-defaults.js', async () => {
     withFormState: vi.fn(async (_u: unknown, rows: unknown[]) =>
       rows.map((r) => ({ ...(r as object), on_layout: true }))
     ),
+    hasAllowedField: vi.fn(async () => true),
     allowedForPerson: vi.fn(async () => [
       { collection: 'orders', label: 'Orders', fields: ['ship_to'] }
     ])
@@ -71,6 +72,7 @@ import {
   allowedForPerson,
   deleteDefault,
   FieldDefaultRefusal,
+  hasAllowedField,
   listDefaults,
   saveDefault,
   withFormState
@@ -129,6 +131,18 @@ describe('/field-defaults/mine', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().data[0].fields).toEqual(['ship_to'])
     expect((vi.mocked(allowedForPerson).mock.calls[0][0] as { id: string }).id).toBe('bob')
+  })
+
+  it('answers only "is there anything" for ?any=1, without the full list', async () => {
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/field-defaults/mine/allowed?any=1',
+      headers: { 'x-test-user': 'bob' }
+    })
+    expect(res.json()).toEqual({ data: { any: true } })
+    expect(allowedForPerson).not.toHaveBeenCalled()
+    expect((vi.mocked(hasAllowedField).mock.calls[0][0] as { id: string }).id).toBe('bob')
   })
 
   it('saves as the caller, for the caller', async () => {

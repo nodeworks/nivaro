@@ -5,6 +5,7 @@ import {
   deleteDefault,
   type FieldDefaultInput,
   FieldDefaultRefusal,
+  hasAllowedField,
   listDefaults,
   saveDefault,
   withFormState
@@ -18,6 +19,7 @@ import type { User } from '../types.js'
  * GET    /field-defaults/mine?collection=      the caller's own defaults (?on_layout=1 adds
  *                                              on_layout: some form they get still allows it)
  * GET    /field-defaults/mine/allowed          [{collection, label, fields}] they may keep one for
+ *                                              (?any=1 → { any: boolean }, stops at the first)
  * PUT    /field-defaults/mine                  { collection, field, value, context } upsert
  * DELETE /field-defaults/mine/:id
  * Admin (validated AS the person, logged as the admin):
@@ -46,15 +48,15 @@ function collectionQuery(q: unknown): string | undefined {
   return typeof c === 'string' && c.trim() ? c.trim() : undefined
 }
 
-function wantsFormState(q: unknown): boolean {
-  const v = (q as { on_layout?: unknown } | undefined)?.on_layout
+function wantsFlag(q: unknown, name: string): boolean {
+  const v = (q as Record<string, unknown> | undefined)?.[name]
   return v === '1' || v === 'true'
 }
 
 /** The list as answered: on_layout added only when asked (the form's read skips that cost). */
 async function listFor(user: User, query: unknown) {
   const rows = await listDefaults(user.id, collectionQuery(query))
-  return wantsFormState(query) ? withFormState(user, rows) : rows
+  return wantsFlag(query, 'on_layout') ? withFormState(user, rows) : rows
 }
 
 function refuse(reply: FastifyReply, err: unknown) {
@@ -69,6 +71,9 @@ export async function fieldDefaultsRoutes(app: FastifyInstance) {
   })
 
   app.get('/mine/allowed', { preHandler: requireAuth }, async (req, reply) => {
+    // ?any=1: the own profile only needs to know whether the card has anything to offer.
+    if (wantsFlag(req.query, 'any'))
+      return reply.send({ data: { any: await hasAllowedField(req.user!) } })
     return reply.send({ data: await allowedForPerson(req.user!) })
   })
 

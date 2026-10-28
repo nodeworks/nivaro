@@ -260,6 +260,30 @@ export async function withFormState(
 
 export type AllowedCollection = { collection: string; label: string | null; fields: string[] }
 
+/** The toggled fields of one collection this person may also set (null = none / refused). */
+async function settableFields(
+  user: User,
+  collection: string,
+  toggled: Set<string>
+): Promise<string[] | null> {
+  if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection)) return null
+  if (!(await can(user, 'create', collection)) || !(await can(user, 'read', collection)))
+    return null
+  const allowed = await getAllowedFields(user, 'create', collection)
+  const fields = [...toggled]
+    .filter((f) => allowed === null || allowed.includes('*') || allowed.includes(f))
+    .sort()
+  return fields.length ? fields : null
+}
+
+/** True when allowedForPerson would list anything — stops at the first collection that does. */
+export async function hasAllowedField(user: User): Promise<boolean> {
+  for (const [collection, set] of await allowedFieldsByCollection(user)) {
+    if (await settableFields(user, collection, set)) return true
+  }
+  return false
+}
+
 /**
  * Where this person could keep a default (an administrator's "Add default"): per collection,
  * the toggled fields they may also set — create + read permission and the create field list,
@@ -269,13 +293,8 @@ export async function allowedForPerson(user: User): Promise<AllowedCollection[]>
   const map = await allowedFieldsByCollection(user)
   const out: AllowedCollection[] = []
   for (const [collection, set] of map) {
-    if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection)) continue
-    if (!(await can(user, 'create', collection)) || !(await can(user, 'read', collection))) continue
-    const allowed = await getAllowedFields(user, 'create', collection)
-    const fields = [...set]
-      .filter((f) => allowed === null || allowed.includes('*') || allowed.includes(f))
-      .sort()
-    if (fields.length) out.push({ collection, label: null, fields })
+    const fields = await settableFields(user, collection, set)
+    if (fields) out.push({ collection, label: null, fields })
   }
   if (out.length === 0) return out
   const names = (await db('nivaro_collections')

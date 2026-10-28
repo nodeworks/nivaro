@@ -157,6 +157,7 @@ export function ConfirmButton({
   className,
   armedClassName,
   title,
+  confirmTitle,
   disabled
 }: {
   onConfirm: () => void
@@ -164,7 +165,10 @@ export function ConfirmButton({
   confirmLabel?: ReactNode
   className?: string
   armedClassName?: string
+  /** Accessible name and instant tooltip (data-tip) while unarmed. */
   title?: string
+  /** Accessible name once armed; default: the confirm label's text, else "<title>?". */
+  confirmTitle?: string
   disabled?: boolean
 }) {
   const [armed, setArmed] = useState(false)
@@ -176,8 +180,13 @@ export function ConfirmButton({
   return (
     <button
       type='button'
-      title={title}
-      aria-label={title}
+      data-tip={title}
+      aria-label={
+        armed
+          ? (confirmTitle ??
+            (typeof confirmLabel === 'string' ? confirmLabel : title ? `${title}?` : undefined))
+          : title
+      }
       disabled={disabled}
       onClick={() => {
         if (armed) {

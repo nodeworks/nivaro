@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookmarkCheck, Check, ChevronsUpDown, Pencil, Plus, Trash2, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ParentDraftContext, useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, put } from '../../lib/commands'
@@ -163,7 +163,9 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
   const {
     data: rows,
     isPending,
-    isError
+    isError,
+    refetch,
+    isRefetching
   } = useQuery({
     queryKey: listKey,
     queryFn: () =>
@@ -171,13 +173,24 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
     enabled: allowedHere,
     staleTime: 30_000
   })
+  // The full list feeds an admin's Add default; the own page only asks whether any form
+  // offers one at all (the API stops at the first).
   const { data: allowed } = useQuery({
     queryKey: ['field-defaults-allowed', who],
     queryFn: () =>
       client
         .request<{ data: AllowedCollection[] }>(get(`${base}/allowed`))
         .then((r) => r.data ?? []),
-    enabled: allowedHere,
+    enabled: allowedHere && forOther,
+    staleTime: 60_000
+  })
+  const { data: anyAllowed, isPending: anyPending } = useQuery({
+    queryKey: ['field-defaults-allowed-any', who],
+    queryFn: () =>
+      client
+        .request<{ data: { any?: boolean } }>(get(`${base}/allowed`, { any: 1 }))
+        .then((r) => r.data?.any === true),
+    enabled: allowedHere && !forOther,
     staleTime: 60_000
   })
 
@@ -269,8 +282,13 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
   })
 
   if (!allowedHere) return null
-  // Own page: nothing saved and no form offers a default → the card has nothing to teach.
-  if (!forOther && rows?.length === 0 && allowed?.length === 0) return null
+  // Own page: the card appears only once known to have something — saved defaults, or a form
+  // that offers one (today most people have neither; a skeleton that then vanished shifted the
+  // whole profile on every open). An admin's tools tab keeps its skeleton.
+  if (!forOther) {
+    if (isPending || (anyPending && !isError)) return null
+    if (!isError && (rows ?? []).length === 0 && anyAllowed !== true) return null
+  }
 
   const groups = [...new Set((rows ?? []).map((r) => r.collection))]
     .map((c) => ({ collection: c, label: metas.get(c)?.label || titleCase(c) }))
@@ -310,7 +328,18 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
           ))}
         </div>
       ) : isError ? (
-        <EmptyLine>Could not load the saved defaults. Reload the page to try again.</EmptyLine>
+        <div className='flex flex-wrap items-center gap-2'>
+          <EmptyLine>Could not load the saved defaults.</EmptyLine>
+          <button
+            type='button'
+            data-default-retry
+            disabled={isRefetching}
+            onClick={() => void refetch()}
+            className='inline-flex h-7 items-center rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-700 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:opacity-50 dark:border-border dark:text-slate-200'
+          >
+            {isRefetching ? 'Trying…' : 'Retry'}
+          </button>
+        </div>
       ) : (rows ?? []).length === 0 ? (
         <p data-default-empty className='text-[12px] text-slate-500 dark:text-slate-400'>
           {forOther ? `${firstName} has no saved defaults yet.` : 'No defaults yet.'} On a record
@@ -372,6 +401,12 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
 
 // ─── One saved default ───────────────────────────────────────────────────────
 
+const FOCUSABLE =
+  'input:not([type=hidden]), textarea, [role=combobox], button, [tabindex]:not([tabindex="-1"])'
+
+const STALE_EXPLAINED =
+  'No form you can be given offers a personal default for this field now, so it is not used. Clear it, or ask an admin to turn it back on.'
+
 function DefaultRowItem({
   row,
   meta,
@@ -392,10 +427,24 @@ function DefaultRowItem({
   clearing: boolean
 }) {
   const [editing, setEditing] = useState(false)
+  const changeRef = useRef<HTMLButtonElement | null>(null)
+  const returnFocus = useRef(false)
+  // Closing the editor (Cancel, Escape, Save) hands focus back to Change.
+  useEffect(() => {
+    if (editing || !returnFocus.current) return
+    returnFocus.current = false
+    changeRef.current?.focus()
+  }, [editing])
+  const close = () => {
+    returnFocus.current = true
+    setEditing(false)
+  }
   const stale = row.on_layout === false
   const fc = meta.fields.find((f) => f.field === row.field)
   const value = parts ? partText(parts.value, labels) : { text: '', state: 'loading' as const }
   const context = (parts?.context ?? []).map(([k, p]) => {
+    // A parent that is no longer a field of the collection: name it, there is no value to show.
+    if (p.kind === 'unknown') return fieldLabel(meta, k)
     const t = partText(p, labels)
     if (t.state === 'loading') return null
     return t.state === 'gone' || t.state === 'failed'
@@ -420,9 +469,9 @@ function DefaultRowItem({
               field={fc}
               relations={meta.relations}
               base={base}
-              onCancel={() => setEditing(false)}
+              onCancel={close}
               onSaved={() => {
-                setEditing(false)
+                close()
                 onSaved()
               }}
             />
@@ -460,10 +509,11 @@ function DefaultRowItem({
               {row.updated_by ? ' by an admin' : ''}
             </span>
             {stale && (
-              <span data-tip='No form you can be given offers a personal default for this field now, so it is not used. Clear it, or ask an admin to turn it back on.'>
+              <span data-tip={STALE_EXPLAINED}>
                 <Pill tone='amber' testId='stale'>
                   <span data-default-stale>No longer on any form</span>
                 </Pill>
+                <span className='sr-only'>. {STALE_EXPLAINED}</span>
               </span>
             )}
           </p>
@@ -480,6 +530,7 @@ function DefaultRowItem({
         >
           {!stale && fc && (
             <button
+              ref={changeRef}
               type='button'
               data-default-change
               aria-label={`Change the default for ${fieldLabel(meta, row.field)}`}
@@ -494,6 +545,7 @@ function DefaultRowItem({
             onConfirm={onClear}
             disabled={clearing}
             title={`Clear the default for ${fieldLabel(meta, row.field)}`}
+            confirmTitle={`Clear the default for ${fieldLabel(meta, row.field)}? Press again to confirm`}
             confirmLabel={
               <span data-default-clear className='px-1 text-[11.5px] font-semibold'>
                 Clear?
@@ -657,16 +709,44 @@ function DefaultEditor({
 }) {
   const [draft, setDraft] = useState<unknown>(row.value)
   const { save, error } = useSaveDefault(base, onSaved)
+  const boxRef = useRef<HTMLFieldSetElement | null>(null)
+  // Opening the editor puts the cursor in the field's control (input, picker trigger, …).
+  useEffect(() => {
+    const focusFirst = () => {
+      const el = boxRef.current
+        ?.querySelector('[data-default-control]')
+        ?.querySelector<HTMLElement>(FOCUSABLE)
+      el?.focus()
+      return !!el
+    }
+    if (focusFirst()) return
+    const t = window.setTimeout(focusFirst, 50)
+    return () => window.clearTimeout(t)
+  }, [])
   return (
-    <div className='space-y-1.5' data-default-editor>
-      <DefaultValueControl
-        collection={row.collection}
-        field={field}
-        relations={relations}
-        context={row.context ?? {}}
-        value={draft}
-        onChange={setDraft}
-      />
+    <fieldset
+      ref={boxRef}
+      className='m-0 min-w-0 space-y-1.5 border-0 p-0'
+      data-default-editor
+      onKeyDown={(e) => {
+        // Escape cancels — unless it was closing a picker's list (portaled outside this box).
+        if (e.key !== 'Escape' || e.defaultPrevented) return
+        if (!boxRef.current?.contains(e.target as Node)) return
+        e.stopPropagation()
+        onCancel()
+      }}
+    >
+      <legend className='sr-only'>Change the default for {field.label || field.field}</legend>
+      <div data-default-control>
+        <DefaultValueControl
+          collection={row.collection}
+          field={field}
+          relations={relations}
+          context={row.context ?? {}}
+          value={draft}
+          onChange={setDraft}
+        />
+      </div>
       {error && (
         <p role='alert' className='text-[11.5px] text-red-600 dark:text-red-400'>
           {error}
@@ -685,7 +765,7 @@ function DefaultEditor({
           })
         }
       />
-    </div>
+    </fieldset>
   )
 }
 

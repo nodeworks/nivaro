@@ -82,6 +82,7 @@ import {
   deleteDefault,
   FieldDefaultRefusal,
   fieldAllowedOnSomeLayout,
+  hasAllowedField,
   listDefaults,
   saveDefault,
   withFormState
@@ -571,6 +572,34 @@ describe('allowedForPerson', () => {
     expect((await allowedForPerson(BOB))[0]?.fields).toEqual(['ship_to'])
     vi.mocked(can).mockResolvedValue(false)
     expect(await allowedForPerson(BOB)).toEqual([])
+  })
+})
+
+describe('hasAllowedField', () => {
+  it('stops at the first collection with a settable toggled field', async () => {
+    tables.nivaro_collection_layouts.push({
+      id: 20,
+      collection: 'invoices',
+      layout_type: 'grouped',
+      conditions: null,
+      parent_layout_id: null
+    })
+    tables.nivaro_layout_field_assignments.push({
+      layout_id: 20,
+      field: 'terms',
+      overrides: JSON.stringify({ personal_default: true })
+    })
+    expect(await hasAllowedField(BOB)).toBe(true)
+    // Two collections qualify; one create check answered it. No label read.
+    expect(vi.mocked(can).mock.calls.filter((c) => c[1] === 'create')).toHaveLength(1)
+    expect(vi.mocked(getAllowedFields)).toHaveBeenCalledTimes(1)
+  })
+
+  it('is false when nothing is toggled, or nothing toggled is settable', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['other'])
+    expect(await hasAllowedField(BOB)).toBe(false)
+    tables.nivaro_layout_field_assignments = []
+    expect(await hasAllowedField(BOB)).toBe(false)
   })
 })
 

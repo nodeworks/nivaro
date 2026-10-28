@@ -132,14 +132,23 @@ const RECORDS: Record<string, Array<Record<string, unknown>>> = {
 let root: Root
 let host: HTMLDivElement
 let calls: Cmd[] = []
-let rows = ROWS
+let rows: Array<Omit<(typeof ROWS)[number], 'context'> & { context: Record<string, unknown> }> =
+  ROWS
+let anyAllowed = true
+let listFailures = 0
 
 function respond(cmd: Cmd): unknown {
   const p = cmd._path
   if (cmd._method === 'DELETE') return { data: { id: Number(p.split('/').pop()) } }
   if (cmd._method === 'PUT') return { data: { id: 9, ...(cmd._body as object) } }
-  if (p === '/field-defaults/mine' || /^\/field-defaults\/users\/[^/]+$/.test(p))
+  if (p === '/field-defaults/mine' || /^\/field-defaults\/users\/[^/]+$/.test(p)) {
+    if (listFailures > 0) {
+      listFailures--
+      throw Object.assign(new Error('boom'), { status: 500 })
+    }
     return { data: rows }
+  }
+  if (p.endsWith('/allowed') && cmd._params?.any) return { data: { any: anyAllowed } }
   if (p.endsWith('/allowed'))
     return {
       data: [
@@ -216,6 +225,8 @@ beforeEach(() => {
   root = createRoot(host)
   calls = []
   rows = ROWS
+  anyAllowed = true
+  listFailures = 0
 })
 afterEach(() => {
   act(() => root.unmount())
@@ -303,6 +314,95 @@ describe('MyDefaultsCard', () => {
       value: 'Standard',
       context: {}
     })
+  })
+
+  it('own page: draws nothing until known, and nothing at all with none saved or offered', async () => {
+    rows = []
+    anyAllowed = false
+    const seen: string[] = []
+    const obs = new MutationObserver(() => seen.push(host.innerHTML))
+    obs.observe(host, { childList: true, subtree: true, characterData: true })
+    await mount()
+    await settle()
+    obs.disconnect()
+    expect(seen.filter(Boolean)).toEqual([])
+    expect(host.innerHTML).toBe('')
+    // The own page asks only "is there anything" — never the full list.
+    const allowedCalls = calls.filter((c) => c._path === '/field-defaults/mine/allowed')
+    expect(allowedCalls.map((c) => c._params)).toEqual([{ any: 1 }])
+  })
+
+  it('own page: no skeleton while the reads are in flight', async () => {
+    const client = { request: vi.fn(() => new Promise(() => {})) }
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <NivaroProvider client={client as never}>
+            <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: 'me-1' }}>
+              <MyDefaultsCard />
+            </ItemEditAuthContext.Provider>
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    })
+    expect(host.innerHTML).toBe('')
+  })
+
+  it('offers Retry when the list fails, and reads again', async () => {
+    listFailures = 1
+    await mount()
+    await settle(() => !!host.querySelector('[data-default-retry]'))
+    await click(host.querySelector('[data-default-retry]'))
+    await settle(() => !!rowEl(1))
+    expect(calls.filter((c) => c._path === '/field-defaults/mine')).toHaveLength(2)
+    expect(rowEl(1)).toBeTruthy()
+  })
+
+  it('Clear tells its state through data-tip and aria-label, never a native title', async () => {
+    await mount()
+    const btn = rowEl(2)?.querySelector('[data-default-clear]')?.closest('button')
+    expect(btn?.hasAttribute('title')).toBe(false)
+    expect(btn?.getAttribute('data-tip')).toBe('Clear the default for Notes')
+    expect(btn?.getAttribute('aria-label')).toBe('Clear the default for Notes')
+    await click(btn)
+    expect(btn?.getAttribute('aria-label')).toBe(
+      'Clear the default for Notes? Press again to confirm'
+    )
+  })
+
+  it('explains a stale row to screen readers, not only in a tooltip', async () => {
+    await mount()
+    expect(rowEl(3)?.querySelector('.sr-only')?.textContent).toMatch(/not used/)
+  })
+
+  it('names a context parent that is no longer a field instead of "Saved value"', async () => {
+    rows = [
+      {
+        ...ROWS[0],
+        id: 7,
+        field: 'notes',
+        value: 'Rush order',
+        context: { legacy_area: 3 }
+      }
+    ]
+    await mount()
+    await settle(() => !!rowEl(7)?.querySelector('[data-default-context]'))
+    expect(rowEl(7)?.querySelector('[data-default-context]')?.textContent).toBe('for Legacy Area')
+  })
+
+  it('Change focuses the control, Escape cancels, and focus returns to Change', async () => {
+    await mount()
+    const change = rowEl(2)?.querySelector<HTMLElement>('[data-default-change]')
+    await click(change)
+    await settle(() => document.activeElement?.tagName === 'INPUT')
+    const input = rowEl(2)?.querySelector('input')
+    expect(document.activeElement).toBe(input)
+    await act(async () => {
+      input?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await settle(() => !rowEl(2)?.querySelector('input'))
+    expect(rowEl(2)?.querySelector('input')).toBeNull()
+    expect(document.activeElement).toBe(rowEl(2)?.querySelector('[data-default-change]'))
   })
 
   it('teaches how to save one when there are none', async () => {
