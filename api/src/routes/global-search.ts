@@ -5,6 +5,44 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
+import { buildSearchPreview } from '../services/search-preview.js'
+import {
+  type FieldMeta,
+  type FilterChip,
+  type FilterPlan,
+  hasFilterTokens,
+  type ParsedQuery,
+  PEOPLE_SCOPE,
+  parseSearchQuery,
+  planFilters
+} from '../services/search-query.js'
+import {
+  FUZZY_MIN_SIMILARITY,
+  fuzzyChunks,
+  isIdColumn,
+  isNumericIdColumn,
+  looksLikeId,
+  type MatchTier,
+  matchTier,
+  rankHits,
+  scoreHit,
+  similarity,
+  wantsFuzzy
+} from '../services/search-rank.js'
+import {
+  createSavedSearch,
+  deleteSavedSearch,
+  listSavedSearches,
+  SavedSearchError
+} from '../services/search-saved.js'
+import { loadSearchScopes } from '../services/search-scopes.js'
+import {
+  hitKey,
+  learnedOpens,
+  ownedAmong,
+  recentOpens,
+  recordClick
+} from '../services/search-signals.js'
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
 import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
@@ -70,6 +108,7 @@ interface FieldRow {
   type: string
   hidden: boolean | number
   sort: number | null
+  label?: string | null
 }
 
 /** Pick the text-ish fields to search per collection: preferred names first, else first 2 string fields. */
@@ -92,22 +131,43 @@ function pickSearchFields(fields: FieldRow[]): string[] {
 // User Scopes all apply — the raw scan can never leak a row the items API
 // would refuse. Replaces the old first-10-collections per-table search, which
 // missed both most collections and every human-id column.
+//
+// Search program 2026-10-28 adds, on the same plan: an exact-id pass (an id-ish
+// query equal to a business id column → `data.exact`, ranked first), a typo pass
+// when little matched, prefix scopes and field filters (services/search-query.ts,
+// filters go through the items service as the caller), and ranking signals
+// (services/search-rank.ts + search-signals.ts) that only ever reorder hits the
+// caller already read.
 
 interface PlanEntry {
   collection: string
   display_name: string | null
   columns: string[]
   /** The columns its label shows (display-template fields, else the first search
-   *  column): what a labels-only search (`labels=1`) matches. */
+   *  column), plus `browser_config.label_search_fields`: what a labels-only
+   *  search (`labels=1`) matches. */
   labelColumns: string[]
+  /** The `label_search_fields` among labelColumns: a labels-only hit through one
+   *  of them is kept although the label does not show the phrase. */
+  labelSearch: string[]
+  /** String columns holding business ids (`workflow_id`, `mwf_id`, `po_number`). */
+  idColumns: string[]
+  /** Numeric columns holding quoted numbers (`po_number`) — digits-only queries. */
+  numIdColumns: string[]
   template: string | null
   /** Partition-stat row count — what a contains-LIKE over it costs. */
   rows: number
+  /** false: over ROW_BUDGET or no text columns — never scanned, but still a scope
+   *  target (filters through the items service, `id` equality). */
+  textSearchable: boolean
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const NAMEISH = ['name', 'title', 'label', 'subject']
 const MAX_COLS_PER_COLLECTION = 3
+const MAX_ID_COLS = 4
+const MAX_NUM_ID_COLS = 2
+const MAX_LABEL_SEARCH = 4
 const PER_COLLECTION = 8
 const RECORD_CAP = 30
 // A contains-LIKE is a table scan; multi-million-row tables (invoices 2.7M,
@@ -116,24 +176,57 @@ const RECORD_CAP = 30
 // the searchable set stays every collection a person actually types names
 // and ids from (workflows, IRs, projects, vendors, units, lines).
 const ROW_BUDGET = 500_000
+// The typo pass runs several LIKEs per row: only on the smaller tables.
+const FUZZY_ROW_BUDGET = 200_000
+const FUZZY_PER_COLLECTION = 4
+const FILTER_COLLECTIONS = 12
+
+/** `browser_config.label_search_fields` (search program item 23), parsed locally:
+ *  identifier names only, deduped, capped. Never widens past what the caller may
+ *  read — searchColumns intersects with their field list like any column. */
+export function parseLabelSearchFields(browserConfig: unknown): string[] {
+  try {
+    const bc =
+      typeof browserConfig === 'string'
+        ? (JSON.parse(browserConfig) as Record<string, unknown>)
+        : (browserConfig as Record<string, unknown> | null)
+    const raw = bc?.label_search_fields
+    if (!Array.isArray(raw)) return []
+    const names = raw.map((v) => String(v ?? '').trim()).filter((v) => IDENT_RE.test(v))
+    return [...new Set(names)].slice(0, MAX_LABEL_SEARCH)
+  } catch {
+    return []
+  }
+}
 
 let planCache: { at: number; plan: PlanEntry[] } | null = null
 
 async function buildSearchPlan(): Promise<PlanEntry[]> {
   if (planCache && Date.now() - planCache.at < 60_000) return planCache.plan
 
-  const [collections, stringCols, relations, idTables, rowCounts] = await Promise.all([
+  const [collections, stringCols, numericCols, relations, idTables, rowCounts] = await Promise.all([
     db('nivaro_collections')
       .whereNot('collection', 'like', 'nivaro\\_%')
       .whereNot('collection', 'like', 'directus\\_%')
       .where((qb) => void qb.where('is_virtual', 0).orWhereNull('is_virtual'))
-      .select('collection', 'display_name', 'display_template') as Promise<
-      Array<{ collection: string; display_name: string | null; display_template: string | null }>
+      .select('collection', 'display_name', 'display_template', 'browser_config') as Promise<
+      Array<{
+        collection: string
+        display_name: string | null
+        display_template: string | null
+        browser_config: unknown
+      }>
     >,
     db.raw(`
       select table_name, column_name from information_schema.columns
       where data_type in ('nvarchar', 'varchar', 'char', 'nchar')
         and (character_maximum_length between 1 and 2000 or character_maximum_length = -1)
+    `) as Promise<Array<{ table_name: string; column_name: string }>>,
+    // Quoted numbers stored as numbers (po_number int) — name-filtered in JS.
+    db.raw(`
+      select table_name, column_name from information_schema.columns
+      where data_type in ('int', 'bigint', 'numeric', 'decimal')
+        and (column_name like '%number' or column_name like '%[_]num' or column_name like '%[_]no')
     `) as Promise<Array<{ table_name: string; column_name: string }>>,
     // Junction collections carry no human labels — searching them is noise.
     db('nivaro_relations').whereNotNull('junction_field').select('many_collection') as Promise<
@@ -156,21 +249,25 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
   const junctions = new Set(relations.map((r) => r.many_collection))
   const hasId = new Set(idTables.map((t) => t.table_name))
   const rowsByTable = new Map(rowCounts.map((r) => [r.table_name, Number(r.row_count)]))
-  const colsByTable = new Map<string, Set<string>>()
-  for (const c of stringCols) {
-    const set = colsByTable.get(c.table_name) ?? new Set<string>()
-    set.add(c.column_name)
-    colsByTable.set(c.table_name, set)
+  const group = (rows: Array<{ table_name: string; column_name: string }>) => {
+    const by = new Map<string, Set<string>>()
+    for (const c of rows) {
+      const set = by.get(c.table_name) ?? new Set<string>()
+      set.add(c.column_name)
+      by.set(c.table_name, set)
+    }
+    return by
   }
+  const colsByTable = group(stringCols)
+  const numsByTable = group(numericCols)
 
   const plan: PlanEntry[] = []
   for (const col of collections) {
     if (junctions.has(col.collection)) continue
     if (!IDENT_RE.test(col.collection)) continue
     if (!hasId.has(col.collection)) continue
-    if ((rowsByTable.get(col.collection) ?? 0) > ROW_BUDGET) continue
-    const available = colsByTable.get(col.collection)
-    if (!available || !available.size) continue
+    const rows = rowsByTable.get(col.collection) ?? 0
+    const available = colsByTable.get(col.collection) ?? new Set<string>()
 
     const picked: string[] = []
     for (const m of (col.display_template ?? '').matchAll(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g)) {
@@ -184,17 +281,31 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       if (c.endsWith('_id') && c !== 'id' && !picked.includes(c)) picked.push(c)
     }
     const columns = picked.filter((c) => IDENT_RE.test(c)).slice(0, MAX_COLS_PER_COLLECTION)
-    if (columns.length === 0) continue
+    const labelSearch = parseLabelSearchFields(col.browser_config).filter((c) => available.has(c))
+    // A template that shows only non-text fields has no label to match: the
+    // collection sits out of a labels-only search. No template: the label is the
+    // first search column.
+    const baseLabel = col.display_template?.trim() ? fromTemplate : columns.slice(0, 1)
+    const idColumns = [...available]
+      .filter((c) => IDENT_RE.test(c) && isIdColumn(c))
+      .sort()
+      .slice(0, MAX_ID_COLS)
+    const numIdColumns = [...(numsByTable.get(col.collection) ?? [])]
+      .filter((c) => IDENT_RE.test(c) && isNumericIdColumn(c))
+      .sort()
+      .slice(0, MAX_NUM_ID_COLS)
+    const textSearchable = rows <= ROW_BUDGET && columns.length > 0
     plan.push({
       collection: col.collection,
       display_name: col.display_name,
-      columns,
-      // A template that shows only non-text fields has no label to match: the
-      // collection sits out of a labels-only search. No template: the label is the
-      // first search column.
-      labelColumns: col.display_template?.trim() ? fromTemplate : columns.slice(0, 1),
+      columns: rows <= ROW_BUDGET ? columns : [],
+      labelColumns: rows <= ROW_BUDGET ? [...new Set([...baseLabel, ...labelSearch])] : [],
+      labelSearch,
+      idColumns: rows <= ROW_BUDGET ? idColumns : [],
+      numIdColumns: rows <= ROW_BUDGET ? numIdColumns : [],
       template: col.display_template,
-      rows: rowsByTable.get(col.collection) ?? 0
+      rows,
+      textSearchable
     })
   }
   planCache = { at: Date.now(), plan }
@@ -219,31 +330,52 @@ function escapeLike(v: string): string {
   return v.replace(/[\\%_[]/g, (m) => `\\${m}`)
 }
 
-type RecordHit = {
+export type RecordHit = {
   collection: string
   display_name: string | null
   id: unknown
   label: string
   snippet: string
+  /** The field the match was found in — always one the caller may read. */
+  matched_field?: string
+  matched_label?: string
+  /** Its value as the caller read it, ≤80 chars. */
+  matched_value?: string
+  exact?: boolean
+  score?: number
+  /** The caller created it, owns it, or opened it from search lately. */
+  mine?: boolean
+  updated_at?: string
+}
+
+/** A hit while it is being ranked. */
+interface Found extends RecordHit {
+  tier: MatchTier
+  similarity?: number
+  createdBy?: string | null
 }
 
 /** The columns a search matches: every search column, or (labels-only) just the ones
  *  the record's label shows — so every hit visibly contains what was typed. */
 export function searchColumns(
-  p: PlanEntry,
+  p: Pick<PlanEntry, 'columns' | 'labelColumns'>,
   labelsOnly: boolean,
   allowed?: string[] | null
 ): string[] {
   const cols = labelsOnly ? p.labelColumns : p.columns
-  // A column the caller may not read is never matched: a hit (or a count) found
-  // through it would say what it holds. null = every field.
+  return readableOnly(cols, allowed)
+}
+
+/** A column the caller may not read is never matched: a hit (or a count) found
+ *  through it would say what it holds. null = every field. */
+function readableOnly(cols: string[], allowed?: string[] | null): string[] {
   return allowed == null || allowed.includes('*') ? cols : cols.filter((c) => allowed.includes(c))
 }
 
 /** Each plan collection's readable fields for the caller (null = all). */
 async function allowedByCollection(
   user: User,
-  plan: PlanEntry[]
+  plan: Array<{ collection: string }>
 ): Promise<Map<string, string[] | null>> {
   const out = new Map<string, string[] | null>()
   await Promise.all(
@@ -256,7 +388,7 @@ async function allowedByCollection(
 
 /** A hit's label: the collection's display template over the row, else the matched text. */
 function hitLabel(
-  p: PlanEntry | undefined,
+  p: Pick<PlanEntry, 'template'> | undefined,
   item: Record<string, unknown>,
   matched: string
 ): string {
@@ -280,33 +412,161 @@ function matchedText(p: PlanEntry, item: Record<string, unknown>, cols = p.colum
   return String(item.id ?? '')
 }
 
-async function searchRecords(
+const UPDATED_COLS = ['date_updated', 'updated_at', 'modified_at', 'date_modified']
+const CREATED_BY_COLS = ['user_created', 'created_by']
+
+type LabelOf = (collection: string, field: string) => string
+
+const titleCase = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+function fieldLabelMap(rows: Array<{ collection: string; field: string; label?: string | null }>) {
+  const m = new Map<string, string>()
+  for (const r of rows) {
+    const l = String(r.label ?? '').trim()
+    if (l) m.set(`${r.collection}.${r.field}`, l)
+  }
+  return (collection: string, field: string) =>
+    m.get(`${collection}.${field}`) ?? (field === 'id' ? 'ID' : titleCase(field))
+}
+
+/**
+ * One row as the caller read it → a hit, or null when none of `cols` holds the
+ * phrase (or a synonym form). Label, snippet and matched value come from the
+ * caller's row, never the raw scan: a column they may not read is absent there.
+ * Exported for tests.
+ */
+export function toHit(
+  p: Pick<PlanEntry, 'collection' | 'display_name' | 'template'>,
+  item: Record<string, unknown>,
+  cols: string[],
+  forms: string[],
+  labelOf: LabelOf
+): Found | null {
+  let best: { col: string; value: string; tier: MatchTier } | null = null
+  const order: MatchTier[] = ['equal', 'prefix', 'word', 'contains']
+  for (const c of cols) {
+    const t = matchTier(item[c], forms)
+    if (t && (!best || order.indexOf(t) < order.indexOf(best.tier)))
+      best = { col: c, value: String(item[c]), tier: t }
+  }
+  if (!best) return null
+  return withRowFacts(
+    {
+      collection: p.collection,
+      display_name: p.display_name ?? null,
+      id: item.id,
+      label: hitLabel(p, item, best.value),
+      snippet: best.value.slice(0, 120),
+      matched_field: best.col,
+      matched_label: labelOf(p.collection, best.col),
+      matched_value: best.value.slice(0, 80),
+      tier: best.tier
+    },
+    item
+  )
+}
+
+function withRowFacts(h: Found, item: Record<string, unknown>): Found {
+  for (const c of UPDATED_COLS) {
+    const v = item[c]
+    if (v != null && typeof v !== 'object') {
+      h.updated_at = String(v)
+      break
+    }
+    if (v instanceof Date) {
+      h.updated_at = v.toISOString()
+      break
+    }
+  }
+  for (const c of CREATED_BY_COLS) {
+    const v = item[c]
+    if (v != null && typeof v !== 'object') {
+      h.createdBy = String(v)
+      break
+    }
+  }
+  return h
+}
+
+/** Candidate ids per collection → the rows the caller may read (RBAC, row filters,
+ *  User Scopes), one readItems per collection. Unreadable = nothing. */
+async function confirmRows(
   user: User,
-  readable: string[],
+  byCollection: Map<string, string[]>
+): Promise<Map<string, Array<Record<string, unknown>>>> {
+  const out = new Map<string, Array<Record<string, unknown>>>()
+  await Promise.all(
+    [...byCollection.entries()].map(async ([collection, ids]) => {
+      if (ids.length === 0) return
+      try {
+        const { data } = await readItems(user, collection, {
+          filter: { id: { _in: ids } },
+          limit: ids.length,
+          count: false
+        })
+        out.set(collection, data as Array<Record<string, unknown>>)
+      } catch {
+        /* collection unreadable for this user — drop silently */
+      }
+    })
+  )
+  return out
+}
+
+function groupCandidates(rows: Array<{ c: string; id: string }>, cap: number) {
+  const by = new Map<string, string[]>()
+  for (const r of rows) {
+    const list = by.get(r.c) ?? []
+    if (list.length < cap && !list.includes(r.id)) list.push(r.id)
+    by.set(r.c, list)
+  }
+  return by
+}
+
+/** Run batched raw candidate statements side by side; a failed batch drops the plan cache. */
+async function runBatches(
+  stmts: Array<{ sql: string; bindings: unknown[] }>
+): Promise<Array<{ c: string; id: string }>> {
+  let rows: Array<{ c: string; id: string }> = []
+  const settled = await Promise.allSettled(
+    stmts.map((s) => db.raw(s.sql, s.bindings as never) as Promise<typeof rows>)
+  )
+  for (const r of settled) {
+    if (r.status === 'fulfilled') rows = rows.concat(r.value)
+    else planCache = null // stale plan (dropped table/column) — rebuild next request
+  }
+  return rows
+}
+
+interface SearchCtx {
+  user: User
+  labelsOnly: boolean
+  allowed: Map<string, string[] | null>
+  labelOf: LabelOf
+}
+
+/** Text pass: the union of contains-LIKEs (the original omnisearch), as Found hits. */
+async function searchUnion(
+  ctx: SearchCtx,
+  candidates: PlanEntry[],
   q: string,
-  labelsOnly = false
-): Promise<RecordHit[]> {
-  const readableSet = new Set(readable)
-  const readablePlan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
-  const allowed = await allowedByCollection(user, readablePlan)
-  const colsOf = (p: PlanEntry) => searchColumns(p, labelsOnly, allowed.get(p.collection))
-  const plan = readablePlan.filter((p) => colsOf(p).length > 0)
+  phrases: string[],
+  perCollection: number
+): Promise<Found[]> {
+  const colsOf = (p: PlanEntry) => searchColumns(p, ctx.labelsOnly, ctx.allowed.get(p.collection))
+  const plan = candidates.filter((p) => p.textSearchable && colsOf(p).length > 0)
   if (plan.length === 0) return []
 
   // Search synonyms (#1581): the phrase as typed plus its synonym forms. With
   // none (the usual case) the statement is exactly as before; with some, the
   // forms are bound ONCE in a CTE every union member reads, so the parameter
   // count does not multiply by columns × collections.
-  const phrases = await searchPhrases(q).catch(() => [q])
   const likes = phrases.map((p) => `%${escapeLike(p)}%`)
   const statement = (batch: PlanEntry[]) => {
     const parts: string[] = []
     const bindings: string[] = []
     for (const p of batch) {
       const cols = colsOf(p)
-      const casts = cols.map((c) => `CAST([${c}] AS nvarchar(200))`)
-      // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
-      const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
       const wheres =
         likes.length > 1
           ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
@@ -316,7 +576,7 @@ async function searchRecords(
       // equal to the phrase, then one starting with it, then the newest.
       const rank = `CASE WHEN ${cols.map((c) => `[${c}] = ?`).join(' OR ')} THEN 0 WHEN ${cols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 2 END`
       parts.push(
-        `SELECT * FROM (SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
+        `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
       )
       if (likes.length === 1) bindings.push(...cols.map(() => likes[0]))
       bindings.push(...cols.map(() => q), ...cols.map(() => `${escapeLike(q)}%`))
@@ -333,87 +593,466 @@ async function searchRecords(
   // units and the two line tables are 0.4–0.6 s each), so they go out as a few
   // row-balanced statements side by side instead — the answer waits for the
   // slowest batch, and a search holds at most SEARCH_BATCHES connections.
-  let candidates: Array<{ c: string; id: string; label: string | null }> = []
-  const settled = await Promise.allSettled(
-    balanceByRows(plan, SEARCH_BATCHES).map((batch) => {
-      const { sql, bindings } = statement(batch)
-      return db.raw(sql, bindings) as Promise<typeof candidates>
-    })
-  )
-  for (const r of settled) {
-    if (r.status === 'fulfilled') candidates = candidates.concat(r.value)
-    else planCache = null // stale plan (dropped table/column) — rebuild next request
-  }
-
-  const byCollection = new Map<string, string[]>()
-  for (const cand of candidates) {
-    const list = byCollection.get(cand.c) ?? []
-    if (list.length < PER_COLLECTION) list.push(cand.id)
-    byCollection.set(cand.c, list)
-  }
+  const candidatesRows = await runBatches(balanceByRows(plan, SEARCH_BATCHES).map(statement))
+  const rows = await confirmRows(ctx.user, groupCandidates(candidatesRows, perCollection))
 
   const planByName = new Map(plan.map((p) => [p.collection, p]))
-  const results: RecordHit[] = []
-  await Promise.all(
-    [...byCollection.entries()].map(async ([collection, ids]) => {
-      try {
-        const p = planByName.get(collection)
-        const { data: items } = await readItems(user, collection, {
-          filter: { id: { _in: ids } },
-          limit: ids.length
-        })
-        // Label and snippet come from the row as the caller READ it (field
-        // permissions applied), never from the raw scan: a hit found only through
-        // a column the caller may not read is dropped — showing it would say what
-        // that column holds.
-        const forms = phrases.map((ph) => ph.toLowerCase())
-        const cols = p ? colsOf(p) : []
-        for (const item of items as Array<Record<string, unknown>>) {
-          const seen = cols
-            .map((c) => item[c])
-            .find(
-              (v) =>
-                v != null &&
-                typeof v !== 'object' &&
-                forms.some((f) => String(v).toLowerCase().includes(f))
-            )
-          if (seen === undefined) continue
-          results.push({
-            collection,
-            display_name: p?.display_name ?? null,
-            id: item.id,
-            label: hitLabel(p, item, String(seen)),
-            snippet: String(seen).slice(0, 120)
-          })
-        }
-      } catch {
-        /* collection unreadable for this user — drop silently */
-      }
-    })
-  )
-
-  const lower = q.toLowerCase()
-  if (labelsOnly) {
-    // What the person sees must hold what they typed (or a synonym of it).
-    const forms = phrases.map((ph) => ph.toLowerCase())
-    for (let i = results.length - 1; i >= 0; i--) {
-      const label = results[i].label.toLowerCase()
-      if (!forms.some((f) => label.includes(f))) results.splice(i, 1)
+  const forms = phrases.map((ph) => ph.toLowerCase())
+  const out: Found[] = []
+  for (const [collection, items] of rows) {
+    const p = planByName.get(collection)
+    if (!p) continue
+    for (const item of items) {
+      const hit = toHit(p, item, colsOf(p), forms, ctx.labelOf)
+      if (!hit) continue
+      // labels=1: what the person sees must hold what they typed (or a synonym
+      // of it) — unless it matched a configured label search field, which the
+      // hit names (matched_label / matched_value) so the person sees why.
+      if (
+        ctx.labelsOnly &&
+        !forms.some((f) => hit.label.toLowerCase().includes(f)) &&
+        !p.labelSearch.includes(hit.matched_field ?? '')
+      )
+        continue
+      out.push(hit)
     }
   }
-  const tier = (r: { id: unknown; label: string; snippet: string }) => {
-    const label = r.label.toLowerCase()
-    const snippet = r.snippet.toLowerCase()
-    if (label === lower || snippet === lower || String(r.id) === q) return 0
-    if (label.startsWith(lower) || snippet.startsWith(lower)) return 1
-    return 2
+  return out
+}
+
+/**
+ * Exact-id pass (item 1): an id-ish query equal to a business-id column of a
+ * collection (string `*_id` / `*_number`, numeric `*_number` for digits), or —
+ * scoped — the record's own `id`. Readable columns only; every candidate is
+ * re-read as the caller and must still show that exact value. Exported for tests
+ * of the statement shape via `exactStatement`.
+ */
+export function exactStatement(
+  batch: Array<{ collection: string; cols: string[]; nums: string[] }>,
+  q: string
+): { sql: string; bindings: unknown[] } | null {
+  const parts: string[] = []
+  const bindings: unknown[] = []
+  const digits = /^\d{1,15}$/.test(q)
+  for (const b of batch) {
+    const nums = digits ? b.nums : []
+    const preds = [...b.cols.map((c) => `[${c}] = ?`), ...nums.map((c) => `[${c}] = ?`)]
+    if (preds.length === 0) continue
+    parts.push(
+      `SELECT * FROM (SELECT TOP 2 '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${preds.join(' OR ')}) AS [x_${b.collection}]`
+    )
+    bindings.push(...b.cols.map(() => q), ...nums.map(() => Number(q)))
   }
-  results.sort((a, b) => {
-    const t = tier(a) - tier(b)
-    if (t !== 0) return t
-    return a.label.length - b.label.length
+  return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
+}
+
+async function searchExact(
+  ctx: SearchCtx,
+  candidates: PlanEntry[],
+  q: string,
+  scope: string | null
+): Promise<Found[]> {
+  const specs = candidates
+    .map((p) => {
+      const allowed = ctx.allowed.get(p.collection)
+      return {
+        p,
+        collection: p.collection,
+        rows: p.rows,
+        cols: readableOnly(p.idColumns, allowed),
+        nums: readableOnly(p.numIdColumns, allowed)
+      }
+    })
+    .filter((s) => s.cols.length + s.nums.length > 0)
+  const stmts = balanceByRows(specs, 2)
+    .map((batch) => exactStatement(batch, q))
+    .filter((s): s is { sql: string; bindings: unknown[] } => s != null)
+  const [found, byId] = await Promise.all([
+    runBatches(stmts),
+    // Scoped: the record's own id. A primary-key seek, so any table size; its
+    // own statement — an id type clash (uuid vs digits) fails only this one.
+    scope && candidates.some((p) => p.collection === scope)
+      ? (
+          db.raw(
+            `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
+            [/^\d{1,15}$/.test(q) ? Number(q) : q]
+          ) as Promise<Array<{ c: string; id: string }>>
+        ).catch(() => [])
+      : Promise.resolve([] as Array<{ c: string; id: string }>)
+  ])
+  const rows = await confirmRows(ctx.user, groupCandidates([...byId, ...found], 2))
+  const lower = q.toLowerCase()
+  const out: Found[] = []
+  for (const [collection, items] of rows) {
+    const spec = specs.find((s) => s.collection === collection)
+    const p = spec?.p ?? candidates.find((c) => c.collection === collection)
+    if (!p) continue
+    const idReadable = readableOnly(['id'], ctx.allowed.get(collection)).length > 0
+    for (const item of items) {
+      let col = [...(spec?.cols ?? []), ...(spec?.nums ?? [])].find(
+        (c) => item[c] != null && String(item[c]).toLowerCase() === lower
+      )
+      if (!col && scope === collection && idReadable && String(item.id).toLowerCase() === lower)
+        col = 'id'
+      if (!col) continue
+      const value = String(item[col])
+      out.push(
+        withRowFacts(
+          {
+            collection,
+            display_name: p.display_name,
+            id: item.id,
+            label: hitLabel(p, item, value),
+            snippet: value.slice(0, 120),
+            matched_field: col,
+            matched_label: ctx.labelOf(collection, col),
+            matched_value: value.slice(0, 80),
+            exact: true,
+            tier: 'exact'
+          },
+          item
+        )
+      )
+    }
+  }
+  return out
+}
+
+/** The typo pass statement (item 4): rows where enough 3-letter chunks of the
+ *  query appear in a name column, best first. Exported for tests. */
+export function fuzzyStatement(
+  batch: Array<{ collection: string; cols: string[] }>,
+  q: string
+): { sql: string; bindings: string[] } | null {
+  const { chunks, need } = fuzzyChunks(q)
+  if (chunks.length < 2) return null
+  const parts: string[] = []
+  const bindings: string[] = []
+  for (const b of batch) {
+    if (b.cols.length === 0) continue
+    const sums = b.cols.map(
+      (c, i) =>
+        `(${chunks.map(() => `CASE WHEN t.[${c}] LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
+    )
+    const where = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
+    const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
+    parts.push(
+      `SELECT * FROM (SELECT TOP ${FUZZY_PER_COLLECTION} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
+    )
+    for (const _c of b.cols) bindings.push(...chunks.map((ch) => `%${escapeLike(ch)}%`))
+  }
+  return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
+}
+
+async function searchFuzzy(ctx: SearchCtx, candidates: PlanEntry[], q: string): Promise<Found[]> {
+  const specs = candidates
+    .filter((p) => p.textSearchable && p.rows <= FUZZY_ROW_BUDGET)
+    .map((p) => {
+      const cols = searchColumns(p, ctx.labelsOnly, ctx.allowed.get(p.collection))
+      // Name-like columns only: the label's, else the first search column.
+      const named = cols.filter((c) => p.labelColumns.includes(c) || NAMEISH.includes(c))
+      return {
+        p,
+        collection: p.collection,
+        rows: p.rows,
+        cols: (named.length ? named : cols).slice(0, 2)
+      }
+    })
+    .filter((s) => s.cols.length > 0)
+  const stmts = balanceByRows(specs, SEARCH_BATCHES)
+    .map((batch) => fuzzyStatement(batch, q))
+    .filter((s): s is { sql: string; bindings: string[] } => s != null)
+  if (stmts.length === 0) return []
+  const rows = await confirmRows(
+    ctx.user,
+    groupCandidates(await runBatches(stmts), FUZZY_PER_COLLECTION)
+  )
+  const out: Found[] = []
+  for (const [collection, items] of rows) {
+    const spec = specs.find((s) => s.collection === collection)
+    if (!spec) continue
+    for (const item of items) {
+      let best: { col: string; value: string; sim: number } | null = null
+      for (const c of spec.cols) {
+        const v = item[c]
+        if (v == null || typeof v === 'object') continue
+        const sim = similarity(q, String(v))
+        if (!best || sim > best.sim) best = { col: c, value: String(v), sim }
+      }
+      if (!best || best.sim < FUZZY_MIN_SIMILARITY) continue
+      out.push(
+        withRowFacts(
+          {
+            collection,
+            display_name: spec.p.display_name,
+            id: item.id,
+            label: hitLabel(spec.p, item, best.value),
+            snippet: best.value.slice(0, 120),
+            matched_field: best.col,
+            matched_label: ctx.labelOf(collection, best.col),
+            matched_value: best.value.slice(0, 80),
+            tier: 'fuzzy',
+            similarity: best.sim
+          },
+          item
+        )
+      )
+    }
+  }
+  return out
+}
+
+/** The items-service filter for "any search column contains the phrase (or a synonym)". */
+async function matchFilter(cols: string[], q: string): Promise<Record<string, unknown>> {
+  const phrases = await searchPhrases(q).catch(() => [q])
+  return phraseFilter(cols, phrases)
+}
+
+const phraseFilter = (cols: string[], phrases: string[]) => ({
+  _or: phrases.flatMap((ph) => cols.map((c) => ({ [c]: { _contains: ph } })))
+})
+
+/** The text filter AND the field filters, for the items service. Exported for tests. */
+export function combinedFilter(
+  textFilter: Record<string, unknown> | null,
+  clauses: Array<Record<string, unknown>>
+): Record<string, unknown> {
+  const all = [...(textFilter ? [textFilter] : []), ...clauses]
+  return all.length === 1 ? all[0] : { _and: all }
+}
+
+const FILTER_CONCURRENCY = 4
+
+/**
+ * Filtered pass (items 2/3/16): each target collection read through the items
+ * service as the caller with the text filter AND the field filters — RBAC, row
+ * filters, User Scopes and field permissions all apply; the clauses only name
+ * fields the caller may read (planFilters got readable fields only).
+ */
+async function searchFiltered(
+  ctx: SearchCtx,
+  plan: PlanEntry[],
+  targets: Map<string, Array<Record<string, unknown>>>,
+  text: string,
+  phrases: string[],
+  chips: FilterChip[],
+  perCollection: number
+): Promise<Found[]> {
+  const byName = new Map(plan.map((p) => [p.collection, p]))
+  const list = [...targets.entries()]
+    .map(([c, clauses]) => ({ p: byName.get(c), clauses }))
+    .filter((t): t is { p: PlanEntry; clauses: Array<Record<string, unknown>> } => !!t.p)
+    .sort((a, b) => a.p.rows - b.p.rows)
+    .slice(0, FILTER_COLLECTIONS)
+  const forms = phrases.map((f) => f.toLowerCase())
+  const out: Found[] = []
+  for (let i = 0; i < list.length; i += FILTER_CONCURRENCY) {
+    await Promise.all(
+      list.slice(i, i + FILTER_CONCURRENCY).map(async ({ p, clauses }) => {
+        const cols = searchColumns(p, ctx.labelsOnly, ctx.allowed.get(p.collection))
+        // Text with no column to match it on cannot match: the collection sits out.
+        if (text && cols.length === 0) return
+        try {
+          const r = await readItems(ctx.user, p.collection, {
+            filter: combinedFilter(text ? phraseFilter(cols, phrases) : null, clauses),
+            sort: ['-id'],
+            limit: perCollection,
+            count: false
+          })
+          for (const item of r.data as Array<Record<string, unknown>>) {
+            if (text) {
+              const hit = toHit(p, item, cols, forms, ctx.labelOf)
+              if (hit) out.push(hit)
+              continue
+            }
+            // Filters only: the hit is "matched" by its first filter field.
+            const f = chips.find((c) => c.field in item)?.field
+            const value = f != null && item[f] != null ? String(item[f]) : ''
+            const label = hitLabel(
+              p,
+              item,
+              matchedText(p, item, p.columns.length ? p.columns : ['id'])
+            )
+            out.push(
+              withRowFacts(
+                {
+                  collection: p.collection,
+                  display_name: p.display_name,
+                  id: item.id,
+                  label,
+                  snippet: (value || label).slice(0, 120),
+                  ...(f ? { matched_field: f, matched_label: ctx.labelOf(p.collection, f) } : {}),
+                  ...(value ? { matched_value: value.slice(0, 80) } : {}),
+                  tier: 'contains'
+                },
+                item
+              )
+            )
+          }
+        } catch {
+          /* unreadable, or the filter was refused — no hits from it */
+        }
+      })
+    )
+  }
+  return out
+}
+
+/** Merge passes: one hit per record, the best tier wins (exact first). Exported for tests. */
+export function mergeFound(...lists: Found[][]): Found[] {
+  const order: MatchTier[] = ['exact', 'equal', 'prefix', 'word', 'contains', 'fuzzy']
+  const by = new Map<string, Found>()
+  for (const list of lists) {
+    for (const h of list) {
+      const k = hitKey(h.collection, h.id)
+      const prev = by.get(k)
+      if (!prev || order.indexOf(h.tier) < order.indexOf(prev.tier)) by.set(k, h)
+    }
+  }
+  return [...by.values()]
+}
+
+/** Score every hit with the caller's signals and drop the internals. Exported for tests. */
+export function finishHits(
+  found: Found[],
+  signals: {
+    userId: string
+    learned: Map<string, number>
+    recent: Set<string>
+    owned: Set<string>
+  },
+  cap = RECORD_CAP
+): RecordHit[] {
+  const me = signals.userId.toLowerCase()
+  const scored = found.map((h) => {
+    const k = hitKey(h.collection, h.id)
+    const mine =
+      (h.createdBy != null && h.createdBy.toLowerCase() === me) ||
+      signals.recent.has(k) ||
+      signals.owned.has(k)
+    const { tier, similarity: sim, createdBy: _c, ...hit } = h
+    return {
+      ...hit,
+      ...(mine ? { mine: true } : {}),
+      score: scoreHit({ tier, similarity: sim, mine, learned: signals.learned.get(k) ?? 0 })
+    } as RecordHit
   })
-  return results.slice(0, RECORD_CAP)
+  return rankHits(scored).slice(0, cap)
+}
+
+interface RecordSearchResult {
+  records: RecordHit[]
+  exact: RecordHit | null
+  chips: FilterChip[]
+  text: string
+  suggestions: string[]
+}
+
+/** Each candidate collection's readable fields, as the query parser wants them. */
+function readableMetas(
+  plan: Array<{ collection: string }>,
+  fieldRows: FieldRow[],
+  allowed: Map<string, string[] | null>
+): Map<string, FieldMeta[]> {
+  const by = new Map<string, FieldMeta[]>()
+  for (const p of plan) by.set(p.collection, [])
+  for (const f of fieldRows) {
+    const list = by.get(f.collection)
+    if (!list) continue
+    const a = allowed.get(f.collection)
+    if (a != null && !a.includes('*') && !a.includes(f.field)) continue
+    list.push({ field: f.field, label: f.label ?? null, type: String(f.type ?? '') })
+  }
+  return by
+}
+
+/** Everything the record half of one search does. */
+async function searchRecords(
+  user: User,
+  readable: string[],
+  parsed: ParsedQuery,
+  labelsOnly: boolean,
+  fieldRows: FieldRow[],
+  /** The query as typed — what the palette logs, so what learned ranking keys on. */
+  raw: string
+): Promise<RecordSearchResult> {
+  const readableSet = new Set(readable)
+  const scope = parsed.scope && parsed.scope !== PEOPLE_SCOPE ? parsed.scope : null
+  let plan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
+  if (scope) plan = plan.filter((p) => p.collection === scope)
+  const empty = { records: [], exact: null, chips: [], text: parsed.text, suggestions: [] }
+  if (plan.length === 0) return empty
+  const allowed = await allowedByCollection(user, plan)
+  const ctx: SearchCtx = { user, labelsOnly, allowed, labelOf: fieldLabelMap(fieldRows) }
+
+  const filters: FilterPlan = planFilters(parsed, readableMetas(plan, fieldRows, allowed), {
+    scope
+  })
+  const text = filters.text
+  const filtering = filters.targets != null
+  // Asked to filter by fields no readable collection has: nothing matches.
+  if (!filtering && hasFilterTokens(parsed) && filters.chips.length === 0 && text.length < 2)
+    return { ...empty, text }
+  const phrases = text.length >= 2 ? await searchPhrases(text).catch(() => [text]) : []
+  const per = scope ? RECORD_CAP : PER_COLLECTION
+
+  const [main, exact] = await Promise.all([
+    filtering
+      ? searchFiltered(
+          ctx,
+          plan,
+          filters.targets as Map<string, Array<Record<string, unknown>>>,
+          text,
+          phrases,
+          filters.chips,
+          per
+        )
+      : text.length >= 2
+        ? searchUnion(ctx, plan, text, phrases, per)
+        : Promise.resolve([] as Found[]),
+    !filtering && looksLikeId(text)
+      ? searchExact(ctx, plan, text, scope)
+      : Promise.resolve([] as Found[])
+  ])
+  // Typo pass only when the exact and contains passes found little.
+  const fuzzy =
+    !filtering && main.length + exact.length < 3 && wantsFuzzy(text)
+      ? await searchFuzzy(ctx, plan, text).catch(() => [] as Found[])
+      : []
+  const found = mergeFound(exact, main, fuzzy)
+
+  const byCollection = new Map<string, string[]>()
+  for (const h of found) {
+    const list = byCollection.get(h.collection) ?? []
+    list.push(String(h.id))
+    byCollection.set(h.collection, list)
+  }
+  const [learned, recent, owned] = await Promise.all([
+    learnedOpens(raw).catch(() => new Map<string, number>()),
+    recentOpens(String(user.id)).catch(() => new Set<string>()),
+    ownedAmong(String(user.id), byCollection).catch(() => new Set<string>())
+  ])
+  const records = finishHits(found, { userId: String(user.id), learned, recent, owned })
+  const exactHits = records.filter((r) => r.exact)
+  // "Did you mean": only when nothing but near spellings came back.
+  const suggestions =
+    main.length + exact.length === 0 && fuzzy.length > 0
+      ? [
+          ...new Set(
+            [...fuzzy]
+              .sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+              .map((h) => (h.matched_value ?? '').trim())
+              .filter((v) => v && v.toLowerCase() !== text.toLowerCase())
+          )
+        ].slice(0, 3)
+      : []
+  return {
+    records,
+    exact: exactHits.length === 1 ? exactHits[0] : null,
+    chips: filters.chips,
+    text,
+    suggestions
+  }
 }
 
 // ─── People ───────────────────────────────────────────────────────────────────
@@ -522,14 +1161,48 @@ function matchStatic(
 
 // ─── One collection's matches (the search's collection tabs) ─────────────────
 
-/** The items-service filter for "any search column contains the phrase (or a synonym)". */
-async function matchFilter(cols: string[], q: string): Promise<Record<string, unknown>> {
-  const phrases = await searchPhrases(q).catch(() => [q])
-  return { _or: phrases.flatMap((ph) => cols.map((c) => ({ [c]: { _contains: ph } }))) }
-}
-
 const COUNT_CONCURRENCY = 4
 export const PAGE_MAX = 50
+
+/** One collection's readable fields with labels (counts / records tabs). */
+async function readableFieldMetas(
+  collection: string,
+  allowed: string[] | null
+): Promise<FieldRow[]> {
+  const rows = (await db('nivaro_fields')
+    .where({ collection })
+    .select('collection', 'field', 'type', 'hidden', 'sort', 'label')
+    .catch(() => [])) as FieldRow[]
+  return allowed == null || allowed.includes('*')
+    ? rows
+    : rows.filter((r) => allowed.includes(r.field))
+}
+
+/** The filter for one collection's tab: the text (if any) AND the field filters the
+ *  query names (null = this collection is out of the search). */
+async function tabFilter(
+  p: PlanEntry,
+  parsed: ParsedQuery,
+  labelsOnly: boolean,
+  allowed: string[] | null
+): Promise<{ filter: Record<string, unknown>; cols: string[]; text: string } | null> {
+  const fields = await readableFieldMetas(p.collection, allowed)
+  const metas = new Map([
+    [
+      p.collection,
+      fields.map((f) => ({ field: f.field, label: f.label ?? null, type: String(f.type ?? '') }))
+    ]
+  ])
+  // A tab is one collection: its amounts and dates resolve there, like a scope.
+  const plan = planFilters(parsed, metas, { scope: p.collection })
+  const cols = searchColumns(p, labelsOnly, allowed)
+  const clauses = plan.targets?.get(p.collection) ?? []
+  const text = plan.text
+  if (text.length >= 2 && cols.length === 0) return null
+  if (text.length < 2 && clauses.length === 0) return null
+  const textFilter = text.length >= 2 ? await matchFilter(cols, text) : null
+  return { filter: combinedFilter(textFilter, clauses), cols, text }
+}
 
 /** How many records of each collection match, counted AS THE CALLER (RBAC, row filters,
  *  User Scopes). A collection whose count fails is left out. Exported for tests. */
@@ -540,21 +1213,25 @@ export async function countMatches(
   collections: string[],
   labelsOnly = false
 ): Promise<Array<{ collection: string; display_name: string | null; count: number }>> {
+  const parsed = parseSearchQuery(q, await loadSearchScopes())
   const readableSet = new Set(readable)
-  const listed = (await buildSearchPlan()).filter(
-    (p) => readableSet.has(p.collection) && collections.includes(p.collection)
+  const plan = (await buildSearchPlan()).filter(
+    (p) =>
+      readableSet.has(p.collection) &&
+      collections.includes(p.collection) &&
+      (!parsed.scope || parsed.scope === p.collection)
   )
-  const allowed = await allowedByCollection(user, listed)
-  const plan = listed.filter(
-    (p) => searchColumns(p, labelsOnly, allowed.get(p.collection)).length > 0
-  )
+  const allowed = await allowedByCollection(user, plan)
   const out: Array<{ collection: string; display_name: string | null; count: number }> = []
   for (let i = 0; i < plan.length; i += COUNT_CONCURRENCY) {
     await Promise.all(
       plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
         try {
+          const f = await tabFilter(p, parsed, labelsOnly, allowed.get(p.collection) ?? null)
+          // A text-only search never scans a table over the row budget.
+          if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return
           const r = await readItems(user, p.collection, {
-            filter: await matchFilter(searchColumns(p, labelsOnly, allowed.get(p.collection)), q),
+            filter: f.filter,
             fields: ['id'],
             limit: 1
           })
@@ -578,24 +1255,31 @@ export async function searchCollectionPage(
   offset: number,
   limit: number,
   labelsOnly = false
-): Promise<{ data: RecordHit[]; total: number | null }> {
+): Promise<{ data: RecordHit[]; total: number | null; query?: unknown }> {
   if (!readable.includes(collection)) return { data: [], total: 0 }
   const p = (await buildSearchPlan()).find((x) => x.collection === collection)
   if (!p) return { data: [], total: 0 }
-  const cols = searchColumns(
-    p,
-    labelsOnly,
-    await getAllowedFields(user, 'read', collection).catch(() => [])
-  )
-  if (cols.length === 0) return { data: [], total: 0 }
+  const parsed = parseSearchQuery(q, await loadSearchScopes())
+  if (parsed.scope && parsed.scope !== collection) return { data: [], total: 0 }
+  const allowed = await getAllowedFields(user, 'read', collection).catch(() => [])
+  const f = await tabFilter(p, parsed, labelsOnly, allowed)
+  if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return { data: [], total: 0 }
   const r = await readItems(user, collection, {
-    filter: await matchFilter(cols, q),
+    filter: f.filter,
     sort: ['-id'],
     offset,
     limit
   })
+  const fieldRows = await readableFieldMetas(collection, allowed)
+  const labelOf = fieldLabelMap(fieldRows)
+  const forms = f.text.length >= 2 ? await searchPhrases(f.text).catch(() => [f.text]) : []
   const data = (r.data as Array<Record<string, unknown>>).map((item) => {
-    const matched = matchedText(p, item, cols)
+    const hit = forms.length ? toHit(p, item, f.cols, forms, labelOf) : null
+    if (hit) {
+      const { tier: _t, similarity: _s, createdBy: _c, ...rest } = hit
+      return rest as RecordHit
+    }
+    const matched = matchedText(p, item, f.cols.length ? f.cols : p.columns)
     return {
       collection,
       display_name: p.display_name,
@@ -626,29 +1310,58 @@ async function readableCollections(user: User): Promise<string[]> {
 export async function globalSearchRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
-  // GET /?q= — search records, admin pages, and quick actions
+  // GET /?q= — search records, admin pages, and quick actions. The query may carry
+  // a prefix scope (`wf: …`, `@…`), field filters (`status:open`), amounts and
+  // dates (services/search-query.ts); `data.query` says how it was read.
   app.get('/', async (req, reply) => {
     const { q: rawQ, labels } = req.query as { q?: string; labels?: string }
-    const q = (rawQ ?? '').trim()
+    const raw = (rawQ ?? '').trim().slice(0, 300)
     // labels=1: match only what each record's label shows (the EFP palette).
     const labelsOnly = labels === '1' || labels === 'true'
+    const parsed = parseSearchQuery(raw, await loadSearchScopes().catch(() => ({})))
+    const q = parsed.text
+    const query: { text: string; scope: string | null; filters: FilterChip[] } = {
+      text: q,
+      scope: parsed.scopeKey,
+      filters: []
+    }
 
+    const scoped = parsed.scope != null
     const forms = q.length >= 2 ? await searchPhrases(q).catch(() => [q]) : [q]
-    const pages = q ? matchStatic(ADMIN_PAGES, forms, 8) : []
-    const actions = q ? matchStatic(QUICK_ACTIONS, forms, 4) : []
+    // Pages and actions answer unscoped words only — `wf: settings` means workflows.
+    const pages = q && !scoped && !hasFilterTokens(parsed) ? matchStatic(ADMIN_PAGES, forms, 8) : []
+    const actions =
+      q && !scoped && !hasFilterTokens(parsed) ? matchStatic(QUICK_ACTIONS, forms, 4) : []
+    const base = {
+      records: [] as RecordHit[],
+      people: [] as PersonHit[],
+      pages,
+      actions,
+      semantic: [] as Array<{ collection: string; id: unknown; label: string; snippet: string }>,
+      exact: null as RecordHit | null,
+      suggestions: [] as string[],
+      query
+    }
 
-    if (q.length < 2) {
-      return reply.send({ data: { records: [], people: [], pages, actions } })
+    // `@jane` — people only.
+    if (parsed.scope === PEOPLE_SCOPE) {
+      const people = q.length >= 1 ? await searchPeople(q, req.isAdmin === true) : []
+      // [A2 hook: extra/commands/people] — people-scope answers get A2's people fields here too.
+      return reply.send({ data: { ...base, people } })
+    }
+
+    if (q.length < 2 && !hasFilterTokens(parsed)) {
+      return reply.send({ data: base })
     }
 
     // Readable collections in one pass (avoid per-collection can() round-trips)
     const user = req.user!
     const readable = await readableCollections(user as User)
-    // Field metadata — the semantic block below still labels via pickSearchFields
+    // Field metadata — filters, matched-field labels, and the semantic block's labels
     const fieldRows = readable.length
       ? ((await db('nivaro_fields')
           .whereIn('collection', readable)
-          .select('collection', 'field', 'type', 'hidden', 'sort')) as FieldRow[])
+          .select('collection', 'field', 'type', 'hidden', 'sort', 'label')) as FieldRow[])
       : []
 
     const byCollection = new Map<string, FieldRow[]>()
@@ -658,16 +1371,21 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       byCollection.set(f.collection, list)
     }
 
-    const [records, people] = await Promise.all([
-      searchRecords(user as User, readable, q, labelsOnly),
-      searchPeople(q, req.isAdmin === true)
+    const [found, people] = await Promise.all([
+      searchRecords(user as User, readable, parsed, labelsOnly, fieldRows, raw),
+      !scoped && !hasFilterTokens(parsed) && q.length >= 2
+        ? searchPeople(q, req.isAdmin === true)
+        : Promise.resolve([] as PersonHit[])
     ])
+    const records = found.records
+    query.text = found.text
+    query.filters = found.chips
 
     // Semantic hits — meaning-based matches from the embeddings index, deduped
     // against keyword records. Only collections that are both indexed and
     // readable are searched; label resolution goes through a direct id read.
     let semantic: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
-    if (q.length >= 4) {
+    if (q.length >= 4 && !scoped && !hasFilterTokens(parsed)) {
       try {
         const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
         const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
@@ -711,8 +1429,75 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       }
     }
 
-    return reply.send({ data: { records, people, pages, actions, semantic } })
+    const data: Record<string, unknown> = {
+      ...base,
+      records,
+      people,
+      semantic,
+      exact: found.exact,
+      suggestions: found.suggestions,
+      query
+    }
+    // [A2 hook: extra/commands/people] — merge `extra`, `commands` and the extra
+    // people fields (role_name, zones, title) into `data` here, before the send.
+    return reply.send({ data })
   })
+
+  // GET /preview?collection=&id= — the palette's preview pane, read as the caller.
+  app.get('/preview', async (req, reply) => {
+    const { collection, id } = req.query as { collection?: string; id?: string }
+    const c = (collection ?? '').trim()
+    const item = (id ?? '').trim()
+    if (!IDENT_RE.test(c) || !item || item.length > 100)
+      return reply.code(400).send({ error: 'collection and id are required' })
+    if (c.toLowerCase().startsWith('nivaro_') || c.toLowerCase().startsWith('directus_'))
+      return reply.code(404).send({ error: 'Not found' })
+    const data = await buildSearchPreview(req.user as User, c, item, req.isAdmin === true)
+    if (!data) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data })
+  })
+
+  // POST /click {q, collection, id, position, log_id?} — what was opened from a
+  // search; feeds learned ranking (services/search-signals.ts).
+  app.post('/click', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const res = await recordClick(String(req.user!.id), body).catch(() => ({
+      ok: false,
+      log_id: null
+    }))
+    return reply.send({ data: res })
+  })
+
+  // Saved searches — the caller's own, in preferences.saved_searches.
+  app.get('/saved', async (req, reply) => {
+    return reply.send({ data: await listSavedSearches(String(req.user!.id)) })
+  })
+
+  app.post('/saved', async (req, reply) => {
+    try {
+      const entry = await createSavedSearch(
+        String(req.user!.id),
+        (req.body ?? {}) as Record<string, unknown>
+      )
+      return reply.code(201).send({ data: entry })
+    } catch (e) {
+      if (e instanceof SavedSearchError) return reply.code(e.status).send({ error: e.message })
+      throw e
+    }
+  })
+
+  const deleteSaved = async (id: string, userId: string, reply: import('fastify').FastifyReply) => {
+    if (!id) return reply.code(400).send({ error: 'id is required' })
+    const ok = await deleteSavedSearch(userId, id.slice(0, 64))
+    if (!ok) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: { ok: true } })
+  }
+  app.delete('/saved/:id', async (req, reply) =>
+    deleteSaved(String((req.params as { id?: string }).id ?? ''), String(req.user!.id), reply)
+  )
+  app.delete('/saved', async (req, reply) =>
+    deleteSaved(String((req.query as { id?: string }).id ?? ''), String(req.user!.id), reply)
+  )
 
   // GET /counts?q=&collections=a,b — each listed collection's match count as the caller
   // (the search's tabs). The palette asks for the collections the first answer found.
@@ -727,7 +1512,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       labels?: string
     }
     const labelsOnly = labels === '1' || labels === 'true'
-    const q = (rawQ ?? '').trim()
+    const q = (rawQ ?? '').trim().slice(0, 300)
     const cols = (rawCols ?? '')
       .split(',')
       .map((c) => c.trim())
@@ -754,7 +1539,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       labels?: string
     }
     const labelsOnly = query.labels === '1' || query.labels === 'true'
-    const q = (query.q ?? '').trim()
+    const q = (query.q ?? '').trim().slice(0, 300)
     const collection = (query.collection ?? '').trim()
     if (q.length < 2 || !IDENT_RE.test(collection)) return reply.send({ data: [], total: 0 })
     const offset = Math.max(0, Math.floor(Number(query.offset) || 0))
