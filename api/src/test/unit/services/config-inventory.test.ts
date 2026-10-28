@@ -49,6 +49,11 @@ describe('classifyTables', () => {
     expect(dupes).toEqual([])
   })
 
+  it('managed procedures and their versions are configuration (migration 507)', () => {
+    expect(CONFIG_TABLES).toContain('nivaro_managed_procedures')
+    expect(CONFIG_TABLES).toContain('nivaro_managed_procedure_versions')
+  })
+
   it('reports a table it has never heard of rather than ignoring it', () => {
     // This is the whole point: a new migration must surface here, because a
     // silently-skipped table produces a diff that claims agreement it never
@@ -93,6 +98,24 @@ describe('redactRow', () => {
   it('leaves an unlisted table untouched apart from the global secrets', () => {
     const row = redactRow('nivaro_queues', { id: 'q', name: 'Work', key_hash: 'x' })
     expect(row).toEqual({ id: 'q', name: 'Work' })
+  })
+
+  it("drops a managed procedure's deployed_* — they describe the database, not the config", () => {
+    const row = redactRow('nivaro_managed_procedures', {
+      id: 1,
+      name: 'spend_totals',
+      body: 'CREATE OR ALTER PROCEDURE spend_totals AS SELECT 1',
+      body_hash: 'a'.repeat(64),
+      deployed_hash: 'b'.repeat(64),
+      deployed_at: '2026-10-28T00:00:00.000Z',
+      deployed_by: 'script:proc-deploy'
+    })
+    expect(row).toEqual({
+      id: 1,
+      name: 'spend_totals',
+      body: 'CREATE OR ALTER PROCEDURE spend_totals AS SELECT 1',
+      body_hash: 'a'.repeat(64)
+    })
   })
 })
 

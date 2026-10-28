@@ -110,6 +110,52 @@ describe('planTable', () => {
     expect(p2.ops[0].fields.sort()).toEqual(['email', 'id'])
   })
 
+  it('a restore keeps the live deployed_* of a managed procedure (migration 507)', () => {
+    const procCols = cols({
+      id: { type: 'int', identity: true },
+      name: {},
+      body: {},
+      body_hash: {},
+      deployed_hash: {},
+      deployed_at: { type: 'datetime' },
+      deployed_by: {}
+    })
+    // A file that carries deployed_* anyway (written before the redaction, or by hand).
+    const target = rows({
+      '1': {
+        id: 1,
+        name: 'p',
+        body: 'old',
+        body_hash: 'h-old',
+        deployed_hash: 'from-file',
+        deployed_at: '2020-01-01T00:00:00.000Z',
+        deployed_by: 'someone'
+      },
+      '2': { id: 2, name: 'q', body: 'b', body_hash: 'h-q', deployed_hash: 'from-file' }
+    })
+    const live = rows({
+      '1': {
+        id: 1,
+        name: 'p',
+        body: 'new',
+        body_hash: 'h-new',
+        deployed_hash: 'live',
+        deployed_at: '2026-10-28T00:00:00.000Z',
+        deployed_by: 'script:x'
+      }
+    })
+    const p = planTable('nivaro_managed_procedures', target, live, procCols, { deletes: true })
+    const update = p.ops.find((o) => o.op === 'update')
+    const insert = p.ops.find((o) => o.op === 'insert')
+    expect(update?.fields.sort()).toEqual(['body', 'body_hash'])
+    expect(insert?.fields).not.toContain('deployed_hash')
+    for (const o of p.ops) {
+      for (const c of ['deployed_hash', 'deployed_at', 'deployed_by']) {
+        expect(o.fields).not.toContain(c)
+      }
+    }
+  })
+
   it('reports snapshot columns the live table no longer has and does not write them', () => {
     const target = rows({ '1': { id: 1, name: 'A', view_mode: 'grid' } })
     const live = rows({ '1': { id: 1, name: 'B' } })
