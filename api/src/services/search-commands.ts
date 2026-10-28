@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { safeRecordLabel } from './record-label-fallback.js'
 
 /**
  * Search commands (search program item 19): a query that reads like an
@@ -245,7 +246,13 @@ export interface CommandDeps {
   ): Promise<{ field: string; id: string; label: string } | null>
 }
 
-export type HitLike = { collection: string; id: unknown; label?: string; snippet?: string }
+export type HitLike = {
+  collection: string
+  id: unknown
+  label?: string
+  snippet?: string
+  display_name?: string | null
+}
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -264,7 +271,12 @@ async function findTargets(user: User, ref: string, hits: HitLike[]): Promise<Ta
     return fromHits.slice(0, 3).map((h) => ({
       collection: h.collection,
       id: String(h.id),
-      label: String(h.label ?? h.id)
+      // Command labels and confirm text never show the pk (record-label-fallback.ts).
+      label: safeRecordLabel(h.label, {
+        collection: h.collection,
+        id: h.id,
+        display_name: h.display_name
+      })
     }))
 
   // Collections that carry a pipeline or a registry action — where commands live.
@@ -288,8 +300,8 @@ async function findTargets(user: User, ref: string, hits: HitLike[]): Promise<Ta
     >,
     db('nivaro_collections')
       .whereIn('collection', candidates)
-      .select('collection', 'display_template') as Promise<
-      Array<{ collection: string; display_template: string | null }>
+      .select('collection', 'display_template', 'display_name') as Promise<
+      Array<{ collection: string; display_template: string | null; display_name: string | null }>
     >
   ])
   const { readItems } = await import('./items.js')
@@ -342,9 +354,16 @@ async function findTargets(user: User, ref: string, hits: HitLike[]): Promise<Ta
   const labels = await linkLabelsAsUser(user, byCollection).catch(
     () => ({}) as Record<string, string>
   )
-  return found
-    .slice(0, 3)
-    .map((t) => ({ ...t, label: labels[`${t.collection}:${t.id}`] ?? t.label }))
+  return found.slice(0, 3).map((t) => ({
+    ...t,
+    // Typed a business id: it is the label until the record's own label is known.
+    // Typed the pk: never shown — the collection's name stands in.
+    label: safeRecordLabel(labels[`${t.collection}:${t.id}`] ?? t.label, {
+      collection: t.collection,
+      id: t.id,
+      display_name: colRows.find((c) => c.collection === t.collection)?.display_name
+    })
+  }))
 }
 
 async function offeredTransitions(

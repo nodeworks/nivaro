@@ -4,6 +4,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
 import { stripHtmlToText } from './latest-comment.js'
+import { safeRecordLabel } from './record-label-fallback.js'
 
 /**
  * Global search's extra result kinds (search program 2026-10-28, items 15/17/18):
@@ -477,8 +478,12 @@ export async function searchTextHits(
     if (out.length >= EXTRA_CAP) break
     if (seen.has(r.id)) continue
     seen.add(r.id)
-    const recordLabel =
-      labels[`${r.collection}:${r.item}`] ?? `${names.get(r.collection) ?? r.collection} ${r.item}`
+    // Never the parent's pk: its label as the caller, else the collection's name.
+    const recordLabel = safeRecordLabel(labels[`${r.collection}:${r.item}`], {
+      collection: r.collection,
+      id: r.item,
+      display_name: names.get(r.collection)
+    })
     const query = r.kind === 'comment' ? `?comment=${encodeURIComponent(r.id)}` : '?tab=notes'
     out.push({
       kind: r.kind,
@@ -529,7 +534,7 @@ export async function searchFileHits(
     const ref = (refs.get(f.id.toLowerCase()) ?? []).find((r: { collection: string; id: string }) =>
       openable.get(r.collection)?.has(r.id.toLowerCase())
     )
-    const name = f.title || f.filename_download || f.id
+    const name = f.title || f.filename_download || 'File'
     const fileQ = `?file=${encodeURIComponent(f.id)}`
     return {
       kind: 'file',

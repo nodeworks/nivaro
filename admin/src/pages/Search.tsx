@@ -35,6 +35,7 @@ import {
 import {
   sendSearchClick,
   useDeleteSavedSearch,
+  useRecentRecordLabels,
   useSavedSearches,
   useSaveSearch
 } from '@/components/global-search-api'
@@ -50,6 +51,7 @@ import {
   queryChips,
   readRecentRecords,
   readRecentSearches,
+  recordLabel,
   recordPath,
   recordsCsv,
   type SearchRecord,
@@ -252,7 +254,7 @@ export function SearchPage() {
     pushRecentRecord({
       collection: r.collection,
       id: String(r.id),
-      label: r.label || String(r.id),
+      label: r.label,
       kind: collectionLabel(r)
     })
     sendSearchClick({ q, collection: r.collection, id: r.id, position })
@@ -677,10 +679,10 @@ function AllResults({
           </span>
           <span className='min-w-0 flex-1'>
             <span className='block truncate text-[13px] font-medium text-slate-900 dark:text-foreground'>
-              {exact.label || String(exact.id)}
+              {recordLabel(exact)}
             </span>
             <span className='block truncate text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-              {collectionLabel(exact)} · {String(exact.id)}
+              {collectionLabel(exact)}
             </span>
           </span>
           <ArrowRight className='h-4 w-4 text-slate-400 dark:text-muted-foreground' />
@@ -903,16 +905,13 @@ function RecordsTable({
                     className='flex min-w-0 items-center gap-2 rounded text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-foreground'
                   >
                     <span className='truncate'>
-                      <Hi text={r.label || String(r.id)} q={q} />
+                      <Hi text={recordLabel(r)} q={q} />
                     </span>
                     {r.exact && (
                       <span className='shrink-0 rounded bg-nvr-cyan/15 px-1 text-[10px] font-medium text-foreground'>
                         Exact
                       </span>
                     )}
-                    <span className='shrink-0 font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'>
-                      {String(r.id)}
-                    </span>
                   </Link>
                   {why && (
                     <span className='mt-0.5 block truncate text-[11px] text-slate-600 sm:hidden dark:text-muted-foreground'>
@@ -1063,6 +1062,8 @@ function StartPanel({
   onPick: (q: string, scope: string | null) => void
   short: boolean
 }) {
+  // Recents stored without a label (or an old pk-only one) are named as the viewer.
+  const recentLabels = useRecentRecordLabels(recentRecords, recentRecords.length > 0)
   const row = 'group flex items-center gap-2 px-3 py-2 hover:bg-slate-50 dark:hover:bg-muted'
   const box =
     'divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'
@@ -1157,7 +1158,7 @@ function StartPanel({
                   className='flex items-center gap-2 px-3 py-2 hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none dark:hover:bg-muted dark:focus-visible:bg-muted'
                 >
                   <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-900 dark:text-foreground'>
-                    {r.label}
+                    {recentLabels[`${r.collection}:${r.id}`] ?? recordLabel(r)}
                   </span>
                   <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-600 dark:bg-muted dark:text-muted-foreground'>
                     {r.kind ?? titleCase(r.collection)}

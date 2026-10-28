@@ -4,6 +4,7 @@ import { getCollection, getFields, getRelations } from './collections.js'
 import { labelFor } from './global-search.js'
 import { readItems, readOne } from './items.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
+import { collectionTitle } from './record-label-fallback.js'
 import { attachRecordState, type RecordState } from './record-state.js'
 
 /**
@@ -147,7 +148,16 @@ export async function buildSearchPreview(
         if (hit)
           relLabels.set(
             r.many_field,
-            new Map([[String(v), labelFor(hit, targetCol?.display_template)]])
+            new Map([
+              [
+                String(v),
+                labelFor(
+                  hit,
+                  targetCol?.display_template,
+                  collectionTitle(target, targetCol?.display_name)
+                )
+              ]
+            ])
           )
       } catch {
         /* unreadable target — the raw value stays hidden too */
@@ -167,7 +177,11 @@ export async function buildSearchPreview(
   const out: SearchPreview = {
     collection,
     id: row.id,
-    label: labelFor(row, col?.display_template).slice(0, 120),
+    label: labelFor(
+      row,
+      col?.display_template,
+      collectionTitle(collection, col?.display_name)
+    ).slice(0, 120),
     fields
   }
 

@@ -6,6 +6,7 @@ import { selectInChunks } from './db-batch.js'
 import { resolveDisplayValue } from './display-value.js'
 import { readItems } from './items.js'
 import { can } from './permissions.js'
+import { collectionTitle, isPkLabel } from './record-label-fallback.js'
 import { searchPhrases } from './search-synonyms.js'
 
 /**
@@ -60,19 +61,23 @@ const LABEL_FALLBACKS = [
   'email'
 ]
 
+/** A record's label: its display template, else a name / business id column —
+ *  never the primary key: with nothing to show, `fallback` (the collection's
+ *  display name, see record-label-fallback.ts). */
 export function labelFor(
   row: Record<string, unknown>,
-  displayTemplate: string | null | undefined
+  displayTemplate: string | null | undefined,
+  fallback: string
 ): string {
   if (displayTemplate) {
     const rendered = resolveDisplayValue(row, displayTemplate)
-    if (rendered && String(rendered).trim() !== '') return String(rendered).trim()
+    if (rendered && !isPkLabel(rendered, row.id)) return String(rendered).trim()
   }
   for (const f of LABEL_FALLBACKS) {
     const v = row[f]
     if (v != null && String(v).trim() !== '') return String(v).trim()
   }
-  return `#${String(row.id ?? '')}`
+  return fallback
 }
 
 /**
@@ -311,7 +316,11 @@ export async function globalSearch(
     const list = Array.isArray(rows) ? rows : (rows?.data ?? [])
     const meta = await getCollection(c.collection).catch(() => null)
     return list.map((row) => {
-      const label = labelFor(row, c.display_template)
+      const label = labelFor(
+        row,
+        c.display_template,
+        collectionTitle(c.collection, meta?.display_name)
+      )
       // A hit found through a synonym scores as that form would, one point under
       // the typed text so an exact typed match still ranks first.
       const { score, matched } = forms

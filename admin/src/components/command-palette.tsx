@@ -45,6 +45,7 @@ import { formatRelative, titleCase } from '@/lib/utils'
 import {
   runSearchCommand,
   sendSearchClick,
+  useRecentRecordLabels,
   useSavedSearches,
   useSaveSearch
 } from './global-search-api'
@@ -67,6 +68,7 @@ import {
   readRecentRecords,
   readRecentSearches,
   recordFromPath,
+  recordLabel,
   recordPath,
   type SearchCommand,
   type SearchExtra,
@@ -543,6 +545,9 @@ export function CommandPalette() {
       setRecentSearches(readRecentSearches())
     }
   }, [open])
+  // Recents stored without a label (or with an old pk-only one) are named as the viewer.
+  const recentLabels = useRecentRecordLabels(recentRecords, open, setRecentRecords)
+  const recentTitle = (r: RecentRecord) => recentLabels[`${r.collection}:${r.id}`] ?? recordLabel(r)
   const recallRef = useRef<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   // Back to the box once a command's confirm closes.
@@ -607,7 +612,8 @@ export function CommandPalette() {
       setRecentRecords(
         pushRecentRecord({
           ...rec,
-          label: opts.label || rec.id,
+          // pushRecentRecord stores no pk-only label; '' is resolved on display.
+          label: opts.label ?? '',
           kind: opts.kind ?? titleCase(rec.collection)
         })
       )
@@ -691,7 +697,7 @@ export function CommandPalette() {
     for (const r of list)
       entries.set(recordValue(prefix, r), {
         kind: collectionLabel(r),
-        title: r.label || String(r.id),
+        title: recordLabel(r),
         sub: whyMatched(r) ?? (r.snippet && r.snippet !== r.label ? r.snippet : ''),
         path: recordPath(r.collection, r.id),
         record: r
@@ -699,7 +705,7 @@ export function CommandPalette() {
   for (const r of recentRecords)
     entries.set(`rrec-${r.collection}-${r.id}`, {
       kind: r.kind ?? titleCase(r.collection),
-      title: r.label,
+      title: recentTitle(r),
       path: recordPath(r.collection, r.id),
       record: r
     })
@@ -740,7 +746,7 @@ export function CommandPalette() {
 
   const openRecord = (r: SearchRecord, position: number, newTab = false) =>
     go(recordPath(r.collection, r.id), {
-      label: r.label || String(r.id),
+      label: recordLabel(r),
       kind: collectionLabel(r),
       position,
       newTab
@@ -947,7 +953,7 @@ export function CommandPalette() {
                           <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
                           <div className='min-w-0 flex-1'>
                             <div className='truncate text-[13px]'>
-                              <Hi text={r.label || String(r.id)} q={q} />
+                              <Hi text={recordLabel(r)} q={q} />
                             </div>
                             <RecordLine r={r} q={q} />
                           </div>
@@ -1108,11 +1114,14 @@ export function CommandPalette() {
                             key={value}
                             value={value}
                             onSelect={() =>
-                              go(recordPath(r.collection, r.id), { label: r.label, kind: r.kind })
+                              go(recordPath(r.collection, r.id), {
+                                label: recentTitle(r),
+                                kind: r.kind
+                              })
                             }
                           >
                             <Search className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
-                            <span className='truncate text-[13px]'>{r.label}</span>
+                            <span className='truncate text-[13px]'>{recentTitle(r)}</span>
                             <span className='ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
                               {r.kind ?? titleCase(r.collection)}
                             </span>
@@ -1239,7 +1248,7 @@ export function CommandPalette() {
                             <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
                             <div className='min-w-0 flex-1'>
                               <div className='truncate text-[13px]'>
-                                <Hi text={r.label || String(r.id)} q={q} />
+                                <Hi text={recordLabel(r)} q={q} />
                               </div>
                               <RecordLine r={r} q={q} />
                             </div>
@@ -1282,7 +1291,7 @@ export function CommandPalette() {
                           >
                             <Sparkles className='mr-2 h-3.5 w-3.5 text-purple-500' />
                             <div className='min-w-0 flex-1'>
-                              <div className='truncate text-[13px]'>{r.label || String(r.id)}</div>
+                              <div className='truncate text-[13px]'>{recordLabel(r)}</div>
                             </div>
                             <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
                               {titleCase(r.collection)}

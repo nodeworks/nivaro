@@ -2,8 +2,13 @@ import { userErrorMessage } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import type { SavedSearch, SearchCommand } from './global-search-helpers'
-import { commandRequest } from './global-search-helpers'
+import type { RecentRecord, SavedSearch, SearchCommand } from './global-search-helpers'
+import {
+  commandRequest,
+  labelRefsQuery,
+  relabelRecentRecords,
+  staleRecentRecords
+} from './global-search-helpers'
 
 /**
  * Admin calls of the global search beside the main GET /global-search: saved
@@ -14,6 +19,34 @@ import { commandRequest } from './global-search-helpers'
 
 const SAVED_KEY = ['global-search-saved']
 const status = (e: unknown) => (e as { response?: { status?: number } })?.response?.status
+
+/**
+ * Labels for recent records stored without one (or with a pk-only label from an
+ * older build): ONE `GET /global-search/labels` for all of them, read as the viewer,
+ * and the stored list is relabelled so the next open needs nothing. Returns
+ * `collection:id` → label; rows show `labels[key] ?? recordLabel(r)`. An older API
+ * without the route leaves the collection-name stand-in.
+ */
+export function useRecentRecordLabels(
+  list: RecentRecord[],
+  enabled: boolean,
+  onRelabelled?: (next: RecentRecord[]) => void
+): Record<string, string> {
+  const url = labelRefsQuery(staleRecentRecords(list))
+  const q = useQuery({
+    queryKey: ['global-search-labels', url],
+    queryFn: async () => {
+      const r = await api.get<{ data: Record<string, string> }>(url)
+      const labels = r.data?.data && typeof r.data.data === 'object' ? r.data.data : {}
+      onRelabelled?.(relabelRecentRecords(labels))
+      return labels
+    },
+    enabled: enabled && url !== '',
+    retry: false,
+    staleTime: 300_000
+  })
+  return q.data ?? {}
+}
 
 /** Saved searches; `available` is false when the API has no such endpoint. */
 export function useSavedSearches(enabled: boolean) {

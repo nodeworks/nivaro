@@ -4,19 +4,26 @@ import { labelFor, scoreRow } from '../../../services/global-search.js'
 describe('labelFor', () => {
   it('renders the display template when there is one', () => {
     expect(
-      labelFor({ id: 1, workflow_id: 'AB26-1', name: 'Thing' }, '{{workflow_id}} · {{name}}')
+      labelFor(
+        { id: 1, workflow_id: 'AB26-1', name: 'Thing' },
+        '{{workflow_id}} · {{name}}',
+        'Workflow'
+      )
     ).toBe('AB26-1 · Thing')
   })
 
   it('falls back through the usual naming columns', () => {
-    expect(labelFor({ id: 2, title: 'A title' }, null)).toBe('A title')
-    expect(labelFor({ id: 3, subject: 'Subject' }, null)).toBe('Subject')
-    expect(labelFor({ id: 4, workflow_id: 'CR-9' }, null)).toBe('CR-9')
+    expect(labelFor({ id: 2, title: 'A title' }, null, 'Workflow')).toBe('A title')
+    expect(labelFor({ id: 3, subject: 'Subject' }, null, 'Workflow')).toBe('Subject')
+    expect(labelFor({ id: 4, workflow_id: 'CR-9' }, null, 'Workflow')).toBe('CR-9')
   })
 
-  it('never renders empty — an unnamed row still identifies itself', () => {
-    expect(labelFor({ id: 7 }, null)).toBe('#7')
-    expect(labelFor({ id: 8, name: '   ' }, null)).toBe('#8')
+  it('never shows the primary key — an unnamed row shows the collection name', () => {
+    expect(labelFor({ id: 7 }, null, 'Inventory Request')).toBe('Inventory Request')
+    expect(labelFor({ id: 8, name: '   ' }, null, 'Inventory Request')).toBe('Inventory Request')
+    // A template that renders only the pk is no label either.
+    expect(labelFor({ id: 9 }, '{{id}}', 'Cifa Items')).toBe('Cifa Items')
+    expect(labelFor({ id: 9, cifa_number: 'C-9' }, '#{{id}}', 'Cifa Items')).toBe('Cifa Items')
   })
 })
 

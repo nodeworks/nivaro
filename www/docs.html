@@ -17105,6 +17105,13 @@ GET /api/global-search/preview?collection=customers&amp;id=cust-123
   "state": { "label": "In review", "color": "#00ceff" }, "owners": [{ "id": "…", "name": "Sam Ray" }],
   "fields": [{ "label": "City", "value": "Denver" }], "updated_at": "…", "updated_by": "Ana Acme" } }
 
+// Labels for records shown without one (recents / pins saved with a bare id), read as you,
+// batched (at most 100). A record never shows its id: its label, else a business id
+// column (workflow_id…), else the collection's name alone — also when you cannot read it.
+// Every record label search returns follows the same rule.
+GET /api/global-search/labels?refs=workflows:370880,cifa_items:39
+{ "data": { "workflows:370880": "CM26-80394", "cifa_items:39": "Cifa Items" } }
+
 // What was opened (feeds learned ranking; log_id = the search-analytics log row, when known).
 POST /api/global-search/click { "q": "acme", "collection": "customers", "id": "cust-123", "position": 0, "log_id": 812 }
 

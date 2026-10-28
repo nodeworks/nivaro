@@ -56,6 +56,17 @@ describe('toHit — matched field', () => {
   })
 })
 
+describe('toHit — never the primary key', () => {
+  it('a pk match or a pk-only template falls back to the collection name', () => {
+    const plain = { collection: 'cifa_items', display_name: 'Cifa Items', template: null }
+    expect(toHit(plain, { id: 39767 }, ['id'], ['39767'], labelOf)?.label).toBe('Cifa Items')
+    const pkTemplate = { ...plain, template: '#{{id}}' }
+    expect(toHit(pkTemplate, { id: 985, note: 'x' }, ['note'], ['x'], labelOf)?.label).toBe(
+      'Cifa Items'
+    )
+  })
+})
+
 describe('mergeFound / finishHits', () => {
   it('one hit per record, the best tier wins, exact ranks first', () => {
     const merged = mergeFound(

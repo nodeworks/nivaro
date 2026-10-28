@@ -3,9 +3,12 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { tenantState } from '../services/ai-tenant-state.js'
+import { getCollection } from '../services/collections.js'
 import { readItems } from '../services/items.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
+import { safeRecordLabel } from '../services/record-label-fallback.js'
+import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
 import { labelSearchFieldsOf } from '../services/search-fields.js'
 import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
 import { buildSearchPreview } from '../services/search-preview.js'
@@ -382,9 +385,12 @@ async function allowedByCollection(
   return out
 }
 
-/** A hit's label: the collection's display template over the row, else the matched text. */
+/** A hit's label: the collection's display template over the row, else the matched
+ *  text — never the primary key: a pk-only label falls back to a business id column
+ *  on the caller's row, else the collection's display name (record-label-fallback.ts). */
 function hitLabel(
-  p: Pick<PlanEntry, 'template'> | undefined,
+  p: Pick<PlanEntry, 'collection' | 'display_name' | 'template'> &
+    Partial<Pick<PlanEntry, 'columns' | 'idColumns'>>,
   item: Record<string, unknown>,
   matched: string
 ): string {
@@ -396,16 +402,24 @@ function hitLabel(
     })
     if (rendered.trim()) label = rendered.trim()
   }
-  return label.slice(0, 80)
+  return safeRecordLabel(label, {
+    collection: p.collection,
+    id: item.id,
+    display_name: p.display_name,
+    row: item,
+    columns: [...(p.idColumns ?? []), ...(p.columns ?? [])]
+  }).slice(0, 80)
 }
 
-/** The first plan column holding a value, for a hit found by the items service. */
+/** The first plan column holding a value, for a hit found by the items service
+ *  ('' when none does — hitLabel then falls back, never to the pk). */
 function matchedText(p: PlanEntry, item: Record<string, unknown>, cols = p.columns): string {
   for (const c of cols) {
+    if (c === 'id') continue
     const v = item[c]
     if (v != null && typeof v !== 'object' && String(v).trim()) return String(v)
   }
-  return String(item.id ?? '')
+  return ''
 }
 
 const UPDATED_COLS = ['date_updated', 'updated_at', 'modified_at', 'date_modified']
@@ -716,17 +730,21 @@ async function searchExact(
         col = 'id'
       if (!col) continue
       const value = String(item[col])
+      // A pk match shows no pk: the label falls back and no "ID: 123" chip rides along.
+      const byPk = col === 'id'
+      const label = hitLabel(p, item, byPk ? '' : value)
       out.push(
         withRowFacts(
           {
             collection,
             display_name: p.display_name,
             id: item.id,
-            label: hitLabel(p, item, value),
-            snippet: value.slice(0, 120),
+            label,
+            snippet: (byPk ? label : value).slice(0, 120),
             matched_field: col,
-            matched_label: ctx.labelOf(collection, col),
-            matched_value: value.slice(0, 80),
+            ...(byPk
+              ? {}
+              : { matched_label: ctx.labelOf(collection, col), matched_value: value.slice(0, 80) }),
             exact: true,
             tier: 'exact'
           },
@@ -888,11 +906,7 @@ async function searchFiltered(
             // Filters only: the hit is "matched" by its first filter field.
             const f = chips.find((c) => c.field in item)?.field
             const value = f != null && item[f] != null ? String(item[f]) : ''
-            const label = hitLabel(
-              p,
-              item,
-              matchedText(p, item, p.columns.length ? p.columns : ['id'])
-            )
+            const label = hitLabel(p, item, matchedText(p, item))
             out.push(
               withRowFacts(
                 {
@@ -1371,6 +1385,28 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
+  // GET /labels?refs=col:id,col:id — labels for records search shows without one
+  // (pins / recents saved with a pk-only label), read as the caller and batched per
+  // collection (services/record-labels-as-viewer.ts). Every ref gets a label, never
+  // the pk: its label, else a business id column, else the collection's name.
+  app.get('/labels', async (req, reply) => {
+    const raw = String((req.query as { refs?: string }).refs ?? '')
+    const refs: Array<{ collection: string; id: string }> = []
+    for (const part of raw.split(',')) {
+      const at = part.indexOf(':')
+      if (at <= 0) continue
+      const collection = part.slice(0, at).trim()
+      const id = part.slice(at + 1).trim()
+      if (!IDENT_RE.test(collection) || !id || id.length > 100) continue
+      if (/^(nivaro_|directus_)/i.test(collection)) continue
+      refs.push({ collection, id })
+      if (refs.length >= MAX_LABEL_REFS) break
+    }
+    if (refs.length === 0) return reply.send({ data: {} })
+    const data = await recordLabelsAsViewer(req.user as User, refs)
+    return reply.send({ data })
+  })
+
   // POST /click {q, collection, id, position, log_id?} — what was opened from a
   // search; feeds learned ranking (services/search-signals.ts).
   app.post('/click', async (req, reply) => {
@@ -1583,6 +1619,9 @@ async function runGlobalSearch(
               count: false
             }).catch(() => ({ data: [] as unknown[] }))
           ).data as Array<Record<string, unknown>>
+          const displayName = rows.length
+            ? ((await getCollection(collection).catch(() => undefined))?.display_name ?? null)
+            : null
           for (const row of rows) {
             const key = `${collection}:${String(row.id)}`
             if (seen.has(key)) continue
@@ -1590,7 +1629,11 @@ async function runGlobalSearch(
             semantic.push({
               collection,
               id: row.id,
-              label: String(row[labelField] ?? row.id).slice(0, 80),
+              label: safeRecordLabel(labelField === 'id' ? '' : row[labelField], {
+                collection,
+                id: row.id,
+                display_name: displayName
+              }).slice(0, 80),
               snippet: 'semantic match'
             })
           }

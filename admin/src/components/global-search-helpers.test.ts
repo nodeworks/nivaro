@@ -6,6 +6,8 @@ import {
   extraTabs,
   forgetRecentSearch,
   isNewTabEnter,
+  isPkLabel,
+  labelRefsQuery,
   nextRecall,
   personMeta,
   pushRecentRecord,
@@ -14,10 +16,13 @@ import {
   readRecentRecords,
   readRecentSearches,
   recordFromPath,
+  recordLabel,
   recordsCsv,
+  relabelRecentRecords,
   type SearchCommand,
   type SearchRecord,
   sortRecords,
+  staleRecentRecords,
   toCsv,
   whyMatched
 } from './global-search-helpers'
@@ -41,6 +46,64 @@ const rec = (p: Partial<SearchRecord>): SearchRecord => ({
   label: 'WF-1',
   snippet: '',
   ...p
+})
+
+describe('record labels — never the primary key', () => {
+  it('spots stored pk-only labels and keeps real ones', () => {
+    expect(isPkLabel('Workflow 370973', '370973', ['workflows'])).toBe(true)
+    expect(isPkLabel('Inventory Request #32828', 32828, ['inventory_request'])).toBe(true)
+    expect(isPkLabel('Cifa Items #39', 39, ['cifa_items', 'Cifa Items'])).toBe(true)
+    expect(isPkLabel('#985', 985)).toBe(true)
+    expect(isPkLabel('', 1)).toBe(true)
+    expect(isPkLabel('MM26INV-32440', 32440, ['inventory_request'])).toBe(false)
+    expect(isPkLabel('Zone 5', 5, ['regions'])).toBe(false)
+  })
+
+  it('an unresolvable record shows the collection name alone', () => {
+    expect(recordLabel({ collection: 'inventory_request', id: 32832, label: '' })).toBe(
+      'Inventory Request'
+    )
+    expect(
+      recordLabel({
+        collection: 'cifa_items',
+        id: 39767,
+        label: '39767',
+        display_name: 'CIFA items'
+      })
+    ).toBe('CIFA items')
+    expect(recordLabel({ collection: 'workflows', id: 1, label: 'CM26-80394' })).toBe('CM26-80394')
+  })
+
+  it('never stores a pk-only label, and re-resolves old ones in one request', () => {
+    pushRecentRecord({ collection: 'workflows', id: '370880', label: '370880', kind: 'Workflows' })
+    localStorage.setItem(
+      'nvr_palette_recent_records',
+      JSON.stringify([
+        ...JSON.parse(localStorage.getItem('nvr_palette_recent_records') ?? '[]'),
+        { collection: 'inventory_request', id: '32828', label: 'Inventory Request #32828' },
+        { collection: 'units', id: '4', label: 'Rack 4' }
+      ])
+    )
+    const list = readRecentRecords()
+    expect(list[0].label).toBe('')
+    const stale = staleRecentRecords(list)
+    expect(stale.map((r) => r.id)).toEqual(['370880', '32828'])
+    expect(labelRefsQuery(stale)).toBe(
+      '/global-search/labels?refs=workflows%3A370880,inventory_request%3A32828'
+    )
+    const next = relabelRecentRecords({
+      'workflows:370880': 'CM26-80394',
+      // The collection-name stand-in is shown but not stored.
+      'inventory_request:32828': 'Inventory Request'
+    })
+    expect(next.map((r) => r.label)).toEqual(['CM26-80394', 'Inventory Request #32828', 'Rack 4'])
+    expect(readRecentRecords()[0].label).toBe('CM26-80394')
+  })
+
+  it('the CSV Label column never holds the pk (the ID column keeps it)', () => {
+    const csv = recordsCsv([rec({ id: 39767, label: '39767', collection: 'cifa_items' })])
+    expect(csv.split('\r\n')[1]).toBe('cifa_items,39767,Cifa Items,,,,')
+  })
 })
 
 describe('recents', () => {

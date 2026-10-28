@@ -81,6 +81,97 @@ export interface RecordPreview {
   updated_by?: string | null
 }
 
+// ─── Record labels: never the primary key ────────────────────────────────────
+// Twin of api/src/services/record-label-fallback.ts (keep the two in step). A
+// record's `id` is a database detail: visible text shows its label, else the
+// collection's name — the pk stays in URLs, keys and data attributes only.
+
+const norm = (v: unknown) =>
+  String(v ?? '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+
+/** A label that only restates the pk: blank, "32832", "#32832", or a collection
+ *  name + the pk ("Workflow 370973", "Cifa Items #39") — the shapes old fallbacks
+ *  stored. `names` = the collection's key / display name / singular. */
+export function isPkLabel(label: unknown, id: unknown, names: readonly unknown[] = []): boolean {
+  const l = norm(label)
+  if (!l) return true
+  const pk = String(id ?? '')
+    .trim()
+    .toLowerCase()
+  if (!pk) return false
+  if (l === pk || l === `#${pk}`) return true
+  for (const n of names) {
+    const full = norm(n)
+    if (!full) continue
+    for (const name of new Set([full, full.replace(/ies$/, 'y'), full.replace(/s$/, '')]))
+      if (l === `${name} ${pk}` || l === `${name} #${pk}` || l === `${name}#${pk}`) return true
+  }
+  return false
+}
+
+const titleWords = (s: string) =>
+  s
+    .replace(/_/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+
+/** What a record row shows: its label, else (pk-only or blank) the collection's
+ *  display name alone. */
+export function recordLabel(r: {
+  collection: string
+  id: unknown
+  label?: string | null
+  display_name?: string | null
+  kind?: string | null
+}): string {
+  const name = String(r.display_name || r.kind || '').trim() || titleWords(r.collection) || 'Record'
+  return isPkLabel(r.label, r.id, [r.collection, r.display_name, r.kind])
+    ? name
+    : String(r.label).trim()
+}
+
+/** Recent records whose stored label is missing or pk-only — resolved again on display. */
+export function staleRecentRecords(list: RecentRecord[]): RecentRecord[] {
+  return list.filter((r) => isPkLabel(r.label, r.id, [r.collection, r.kind]))
+}
+
+/** `GET /global-search/labels?refs=…` for records still needing a label (≤100). */
+export function labelRefsQuery(refs: Array<{ collection: string; id: string }>): string {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const r of refs) {
+    const k = `${r.collection}:${r.id}`
+    if (seen.has(k) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(r.collection) || !r.id) continue
+    seen.add(k)
+    parts.push(encodeURIComponent(k))
+    if (parts.length >= 100) break
+  }
+  return parts.length ? `/global-search/labels?refs=${parts.join(',')}` : ''
+}
+
+/** Stored recents relabelled from a `/global-search/labels` answer; returns the new list. */
+export function relabelRecentRecords(labels: Record<string, string>): RecentRecord[] {
+  let changed = false
+  const list = readRecentRecords().map((r) => {
+    const l = labels[`${r.collection}:${r.id}`]
+    if (!l || !isPkLabel(r.label, r.id, [r.collection, r.kind])) return r
+    // The collection-name stand-in is not stored: a later read may find a real label.
+    if (
+      isPkLabel(l, r.id, [r.collection, r.kind]) ||
+      norm(l) === norm(recordLabel({ ...r, label: '' }))
+    )
+      return r
+    changed = true
+    return { ...r, label: l }
+  })
+  if (changed) writeList(RECENT_RECORDS_KEY, list)
+  return list
+}
+
 // ─── Recents (localStorage) ──────────────────────────────────────────────────
 
 export interface RecentRecord {
@@ -119,15 +210,18 @@ const isRecentRecord = (v: unknown): v is RecentRecord =>
   (typeof (v as RecentRecord).id === 'string' || typeof (v as RecentRecord).id === 'number')
 
 export function readRecentRecords(): RecentRecord[] {
+  // The stored label as is ('' when none): rows show recordLabel(), never the pk.
   return readList(RECENT_RECORDS_KEY, MAX_RECENT_RECORDS, isRecentRecord).map((r) => ({
     ...r,
     id: String(r.id),
-    label: r.label || String(r.id)
+    label: typeof r.label === 'string' ? r.label : ''
   }))
 }
 
 export function pushRecentRecord(r: RecentRecord): RecentRecord[] {
-  const entry = { ...r, id: String(r.id) }
+  // A pk-only label is never stored: '' is, and the next display resolves it.
+  const id = String(r.id)
+  const entry = { ...r, id, label: isPkLabel(r.label, id, [r.collection, r.kind]) ? '' : r.label }
   const list = [
     entry,
     ...readRecentRecords().filter((x) => !(x.collection === entry.collection && x.id === entry.id))
@@ -440,7 +534,7 @@ export function recordsCsv(rows: SearchRecord[]): string {
     rows.map((r) => [
       r.display_name || r.collection,
       r.id,
-      r.label,
+      recordLabel(r),
       r.matched_label ?? r.matched_field ?? (r.exact ? 'ID' : ''),
       r.matched_value ?? '',
       r.snippet && r.snippet !== r.label ? r.snippet : '',
