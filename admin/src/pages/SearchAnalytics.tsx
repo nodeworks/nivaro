@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatNumber } from '@/lib/utils'
 import { AddSynonymButton, SynonymsCard } from './SearchSynonyms'
+import { SearchWhyCard } from './SearchWhy'
 
 /**
  * Search Analytics (#1581, admin only). What people typed into Cmd+K and the
@@ -322,6 +323,8 @@ export function SearchAnalyticsPage() {
             </p>
           </>
         )}
+        {/* Search item 25 — needs no search log, so it shows whatever the log's state. */}
+        {!isLoading && <SearchWhyCard />}
       </div>
     </div>
   )
