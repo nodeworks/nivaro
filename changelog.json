@@ -1,10 +1,70 @@
 {
-  "generated_at": "2026-10-28T18:05:57.654Z",
+  "generated_at": "2026-10-28T18:57:55.187Z",
   "releases": [
+    {
+      "version": "0.3.43",
+      "tag": "v0.3.43",
+      "date": "2026-10-28T14:57:41-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "catalog-picker",
+              "text": "shown-field matches first; others say which field matched",
+              "hash": "18111daa2"
+            },
+            {
+              "section": "Added",
+              "scope": "global-search",
+              "text": "labels=1 matches only what a record's label shows",
+              "hash": "96383d6f1"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "collection tabs with counts in the Cmd+K palette",
+              "hash": "75c0d2395"
+            },
+            {
+              "section": "Added",
+              "scope": "global-search",
+              "text": "per-collection match counts and paging for search tabs",
+              "hash": "15a59ca01"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "list search never matches a field the caller may not read",
+              "hash": "11fc36ab5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record header",
+              "text": "Hold buttons match the pipeline buttons; stay with an addendum open",
+              "hash": "5aee02bf1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "global-search",
+              "text": "never match or show a field the caller may not read",
+              "hash": "7b4848ad4"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.3.42",
       "tag": "v0.3.42",
-      "date": "2026-10-28T14:05:44-04:00",
+      "date": "2026-10-28T14:05:57-04:00",
       "sections": [
         {
           "label": "Added",
