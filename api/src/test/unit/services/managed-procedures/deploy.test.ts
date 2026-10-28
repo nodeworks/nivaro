@@ -33,10 +33,15 @@ vi.mock('../../../../services/procedure-deploy.js', async (importOriginal) => {
     ...real,
     deployProcedure: vi.fn(async () => {}),
     dropProcedure: vi.fn(async () => {}),
+    // As SQL Server answers: an encrypted proc ('' here) has a NULL definition.
     liveProcedureDefinition: vi.fn(
-      async (_schema: string | null, name: string) => live.defs.get(name.toLowerCase()) ?? null
+      async (_schema: string | null, name: string) => live.defs.get(name.toLowerCase()) || null
     ),
-    liveProcedureDefinitions: vi.fn(async () => new Map(live.defs))
+    liveProcedureDefinitions: vi.fn(async (names?: string[]) => {
+      if (!names) return new Map(live.defs)
+      const want = new Set(names.map((n) => n.toLowerCase()))
+      return new Map([...live.defs].filter(([n]) => want.has(n)))
+    })
   }
 })
 
@@ -54,9 +59,14 @@ import {
   ManagedProcError,
   saveManagedVersion
 } from '../../../../services/managed-procedures/store.js'
-import { deployProcedure, dropProcedure, sha256 } from '../../../../services/procedure-deploy.js'
+import {
+  deployProcedure,
+  dropProcedure,
+  liveProcedureDefinitions,
+  sha256
+} from '../../../../services/procedure-deploy.js'
 import { registerReadinessCheck } from '../../../../services/readiness.js'
-import { resetFakeStore, rowsOf, seedRow } from './fake-store.js'
+import { fakeStore, resetFakeStore, rowsOf, seedRow } from './fake-store.js'
 
 const IMPORTS = 'nivaro_import_definitions'
 const OLD = 'CREATE PROCEDURE spend_totals AS SELECT 1'
@@ -103,6 +113,8 @@ beforeEach(() => {
   vi.mocked(deployProcedure).mockImplementation(async () => {})
   vi.mocked(dropProcedure).mockReset()
   vi.mocked(dropProcedure).mockImplementation(async () => {})
+  vi.mocked(liveProcedureDefinitions).mockClear()
+  fakeStore.beforeUpdate = null
 })
 
 describe('deployManagedProcedure', () => {
@@ -535,5 +547,198 @@ describe('dropProcedure', () => {
     await expect(drop({ schema: 'dbo', name: 'x]; DROP TABLE t; --' })).rejects.toThrow(/dbo/)
     await expect(drop({ schema: 'sales', name: 'old_report' })).rejects.toThrow(/dbo/)
     expect(conn.sql).toEqual([])
+  })
+})
+
+describe('fix round 1', () => {
+  it('a stamp failure after a successful deploy keeps config (it matches live) and says so', async () => {
+    await saveManagedVersion({ name: 'spend_totals', body: OLD, note: 'v1', userId: null })
+    live.defs.set('spend_totals', OLD)
+    // The DDL succeeds; the stamp written after it fails.
+    vi.mocked(deployProcedure).mockImplementationOnce(async () => {
+      fakeStore.beforeUpdate = (table) => {
+        if (table === MANAGED_TABLE) throw new Error('stamp write lost')
+      }
+    })
+    const err = await saveAndDeployManaged({
+      name: 'spend_totals',
+      body: NEW,
+      note: 'v2',
+      userId: null,
+      by: 'user:u1'
+    }).catch((e) => e)
+    fakeStore.beforeUpdate = null
+    expect(deployProcedure).toHaveBeenCalledTimes(1)
+    expect(err).toBeInstanceOf(ManagedProcError)
+    expect(err.code).toBe('DEPLOY_STAMP_FAILED')
+    expect(err.message).toMatch(/stamp write lost/)
+    const p = await getManagedProcedure('spend_totals')
+    expect(p?.version).toBe(2)
+    expect(p?.body_hash).toBe(procBodyHash(NEW))
+  })
+
+  it('deploy-all reports a stamp failure as phase stamp, a DDL failure as phase deploy', async () => {
+    seedManaged('a_proc', 'CREATE OR ALTER PROCEDURE a_proc AS SELECT 1')
+    seedManaged('b_proc', 'CREATE OR ALTER PROCEDURE b_proc AS SELECT 1')
+    vi.mocked(deployProcedure).mockImplementation(async (_d, t) => {
+      if (t.name === 'a_proc') throw new Error('Managed boom')
+    })
+    fakeStore.beforeUpdate = (table) => {
+      if (table === MANAGED_TABLE) throw new Error('stamp write lost')
+    }
+    const { results, failed } = await deployAllAppManaged({ execute: true, by: 'script:test' })
+    expect(failed).toBe(2)
+    expect(results.find((r) => r.name === 'a_proc')).toMatchObject({
+      action: 'failed',
+      phase: 'deploy',
+      reason: 'Managed boom'
+    })
+    const b = results.find((r) => r.name === 'b_proc')
+    expect(b).toMatchObject({ action: 'failed', phase: 'stamp' })
+    expect(b?.reason).toMatch(/^created, but recording the deploy failed: stamp write lost/)
+  })
+
+  it('two import definitions naming one proc: neither deploys, both reported, drift conflict', async () => {
+    seedImport('b_def', 'import_dup', 'CREATE OR ALTER PROCEDURE import_dup AS SELECT 2')
+    seedImport('a_def', 'IMPORT_DUP', 'CREATE OR ALTER PROCEDURE import_dup AS SELECT 1')
+    seedImport('ok', 'import_ok', 'CREATE OR ALTER PROCEDURE import_ok AS SELECT 1')
+    const { results, failed, problems } = await deployAllAppManaged({
+      execute: true,
+      by: 'script:test'
+    })
+    const dups = results.filter((r) => r.name.toLowerCase() === 'import_dup')
+    expect(dups).toHaveLength(2)
+    for (const d of dups) {
+      expect(d).toMatchObject({
+        kind: 'import',
+        action: 'skipped',
+        reason: 'import definitions a_def, b_def both own it'
+      })
+    }
+    expect(deployProcedure).toHaveBeenCalledTimes(1)
+    expect(deployProcedure).toHaveBeenCalledWith(expect.stringContaining('import_ok'), {
+      schema: 'dbo',
+      name: 'import_ok'
+    })
+    expect(failed).toBe(0)
+    expect(problems).toBe(2)
+    const drift = await managedDrift()
+    expect(drift.filter((d) => d.name.toLowerCase() === 'import_dup').map((d) => d.status)).toEqual(
+      ['conflict', 'conflict']
+    )
+  })
+
+  it('the owner answer is deterministic and exposes an import conflict', async () => {
+    const { appManagedProcedures } = await import(
+      '../../../../services/managed-procedures/owners.js'
+    )
+    seedImport('b_def', 'import_dup', 'CREATE OR ALTER PROCEDURE import_dup AS SELECT 2')
+    seedImport('a_def', 'IMPORT_DUP', 'CREATE OR ALTER PROCEDURE import_dup AS SELECT 1')
+    const owner = (await appManagedProcedures()).get('import_dup')
+    expect(owner).toMatchObject({
+      kind: 'import',
+      key: 'a_def',
+      conflictingKeys: ['a_def', 'b_def']
+    })
+  })
+
+  it('an encrypted live proc (NULL definition) counts as live on the single path', async () => {
+    seedManaged('old_report', 'CREATE OR ALTER PROCEDURE old_report AS SELECT 1', {
+      deployed_hash: 'h',
+      dropped_at: new Date()
+    })
+    live.defs.set('old_report', '')
+    const r = await deployManagedProcedure('old_report', { by: 'script:test' })
+    expect(r.action).toBe('dropped')
+    expect(dropProcedure).toHaveBeenCalledWith({ schema: 'dbo', name: 'old_report' })
+    seedManaged('enc', 'CREATE OR ALTER PROCEDURE enc AS SELECT 1')
+    live.defs.set('enc', '')
+    expect((await deployManagedProcedure('enc')).action).toBe('altered')
+  })
+
+  it('a case-only change (a literal) is deployed', async () => {
+    seedManaged('status_list', "CREATE OR ALTER PROCEDURE status_list AS SELECT 'OPEN' AS s", {
+      deployed_hash: 'x'
+    })
+    live.defs.set('status_list', "CREATE PROCEDURE status_list AS SELECT 'Open' AS s")
+    expect((await deployManagedProcedure('status_list')).action).toBe('altered')
+    const drift = await managedDrift()
+    expect(drift.find((d) => d.name === 'status_list')?.status).toBe('drifted')
+  })
+
+  it('header case and whitespace alone are not a change', async () => {
+    seedManaged('status_list', "CREATE OR ALTER PROCEDURE status_list AS SELECT 'OPEN' AS s")
+    live.defs.set('status_list', "create   procedure status_list\nAS SELECT 'OPEN' AS s")
+    expect((await deployManagedProcedure('status_list')).action).toBe('unchanged')
+  })
+
+  it('a stamp is skipped when the row moved on during the deploy', async () => {
+    seedManaged('spend_totals', NEW)
+    vi.mocked(deployProcedure).mockImplementation(async () => {
+      const row = managedRow('spend_totals') as Record<string, unknown>
+      row.version = 2
+      row.body_hash = 'newer'
+    })
+    const r = await deployManagedProcedure('spend_totals')
+    expect(r.action).toBe('created')
+    expect(managedRow('spend_totals')?.deployed_hash).toBeNull()
+  })
+
+  it('the readiness check reads only config names and caches for 30 minutes', async () => {
+    registerManagedProcReadiness()
+    seedManaged('in_sync', 'CREATE OR ALTER PROCEDURE in_sync AS SELECT 1')
+    live.defs.set('in_sync', 'CREATE PROCEDURE in_sync AS SELECT 1')
+    live.defs.set('legacy_unknown', 'CREATE PROCEDURE legacy_unknown AS SELECT 1')
+    await readiness.checks[0].run()
+    expect(liveProcedureDefinitions).toHaveBeenCalledWith(['in_sync'])
+    expect(readiness.checks[0].ttlMs).toBe(30 * 60_000)
+  })
+
+  it('deploy-all off SQL Server deploys nothing and says why', async () => {
+    dialect.mssql = false
+    seedManaged('a_proc', 'CREATE OR ALTER PROCEDURE a_proc AS SELECT 1')
+    const r = await deployAllAppManaged({ execute: true, by: 'script:test' })
+    expect(r).toMatchObject({ results: [], failed: 0, problems: 0 })
+    expect(r.unsupported).toMatch(/SQL Server/)
+    expect(liveProcedureDefinitions).not.toHaveBeenCalled()
+  })
+
+  it('skipped import bodies (header mismatch, empty) count as problems', async () => {
+    seedImport('x', 'import_x', 'CREATE OR ALTER PROCEDURE other AS SELECT 1')
+    seedImport('e', 'import_e', '   ')
+    const { problems, failed, results } = await deployAllAppManaged({
+      execute: true,
+      by: 'script:test'
+    })
+    expect(failed).toBe(0)
+    expect(problems).toBe(2)
+    expect(results.every((r) => r.action === 'skipped' && r.reason)).toBe(true)
+  })
+
+  it('a DROPPED managed row that an import owns is skipped and nothing is dropped', async () => {
+    seedManaged('import_po', 'CREATE OR ALTER PROCEDURE import_po AS SELECT 1', {
+      dropped_at: new Date()
+    })
+    seedImport('po', 'import_po', 'CREATE OR ALTER PROCEDURE import_po AS SELECT 2')
+    live.defs.set('import_po', 'CREATE PROCEDURE import_po AS SELECT 2')
+    const r = await deployManagedProcedure('import_po')
+    expect(r).toMatchObject({ action: 'skipped', reason: 'import definition po owns it' })
+    expect(dropProcedure).not.toHaveBeenCalled()
+  })
+
+  it('a case-only edit is saved as a new version and deployed', async () => {
+    const v1 = "CREATE PROCEDURE status_list AS SELECT 'Open' AS s"
+    await saveManagedVersion({ name: 'status_list', body: v1, note: 'v1', userId: null })
+    live.defs.set('status_list', v1)
+    const r = await saveAndDeployManaged({
+      name: 'status_list',
+      body: "CREATE PROCEDURE status_list AS SELECT 'OPEN' AS s",
+      note: 'v2',
+      userId: null,
+      by: 'user:u1'
+    })
+    expect(r).toMatchObject({ version: 2, unchanged: false })
+    expect(r.deployed.action).toBe('altered')
+    expect((await getManagedProcedure('status_list'))?.body).toContain("'OPEN'")
   })
 })

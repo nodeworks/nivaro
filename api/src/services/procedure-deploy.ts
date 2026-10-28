@@ -166,21 +166,37 @@ export async function dropProcedure(target: {
   )
 }
 
+/** Names per IN (…) read — well under SQL Server's ~2100 bound-parameter cap. */
+const LIVE_READ_CHUNK = 500
+
 /**
- * Every user dbo procedure's text as SQL Server keeps it, keyed by lowercased name — one read for
- * a whole deploy run or drift report. A proc without readable text maps to ''.
+ * User dbo procedures' text as SQL Server keeps it, keyed by lowercased name — one read for a
+ * whole deploy run or drift report. `names` limits the read to those procedures (in chunks);
+ * omitted, every user dbo procedure. A proc whose text is not readable (WITH ENCRYPTION: its
+ * sys.sql_modules definition is NULL) maps to '' — it is live (a drop must see it) and never
+ * matches a config body. Unlike liveProcedureDefinition(), which answers null for it.
  */
-export async function liveProcedureDefinitions(): Promise<Map<string, string>> {
-  const rows = (await db.raw(
-    `SELECT p.name, m.definition FROM sys.procedures p
-       JOIN sys.sql_modules m ON m.object_id = p.object_id
+export async function liveProcedureDefinitions(names?: string[]): Promise<Map<string, string>> {
+  const base = `SELECT p.name, m.definition FROM sys.procedures p
        JOIN sys.schemas s ON s.schema_id = p.schema_id
+       LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
       WHERE p.is_ms_shipped = 0 AND s.name = 'dbo'`
-  )) as Array<{ name: string; definition: string | null }>
+  const reads: Array<Promise<unknown>> = []
+  if (names === undefined) reads.push(db.raw(base))
+  else {
+    const wanted = [...new Set(names.filter((n) => PROC_NAME_RE.test(n)))]
+    for (let i = 0; i < wanted.length; i += LIVE_READ_CHUNK) {
+      const chunk = wanted.slice(i, i + LIVE_READ_CHUNK)
+      reads.push(db.raw(`${base} AND p.name IN (${chunk.map(() => '?').join(', ')})`, chunk))
+    }
+  }
   const out = new Map<string, string>()
-  for (const r of rows ?? []) {
-    // An encrypted proc has no text: it is still live (a drop must see it), it never matches.
-    if (r?.name) out.set(String(r.name).toLowerCase(), r.definition ?? '')
+  for (const rows of (await Promise.all(reads)) as Array<
+    Array<{ name: string; definition: string | null }>
+  >) {
+    for (const r of rows ?? []) {
+      if (r?.name) out.set(String(r.name).toLowerCase(), r.definition ?? '')
+    }
   }
   return out
 }

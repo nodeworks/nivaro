@@ -4,7 +4,7 @@ import {
   liveProcedureDefinition,
   toCreateOrAlter
 } from '../procedure-deploy.js'
-import { procBodyHash } from './normalize.js'
+import { procBodyHash, sameDeployedBody } from './normalize.js'
 import { MANAGED_TABLE, procedureOwner, VERSIONS_TABLE } from './owners.js'
 
 /**
@@ -173,9 +173,10 @@ export async function listManagedProcedures(): Promise<ManagedProcedure[]> {
  * `extra.current`). `baseHash: null` means "I am creating it" — stale when a row exists.
  *
  * The stored body is the CREATE OR ALTER form. A body that normalizes to the current hash of a
- * live (not dropped) row is `unchanged` and nothing is written. Otherwise the row and its
- * version row are written in one transaction, guarded on the row being what we read — a writer
- * that got in between makes this 409 PROC_STALE. `previous` is the row before the save (null
+ * live (not dropped) row, and differs from it at most in header spelling and whitespace (case
+ * kept — a case-only edit is saved), is `unchanged` and nothing is written. Otherwise the row
+ * and its version row are written in one transaction, guarded on the row being what we read — a
+ * writer that got in between makes this 409 PROC_STALE. `previous` is the row before the save (null
  * for a new one), for putBackManaged().
  */
 export async function saveManagedVersion(input: {
@@ -211,7 +212,14 @@ export async function saveManagedVersion(input: {
 
   const body = toCreateOrAlter(raw)
   const bodyHash = procBodyHash(body)
-  if (current && current.body_hash === bodyHash && current.dropped_at == null) {
+  // Unchanged = same hash AND same deploy form: body_hash lowercases, so a case-only edit (a
+  // literal 'Open' → 'OPEN') hashes the same yet is a real change the deploy must ship.
+  if (
+    current &&
+    current.body_hash === bodyHash &&
+    current.dropped_at == null &&
+    sameDeployedBody(current.body, body)
+  ) {
     return { procedure: current, version: current.version, unchanged: true, previous: current }
   }
 
@@ -341,15 +349,30 @@ export async function getManagedVersion(
   return { ...toVersion(row), body: String(row.body ?? '') }
 }
 
-/** Record what this database just got from config (`hash` null after a drop). */
-export async function stampDeployed(id: number, hash: string | null, by: string): Promise<void> {
-  await db(MANAGED_TABLE)
-    .where('id', id)
+/**
+ * Record what this database just got from config (`hash` null after a drop). With `guard`, the
+ * stamp is written only while the row is still at that version and body_hash — a save that moved
+ * it on during the deploy is its own writer's to deploy and stamp. Resolves whether it wrote.
+ */
+export async function stampDeployed(
+  id: number,
+  hash: string | null,
+  by: string,
+  guard?: { version: number; body_hash: string }
+): Promise<boolean> {
+  const where: Record<string, unknown> = { id }
+  if (guard) {
+    where.version = guard.version
+    where.body_hash = guard.body_hash
+  }
+  const hit = await db(MANAGED_TABLE)
+    .where(where)
     .update({
       deployed_hash: hash,
       deployed_at: new Date(),
       deployed_by: String(by ?? '').slice(0, TEXT_MAX) || null
     })
+  return Number(hit) > 0
 }
 
 /**

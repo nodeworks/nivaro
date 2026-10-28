@@ -30,3 +30,21 @@ export function normalizeProcBody(s: string): string {
 export function procBodyHash(s: string): string {
   return createHash('sha256').update(normalizeProcBody(s)).digest('hex')
 }
+
+/**
+ * The form a deploy DECIDES in: marker stripped, the first `create [or alter] proc[edure]` folded
+ * to `create proc`, whitespace runs collapsed, trimmed — and case KEPT. normalizeProcBody
+ * lowercases, so a case-only change (a literal 'Open' → 'OPEN') would read as unchanged and
+ * never deploy; body_hash keeps using normalizeProcBody (scripts and stale checks rely on it).
+ */
+export function procDeployForm(s: string): string {
+  return stripAppManagedMarker(s)
+    .replace(/create\s+(or\s+alter\s+)?proc(edure)?/i, 'create proc')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Whether a config body and a live definition are the same for deploy purposes. */
+export function sameDeployedBody(config: string, live: string): boolean {
+  return procDeployForm(config) === procDeployForm(live)
+}
