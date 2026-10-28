@@ -14,11 +14,11 @@ test.describe('Login page', () => {
     expect(title.toLowerCase()).toMatch(/nivaro|login/)
   })
 
-  test('Microsoft login button is visible', async ({ page }) => {
+  test('SSO sign-in button is visible', async ({ page }) => {
     await page.goto('/login')
-    const btn = page
-      .getByRole('button', { name: /microsoft/i })
-      .or(page.getByRole('link', { name: /microsoft/i }))
+    // The provider's label is configurable ("Continue with Microsoft", "Continue with example"…).
+    const sso = /continue with|microsoft/i
+    const btn = page.getByRole('button', { name: sso }).or(page.getByRole('link', { name: sso }))
     await expect(btn.first()).toBeVisible({ timeout: 8000 })
   })
 
