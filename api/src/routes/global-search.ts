@@ -96,6 +96,9 @@ interface PlanEntry {
   collection: string
   display_name: string | null
   columns: string[]
+  /** The columns its label shows (display-template fields, else the first search
+   *  column): what a labels-only search (`labels=1`) matches. */
+  labelColumns: string[]
   template: string | null
   /** Partition-stat row count — what a contains-LIKE over it costs. */
   rows: number
@@ -172,6 +175,7 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
     for (const m of (col.display_template ?? '').matchAll(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g)) {
       if (available.has(m[1]) && !picked.includes(m[1])) picked.push(m[1])
     }
+    const fromTemplate = picked.filter((c) => IDENT_RE.test(c))
     for (const n of NAMEISH) if (available.has(n) && !picked.includes(n)) picked.push(n)
     // String-typed *_id columns are business identifiers (order_id,
     // project_id, request_id) — FK columns are ints/uuids.
@@ -184,6 +188,10 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       collection: col.collection,
       display_name: col.display_name,
       columns,
+      // A template that shows only non-text fields has no label to match: the
+      // collection sits out of a labels-only search. No template: the label is the
+      // first search column.
+      labelColumns: col.display_template?.trim() ? fromTemplate : columns.slice(0, 1),
       template: col.display_template,
       rows: rowsByTable.get(col.collection) ?? 0
     })
@@ -218,6 +226,12 @@ type RecordHit = {
   snippet: string
 }
 
+/** The columns a search matches: every search column, or (labels-only) just the ones
+ *  the record's label shows — so every hit visibly contains what was typed. */
+function searchColumns(p: PlanEntry, labelsOnly: boolean): string[] {
+  return labelsOnly ? p.labelColumns : p.columns
+}
+
 /** A hit's label: the collection's display template over the row, else the matched text. */
 function hitLabel(
   p: PlanEntry | undefined,
@@ -236,17 +250,24 @@ function hitLabel(
 }
 
 /** The first plan column holding a value, for a hit found by the items service. */
-function matchedText(p: PlanEntry, item: Record<string, unknown>): string {
-  for (const c of p.columns) {
+function matchedText(p: PlanEntry, item: Record<string, unknown>, cols = p.columns): string {
+  for (const c of cols) {
     const v = item[c]
     if (v != null && typeof v !== 'object' && String(v).trim()) return String(v)
   }
   return String(item.id ?? '')
 }
 
-async function searchRecords(user: User, readable: string[], q: string): Promise<RecordHit[]> {
+async function searchRecords(
+  user: User,
+  readable: string[],
+  q: string,
+  labelsOnly = false
+): Promise<RecordHit[]> {
   const readableSet = new Set(readable)
-  const plan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
+  const plan = (await buildSearchPlan()).filter(
+    (p) => readableSet.has(p.collection) && searchColumns(p, labelsOnly).length > 0
+  )
   if (plan.length === 0) return []
 
   // Search synonyms (#1581): the phrase as typed plus its synonym forms. With
@@ -259,22 +280,23 @@ async function searchRecords(user: User, readable: string[], q: string): Promise
     const parts: string[] = []
     const bindings: string[] = []
     for (const p of batch) {
-      const casts = p.columns.map((c) => `CAST([${c}] AS nvarchar(200))`)
+      const cols = searchColumns(p, labelsOnly)
+      const casts = cols.map((c) => `CAST([${c}] AS nvarchar(200))`)
       // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
       const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
       const wheres =
         likes.length > 1
-          ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${p.columns.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
-          : p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
+          ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
+          : cols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
       // Best matches first within each collection (army 2026-10-25: an exact
       // name came back nowhere because TOP took an arbitrary five): a column
       // equal to the phrase, then one starting with it, then the newest.
-      const rank = `CASE WHEN ${p.columns.map((c) => `[${c}] = ?`).join(' OR ')} THEN 0 WHEN ${p.columns.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 2 END`
+      const rank = `CASE WHEN ${cols.map((c) => `[${c}] = ?`).join(' OR ')} THEN 0 WHEN ${cols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 2 END`
       parts.push(
         `SELECT * FROM (SELECT TOP ${PER_COLLECTION} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id, ${labelExpr} AS label FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
       )
-      if (likes.length === 1) bindings.push(...p.columns.map(() => likes[0]))
-      bindings.push(...p.columns.map(() => q), ...p.columns.map(() => `${escapeLike(q)}%`))
+      if (likes.length === 1) bindings.push(...cols.map(() => likes[0]))
+      bindings.push(...cols.map(() => q), ...cols.map(() => `${escapeLike(q)}%`))
     }
     const cte =
       likes.length > 1
@@ -336,6 +358,14 @@ async function searchRecords(user: User, readable: string[], q: string): Promise
   )
 
   const lower = q.toLowerCase()
+  if (labelsOnly) {
+    // What the person sees must hold what they typed (or a synonym of it).
+    const forms = phrases.map((ph) => ph.toLowerCase())
+    for (let i = results.length - 1; i >= 0; i--) {
+      const label = results[i].label.toLowerCase()
+      if (!forms.some((f) => label.includes(f))) results.splice(i, 1)
+    }
+  }
   const tier = (r: { id: unknown; label: string; snippet: string }) => {
     const label = r.label.toLowerCase()
     const snippet = r.snippet.toLowerCase()
@@ -458,9 +488,14 @@ function matchStatic(
 // ─── One collection's matches (the search's collection tabs) ─────────────────
 
 /** The items-service filter for "any search column contains the phrase (or a synonym)". */
-async function matchFilter(p: PlanEntry, q: string): Promise<Record<string, unknown>> {
+async function matchFilter(
+  p: PlanEntry,
+  q: string,
+  labelsOnly: boolean
+): Promise<Record<string, unknown>> {
   const phrases = await searchPhrases(q).catch(() => [q])
-  return { _or: phrases.flatMap((ph) => p.columns.map((c) => ({ [c]: { _contains: ph } }))) }
+  const cols = searchColumns(p, labelsOnly)
+  return { _or: phrases.flatMap((ph) => cols.map((c) => ({ [c]: { _contains: ph } }))) }
 }
 
 const COUNT_CONCURRENCY = 4
@@ -472,11 +507,15 @@ export async function countMatches(
   user: User,
   readable: string[],
   q: string,
-  collections: string[]
+  collections: string[],
+  labelsOnly = false
 ): Promise<Array<{ collection: string; display_name: string | null; count: number }>> {
   const readableSet = new Set(readable)
   const plan = (await buildSearchPlan()).filter(
-    (p) => readableSet.has(p.collection) && collections.includes(p.collection)
+    (p) =>
+      readableSet.has(p.collection) &&
+      collections.includes(p.collection) &&
+      searchColumns(p, labelsOnly).length > 0
   )
   const out: Array<{ collection: string; display_name: string | null; count: number }> = []
   for (let i = 0; i < plan.length; i += COUNT_CONCURRENCY) {
@@ -484,7 +523,7 @@ export async function countMatches(
       plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
         try {
           const r = await readItems(user, p.collection, {
-            filter: await matchFilter(p, q),
+            filter: await matchFilter(p, q, labelsOnly),
             fields: ['id'],
             limit: 1
           })
@@ -506,19 +545,20 @@ export async function searchCollectionPage(
   q: string,
   collection: string,
   offset: number,
-  limit: number
+  limit: number,
+  labelsOnly = false
 ): Promise<{ data: RecordHit[]; total: number | null }> {
   if (!readable.includes(collection)) return { data: [], total: 0 }
   const p = (await buildSearchPlan()).find((x) => x.collection === collection)
-  if (!p) return { data: [], total: 0 }
+  if (!p || searchColumns(p, labelsOnly).length === 0) return { data: [], total: 0 }
   const r = await readItems(user, collection, {
-    filter: await matchFilter(p, q),
+    filter: await matchFilter(p, q, labelsOnly),
     sort: ['-id'],
     offset,
     limit
   })
   const data = (r.data as Array<Record<string, unknown>>).map((item) => {
-    const matched = matchedText(p, item)
+    const matched = matchedText(p, item, searchColumns(p, labelsOnly))
     return {
       collection,
       display_name: p.display_name,
@@ -551,8 +591,10 @@ export async function globalSearchRoutes(app: FastifyInstance) {
 
   // GET /?q= — search records, admin pages, and quick actions
   app.get('/', async (req, reply) => {
-    const { q: rawQ } = req.query as { q?: string }
+    const { q: rawQ, labels } = req.query as { q?: string; labels?: string }
     const q = (rawQ ?? '').trim()
+    // labels=1: match only what each record's label shows (the EFP palette).
+    const labelsOnly = labels === '1' || labels === 'true'
 
     const forms = q.length >= 2 ? await searchPhrases(q).catch(() => [q]) : [q]
     const pages = q ? matchStatic(ADMIN_PAGES, forms, 8) : []
@@ -580,7 +622,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     }
 
     const [records, people] = await Promise.all([
-      searchRecords(user as User, readable, q),
+      searchRecords(user as User, readable, q, labelsOnly),
       searchPeople(q, req.isAdmin === true)
     ])
 
@@ -638,7 +680,16 @@ export async function globalSearchRoutes(app: FastifyInstance) {
   // GET /counts?q=&collections=a,b — each listed collection's match count as the caller
   // (the search's tabs). The palette asks for the collections the first answer found.
   app.get('/counts', async (req, reply) => {
-    const { q: rawQ, collections: rawCols } = req.query as { q?: string; collections?: string }
+    const {
+      q: rawQ,
+      collections: rawCols,
+      labels
+    } = req.query as {
+      q?: string
+      collections?: string
+      labels?: string
+    }
+    const labelsOnly = labels === '1' || labels === 'true'
     const q = (rawQ ?? '').trim()
     const cols = (rawCols ?? '')
       .split(',')
@@ -650,7 +701,7 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     // A COUNT per collection over contains-LIKEs: an expensive read, so it holds a slot.
     const data = await withReadGate(
       String(user.id),
-      async () => countMatches(user, await readableCollections(user), q, cols),
+      async () => countMatches(user, await readableCollections(user), q, cols, labelsOnly),
       { label: 'global-search:counts' }
     )
     return reply.send({ data })
@@ -658,7 +709,14 @@ export async function globalSearchRoutes(app: FastifyInstance) {
 
   // GET /records?q=&collection=&offset=&limit= — one collection's matches, a page at a time.
   app.get('/records', async (req, reply) => {
-    const query = req.query as { q?: string; collection?: string; offset?: string; limit?: string }
+    const query = req.query as {
+      q?: string
+      collection?: string
+      offset?: string
+      limit?: string
+      labels?: string
+    }
+    const labelsOnly = query.labels === '1' || query.labels === 'true'
     const q = (query.q ?? '').trim()
     const collection = (query.collection ?? '').trim()
     if (q.length < 2 || !IDENT_RE.test(collection)) return reply.send({ data: [], total: 0 })
@@ -669,7 +727,15 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       const page = await withReadGate(
         String(user.id),
         async () =>
-          searchCollectionPage(user, await readableCollections(user), q, collection, offset, limit),
+          searchCollectionPage(
+            user,
+            await readableCollections(user),
+            q,
+            collection,
+            offset,
+            limit,
+            labelsOnly
+          ),
         { label: 'global-search:records' }
       )
       return reply.send(page)

@@ -51,6 +51,11 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
   }
 }
 
+// labels=1 (on all three): match only the fields each record's label shows (its display
+// template), so every hit visibly contains the text. Collections whose label shows no
+// text field sit out.
+GET /api/global-search?q=acme&labels=1
+
 // Tabs: each collection's match count, counted as the caller (RBAC, row filters, User Scopes).
 // Pass the collections the first answer's records came from.
 GET /api/global-search/counts?q=acme&collections=customers,orders
