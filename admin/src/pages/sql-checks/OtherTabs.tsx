@@ -277,9 +277,11 @@ function PageFix({ row }: { row: FixRow }) {
   const state = d.reverted
     ? `Reverted${d.reverted_by ? ` by ${d.reverted_by}` : ''}`
     : d.applied
-      ? d.deployed
-        ? 'Applied and checked'
-        : 'Stored body saved (not deployed)'
+      ? d.kind === 'managed_procedure'
+        ? `Saved to app config${d.managed_version ? ` as v${d.managed_version}` : ''} and deployed`
+        : d.deployed
+          ? 'Applied and checked'
+          : 'Stored body saved (not deployed)'
       : d.rolled_back
         ? `Put back automatically: ${d.rollback_reason ?? 'the re-check was not clean'}`
         : d.error

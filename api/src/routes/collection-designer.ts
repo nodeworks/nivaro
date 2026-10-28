@@ -19,6 +19,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { procedureOwner } from '../services/managed-procedures/owners.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const COLUMN_TYPES = new Set([
@@ -859,6 +860,12 @@ ${sample
               staging_columns: JSON.stringify(svc.stagingColumns)
             }
           } else {
+            // A procedure app config owns (app-managed, or an import definition's) has one
+            // writer — the pipeline never generates over it.
+            if (await procedureOwner(procName)) {
+              errors.push(`Procedure ${procName} is app-managed — import pipeline skipped`)
+              continue
+            }
             const procExists = (await db.raw(`SELECT 1 FROM sys.procedures WHERE name = ?`, [
               procName
             ])) as unknown[]

@@ -31,9 +31,10 @@ vi.mock('../../../services/procedure-deploy.js', async (orig) => {
 import { procedureRoutes } from '../../../routes/procedures.js'
 import { stagedImportRoutes } from '../../../routes/staged-imports.js'
 import { deployProcedure, toCreateOrAlter } from '../../../services/procedure-deploy.js'
-import { resetFakeStore, seedRow } from '../services/managed-procedures/fake-store.js'
+import { resetFakeStore, rowsOf, seedRow } from '../services/managed-procedures/fake-store.js'
 
 const IMPORTS = 'nivaro_import_definitions'
+const MANAGED = 'nivaro_managed_procedures'
 
 beforeEach(() => {
   resetFakeStore()
@@ -103,6 +104,152 @@ describe('the Procedures page never writes an app-managed procedure', () => {
     })
     expect(put.statusCode).toBe(409)
     expect(put.json()).toMatchObject({ code: 'APP_MANAGED', definition: 'invoices' })
+    expect(deployProcedure).not.toHaveBeenCalled()
+  })
+})
+
+describe('import definitions never take an app-managed procedure', () => {
+  const MSG =
+    'spend_totals is an app-managed procedure (Developer → Procedures). Give this import its own procedure, or drop it there first.'
+  const BODY = 'CREATE OR ALTER PROCEDURE spend_totals AS SELECT 1'
+  const imports = async () => {
+    const app = Fastify()
+    await app.register(stagedImportRoutes, { prefix: '/staged-imports' })
+    return app
+  }
+
+  it('PATCH an import definition body onto a managed procedure is 409 MANAGED_PROCEDURE', async () => {
+    const app = await imports()
+    seedRow(MANAGED, { name: 'spend_totals', body: BODY, body_hash: 'h', version: 1 })
+    const row = seedRow(IMPORTS, {
+      id: '1',
+      key: 'spend',
+      procedure: 'spend_totals',
+      procedure_body: null
+    })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/staged-imports/definitions/1',
+      payload: { procedure_body: BODY }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ code: 'MANAGED_PROCEDURE', error: MSG })
+    expect(row.procedure_body).toBeNull()
+  })
+
+  it('PATCH a body whose header names a managed procedure is refused whatever the row names', async () => {
+    const app = await imports()
+    seedRow(MANAGED, { name: 'spend_totals', body: BODY, body_hash: 'h', version: 1 })
+    seedRow(IMPORTS, { id: '1', key: 'spend', procedure: 'import_spend', procedure_body: null })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/staged-imports/definitions/1',
+      payload: { procedure_body: BODY }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'MANAGED_PROCEDURE' })
+  })
+
+  it('PATCH pointing a definition that has a body at a managed procedure is refused', async () => {
+    const app = await imports()
+    seedRow(MANAGED, { name: 'spend_totals', body: BODY, body_hash: 'h', version: 1 })
+    const row = seedRow(IMPORTS, {
+      id: '1',
+      key: 'spend',
+      procedure: 'import_spend',
+      procedure_body: 'CREATE OR ALTER PROCEDURE import_spend AS SELECT 1'
+    })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/staged-imports/definitions/1',
+      payload: { procedure: 'Spend_Totals' }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'MANAGED_PROCEDURE' })
+    expect(row.procedure).toBe('import_spend')
+  })
+
+  it('a dropped managed row does not block an import body', async () => {
+    const app = await imports()
+    seedRow(MANAGED, {
+      name: 'spend_totals',
+      body: BODY,
+      body_hash: 'h',
+      version: 2,
+      dropped_at: new Date()
+    })
+    const row = seedRow(IMPORTS, {
+      id: '1',
+      key: 'spend',
+      procedure: 'spend_totals',
+      procedure_body: null
+    })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/staged-imports/definitions/1',
+      payload: { procedure_body: BODY }
+    })
+    expect(res.json()).not.toMatchObject({ code: 'MANAGED_PROCEDURE' })
+    expect(row.procedure_body).toBe(BODY)
+  })
+
+  it('POST a new definition with a body onto a managed procedure is 409 MANAGED_PROCEDURE', async () => {
+    const app = await imports()
+    seedRow(MANAGED, { name: 'spend_totals', body: BODY, body_hash: 'h', version: 1 })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/staged-imports/definitions',
+      payload: { key: 'spend', procedure: 'spend_totals', procedure_body: BODY }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({ code: 'MANAGED_PROCEDURE', error: MSG })
+    expect(rowsOf(IMPORTS)).toHaveLength(0)
+  })
+
+  it('restoring a version whose body takes a managed procedure is refused', async () => {
+    const app = await imports()
+    seedRow(MANAGED, { name: 'spend_totals', body: BODY, body_hash: 'h', version: 1 })
+    const row = seedRow(IMPORTS, {
+      id: '1',
+      key: 'spend',
+      procedure: 'import_spend',
+      procedure_body: null
+    })
+    seedRow('nivaro_import_definition_versions', {
+      id: '5',
+      definition: '1',
+      version: 2,
+      snapshot: JSON.stringify({ procedure: 'spend_totals', procedure_body: BODY })
+    })
+    const res = await app.inject({
+      method: 'POST',
+      url: '/staged-imports/definitions/1/versions/5/restore'
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'MANAGED_PROCEDURE' })
+    expect(row.procedure).toBe('import_spend')
+  })
+
+  it('deploying one of two import definitions that name the same procedure is 409', async () => {
+    const app = await imports()
+    seedRow(IMPORTS, {
+      id: '1',
+      key: 'spend_a',
+      procedure: 'import_spend',
+      procedure_body: 'CREATE OR ALTER PROCEDURE import_spend AS SELECT 1'
+    })
+    seedRow(IMPORTS, {
+      id: '2',
+      key: 'spend_b',
+      procedure: 'import_spend',
+      procedure_body: 'CREATE OR ALTER PROCEDURE import_spend AS SELECT 2'
+    })
+    const res = await app.inject({ method: 'POST', url: '/staged-imports/definitions/1/deploy' })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({
+      code: 'IMPORT_PROC_CONFLICT',
+      definitions: ['spend_a', 'spend_b']
+    })
     expect(deployProcedure).not.toHaveBeenCalled()
   })
 })

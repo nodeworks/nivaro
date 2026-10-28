@@ -191,9 +191,11 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
             {p.class === 'xact-abort'
               ? 'Adds SET XACT_ABORT ON as the first statement, so a failed statement rolls the whole transaction back.'
               : 'Treats two empty keys as a match, so a row with an empty key updates its stored row instead of being added again.'}{' '}
-            {p.deploys
-              ? 'The procedure is changed in the database and checked again at once; if the check finds anything new, the previous version goes back automatically.'
-              : 'Only the stored body changes; deploy it from the import definition when you are ready.'}
+            {p.target.kind === 'managed_procedure'
+              ? 'The fix is checked first, then saved as a new version of the procedure in config and deployed from there; Revert saves the previous version back the same way.'
+              : p.deploys
+                ? 'The procedure is changed in the database and checked again at once; if the check finds anything new, the previous version goes back automatically.'
+                : 'Only the stored body changes; deploy it from the import definition when you are ready.'}
           </p>
 
           <p
