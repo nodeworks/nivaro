@@ -16416,17 +16416,19 @@ GET /api/approvals/decisions?instance=X
         <div class="doc-section" id="s-item-locking" data-toc='[{"id":"item-locking","label":"Item Locking &amp; Presence"},{"id":"draft-recovery","label":"Unsaved-draft recovery"},{"id":"item-locking-how-it-works","label":"How Locking Works"},{"id":"item-locking-api","label":"API Reference"},{"id":"item-locking-configuration","label":"Per-Collection Configuration"},{"id":"item-locking-ui-behavior","label":"UI Behavior"},{"id":"item-locking-presence","label":"Presence (Who&apos;s Viewing)"}]'>
           <!-- SYNC:item-locking -->
           <h1 class="doc-h1" id="item-locking">Item Locking &amp; Presence</h1>
-          <p class="doc-p">Prevent simultaneous editing conflicts with soft item locks. When a user opens a record for editing, a 5-minute TTL lock is acquired. Other users attempting to edit see an amber banner and the form switches to read-only. Locks auto-release after 5 minutes without activity, preventing stale locks from crashed tabs.</p>
+          <p class="doc-p">Prevent simultaneous editing conflicts with record edit locks. A lock is held only while the person is actually editing: their first real edit takes it, and it is let go the moment they leave — the tab is hidden, the browser window loses focus (for more than about 1.5 seconds; focus moving into a popover or an embedded frame on the page does not count), they switch to Summary mode, navigate away, close the page, or an administrator's View-as ends. Coming back to the tab in Edit mode takes it back silently; if someone else took it meanwhile, the form turns read-only naming them and keeps the unsaved changes. On the server a lock is a 30-second lease the open form renews every 10 seconds, so a crashed or sleeping browser frees the record within half a minute, and where the server can see every live connection (the realtime board) a holder with no connection left holds nothing at all. Other users attempting to edit a held record see an amber banner and the form switches to read-only; saves and transitions over a live lock are refused with 409 RECORD_LOCKED.</p>
           <h3 class="doc-h3" id="draft-recovery">Unsaved-draft recovery</h3>
           <p class="doc-p">The record form keeps a copy of your unsaved work in the browser (IndexedDB, per record and per user): the fields you changed, staged grid rows, edits and removals, and staged relation links — written about a second after each change and removed the moment the form is clean, saved, or you discard it. If the tab crashes, the session expires or you navigate away, the next time you open that record (or the new-record form for that collection) a banner offers "Restore your unsaved changes from N min ago" with the diff (field: was → will be) and staged counts; nothing is applied until you choose Restore. A draft whose values now match the saved record is dropped silently, and the banner flags when the record changed underneath the draft. On a new-record form only the fields you actually touched are kept — layout defaults and prefills are not treated as your work.</p>
           <h3 class="doc-h3" id="item-locking-how-it-works">How Locking Works</h3>
           <ul class="doc-ul">
-            <li>User opens item editor → client POSTs to acquire lock</li>
-            <li>Lock created in <code class="doc-code">nivaro_item_locks</code> with 5-minute TTL</li>
-            <li>Client heartbeat endpoint called every 2.5 minutes to refresh TTL</li>
-            <li>On close/navigate away, lock is deleted via DELETE</li>
-            <li>If lock already held, acquiring user gets 409 Conflict with holder info</li>
-            <li>After 5 minutes of no heartbeat, lock auto-expires</li>
+            <li>User makes the first real edit → client POSTs to acquire the lock with <code class="doc-code">beat_ms: 10000</code></li>
+            <li>Lock created in <code class="doc-code">nivaro_item_locks</code> with a 30-second lease (<code class="doc-code">expires_at</code>); a client that does not send <code class="doc-code">beat_ms</code> (built before 2026-10-28, 60 s heartbeat) gets 150 s</li>
+            <li>Client heartbeat every 10 seconds pushes <code class="doc-code">expires_at</code> forward by the lease</li>
+            <li>Tab hidden, window blurred (~1.5 s), Summary mode, navigate away or page close → the lock is released (a keepalive <code class="doc-code">POST …/lock/release</code> when the page may be going away)</li>
+            <li>Back in Edit mode on the focused tab → the lock is taken again silently</li>
+            <li>If the lock is held by someone live, the acquiring user gets 409 Conflict with holder info</li>
+            <li>A lock with no heartbeat inside its lease, or whose holder the realtime board knows has no connection left, holds nothing: it reads as free, is free to take, and refuses no save or transition</li>
+            <li>Stopping a View-as (DELETE /api/auth/masquerade) releases the locks taken through that View-as</li>
           </ul>
           <h3 class="doc-h3" id="item-locking-api">API Reference</h3>
           <pre class="doc-pre"><code>GET /api/item-locks/:collection/:item/lock
@@ -16476,7 +16478,8 @@ GET /api/approvals/decisions?instance=X
   }
 }</code></pre>
           <pre class="doc-pre"><code>POST /api/item-locks/:collection/:item/heartbeat
-  # Extend TTL by 5 minutes (called every 2.5 min while editing)
+  # Body { idle_seconds, beat_ms } — renews the lease (30 s when beat_ms ≤ 15000, else 150 s).
+  # Called every 10 s while the form is the focused, visible edit surface
 
 DELETE /api/item-locks/:collection/:item/lock
   # Release lock (called on close/navigate away)
@@ -16498,7 +16501,7 @@ PATCH /api/item-locks/config/:collection
             <li>Amber banner: "Being edited by Sarah Chen (expires in 4 min 30 sec)"</li>
             <li>Form switches to read-only when locked by someone else</li>
             <li>Admin sees "Take over" button in banner to force-acquire lock</li>
-            <li>Heartbeat interval: 2.5 minutes; TTL: 5 minutes (prevents stale locks)</li>
+            <li>Heartbeat interval: 10 seconds; lease: 30 seconds (a crashed or sleeping browser frees the record within half a minute)</li>
             <li>If disabled returns true, all lock UI is suppressed silently</li>
           </ul>
           <h3 class="doc-h3" id="item-locking-presence">Presence (Who's Viewing)</h3>
