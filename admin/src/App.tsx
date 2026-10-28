@@ -8,6 +8,7 @@ import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
+import { I18nProvider } from '@/lib/i18n'
 import {
   isLoginPath,
   isServerPath,
@@ -16,7 +17,6 @@ import {
   refusedLoginRedirect,
   takePostLoginTarget
 } from '@/lib/post-login-target'
-import { I18nProvider } from '@/lib/i18n'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
 import { ThemeProvider, useTheme } from '@/lib/theme'
@@ -259,7 +259,12 @@ const queryClient = new QueryClient({
         const e = err as { code?: string; name?: string } | null
         return failures < 1 && e?.code !== 'ECONNABORTED' && e?.name !== 'TimeoutError'
       },
-      staleTime: 30_000
+      staleTime: 30_000,
+      // Returning to the tab no longer refetches every stale query on the
+      // page at once (a burst per focus for anyone with many tabs open). Live
+      // data comes from the socket bridge, which also reconciles a tab that was
+      // hidden for a while; a query that must re-read on focus opts in itself.
+      refetchOnWindowFocus: false
     }
   }
 })
