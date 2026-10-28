@@ -2204,7 +2204,13 @@ function ItemEditFormView({
   const pdQuietRef = useRef<Set<string>>(new Set())
   // Staged links that are only prefill (staging key → ids): not unsaved work, never hold a
   // pushed reload. Set once the hook below exists.
-  const pdQuietLinksRef = useRef<() => Map<string, Set<string>>>(() => new Map())
+  const pdQuietLinksRef = useRef<(links: Map<string, unknown[]>) => Map<string, Set<string>>>(
+    () => new Map()
+  )
+  // Links a field rule staged because a personal-default value triggered it (staging key → ids).
+  const pdQuietRuleLinksRef = useRef<Map<string, Set<string>>>(new Map())
+  // An explicit fill (document autofill) takes a field over from its personal default.
+  const pdReleaseRef = useRef<(field: string) => void>(() => {})
   // The person's own edits reach the hook through this (handleFieldChange, M2M staging).
   const pdPersonChangeRef = useRef<(field: string) => void>(() => {})
   // > 0 while staging that is not the person's (rule results, layout defaults, prefill, imports).
@@ -2466,7 +2472,12 @@ function ItemEditFormView({
         if (crossFillInFlightRef.current === 0) {
           const field = stagingKeyToFieldRef.current.get(k)
           if (field) {
-            if (notPersonStageRef.current === 0) pdPersonChangeRef.current(field)
+            if (notPersonStageRef.current === 0) {
+              // The person's own pick: no longer prefill, so what it derives is their work.
+              pdQuietRef.current.delete(field)
+              pdQuietRuleLinksRef.current.delete(k)
+              pdPersonChangeRef.current(field)
+            }
             crossDefaultsRef.current?.(field, id)
             upstreamCascadesRef.current?.(field, id)
           }
@@ -2491,7 +2502,11 @@ function ItemEditFormView({
         })
         if (crossFillInFlightRef.current === 0 && notPersonStageRef.current === 0) {
           const field = stagingKeyToFieldRef.current.get(k)
-          if (field) pdPersonChangeRef.current(field)
+          if (field) {
+            pdQuietRef.current.delete(field)
+            pdQuietRuleLinksRef.current.delete(k)
+            pdPersonChangeRef.current(field)
+          }
         }
       },
       unstageUnlink: (k, jId) =>
@@ -2633,8 +2648,13 @@ function ItemEditFormView({
   const [fromAutofill, setFromAutofill] = useState(false)
   const applyDocumentProposal = useCallback(
     async (sel: DocumentApplySelection) => {
-      autofillAppliedRef.current = { id: sel.proposal_id, fields: Object.keys(sel.values) }
+      autofillAppliedRef.current = {
+        id: sel.proposal_id,
+        fields: [...Object.keys(sel.values), ...Object.keys(sel.m2m ?? {})]
+      }
       setFromAutofill(true)
+      // The document's links REPLACE a personal default's for that field (and its pill goes).
+      for (const f of Object.keys(sel.m2m ?? {})) pdReleaseRef.current(f)
       const values: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(sel.values)) {
         const cfg = (fieldConfig ?? []).find((f) => f.field === k)
@@ -3270,7 +3290,7 @@ function ItemEditFormView({
     const edits = size(pendingO2MEdits, (e) => e.size)
     const deletes = size(pendingO2MDeletes, (d) => d.size)
     // Links a personal default (or what it derived) staged are prefill, not unsaved work.
-    const links = linksBeyond(m2mLinks, pdQuietLinksRef.current())
+    const links = linksBeyond(m2mLinks, pdQuietLinksRef.current(m2mLinks))
     const unlinks = size(m2mUnlinks, (u) => u.size)
     const total = fields.length + rows + edits + deletes + links + unlinks
     const parts: string[] = []
@@ -3417,7 +3437,7 @@ function ItemEditFormView({
       if (!isDirty) {
         // Staged lines or links with a clean flag would be dropped below: keep the hold.
         // Links only a personal default staged come back on reload: they hold nothing.
-        const quietLinks = pdQuietLinksRef.current()
+        const quietLinks = pdQuietLinksRef.current(m2mLinks)
         const staged =
           pendingO2MRows.size +
           pendingO2MEdits.size +
@@ -4365,7 +4385,12 @@ function ItemEditFormView({
   crossDefaultsRef.current = runCrossDefaults
 
   const applyFieldRuleResults = useCallback(
-    (results: Record<string, unknown> | null | undefined, sentSeq?: number) => {
+    (
+      results: Record<string, unknown> | null | undefined,
+      sentSeq?: number,
+      // The trigger still holds a personal default's value: what the rule fills is prefill too.
+      quietTrigger = false
+    ) => {
       const { scalar: rawScalar, alias } = partitionRuleResults(
         results,
         new Set(m2mAliasFieldsForRules.keys())
@@ -4390,6 +4415,12 @@ function ItemEditFormView({
         // whatever that other response already staged, not what was true
         // when this request was fired.
         const toStage = idsNeedingStaging(ids, m2mAliasFieldStatesRef.current[field]?.ids)
+        if (quietTrigger && toStage.length > 0) {
+          pdQuietRef.current.add(field)
+          const set = pdQuietRuleLinksRef.current.get(info.stagingKey) ?? new Set<string>()
+          for (const id of toStage) set.add(String(id))
+          pdQuietRuleLinksRef.current.set(info.stagingKey, set)
+        }
         notPersonStageRef.current += 1
         try {
           for (const id of toStage) m2mStagingCtx.stageLink(info.stagingKey, id)
@@ -4402,6 +4433,7 @@ function ItemEditFormView({
         draftRef.current = merged
         setDraft(merged)
         markAutoFilled(Object.keys(scalar))
+        if (quietTrigger) for (const k of Object.keys(scalar)) pdQuietRef.current.add(k)
         // Rule-set FKs cascade their own cross-record defaults.
         for (const [field, value] of Object.entries(scalar)) runCrossDefaults(field, value)
       }
@@ -4462,7 +4494,7 @@ function ItemEditFormView({
                 if (cur !== null && cur !== undefined && cur !== '') delete results[k]
               }
             }
-            applyFieldRuleResults(results, sentSeq)
+            applyFieldRuleResults(results, sentSeq, pdQuietRef.current.has(field))
           })
           .catch(() => {})
       }, 300)
@@ -4651,6 +4683,7 @@ function ItemEditFormView({
     for (const k of Object.keys(__links ?? {})) out.add(k)
     for (const k of Object.keys(initialLinks ?? {})) out.add(k)
     for (const k of Object.keys(initialImportResult?.values ?? {})) out.add(k)
+    for (const k of Object.keys(initialImportResult?.m2m ?? {})) out.add(k)
     return out
   }, [initialValues, initialLinks, initialImportResult])
   const pdIsExplicit = useCallback(
@@ -4726,7 +4759,11 @@ function ItemEditFormView({
       fieldConfigFetched &&
       relationsFetched &&
       recovery.state === 'none' &&
-      recoveryCheckedKey === recoveryKey,
+      recoveryCheckedKey === recoveryKey &&
+      // The draft check ran for the real person (the auth id can arrive a render late; the
+      // anonymous key's check never saw their server draft).
+      !!authUserId,
+    resetKey: `${collection}:${itemId}`,
     rulesFor: (f) =>
       getCascadeFilters(
         (fieldConfig ?? []).find((fc) => fc.field === f)?.dependency_config ?? null
@@ -4757,7 +4794,8 @@ function ItemEditFormView({
     }
   })
   pdPersonChangeRef.current = personalDefaults.onPersonChange
-  pdQuietLinksRef.current = () => {
+  pdReleaseRef.current = personalDefaults.release
+  pdQuietLinksRef.current = (links) => {
     const out = new Map<string, Set<string>>()
     const add = (key: string, ids: unknown[]) => {
       const set = out.get(key) ?? new Set<string>()
@@ -4770,8 +4808,24 @@ function ItemEditFormView({
     }
     for (const [source, entries] of derivedFillsRef.current)
       if (pdQuietRef.current.has(source)) for (const e of entries) add(e.stagingKey, e.ids)
+    // Links a rule staged from a personal-default trigger (a person's pick on that field
+    // takes its entry out first). Only ids still staged count.
+    for (const [key, ids] of pdQuietRuleLinksRef.current) {
+      const staged = new Set((links.get(key) ?? []).map(String))
+      add(
+        key,
+        [...ids].filter((id) => staged.has(id))
+      )
+    }
     return out
   }
+  // Another record on this form instance (a create that navigates in place): nothing quiet
+  // carries over.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the record identity is the trigger
+  useEffect(() => {
+    pdQuietRef.current.clear()
+    pdQuietRuleLinksRef.current.clear()
+  }, [collection, itemId, isNew])
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
 

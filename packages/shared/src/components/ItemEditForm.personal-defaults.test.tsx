@@ -5,7 +5,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider } from '../context'
 import { ItemEditForm } from './ItemEditForm'
-import type { ActiveLayoutData, CMSField } from './item-edit/types'
+import { type M2MStagingCtx, useM2MStaging } from './item-edit/M2MStagingContext'
+import type { ActiveLayoutData, CMSField, CMSRelation } from './item-edit/types'
 
 // Personal field defaults on the real record form: a new record opens with the person's saved
 // value in an allowed field, marked "Your default", without counting as unsaved work; a
@@ -60,8 +61,29 @@ const FIELD_CONFIG: CMSField[] = [
   field('notes', 'Notes', { sort: 1 })
 ]
 
-type Cmd = { _method?: string; _path: string; _params?: Record<string, unknown> }
+type Cmd = {
+  _method?: string
+  _path: string
+  _params?: Record<string, unknown>
+  _body?: unknown
+}
 
+const TITLE_DEFAULT = {
+  id: 1,
+  collection: 'orders',
+  field: 'title',
+  value: 'Rush order',
+  context: {},
+  updated_at: '2026-10-28T10:00:00.000Z'
+}
+// Per-test fixture: what the form is configured with and extra server answers.
+let fx: {
+  fieldConfig: CMSField[]
+  relations: CMSRelation[]
+  defaults: unknown[]
+  fieldRules: unknown[]
+  answer?: (cmd: Cmd) => unknown
+} = { fieldConfig: FIELD_CONFIG, relations: [], defaults: [TITLE_DEFAULT], fieldRules: [] }
 let serverDraft: unknown = null
 function makeClient() {
   const calls: Cmd[] = []
@@ -71,22 +93,14 @@ function makeClient() {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
       const p = cmd._path
+      const extra = fx.answer?.(cmd)
+      if (extra !== undefined) return extra
       if (p === '/collection-layouts/active') return { data: LAYOUT }
-      if (p === '/field-config/orders') return { data: FIELD_CONFIG }
+      if (p === '/field-config/orders') return { data: fx.fieldConfig }
+      if (p === '/data-model/relations/for/orders') return { data: fx.relations }
+      if (p === '/field-rules') return { data: fx.fieldRules }
       if (p === '/collections/orders') return { data: { display_name: 'Orders' } }
-      if (p === '/field-defaults/mine')
-        return {
-          data: [
-            {
-              id: 1,
-              collection: 'orders',
-              field: 'title',
-              value: 'Rush order',
-              context: {},
-              updated_at: '2026-10-28T10:00:00.000Z'
-            }
-          ]
-        }
+      if (p === '/field-defaults/mine') return { data: fx.defaults }
       if (p === '/drafts/orders/new' && serverDraft) return { data: serverDraft }
       if ((cmd._method ?? 'GET').toUpperCase() !== 'GET') return { data: null }
       return { data: [] }
@@ -130,6 +144,8 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   serverDraft = null
+  fx = { fieldConfig: FIELD_CONFIG, relations: [], defaults: [TITLE_DEFAULT], fieldRules: [] }
+  staging = null
   window.localStorage.clear()
 })
 
@@ -144,21 +160,41 @@ async function settle(until: () => boolean) {
   })
 }
 
-async function mountNew(onDirtyChange = vi.fn()) {
+// The form's M2M staging, as a picker would use it.
+let staging: M2MStagingCtx | null = null
+function GrabStaging() {
+  staging = useM2MStaging()
+  return null
+}
+
+type MountOpts = { userId?: string; itemId?: string; grabStaging?: boolean }
+async function mountNew(onDirtyChange = vi.fn(), opts: MountOpts = {}) {
   const { client, calls } = makeClient()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () =>
+  const render = (o: MountOpts) =>
     root.render(
       <QueryClientProvider client={qc}>
         <NivaroProvider client={client as never}>
-          <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: 'u1' }}>
-            <ItemEditForm collection='orders' documentTitle={false} onDirtyChange={onDirtyChange} />
+          <ItemEditAuthContext.Provider value={{ isAdmin: false, userId: o.userId ?? 'u1' }}>
+            <ItemEditForm
+              collection='orders'
+              itemId={o.itemId}
+              documentTitle={false}
+              onDirtyChange={onDirtyChange}
+              renderField={o.grabStaging ? () => <GrabStaging /> : undefined}
+            />
           </ItemEditAuthContext.Provider>
         </NivaroProvider>
       </QueryClientProvider>
     )
-  )
-  return { calls, onDirtyChange }
+  await act(async () => render(opts))
+  return {
+    calls,
+    onDirtyChange,
+    rerender: async (o: MountOpts) => {
+      await act(async () => render({ ...opts, ...o }))
+    }
+  }
 }
 
 const titleInput = () => host.querySelector<HTMLInputElement>('[data-field="title"] input')
@@ -221,6 +257,110 @@ describe('ItemEditForm personal defaults', () => {
       )?.value
     ).toBe('from my draft')
     expect(titleInput()?.value).toBe('')
+    expect(host.querySelector('[data-personal-default="title"]')).toBeNull()
+  })
+})
+
+// Tags (M2M) whose pick fills Zone from the picked tag (an upstream cascade): a tag with a zone
+// fills it, the way a person's pick would.
+function tagsFixture(tagsAllowed: boolean) {
+  fx.fieldConfig = [
+    field('title', 'Title', { sort: 0, _overrides: { personal_default: true } }),
+    field('zone', 'Zone', { sort: 1, interface: 'select-dropdown-m2o' }),
+    field('tags', 'Tags', {
+      sort: 2,
+      type: 'alias',
+      interface: 'list-m2m',
+      dependency_config: {
+        cascade_filters: [{ parent_field: 'zone', filter_column: 'zone', upstream: true }]
+      },
+      ...(tagsAllowed ? { _overrides: { personal_default: true } } : {})
+    })
+  ]
+  fx.relations = [
+    {
+      id: 1,
+      many_collection: 'orders',
+      many_field: 'zone',
+      one_collection: 'zones',
+      one_field: null,
+      junction_field: null
+    },
+    {
+      id: 2,
+      many_collection: 'orders_tags',
+      many_field: 'orders_id',
+      one_collection: 'orders',
+      one_field: 'tags',
+      junction_field: 'tags_id'
+    },
+    {
+      id: 3,
+      many_collection: 'orders_tags',
+      many_field: 'tags_id',
+      one_collection: 'tags',
+      one_field: null,
+      junction_field: 'orders_id'
+    }
+  ]
+  fx.answer = (cmd) => {
+    if (cmd._path === '/items/tags' && cmd._params?.filter) {
+      const f = JSON.parse(String(cmd._params.filter)) as {
+        _and?: Array<{ id?: { _in?: string[] } }>
+      }
+      return { data: (f._and?.[0]?.id?._in ?? []).map((id) => ({ id })) }
+    }
+    if (cmd._path === '/items/tags/7') return { data: { id: '7', zone: null } }
+    if (cmd._path === '/items/tags/8') return { data: { id: '8', zone: 'Z' } }
+    return undefined
+  }
+}
+
+describe('ItemEditForm personal defaults: fix round 1', () => {
+  it('a person adding a link to a defaulted M2M field: what it derives is their work', async () => {
+    tagsFixture(true)
+    fx.defaults = [{ ...TITLE_DEFAULT, id: 2, field: 'tags', value: ['7'] }]
+    const { calls, onDirtyChange } = await mountNew(vi.fn(), { grabStaging: true })
+    await settle(() => (staging?.getStagedLinks('tags') ?? []).length > 0)
+    expect(staging?.getStagedLinks('tags')).toEqual(['7'])
+    expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(false)
+    await act(async () => staging?.stageLink('tags', '8'))
+    await settle(() => calls.some((c) => c._path === '/items/tags/8'))
+    expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(true)
+    // The recovery draft is kept (mirrored to the server).
+    expect(calls.some((c) => c._method === 'PUT' && c._path === '/drafts/orders/new')).toBe(true)
+  })
+
+  it('default → field rule → cascade: everything derived stays prefill', async () => {
+    tagsFixture(false)
+    fx.fieldRules = [
+      { id: 1, collection: 'orders', trigger_field: 'title', target_field: 'tags', is_active: true }
+    ]
+    const base = fx.answer
+    fx.answer = (cmd) =>
+      cmd._path === '/field-rules/evaluate' ? { data: { tags: ['8'] } } : base?.(cmd)
+    const { calls, onDirtyChange } = await mountNew(vi.fn(), { grabStaging: true })
+    await settle(() => calls.some((c) => c._path === '/items/tags/8'))
+    expect(staging?.getStagedLinks('tags')).toEqual(['8'])
+    expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(false)
+    expect(calls.some((c) => c._method === 'PUT' && c._path.startsWith('/drafts/'))).toBe(false)
+  })
+
+  it('no applying before the signed-in person is known', async () => {
+    await mountNew(vi.fn(), { userId: '' })
+    await settle(() => false)
+    expect(titleInput()?.value).toBe('')
+  })
+
+  it('the created record keeps no pill when the form stays mounted', async () => {
+    const answer = (cmd: Cmd) =>
+      cmd._path === '/items/orders/41' ? { data: { id: 41, title: 'Rush order' } } : undefined
+    fx.answer = answer
+    const { rerender } = await mountNew()
+    await settle(() => !!host.querySelector('[data-personal-default="title"]'))
+    await rerender({ itemId: '41' })
+    await settle(() => !host.querySelector('[data-personal-default="title"]'))
+    expect(titleInput()?.value).toBe('Rush order')
     expect(host.querySelector('[data-personal-default="title"]')).toBeNull()
   })
 })

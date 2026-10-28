@@ -21,7 +21,6 @@ const RULES: Record<string, CascadeRule[]> = {
   region: [{ parent_field: 'zone', filter_column: 'zone' }],
   ship_to: [{ parent_field: 'region', filter_column: 'region' }]
 }
-const rulesFor = (f: string) => RULES[f] ?? []
 const LABELS: Record<string, string> = {
   zone: 'Zone',
   region: 'Region',
@@ -59,6 +58,11 @@ type HarnessOpts = {
   replaceable?: (f: string, cur: unknown) => boolean
   invalid?: Set<string>
   disabled?: boolean
+  rules?: Record<string, CascadeRule[]>
+  revalidate?: (f: string, v: unknown) => Promise<boolean | null>
+  valueLabel?: (f: string, v: unknown) => string | null
+  isNew?: boolean
+  resetKey?: string
 }
 
 let root: Root
@@ -84,9 +88,12 @@ function Harness({ o }: { o: HarnessOpts }) {
   const [, setDraft] = useState<Record<string, unknown>>(draftRef.current)
   const [, setTick] = useState(0)
   const allowed = new Set(o.allowed ?? ['zone', 'region', 'ship_to', 'tags'])
+  const rules = o.rules ?? RULES
+  const rulesFor = (f: string) => rules[f] ?? []
   const result = usePersonalDefaults({
     collection: 'orders',
-    isNew: true,
+    isNew: o.isNew ?? true,
+    resetKey: o.resetKey,
     layoutAllows: (f) => allowed.has(f),
     draftRef,
     setFieldValue: (f, v, prev) => {
@@ -104,14 +111,14 @@ function Harness({ o }: { o: HarnessOpts }) {
       setDraft(draftRef.current)
     },
     markAutoFilled: (fs) => calls.auto.push(...fs),
-    revalidate: async (f) => !o.invalid?.has(f),
+    revalidate: o.revalidate ?? (async (f) => !o.invalid?.has(f)),
     disabled: !!o.disabled,
     rulesFor,
     readValue: (f) => (f === 'tags' ? (staged.current.tags ?? []) : undefined),
     canFill: (f) => (o.canFill ? o.canFill(f, touched) : !touched.has(f)),
     replaceable: o.replaceable,
     fieldLabel: (f) => LABELS[f] ?? f,
-    valueLabel: (_f, v) => VALUE_LABELS[String(v)] ?? String(v),
+    valueLabel: o.valueLabel ?? ((_f, v) => VALUE_LABELS[String(v)] ?? String(v)),
     afterApply: (f) => calls.after.push(f)
   })
   api = result
@@ -120,9 +127,13 @@ function Harness({ o }: { o: HarnessOpts }) {
     staged,
     touched,
     personEdit: (f, v) => {
+      // handleFieldChange: the edit, plus clear_on_parent_change children nulled in the same write.
       touched.add(f)
-      draftRef.current = { ...draftRef.current, [f]: v }
-      setDraft(draftRef.current)
+      const next: Record<string, unknown> = { ...draftRef.current, [f]: v }
+      for (const [child, rs] of Object.entries(rules))
+        if (rs.some((r) => r.parent_field === f && r.clear_on_parent_change)) next[child] = null
+      draftRef.current = next
+      setDraft(next)
       result.onPersonChange(f)
     },
     ruleWrite: (f, v) => {
@@ -142,6 +153,8 @@ async function flush(n = 10) {
   }
 }
 
+let renderWith: (o: HarnessOpts) => Promise<void>
+
 async function mount(o: HarnessOpts) {
   const client = {
     request: vi.fn(async (cmd: { _method?: string; _path: string }) => {
@@ -152,16 +165,19 @@ async function mount(o: HarnessOpts) {
     })
   }
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () =>
-    root.render(
-      <QueryClientProvider client={qc}>
-        <NivaroProvider client={client as never}>
-          <Harness o={o} />
-        </NivaroProvider>
-      </QueryClientProvider>
+  renderWith = async (next: HarnessOpts) => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <Harness o={next} />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
     )
-  )
-  await flush()
+    await flush()
+  }
+  await renderWith(o)
   return { qc }
 }
 
@@ -367,5 +383,90 @@ describe('PersonalDefaultsContext value', () => {
     expect(
       requests.some((r) => r._method === 'DELETE' && r._path === '/field-defaults/mine/2')
     ).toBe(true)
+  })
+})
+
+describe('usePersonalDefaults: fix round 1', () => {
+  it('clear_on_parent_change: the nulled child is still picked again for the new parent', async () => {
+    const rules = {
+      region: [{ parent_field: 'zone', filter_column: 'zone', clear_on_parent_change: true }]
+    }
+    await mount({
+      rules,
+      defaults: [d('zone', '2'), d('region', '10', { zone: '2' }), d('region', '20', { zone: '5' })]
+    })
+    expect(draft().region).toBe('10')
+    await act(async () => form.personEdit('zone', '5'))
+    await flush()
+    expect(draft().region).toBe('20')
+    expect(api.ledger.get('region')).toBe('20')
+  })
+
+  it('a parent that moves while the check runs: the child is picked for the new context', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let first = true
+    await mount({
+      initial: { zone: '2' },
+      canFill: (f) => f !== 'zone',
+      defaults: [d('region', '10', { zone: '2' }), d('region', '20', { zone: '5' })],
+      revalidate: async (f) => {
+        if (f === 'region' && first) {
+          first = false
+          await gate
+        }
+        return true
+      }
+    })
+    await act(async () => form.ruleWrite('zone', '5'))
+    await act(async () => release())
+    await flush()
+    expect(draft().region).toBe('20')
+    expect(api.ledger.get('region')).toBe('20')
+  })
+
+  it('a check that could not run skips quietly (no "no longer available")', async () => {
+    await mount({ defaults: [d('zone', '2')], revalidate: async () => null })
+    expect(draft().zone).toBeUndefined()
+    expect(api.hintFor('zone')).toBeNull()
+  })
+
+  it('no label for the value: the hint never shows a raw id', async () => {
+    await mount({
+      defaults: [d('zone', '2'), d('ship_to', '100', { zone: '2' })],
+      invalid: new Set(['ship_to']),
+      valueLabel: () => null
+    })
+    expect(api.hintFor('ship_to')).toBe('Your saved default is no longer available')
+  })
+
+  it('no label for the parent value: "a different <Parent>"', async () => {
+    await mount({
+      defaults: [d('region', '10', { zone: '2' })],
+      initial: { zone: '5' },
+      canFill: (f) => f !== 'zone',
+      valueLabel: () => null
+    })
+    expect(api.hintFor('region')).toBe('Your saved default is for a different Zone')
+  })
+
+  it('a create that stays on screen keeps no pills', async () => {
+    const o: HarnessOpts = { defaults: [d('zone', '2')], resetKey: 'orders:new' }
+    await mount(o)
+    expect(api.ledger.has('zone')).toBe(true)
+    await renderWith({ ...o, isNew: false, resetKey: 'orders:41' })
+    expect(api.ledger.size).toBe(0)
+    expect(api.context.applied('zone')).toBe(false)
+  })
+
+  it("an explicit fill (document autofill) replaces the default's M2M links", async () => {
+    await mount({ defaults: [d('tags', ['7', '8'])] })
+    expect(form.staged.current.tags).toEqual(['7', '8'])
+    await act(async () => api.release('tags'))
+    await flush()
+    expect(form.staged.current.tags).toEqual([])
+    expect(api.ledger.has('tags')).toBe(false)
   })
 })

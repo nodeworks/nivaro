@@ -63,7 +63,8 @@ export type UsePersonalDefaultsOptions = {
    *  the staged links an M2M undo removes, or a layout default being replaced. */
   setFieldValue: (field: string, value: unknown, previous?: unknown) => void
   markAutoFilled: (fields: string[]) => void
-  revalidate: (field: string, value: unknown) => Promise<boolean>
+  /** true = still pickable, false = checked and refused, null = could not check (skip quietly). */
+  revalidate: (field: string, value: unknown) => Promise<boolean | null>
   /** No applying at all (a restored draft, design mode). */
   disabled: boolean
   /** Read the person's defaults (some field on this form is allowed). Default true. */
@@ -78,9 +79,13 @@ export type UsePersonalDefaultsOptions = {
   /** A value the personal default outranks (a layout default the person never touched). */
   replaceable?: (field: string, current: unknown) => boolean
   fieldLabel?: (field: string) => string
-  valueLabel?: (field: string, value: unknown) => string | Promise<string>
+  /** The label the picker would show; null = none (hints then say "Your saved default"). */
+  valueLabel?: (field: string, value: unknown) => string | null | Promise<string | null>
   /** Runs once a pass has applied its values (field rules, cross-record defaults, cascades). */
   afterApply?: (field: string, value: unknown) => void
+  /** The record the form shows (e.g. `orders:new`): a change starts the ledger over — a
+   *  created record that stays on screen keeps no pills. */
+  resetKey?: string
 }
 
 export type UsePersonalDefaultsResult = {
@@ -88,6 +93,8 @@ export type UsePersonalDefaultsResult = {
   hintFor(field: string): string | null
   undo(field: string): void
   onPersonChange(field: string): void
+  /** An explicit fill (document autofill) takes the field over: its default's value goes. */
+  release(field: string): void
   /** Synchronous ledger read (the form's dirty / unsaved-links accounting). */
   appliedNow(): ReadonlyMap<string, unknown>
   context: PersonalDefaultsApi
@@ -198,18 +205,20 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     },
     [currentValue]
   )
-  const label = useCallback(async (field: string, value: unknown): Promise<string> => {
+  const label = useCallback(async (field: string, value: unknown): Promise<string | null> => {
     const o = optsRef.current
     const parts = await Promise.all(
       asList(plain(value)).map(async (v) => {
+        if (!o.valueLabel) return String(v)
         try {
-          return String((await o.valueLabel?.(field, v)) ?? v)
+          return (await o.valueLabel(field, v)) ?? null
         } catch {
-          return String(v)
+          return null
         }
       })
     )
-    return parts.join(', ')
+    const known = parts.filter((x): x is string => !!x)
+    return known.length > 0 ? known.join(', ') : null
   }, [])
   const setHint = useCallback(
     async (field: string, text: Promise<string>) => {
@@ -222,7 +231,10 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const blockedHint = useCallback(
     async (parent: string, want: unknown) => {
       const name = optsRef.current.fieldLabel?.(parent) ?? parent
-      return `Your default is for ${name} ${await label(parent, want)}`
+      const l = await label(parent, want)
+      return l
+        ? `Your default is for ${name} ${l}`
+        : `Your saved default is for a different ${name}`
     },
     [label]
   )
@@ -239,9 +251,9 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     o.markAutoFilled([field])
   }, [])
 
-  /** Step 3–5 for one field. Answers the fields it wrote (parents first), [] when none. */
-  const applyField = useCallback(
-    async (field: string): Promise<string[]> => {
+  /** Steps 3–5 for one field, once. 'stale' = a parent moved while the checks ran. */
+  const applyOnce = useCallback(
+    async (field: string): Promise<string[] | 'stale'> => {
       const o = optsRef.current
       const cands = byFieldRef.current.get(field) ?? []
       if (cands.length === 0 || !o.layoutAllows(field)) return []
@@ -271,13 +283,22 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         ...Object.keys(fillParents).filter((p) => !order.includes(p))
       ]
       const filled: Array<[string, unknown]> = []
+      // Takes back only what still holds this step's value (never a value someone set since).
       const rollback = () => {
-        for (const [p, v] of filled.reverse()) write(p, null, v)
+        for (const [p, v] of filled.reverse()) {
+          if (sameDefaultValue(currentValue(p), v)) write(p, null, v)
+          else ledgerRef.current.delete(p)
+        }
       }
       for (const p of parents) {
         const want = fillParents[p]
         const fillable = o.layoutAllows(p) && !undoneRef.current.has(p) && (o.canFill?.(p) ?? true)
-        if (!fillable || !(await o.revalidate(p, want)) || !isEmptyValue(currentValue(p))) {
+        const ok = fillable ? await o.revalidate(p, want) : false
+        if (ok === null) {
+          rollback()
+          return []
+        }
+        if (!ok || !isEmptyValue(currentValue(p))) {
           rollback()
           await setHint(field, blockedHint(p, want))
           return []
@@ -285,11 +306,21 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         write(p, want)
         filled.push([p, want])
       }
-      if (!(await o.revalidate(field, pick.value))) {
+      const ok = await o.revalidate(field, pick.value)
+      if (ok === null) {
+        // The check could not run (network): skip, and say nothing untrue.
+        rollback()
+        return []
+      }
+      if (!ok) {
         rollback()
         await setHint(
           field,
-          label(field, pick.value).then((l) => `Your default "${l}" is no longer available`)
+          label(field, pick.value).then((l) =>
+            l
+              ? `Your default "${l}" is no longer available`
+              : 'Your saved default is no longer available'
+          )
         )
         return []
       }
@@ -298,12 +329,30 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         rollback()
         return []
       }
+      // A parent moved while the checks ran: the pick was for the old context.
+      const fresh = pickDefault(cands, viewOf(keys))
+      if (fresh.pick?.id !== pick.id || Object.keys(fresh.fillParents).length > 0) {
+        rollback()
+        return 'stale'
+      }
       write(field, pick.value, replacing ? start : undefined)
       return [...filled.map(([p]) => p), field]
     },
     [currentValue, viewOf, setHint, blockedHint, label, write]
   )
 
+  /** Answers the fields it wrote (parents first), [] when none. */
+  const applyField = useCallback(
+    async (field: string): Promise<string[]> => {
+      // A parent that moved while the checks ran makes the pick stale: pick again (bounded).
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await applyOnce(field)
+        if (r !== 'stale') return r
+      }
+      return []
+    },
+    [applyOnce]
+  )
   /** Applies fields in order, then lets rules / cross-record defaults run for what landed. */
   const runPass = useCallback(
     async (fields: string[]) => {
@@ -362,14 +411,29 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   // Parent changes are processed after the render that carries them, so M2M parents read
   // their new effective ids.
   const queueRef = useRef(new Set<string>())
+  // Children still holding their default when their parent changed (child → that value), taken
+  // out of the ledger NOW: the same edit may already have nulled them (clear_on_parent_change),
+  // and the ledger reconcile would otherwise drop them before they are picked again.
+  const repickRef = useRef(new Map<string, unknown>())
   const [personTick, setPersonTick] = useState(0)
   const onPersonChange = useCallback(
     (field: string) => {
       let changed = ledgerRef.current.delete(field)
       if (hintsRef.current.delete(field)) changed = true
       undoneRef.current.delete(field)
+      repickRef.current.delete(field)
+      if (!optsRef.current.isNew) {
+        if (changed) publish()
+        return
+      }
+      const rulesFor = optsRef.current.rulesFor
+      for (const [child, v] of [...ledgerRef.current]) {
+        if (!cascadeParents(child, rulesFor).includes(field)) continue
+        repickRef.current.set(child, v)
+        ledgerRef.current.delete(child)
+        changed = true
+      }
       if (changed) publish()
-      if (!optsRef.current.isNew) return
       queueRef.current.add(field)
       setPersonTick((t) => t + 1)
     },
@@ -380,18 +444,24 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     if (queueRef.current.size === 0 || optsRef.current.disabled) return
     const changedParents = [...queueRef.current]
     queueRef.current.clear()
+    const repick = new Map(repickRef.current)
+    repickRef.current.clear()
     const o = optsRef.current
     const again: string[] = []
     for (const child of allowedWithDefaults()) {
+      if (repick.has(child)) {
+        const v = repick.get(child)
+        const now = currentValue(child)
+        // Still holding its personal-default value: cleared, then picked again for the new
+        // context. Already emptied by the parent's clear_on_parent_change: just picked again.
+        if (sameDefaultValue(now, v)) o.setFieldValue(child, null, v)
+        else if (!isEmptyValue(now)) continue
+        again.push(child)
+        continue
+      }
       const parents = cascadeParents(child, o.rulesFor)
       if (!changedParents.some((p) => parents.includes(p))) continue
-      if (ledgerRef.current.has(child)) {
-        const v = ledgerRef.current.get(child)
-        // Still holding its personal-default value: cleared, then picked again for the new context.
-        o.setFieldValue(child, null, v)
-        ledgerRef.current.delete(child)
-        again.push(child)
-      } else if (hintsRef.current.has(child) && isEmptyValue(currentValue(child))) {
+      if (hintsRef.current.has(child) && isEmptyValue(currentValue(child))) {
         hintsRef.current.delete(child)
         again.push(child)
       }
@@ -420,6 +490,34 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     },
     [currentValue, publish]
   )
+
+  const release = useCallback(
+    (field: string) => {
+      if (!ledgerRef.current.has(field)) return
+      const v = ledgerRef.current.get(field)
+      if (sameDefaultValue(currentValue(field), v)) optsRef.current.setFieldValue(field, null, v)
+      ledgerRef.current.delete(field)
+      undoneRef.current.add(field)
+      publish()
+    },
+    [currentValue, publish]
+  )
+
+  // Another record on the same form instance (a create that stays on screen, the next record):
+  // nothing of this one's ledger, hints or queue carries over.
+  const resetSig = `${collection}|${isNew ? 'new' : 'saved'}|${opts.resetKey ?? ''}`
+  const resetSigRef = useRef(resetSig)
+  useEffect(() => {
+    if (resetSigRef.current === resetSig) return
+    resetSigRef.current = resetSig
+    ledgerRef.current.clear()
+    hintsRef.current.clear()
+    undoneRef.current.clear()
+    repickRef.current.clear()
+    queueRef.current.clear()
+    appliedOnceRef.current = false
+    publish()
+  }, [resetSig, publish])
 
   const hintFor = useCallback((field: string) => hints.get(field) ?? null, [hints])
   const appliedNow = useCallback(() => ledgerRef.current as ReadonlyMap<string, unknown>, [])
@@ -487,5 +585,5 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     [defaultFor, save, clear, refresh, ledger, hintFor, undo]
   )
 
-  return { ledger, hintFor, undo, onPersonChange, appliedNow, context }
+  return { ledger, hintFor, undo, onPersonChange, release, appliedNow, context }
 }

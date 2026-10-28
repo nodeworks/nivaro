@@ -96,7 +96,8 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
     return out
   }
 
-  async function revalidate(field: string, value: unknown): Promise<boolean> {
+  /** true = pickable, false = checked and refused, null = the check could not run. */
+  async function revalidate(field: string, value: unknown): Promise<boolean | null> {
     const fc = byName.get(field)
     if (!fc || isEmptyValue(value)) return false
     if ((fc.interface ?? '').startsWith('file')) return false
@@ -111,6 +112,9 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
       if (rel.kind === 'm2m' && opts?.max_values != null && want.length > opts.max_values)
         return false
       const draft = view()
+      // Twin of FieldRow's cascade build (FieldRow.tsx `cascadeCompiled`), parents read the same
+      // way. Not mirrored: FieldRow's `skipParent` (a parent THIS field's own pick derived) —
+      // there is no pick yet when a default is checked. Change both together.
       const cascade = buildCascadeFilter({
         rules: getCascadeFilters(fc.dependency_config),
         parentValue: (p) => {
@@ -147,7 +151,8 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
         const found = new Set((res?.data ?? []).map((r) => String(r.id)))
         return want.every((id) => found.has(id))
       } catch {
-        return false
+        // Network / server trouble is not "no longer available": the form skips quietly.
+        return null
       }
     }
     const choices = choicesOf(fc)
@@ -160,49 +165,53 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
     return scalarOk(fc, value)
   }
 
-  const labels = new Map<string, Promise<string>>()
-  function valueLabel(field: string, value: unknown): Promise<string> {
+  // The label the picker shows: the target's display template (the users picker's own
+  // template for nivaro_users), read as the caller; null when nothing but an id is known.
+  const labels = new Map<string, Promise<string | null>>()
+  function valueLabel(field: string, value: unknown): Promise<string | null> {
     const fc = byName.get(field)
     const v = plain(value)
-    const fallback = String(v ?? '')
-    if (!fc) return Promise.resolve(fallback)
+    const text = String(v ?? '')
+    if (!fc) return Promise.resolve(null)
     const choices = choicesOf(fc)
     if (choices) {
-      const hit = choices.find((c) => String(c.value) === fallback)
-      return Promise.resolve(hit ? choiceLabel(hit.text ?? fallback) : fallback)
+      const hit = choices.find((c) => String(c.value) === text)
+      return Promise.resolve(hit?.text ? choiceLabel(hit.text) : null)
     }
     if (typeof v === 'boolean') return Promise.resolve(v ? 'Yes' : 'No')
     const rel = pickedCollection(relations, collection, field)
-    if (!rel) return Promise.resolve(fallback)
-    const key = `${rel.target}:${fallback}`
+    // A plain value is its own label (a number, a date, a word).
+    if (!rel) return Promise.resolve(text || null)
+    const key = `${rel.target}:${text}`
     const cached = labels.get(key)
     if (cached) return cached
     const p = (async () => {
-      try {
-        if (USER_SYSTEM_COLS.has(rel.target)) {
-          const u = await client.request<{ data: Record<string, unknown> }>(
-            get(`/users/${fallback}`)
-          )
-          return u?.data ? userDisplayLabel(u.data) : fallback
-        }
-        const [meta, rows] = await Promise.all([
-          client
-            .request<{ data: { display_template?: string | null } }>(
-              get(`/collections/${rel.target}`)
-            )
-            .catch(() => null),
-          client.request<{ data: Array<Record<string, unknown>> }>(
-            get(`/items/${rel.target}`, {
-              filter: JSON.stringify({ id: { _eq: fallback } }),
-              limit: 1
-            })
-          )
-        ])
-        const row = rows?.data?.[0]
-        return row ? renderDisplayTemplate(meta?.data?.display_template, row) || fallback : fallback
-      } catch {
-        return fallback
-      }
+      const meta = await client
+        .request<{ data: { display_template?: string | null } }>(get(`/collections/${rel.target}`))
+        .catch(() => null)
+      const template =
+        meta?.data?.display_template ??
+        (USER_SYSTEM_COLS.has(rel.target) ? '{{first_name}} {{last_name}} ({{email}})' : null)
+      const tokens = template ? [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]) : []
+      const rows = await client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${rel.target}`, {
+            filter: JSON.stringify({ id: { _eq: text } }),
+            limit: 1,
+            ...(tokens.length ? { fields: ['id', ...tokens].join(',') } : {})
+          })
+        )
+        .catch(() => null)
+      const row = rows?.data?.[0]
+      if (!row) return null
+      const shown = (
+        USER_SYSTEM_COLS.has(rel.target) && !meta?.data?.display_template
+          ? userDisplayLabel(row)
+          : renderDisplayTemplate(template, row)
+      ).trim()
+      // Nothing readable, or only the id again: no label.
+      if (!/[\p{L}\p{N}]/u.test(shown) || shown === String(row.id) || shown === text) return null
+      return shown
     })()
     labels.set(key, p)
     return p

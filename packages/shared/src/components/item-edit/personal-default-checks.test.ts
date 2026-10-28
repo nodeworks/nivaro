@@ -118,3 +118,46 @@ describe('personal default re-validation', () => {
     expect(await checks([]).valueLabel('status', 'open')).toBe('Open')
   })
 })
+
+describe('fix round 1', () => {
+  function withClient(
+    answer: (cmd: { _path: string; _params?: Record<string, unknown> }) => unknown
+  ) {
+    return makePersonalDefaultChecks({
+      client: {
+        request: async (cmd: unknown) => answer(cmd as { _path: string })
+      } as never,
+      collection: 'orders',
+      fields: FIELDS,
+      relations: RELATIONS,
+      readValue: () => undefined
+    })
+  }
+
+  it('a re-check that could not run answers null, not "refused"', async () => {
+    const c = withClient(() => {
+      throw new Error('offline')
+    })
+    expect(await c.revalidate('ship_to', '100')).toBeNull()
+  })
+
+  it('a refused template read still labels by what the picker shows', async () => {
+    const c = withClient((cmd) => {
+      if (cmd._path === '/collections/locations')
+        throw Object.assign(new Error('no'), { status: 403 })
+      return { data: [{ id: '100', name: 'Cambridge' }] }
+    })
+    expect(await c.valueLabel('ship_to', '100')).toBe('Cambridge')
+  })
+
+  it('only an id to show: no label', async () => {
+    const c = withClient((cmd) =>
+      cmd._path === '/collections/locations' ? { data: {} } : { data: [{ id: '100' }] }
+    )
+    expect(await c.valueLabel('ship_to', '100')).toBeNull()
+    const gone = withClient((cmd) =>
+      cmd._path === '/collections/locations' ? { data: {} } : { data: [] }
+    )
+    expect(await gone.valueLabel('ship_to', '100')).toBeNull()
+  })
+})

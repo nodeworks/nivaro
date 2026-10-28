@@ -2,7 +2,8 @@ import { Undo2, UserRound } from 'lucide-react'
 
 // "Your default" marker on a field a personal default prefilled (spec "Applying on a new
 // record" 7). Same size and tone as the document-autofill "derived" pill (sky tint, 10.5px);
-// the undo control is always visible (no hover reveal), so the label row never shifts.
+// the undo control is always visible (no hover reveal), so the label row never shifts. Its glyph
+// box is 16px; an invisible ::before reaches 4px further on every side (24×24 hit area).
 
 export function PersonalDefaultPill({
   field,
@@ -26,7 +27,7 @@ export function PersonalDefaultPill({
         onClick={onUndo}
         aria-label={label ? `Undo your default for ${label}` : 'Undo your default'}
         data-personal-default-undo={field}
-        className='inline-flex h-4 w-4 items-center justify-center rounded text-sky-700 transition-colors duration-150 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nvr-cyan dark:text-sky-300 dark:hover:bg-sky-800/50 dark:hover:text-white'
+        className='relative inline-flex h-4 w-4 items-center justify-center rounded text-sky-700 before:absolute before:-inset-1 before:content-[""] transition-colors duration-150 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-nvr-cyan dark:text-sky-300 dark:hover:bg-sky-800/50 dark:hover:text-white'
       >
         <Undo2 className='h-3 w-3' aria-hidden />
       </button>
