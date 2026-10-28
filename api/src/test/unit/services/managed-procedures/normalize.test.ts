@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   normalizeProcBody,
   procBodyHash,
+  procDeployHash,
   stripAppManagedMarker
 } from '../../../../services/managed-procedures/normalize.js'
 
@@ -62,6 +63,20 @@ describe('stripAppManagedMarker', () => {
     )
     expect(stripAppManagedMarker('CREATE PROC a AS\n-- @app-managed\nSELECT 1')).toBe(
       'CREATE PROC a AS\n-- @app-managed\nSELECT 1'
+    )
+  })
+})
+
+describe('procDeployHash', () => {
+  it('folds header and whitespace like the deploy decision, but keeps case', () => {
+    expect(procDeployHash('CREATE PROCEDURE a AS\n  SELECT 1')).toBe(
+      procDeployHash('create or alter procedure a AS SELECT 1')
+    )
+    expect(procDeployHash("CREATE PROC a AS SELECT 'open'")).not.toBe(
+      procDeployHash("CREATE PROC a AS SELECT 'OPEN'")
+    )
+    expect(procBodyHash("CREATE PROC a AS SELECT 'open'")).toBe(
+      procBodyHash("CREATE PROC a AS SELECT 'OPEN'")
     )
   })
 })

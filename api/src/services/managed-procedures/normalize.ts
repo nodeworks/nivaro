@@ -44,6 +44,12 @@ export function procDeployForm(s: string): string {
     .trim()
 }
 
+/** sha256 hex of the deploy form (case KEPT) — the Procedures page's `live_hash`, so a
+ *  case-only raw change to a live proc is still a change. */
+export function procDeployHash(s: string): string {
+  return createHash('sha256').update(procDeployForm(s)).digest('hex')
+}
+
 /** Whether a config body and a live definition are the same for deploy purposes. */
 export function sameDeployedBody(config: string, live: string): boolean {
   return procDeployForm(config) === procDeployForm(live)

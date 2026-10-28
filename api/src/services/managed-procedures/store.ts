@@ -324,7 +324,15 @@ export async function saveManagedVersion(input: {
  */
 export async function adoptLiveProcedure(
   name: string,
-  opts: { userId: string | null; note?: string; owner?: string | null; by: string }
+  opts: {
+    userId: string | null
+    note?: string
+    owner?: string | null
+    by: string
+    /** As saveManagedVersion: `null` = "config has no row" — 409 PROC_STALE when one exists
+     *  (another writer adopted it first). */
+    baseHash?: string | null
+  }
 ): Promise<{ procedure: ManagedProcedure; version: number; unchanged: boolean }> {
   assertName(name)
   await assertNotImportOwned(name)
@@ -337,7 +345,8 @@ export async function adoptLiveProcedure(
     body: definition,
     note: opts.note ?? ADOPT_NOTE,
     userId: opts.userId,
-    ...(opts.owner !== undefined ? { owner: opts.owner } : {})
+    ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
+    ...(opts.baseHash !== undefined ? { baseHash: opts.baseHash } : {})
   })
   await stampDeployed(r.procedure.id, r.procedure.body_hash, opts.by)
   const procedure = (await getManagedProcedure(r.procedure.name)) ?? r.procedure

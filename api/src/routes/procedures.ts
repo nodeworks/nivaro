@@ -10,7 +10,7 @@ import {
   registerManagedProcReadiness,
   saveAndDeployManaged
 } from '../services/managed-procedures/deploy.js'
-import { procBodyHash } from '../services/managed-procedures/normalize.js'
+import { procDeployHash } from '../services/managed-procedures/normalize.js'
 import { appManagedProcedures, procedureOwner } from '../services/managed-procedures/owners.js'
 import {
   adoptLiveProcedure,
@@ -21,6 +21,7 @@ import {
   ManagedProcError,
   type ManagedProcedure,
   markManagedDropped,
+  putBackManaged,
   unmarkManagedDropped
 } from '../services/managed-procedures/store.js'
 import { definitionNameMatches, liveProcedureDefinitions } from '../services/procedure-deploy.js'
@@ -225,9 +226,18 @@ async function refuseName(name: string, reply: FastifyReply) {
   return null
 }
 
-/** The live text of one dbo proc: null = not there, '' = there but unreadable (encrypted). */
-async function liveText(name: string): Promise<string | null> {
-  return (await liveProcedureDefinitions([name])).get(name.toLowerCase()) ?? null
+/** One dbo proc as SQL Server keeps it — its spelling and text ('' = encrypted, unreadable) —
+ *  or null when it is not there. */
+async function liveProc(name: string): Promise<{ name: string; text: string } | null> {
+  const rows = (await db.raw(
+    `SELECT p.name, m.definition FROM sys.procedures p
+       JOIN sys.schemas s ON s.schema_id = p.schema_id
+       LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
+      WHERE p.name = ? AND s.name = 'dbo' AND p.is_ms_shipped = 0`,
+    [name]
+  )) as Array<{ name: string; definition: string | null }>
+  const r = rows?.[0]
+  return r ? { name: String(r.name), text: r.definition ?? '' } : null
 }
 
 const unreadable = (name: string) =>
@@ -237,23 +247,77 @@ const unreadable = (name: string) =>
     `dbo.${name} is encrypted — its text cannot be read, so it cannot be adopted into config`
   )
 
+const staleNoConfig = () =>
+  new ManagedProcError(
+    409,
+    'PROC_STALE',
+    'This procedure was changed since you opened it — reload to see the current version',
+    { current: null }
+  )
+
 const actor = (req: FastifyRequest) => `user:${req.user?.id ?? 'unknown'}`
 const noteOf = (v: unknown, fallback: string) => {
   const s = typeof v === 'string' ? v.trim() : ''
   return (s || fallback).slice(0, NOTE_MAX)
 }
 
-/** `base_hash` / `base_version` from a body: absent = skip the check, null = "creating". */
-function baseOf(body: { base_hash?: unknown; base_version?: unknown } | undefined) {
-  const out: { baseHash?: string | null; baseVersion?: number | null } = {}
-  if (body && 'base_hash' in body && body.base_hash !== undefined) {
-    out.baseHash = body.base_hash == null ? null : String(body.base_hash)
-  }
-  if (body && 'base_version' in body && body.base_version !== undefined) {
-    out.baseVersion = body.base_version == null ? null : Number(body.base_version)
+const fieldError = (field: string, what: string) =>
+  new ManagedProcError(400, 'PROC_FIELD_INVALID', `${field} must be ${what}`, { field })
+
+/** An optional string field: absent = undefined, null kept, anything else not a string → 400. */
+function optText(body: Record<string, unknown>, field: string): string | null | undefined {
+  const v = body[field]
+  if (v === undefined || v === null) return v as undefined | null
+  if (typeof v !== 'string') throw fieldError(field, 'a string or null')
+  return v
+}
+
+/**
+ * The bases a write was opened on: `base_hash` / `base_version` (the config row; null =
+ * "there was none") and `base_live_hash` (the live text's procDeployHash as GET /:name gave it;
+ * null = "it was not live"). Absent = no check. A wrong type → 400 PROC_FIELD_INVALID.
+ */
+function readBase(body: Record<string, unknown> | undefined) {
+  const b = body ?? {}
+  const out: {
+    baseHash?: string | null
+    baseVersion?: number | null
+    baseLiveHash?: string | null
+  } = {}
+  const hash = optText(b, 'base_hash')
+  if (hash !== undefined) out.baseHash = hash
+  const live = optText(b, 'base_live_hash')
+  if (live !== undefined) out.baseLiveHash = live
+  const v = b.base_version
+  if (v === null) out.baseVersion = null
+  else if (v !== undefined) {
+    const n = typeof v === 'string' && /^\d{1,9}$/.test(v) ? Number(v) : v
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      throw fieldError('base_version', 'a positive whole number or null')
+    }
+    out.baseVersion = n
   }
   return out
 }
+
+/** 409 PROC_DRIFTED (`live_hash` = the live text now) when live changed since it was opened. */
+function assertLiveUnchanged(
+  baseLiveHash: string | null | undefined,
+  live: { text: string } | null
+): void {
+  if (baseLiveHash === undefined) return
+  const now = live == null ? null : procDeployHash(live.text)
+  if (now === baseLiveHash) return
+  throw new ManagedProcError(
+    409,
+    'PROC_DRIFTED',
+    "The procedure was changed in the database since you opened it — keep the database's version, or overwrite it",
+    { live_hash: now }
+  )
+}
+
+const isStampFailure = (e: unknown) =>
+  e instanceof ManagedProcError && e.code === 'DEPLOY_STAMP_FAILED'
 
 function parseVersion(v: string): number | null {
   if (!/^\d{1,9}$/.test(v)) return null
@@ -288,15 +352,52 @@ async function log(
   })
 }
 
-/** Adopt an unmanaged live proc (its text becomes a version) and log it. */
+/** Adopt an unmanaged live proc (its text becomes version 1) and log it. `null` base: a writer
+ *  that adopted it meanwhile makes this 409 PROC_STALE. */
 async function adoptForWrite(req: FastifyRequest, name: string, note: string) {
   const adopted = await adoptLiveProcedure(name, {
     userId: req.user?.id ?? null,
     note,
-    by: actor(req)
+    by: actor(req),
+    baseHash: null
   })
   await log(req, 'procedure-adopt', name, adopted.version, note)
   return adopted
+}
+
+/**
+ * Undo an adoption made for a write that then failed with live unchanged — otherwise the proc
+ * stays managed and promote carries this database's body to the next environment. Guarded (a
+ * writer that moved the row on keeps it). Resolves whether config no longer has the row.
+ */
+async function undoAdoption(
+  req: FastifyRequest,
+  name: string,
+  adopted: { procedure: ManagedProcedure; version: number },
+  what: 'edit' | 'drop'
+): Promise<boolean> {
+  try {
+    await putBackManaged(null, adopted.procedure.id, adopted.version)
+    if (await getManagedProcedure(name)) return false
+  } catch (err) {
+    req.log.error({ err, procedure: name }, 'could not undo the adoption made for a failed write')
+    return false
+  }
+  await log(req, 'procedure-adopt', name, adopted.version, `undone: ${what} failed`)
+  return true
+}
+
+/** A DDL that ran but was not recorded still changed live: log it before answering. */
+async function logIfStampFailed(
+  req: FastifyRequest,
+  e: unknown,
+  action: string,
+  name: string,
+  note: string
+) {
+  if (!isStampFailure(e)) return
+  const v = Number((e as ManagedProcError).extra?.version)
+  await log(req, action, name, Number.isFinite(v) && v > 0 ? v : null, `${note} (not stamped)`)
 }
 
 export async function procedureRoutes(app: FastifyInstance) {
@@ -388,8 +489,8 @@ export async function procedureRoutes(app: FastifyInstance) {
         created: liveRow?.create_date ?? null,
         modified: liveRow?.modify_date ?? null,
         definition,
-        // The hash an unmanaged proc's edit sends back as base_hash (stale-checked at adopt).
-        live_hash: definition != null ? procBodyHash(definition) : null,
+        // What a write sends back as base_live_hash (case kept: a case-only change counts).
+        live_hash: liveRow ? procDeployHash(definition ?? '') : null,
         params: liveRow ? await procParams(name) : [],
         managed,
         config: config
@@ -419,14 +520,15 @@ export async function procedureRoutes(app: FastifyInstance) {
       note?: string
       base_hash?: string | null
       base_version?: number | null
+      base_live_hash?: string | null
       create?: boolean
       owner?: string | null
       description?: string | null
     }
   }>('/:name', async (req, reply) => {
     const { name } = req.params
-    const body = req.body ?? {}
-    const definition = String(body.definition ?? '')
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const definition = typeof body.definition === 'string' ? body.definition : ''
     if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
     if (!definition.trim()) return reply.code(400).send({ error: 'definition is required' })
     const refused = await refuseName(name, reply)
@@ -438,57 +540,58 @@ export async function procedureRoutes(app: FastifyInstance) {
       })
     }
     try {
-      const [current, live] = await Promise.all([getManagedProcedure(name), liveText(name)])
+      const fields = readBase(body)
+      const owner = optText(body, 'owner')
+      const description = optText(body, 'description')
+      const [current, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
       const create = body.create === true
-      if (create && (current || live != null)) {
+      if (create && (current || live)) {
         return reply.code(409).send({
           error: current?.dropped_at
             ? `${name} was dropped — restore one of its versions instead of creating it again`
             : `A procedure named ${name} already exists`,
           code: 'PROC_EXISTS',
-          live: live != null,
+          live: !!live,
           managed: !!current,
           dropped: !!current?.dropped_at
         })
       }
-      const base = create ? { baseHash: null } : baseOf(body)
-      if (!current && live != null) {
-        // An edit makes a proc managed: its live text becomes version 1 first. A base_hash is
-        // the live hash GET /:name gave — check it before writing anything.
-        if (live === '') throw unreadable(name)
-        // (A null base or any base_version means the caller saw no config row — stale too.)
-        if (
-          (base.baseHash !== undefined && base.baseHash !== procBodyHash(live)) ||
-          base.baseVersion !== undefined
-        ) {
-          throw new ManagedProcError(
-            409,
-            'PROC_STALE',
-            'This procedure was changed since you opened it — reload to see the current version',
-            { current: null }
-          )
-        }
-        await adoptForWrite(req, name, NOTE_ADOPT_EDIT)
+      assertLiveUnchanged(fields.baseLiveHash, live)
+      let base: { baseHash?: string | null; baseVersion?: number | null } = create
+        ? { baseHash: null }
+        : { baseHash: fields.baseHash, baseVersion: fields.baseVersion }
+      let adopted: Awaited<ReturnType<typeof adoptForWrite>> | null = null
+      if (!current && live) {
+        // An edit makes a proc managed: its live text becomes version 1 first. A caller that saw
+        // a config row (any base_hash / base_version) is stale — there is none.
+        if (live.text === '') throw unreadable(name)
+        if (base.baseHash !== undefined || base.baseVersion !== undefined) throw staleNoConfig()
+        adopted = await adoptForWrite(req, live.name, NOTE_ADOPT_EDIT)
+        base = { baseHash: adopted.procedure.body_hash, baseVersion: adopted.version }
       }
-      const isNew = !current && live == null
+      const isNew = !current && !live
+      const action = isNew ? 'procedure-create' : 'procedure-update'
       const note = noteOf(body.note, isNew ? NOTE_CREATE : NOTE_EDIT)
-      const saved = await saveAndDeployManaged({
-        name,
-        body: definition,
-        note,
-        userId: req.user?.id ?? null,
-        ...base,
-        ...(body.owner !== undefined ? { owner: body.owner } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        by: actor(req)
-      })
-      await log(
-        req,
-        isNew ? 'procedure-create' : 'procedure-update',
-        name,
-        saved.version,
-        saved.unchanged ? `${note} (unchanged)` : note
-      )
+      let saved: Awaited<ReturnType<typeof saveAndDeployManaged>>
+      try {
+        saved = await saveAndDeployManaged({
+          name,
+          body: definition,
+          note,
+          userId: req.user?.id ?? null,
+          ...(base.baseHash !== undefined ? { baseHash: base.baseHash } : {}),
+          ...(base.baseVersion !== undefined ? { baseVersion: base.baseVersion } : {}),
+          ...(owner !== undefined ? { owner } : {}),
+          ...(description !== undefined ? { description } : {}),
+          by: actor(req)
+        })
+      } catch (e) {
+        await logIfStampFailed(req, e, action, name, note)
+        // Live is unchanged unless only the stamp failed: the adoption goes too.
+        if (adopted && !isStampFailure(e)) await undoAdoption(req, name, adopted, 'edit')
+        throw e
+      }
+      await log(req, action, name, saved.version, saved.unchanged ? `${note} (unchanged)` : note)
       return reply.send({
         ok: true,
         created: isNew,
@@ -517,7 +620,7 @@ export async function procedureRoutes(app: FastifyInstance) {
       req.query?.keep_live === 'true' ||
       req.body?.keep_live === true
     try {
-      const [current, live] = await Promise.all([getManagedProcedure(name), liveText(name)])
+      const [current, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
       if (current && !keepLive) {
         return reply.code(409).send({
           error: `${name} is already app-managed — deploy its config, or keep the database's version (keep_live=1)`,
@@ -525,12 +628,14 @@ export async function procedureRoutes(app: FastifyInstance) {
           version: current.version
         })
       }
-      if (live === '') throw unreadable(name)
+      if (live?.text === '') throw unreadable(name)
       const note = noteOf(req.body?.note, current ? NOTE_KEEP_LIVE : NOTE_ADOPT)
-      const adopted = await adoptLiveProcedure(name, {
+      // Stored under the spelling SQL Server keeps; guarded on the row we read (or its absence).
+      const adopted = await adoptLiveProcedure(live?.name ?? name, {
         userId: req.user?.id ?? null,
         note,
-        by: actor(req)
+        by: actor(req),
+        baseHash: current ? current.body_hash : null
       })
       await log(req, 'procedure-adopt', name, adopted.version, note)
       return reply.send({ data: { version: adopted.version, unchanged: adopted.unchanged } })
@@ -540,33 +645,66 @@ export async function procedureRoutes(app: FastifyInstance) {
   })
 
   // ── Drop: mark dropped in config, then drop live (versions kept) ─────────
-  app.delete<{ Params: { name: string } }>('/:name', async (req, reply) => {
+  app.delete<{
+    Params: { name: string }
+    Querystring: { base_version?: string }
+    Body: { base_version?: number | null } | undefined
+  }>('/:name', async (req, reply) => {
     const { name } = req.params
     const refused = await refuseName(name, reply)
     if (refused) return refused
     try {
-      const [found, live] = await Promise.all([getManagedProcedure(name), liveText(name)])
-      if (!found && live == null) return reply.code(404).send({ error: 'Procedure not found' })
-      let current = found
-      if (!current) {
-        // So the drop travels with config and Undo (restore a version) works.
-        if (live === '') throw unreadable(name)
-        current = (await adoptForWrite(req, name, NOTE_ADOPT_DROP)).procedure
+      const { baseVersion } = readBase({
+        base_version: req.body?.base_version ?? req.query?.base_version
+      })
+      const [found, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
+      if (!found && !live) return reply.code(404).send({ error: 'Procedure not found' })
+      if (baseVersion !== undefined && (found?.version ?? null) !== baseVersion) {
+        throw new ManagedProcError(
+          409,
+          'PROC_STALE',
+          'This procedure was changed since you opened it — reload to see the current version',
+          { current: found ? { body_hash: found.body_hash, version: found.version } : null }
+        )
       }
-      const before = current
+      let current = found
+      let adopted: Awaited<ReturnType<typeof adoptForWrite>> | null = null
+      if (!current && live) {
+        // So the drop travels with config and Undo (restore a version) works.
+        if (live.text === '') throw unreadable(name)
+        adopted = await adoptForWrite(req, live.name, NOTE_ADOPT_DROP)
+        current = adopted.procedure
+      }
+      const before = current as ManagedProcedure
       await markManagedDropped(name, req.user?.id ?? null)
       const result = await deployManagedProcedure(name, { by: actor(req) })
       if (result.action === 'failed') {
         if (result.phase === 'stamp') {
+          await log(req, 'procedure-drop', name, before.version, 'dropped (not stamped)')
           throw new ManagedProcError(
             500,
             'DEPLOY_STAMP_FAILED',
-            result.reason ?? 'Dropped, but recording the drop failed'
+            result.reason ?? 'Dropped, but recording the drop failed',
+            { version: before.version }
           )
         }
-        // The database refused the drop: config must not claim it.
-        if (!before.dropped_at) await unmarkManagedDropped(before)
-        throw new ManagedProcError(400, 'DROP_FAILED', result.reason ?? 'Drop failed')
+        // The database refused the drop: config must not claim it (nor keep an adoption).
+        if (adopted) await undoAdoption(req, name, adopted, 'drop')
+        else if (!before.dropped_at) {
+          try {
+            await unmarkManagedDropped(before)
+          } catch (err) {
+            req.log.error({ err, procedure: name }, 'could not put back the dropped mark')
+          }
+        }
+        const left = await getManagedProcedure(name).catch(() => before)
+        const configDropped = !!left?.dropped_at
+        throw new ManagedProcError(
+          400,
+          'DROP_FAILED',
+          `${result.reason ?? 'Drop failed'}${configDropped ? ' — config still marks it dropped, so the next deploy will drop it' : ''}`,
+          { config_dropped: configDropped }
+        )
       }
       await log(req, 'procedure-drop', name, before.version, result.action)
       return reply.code(204).send()
@@ -610,7 +748,14 @@ export async function procedureRoutes(app: FastifyInstance) {
   // ── Restore (Undo): save version N's body as the next version, deploy ───
   app.post<{
     Params: { name: string; version: string }
-    Body: { base_hash?: string | null; base_version?: number | null; note?: string } | undefined
+    Body:
+      | {
+          base_hash?: string | null
+          base_version?: number | null
+          base_live_hash?: string | null
+          note?: string
+        }
+      | undefined
   }>('/:name/versions/:version/restore', async (req, reply) => {
     const { name } = req.params
     const refused = await refuseName(name, reply)
@@ -622,15 +767,23 @@ export async function procedureRoutes(app: FastifyInstance) {
       if (!v) {
         return reply.code(404).send({ error: 'Version not found', code: 'PROC_VERSION_NOT_FOUND' })
       }
+      const { baseLiveHash, ...base } = readBase(req.body as Record<string, unknown> | undefined)
+      assertLiveUnchanged(baseLiveHash, await liveProc(name))
       const note = noteOf(req.body?.note, `Restored version ${n}`)
-      const saved = await saveAndDeployManaged({
-        name,
-        body: v.body,
-        note,
-        userId: req.user?.id ?? null,
-        ...baseOf(req.body),
-        by: actor(req)
-      })
+      let saved: Awaited<ReturnType<typeof saveAndDeployManaged>>
+      try {
+        saved = await saveAndDeployManaged({
+          name,
+          body: v.body,
+          note,
+          userId: req.user?.id ?? null,
+          ...base,
+          by: actor(req)
+        })
+      } catch (e) {
+        await logIfStampFailed(req, e, 'procedure-restore', name, note)
+        throw e
+      }
       await log(req, 'procedure-restore', name, saved.version, note)
       return reply.send({
         data: { version: saved.version, unchanged: saved.unchanged, deployed: saved.deployed }
@@ -649,6 +802,18 @@ export async function procedureRoutes(app: FastifyInstance) {
       const result: DeployResult = await deployManagedProcedure(name, { by: actor(req) })
       if (result.action === 'failed') {
         const stamp = result.phase === 'stamp'
+        if (stamp) {
+          // The DDL ran: live changed. reason = "<action>, but recording … failed".
+          const did = /^(created|altered|dropped|unchanged|absent)\b/.exec(result.reason ?? '')
+          const row = await getManagedProcedure(name).catch(() => null)
+          await log(
+            req,
+            'procedure-deploy-config',
+            name,
+            row?.version ?? null,
+            `${did?.[1] ?? 'deployed'} (not stamped)`
+          )
+        }
         return reply.code(stamp ? 500 : 400).send({
           error: result.reason ?? 'Deploy failed',
           code: stamp ? 'DEPLOY_STAMP_FAILED' : 'DEPLOY_FAILED',

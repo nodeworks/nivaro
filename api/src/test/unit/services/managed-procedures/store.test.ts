@@ -273,6 +273,15 @@ describe('adoptLiveProcedure', () => {
     expect(rowsOf(VERSIONS_TABLE)[0].note).toBe('Adopted from the live database')
   })
 
+  it('adopt with baseHash null refuses when another writer adopted first (409 PROC_STALE)', async () => {
+    live.defs.set('spend_totals', BODY)
+    await adoptLiveProcedure('spend_totals', { userId: null, by: 'user:a', baseHash: null })
+    await expect(
+      adoptLiveProcedure('spend_totals', { userId: null, by: 'user:b', baseHash: null })
+    ).rejects.toMatchObject({ status: 409, code: 'PROC_STALE' })
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(1)
+  })
+
   it('adopting again with the same live text is unchanged but still stamps', async () => {
     live.defs.set('spend_totals', BODY)
     await adoptLiveProcedure('spend_totals', { userId: null, by: 'script:a', note: 'first' })

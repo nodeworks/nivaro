@@ -13,7 +13,11 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: vi.fn() }))
 
 /** What SQL Server holds: lowercased name → definition ('' = encrypted, text unreadable). */
-const live = vi.hoisted(() => ({ defs: new Map<string, string>() }))
+const live = vi.hoisted(() => ({
+  defs: new Map<string, string>(),
+  /** lowercased name → the spelling sys.procedures keeps (default: the key). */
+  names: new Map<string, string>()
+}))
 
 vi.mock('../../../db/index.js', async () => {
   const { fakeDb, fakeStore } = await import('../services/managed-procedures/fake-store.js')
@@ -30,6 +34,11 @@ vi.mock('../../../db/index.js', async () => {
         bytes: def.length,
         param_count: 0
       }))
+    }
+    if (sql.includes("s.name = 'dbo'") && sql.includes('p.name = ?')) {
+      const name = String(bindings[0]).toLowerCase()
+      if (!live.defs.has(name)) return []
+      return [{ name: live.names.get(name) ?? name, definition: live.defs.get(name) || null }]
     }
     if (sql.includes('m.definition') && sql.includes('p.name = ?')) {
       const name = String(bindings[0]).toLowerCase()
@@ -65,11 +74,16 @@ vi.mock('../../../services/procedure-deploy.js', async (importOriginal) => {
 
 import { procedureRoutes } from '../../../routes/procedures.js'
 import { logActivity } from '../../../services/activity.js'
-import { procBodyHash } from '../../../services/managed-procedures/normalize.js'
+import { procBodyHash, procDeployHash } from '../../../services/managed-procedures/normalize.js'
 import { MANAGED_TABLE, VERSIONS_TABLE } from '../../../services/managed-procedures/owners.js'
 import { deployProcedure, dropProcedure } from '../../../services/procedure-deploy.js'
 import { registerReadinessCheck } from '../../../services/readiness.js'
-import { resetFakeStore, rowsOf, seedRow } from '../services/managed-procedures/fake-store.js'
+import {
+  fakeStore,
+  resetFakeStore,
+  rowsOf,
+  seedRow
+} from '../services/managed-procedures/fake-store.js'
 
 const IMPORTS = 'nivaro_import_definitions'
 const V1 = 'CREATE PROCEDURE spend_totals AS SELECT 1'
@@ -88,9 +102,20 @@ const put = (name: string, payload: Record<string, unknown>) =>
 
 const actions = () => vi.mocked(logActivity).mock.calls.map((c) => c[0])
 
+/** Make the nth update of the managed table from now on throw (1 = the next one). */
+function failManagedUpdate(n: number) {
+  let seen = 0
+  fakeStore.beforeUpdate = (table) => {
+    if (table !== MANAGED_TABLE) return
+    seen++
+    if (seen === n) throw new Error('Transaction (Process ID 61) was deadlocked')
+  }
+}
+
 beforeEach(async () => {
   resetFakeStore()
   live.defs = new Map()
+  live.names = new Map()
   vi.mocked(deployProcedure).mockClear()
   vi.mocked(dropProcedure).mockClear()
   vi.mocked(logActivity).mockClear()
@@ -183,19 +208,123 @@ describe('PUT /:name', () => {
 
   it('PUT on an unmanaged proc whose live text changed since it was read is 409 and writes nothing', async () => {
     live.defs.set('spend_totals', V1)
-    const res = await put('spend_totals', { definition: V2, base_hash: procBodyHash('other') })
+    const res = await put('spend_totals', {
+      definition: V2,
+      base_live_hash: procDeployHash('other')
+    })
     expect(res.statusCode).toBe(409)
-    expect(res.json()).toMatchObject({ code: 'PROC_STALE' })
+    expect(res.json()).toMatchObject({ code: 'PROC_DRIFTED', live_hash: procDeployHash(V1) })
     expect(rowsOf(MANAGED_TABLE)).toHaveLength(0)
-    // A caller that thought the name was new (null base) or had a config version is stale too.
-    for (const base of [{ base_hash: null }, { base_version: 1 }]) {
+    // A caller that saw a config row (any base_hash / base_version) is stale: there is none.
+    for (const base of [{ base_hash: null }, { base_hash: 'h' }, { base_version: 1 }]) {
       const r = await put('spend_totals', { definition: V2, ...base })
       expect(r.statusCode).toBe(409)
+      expect(r.json()).toMatchObject({ code: 'PROC_STALE' })
     }
     expect(rowsOf(MANAGED_TABLE)).toHaveLength(0)
     // The live hash GET /:name gave passes.
-    const ok = await put('spend_totals', { definition: V2, base_hash: procBodyHash(V1) })
+    const ok = await put('spend_totals', { definition: V2, base_live_hash: procDeployHash(V1) })
     expect(ok.json()).toMatchObject({ version: 2 })
+  })
+
+  it('PUT on a managed proc refuses a raw change to live since it was opened (409 PROC_DRIFTED)', async () => {
+    await put('spend_totals', {
+      definition: "CREATE PROCEDURE spend_totals AS SELECT 'open'",
+      create: true
+    })
+    const opened = procDeployHash(live.defs.get('spend_totals') as string)
+    // A case-only hotfix straight to the database.
+    live.defs.set('spend_totals', "CREATE OR ALTER PROCEDURE spend_totals AS SELECT 'OPEN'")
+    vi.mocked(deployProcedure).mockClear()
+    const res = await put('spend_totals', { definition: V2, base_live_hash: opened })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({
+      code: 'PROC_DRIFTED',
+      live_hash: procDeployHash("CREATE PROCEDURE spend_totals AS SELECT 'OPEN'")
+    })
+    expect(deployProcedure).not.toHaveBeenCalled()
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(1)
+    // Overwrite = resend with the hash it was given.
+    const ok = await put('spend_totals', { definition: V2, base_live_hash: res.json().live_hash })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toMatchObject({ version: 2 })
+    // null = "not live when I opened it"
+    await app.inject({ method: 'DELETE', url: '/procedures/spend_totals' })
+    const revived = await put('spend_totals', { definition: V1, base_live_hash: null })
+    expect(revived.statusCode).toBe(200)
+  })
+
+  it('PUT refuses an owner, description or base that is not the right type (400)', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    for (const bad of [
+      { owner: 5 },
+      { description: { x: 1 } },
+      { base_version: 'x' },
+      { base_hash: 3 },
+      { base_live_hash: [] }
+    ]) {
+      const r = await put('spend_totals', { definition: V2, ...bad })
+      expect(r.statusCode, JSON.stringify(bad)).toBe(400)
+      expect(r.json()).toMatchObject({ code: 'PROC_FIELD_INVALID' })
+    }
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(1)
+  })
+
+  it('a stamp failure after the deploy still logs the change (not stamped)', async () => {
+    failManagedUpdate(1) // a new name: the stamp is the first update
+    const res = await put('new_report', {
+      definition: 'CREATE PROCEDURE new_report AS SELECT 1',
+      create: true
+    })
+    expect(res.statusCode).toBe(500)
+    expect(res.json()).toMatchObject({ code: 'DEPLOY_STAMP_FAILED', version: 1 })
+    expect(actions()).toEqual([
+      expect.objectContaining({
+        action: 'procedure-create',
+        comment: 'v1 · Created in the Procedures page (not stamped)'
+      })
+    ])
+  })
+
+  it('an adoption made for an edit is undone when the edit fails to deploy', async () => {
+    live.defs.set('spend_totals', V1)
+    vi.mocked(deployProcedure).mockRejectedValueOnce(new Error("Invalid column name 'x'"))
+    const res = await put('spend_totals', { definition: V2 })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'DEPLOY_FAILED' })
+    expect(rowsOf(MANAGED_TABLE)).toHaveLength(0)
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(0)
+    expect(live.defs.get('spend_totals')).toBe(V1)
+    expect(actions()).toEqual([
+      expect.objectContaining({
+        action: 'procedure-adopt',
+        comment: expect.stringMatching(/^v1 · Adopted/)
+      }),
+      expect.objectContaining({ action: 'procedure-adopt', comment: 'v1 · undone: edit failed' })
+    ])
+  })
+
+  it('an adoption made for an edit is kept when only the stamp failed', async () => {
+    live.defs.set('spend_totals', V1)
+    failManagedUpdate(3) // adopt stamp, save v2, then the v2 stamp
+    const res = await put('spend_totals', { definition: V2 })
+    expect(res.statusCode).toBe(500)
+    expect(res.json()).toMatchObject({ code: 'DEPLOY_STAMP_FAILED', version: 2 })
+    expect(rowsOf(MANAGED_TABLE)[0]).toMatchObject({ version: 2 })
+    expect(actions().map((a) => a.comment)).toEqual([
+      'v1 · Adopted from the live database before an edit',
+      'v2 · Edited in the Procedures page (not stamped)'
+    ])
+  })
+
+  it('adopt keeps the spelling sys.procedures has', async () => {
+    live.defs.set('spend_totals', 'CREATE PROCEDURE Spend_Totals AS SELECT 1')
+    live.names.set('spend_totals', 'Spend_Totals')
+    const res = await put('spend_totals', {
+      definition: 'CREATE PROCEDURE spend_totals AS SELECT 2'
+    })
+    expect(res.statusCode).toBe(200)
+    expect(rowsOf(MANAGED_TABLE)[0].name).toBe('Spend_Totals')
   })
 
   it('PUT keeps refusing a decoy header (400) and an import-owned name (409 APP_MANAGED)', async () => {
@@ -264,6 +393,66 @@ describe('DELETE /:name', () => {
     expect(actions().map((a) => a.action)).toEqual(['procedure-adopt', 'procedure-drop'])
   })
 
+  it('DELETE with a stale base_version is 409 and drops nothing', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    await put('spend_totals', { definition: V2 })
+    vi.mocked(dropProcedure).mockClear()
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/procedures/spend_totals?base_version=1'
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({ code: 'PROC_STALE' })
+    expect(dropProcedure).not.toHaveBeenCalled()
+    const ok = await app.inject({
+      method: 'DELETE',
+      url: '/procedures/spend_totals?base_version=2'
+    })
+    expect(ok.statusCode).toBe(204)
+  })
+
+  it('an adoption made for a drop is undone when the drop fails', async () => {
+    live.defs.set('spend_totals', V1)
+    vi.mocked(dropProcedure).mockRejectedValueOnce(
+      new Error('Lock request time out period exceeded.')
+    )
+    const res = await app.inject({ method: 'DELETE', url: '/procedures/spend_totals' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'DROP_FAILED' })
+    expect(rowsOf(MANAGED_TABLE)).toHaveLength(0)
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(0)
+    expect(actions().map((a) => a.comment)).toEqual([
+      'v1 · Adopted from the live database before a drop',
+      'v1 · undone: drop failed'
+    ])
+  })
+
+  it('a drop whose stamp failed is logged (not stamped)', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    vi.mocked(logActivity).mockClear()
+    failManagedUpdate(2) // the dropped mark, then the stamp
+    const res = await app.inject({ method: 'DELETE', url: '/procedures/spend_totals' })
+    expect(res.statusCode).toBe(500)
+    expect(res.json()).toMatchObject({ code: 'DEPLOY_STAMP_FAILED' })
+    expect(live.defs.has('spend_totals')).toBe(false)
+    expect(actions()).toEqual([
+      expect.objectContaining({ action: 'procedure-drop', comment: 'v1 · dropped (not stamped)' })
+    ])
+  })
+
+  it('when putting the dropped mark back fails, the answer says config still marks it dropped', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    vi.mocked(dropProcedure).mockRejectedValueOnce(
+      new Error('Lock request time out period exceeded.')
+    )
+    failManagedUpdate(2) // the dropped mark, then the put-back
+    const res = await app.inject({ method: 'DELETE', url: '/procedures/spend_totals' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ code: 'DROP_FAILED', config_dropped: true })
+    expect(rowsOf(MANAGED_TABLE)[0].dropped_at).toBeInstanceOf(Date)
+    expect(live.defs.has('spend_totals')).toBe(true)
+  })
+
   it('DELETE of a name neither live nor in config is 404', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/procedures/nothing_here' })
     expect(res.statusCode).toBe(404)
@@ -330,6 +519,44 @@ describe('versions and restore', () => {
     expect(deployProcedure).not.toHaveBeenCalled()
   })
 
+  it('restore refuses a raw change to live since it was opened (409 PROC_DRIFTED)', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    await put('spend_totals', { definition: V2 })
+    const opened = procDeployHash(V2)
+    live.defs.set('spend_totals', 'CREATE PROCEDURE spend_totals AS SELECT 3')
+    vi.mocked(deployProcedure).mockClear()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/procedures/spend_totals/versions/1/restore',
+      payload: { base_live_hash: opened }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toMatchObject({
+      code: 'PROC_DRIFTED',
+      live_hash: procDeployHash('CREATE PROCEDURE spend_totals AS SELECT 3')
+    })
+    expect(deployProcedure).not.toHaveBeenCalled()
+  })
+
+  it('a restore whose stamp failed is logged (not stamped)', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    await put('spend_totals', { definition: V2 })
+    vi.mocked(logActivity).mockClear()
+    failManagedUpdate(2) // the save, then the stamp
+    const res = await app.inject({
+      method: 'POST',
+      url: '/procedures/spend_totals/versions/1/restore',
+      payload: {}
+    })
+    expect(res.statusCode).toBe(500)
+    expect(actions()).toEqual([
+      expect.objectContaining({
+        action: 'procedure-restore',
+        comment: 'v3 · Restored version 1 (not stamped)'
+      })
+    ])
+  })
+
   it('an unknown version is 404 and a bad one 400', async () => {
     await put('spend_totals', { definition: V1, create: true })
     expect(
@@ -384,6 +611,22 @@ describe('adopt and deploy', () => {
     expect(live.defs.get('spend_totals')).toBe('CREATE OR ALTER PROCEDURE spend_totals AS SELECT 1')
     expect(actions()).toEqual([
       expect.objectContaining({ action: 'procedure-deploy-config', comment: 'v1 · altered' })
+    ])
+  })
+
+  it('a config deploy whose stamp failed is logged (not stamped)', async () => {
+    await put('spend_totals', { definition: V1, create: true })
+    live.defs.set('spend_totals', V2)
+    vi.mocked(logActivity).mockClear()
+    failManagedUpdate(1)
+    const res = await app.inject({ method: 'POST', url: '/procedures/spend_totals/deploy' })
+    expect(res.statusCode).toBe(500)
+    expect(res.json()).toMatchObject({ code: 'DEPLOY_STAMP_FAILED' })
+    expect(actions()).toEqual([
+      expect.objectContaining({
+        action: 'procedure-deploy-config',
+        comment: 'v1 · altered (not stamped)'
+      })
     ])
   })
 
@@ -503,7 +746,7 @@ describe('reads', () => {
     const res = await app.inject({ method: 'GET', url: '/procedures/legacy_proc' })
     expect(res.json().data).toMatchObject({
       definition: 'CREATE PROCEDURE legacy_proc AS SELECT 1',
-      live_hash: procBodyHash('CREATE PROCEDURE legacy_proc AS SELECT 1'),
+      live_hash: procDeployHash('CREATE PROCEDURE legacy_proc AS SELECT 1'),
       managed: null,
       config: null
     })
