@@ -136,6 +136,29 @@ describe('realtime shared worker source (#2475)', () => {
     expect(b.events('auth:ok').length).toBe(1)
   })
 
+  it('reports the newest open tab build, and re-announces when tabs come and go (2026-10-28)', () => {
+    const { socket, attach } = boot()
+    const old = attach()
+    old.send({ t: 'hello', app: 'efp-new', version: { build: 'old', tab: 't1', loaded: 1000 } })
+    socket.connect()
+    const asked = old.received.find((m) => m.t === 'need-token')?.req
+    old.send({ t: 'token', req: asked, token: 'ws-1' })
+    socket.fire('auth:ok')
+    const builds = () =>
+      (socket.sent('client:hello') as Array<Record<string, unknown>>).map((h) => h.build)
+    expect(builds()).toEqual(['old'])
+    // A tab reloaded onto the new release joins the same worker.
+    const fresh = attach()
+    fresh.send({ t: 'hello', app: 'efp-new', version: { build: 'new', tab: 't2', loaded: 2000 } })
+    expect(builds()).toEqual(['old', 'new'])
+    // An older tab saying hello again does not take it back.
+    old.send({ t: 'hello', app: 'efp-new', version: { build: 'old', tab: 't1', loaded: 1000 } })
+    expect(builds()).toEqual(['old', 'new'])
+    // The new tab closes: the old one is what is left.
+    fresh.send({ t: 'bye' })
+    expect(builds()).toEqual(['old', 'new', 'old'])
+  })
+
   it('backs off when a tab has no token; focus never restarts the asking', () => {
     const { socket, scope, attach } = boot()
     const a = attach()

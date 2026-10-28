@@ -316,6 +316,38 @@ function wakeToken(reset) {
   socket.connect()
 }
 
+/* The build this browser's socket reports is the NEWEST open tab's (2026-10-28): the
+   first tab's was kept forever, so a tab reloaded onto a new release still showed the
+   old build on /realtime ("not on the latest build"). Re-announced when it changes —
+   a newer tab says hello, or the tab it came from closes. */
+function versionOf(h) {
+  if (!h) return null
+  if (h.version && typeof h.version === 'object') return h.version
+  if (h.build || h.loaded) return { build: h.build, api: h.api, tab: h.tab, loaded: h.loaded }
+  return null
+}
+
+function refreshHello() {
+  var best = null
+  var bestAt = -1
+  ports.forEach(function (st) {
+    var v = versionOf(st.hello)
+    if (!v) return
+    var at = Number(v.loaded) || 0
+    if (at >= bestAt) { bestAt = at; best = st.hello }
+  })
+  var prev = hello && hello.version ? hello.version : {}
+  if (!best) {
+    if (!hello) {
+      ports.forEach(function (st) { if (!hello && st.hello) hello = { app: st.hello.app, features: st.hello.features, version: {} } })
+    }
+    return
+  }
+  var v = versionOf(best) || {}
+  hello = { app: best.app || (hello && hello.app), features: best.features || (hello && hello.features), version: v }
+  if ((v.build !== prev.build || v.tab !== prev.tab) && socket && socket.connected) sendHello()
+}
+
 function sendHello() {
   if (!hello) return
   var features = ['coalesce'].concat(hello.features || []).filter(function (f, i, a) { return a.indexOf(f) === i })
@@ -450,7 +482,7 @@ function onEmit(port, msg) {
   if (event === 'client:hello') {
     var st1 = ports.get(port)
     if (st1) st1.hello = payload
-    if (!hello && payload) hello = { app: payload.app, features: payload.features, version: {} }
+    refreshHello()
     return
   }
   if (event === 'page:at') {
@@ -476,6 +508,7 @@ function drop(port) {
   if (!ports.has(port)) return
   releaseAll(port)
   ports.delete(port)
+  refreshHello()
   if (activePort === port) activePort = null
   if (tokenReq.port === port) tokenReq.port = null
   try { port.close() } catch (e) { /* already closed */ }
@@ -490,7 +523,7 @@ function onMessage(port, ev) {
   switch (msg.t) {
     case 'hello':
       st.hello = msg
-      if (!hello) hello = { app: msg.app, features: msg.features, version: msg.version || {} }
+      refreshHello()
       if (!activePort || msg.active) activePort = port
       ensureSocket()
       post(port, status())
