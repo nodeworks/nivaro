@@ -722,6 +722,16 @@ describe('Inspector', () => {
     expect(openLayout).toHaveBeenCalledWith(3)
   })
 
+  it('a header item has Remove from header', async () => {
+    const { apply } = await mount({ kind: 'header', field: 'title' })
+    await settle()
+    await click(host.querySelector('[data-header-remove]'))
+    expect(apply).toHaveBeenCalledWith(
+      [{ op: 'remove', at: { field: 'title', group_key: '__header__' } }],
+      { label: 'Remove Title from the header' }
+    )
+  })
+
   it('an override of the parent gets Reset to parent (#2635)', async () => {
     const base = makeBundle({ parent_layout_id: 3 })
     const bundle: LayoutBundle = {

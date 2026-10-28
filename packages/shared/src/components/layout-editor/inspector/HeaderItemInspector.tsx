@@ -303,6 +303,20 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
           }
         />
       </Setting>
+      {/* Takes the field out of the header strip only: its value and any other
+          place it sits on the form are untouched, and Undo puts it back. */}
+      <div className='border-t border-slate-200 pt-3 dark:border-border'>
+        <button
+          type='button'
+          data-header-remove
+          onClick={() =>
+            env.apply([{ op: 'remove', at }], { label: `Remove ${label} from the header` })
+          }
+          className='text-[12px] text-red-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-red-400'
+        >
+          Remove from header
+        </button>
+      </div>
     </div>
   )
 }
