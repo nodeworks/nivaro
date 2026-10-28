@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { onConfigWrite } from '../db/config-epoch.js'
+import { cacheSetting } from './cache-config.js'
 import { registerCache } from './cache-registry.js'
 import { onCollectionTouched, onItemEvent } from './item-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -28,17 +29,12 @@ import { currentTenantKey } from './tenant-rooms.js'
  * the read discards its answer.
  */
 
-const envMs = (name: string, fallback: number): number => {
-  const raw = process.env[name]
-  if (raw == null || raw === '') return fallback
-  const n = Number(raw)
-  return Number.isFinite(n) && n >= 0 ? Math.min(n, 300_000) : fallback
-}
-
-/** How long a cached list total is served (LIST_TOTAL_CACHE_MS; 0 = off). */
-export const listTotalTtlMs = (): number => envMs('LIST_TOTAL_CACHE_MS', 30_000)
-/** How long a cached display-label row is served (LABEL_CACHE_MS; 0 = off). */
-export const labelRowTtlMs = (): number => envMs('LABEL_CACHE_MS', 30_000)
+/** How long a cached list total is served (LIST_TOTAL_CACHE_MS wins, else the instance's
+ *  cache config, else 30 s; 0 = off). */
+export const listTotalTtlMs = (): number => cacheSetting('list_total.ttl_ms')
+/** How long a cached display-label row is served (LABEL_CACHE_MS wins, else the cache
+ *  config, else 30 s; 0 = off). */
+export const labelRowTtlMs = (): number => cacheSetting('label.ttl_ms')
 
 const TOTALS_MAX = 5000
 const ROWS_MAX = 5000

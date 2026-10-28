@@ -112,6 +112,8 @@ vi.mock('../../../services/items.js', async (orig) => ({
     })
   ),
   aggregateItems: svc.aggregate,
+  // /distinct checks the column through the column cache (2026-10-27).
+  actualColumnName: vi.fn(async (_t: string, c: string) => c),
   createOneReported: vi.fn(async (_u: unknown, _c: string, data: Record<string, unknown>) => {
     svc.created.push(data)
     return { id: 99, item: { id: 99 }, readable: true, linkFailures: [], upserted: false }

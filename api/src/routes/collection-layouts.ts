@@ -2,10 +2,13 @@ import { randomUUID } from 'crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { config } from '../config.js'
+import { configEpochNow, onConfigWrite } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
+import { cacheSetting } from '../services/cache-config.js'
+import { registerCache } from '../services/cache-registry.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { type AbApplied, abFor, liveVariants } from '../services/layout-ab.js'
@@ -59,6 +62,7 @@ import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layo
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
 import { registerLayoutCrossformRoutes } from './layout-crossform.js'
@@ -69,6 +73,186 @@ import { applyTemplateToNewLayout, layoutReuseRoutes, loadFormTemplate } from '.
 import { layoutStagedRoutes } from './layout-staged.js'
 
 export { parseConditions, parseRecordConditions, type RecordConditionRule, roleAllows, slugify }
+
+// ── Layout bundles (/active, /summary) ───────────────────────────────────────
+/**
+ * The sections + field assignments a record form renders, per LAYOUT (C2, 2026-10-27).
+ * Every record open asked for them again; the pick (which form this caller gets) still
+ * runs per request, and so does everything per caller (role-hidden sections, editor notes,
+ * lazy-section merge) — only the rows behind a picked layout are kept.
+ *
+ * Keyed by tenant, kind, layout id, the configuration epoch and a local generation: a
+ * layout edit in this process (any configuration write the driver sees) drops them at
+ * once, one on another replica when the epoch moves (cache registry, ≤ the epoch poll),
+ * a writer outside the app within the TTL (LAYOUT_BUNDLE_CACHE_TTL_MS / the instance's
+ * cache config, default 30 s — the driver-seam cache under these reads has the same).
+ * Read straight through whenever the epoch is not known (CACHE_EPOCH=off, not read in the
+ * last 15 s, a configuration write of this process still settling), in cloud mode (tenant
+ * pools have no driver seam to hear writes) and when switched off.
+ * Callers get a copy.
+ */
+const BUNDLE_MAX = 2_000
+const layoutBundles = new Map<string, { at: number; value: unknown }>()
+const layoutBundleInflight = new Map<string, Promise<unknown>>()
+let layoutBundleGen = 0
+let layoutBundleWired = false
+const layoutBundleCounters = { hits: 0, misses: 0 }
+
+function clearLayoutBundles(): void {
+  layoutBundleGen++
+  layoutBundles.clear()
+}
+
+export function layoutBundleStats(): Record<string, number> {
+  return { entries: layoutBundles.size, ...layoutBundleCounters }
+}
+
+function layoutBundleTtlMs(): number {
+  if (process.env.CLOUD_META_DB_URL) return 0
+  return cacheSetting('layout_bundle.enabled') ? cacheSetting('layout_bundle.ttl_ms') : 0
+}
+
+/** Exported for tests: one bundle through the cache (a structured copy each time). */
+export async function cachedLayoutBundle<T>(
+  kind: string,
+  layoutId: unknown,
+  load: () => Promise<T>
+): Promise<T> {
+  const ttl = layoutBundleTtlMs()
+  // No epoch known (mechanism off, not read lately, or this process has a configuration
+  // write whose move has not landed): nothing could retire an entry — read through.
+  const epoch = configEpochNow()
+  if (ttl <= 0 || epoch == null) return load()
+  if (!layoutBundleWired) {
+    layoutBundleWired = true
+    onConfigWrite(clearLayoutBundles)
+    registerCache(
+      'layout-bundles',
+      'Record form sections + field assignments per layout (/active, /summary)',
+      clearLayoutBundles
+    )
+  }
+  const key = [currentTenantKey(), kind, String(layoutId), epoch, layoutBundleGen].join('|')
+  const hit = layoutBundles.get(key)
+  if (hit && Date.now() - hit.at < ttl) {
+    layoutBundleCounters.hits++
+    return structuredClone(hit.value) as T
+  }
+  layoutBundleCounters.misses++
+  let p = layoutBundleInflight.get(key) as Promise<T> | undefined
+  if (!p) {
+    const gen = layoutBundleGen
+    const started = Date.now()
+    p = load()
+      .then((value) => {
+        if (gen === layoutBundleGen) {
+          while (layoutBundles.size >= BUNDLE_MAX) {
+            const oldest = layoutBundles.keys().next().value
+            if (oldest === undefined) break
+            layoutBundles.delete(oldest)
+          }
+          layoutBundles.set(key, { at: started, value: structuredClone(value) })
+        }
+        return value
+      })
+      .finally(() => layoutBundleInflight.delete(key))
+    layoutBundleInflight.set(key, p)
+  }
+  return structuredClone(await p) as T
+}
+
+const ACTIVE_ASSIGNMENT_COLUMNS = [
+  'field',
+  'group_key',
+  'sort',
+  'label_override',
+  'is_visible',
+  'default_expanded',
+  'lock_conditions',
+  'overrides',
+  'show_row_revisions',
+  'show_approval_chain',
+  'widget_id',
+  'input_bindings',
+  'allow_revision_restore',
+  // Slot cards (owners, PDF, widgets) size by col_span on the record page.
+  'col_span'
+]
+
+// knex rows, as the handlers always read them
+type BundleRow = Record<string, any>
+
+/** /active's rows for one layout: its own sections + assignments, its parent's filling in
+ *  (#424, one level), and the parent's lazy sections (#2713) before the per-caller filter. */
+async function loadActiveBundle(
+  layoutId: unknown,
+  parentLayoutId: unknown
+): Promise<{ groupsRaw: BundleRow[]; assignments: BundleRow[]; parentLazy: string[] }> {
+  let [groupsRaw, assignments] = (await Promise.all([
+    db('nivaro_field_groups').where({ layout_id: layoutId }).orderBy('sort', 'asc'),
+    db('nivaro_layout_field_assignments')
+      .where({ layout_id: layoutId })
+      .select(...ACTIVE_ASSIGNMENT_COLUMNS)
+      .orderBy('sort', 'asc')
+  ])) as [BundleRow[], BundleRow[]]
+  let parentLazy: string[] = []
+  const ownGroupKeys = new Set(groupsRaw.map((g) => g.key as string))
+  if (parentLayoutId) {
+    try {
+      const [pGroups, pAssignments] = (await Promise.all([
+        db('nivaro_field_groups')
+          .where({ layout_id: Number(parentLayoutId) })
+          .orderBy('sort', 'asc'),
+        db('nivaro_layout_field_assignments')
+          .where({ layout_id: Number(parentLayoutId) })
+          .select(...ACTIVE_ASSIGNMENT_COLUMNS)
+          .orderBy('sort', 'asc')
+      ])) as [BundleRow[], BundleRow[]]
+      const childFields = new Set(assignments.map((a) => a.field as string))
+      const childGroupKeys = new Set(groupsRaw.map((g) => g.key as string))
+      assignments = [
+        ...assignments,
+        ...pAssignments.filter((a) => !childFields.has(a.field as string))
+      ]
+      groupsRaw = [...groupsRaw, ...pGroups.filter((g) => !childGroupKeys.has(g.key as string))]
+    } catch {
+      // broken parent reference — the child stands alone
+    }
+    try {
+      const parent = (await db('nivaro_collection_layouts')
+        .where({ id: Number(parentLayoutId) })
+        .first('conditions')) as { conditions?: unknown } | undefined
+      parentLazy = lazySectionsOf(parent?.conditions).filter((k) => !ownGroupKeys.has(k))
+    } catch {
+      // the parent's own lazy sections are a nicety; the form renders without them
+    }
+  }
+  return { groupsRaw, assignments, parentLazy }
+}
+
+/** /summary's (and /detail's) rows for one layout. */
+async function loadPresentationBundle(
+  layoutId: unknown
+): Promise<{ groups: BundleRow[]; assignments: BundleRow[] }> {
+  const [groups, assignments] = (await Promise.all([
+    db('nivaro_field_groups').where({ layout_id: layoutId }).orderBy('sort', 'asc'),
+    db('nivaro_layout_field_assignments')
+      .where({ layout_id: layoutId })
+      .select(
+        'field',
+        'group_key',
+        'sort',
+        'label_override',
+        'is_visible',
+        'default_expanded',
+        'overrides',
+        'widget_id',
+        'input_bindings'
+      )
+      .orderBy('sort', 'asc')
+  ])) as [BundleRow[], BundleRow[]]
+  return { groups, assignments }
+}
 
 // Does every rule match the given record? eq/neq compare via
 // String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
@@ -1001,90 +1185,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.changes_tray = !!layout.changes_tray
     layout.entry_config = parseEntryConfig(layout.entry_config)
 
-    let [groupsRaw, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments')
-        .where({ layout_id: layout.id })
-        .select(
-          'field',
-          'group_key',
-          'sort',
-          'label_override',
-          'is_visible',
-          'default_expanded',
-          'lock_conditions',
-          'overrides',
-          'show_row_revisions',
-          'show_approval_chain',
-          'widget_id',
-          'input_bindings',
-          'allow_revision_restore',
-          // Slot cards (owners, PDF, widgets) size by col_span on the record page.
-          'col_span'
-        )
-        .orderBy('sort', 'asc')
-    ])
-
     // Layout inheritance (#424): a child layout EXTENDS its parent — parent
     // assignments fill in wherever the child has none for that field, parent
     // groups ride along unless the child defines the same key. One level
     // deep, deliberately (chains would make "where does this field come from"
-    // unanswerable).
-    const ownGroupKeys = new Set(groupsRaw.map((g: { key: string }) => g.key))
-    if (layout.parent_layout_id) {
-      try {
-        const [pGroups, pAssignments] = await Promise.all([
-          db('nivaro_field_groups')
-            .where({ layout_id: Number(layout.parent_layout_id) })
-            .orderBy('sort', 'asc'),
-          db('nivaro_layout_field_assignments')
-            .where({ layout_id: Number(layout.parent_layout_id) })
-            .select(
-              'field',
-              'group_key',
-              'sort',
-              'label_override',
-              'is_visible',
-              'default_expanded',
-              'lock_conditions',
-              'overrides',
-              'show_row_revisions',
-              'show_approval_chain',
-              'widget_id',
-              'input_bindings',
-              'allow_revision_restore',
-              'col_span'
-            )
-            .orderBy('sort', 'asc')
-        ])
-        const childFields = new Set(assignments.map((a: { field: string }) => a.field))
-        const childGroupKeys = new Set(groupsRaw.map((g: { key: string }) => g.key))
-        assignments = [
-          ...assignments,
-          ...pAssignments.filter((a: { field: string }) => !childFields.has(a.field))
-        ]
-        groupsRaw = [
-          ...groupsRaw,
-          ...pGroups.filter((g: { key: string }) => !childGroupKeys.has(g.key))
-        ]
-      } catch {
-        // broken parent reference — the child stands alone
-      }
-      // Sections that load when opened (#2713) ride along with the parent's sections.
-      try {
-        const parent = (await db('nivaro_collection_layouts')
-          .where({ id: Number(layout.parent_layout_id) })
-          .first('conditions')) as { conditions?: unknown } | undefined
-        const parentLazy = lazySectionsOf(parent?.conditions).filter((k) => !ownGroupKeys.has(k))
-        if (parentLazy.length > 0) {
-          const own = (layout.conditions ?? {}) as Record<string, unknown>
-          layout.conditions = {
-            ...own,
-            lazy_sections: [...new Set([...lazySectionsOf(own), ...parentLazy])]
-          }
-        }
-      } catch {
-        // the parent's own lazy sections are a nicety; the form renders without them
+    // unanswerable). The rows are kept per layout (cachedLayoutBundle).
+    const { groupsRaw, assignments, parentLazy } = await cachedLayoutBundle(
+      'active',
+      `${layout.id}:${layout.parent_layout_id ?? ''}`,
+      () => loadActiveBundle(layout.id, layout.parent_layout_id)
+    )
+    // Sections that load when opened (#2713) ride along with the parent's sections.
+    if (layout.parent_layout_id && parentLazy.length > 0) {
+      const own = (layout.conditions ?? {}) as Record<string, unknown>
+      layout.conditions = {
+        ...own,
+        lazy_sections: [...new Set([...lazySectionsOf(own), ...parentLazy])]
       }
     }
 
@@ -1108,9 +1224,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
           }
         })
 
-    const ungroupedRow = assignments.find(
-      (a: { field: string; sort: number }) => a.field === '__ungrouped_pos__'
-    )
+    const ungroupedRow = assignments.find((a) => a.field === '__ungrouped_pos__')
     const ungrouped_sort: number | null = ungroupedRow ? ungroupedRow.sort : null
 
     return reply.send({
@@ -1151,23 +1265,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.changes_tray = !!layout.changes_tray
     layout.entry_config = parseEntryConfig(layout.entry_config)
 
-    const [groups, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments')
-        .where({ layout_id: layout.id })
-        .select(
-          'field',
-          'group_key',
-          'sort',
-          'label_override',
-          'is_visible',
-          'default_expanded',
-          'overrides',
-          'widget_id',
-          'input_bindings'
-        )
-        .orderBy('sort', 'asc')
-    ])
+    const { groups, assignments } = await cachedLayoutBundle('presentation', layout.id, () =>
+      loadPresentationBundle(layout.id)
+    )
     return reply.send({
       data: { layout, ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }) }
     })
@@ -1191,23 +1291,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray
     layout.entry_config = parseEntryConfig(layout.entry_config)
-    const [groups, assignments] = await Promise.all([
-      db('nivaro_field_groups').where({ layout_id: layout.id }).orderBy('sort', 'asc'),
-      db('nivaro_layout_field_assignments')
-        .where({ layout_id: layout.id })
-        .select(
-          'field',
-          'group_key',
-          'sort',
-          'label_override',
-          'is_visible',
-          'default_expanded',
-          'overrides',
-          'widget_id',
-          'input_bindings'
-        )
-        .orderBy('sort', 'asc')
-    ])
+    const { groups, assignments } = await cachedLayoutBundle('presentation', layout.id, () =>
+      loadPresentationBundle(layout.id)
+    )
     return reply.send({
       data: { layout, ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }) }
     })

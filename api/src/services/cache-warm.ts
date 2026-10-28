@@ -41,7 +41,9 @@
  * it warms the buffer pool, plan cache and the read path's own caches). Same
  * rules as the viewer phase: usage-ranked runs only, never in cloud mode.
  */
+
 import type { Redis } from 'ioredis'
+import { cacheSetting } from './cache-config.js'
 import {
   type QueuePhaseDeps,
   type QueueUsageLogRow,
@@ -89,12 +91,11 @@ const MASKED = '••••••'
 
 export type CacheWarmMode = 'on' | 'off' | 'auto'
 
-/** CACHE_WARM=on|off; unset (auto) follows cronTicksEnabled(). */
+/** CACHE_WARM=on|off (env wins), else this instance's cache config (Database → Caches,
+ *  services/cache-config.ts); auto follows cronTicksEnabled(). An env value that names no
+ *  mode reads as unset. */
 export function cacheWarmMode(): CacheWarmMode {
-  const raw = (process.env.CACHE_WARM ?? '').trim().toLowerCase()
-  if (['on', 'true', '1', 'yes'].includes(raw)) return 'on'
-  if (['off', 'false', '0', 'no'].includes(raw)) return 'off'
-  return 'auto'
+  return cacheSetting('warm.mode')
 }
 
 export function cacheWarmAllowed(): boolean {
@@ -104,9 +105,9 @@ export function cacheWarmAllowed(): boolean {
   return cronTicksEnabled()
 }
 
+/** CACHE_WARM_BUDGET_MS (env wins), else the cache config, else CACHE_WARM_DEFAULT_BUDGET_MS. */
 export function cacheWarmBudgetMs(): number {
-  const n = Number(process.env.CACHE_WARM_BUDGET_MS)
-  return Number.isFinite(n) && n > 0 ? n : CACHE_WARM_DEFAULT_BUDGET_MS
+  return cacheSetting('warm.budget_ms')
 }
 
 export interface WarmQueryDef {

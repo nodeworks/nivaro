@@ -82,15 +82,48 @@ export const obsApiAnalytics: DocSection = {
         '`CACHE_EPOCH=off` turns the mechanism off; `CACHE_EPOCH_POLL_MS` sets the poll (default 5000). Self-hosted only.'
       ]
     },
-    { type: 'h2', id: 'permission-cache', text: 'Permission cache' },
+    { type: 'h2', id: 'cache-switches', text: 'Cache switches (Database, Caches)' },
     {
       type: 'p',
-      text: "Every list read asks the same permission questions: may this person read the collection, which fields, under which row filter, inside which User Scopes. Without the cache each answer is rebuilt from the role's policies on every call, several database round trips per collection and again for every expanded relation. With `PERMISSION_CACHE=on` each person's answers are kept in the process for a short time. It is off by default; turn it on for one environment (staging) first."
+      text: 'Every cache switch can be set from Database, Caches instead of only through env vars. The card shows each switch with its effective value and where it came from: `env` (an env var that is set always wins), `config` (stored for this instance) or `default`. Saved values go under the `cache` key of this instance’s `nivaro_settings_overrides` row (instance = `NIVARO_INSTANCE`, else `NODE_ENV`), so every replica of one environment shares them; each process re-reads them every 15 seconds and at once when another process moves the configuration number, so a change reaches every replica within about 30 seconds without a restart. `GET /api/cache-config` lists them and `PATCH /api/cache-config {settings: {"permission.enabled": true, "identity.ttl_ms": null}}` stores them (null clears a stored value). Admins only; cloud mode reads env and defaults only.'
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'Env var (wins)', 'Default'],
+      rows: [
+        ['permission.enabled', '`PERMISSION_CACHE` (on only for `on`)', 'off'],
+        ['permission.ttl_ms', '`PERMISSION_CACHE_TTL_MS`', '30000 (1000 to 60000)'],
+        ['permission.max', '`PERMISSION_CACHE_MAX`', '20000'],
+        ['metadata_l2.enabled', '`METADATA_L2` (off only for `off`)', 'on'],
+        ['metadata_l2.ttl_s', '`METADATA_L2_TTL_S`', '600'],
+        ['warm.mode', '`CACHE_WARM` (on, off, auto)', 'auto'],
+        ['warm.budget_ms', '`CACHE_WARM_BUDGET_MS`', '240000'],
+        ['list_total.ttl_ms', '`LIST_TOTAL_CACHE_MS` (0 = off)', '30000'],
+        ['label.ttl_ms', '`LABEL_CACHE_MS` (0 = off)', '30000'],
+        ['identity.enabled', '`IDENTITY_CACHE`', 'on'],
+        ['identity.ttl_ms', '`IDENTITY_CACHE_TTL_MS`', '5000 (at most 5000)'],
+        ['layout_bundle.enabled', '`LAYOUT_BUNDLE_CACHE`', 'on'],
+        ['layout_bundle.ttl_ms', '`LAYOUT_BUNDLE_CACHE_TTL_MS`', '30000']
+      ]
     },
     {
       type: 'ul',
       items: [
-        "What is kept: the role's decision for an action on a collection, the allowed field list, the row-filter conditions, the admin flag and the person's compiled User Scope filters. Records and user rows are never kept: who is signed in, their status and role, an API key, a connected app or a View-as session is still checked on every request.",
+        'The permission cache can be switched on or off while running: each move drops everything the process held, and turning it on attaches the write side it needs. Turn it on for an environment from this card once and every replica follows; an env var on one replica still overrides it there.',
+        'Identity rows: the active user row a request signs in with is shared by the requests of the next few seconds (at most 5). A write to `nivaro_users` through the app forgets them in that process at once; a suspension or role change made on another replica shows within the lifetime. Inactive accounts are always read fresh.',
+        'Record form layouts: the sections and field assignments behind `/collection-layouts/active`, `/summary` and `/detail` are kept per layout and configuration number. Which form a person gets is still decided on every request. A layout edit clears them at once in the process that made it and on every other process when the number moves.',
+        'Cache warm, list totals and label rows read the switch each time they run, so a change applies to the next run.'
+      ]
+    },
+    { type: 'h2', id: 'permission-cache', text: 'Permission cache' },
+    {
+      type: 'p',
+      text: "Every list read asks the same permission questions: may this person read the collection, which fields, under which row filter, inside which User Scopes. Without the cache each answer is rebuilt from the role's policies on every call, several database round trips per collection and again for every expanded relation. With the cache on (`PERMISSION_CACHE=on`, or Permission cache, Enabled on Database, Caches) each person's answers are kept in the process for a short time. It is off by default; turn it on for one environment (staging) first."
+    },
+    {
+      type: 'ul',
+      items: [
+        "What is kept: the role's decision for an action on a collection, the allowed field list, the row-filter conditions, the admin flag and the person's compiled User Scope filters. Records are never kept: who is signed in, their status and role, an API key, a connected app or a View-as session is still checked on every request (the user row through the identity-row cache, at most 5 seconds old).",
         "Every entry belongs to one sign-in: the person, their role, how they signed in (session, token, API key, View-as, connected app), the key's scopes and row restrictions and the sandbox flag. Two people never share an entry, and neither do a person and the API key they own.",
         'Any change to roles, policies, User Scopes, scope dimensions, relations, fields, collections or subtree permissions made through the app reaches every server at once: the write moves a shared access version in Redis (again when its transaction ends) and every entry built before it stops being used. So do table changes, procedures the app runs whose body may touch those tables, and procedures it has not looked at yet. Creating, changing, revoking or deleting an API key, and starting or ending View-as, move the person’s own version.',
         'A change made outside the app (SQL run directly against the database, a job on the database server) cannot move the version. Entries never outlive `PERMISSION_CACHE_TTL_MS` (default 30 s, at most 60 s), so such a change is seen within that time. Clearing the Permission cache from Ops Console, Caches applies it at once on every server.',

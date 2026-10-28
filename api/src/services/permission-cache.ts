@@ -1,5 +1,9 @@
 /**
- * Compiled permission cache per person (#2442). OFF unless PERMISSION_CACHE=on.
+ * Compiled permission cache per person (#2442). OFF unless PERMISSION_CACHE=on or this
+ * instance's cache config (Database → Caches, services/cache-config.ts) turns it on; env wins.
+ * The config is re-read every 15 s, so the switch can move at run time: every move drops
+ * everything this process holds (entries, versions seen, subcaches) and turning it on
+ * attaches the write seams handed over by providePermissionCacheWiring.
  *
  * What it holds: the DERIVED answers the permission layer rebuilds on every
  * call — the role decision behind can() (role row + matching policy), the
@@ -7,8 +11,9 @@
  * person's compiled User Scope enforcement (restrict filters + hop routes) —
  * one entry per (principal, question). Never a record, never a user row: who
  * the caller is (user row, status, role id, API key row, OAuth grant,
- * masquerade token) is still read fresh on every request by authenticate,
- * and that identity is part of every key.
+ * masquerade token) is read by authenticate on every request (the user row
+ * through the ≤5 s identity cache in middleware/authenticate.ts), and that
+ * identity is part of every key.
  *
  * The key: tenant · sign-in kind (session / token / api key + id / run-as-key
  * / masquerade + issuing admin / oauth + client) · user id · role id · the
@@ -57,6 +62,7 @@
  */
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
+import { cacheSetting, onCacheConfigChange } from './cache-config.js'
 
 export interface PermissionCacheRedis {
   status?: string
@@ -72,15 +78,26 @@ function bounded(raw: string | undefined, fallback: number, min: number, max: nu
 }
 
 const CLOUD = !!process.env.CLOUD_META_DB_URL
-let enabled = process.env.PERMISSION_CACHE === 'on' && !CLOUD
+/** Tests and the equivalence harness pin the switch; undefined = follow the cache config. */
+let pinned: boolean | undefined
+let lastOn = false
+/** On / off: env PERMISSION_CACHE wins, else this instance's stored cache config
+ *  (services/cache-config.ts, re-read every 15 s), else off. Never in cloud mode. */
+function isOn(): boolean {
+  if (CLOUD) return false
+  const on = pinned ?? cacheSetting('permission.enabled')
+  if (on !== lastOn) switched(on)
+  return on
+}
 /** Hard backstop: no entry is served after this, whatever the versions say. */
-export const PERMISSION_CACHE_TTL_MS = bounded(
-  process.env.PERMISSION_CACHE_TTL_MS,
-  30_000,
-  1_000,
-  60_000
-)
-const MAX_ENTRIES = bounded(process.env.PERMISSION_CACHE_MAX, 20_000, 100, 200_000)
+export function permissionCacheTtlMs(): number {
+  return cacheSetting('permission.ttl_ms')
+}
+/** The TTL this process started with (tests; live readers use permissionCacheTtlMs()). */
+export const PERMISSION_CACHE_TTL_MS = permissionCacheTtlMs()
+function maxEntries(): number {
+  return cacheSetting('permission.max')
+}
 /** How long a version read may take before the request goes uncached. */
 const VERSION_TIMEOUT_MS = bounded(process.env.PERMISSION_CACHE_REDIS_TIMEOUT_MS, 50, 5, 1_000)
 /** How long one user object reuses the versions it read (one request, in practice). */
@@ -98,15 +115,67 @@ export function setPermissionCacheRedis(r: PermissionCacheRedis | null): void {
 }
 
 export function permissionCacheEnabled(): boolean {
-  return enabled
+  return isOn()
 }
 
 /** Tests and the equivalence harness switch the cache at run time. A process that booted
- *  with it off has no seam or commit hook attached, so its own writes move nothing. */
+ *  with it off has no seam or commit hook attached unless wiring was provided
+ *  (providePermissionCacheWiring), so its own writes move nothing. */
 export function setPermissionCacheEnabled(on: boolean): void {
-  enabled = on && !CLOUD
+  pinned = on && !CLOUD
+  lastOn = pinned
   resetLocal(undefined, false)
 }
+
+// ── runtime switch (cache config) ────────────────────────────────────────────
+
+export interface PermissionCacheWiring {
+  redis: PermissionCacheRedis | null
+  /** knex clients (`knex.client`) whose statements move the access versions. */
+  clients: Array<object | null | undefined>
+  procLookup?: ((name: string) => Promise<string | null>) | null
+}
+let wiring: PermissionCacheWiring | null = null
+let wired = false
+
+/** What turning the cache on at run time attaches (the cache-config route plugin hands it
+ *  over at boot). Attached at once when the cache is already on. */
+export function providePermissionCacheWiring(w: PermissionCacheWiring): void {
+  if (CLOUD) return
+  wiring = w
+  if (isOn()) wireUp()
+}
+
+function wireUp(): void {
+  const w = wiring
+  if (!w || wired) return
+  wired = true
+  if (!redis) setPermissionCacheRedis(w.redis)
+  for (const client of w.clients) {
+    attachPermissionCacheSeam(client as EmitterLike | null | undefined)
+    attachPermissionCacheCommitHook(client)
+  }
+  if (w.procLookup && !procLookup) setPermissionCacheProcLookup(w.procLookup)
+}
+
+/** The switch moved (cache config saved here or on another replica). Everything this process
+ *  holds is dropped either way — the subcaches too — so turning it on starts from nothing
+ *  and turning it off leaves nothing behind to come back to. */
+function switched(on: boolean): void {
+  lastOn = on
+  if (on) wireUp()
+  for (const t of trailing) clearTimeout(t)
+  trailing = []
+  seenGlobal.clear()
+  seenUser.clear()
+  wroteAccess.clear()
+  forgetProcedureVerdicts()
+  resetLocal(undefined, true)
+}
+
+onCacheConfigChange((changed) => {
+  if (changed.has('permission.enabled')) isOn()
+})
 
 // ── state ────────────────────────────────────────────────────────────────────
 
@@ -186,14 +255,14 @@ function resetLocal(userId: string | undefined, listeners: boolean, scan = true)
 export function clearPermissionCache(): void {
   // The epoch also moves on CREATE / ALTER PROCEDURE elsewhere: bodies are read again.
   forgetProcedureVerdicts()
-  resetLocal(undefined, enabled)
+  resetLocal(undefined, isOn())
 }
 
 export function permissionCacheStats(): Record<string, number | boolean> {
   return {
-    enabled,
-    ttl_ms: PERMISSION_CACHE_TTL_MS,
-    max_entries: MAX_ENTRIES,
+    enabled: isOn(),
+    ttl_ms: permissionCacheTtlMs(),
+    max_entries: maxEntries(),
     entries: entries.size,
     ...counters
   }
@@ -353,7 +422,7 @@ export async function cachedAccess<T>(
   compute: (ctx: AccessCompute) => Promise<T>,
   clone: (v: T) => T
 ): Promise<T> {
-  if (!enabled) return compute(NO_STORE)
+  if (!isOn()) return compute(NO_STORE)
   const pending = versionsFor(user)
   const versions = pending ? await pending : null
   if (!versions) {
@@ -365,7 +434,7 @@ export async function cachedAccess<T>(
   const hit = entries.get(key)
   if (hit) {
     entries.delete(key)
-    if (now - hit.at < PERMISSION_CACHE_TTL_MS) {
+    if (now - hit.at < permissionCacheTtlMs()) {
       entries.set(key, hit)
       counters.hits++
       return clone(hit.v as T)
@@ -381,10 +450,12 @@ export async function cachedAccess<T>(
       degraded = true
     }
   })
-  if (gen === generation && ugen === (userGeneration.get(uid) ?? 0) && enabled && !degraded) {
-    if (entries.size >= MAX_ENTRIES) {
+  if (gen === generation && ugen === (userGeneration.get(uid) ?? 0) && isOn() && !degraded) {
+    const max = maxEntries()
+    while (entries.size >= max) {
       const oldest = entries.keys().next().value
-      if (oldest !== undefined) entries.delete(oldest)
+      if (oldest === undefined) break
+      entries.delete(oldest)
     }
     entries.set(key, { at: now, v: clone(value) })
     counters.stores++
@@ -398,7 +469,7 @@ export async function cachedAccess<T>(
 
 /** Move the cluster-wide access version (and clear this process's entries). */
 export function bumpAccessVersion(): void {
-  if (!enabled) return
+  if (!isOn()) return
   counters.bumps++
   resetLocal(undefined, true)
   const r = redis
@@ -410,7 +481,7 @@ export function bumpAccessVersion(): void {
 
 /** Move one person's access version (API key, View-as, scope assignment changes). */
 export function bumpUserAccessVersion(userId: string | number | null | undefined): void {
-  if (!enabled) return
+  if (!isOn()) return
   if (userId == null || userId === '') {
     bumpAccessVersion()
     return
@@ -609,7 +680,7 @@ function lookUpProcedure(name: string, previous: boolean | undefined): void {
 function procMayChangeAccess(name: string): boolean {
   const known = procTouches.get(name)
   if (known) {
-    if (Date.now() - known.at >= PERMISSION_CACHE_TTL_MS) lookUpProcedure(name, known.touches)
+    if (Date.now() - known.at >= permissionCacheTtlMs()) lookUpProcedure(name, known.touches)
     return known.touches
   }
   lookUpProcedure(name, undefined)
@@ -635,7 +706,7 @@ const wroteAccess = new Set<string>()
  * while the cache is on: with it off nothing here runs.
  */
 export function notePermissionStatement(sql: string, after: boolean, txId?: unknown): boolean {
-  if (!enabled || !sql) return false
+  if (!sql || !isOn()) return false
   if (PROC_DDL_RE.test(sql)) forgetProcedureVerdicts()
   const verdict = classifyStatement(sql)
   const bump = verdict.bump || verdict.procs.some((p) => procMayChangeAccess(p))
@@ -707,7 +778,7 @@ function watchTransaction(trx: TrxLike | null | undefined): void {
   if (typeof trx.on === 'function') {
     trx.on('query', (q: unknown) => {
       const sql = (q as QueryEvent | null)?.sql
-      if (!enabled || typeof sql !== 'string') return
+      if (typeof sql !== 'string' || !isOn()) return
       const v = classifyStatement(sql)
       if (v.bump || v.procs.some((p) => procMayChangeAccess(p))) {
         if (wroteAccess.size > 10_000) wroteAccess.clear()
