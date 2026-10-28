@@ -205,6 +205,65 @@ describe('useItemLock — held only while this tab is the focused edit surface (
     expect(lock?.acquired).toBe(true)
   })
 
+  it('an open file picker keeps the lock until it closes; a picker left open lets go after 5 min', async () => {
+    const { calls } = await claimed()
+    const input = document.createElement('input')
+    input.type = 'file'
+    document.body.appendChild(input)
+    try {
+      // Upload clicked: the native picker takes window focus.
+      input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      focus = false
+      await act(async () => {
+        window.dispatchEvent(new Event('blur'))
+        vi.advanceTimersByTime(60_000)
+      })
+      expect(said(calls, 'DELETE')).toHaveLength(0)
+      expect(lock?.acquired).toBe(true)
+      // File chosen: focus comes back, nothing was released or retaken.
+      focus = true
+      await act(async () => {
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        window.dispatchEvent(new Event('focus'))
+      })
+      expect(said(calls, 'DELETE')).toHaveLength(0)
+      expect(said(calls, 'POST')).toHaveLength(1)
+
+      // Picker cancelled while the person is already in another app: ordinary rule.
+      input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      focus = false
+      await act(async () => {
+        window.dispatchEvent(new Event('blur'))
+        vi.advanceTimersByTime(10_000)
+        input.dispatchEvent(new Event('cancel', { bubbles: true }))
+        vi.advanceTimersByTime(1_600)
+      })
+      expect(said(calls, 'DELETE')).toHaveLength(1)
+      expect(lock?.acquired).toBe(false)
+
+      // Back, then a picker left open on an empty desk: released at the 5 min cap.
+      focus = true
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'))
+      })
+      await flush()
+      expect(lock?.acquired).toBe(true)
+      input.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      focus = false
+      await act(async () => {
+        window.dispatchEvent(new Event('blur'))
+        vi.advanceTimersByTime(4 * 60_000)
+      })
+      expect(lock?.acquired).toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(60_000 + 100)
+      })
+      expect(lock?.acquired).toBe(false)
+    } finally {
+      input.remove()
+    }
+  })
+
   it('a quick blur-and-back inside the debounce keeps the lock', async () => {
     const { calls } = await claimed()
     focus = false

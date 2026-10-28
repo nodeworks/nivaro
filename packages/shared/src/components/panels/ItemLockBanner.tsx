@@ -22,6 +22,11 @@ const BLUR_RELEASE_MS = 1_500
 /** While focus sits inside an iframe the top window hears no blur when it
  *  moves on to another app: ask `document.hasFocus()` this often instead. */
 const IFRAME_FOCUS_POLL_MS = 2_000
+/** A native file picker takes window focus while someone chooses what to
+ *  attach — that is editing, not leaving. The lock stays (the page keeps
+ *  beating) until the picker closes (a file chosen or cancel) or focus comes
+ *  back, at most this long: a picker left open on an empty desk lets go. */
+const FILE_PICKER_HOLD_MS = 5 * 60_000
 /** How often a viewer locked out re-reads the lock when no live notice came. */
 const HOLDER_RECHECK_MS = 30_000
 /** How often a viewer who knows of no holder re-reads the lock: a `$lock`
@@ -54,7 +59,8 @@ export interface LockQueueEntry {
 /**
  * Is this browser window the focused one? Turns false only after the window
  * has been without focus for BLUR_RELEASE_MS (never on an element blur), true
- * again the moment it is focused.
+ * again the moment it is focused. A native file picker is not leaving: while
+ * one is open the window counts as focused (FILE_PICKER_HOLD_MS at most).
  */
 function useWindowFocused(): boolean {
   const [focused, setFocused] = useState(true)
@@ -62,41 +68,66 @@ function useWindowFocused(): boolean {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
     let settle: ReturnType<typeof setTimeout> | null = null
     let poll: ReturnType<typeof setInterval> | null = null
+    // When the file picker opened by a click on <input type=file> (also the
+    // programmatic .click() behind an Upload button) stops counting; 0 = none open.
+    let pickerUntil = 0
     const hasFocus = () => (typeof document.hasFocus === 'function' ? document.hasFocus() : true)
     const stopPoll = () => {
       if (poll) clearInterval(poll)
       poll = null
     }
+    const isFileInput = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement && t.type === 'file'
+    const onClick = (e: Event) => {
+      if (isFileInput(e.target)) pickerUntil = Date.now() + FILE_PICKER_HOLD_MS
+    }
+    const onPickerClosed = (e: Event) => {
+      if (!isFileInput(e.target) || !pickerUntil) return
+      pickerUntil = 0
+      // Closed while the window is still elsewhere: the ordinary rule resumes.
+      if (!hasFocus()) onBlur()
+    }
     const onBlur = () => {
       if (settle) clearTimeout(settle)
-      settle = setTimeout(() => {
-        settle = null
-        if (!hasFocus()) {
+      const pickerLeft = pickerUntil - Date.now()
+      settle = setTimeout(
+        () => {
+          settle = null
+          if (!hasFocus()) {
+            stopPoll()
+            setFocused(false)
+            return
+          }
+          // Still focused = focus went into an iframe of this page. Keep asking:
+          // leaving the iframe for another app fires nothing up here.
           stopPoll()
-          setFocused(false)
-          return
-        }
-        // Still focused = focus went into an iframe of this page. Keep asking:
-        // leaving the iframe for another app fires nothing up here.
-        stopPoll()
-        poll = setInterval(() => {
-          if (hasFocus()) return
-          stopPoll()
-          setFocused(false)
-        }, IFRAME_FOCUS_POLL_MS)
-      }, BLUR_RELEASE_MS)
+          poll = setInterval(() => {
+            if (hasFocus()) return
+            stopPoll()
+            setFocused(false)
+          }, IFRAME_FOCUS_POLL_MS)
+        },
+        pickerLeft > 0 ? Math.max(pickerLeft, BLUR_RELEASE_MS) : BLUR_RELEASE_MS
+      )
     }
     const onFocus = () => {
       if (settle) clearTimeout(settle)
       settle = null
+      pickerUntil = 0
       stopPoll()
       setFocused(true)
     }
     window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocus)
+    document.addEventListener('click', onClick, true)
+    document.addEventListener('change', onPickerClosed, true)
+    document.addEventListener('cancel', onPickerClosed, true)
     return () => {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocus)
+      document.removeEventListener('click', onClick, true)
+      document.removeEventListener('change', onPickerClosed, true)
+      document.removeEventListener('cancel', onPickerClosed, true)
       if (settle) clearTimeout(settle)
       stopPoll()
     }
