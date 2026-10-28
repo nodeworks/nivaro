@@ -56,4 +56,34 @@ describe('POST /virtual-collections/:collection/validate-sql', () => {
     expect(res.json()).toMatchObject({ valid: false })
     await app.close()
   })
+
+  it('a temp table or dynamic SQL is valid with a warning (review A13)', async () => {
+    raw.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "The metadata could not be determined because statement 'SELECT * FROM #t' uses a temp table."
+        ),
+        { number: 11526 }
+      )
+    )
+    const app = Fastify()
+    await app.register(virtualCollectionsRoutes)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v/validate-sql',
+      payload: { sql: 'SELECT 1 AS id INTO #t; SELECT * FROM #t' }
+    })
+    expect(res.json()).toMatchObject({ valid: true })
+    expect(res.json().warning).toContain('temp table')
+
+    // a compile error inside the batch stays invalid
+    raw.mockRejectedValueOnce(
+      Object.assign(new Error('The batch could not be analyzed because of compile errors.'), {
+        number: 11501
+      })
+    )
+    const bad = await app.inject({ method: 'POST', url: '/v/validate-sql', payload: { sql: 'x' } })
+    expect(bad.json()).toMatchObject({ valid: false })
+    await app.close()
+  })
 })

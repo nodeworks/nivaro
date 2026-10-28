@@ -14,6 +14,24 @@ export const STORED_FILE_SECURITY_HEADERS: Readonly<Record<string, string>> = Ob
   'Content-Security-Policy': "sandbox; default-src 'none'"
 })
 
+/** PDFs: Firefox's and Safari's built-in viewers can show a blank page under `sandbox`
+ *  (review A14, 2026-10-27). No sandbox, but nothing may load or embed — a PDF's own
+ *  scripting runs inside the viewer, never as the app's origin. */
+export const STORED_PDF_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'; object-src 'none'"
+})
+
+/** The security headers for a stored file served as `contentType` (the value that will be
+ *  sent): the PDF set for exactly `application/pdf`, the sandboxing set for everything else. */
+export function storedFileSecurityHeaders(
+  contentType: string | null | undefined
+): Readonly<Record<string, string>> {
+  return validEssence(contentType) === 'application/pdf'
+    ? STORED_PDF_SECURITY_HEADERS
+    : STORED_FILE_SECURITY_HEADERS
+}
+
 /** Text types shown inline — always re-labelled text/plain so the browser
  *  never treats them as markup, whatever the uploader claimed. */
 const PLAIN_TEXT = new Set([

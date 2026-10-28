@@ -142,7 +142,7 @@ function typedSettingValue(
 
 export async function extensionsRoutes(app: FastifyInstance) {
   // Public — no auth required. The admin SPA loads this before auth context is available.
-  app.get('/manifest', async (_req, reply) => {
+  app.get('/manifest', { config: { publicRoute: true } }, async (_req, reply) => {
     const data = Array.from(extensionRegistry.values())
       .filter((e) => e.enabled && e.manifest?.uiBundle)
       .map((e) => ({
@@ -162,7 +162,15 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data, palette })
   })
 
-  app.addHook('preHandler', requireAdmin)
+  // Every other route here is admin-only — through this ONE hook (review A11, 2026-10-27: a
+  // per-route requireAdmin on top ran authenticate twice and counted an API key's rate limit
+  // twice). A Fastify hook covers every route of the plugin, those declared above it too, so
+  // the public manifest is let through by its route config (before this, non-admins got 403
+  // and never loaded extension UI bundles).
+  app.addHook('preHandler', async (req, reply) => {
+    if ((req.routeOptions.config as { publicRoute?: boolean } | undefined)?.publicRoute) return
+    return requireAdmin(req, reply)
+  })
 
   app.get('/', async (_req, reply) => {
     const { getObservedCapabilities, stagedBuildStatus } = await import('../extensions/loader.js')
@@ -196,7 +204,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // Enable/disable, delete and uninstall change the ONE shared process too: refused in cloud.
-  app.patch('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  app.patch('/:id', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     const body = req.body as { enabled?: boolean }
@@ -221,7 +229,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data: entry })
   })
 
-  app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+  app.delete('/:id', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     const entry = extensionRegistry.get(id)
@@ -243,7 +251,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   // ─── GET /marketplace — registry index (env URL or built-in curated list) ──
 
   // ── Extension settings (#112/#505) — schema-driven, typed ─────────────────
-  app.get('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/settings', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { getExtensionSettingsSchema } = await import('../extensions/loader.js')
     const schema = getExtensionSettingsSchema(id)
@@ -271,7 +279,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
     })
   })
 
-  app.put('/:id/settings', { preHandler: requireAdmin }, async (req, reply) => {
+  app.put('/:id/settings', async (req, reply) => {
     const { id } = req.params as { id: string }
     const body = req.body as { values?: Record<string, string | number | boolean | null> }
     const { getExtensionSettingsSchema, bustExtensionSettingsCache } = await import(
@@ -388,7 +396,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ── Settings history (#4) — the per-key activity rows the PUT writes ─────
-  app.get('/:id/settings/history', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/settings/history', async (req, reply) => {
     const { id } = req.params as { id: string }
     const limit = Math.min(200, Math.max(1, Number((req.query as { limit?: string }).limit) || 50))
     const rows = (await db('nivaro_activity as a')
@@ -437,7 +445,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ── Registry page (#40) — what this extension registered ────────────────
-  app.get('/:id/registry', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/registry', async (req, reply) => {
     const { id } = req.params as { id: string }
     if (!extensionRegistry.has(id)) return reply.code(404).send({ error: 'Extension not found' })
     const { describeExtensionRegistry } = await import('../extensions/loader.js')
@@ -450,7 +458,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // Every hook in the process — core ones included — with how long each takes.
-  app.get('/hooks/timings', { preHandler: requireAdmin }, async (_req, reply) => {
+  app.get('/hooks/timings', async (_req, reply) => {
     const { hooks } = await import('../hooks/registry.js')
     const rows = hooks
       .timings()
@@ -460,7 +468,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
 
   // #530 — every registry version this database has seen for the extension,
   // newest first, each with what it added/removed against the one before.
-  app.get('/:id/registry/history', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/registry/history', async (req, reply) => {
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
     const { registryHistory } = await import('../services/extension-registry-versions.js')
@@ -468,7 +476,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ── Staged builds (#76) — validate, promote, roll back <id>.next / .prev ──
-  app.get('/:id/staged', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/staged', async (req, reply) => {
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
     const { stagedBuildStatus, validateStagedBuild } = await import('../extensions/loader.js')
@@ -477,7 +485,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data: { ...status, check } })
   })
 
-  app.post('/:id/promote', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/:id/promote', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
@@ -498,7 +506,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
     return reply.send({ data: { ...result, restart_required: true } })
   })
 
-  app.post('/:id/rollback', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/:id/rollback', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const { id } = req.params as { id: string }
     if (!SAFE_EXT_NAME.test(id)) return reply.code(400).send({ error: 'Invalid extension id' })
@@ -517,7 +525,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ── Health probes (#262) ──────────────────────────────────────────────────
-  app.get('/:id/health', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/health', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { extensionHealthChecks } = await import('../extensions/loader.js')
     const check = extensionHealthChecks.get(id)
@@ -538,14 +546,14 @@ export async function extensionsRoutes(app: FastifyInstance) {
   })
 
   // ── Log channels (#427) ───────────────────────────────────────────────────
-  app.get('/:id/logs', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/:id/logs', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { getExtensionLogs } = await import('../extensions/loader.js')
     return reply.send({ data: getExtensionLogs(id) })
   })
 
   // ── Starter scaffold (#181) ───────────────────────────────────────────────
-  app.get('/scaffold', { preHandler: requireAdmin }, async (_req, reply) => {
+  app.get('/scaffold', async (_req, reply) => {
     reply.header('content-type', 'text/plain; charset=utf-8')
     reply.header('content-disposition', 'attachment; filename="index.ts"')
     return reply.send(EXTENSION_SCAFFOLD)
@@ -581,7 +589,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
 
   // ─── POST /marketplace/install — copy built-in or download tarball ─────────
 
-  app.post('/marketplace/install', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/marketplace/install', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const body = req.body as { name?: string; tarball_url?: string }
     const name = body?.name ?? ''
@@ -672,7 +680,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
 
   // ─── POST /marketplace/uninstall — remove dir + config entry ──────────────
 
-  app.post('/marketplace/uninstall', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/marketplace/uninstall', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const body = req.body as { name?: string }
     const name = body?.name ?? ''
@@ -706,7 +714,7 @@ export async function extensionsRoutes(app: FastifyInstance) {
     }
   })
 
-  app.post('/reload', { preHandler: requireAdmin }, async (req, reply) => {
+  app.post('/reload', async (req, reply) => {
     if (refuseInCloud(reply)) return reply
     const newIds = await scanNewExtensions({
       app,

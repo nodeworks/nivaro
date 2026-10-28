@@ -4,6 +4,7 @@ import {
   mediaTypeEssence,
   normalizeStoredType,
   STORED_FILE_SECURITY_HEADERS,
+  storedFileSecurityHeaders,
   storedFileServing,
   validEssence
 } from '../../../services/file-serving-safety.js'
@@ -134,6 +135,24 @@ describe('headers', () => {
       'Content-Security-Policy': "sandbox; default-src 'none'"
     })
     expect(mediaTypeEssence(' Text/Plain ; charset=x')).toBe('text/plain')
+  })
+
+  it('PDFs drop sandbox but keep nosniff and a no-load CSP (review A14)', () => {
+    expect(storedFileSecurityHeaders('application/pdf')).toEqual({
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; object-src 'none'"
+    })
+    expect(storedFileSecurityHeaders('Application/PDF; x=1')).toBe(
+      storedFileSecurityHeaders('application/pdf')
+    )
+    for (const t of [
+      'image/png',
+      'text/html',
+      'application/octet-stream',
+      null,
+      'a, application/pdf'
+    ])
+      expect(storedFileSecurityHeaders(t)).toBe(STORED_FILE_SECURITY_HEADERS)
   })
 })
 

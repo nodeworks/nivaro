@@ -89,6 +89,19 @@ describe('extension code routes', () => {
     await a.close()
   })
 
+  it('runs requireAdmin once per admin route; the manifest stays public (review A11)', async () => {
+    const { requireAdmin } = await import('../../../middleware/authenticate.js')
+    const a = await app()
+    const h = { 'x-admin': '1' }
+    expect((await a.inject({ method: 'POST', url: '/reload', headers: h })).statusCode).toBe(200)
+    expect(vi.mocked(requireAdmin)).toHaveBeenCalledTimes(1)
+    vi.mocked(requireAdmin).mockClear()
+    const m = await a.inject({ method: 'GET', url: '/manifest' })
+    expect(m.statusCode).toBe(200)
+    expect(vi.mocked(requireAdmin)).not.toHaveBeenCalled()
+    await a.close()
+  })
+
   it('self-hosted admins keep reload, promote and rollback', async () => {
     const a = await app()
     const h = { 'x-admin': '1' }

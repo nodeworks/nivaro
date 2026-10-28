@@ -5,6 +5,22 @@ import { logActivity } from '../services/activity.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { getUserScopes } from '../services/user-scopes.js'
 
+/**
+ * sp_describe_first_result_set refuses text whose result shape it cannot know without running
+ * it — a temp table, dynamic SQL, an extended procedure (errors 11512–11530, "could not be
+ * determined because …"). The text itself compiled, so validation answers valid + this warning.
+ * A real compile error (11501 "could not be analyzed because of compile errors", 102, 208 …)
+ * stays invalid. Null when the error is anything else.
+ */
+export function undescribableShape(err: unknown): string | null {
+  const e = err as { number?: unknown; message?: unknown }
+  const n = Number(e?.number)
+  const msg = String(e?.message ?? err ?? '')
+  const inRange = Number.isFinite(n) && n >= 11512 && n <= 11530
+  if (!inRange && !/could not be determined because/i.test(msg)) return null
+  return `The SQL compiles, but its columns could not be checked without running it (${msg.slice(0, 300)}). Preview the collection to confirm its columns.`
+}
+
 export async function virtualCollectionsRoutes(app: FastifyInstance) {
   // GET /virtual-collections — list all virtual collections
   app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
@@ -179,6 +195,10 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
       await db.raw('EXEC sys.sp_describe_first_result_set @tsql = ?', [String(sqlToValidate)])
       return reply.send({ valid: true })
     } catch (err) {
+      // A temp table or dynamic SQL compiles fine but has no result shape SQL Server can
+      // describe without running it (review A13, 2026-10-27): not an error, a warning.
+      const shape = undescribableShape(err)
+      if (shape) return reply.send({ valid: true, warning: shape })
       return reply.send({ valid: false, error: String(err) })
     }
   })

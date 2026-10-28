@@ -37,14 +37,28 @@ export function publicReadyReport(report: ReadyReport): ReadyReport {
 }
 
 /** Full /api/ready detail: an administrator, or a probe on loopback no proxy forwarded. */
-async function readyDetailAllowed(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+export async function readyDetailAllowed(req: FastifyRequest): Promise<boolean> {
   const peer = req.socket?.remoteAddress ?? ''
   const loopback = peer === '::1' || peer.startsWith('127.') || peer.startsWith('::ffff:127.')
   if (loopback && !req.headers['x-forwarded-for']) return true
   if (!req.headers.authorization && !req.headers.cookie) return false
-  return authenticate(req, reply)
+  // Identity only: authenticate gets a reply that swallows everything (review A12, 2026-10-27),
+  // so a refused or rate-limited credential can never put headers or a second answer on the
+  // readiness response — this route always answers itself.
+  return authenticate(req, silentReply())
     .then(() => !!req.isAdmin)
     .catch(() => false)
+}
+
+/** A stand-in reply for an identity check: every call is a no-op that chains. */
+export function silentReply(): FastifyReply {
+  const sink: Record<string, unknown> = {}
+  for (const m of ['header', 'headers', 'code', 'status', 'type', 'send', 'removeHeader']) {
+    sink[m] = () => sink
+  }
+  sink.sent = false
+  sink.getHeader = () => undefined
+  return sink as unknown as FastifyReply
 }
 
 export async function healthRoutes(app: FastifyInstance) {
@@ -171,7 +185,7 @@ export async function healthRoutes(app: FastifyInstance) {
     // The verdict per check is public (proxies, deploy gates); the summaries name missing
     // extensions, environment variables and driver errors — administrators and probes from
     // inside the container only.
-    const full = await readyDetailAllowed(req, reply)
+    const full = await readyDetailAllowed(req)
     // Running as root is a warning, never "not ready": the flag for everyone, the reason
     // only with the full detail.
     const asRoot = runningAsRoot()
