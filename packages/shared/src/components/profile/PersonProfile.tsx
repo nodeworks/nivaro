@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { DayTimelineCard } from './DayTimeline'
 import { DelegationCard } from './DelegationCard'
+import { MyDefaultsCard } from './MyDefaultsCard'
 import {
   AccessCard,
   ApiTokenCard,
@@ -227,6 +228,7 @@ export function PersonProfile({
               <div className='space-y-4'>
                 <OffboardingCard profile={profile} />
                 <PersonAiMemoryCard profile={profile} />
+                <MyDefaultsCard userId={profile.id} name={profile.first_name ?? profile.name} />
               </div>
             </div>
           </TabsContent>
