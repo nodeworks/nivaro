@@ -43,6 +43,7 @@ import {
 } from './helpers'
 import { isDerivedForRecord } from './live-rollups'
 import { useM2MStaging } from './M2MStagingContext'
+import { PersonalDefaultHint, PersonalDefaultPill } from './PersonalDefaultPill'
 import {
   DisplayFormulaValue,
   FieldCounter,
@@ -56,6 +57,7 @@ import {
 } from './placement-behaviour'
 import { jsonEqual, keepIfEqual } from './render-stability'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
+import { usePersonalDefaultsApi } from './usePersonalDefaults'
 
 const NUMERIC_TYPES = new Set(['integer', 'float', 'decimal', 'bigInteger', 'number'])
 const TEXTUAL_TYPES = new Set(['string', 'text', 'richtext', 'textarea', 'markdown', 'json', 'csv'])
@@ -709,6 +711,11 @@ export const FieldRow = memo(function FieldRow({
   const remoteChange = affordances?.remoteChanges[field.field]
   const lockReason = affordances?.lockReasons[field.field]
   const applyToLines = affordances?.applyToLines[field.field]
+  // Personal defaults (new records): pill + undo while the field holds its default, or a
+  // quiet hint saying why the saved default was not applied.
+  const personalDefaults = usePersonalDefaultsApi()
+  const personalDefaultApplied = personalDefaults?.applied(field.field) ?? false
+  const personalDefaultHint = personalDefaults?.hintFor(field.field) ?? null
 
   // AI button: the field's own setting (#2692), else the form-wide switch.
   const aiButton = showsAiButton(field._overrides, layoutAiEnabled, isAiEligible(field))
@@ -1107,6 +1114,13 @@ export const FieldRow = memo(function FieldRow({
               Check this
             </span>
           )}
+          {personalDefaultApplied && (
+            <PersonalDefaultPill
+              field={field.field}
+              label={label}
+              onUndo={() => personalDefaults?.undo(field.field)}
+            />
+          )}
           {swapButton}
           {applyToLines && !locked && !field.readonly && (
             <button
@@ -1287,6 +1301,9 @@ export const FieldRow = memo(function FieldRow({
         </div>
       )}
       {counter && <FieldCounter value={draft[field.field]} config={counter} />}
+      {personalDefaultHint && !personalDefaultApplied && (
+        <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
+      )}
       {remoteChange && (
         <RemoteChangeGhost
           change={remoteChange}

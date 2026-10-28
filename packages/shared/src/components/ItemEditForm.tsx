@@ -161,7 +161,11 @@ import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
-import { FieldAffordancesContext, type RemoteFieldChange } from './item-edit/FieldAffordances'
+import {
+  type FieldAffordances,
+  FieldAffordancesContext,
+  type RemoteFieldChange
+} from './item-edit/FieldAffordances'
 import { FieldRow } from './item-edit/FieldRow'
 import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
@@ -212,6 +216,7 @@ import {
   type StagedRelationsCtx,
   type StagedRelOps
 } from './item-edit/O2MStagingContext'
+import { makePersonalDefaultChecks } from './item-edit/personal-default-checks'
 import {
   confirmChangeFields,
   fieldCounterError,
@@ -246,6 +251,13 @@ import { useStableFieldAffordances } from './item-edit/render-stability'
 import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
+import {
+  linksBeyond,
+  type PersonalDefaultsApi,
+  PersonalDefaultsContext,
+  sameDefaultValue,
+  usePersonalDefaults
+} from './item-edit/usePersonalDefaults'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
@@ -1569,6 +1581,25 @@ function translateFields(rows: CMSField[]): CMSField[] {
  * its own hooks included — runs inside DesignCanvas: a client that cannot
  * write, no realtime, inert inputs, selectable shells.
  */
+/** The per-field contexts FieldRow reads, as one wrapper (keeps the form tree's depth). */
+function FieldContexts({
+  affordances,
+  personalDefaults,
+  children
+}: {
+  affordances: FieldAffordances | null
+  personalDefaults: PersonalDefaultsApi
+  children: ReactNode
+}) {
+  return (
+    <FieldAffordancesContext.Provider value={affordances}>
+      <PersonalDefaultsContext.Provider value={personalDefaults}>
+        {children}
+      </PersonalDefaultsContext.Provider>
+    </FieldAffordancesContext.Provider>
+  )
+}
+
 export function ItemEditForm(props: ItemEditFormProps) {
   if (!props.design) return <ItemEditFormView {...props} />
   return (
@@ -2101,6 +2132,8 @@ function ItemEditFormView({
   >({ state: designOn ? 'none' : 'checking' })
   const recoveryRef = useRef(recovery)
   recoveryRef.current = recovery
+  // A restored draft wins outright: no personal defaults are applied after it.
+  const [draftRestored, setDraftRestored] = useState(false)
   // The key the last completed check was for. The auth user id can arrive a
   // render after mount (key anon → real): persistence must not run for a key
   // whose stored draft has not been looked at yet, or a clean form would
@@ -2165,6 +2198,17 @@ function ItemEditFormView({
   // rule derived from the person's pick is part of their work (a Billing
   // Location's Shipping Location + Org Code), not a layout default.
   const autoFilledFieldsRef = useRef<Set<string>>(new Set())
+  // Personal defaults (item-edit/usePersonalDefaults.ts): fields a personal default filled, and
+  // what rules / cross-record defaults / cascades derived from them — prefill, not the person's
+  // work, so they never set isDirty. A person edit of the field takes it out.
+  const pdQuietRef = useRef<Set<string>>(new Set())
+  // Staged links that are only prefill (staging key → ids): not unsaved work, never hold a
+  // pushed reload. Set once the hook below exists.
+  const pdQuietLinksRef = useRef<() => Map<string, Set<string>>>(() => new Map())
+  // The person's own edits reach the hook through this (handleFieldChange, M2M staging).
+  const pdPersonChangeRef = useRef<(field: string) => void>(() => {})
+  // > 0 while staging that is not the person's (rule results, layout defaults, prefill, imports).
+  const notPersonStageRef = useRef(0)
   const markAutoFilled = useCallback((fields: string[]) => {
     if (fields.length === 0) return
     for (const f of fields) autoFilledFieldsRef.current.add(f)
@@ -2380,6 +2424,8 @@ function ItemEditFormView({
   const [importIssues, setImportIssues] = useState<ImportParseResponse['issues']>([])
   const appliedInitialImportRef = useRef(false)
   const appliedLayoutDefaultsRef = useRef(false)
+  // The layout default_values this new form started with: a personal default outranks them.
+  const layoutDefaultValuesRef = useRef<Record<string, unknown>>({})
 
   // ── M2M staging ────────────────────────────────────────────────────────────
   const [m2mLinks, setM2mLinks] = useState<Map<string, unknown[]>>(new Map())
@@ -2420,6 +2466,7 @@ function ItemEditFormView({
         if (crossFillInFlightRef.current === 0) {
           const field = stagingKeyToFieldRef.current.get(k)
           if (field) {
+            if (notPersonStageRef.current === 0) pdPersonChangeRef.current(field)
             crossDefaultsRef.current?.(field, id)
             upstreamCascadesRef.current?.(field, id)
           }
@@ -2433,7 +2480,7 @@ function ItemEditFormView({
           next.set(k, s)
           return next
         }),
-      unstageLink: (k, id) =>
+      unstageLink: (k, id) => {
         setM2mLinks((prev) => {
           const next = new Map(prev)
           next.set(
@@ -2441,7 +2488,12 @@ function ItemEditFormView({
             (next.get(k) ?? []).filter((x) => String(x) !== String(id))
           )
           return next
-        }),
+        })
+        if (crossFillInFlightRef.current === 0 && notPersonStageRef.current === 0) {
+          const field = stagingKeyToFieldRef.current.get(k)
+          if (field) pdPersonChangeRef.current(field)
+        }
+      },
       unstageUnlink: (k, jId) =>
         setM2mUnlinks((prev) => {
           const next = new Map(prev)
@@ -2551,7 +2603,12 @@ function ItemEditFormView({
           // form and the save flush (findM2MRel) resolves them.
           const stagingKey =
             m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
-          for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+          notPersonStageRef.current += 1
+          try {
+            for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+          } finally {
+            notPersonStageRef.current -= 1
+          }
         } else {
           issues.push({
             severity: 'error',
@@ -3004,7 +3061,12 @@ function ItemEditFormView({
               })
             }
           }
-          m2mStagingCtx.stageLink(stagingKey, result.file_id)
+          notPersonStageRef.current += 1
+          try {
+            m2mStagingCtx.stageLink(stagingKey, result.file_id)
+          } finally {
+            notPersonStageRef.current -= 1
+          }
         } else {
           draftRef.current = { ...draftRef.current, [attachField]: result.file_id }
           setDraft((prev) => ({ ...prev, [attachField]: result.file_id }))
@@ -3038,8 +3100,13 @@ function ItemEditFormView({
             // fetch failure: fall through and stage everything (worst case a
             // duplicate link, same as the pre-fix behavior)
           }
-          for (const id of ids) {
-            if (!existing.has(String(id))) m2mStagingCtx.stageLink(stagingKey, id)
+          notPersonStageRef.current += 1
+          try {
+            for (const id of ids) {
+              if (!existing.has(String(id))) m2mStagingCtx.stageLink(stagingKey, id)
+            }
+          } finally {
+            notPersonStageRef.current -= 1
           }
         } else {
           issues.push({
@@ -3202,7 +3269,8 @@ function ItemEditFormView({
     const rows = size(pendingO2MRows, (r) => r.length)
     const edits = size(pendingO2MEdits, (e) => e.size)
     const deletes = size(pendingO2MDeletes, (d) => d.size)
-    const links = size(m2mLinks, (l) => l.length)
+    // Links a personal default (or what it derived) staged are prefill, not unsaved work.
+    const links = linksBeyond(m2mLinks, pdQuietLinksRef.current())
     const unlinks = size(m2mUnlinks, (u) => u.size)
     const total = fields.length + rows + edits + deletes + links + unlinks
     const parts: string[] = []
@@ -3348,11 +3416,13 @@ function ItemEditFormView({
       if (draftSpentRef.current) return !forReload
       if (!isDirty) {
         // Staged lines or links with a clean flag would be dropped below: keep the hold.
+        // Links only a personal default staged come back on reload: they hold nothing.
+        const quietLinks = pdQuietLinksRef.current()
         const staged =
           pendingO2MRows.size +
           pendingO2MEdits.size +
           pendingO2MDeletes.size +
-          m2mLinks.size +
+          (quietLinks.size ? linksBeyond(m2mLinks, quietLinks) : m2mLinks.size) +
           m2mUnlinks.size
         if (forReload && staged > 0) return false
         void deleteDraft(recoveryKey)
@@ -3478,6 +3548,7 @@ function ItemEditFormView({
     if (Object.keys(d.m2m_unlinks ?? {}).length)
       setM2mUnlinks(new Map(Object.entries(d.m2m_unlinks).map(([k, x]) => [k, new Set(x)])))
     setIsDirty(true)
+    setDraftRestored(true)
     setRecovery({ state: 'none' })
     // Re-derive what the restored picks fill (field rules, cross-record
     // defaults) — a draft stored without those values (saved before they
@@ -3513,6 +3584,7 @@ function ItemEditFormView({
     // the once-only flag on a pass that would drop it.
     if (Object.values(defaults).some(Array.isArray) && !relationsFetched) return
     appliedLayoutDefaultsRef.current = true
+    layoutDefaultValuesRef.current = defaults
     const scalar: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(defaults)) {
       if (Array.isArray(value)) {
@@ -3530,7 +3602,12 @@ function ItemEditFormView({
         if (m2mRel) {
           const stagingKey =
             m2mRel.one_field ?? `${m2mRel.many_collection}.${m2mRel.junction_field}`
-          for (const id of value) m2mStagingCtx.stageLink(stagingKey, id)
+          notPersonStageRef.current += 1
+          try {
+            for (const id of value) m2mStagingCtx.stageLink(stagingKey, id)
+          } finally {
+            notPersonStageRef.current -= 1
+          }
           continue
         }
       }
@@ -3550,8 +3627,13 @@ function ItemEditFormView({
     appliedPrefillAliasesRef.current = true
     const staged = prefillAliasLinks(initialValues, relations, collection)
     if (staged.length === 0) return
-    for (const { stagingKey, ids } of staged)
-      for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+    notPersonStageRef.current += 1
+    try {
+      for (const { stagingKey, ids } of staged)
+        for (const id of ids) m2mStagingCtx.stageLink(stagingKey, id)
+    } finally {
+      notPersonStageRef.current -= 1
+    }
     const drop = new Set(staged.map((x) => x.field))
     const strip = (d: Record<string, unknown>) =>
       Object.fromEntries(Object.entries(d).filter(([k]) => !drop.has(k)))
@@ -4038,7 +4120,9 @@ function ItemEditFormView({
               // Part of the person's work: the recovery draft keeps it (an
               // IR's Project Type, filled from its Project, came back empty).
               markAutoFilled([parent])
-              setIsDirty(true)
+              // Derived from a personal default: prefill too, not the person's work.
+              if (pdQuietRef.current.has(root)) pdQuietRef.current.add(parent)
+              else setIsDirty(true)
               crossDefaultsRef.current?.(parent, v, 1)
               derivedOriginRef.current.set(parent, root)
               upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen, root)
@@ -4228,7 +4312,10 @@ function ItemEditFormView({
             draftRef.current = { ...draftRef.current, ...patch }
             setDraft((prev) => ({ ...prev, ...patch }))
             markAutoFilled(Object.keys(patch))
-            setIsDirty(true)
+            // Derived from a personal default: prefill too, not the person's work.
+            if (pdQuietRef.current.has(field))
+              for (const k of Object.keys(patch)) pdQuietRef.current.add(k)
+            else setIsDirty(true)
             // Chain: a target that is itself a watched FK cascades its own
             // defaults (billing location → shipping location → address copy)
             // AND its own upstream cascades (shipping → region → zone).
@@ -4303,7 +4390,12 @@ function ItemEditFormView({
         // whatever that other response already staged, not what was true
         // when this request was fired.
         const toStage = idsNeedingStaging(ids, m2mAliasFieldStatesRef.current[field]?.ids)
-        for (const id of toStage) m2mStagingCtx.stageLink(info.stagingKey, id)
+        notPersonStageRef.current += 1
+        try {
+          for (const id of toStage) m2mStagingCtx.stageLink(info.stagingKey, id)
+        } finally {
+          notPersonStageRef.current -= 1
+        }
       }
       if (Object.keys(scalar).length > 0) {
         const merged = mergeRuleResults(draftRef.current, scalar)
@@ -4482,6 +4574,9 @@ function ItemEditFormView({
       }
       draftRef.current = next
       setDraft(next)
+      // The person's own edit: no longer prefill; a changed parent re-picks untouched children.
+      pdQuietRef.current.delete(field)
+      pdPersonChangeRef.current(field)
       // Revert / Take theirs that puts the last change back leaves nothing to
       // save: the form is clean again (the tab dot, the leave-page prompt and
       // the stored draft all follow isDirty).
@@ -4520,6 +4615,163 @@ function ItemEditFormView({
     },
     [handleFieldChange]
   )
+
+  // ── Personal field defaults (spec 2026-10-28-personal-field-defaults-design) ──────────────
+  // A placement opts its field in (overrides.personal_default); the hook reads the person's
+  // defaults once, applies them once per new-form open (after explicit prefill, before rules /
+  // cross-record defaults, which then fill only what is still empty), and provides the
+  // PersonalDefaultsContext the field menu and FieldRow read on new and existing records.
+  const pdAllowed = useMemo(() => {
+    const out = new Set<string>()
+    for (const f of fieldConfig ?? []) {
+      if (f.readonly || f.hidden) continue
+      if ((f._overrides as Record<string, unknown> | null | undefined)?.personal_default === true)
+        out.add(f.field)
+    }
+    return out
+  }, [fieldConfig])
+  // M2M values the hook staged this tick, before the render that carries them.
+  const pdAliasPendingRef = useRef<Map<string, string[]>>(new Map())
+  useEffect(() => {
+    pdAliasPendingRef.current.clear()
+  })
+  const pdReadValue = useCallback(
+    (field: string): unknown =>
+      m2mAliasFieldsForRules.has(field)
+        ? (pdAliasPendingRef.current.get(field) ?? m2mAliasFieldStatesRef.current[field]?.ids ?? [])
+        : undefined,
+    [m2mAliasFieldsForRules]
+  )
+  const pdExplicit = useMemo(() => {
+    const out = new Set<string>()
+    const { __links, ...plainInitial } = (initialValues ?? {}) as Record<string, unknown> & {
+      __links?: Record<string, unknown>
+    }
+    for (const k of Object.keys(plainInitial)) out.add(k)
+    for (const k of Object.keys(__links ?? {})) out.add(k)
+    for (const k of Object.keys(initialLinks ?? {})) out.add(k)
+    for (const k of Object.keys(initialImportResult?.values ?? {})) out.add(k)
+    return out
+  }, [initialValues, initialLinks, initialImportResult])
+  const pdIsExplicit = useCallback(
+    (field: string) => {
+      if (pdExplicit.has(field)) return true
+      const info = m2mAliasFieldsForRules.get(field)
+      if (info && pdExplicit.has(info.stagingKey)) return true
+      return autofillAppliedRef.current?.fields.includes(field) ?? false
+    },
+    [pdExplicit, m2mAliasFieldsForRules]
+  )
+  const pdChecks = useMemo(
+    () =>
+      makePersonalDefaultChecks({
+        client,
+        collection,
+        fields: fieldConfig ?? [],
+        relations,
+        readValue: (f) => pdReadValue(f) ?? draftRef.current[f]
+      }),
+    [client, collection, fieldConfig, relations, pdReadValue]
+  )
+  const pdSetFieldValue = useCallback(
+    (field: string, value: unknown, previous?: unknown) => {
+      if (isEmptyValue(value)) pdQuietRef.current.delete(field)
+      else pdQuietRef.current.add(field)
+      const info = m2mAliasFieldsForRules.get(field)
+      if (!info) {
+        draftRef.current = { ...draftRef.current, [field]: value }
+        setDraft((prev) => ({ ...prev, [field]: value }))
+        return
+      }
+      const list = (v: unknown) => (Array.isArray(v) ? v : isEmptyValue(v) ? [] : [v])
+      const want = list(value)
+      const wantIds = new Set(want.map(String))
+      const drop = list(previous)
+        .map(String)
+        .filter((id) => !wantIds.has(id))
+      const before = (
+        pdAliasPendingRef.current.get(field) ??
+        m2mAliasFieldStatesRef.current[field]?.ids ??
+        []
+      ).map(String)
+      // A prefill, not a pick: no cross-default round and no person change from the staging.
+      crossFillInFlightRef.current += 1
+      try {
+        for (const id of drop) m2mStagingCtx.unstageLink(info.stagingKey, id)
+        for (const id of want)
+          if (!before.includes(String(id))) m2mStagingCtx.stageLink(info.stagingKey, id)
+      } finally {
+        crossFillInFlightRef.current -= 1
+      }
+      pdAliasPendingRef.current.set(field, [
+        ...new Set([...before.filter((id) => !drop.includes(id)), ...wantIds])
+      ])
+    },
+    [m2mAliasFieldsForRules, m2mStagingCtx]
+  )
+  const personalDefaults = usePersonalDefaults({
+    collection,
+    isNew,
+    layoutAllows: (f) => pdAllowed.has(f),
+    draftRef,
+    setFieldValue: pdSetFieldValue,
+    markAutoFilled,
+    revalidate: pdChecks.revalidate,
+    disabled: designOn || draftRestored,
+    enabled: !designOn && pdAllowed.size > 0,
+    ready:
+      isNew &&
+      !designOn &&
+      activeLayoutData !== undefined &&
+      fieldConfigFetched &&
+      relationsFetched &&
+      recovery.state === 'none' &&
+      recoveryCheckedKey === recoveryKey,
+    rulesFor: (f) =>
+      getCascadeFilters(
+        (fieldConfig ?? []).find((fc) => fc.field === f)?.dependency_config ?? null
+      ),
+    readValue: pdReadValue,
+    canFill: (f) => !userTouchedRef.current.has(f) && !pdIsExplicit(f),
+    replaceable: (f, cur) =>
+      Object.hasOwn(layoutDefaultValuesRef.current, f) &&
+      !pdIsExplicit(f) &&
+      sameDefaultValue(cur, layoutDefaultValuesRef.current[f]),
+    fieldLabel: (f) => {
+      const fc = (fieldConfig ?? []).find((x) => x.field === f)
+      return fc?.label || titleCase(f)
+    },
+    valueLabel: pdChecks.valueLabel,
+    afterApply: (f, v) => {
+      // What a pick of this value fills (field rules, cross-record defaults, upstream
+      // cascades) — fill-only-when-empty, so a personal default is never replaced by them.
+      if (!m2mAliasFieldsForRules.has(f)) {
+        rederiveRef.current(f, v)
+        return
+      }
+      // M2M: field rules follow the staging watcher; cross defaults + cascades per id.
+      for (const id of Array.isArray(v) ? v : [v]) {
+        runCrossDefaults(f, id, 0, true)
+        upstreamCascadesRef.current(f, id)
+      }
+    }
+  })
+  pdPersonChangeRef.current = personalDefaults.onPersonChange
+  pdQuietLinksRef.current = () => {
+    const out = new Map<string, Set<string>>()
+    const add = (key: string, ids: unknown[]) => {
+      const set = out.get(key) ?? new Set<string>()
+      for (const id of ids) set.add(String(id))
+      out.set(key, set)
+    }
+    for (const [f, v] of personalDefaults.appliedNow()) {
+      const info = m2mAliasFieldsForRules.get(f)
+      if (info && Array.isArray(v)) add(info.stagingKey, v)
+    }
+    for (const [source, entries] of derivedFillsRef.current)
+      if (pdQuietRef.current.has(source)) for (const e of entries) add(e.stagingKey, e.ids)
+    return out
+  }
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
 
@@ -10867,7 +11119,10 @@ function ItemEditFormView({
                       <LiveRowsContext.Provider value={liveRowsCtx}>
                         <StagedRelationsContext.Provider value={stagedRelsCtx}>
                           <M2MStagingContext.Provider value={m2mStagingCtx}>
-                            <FieldAffordancesContext.Provider value={fieldAffordances}>
+                            <FieldContexts
+                              affordances={fieldAffordances}
+                              personalDefaults={personalDefaults.context}
+                            >
                               {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
@@ -13569,7 +13824,7 @@ function ItemEditFormView({
                                   )}
                                 </div>
                               </div>
-                            </FieldAffordancesContext.Provider>
+                            </FieldContexts>
                           </M2MStagingContext.Provider>
                         </StagedRelationsContext.Provider>
                       </LiveRowsContext.Provider>
