@@ -1,5 +1,5 @@
 import { openAskPanel } from '@nivaro/shared'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import {
   ArrowRight,
   CornerDownLeft,
@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { ScrollTabs } from '@/components/scroll-tabs'
 import {
   Command,
   CommandEmpty,
@@ -71,10 +72,51 @@ const PAGES: { label: string; path: string; keywords?: string }[] = [
 
 interface SearchRecord {
   collection: string
+  display_name?: string | null
   id: string | number
   label: string
   snippet: string
 }
+
+/** One collection's match count as the caller (GET /global-search/counts). */
+interface CollectionCount {
+  collection: string
+  display_name: string | null
+  count: number
+}
+
+const collectionLabel = (c: { collection: string; display_name?: string | null }) =>
+  c.display_name || titleCase(c.collection)
+
+/** Tabs for a search: one per collection with hits, counted. Until the counts land a
+ *  collection shows how many the first answer held, as a floor ("8+"). Exported for tests. */
+export function searchTabs(
+  hits: SearchRecord[],
+  counts: CollectionCount[] | undefined
+): Array<{ collection: string; label: string; count: string }> {
+  const seen = new Map<string, { collection: string; display_name?: string | null; n: number }>()
+  for (const h of hits) {
+    const cur = seen.get(h.collection)
+    if (cur) cur.n++
+    else seen.set(h.collection, { collection: h.collection, display_name: h.display_name, n: 1 })
+  }
+  if (counts) {
+    const out = counts.map((c) => ({
+      collection: c.collection,
+      label: collectionLabel(c),
+      count: String(c.count)
+    }))
+    for (const s of seen.values())
+      if (!counts.some((c) => c.collection === s.collection))
+        out.push({ collection: s.collection, label: collectionLabel(s), count: `${s.n}+` })
+    return out
+  }
+  return [...seen.values()]
+    .sort((a, b) => b.n - a.n)
+    .map((s) => ({ collection: s.collection, label: collectionLabel(s), count: `${s.n}+` }))
+}
+
+const TAB_PAGE = 25
 
 /** A person from the directory search: directory columns for everyone;
  *  status and account kind only reach an admin. */
@@ -207,6 +249,11 @@ export function CommandPalette() {
     }
   }, [open])
 
+  // null = everything; otherwise the collection whose matches the list shows.
+  const [tab, setTab] = useState<string | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new search or a reopen starts on All
+  useEffect(() => setTab(null), [debouncedQuery, open])
+
   // #1581 — search analytics: what was typed, how many results, how long, what was opened.
   const searchMsRef = useRef(0)
   const searchLogRef = useRef<{ key: string; id: Promise<number | null> } | null>(null)
@@ -266,6 +313,47 @@ export function CommandPalette() {
   const people = debouncedQuery.length >= 2 ? (searchData?.people ?? []) : []
   const serverActions = debouncedQuery.length >= 2 ? (searchData?.actions ?? []) : []
   const semantic = debouncedQuery.length >= 4 ? (searchData?.semantic ?? []) : []
+
+  // Collection tabs: each matched collection's count as the caller, then one
+  // collection's matches a page at a time.
+  const hitCollections = [...new Set(records.map((r) => r.collection))].sort().join(',')
+  const { data: counts } = useQuery({
+    queryKey: ['global-search-counts', debouncedQuery, hitCollections],
+    queryFn: () =>
+      api
+        .get<{ data: CollectionCount[] }>('/global-search/counts', {
+          params: { q: debouncedQuery, collections: hitCollections }
+        })
+        .then((r) => (Array.isArray(r.data.data) ? r.data.data : [])),
+    enabled: open && debouncedQuery.length >= 2 && hitCollections !== '',
+    staleTime: 15_000
+  })
+  const tabs = searchTabs(records, counts)
+  const showTabs = debouncedQuery.length >= 2 && tabs.length > 1
+  const tabPages = useInfiniteQuery({
+    queryKey: ['global-search-tab', debouncedQuery, tab],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api
+        .get<{ data: SearchRecord[]; total: number | null }>('/global-search/records', {
+          params: { q: debouncedQuery, collection: tab, offset: pageParam, limit: TAB_PAGE }
+        })
+        .then((r) => r.data),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((n, pg) => n + (pg.data?.length ?? 0), 0)
+      if ((last.data?.length ?? 0) < TAB_PAGE) return undefined
+      return last.total != null && loaded >= last.total ? undefined : loaded
+    },
+    enabled: open && !!tab && debouncedQuery.length >= 2,
+    staleTime: 15_000
+  })
+  const tabRecords = (tabPages.data?.pages ?? []).flatMap((pg) => pg.data ?? [])
+  const tabTotal = tabPages.data?.pages[0]?.total ?? null
+  const cycleTab = (dir: 1 | -1) => {
+    const order: Array<string | null> = [null, ...tabs.map((t) => t.collection)]
+    const i = order.indexOf(tab)
+    setTab(order[(i + dir + order.length) % order.length])
+  }
 
   const newItemActions = q
     ? (collections ?? [])
@@ -371,6 +459,12 @@ export function CommandPalette() {
           shouldFilter={false}
           value={selectedValue}
           onValueChange={setSelectedValue}
+          onKeyDown={(e) => {
+            if (e.key === 'Tab' && showTabs) {
+              e.preventDefault()
+              cycleTab(e.shiftKey ? -1 : 1)
+            }
+          }}
           className='[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-4 [&_[cmdk-input-wrapper]_svg]:w-4 [&_[cmdk-input]]:h-11 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-2'
         >
           <CommandInput
@@ -378,219 +472,315 @@ export function CommandPalette() {
             value={query}
             onValueChange={setQuery}
           />
+          {showTabs && (
+            <div className='flex items-center border-b border-border'>
+              <ScrollTabs
+                role='tablist'
+                aria-label='Search results by collection'
+                activeKey={tab}
+                className='px-2 py-1.5'
+              >
+                {[{ collection: null as string | null, label: 'All', count: '' }, ...tabs].map(
+                  (t) => {
+                    const on = tab === t.collection
+                    return (
+                      <button
+                        key={t.collection ?? '__all__'}
+                        type='button'
+                        role='tab'
+                        aria-selected={on}
+                        data-palette-tab={t.collection ?? 'all'}
+                        onClick={() => setTab(t.collection)}
+                        className={`flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan ${
+                          on ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {t.label}
+                        {t.count && (
+                          <span
+                            className={`rounded px-1 font-mono text-[10px] tabular-nums ${
+                              on
+                                ? 'bg-nvr-cyan/15 text-foreground'
+                                : 'bg-muted text-muted-foreground'
+                            }`}
+                          >
+                            {t.count}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  }
+                )}
+              </ScrollTabs>
+              <span className='shrink-0 px-2 text-[10px] text-muted-foreground'>Tab to switch</span>
+            </div>
+          )}
           <div className='flex'>
             <CommandList className='max-h-[380px] flex-1'>
-              {!hasResults && (
-                <CommandEmpty>{isFetching ? 'Searching…' : 'No results found.'}</CommandEmpty>
-              )}
-
-              {q && (
-                <CommandGroup heading='Ask AI'>
-                  {/* #1835 — the question opens the Ask AI panel on THIS page,
-                      with the page's record, list or report as context. */}
-                  <CommandItem
-                    value={`ask-${q}`}
-                    data-palette-ask
-                    onSelect={() => {
-                      setOpen(false)
-                      openAskPanel(q)
-                    }}
-                    className='text-[13px]'
-                  >
-                    <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
-                    Ask… “{q}”<span className='ml-auto text-[11px] text-muted-foreground'>⌘J</span>
-                  </CommandItem>
-                  {showAiRow && (
-                    <CommandItem
-                      value={`ai-${q}`}
-                      onSelect={() => aiNavigate.mutate(q)}
-                      className='text-[13px]'
-                    >
-                      <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
-                      {aiNavigate.isPending ? 'Thinking…' : <>Find records: “{q}”</>}
-                    </CommandItem>
-                  )}
-                </CommandGroup>
-              )}
-
-              {!q && recents.length > 0 && (
-                <CommandGroup heading='Recent'>
-                  {recents.map((r) => (
-                    <CommandItem
-                      key={`recent-${r.path}`}
-                      value={`recent-${r.path}`}
-                      onSelect={() => go(r.path, r.label)}
-                    >
-                      <History className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
-                      <span className='text-[13px]'>{r.label}</span>
-                      <span className='ml-auto max-w-[220px] truncate font-mono text-[11px] text-muted-foreground'>
-                        {r.path}
-                      </span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
-
-              {pageMatches.length > 0 && (
-                <CommandGroup heading='Pages'>
-                  {pageMatches.map((p) => (
-                    <CommandItem
-                      key={`page-${p.path}`}
-                      value={`page-${p.path}`}
-                      onSelect={() => go(p.path, p.label)}
-                    >
-                      <FileText className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
-                      <span className='text-[13px]'>
-                        <Hi text={p.label} q={q} />
-                      </span>
-                      <span className='ml-auto font-mono text-[11px] text-muted-foreground'>
-                        {p.path}
-                      </span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              )}
-
-              {people.length > 0 && (
+              {tab ? (
                 <>
-                  <CommandSeparator />
-                  <CommandGroup heading='People'>
-                    {people.map((p) => {
-                      const name = personName(p)
-                      const flag = personFlag(p)
-                      const sub = [p.title, p.email].filter(Boolean).join(' · ')
-                      return (
+                  {tabRecords.length === 0 && (
+                    <CommandEmpty>
+                      {tabPages.isFetching ? 'Searching…' : 'No results found.'}
+                    </CommandEmpty>
+                  )}
+                  {tabRecords.length > 0 && (
+                    <CommandGroup
+                      heading={`${collectionLabel(tabs.find((t) => t.collection === tab) ?? { collection: tab })}${
+                        tabTotal != null ? ` · ${tabTotal}` : ''
+                      }`}
+                    >
+                      {tabRecords.map((r) => (
                         <CommandItem
-                          key={`person-${p.id}`}
-                          value={`person-${p.id}`}
-                          onSelect={() => go(`/users/${encodeURIComponent(p.id)}`, name)}
+                          key={`tab-${r.collection}-${r.id}`}
+                          value={`record-${r.collection}-${r.id}`}
+                          onSelect={() =>
+                            go(`/collections/${r.collection}/${r.id}`, r.label || String(r.id))
+                          }
                         >
-                          <UserRound className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                          <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
                           <div className='min-w-0 flex-1'>
                             <div className='truncate text-[13px]'>
-                              <Hi text={name} q={q} />
+                              <Hi text={r.label || String(r.id)} q={q} />
                             </div>
-                            {sub && (
+                            {r.snippet && r.snippet !== r.label && (
                               <div className='truncate text-[11px] text-muted-foreground'>
-                                <Hi text={sub} q={q} />
+                                {r.snippet}
                               </div>
                             )}
                           </div>
-                          {flag && (
-                            <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
-                              {flag}
-                            </span>
-                          )}
                         </CommandItem>
-                      )
-                    })}
-                  </CommandGroup>
+                      ))}
+                      {tabPages.hasNextPage && (
+                        <CommandItem
+                          value='tab-show-more'
+                          onSelect={() => void tabPages.fetchNextPage()}
+                          className='text-[12px] text-nvr-cyan'
+                        >
+                          {tabPages.isFetchingNextPage
+                            ? 'Loading…'
+                            : `Show more${tabTotal != null ? ` (${tabRecords.length} of ${tabTotal})` : ''}`}
+                        </CommandItem>
+                      )}
+                    </CommandGroup>
+                  )}
                 </>
-              )}
-
-              {records.length > 0 && (
+              ) : (
                 <>
-                  <CommandSeparator />
-                  <CommandGroup heading='Records'>
-                    {records.map((r) => (
+                  {!hasResults && (
+                    <CommandEmpty>{isFetching ? 'Searching…' : 'No results found.'}</CommandEmpty>
+                  )}
+
+                  {q && (
+                    <CommandGroup heading='Ask AI'>
+                      {/* #1835 — the question opens the Ask AI panel on THIS page,
+                      with the page's record, list or report as context. */}
                       <CommandItem
-                        key={`record-${r.collection}-${r.id}`}
-                        value={`record-${r.collection}-${r.id}`}
-                        onSelect={() =>
-                          go(`/collections/${r.collection}/${r.id}`, r.label || String(r.id))
-                        }
+                        value={`ask-${q}`}
+                        data-palette-ask
+                        onSelect={() => {
+                          setOpen(false)
+                          openAskPanel(q)
+                        }}
+                        className='text-[13px]'
                       >
-                        <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
-                        <div className='min-w-0 flex-1'>
-                          <div className='truncate text-[13px]'>
-                            <Hi text={r.label || String(r.id)} q={q} />
-                          </div>
-                          {r.snippet && r.snippet !== r.label && (
-                            <div className='truncate text-[11px] text-muted-foreground'>
-                              {r.snippet}
+                        <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
+                        Ask… “{q}”
+                        <span className='ml-auto text-[11px] text-muted-foreground'>⌘J</span>
+                      </CommandItem>
+                      {showAiRow && (
+                        <CommandItem
+                          value={`ai-${q}`}
+                          onSelect={() => aiNavigate.mutate(q)}
+                          className='text-[13px]'
+                        >
+                          <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
+                          {aiNavigate.isPending ? 'Thinking…' : <>Find records: “{q}”</>}
+                        </CommandItem>
+                      )}
+                    </CommandGroup>
+                  )}
+
+                  {!q && recents.length > 0 && (
+                    <CommandGroup heading='Recent'>
+                      {recents.map((r) => (
+                        <CommandItem
+                          key={`recent-${r.path}`}
+                          value={`recent-${r.path}`}
+                          onSelect={() => go(r.path, r.label)}
+                        >
+                          <History className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
+                          <span className='text-[13px]'>{r.label}</span>
+                          <span className='ml-auto max-w-[220px] truncate font-mono text-[11px] text-muted-foreground'>
+                            {r.path}
+                          </span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+
+                  {pageMatches.length > 0 && (
+                    <CommandGroup heading='Pages'>
+                      {pageMatches.map((p) => (
+                        <CommandItem
+                          key={`page-${p.path}`}
+                          value={`page-${p.path}`}
+                          onSelect={() => go(p.path, p.label)}
+                        >
+                          <FileText className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
+                          <span className='text-[13px]'>
+                            <Hi text={p.label} q={q} />
+                          </span>
+                          <span className='ml-auto font-mono text-[11px] text-muted-foreground'>
+                            {p.path}
+                          </span>
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  )}
+
+                  {people.length > 0 && (
+                    <>
+                      <CommandSeparator />
+                      <CommandGroup heading='People'>
+                        {people.map((p) => {
+                          const name = personName(p)
+                          const flag = personFlag(p)
+                          const sub = [p.title, p.email].filter(Boolean).join(' · ')
+                          return (
+                            <CommandItem
+                              key={`person-${p.id}`}
+                              value={`person-${p.id}`}
+                              onSelect={() => go(`/users/${encodeURIComponent(p.id)}`, name)}
+                            >
+                              <UserRound className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                              <div className='min-w-0 flex-1'>
+                                <div className='truncate text-[13px]'>
+                                  <Hi text={name} q={q} />
+                                </div>
+                                {sub && (
+                                  <div className='truncate text-[11px] text-muted-foreground'>
+                                    <Hi text={sub} q={q} />
+                                  </div>
+                                )}
+                              </div>
+                              {flag && (
+                                <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                                  {flag}
+                                </span>
+                              )}
+                            </CommandItem>
+                          )
+                        })}
+                      </CommandGroup>
+                    </>
+                  )}
+
+                  {records.length > 0 && (
+                    <>
+                      <CommandSeparator />
+                      <CommandGroup heading='Records'>
+                        {records.map((r) => (
+                          <CommandItem
+                            key={`record-${r.collection}-${r.id}`}
+                            value={`record-${r.collection}-${r.id}`}
+                            onSelect={() =>
+                              go(`/collections/${r.collection}/${r.id}`, r.label || String(r.id))
+                            }
+                          >
+                            <Search className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                            <div className='min-w-0 flex-1'>
+                              <div className='truncate text-[13px]'>
+                                <Hi text={r.label || String(r.id)} q={q} />
+                              </div>
+                              {r.snippet && r.snippet !== r.label && (
+                                <div className='truncate text-[11px] text-muted-foreground'>
+                                  {r.snippet}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
-                          {titleCase(r.collection)}
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </>
-              )}
+                            <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                              {titleCase(r.collection)}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </>
+                  )}
 
-              {semantic.length > 0 && (
-                <>
-                  <CommandSeparator />
-                  <CommandGroup heading='Similar meaning'>
-                    {semantic.map((r) => (
-                      <CommandItem
-                        key={`sem-${r.collection}-${r.id}`}
-                        value={`sem-${r.collection}-${r.id}`}
-                        onSelect={() => go(`/collections/${r.collection}/${r.id}`)}
-                      >
-                        <Sparkles className='mr-2 h-3.5 w-3.5 text-purple-500' />
-                        <div className='min-w-0 flex-1'>
-                          <div className='truncate text-[13px]'>{r.label || String(r.id)}</div>
-                        </div>
-                        <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
-                          {titleCase(r.collection)}
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </>
-              )}
+                  {semantic.length > 0 && (
+                    <>
+                      <CommandSeparator />
+                      <CommandGroup heading='Similar meaning'>
+                        {semantic.map((r) => (
+                          <CommandItem
+                            key={`sem-${r.collection}-${r.id}`}
+                            value={`sem-${r.collection}-${r.id}`}
+                            onSelect={() => go(`/collections/${r.collection}/${r.id}`)}
+                          >
+                            <Sparkles className='mr-2 h-3.5 w-3.5 text-purple-500' />
+                            <div className='min-w-0 flex-1'>
+                              <div className='truncate text-[13px]'>{r.label || String(r.id)}</div>
+                            </div>
+                            <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                              {titleCase(r.collection)}
+                            </span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </>
+                  )}
 
-              {'audit contrast'.includes(q.toLowerCase()) && q.length >= 3 && (
-                <CommandGroup heading='Tools'>
-                  <CommandItem
-                    value='tool-contrast-audit'
-                    onSelect={() => {
-                      setOpen(false)
-                      setTimeout(() => showContrastAudit(), 250)
-                    }}
-                  >
-                    <Sparkles className='mr-2 h-3.5 w-3.5 text-amber-500' />
-                    <span className='text-[13px]'>Audit contrast on this page</span>
-                  </CommandItem>
-                </CommandGroup>
-              )}
+                  {'audit contrast'.includes(q.toLowerCase()) && q.length >= 3 && (
+                    <CommandGroup heading='Tools'>
+                      <CommandItem
+                        value='tool-contrast-audit'
+                        onSelect={() => {
+                          setOpen(false)
+                          setTimeout(() => showContrastAudit(), 250)
+                        }}
+                      >
+                        <Sparkles className='mr-2 h-3.5 w-3.5 text-amber-500' />
+                        <span className='text-[13px]'>Audit contrast on this page</span>
+                      </CommandItem>
+                    </CommandGroup>
+                  )}
 
-              {(newItemActions.length > 0 || serverActions.length > 0) && (
-                <>
-                  <CommandSeparator />
-                  <CommandGroup heading='Actions'>
-                    {newItemActions.map((c) => (
-                      <CommandItem
-                        key={`new-${c.collection}`}
-                        value={`new-${c.collection}`}
-                        onSelect={() => go(`/collections/${c.collection}/new`)}
-                      >
-                        <Plus className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
-                        <span className='text-[13px]'>
-                          New item in {c.display_name ?? titleCase(c.collection)}
-                        </span>
-                      </CommandItem>
-                    ))}
-                    {serverActions.map((a) => (
-                      <CommandItem
-                        key={`action-${a.path}-${a.label}`}
-                        value={`action-${a.path}-${a.label}`}
-                        onSelect={() => go(a.path)}
-                      >
-                        <ArrowRight className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
-                        <span className='text-[13px]'>{a.label}</span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
+                  {(newItemActions.length > 0 || serverActions.length > 0) && (
+                    <>
+                      <CommandSeparator />
+                      <CommandGroup heading='Actions'>
+                        {newItemActions.map((c) => (
+                          <CommandItem
+                            key={`new-${c.collection}`}
+                            value={`new-${c.collection}`}
+                            onSelect={() => go(`/collections/${c.collection}/new`)}
+                          >
+                            <Plus className='mr-2 h-3.5 w-3.5 text-nvr-cyan' />
+                            <span className='text-[13px]'>
+                              New item in {c.display_name ?? titleCase(c.collection)}
+                            </span>
+                          </CommandItem>
+                        ))}
+                        {serverActions.map((a) => (
+                          <CommandItem
+                            key={`action-${a.path}-${a.label}`}
+                            value={`action-${a.path}-${a.label}`}
+                            onSelect={() => go(a.path)}
+                          >
+                            <ArrowRight className='mr-2 h-3.5 w-3.5 text-muted-foreground' />
+                            <span className='text-[13px]'>{a.label}</span>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </>
+                  )}
                 </>
               )}
             </CommandList>
             <PreviewPane
               value={selectedValue}
-              records={[...records, ...semantic]}
+              records={tab ? tabRecords : [...records, ...semantic]}
               people={people}
               pages={PAGES}
               recents={recents}
