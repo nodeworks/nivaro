@@ -361,6 +361,14 @@ export interface ExtensionContext {
   cache: {
     registerWarm(name: string, fn: CacheWarmFn, opts?: { budgetMs?: number }): void
   }
+  /** Global-search prefix scopes (`wf: canton` searches workflows only): a map of
+   *  prefix → collection, e.g. `{ wf: 'workflows' }`. These are defaults — the
+   *  `search_scopes` settings override ("" removes a prefix). `@` is always
+   *  people. Optional: older APIs do not offer it — call
+   *  `ctx.search?.registerScopes(…)`. */
+  search?: {
+    registerScopes(map: Record<string, string>): void
+  }
   /** Layouts the extension's code opens (#2613), so the layout editor can show
    *  them before a layout is renamed, retyped or deleted. Name the layout by
    *  `slug` (its link name) or `layout_id`. Optional: older APIs do not offer

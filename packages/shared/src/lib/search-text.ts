@@ -16,7 +16,7 @@
  *   `searchPhrases` reads) and each token also matches the others in its group.
  *
  * `searchRankTier` is the client twin of the API's `search_rank=1` ORDER BY
- * (api/src/services/search-rank.ts) — change both together.
+ * (api/src/services/list-search-rank.ts) — change both together.
  */
 
 export type SynonymGroups = ReadonlyArray<ReadonlyArray<string>>

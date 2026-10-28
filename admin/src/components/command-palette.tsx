@@ -727,7 +727,7 @@ export function CommandPalette() {
         kind: titleCase(h.kind || x.kind),
         title: h.label,
         sub: h.snippet,
-        path: extraHref(h)
+        path: extraHref(h) ?? ''
       })
   for (const c of newItemActions)
     entries.set(`new-${c.collection}`, {
@@ -1391,7 +1391,7 @@ type GoFn = (
 function ExtraItem({ hit, kind, q, go }: { hit: ExtraHit; kind: ExtraKind; q: string; go: GoFn }) {
   const Icon = EXTRA_ICON[kind] ?? FileText
   const value = extraValue(kind, hit)
-  const path = extraHref(hit)
+  const path = extraHref(hit) ?? ''
   return (
     <CommandItem value={value} onSelect={() => go(path, { label: hit.label })}>
       <Icon className='mr-2 h-3.5 w-3.5 text-muted-foreground' />

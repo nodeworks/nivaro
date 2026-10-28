@@ -1,10 +1,13 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { tenantState } from '../services/ai-tenant-state.js'
 import { readItems } from '../services/items.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
+import { labelSearchFieldsOf } from '../services/search-fields.js'
+import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
 import { buildSearchPreview } from '../services/search-preview.js'
 import {
   type FieldMeta,
@@ -181,27 +184,20 @@ const FUZZY_ROW_BUDGET = 200_000
 const FUZZY_PER_COLLECTION = 4
 const FILTER_COLLECTIONS = 12
 
-/** `browser_config.label_search_fields` (search program item 23), parsed locally:
- *  identifier names only, deduped, capped. Never widens past what the caller may
- *  read — searchColumns intersects with their field list like any column. */
+/** `browser_config.label_search_fields` (search program item 23) through the one
+ *  parser (services/search-fields.ts): identifier names only, deduped, capped.
+ *  Never widens past what the caller may read — searchColumns intersects with
+ *  their field list like any column. */
 export function parseLabelSearchFields(browserConfig: unknown): string[] {
-  try {
-    const bc =
-      typeof browserConfig === 'string'
-        ? (JSON.parse(browserConfig) as Record<string, unknown>)
-        : (browserConfig as Record<string, unknown> | null)
-    const raw = bc?.label_search_fields
-    if (!Array.isArray(raw)) return []
-    const names = raw.map((v) => String(v ?? '').trim()).filter((v) => IDENT_RE.test(v))
-    return [...new Set(names)].slice(0, MAX_LABEL_SEARCH)
-  } catch {
-    return []
-  }
+  const names = (labelSearchFieldsOf(browserConfig) ?? []).filter((v) => IDENT_RE.test(v))
+  return [...new Set(names)].slice(0, MAX_LABEL_SEARCH)
 }
 
-let planCache: { at: number; plan: PlanEntry[] } | null = null
+// One plan per tenant: in cloud mode one process serves many tenant databases.
+const planCacheOf = tenantState(() => ({ value: null as { at: number; plan: PlanEntry[] } | null }))
 
 async function buildSearchPlan(): Promise<PlanEntry[]> {
+  const planCache = planCacheOf().value
   if (planCache && Date.now() - planCache.at < 60_000) return planCache.plan
 
   const [collections, stringCols, numericCols, relations, idTables, rowCounts] = await Promise.all([
@@ -308,7 +304,7 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       textSearchable
     })
   }
-  planCache = { at: Date.now(), plan }
+  planCacheOf().value = { at: Date.now(), plan }
   return plan
 }
 
@@ -533,7 +529,7 @@ async function runBatches(
   )
   for (const r of settled) {
     if (r.status === 'fulfilled') rows = rows.concat(r.value)
-    else planCache = null // stale plan (dropped table/column) — rebuild next request
+    else planCacheOf().value = null // stale plan (dropped table/column) — rebuild next request
   }
   return rows
 }
@@ -562,15 +558,36 @@ async function searchUnion(
   // forms are bound ONCE in a CTE every union member reads, so the parameter
   // count does not multiply by columns × collections.
   const likes = phrases.map((p) => `%${escapeLike(p)}%`)
+  // Full-text (search item 24, services/search-fts.ts): where a DBA built a
+  // full-text index, its text columns answer through CONTAINS instead of a
+  // contains-LIKE scan. Plain searches only (synonym forms keep the LIKE CTE);
+  // business-id columns stay on LIKE (CONTAINS matches word starts, not
+  // substrings). No index anywhere = exactly the old statement.
+  const fts = new Map<string, { cols: string[]; cond: { sql: string; bindings: string[] } }>()
+  if (likes.length === 1) {
+    await Promise.all(
+      plan.map(async (p) => {
+        const text = colsOf(p).filter((c) => !p.idColumns.includes(c) && !isIdColumn(c))
+        const cols = text.length ? await ftsColumns(p.collection, text).catch(() => []) : []
+        const cond = cols.length ? ftsCondition(cols, q) : null
+        if (cond) fts.set(p.collection, { cols, cond })
+      })
+    )
+  }
   const statement = (batch: PlanEntry[]) => {
     const parts: string[] = []
     const bindings: string[] = []
     for (const p of batch) {
       const cols = colsOf(p)
+      const ft = fts.get(p.collection)
+      const likeCols = ft ? cols.filter((c) => !ft.cols.includes(c)) : cols
       const wheres =
         likes.length > 1
           ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
-          : cols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')
+          : [
+              ...(ft ? [ft.cond.sql] : []),
+              ...likeCols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`)
+            ].join(' OR ')
       // Best matches first within each collection (army 2026-10-25: an exact
       // name came back nowhere because TOP took an arbitrary five): a column
       // equal to the phrase, then one starting with it, then the newest.
@@ -578,7 +595,10 @@ async function searchUnion(
       parts.push(
         `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
       )
-      if (likes.length === 1) bindings.push(...cols.map(() => likes[0]))
+      if (likes.length === 1) {
+        if (ft) bindings.push(...ft.cond.bindings)
+        bindings.push(...likeCols.map(() => likes[0]))
+      }
       bindings.push(...cols.map(() => q), ...cols.map(() => `${escapeLike(q)}%`))
     }
     const cte =
@@ -1318,148 +1338,22 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     const raw = (rawQ ?? '').trim().slice(0, 300)
     // labels=1: match only what each record's label shows (the EFP palette).
     const labelsOnly = labels === '1' || labels === 'true'
-    const parsed = parseSearchQuery(raw, await loadSearchScopes().catch(() => ({})))
-    const q = parsed.text
-    const query: { text: string; scope: string | null; filters: FilterChip[] } = {
-      text: q,
-      scope: parsed.scopeKey,
-      filters: []
-    }
-
-    const scoped = parsed.scope != null
-    const forms = q.length >= 2 ? await searchPhrases(q).catch(() => [q]) : [q]
-    // Pages and actions answer unscoped words only — `wf: settings` means workflows.
-    const pages = q && !scoped && !hasFilterTokens(parsed) ? matchStatic(ADMIN_PAGES, forms, 8) : []
-    const actions =
-      q && !scoped && !hasFilterTokens(parsed) ? matchStatic(QUICK_ACTIONS, forms, 4) : []
-    const base = {
-      records: [] as RecordHit[],
-      people: [] as PersonHit[],
-      pages,
-      actions,
-      semantic: [] as Array<{ collection: string; id: unknown; label: string; snippet: string }>,
-      exact: null as RecordHit | null,
-      suggestions: [] as string[],
-      query
-    }
-
-    // `@jane` — people only.
-    if (parsed.scope === PEOPLE_SCOPE) {
-      const found = q.length >= 1 ? await searchPeople(q, req.isAdmin === true) : []
-      const { searchPeopleExtras } = await import('../services/search-extra.js')
-      const people = await searchPeopleExtras(req.user as User, q, found, {
-        isAdmin: req.isAdmin === true
-      }).catch(() => found)
-      return reply.send({ data: { ...base, people } })
-    }
-
-    if (q.length < 2 && !hasFilterTokens(parsed)) {
-      return reply.send({ data: base })
-    }
-
-    // Readable collections in one pass (avoid per-collection can() round-trips)
-    const user = req.user!
-    const readable = await readableCollections(user as User)
-    // Field metadata — filters, matched-field labels, and the semantic block's labels
-    const fieldRows = readable.length
-      ? ((await db('nivaro_fields')
-          .whereIn('collection', readable)
-          .select('collection', 'field', 'type', 'hidden', 'sort', 'label')) as FieldRow[])
-      : []
-
-    const byCollection = new Map<string, FieldRow[]>()
-    for (const f of fieldRows) {
-      const list = byCollection.get(f.collection) ?? []
-      list.push(f)
-      byCollection.set(f.collection, list)
-    }
-
-    const [found, people] = await Promise.all([
-      searchRecords(user as User, readable, parsed, labelsOnly, fieldRows, raw),
-      !scoped && !hasFilterTokens(parsed) && q.length >= 2
-        ? searchPeople(q, req.isAdmin === true)
-        : Promise.resolve([] as PersonHit[])
-    ])
-    const records = found.records
-    query.text = found.text
-    query.filters = found.chips
-
-    // Semantic hits — meaning-based matches from the embeddings index, deduped
-    // against keyword records. Only collections that are both indexed and
-    // readable are searched; label resolution goes through a direct id read.
-    let semantic: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
-    if (q.length >= 4 && !scoped && !hasFilterTokens(parsed)) {
-      try {
-        const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
-        const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
-          collection: string
-        }>
-        const targets = indexed.map((r) => r.collection).filter((c) => readable.includes(c))
-        if (targets.length > 0) {
-          const vec = await embedText(q)
-          const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
-          for (const collection of targets) {
-            const hits = (await searchEmbeddings(collection, vec, 4)).filter((h) => h.score > 0.15)
-            if (hits.length === 0) continue
-            const fields = pickSearchFields(byCollection.get(collection) ?? [])
-            const labelField = fields[0] ?? 'id'
-            // Confirmed as the caller, like the keyword path: row filter and
-            // User Scopes drop hits they cannot open.
-            const rows = (
-              await readItems(user as User, collection, {
-                filter: { id: { _in: hits.map((h) => h.item) } },
-                fields: [...new Set(['id', labelField])],
-                limit: hits.length,
-                count: false
-              }).catch(() => ({ data: [] as unknown[] }))
-            ).data as Array<Record<string, unknown>>
-            for (const row of rows) {
-              const key = `${collection}:${String(row.id)}`
-              if (seen.has(key)) continue
-              seen.add(key)
-              semantic.push({
-                collection,
-                id: row.id,
-                label: String(row[labelField] ?? row.id).slice(0, 80),
-                snippet: 'semantic match'
-              })
-            }
-          }
-          semantic = semantic.slice(0, 8)
-        }
-      } catch {
-        semantic = []
-      }
-    }
-
-    // Extra kinds (comments/notes/files/videos/docs/chat/config), confirmable
-    // commands and people role/zones (services/search-extra.ts). Each part judges
-    // its own hits as the caller and never fails the search. Unscoped words only:
-    // `wf: …` and field filters ask for records.
-    const plain = !scoped && !hasFilterTokens(parsed)
-    const { searchExtra, searchCommands, searchPeopleExtras } = await import(
-      '../services/search-extra.js'
-    )
-    const opts = { isAdmin: req.isAdmin === true, req }
-    const [extra, commands, peopleOut] = await Promise.all([
-      plain ? searchExtra(user as User, q, opts).catch(() => ({})) : Promise.resolve({}),
-      searchCommands(user as User, q, records, opts).catch(() => []),
-      searchPeopleExtras(user as User, q, people, { isAdmin: req.isAdmin === true }).catch(
-        () => people
-      )
-    ])
-
-    const data: Record<string, unknown> = {
-      ...base,
-      records,
-      people: peopleOut,
-      semantic,
-      exact: found.exact,
-      suggestions: found.suggestions,
-      query,
-      extra,
-      commands
-    }
+    // Typing, retyping and the palette's tab counts repeat one search: the same
+    // person with the same access gets the answer computed in the last 20 s
+    // (services/search-fts.ts searchAnswerCache, single-flight, per tenant).
+    const ws = req.headers['x-workspace']
+    const run = () => runGlobalSearch(req, raw, labelsOnly)
+    const data = raw
+      ? await searchAnswerCache.get(
+          {
+            user: req.user!,
+            q: raw,
+            variant: labelsOnly ? 'labels' : '',
+            workspace: typeof ws === 'string' ? ws : null
+          },
+          run
+        )
+      : await run()
     return reply.send({ data })
   })
 
@@ -1585,4 +1479,156 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       return reply.send({ data: [], total: 0 })
     }
   })
+}
+
+/** The main search answer for `GET /global-search` (records, people, pages,
+ *  actions, semantic, exact, suggestions, query, extra, commands), as the caller. */
+async function runGlobalSearch(
+  req: FastifyRequest,
+  raw: string,
+  labelsOnly: boolean
+): Promise<Record<string, unknown>> {
+  const parsed = parseSearchQuery(raw, await loadSearchScopes().catch(() => ({})))
+  const q = parsed.text
+  const query: { text: string; scope: string | null; filters: FilterChip[] } = {
+    text: q,
+    scope: parsed.scopeKey,
+    filters: []
+  }
+
+  const scoped = parsed.scope != null
+  const forms = q.length >= 2 ? await searchPhrases(q).catch(() => [q]) : [q]
+  // Pages and actions answer unscoped words only — `wf: settings` means workflows.
+  const pages = q && !scoped && !hasFilterTokens(parsed) ? matchStatic(ADMIN_PAGES, forms, 8) : []
+  const actions =
+    q && !scoped && !hasFilterTokens(parsed) ? matchStatic(QUICK_ACTIONS, forms, 4) : []
+  const base = {
+    records: [] as RecordHit[],
+    people: [] as PersonHit[],
+    pages,
+    actions,
+    semantic: [] as Array<{ collection: string; id: unknown; label: string; snippet: string }>,
+    exact: null as RecordHit | null,
+    suggestions: [] as string[],
+    query
+  }
+
+  // `@jane` — people only.
+  if (parsed.scope === PEOPLE_SCOPE) {
+    const found = q.length >= 1 ? await searchPeople(q, req.isAdmin === true) : []
+    const { searchPeopleExtras } = await import('../services/search-extra.js')
+    const people = await searchPeopleExtras(req.user as User, q, found, {
+      isAdmin: req.isAdmin === true
+    }).catch(() => found)
+    return { ...base, people }
+  }
+
+  if (q.length < 2 && !hasFilterTokens(parsed)) {
+    return base
+  }
+
+  // Readable collections in one pass (avoid per-collection can() round-trips)
+  const user = req.user!
+  const readable = await readableCollections(user as User)
+  // Field metadata — filters, matched-field labels, and the semantic block's labels
+  const fieldRows = readable.length
+    ? ((await db('nivaro_fields')
+        .whereIn('collection', readable)
+        .select('collection', 'field', 'type', 'hidden', 'sort', 'label')) as FieldRow[])
+    : []
+
+  const byCollection = new Map<string, FieldRow[]>()
+  for (const f of fieldRows) {
+    const list = byCollection.get(f.collection) ?? []
+    list.push(f)
+    byCollection.set(f.collection, list)
+  }
+
+  const [found, people] = await Promise.all([
+    searchRecords(user as User, readable, parsed, labelsOnly, fieldRows, raw),
+    !scoped && !hasFilterTokens(parsed) && q.length >= 2
+      ? searchPeople(q, req.isAdmin === true)
+      : Promise.resolve([] as PersonHit[])
+  ])
+  const records = found.records
+  query.text = found.text
+  query.filters = found.chips
+
+  // Semantic hits — meaning-based matches from the embeddings index, deduped
+  // against keyword records. Only collections that are both indexed and
+  // readable are searched; label resolution goes through a direct id read.
+  let semantic: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
+  if (q.length >= 4 && !scoped && !hasFilterTokens(parsed)) {
+    try {
+      const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
+      const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
+        collection: string
+      }>
+      const targets = indexed.map((r) => r.collection).filter((c) => readable.includes(c))
+      if (targets.length > 0) {
+        const vec = await embedText(q)
+        const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
+        for (const collection of targets) {
+          const hits = (await searchEmbeddings(collection, vec, 4)).filter((h) => h.score > 0.15)
+          if (hits.length === 0) continue
+          const fields = pickSearchFields(byCollection.get(collection) ?? [])
+          const labelField = fields[0] ?? 'id'
+          // Confirmed as the caller, like the keyword path: row filter and
+          // User Scopes drop hits they cannot open.
+          const rows = (
+            await readItems(user as User, collection, {
+              filter: { id: { _in: hits.map((h) => h.item) } },
+              fields: [...new Set(['id', labelField])],
+              limit: hits.length,
+              count: false
+            }).catch(() => ({ data: [] as unknown[] }))
+          ).data as Array<Record<string, unknown>>
+          for (const row of rows) {
+            const key = `${collection}:${String(row.id)}`
+            if (seen.has(key)) continue
+            seen.add(key)
+            semantic.push({
+              collection,
+              id: row.id,
+              label: String(row[labelField] ?? row.id).slice(0, 80),
+              snippet: 'semantic match'
+            })
+          }
+        }
+        semantic = semantic.slice(0, 8)
+      }
+    } catch {
+      semantic = []
+    }
+  }
+
+  // Extra kinds (comments/notes/files/videos/docs/chat/config), confirmable
+  // commands and people role/zones (services/search-extra.ts). Each part judges
+  // its own hits as the caller and never fails the search. Unscoped words only:
+  // `wf: …` and field filters ask for records.
+  const plain = !scoped && !hasFilterTokens(parsed)
+  const { searchExtra, searchCommands, searchPeopleExtras } = await import(
+    '../services/search-extra.js'
+  )
+  const opts = { isAdmin: req.isAdmin === true, req }
+  const [extra, commands, peopleOut] = await Promise.all([
+    plain ? searchExtra(user as User, q, opts).catch(() => ({})) : Promise.resolve({}),
+    searchCommands(user as User, q, records, opts).catch(() => []),
+    searchPeopleExtras(user as User, q, people, { isAdmin: req.isAdmin === true }).catch(
+      () => people
+    )
+  ])
+
+  const data: Record<string, unknown> = {
+    ...base,
+    records,
+    people: peopleOut,
+    semantic,
+    exact: found.exact,
+    suggestions: found.suggestions,
+    query,
+    extra,
+    commands
+  }
+  return data
 }

@@ -788,6 +788,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       registerWarm: (name, fn, opts) => registered.cacheWarmers.push({ name, fn, opts })
     },
     layouts: { dependsOn: () => {} },
+    search: { registerScopes: () => {} },
     reads: { route: (handler) => handler },
     seeds: { register: (d) => registered.seeds.push(d) },
     schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },

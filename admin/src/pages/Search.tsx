@@ -321,7 +321,7 @@ export function SearchPage() {
             h.snippet ?? '',
             h.collection ?? '',
             h.item ?? '',
-            extraHref(h)
+            extraHref(h) ?? ''
           ])
         )
       )
@@ -991,7 +991,7 @@ function ExtraList({ hits, q }: { hits: ExtraHit[]; q: string }) {
       {hits.map((h) => (
         <li key={`${h.kind}-${h.id}`}>
           <Link
-            to={extraHref(h)}
+            to={extraHref(h) ?? ''}
             className='flex items-center gap-3 px-3 py-2 hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none dark:hover:bg-muted dark:focus-visible:bg-muted'
           >
             <span className='min-w-0 flex-1'>

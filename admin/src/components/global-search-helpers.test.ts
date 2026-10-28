@@ -266,3 +266,76 @@ describe('csv + sort', () => {
     expect(sortRecords(rows, 'relevance')).toBe(rows)
   })
 })
+
+describe('extraHref safety', () => {
+  const base = { kind: 'comment', id: '1', label: 'x' }
+  it('never follows another host or a script URL', () => {
+    for (const href of [
+      'https://evil.example/x',
+      '//evil.example/x',
+      '/\\evil.example/x',
+      'javascript:alert(1)',
+      'data:text/html,x',
+      '/collections/a\n/b'
+    ]) {
+      expect(extraHref({ ...base, href, admin_href: href })).toBeNull()
+    }
+  })
+  it('falls back to a safe href when admin_href is unsafe', () => {
+    expect(extraHref({ ...base, href: '/records/wf/9', admin_href: '//evil' })).toBe(
+      '/collections/wf/9'
+    )
+  })
+})
+
+describe('commandRequest with the server payload shape', () => {
+  const cmd = (over: Partial<SearchCommand>): SearchCommand => ({
+    id: 'c',
+    label: 'Do it',
+    kind: 'transition',
+    collection: 'workflows',
+    item: '7',
+    confirm: '?',
+    payload: {},
+    ...over
+  })
+  it('reads fields from the body and rebuilds the route', () => {
+    expect(
+      commandRequest(
+        cmd({
+          kind: 'hold',
+          payload: { method: 'POST', path: '//evil', body: { key: 'hold', ids: ['7'] } }
+        })
+      )
+    ).toEqual({
+      kind: 'post',
+      url: '/bulk-actions/run',
+      body: { collection: 'workflows', ids: ['7'], reason: null, key: 'hold' }
+    })
+    expect(
+      commandRequest(cmd({ payload: { method: 'POST', path: '/x', body: { transition_id: 3 } } }))
+    ).toEqual({
+      kind: 'post',
+      url: '/pipelines/instance/workflows/7/transition',
+      body: { transition_id: '3' }
+    })
+  })
+  it('opens the record when a move has open requirements', () => {
+    expect(
+      commandRequest(cmd({ payload: { body: { transition_id: 3 }, has_requirements: true } }))
+    ).toEqual({ kind: 'navigate', path: '/collections/workflows/7' })
+  })
+  it('creates through navigate.admin_href, new-record paths only', () => {
+    expect(
+      commandRequest(
+        cmd({
+          kind: 'create',
+          payload: { navigate: { href: '/r', admin_href: '/collections/workflows/new?prefill=ab' } }
+        })
+      )
+    ).toEqual({ kind: 'navigate', path: '/collections/workflows/new?prefill=ab' })
+    expect(
+      commandRequest(cmd({ kind: 'create', payload: { navigate: { admin_href: '//evil' } } }))
+    ).toEqual({ kind: 'navigate', path: '/collections/workflows/new' })
+  })
+})

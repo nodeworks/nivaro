@@ -89,6 +89,7 @@ import {
 } from '../services/layout-dependencies.js'
 import { clientGoneSignal, gateServerTiming, withReadGate } from '../services/read-gate.js'
 import { runLongSql } from '../services/run-long.js'
+import { registerSearchScopes } from '../services/search-scopes.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
 
 export type {
@@ -930,6 +931,17 @@ export function registrationMembers(
           own('cache_warmers', id)
         } catch (err) {
           console.warn(`[extensions] ${extId}: cache warmer skipped —`, (err as Error).message)
+        }
+      }
+    },
+    // Global-search prefix scopes (search program 2026-10-28): defaults under the
+    // `search_scopes` settings layer (services/search-scopes.ts).
+    search: {
+      registerScopes: (map) => {
+        try {
+          registerSearchScopes(map)
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: search scopes skipped —`, (err as Error).message)
         }
       }
     },

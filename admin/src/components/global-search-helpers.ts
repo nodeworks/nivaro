@@ -238,20 +238,36 @@ export function extraTabs(
 ): Array<{ key: string; kind: ExtraKind; label: string; count: string; hits: ExtraHit[] }> {
   if (!extra) return []
   return EXTRA_KINDS.flatMap(({ kind, label }) => {
-    const hits = Array.isArray(extra[kind]) ? (extra[kind] as ExtraHit[]) : []
+    const hits = (Array.isArray(extra[kind]) ? (extra[kind] as ExtraHit[]) : []).filter(
+      (h) => h && typeof h.label === 'string' && extraHref(h) !== null
+    )
     return hits.length
       ? [{ key: extraTabKey(kind), kind, label, count: String(hits.length), hits }]
       : []
   })
 }
 
+/** An app-relative path: one leading `/`, never `//` or `/\\` (another host), no
+ *  control characters. Server hrefs are followed only through this. */
+export function safeAppPath(href: unknown): string | null {
+  if (typeof href !== 'string') return null
+  const h = href.trim()
+  if (!h.startsWith('/') || h.startsWith('//') || h.startsWith('/\\')) return null
+  if (/[\u0000-\u001f]/.test(h)) return null
+  return h
+}
+
 /** Where an extra hit opens in the admin: `admin_href`, else the shared `href`
- *  with efp-new's `/records/:c/:id` mapped onto `/collections/:c/:id`. */
-export function extraHref(h: ExtraHit): string {
-  if (h.admin_href) return h.admin_href
-  const m = /^\/records\/([^/?#]+)\/([^/?#]+)(.*)$/.exec(h.href)
+ *  with efp-new's `/records/:c/:id` mapped onto `/collections/:c/:id`. Null when
+ *  neither is an app-relative path (never another host or a script URL). */
+export function extraHref(h: ExtraHit): string | null {
+  const admin = safeAppPath(h.admin_href)
+  if (admin) return admin
+  const href = safeAppPath(h.href)
+  if (!href) return null
+  const m = /^\/records\/([^/?#]+)\/([^/?#]+)(.*)$/.exec(href)
   if (m) return `/collections/${m[1]}/${m[2]}${m[3]}`
-  return h.href
+  return href
 }
 
 // ─── People ──────────────────────────────────────────────────────────────────
@@ -358,14 +374,26 @@ const str = (v: unknown) =>
 /** The normal route a search command runs through — the same ones the record page
  *  uses, so access, guards and reasons are judged there. Null = can't be run here. */
 export function commandRequest(cmd: SearchCommand, note?: string): CommandRequest | null {
-  const p = obj(cmd.payload)
+  // The server sends a ready request ({method, path, body}) or a navigate
+  // ({navigate: {href, admin_href}}); its path is never followed — the route is
+  // rebuilt here from the fields, read from the body or the payload itself.
+  const raw = obj(cmd.payload)
+  const p: Record<string, unknown> = { ...obj(raw.body), ...raw }
   const c = cmd.collection ?? str(p.collection)
   const item = cmd.item ?? str(p.item) ?? str(p.id)
   const comment = note?.trim() || null
   if (cmd.kind === 'create') {
+    const to = safeAppPath(obj(raw.navigate).admin_href)
+    if (to && /^\/collections\/[^/?#]+\/new(\?|$)/.test(to)) return { kind: 'navigate', path: to }
     return c ? { kind: 'navigate', path: `/collections/${encodeURIComponent(c)}/new` } : null
   }
   if (!c || !item) return null
+  // Open data-entry first: the move would answer 422 — open the record instead.
+  if (cmd.kind === 'transition' && raw.has_requirements === true)
+    return {
+      kind: 'navigate',
+      path: `/collections/${encodeURIComponent(c)}/${encodeURIComponent(item)}`
+    }
   const base = `/pipelines/instance/${encodeURIComponent(c)}/${encodeURIComponent(item)}`
   if (cmd.kind === 'transition') {
     const transitionId = str(p.transition_id) ?? str(p.transitionId)

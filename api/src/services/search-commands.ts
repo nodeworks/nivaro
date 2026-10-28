@@ -482,18 +482,10 @@ async function creatable(user: User, isAdmin: boolean, thing: string) {
     collection: string
     display_name: string | null
   }>
-  // Search scope prefixes (`ir` → inventory_request) name collections too.
-  let scopes: Record<string, string> = {}
-  try {
-    const s = (await db('nivaro_settings').where({ id: 1 }).first()) as
-      | Record<string, unknown>
-      | undefined
-    const raw = s?.search_scopes
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (parsed && typeof parsed === 'object') scopes = parsed as Record<string, string>
-  } catch {
-    scopes = {}
-  }
+  // Search scope prefixes (`ir` → inventory_request) name collections too —
+  // the same map the query parser reads (services/search-scopes.ts).
+  const { loadSearchScopes } = await import('./search-scopes.js')
+  const scopes: Record<string, string> = await loadSearchScopes().catch(() => ({}))
   const scoped = Object.entries(scopes)
     .filter(([k]) => norm(k) === want)
     .map(([, c]) => c)
