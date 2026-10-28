@@ -1,10 +1,422 @@
 {
-  "generated_at": "2026-10-27T21:14:20.030Z",
+  "generated_at": "2026-10-28T13:01:14.265Z",
   "releases": [
+    {
+      "version": "0.3.37",
+      "tag": "v0.3.37",
+      "date": "2026-10-28T09:00:57-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "tests follow the merged review fixes, reserve sso_link_by_email",
+              "hash": "ef78c75cf"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "PDF file headers at both call sites, brief template keys, review docs",
+              "hash": "4e0a48b11"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "review cluster E - reconnect storms, atomic journal, A2",
+              "hash": "f05d09bcc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ai",
+              "text": "close review section B — brief proxy, playbook leaks, limits",
+              "hash": "780e302b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "extension admin gate once, ready identity check, SQL shape warning, PDF CSP",
+              "hash": "1e874f9eb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "M2M usage site falls back to the junction column name",
+              "hash": "2c33fae3d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "sql",
+              "text": "UTC windows, chunked IN lists, narrow owner-match reads",
+              "hash": "01c502a81"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "picker GUID case, post-login query slashes, M2M file usage",
+              "hash": "af767cd83"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "narrow exceptions to the email-link refusal for second providers",
+              "hash": "258011fce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "body-limits",
+              "text": "webhook flows keep their ceiling without a credential",
+              "hash": "091b42e44"
+            },
+            {
+              "section": "Fixed",
+              "scope": "flows",
+              "text": "cloud-only SSRF guard, whole-part URL placeholders, rich mail",
+              "hash": "3ca5b9ff3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "rate-limit",
+              "text": "anonymous limit never refuses a credentialed request",
+              "hash": "6edbded27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "Summary view edits the Summary layout, rail and empty-files fixes",
+              "hash": "c83af8a1e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "raise login page text contrast to WCAG AA",
+              "hash": "49df89bd0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "cross-cluster follow-ups after merging the audit fixes",
+              "hash": "ada494a1d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "strip credentials from every user row; enforce token tenant",
+              "hash": "b84143023"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "review follow-ups on cluster D hardening",
+              "hash": "a3cdee4db"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "injection Lows — SQL validate, CSV formulas, PDF Liquid, sync paths, TSV",
+              "hash": "02f9735dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "escape mail template output (M27)",
+              "hash": "d30ac94fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "sandbox flow scripts, guard and encode flow requests (C2, M25, M26)",
+              "hash": "61466d5ac"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "refuse extension code changes in cloud mode (C1)",
+              "hash": "a7c55d96a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "harden the SSRF guard and pin outbound connections (M24, M28)",
+              "hash": "5a3240e00"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "public endpoint Lows — forms, presence, ready, webhook HMAC",
+              "hash": "98e118040"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "literal-aware query params, cached public queries and links",
+              "hash": "7df4e6475"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "server-wide hardening — proxy trust, body limits, headers, rate limits",
+              "hash": "1302c0477"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "sign-in hardening, no credentials in /me, safer View-as",
+              "hash": "8cdbee573"
+            },
+            {
+              "section": "Fixed",
+              "scope": "approvals",
+              "text": "Teams approve links need the approver's own session",
+              "hash": "278f1d9f5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "OAuth refresh reuse, secret compare, log masking, one-time tokens",
+              "hash": "92832a004"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "refuse weak SESSION_SECRET, default Secure cookies on https",
+              "hash": "49e8ffccc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "deps",
+              "text": "nodemailer 10, sharp 0.35; document the root banner",
+              "hash": "ce15f581f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "post-login allowlist knows the legacy /items alias",
+              "hash": "42bffee02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cloud",
+              "text": "tenant-scope record/chat-poll emits, widget budget, MCP host",
+              "hash": "6eb6cc8b1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "socket",
+              "text": "rate limits, field:change values, tenant-bound rooms/tokens",
+              "hash": "a5f886424"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "one allowlisted post-login check for every sign-in path",
+              "hash": "2de4894bb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "deps",
+              "text": "expr-eval fork (C3) + same-major security upgrades",
+              "hash": "d86b40029"
+            },
+            {
+              "section": "Fixed",
+              "scope": "image",
+              "text": "production NODE_ENV, loud root warning, harden examples (M29, M31, M32)",
+              "hash": "d23bad796"
+            },
+            {
+              "section": "Fixed",
+              "scope": "iframes",
+              "text": "real sandboxes for the form map and the form preview",
+              "hash": "e409c7d94"
+            },
+            {
+              "section": "Fixed",
+              "scope": "access",
+              "text": "record-level Lows from the 2026-10-27 audit",
+              "hash": "207b0030a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scheduled-changes",
+              "text": "execute as the creator through the items service (M4)",
+              "hash": "e114aa473"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "stop clients planting audit rows (M3)",
+              "hash": "2a6509b98"
+            },
+            {
+              "section": "Fixed",
+              "scope": "item-locks",
+              "text": "only someone who could save may hold a lock (M2)",
+              "hash": "83ca2aac0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record-links",
+              "text": "judge every end of a link as the caller (M1)",
+              "hash": "298874988"
+            },
+            {
+              "section": "Fixed",
+              "scope": "content-export",
+              "text": "read through the items service as the caller (H16)",
+              "hash": "d646e3a66"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "tenant-scope admin stream, import progress; SSE re-check",
+              "hash": "3ec3b802b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "revisions",
+              "text": "cut history to the reader's readable fields (H2)",
+              "hash": "de6ea75e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "sign-in returns only to app pages and listed server pages",
+              "hash": "a5b2d6fc0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "adopt a #masq= View-as token only in a tab the app opened",
+              "hash": "f7eda789e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "environments",
+              "text": "only http(s) base and git URLs",
+              "hash": "ef85aeac1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "links",
+              "text": "treat //host and /\\host as off-site, never in-app paths",
+              "hash": "159e46dcd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "clear unsaved record drafts at sign-out",
+              "hash": "d81fa201a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "redact the bug reporter's console tail and screenshot",
+              "hash": "1ec62bea4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "gate audit, file and instance queries; per-tenant schema",
+              "hash": "944b75437"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "send and store only a validated bare media type (H1 follow-up)",
+              "hash": "d4f1db974"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "never render uploaded HTML/SVG on the app origin (H1)",
+              "hash": "e13e0806d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "signing out ends every View-as the admin started",
+              "hash": "62261d11c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "View-as ends when its administrator is no longer one",
+              "hash": "c00a0d30f"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "cache",
+              "text": "cache switches as config, identity + layout caches, gated heavy reads",
+              "hash": "01ccb0201"
+            },
+            {
+              "section": "Performance",
+              "scope": "client",
+              "text": "chat typing poll follows the socket; admin no focus refetch",
+              "hash": "44bf9c84e"
+            },
+            {
+              "section": "Performance",
+              "scope": "record-form",
+              "text": "memoized rows, stable contexts, scoped M2M refresh",
+              "hash": "4bd007a0f"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync public docs after the security fixes",
+              "hash": "485f3b1af"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "e2e",
+              "text": "SSO button test follows the configured provider label",
+              "hash": "7d465adca"
+            },
+            {
+              "section": "Other",
+              "scope": "security",
+              "text": "reconcile merged View-as and safeFetch tests",
+              "hash": "06d880e6e"
+            },
+            {
+              "section": "Other",
+              "scope": "security",
+              "text": "every Chromium page must intercept its requests (M31)",
+              "hash": "6d58e67dd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "lock down publish, image and www workflows (M30 + deploy lows)",
+              "hash": "538e33b1b"
+            }
+          ]
+        }
+      ],
+      "count": 64
+    },
     {
       "version": "0.3.36",
       "tag": "v0.3.36",
-      "date": "2026-10-27T17:14:05-04:00",
+      "date": "2026-10-27T17:14:20-04:00",
       "sections": [
         {
           "label": "Added",
