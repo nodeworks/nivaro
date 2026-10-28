@@ -40,8 +40,13 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
 {
   "data": {
     "records": [
-      { "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
+      { "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp",
+        "snippet": "Acme Corp", "matched_field": "name", "matched_label": "Name",
+        "matched_value": "Acme Corp", "score": 340, "mine": true, "updated_at": "2026-10-27T14:02:00Z" }
     ],
+    "exact": null,
+    "suggestions": [],
+    "query": { "text": "acme", "scope": null, "filters": [] },
     "people": [
       { "id": "9F1C…", "first_name": "Ana", "last_name": "Acme", "email": "ana@example.com", "title": "Buyer", "department": "Procurement" }
     ],
@@ -51,13 +56,64 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
   }
 }
 
+// matched_*: the field the text was found in and its value as you may read it (a field
+// your role cannot read is never matched). score: exact id 1000 > equals 300 > starts
+// with 200 > a word starts with 160 > contains 100 > near spelling 20–60, plus +40 when
+// it is yours (you created it, are a named owner on it, or opened it from search in the
+// last 30 days — mine: true) and up to +55 when other people opened it for this query.
+// Boosts only reorder results you can already see.
+
+// Exact id: a one-token query with a digit (AB26-77260, B1234-2, PO-00042) equal to a
+// business-id column (string *_id / *_number / *_no, numeric *_number for digits) comes
+// back as data.exact (exact: true) and first in records. Scoped, the record id too.
+GET /api/global-search?q=AB26-77260
+
+// Typo tolerance: when fewer than 3 results matched, a near-spelling pass over name
+// columns (tables up to 200k rows) adds hits below every real match; suggestions then
+// lists the closest names ("did you mean").
+
+// Prefix scopes: search one collection. "@" = people only. The map is config:
+// nivaro_settings.search_scopes (when the column exists) and/or the "search_scopes" key
+// of this instance's settings overrides, e.g. {"wf":"workflows","ir":"inventory_request"}.
+GET /api/global-search?q=wf: canton
+GET /api/global-search?q=@ana
+
+// Field filters: field:value (the field key or its label, e.g. vendor-name:acme). Text
+// fields contain, numbers/booleans equal, comparisons with >= <= > < (amount:>=10k),
+// dates take ranges (due:2026-10, due:last-week). Unscoped, a filter searches only the
+// collections that have that field. Scoped, bare amounts ($12,500 exact, 12.5k ±5%) and
+// dates (Oct 2026, 2026-10, last week, this month, today) go to the collection's money
+// and created-date fields. Filters run through the items service as you; a token that
+// names no readable field stays search text. data.query.filters lists what applied:
+GET /api/global-search?q=wf: status:open $12,500
+// "query": { "text": "", "scope": "wf", "filters": [
+//   { "field": "status", "label": "Status", "op": "contains", "value": "open" },
+//   { "field": "total_amount", "label": "Total", "op": "eq", "value": "12500" } ] }
+
 // labels=1 (on all three): match only the fields each record's label shows (its display
-// template), so every hit visibly contains the text. Collections whose label shows no
-// text field sit out.
+// template), plus the collection's browser_config.label_search_fields, so every hit
+// visibly contains the text (or names the extra field it matched in matched_label).
+// Collections whose label shows no text field sit out.
 GET /api/global-search?q=acme&labels=1
 
+// Preview pane: label, pipeline state, current owners and up to 6 fields (the form's
+// header fields, else the display template's), read as you; 404 when you cannot open it.
+GET /api/global-search/preview?collection=customers&id=cust-123
+{ "data": { "collection": "customers", "id": "cust-123", "label": "Acme Corp",
+  "state": { "label": "In review", "color": "#00ceff" }, "owners": [{ "id": "…", "name": "Sam Ray" }],
+  "fields": [{ "label": "City", "value": "Denver" }], "updated_at": "…", "updated_by": "Ana Acme" } }
+
+// What was opened (feeds learned ranking; log_id = the search-analytics log row, when known).
+POST /api/global-search/click { "q": "acme", "collection": "customers", "id": "cust-123", "position": 0, "log_id": 812 }
+
+// Saved searches — your own, in your preferences (at most 25).
+GET    /api/global-search/saved
+POST   /api/global-search/saved { "name": "Open WFs", "q": "wf: status:open", "scope": "wf" }
+DELETE /api/global-search/saved/:id
+
 // Tabs: each collection's match count, counted as the caller (RBAC, row filters, User Scopes).
-// Pass the collections the first answer's records came from.
+// Pass the collections the first answer's records came from. counts and records read the
+// same scopes and field filters as the main search (a tab is scoped to its collection).
 GET /api/global-search/counts?q=acme&collections=customers,orders
 { "data": [{ "collection": "customers", "display_name": "Customers", "count": 41 }] }
 
