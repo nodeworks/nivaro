@@ -25,10 +25,11 @@ export function ScrollTabs({
   const measure = useCallback(() => {
     const el = ref.current
     if (!el) return
-    setEdge({
-      left: el.scrollLeft > 1,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1
-    })
+    const left = el.scrollLeft > 1
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+    // Same edges, same state: a new object every call re-rendered the strip forever (the
+    // measuring effect runs after every render).
+    setEdge((cur) => (cur.left === left && cur.right === right ? cur : { left, right }))
   }, [])
   // Every render: the tabs (children to observe) change with the search.
   useEffect(() => {
