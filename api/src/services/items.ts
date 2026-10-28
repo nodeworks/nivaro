@@ -4220,16 +4220,27 @@ export async function readItems(
     ])
     const actualColSet = new Set(columnTypes.keys())
     // browser_config.search_fields narrows the columns (services/search-fields.ts).
+    // Never a column outside the caller's field list: a match is a read, so
+    // searching a hidden field would answer what it holds (and `search_fields`
+    // could aim at one). null / '*' = every field.
+    const readable = (c: string) =>
+      !allowedFields || allowedFields.includes('*') || allowedFields.includes(c)
     // A request may narrow further (`search_fields`, e.g. a catalog picker searching
     // only what its rows show); like the collection's list, it never widens.
     let searchCols = narrowSearchColumns(
       narrowSearchColumns(
         fieldMeta
-          .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
+          .filter(
+            (f) =>
+              ['string', 'text'].includes(f.type) && actualColSet.has(f.field) && readable(f.field)
+          )
           .map((f) => f.field),
         parseSearchFields(collectionMeta?.browser_config)
       ),
-      query.search_fields?.length ? query.search_fields : null
+      query.search_fields?.length ? query.search_fields.filter(readable) : null
+    )
+    const hadTextFields = fieldMeta.some(
+      (f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field)
     )
 
     // A collection with NO registered field metadata (nivaro_users is served
@@ -4237,7 +4248,7 @@ export async function readItems(
     // the clause was skipped entirely — every row came back as though it had
     // matched, which reads as "search does nothing". Fall back to the table's
     // own text columns so an unregistered collection is still searchable.
-    if (searchCols.length === 0) {
+    if (searchCols.length === 0 && !hadTextFields) {
       const textCols = (await db
         .raw(
           `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns
@@ -4248,7 +4259,13 @@ export async function readItems(
         .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME))) as string[]
       searchCols = fallbackSearchColumns(collection, textCols)
       // Never a column outside the caller's field list (a match is a read).
-      if (allowedFields) searchCols = searchCols.filter((c) => allowedFields.includes(c))
+      searchCols = searchCols.filter(readable)
+    }
+    // Nothing the caller may read to search in: nothing matches (no clause would
+    // answer every row as a match).
+    if (searchCols.length === 0) {
+      q.whereRaw('1 = 0')
+      countQ.whereRaw('1 = 0')
     }
 
     if (searchCols.length) {
