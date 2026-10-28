@@ -1,5 +1,5 @@
 import { ExternalLink } from 'lucide-react'
-import { useContext, useEffect, useRef, useState } from 'react'
+import { memo, useContext, useEffect, useRef, useState } from 'react'
 import {
   fieldDrilldownConfig,
   RelationPathDataContext,
@@ -125,7 +125,9 @@ function dateBoundsFor(field: { validation_rules?: unknown }): { min?: string; m
   return out
 }
 
-export function FieldRenderer({
+/** Memoized: rows pass it stable props, so a row re-render that changes
+ *  nothing about this field's control skips it. */
+export const FieldRenderer = memo(function FieldRenderer({
   field,
   value,
   onChange,
@@ -1101,7 +1103,7 @@ export function FieldRenderer({
     )
   }
   return input
-}
+})
 
 /** Tags interface (#92): chips + free-entry input; Enter/comma adds, ✕
  *  removes. Value is a JSON string array (stored in a text column). */

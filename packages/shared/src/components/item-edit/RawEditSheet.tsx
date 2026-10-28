@@ -15,6 +15,7 @@ import {
 import { FieldRenderer } from './FieldRenderer'
 import { M2MCombobox, m2aWriteMeta } from './M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './M2MStagingContext'
+import { invalidateM2MFor } from './m2m-invalidate'
 import type { CMSField, CMSRelation } from './types'
 
 /**
@@ -220,7 +221,7 @@ export function RawEditSheet({
       setM2mUnlinks(new Map())
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
       void qc.invalidateQueries({ queryKey: ['raw-edit-record', collection, itemId] })
-      void qc.invalidateQueries({ queryKey: ['m2m-items'] })
+      invalidateM2MFor(qc, [itemId])
       onSaved?.()
       onClose()
     } catch (err) {
