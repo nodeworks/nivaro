@@ -154,6 +154,28 @@ async function gatherProcContext(
   return { tables, schemaCtx, usage }
 }
 
+/** The import definition that owns this procedure's body, or null. An
+ *  app-managed procedure (nivaro_import_definitions.procedure_body set) has ONE
+ *  writer — the import's own deploy — so the procedure manager never deploys
+ *  over it or drops it (deploy-procedures and sync-business-schema skip the
+ *  same set). */
+async function owningImport(name: string): Promise<string | null> {
+  const row = (await db('nivaro_import_definitions')
+    .whereNotNull('procedure_body')
+    .whereRaw('LOWER([procedure]) = ?', [name.toLowerCase()])
+    .first('key')
+    .catch(() => null)) as { key?: string } | null | undefined
+  return row?.key ? String(row.key) : null
+}
+
+function appManagedRefusal(name: string, key: string) {
+  return {
+    error: `${name} is managed by the import definition "${key}". Change it there (Imports → Definitions); a deploy here would be overwritten by the import and fight it.`,
+    code: 'APP_MANAGED',
+    definition: key
+  }
+}
+
 export async function procedureRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
@@ -208,6 +230,8 @@ export async function procedureRoutes(app: FastifyInstance) {
       const definition = String(req.body?.definition ?? '')
       if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
       if (!definition.trim()) return reply.code(400).send({ error: 'definition is required' })
+      const owner = await owningImport(name)
+      if (owner) return reply.code(409).send(appManagedRefusal(name, owner))
       if (!definitionNameMatches(definition, name)) {
         return reply.code(400).send({
           error: `The definition must be a CREATE [OR ALTER] PROCEDURE for "${name}" — the statement's name doesn't match.`
@@ -243,6 +267,8 @@ export async function procedureRoutes(app: FastifyInstance) {
       [name]
     )) as unknown[]
     if (!existing.length) return reply.code(404).send({ error: 'Procedure not found' })
+    const owner = await owningImport(name)
+    if (owner) return reply.code(409).send(appManagedRefusal(name, owner))
     await db.raw(`DROP PROCEDURE [${name}]`)
     await logActivity({
       action: 'procedure-drop',

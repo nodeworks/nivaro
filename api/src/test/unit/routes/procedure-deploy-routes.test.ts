@@ -16,7 +16,8 @@ const importRow: { value: Record<string, unknown> | undefined } = { value: undef
 vi.mock('../../../db/index.js', () => {
   const chain = () => {
     const c: Record<string, unknown> = {}
-    for (const m of ['where', 'select', 'orderBy']) c[m] = vi.fn(() => c)
+    for (const m of ['where', 'whereNotNull', 'whereRaw', 'select', 'orderBy'])
+      c[m] = vi.fn(() => c)
     c.first = vi.fn(async () => importRow.value)
     c.update = vi.fn(async () => 1)
     // biome-ignore lint/suspicious/noThenProperty: a knex builder is awaited as a thenable
@@ -81,5 +82,23 @@ describe('deploy routes read the header outside comments (R1)', () => {
       schema: 'dbo',
       name: 'Foo'
     })
+  })
+})
+
+describe('the Procedures page never writes an app-managed procedure', () => {
+  it('refuses to deploy over or drop a procedure an import definition owns', async () => {
+    vi.mocked(deployProcedure).mockClear()
+    const app = Fastify()
+    await app.register(procedureRoutes, { prefix: '/procedures' })
+    importRow.value = { key: 'invoices' }
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/procedures/import_invoices',
+      payload: { definition: 'CREATE OR ALTER PROCEDURE import_invoices AS SELECT 1' }
+    })
+    expect(put.statusCode).toBe(409)
+    expect(put.json()).toMatchObject({ code: 'APP_MANAGED', definition: 'invoices' })
+    expect(deployProcedure).not.toHaveBeenCalled()
+    importRow.value = undefined
   })
 })
