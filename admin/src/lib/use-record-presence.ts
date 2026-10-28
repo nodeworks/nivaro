@@ -1,12 +1,7 @@
-import { relayLiveEvent } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
-import { io, type Socket } from 'socket.io-client'
-
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
-
+import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
-import { getSocket, mintWsToken, usesWorkerSocket } from '@/lib/socket'
-import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
+import { getSocket, usesWorkerSocket } from '@/lib/socket'
 
 /**
  * Record presence v2 — who's viewing this record and which field they're
@@ -18,9 +13,9 @@ import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
  * state (header chips) and as an imperative outline class on the field
  * wrapper (`nvr-remote-editing`), which the caller's page styles.
  *
- * The record room rides a socket of its own per record page — unless the tab shares the
- * browser's socket (#2475): then it is the shared one, which sits in several record rooms
- * at once and routes each room's events to the tabs holding it.
+ * The record room rides the app's one socket (getSocket): this tab's own, or the browser's shared
+ * one (#2475), which sits in several record rooms at once and routes each room's events to the
+ * tabs holding it.
  */
 
 export interface Viewer {
@@ -41,16 +36,10 @@ export function useRecordPresence(collection: string | undefined, item: string |
   useEffect(() => {
     if (!collection || !item || item === 'new') return
 
+    // The app's one socket (getSocket — the shared worker, or this tab's own, which signs itself
+    // in). A record page used to open a second connection per tab without SharedWorker.
     const shared = usesWorkerSocket()
-    const socket = shared
-      ? getSocket()
-      : io(API_URL, {
-          ...SOCKET_TRANSPORT_OPTIONS,
-          withCredentials: true,
-          reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
-          reconnectionDelayMax: 15_000,
-          randomizationFactor: 0.6
-        })
+    const socket = getSocket()
     socketRef.current = socket
     let disposed = false
     /** Everything this record page put on the socket, so a shared one is left clean. */
@@ -60,30 +49,16 @@ export function useRecordPresence(collection: string | undefined, item: string |
       bound.push([event, cb])
     }
 
-    if (!shared)
-      bind('connect', async () => {
-        // Every sign-in mints a one-time ws token (the static token never reaches the browser).
-        const token = await mintWsToken()
-        if (token && !disposed) socket.emit('auth', { token })
-      })
-
-    const join = () => socket.emit('record:join', { collection, item })
+    const join = () => {
+      if (!disposed) socket.emit('record:join', { collection, item })
+    }
     bind('auth:ok', join)
-    // The shared socket is usually signed in already: join now, and again after each auth:ok.
-    if (shared && socket.connected) join()
+    // The socket is usually signed in already: join now, and again after each auth:ok.
+    if (socket.connected) join()
 
-    // This socket is the one inside the record room (and the user room): hand
-    // the live-record notices to the shared hooks (lib/live.ts useLiveEvent).
-    const relayed = [
-      'record:integrity',
-      'record:automation',
-      'owners:changed',
-      'access:changed',
-      'record:signal'
-    ]
-    // On the shared socket the host relays these once for every record page (getSocket).
-    if (!shared)
-      for (const ev of relayed) bind(ev, (payload: unknown) => relayLiveEvent(ev, payload))
+    // The live-record notices this socket receives (record:integrity, owners:changed,
+    // access:changed …) reach the shared hooks (lib/live.ts useLiveEvent) through getSocket's
+    // own relay, once for every record page.
 
     bind(
       'record:viewers',
@@ -229,7 +204,6 @@ export function useRecordPresence(collection: string | undefined, item: string |
       document.removeEventListener('input', onInput)
       socket.emit('record:leave', { collection, item })
       for (const [ev, cb] of bound) socket.off(ev, cb)
-      if (!shared) socket.disconnect()
       socketRef.current = null
       setViewers([])
       setEditing({})

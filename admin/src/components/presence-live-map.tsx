@@ -2,11 +2,9 @@ import { UserAvatar } from '@nivaro/shared'
 import { Radio, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
-import { io } from 'socket.io-client'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { useAuth } from '@/lib/auth'
-import { mintWsToken } from '@/lib/socket'
-import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
+import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
 /**
@@ -19,8 +17,6 @@ interface PresenceEntry {
   path: string
   since: number
 }
-
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 function safePath(path: string): string | null {
   return path.startsWith('/') && !path.startsWith('//') && !path.includes(':') ? path : null
@@ -54,21 +50,23 @@ export function PresenceLiveMap() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect when the signed-in person changes
   useEffect(() => {
-    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
-    socket.on('connect', async () => {
-      // A one-time ws token (the static token is never sent to the browser).
-      const token = await mintWsToken()
-      if (token) socket.emit('auth', { token })
-    })
-    socket.on('auth:ok', () => {
+    // The app's one socket (getSocket: the shared worker, or this tab's own) — signed in there.
+    const socket = getSocket()
+    const onAuth = () => {
       socket.emit('presence-map:join')
       setConnected(true)
-    })
-    socket.on('presence-map:update', (snapshot: PresenceEntry[]) => setEntries(snapshot))
-    socket.on('disconnect', () => setConnected(false))
+    }
+    const onUpdate = (snapshot: PresenceEntry[]) => setEntries(snapshot)
+    const onDisconnect = () => setConnected(false)
+    socket.on('auth:ok', onAuth)
+    socket.on('presence-map:update', onUpdate)
+    socket.on('disconnect', onDisconnect)
+    if (socket.connected) onAuth()
     return () => {
       socket.emit('presence-map:leave')
-      socket.disconnect()
+      socket.off('auth:ok', onAuth)
+      socket.off('presence-map:update', onUpdate)
+      socket.off('disconnect', onDisconnect)
     }
   }, [user?.id])
 

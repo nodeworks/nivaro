@@ -9,38 +9,19 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { io } from 'socket.io-client'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
-import { mintWsToken } from '@/lib/socket'
-import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
+import { adminRealtime } from '@/lib/socket'
 
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
-
-// Socket adapter: same auth handshake + collection:join protocol the page used
-// inline before (joins only after auth:ok — see api/src/plugins/socketio.ts).
-// The socket signs in with a one-time ws token (the static token never reaches the browser);
-// the server gates collection:join on a completed auth handshake (joins only after auth:ok —
-// api/src/plugins/socketio.ts).
+// Live updates ride the app's one socket (adminRealtime: the shared worker, or this tab's socket
+// with the leader relay) — QueueWorklist reads RealtimeContext first anyway, and this adapter is
+// only its fallback, so a queue page never opens a second connection of its own.
 function createSocketRealtime(): QueueRealtimeAdapter {
   return {
     subscribe(collections, onUpdate) {
-      const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
-      socket.on('connect', async () => {
-        const token = await mintWsToken()
-        if (token) socket.emit('auth', { token })
-      })
-      socket.on('auth:ok', () => {
-        for (const collection of collections) {
-          socket.emit('collection:join', { collection })
-        }
-      })
-      socket.on('collection:update', onUpdate)
-      return () => {
-        socket.disconnect()
-      }
+      return adminRealtime.subscribeCollections(collections, (ev) => onUpdate(ev))
     }
   }
 }

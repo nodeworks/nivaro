@@ -30,6 +30,33 @@ import { trackSse } from '../services/traffic-taps/realtime.js'
 const HEARTBEAT_MS = 25_000
 const MAX_FILTER_COLLECTIONS = 50
 
+/**
+ * Backpressure (review 2026-10-27): a consumer that reads slower than events arrive (a stalled
+ * proxy, a sleeping laptop on a slow link) used to grow this process's write buffer without
+ * limit. Past SSE_BUFFER_SOFT_BYTES (default 256 KB unwritten) events are no longer queued —
+ * the collections they named are remembered and, once the buffer drains, each goes out as ONE
+ * "refetch this collection" message (the coalesced `many` shape every client already reads).
+ * Past SSE_BUFFER_HARD_BYTES (default 4 MB) the stream is closed; EventSource reconnects.
+ */
+export function sseBufferLimits(env: NodeJS.ProcessEnv = process.env): {
+  soft: number
+  hard: number
+} {
+  const num = (raw: string | undefined, dflt: number) => {
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt
+  }
+  const soft = num(env.SSE_BUFFER_SOFT_BYTES, 256 * 1024)
+  const hard = Math.max(soft, num(env.SSE_BUFFER_HARD_BYTES, 4 * 1024 * 1024))
+  return { soft, hard }
+}
+
+/** The message that tells a consumer to refetch a whole collection it fell behind on. */
+export function staleCollectionFrame(collection: string): string {
+  const payload = { collection, item: null, items: null, many: true, count: 0, coalesced: true }
+  return `event: collection.update\ndata: ${JSON.stringify(payload)}\n\n`
+}
+
 /** The collections of `wanted` the user may read (unreadable ones dropped silently). */
 async function readableOf(
   user: NonNullable<import('fastify').FastifyRequest['user']>,
@@ -134,8 +161,38 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
         if (!(await check)) return
         if (closed) return
       }
+      write(`event: collection.update\ndata: ${JSON.stringify(payload)}\n\n`, ev.collection)
+    }
+
+    // Backpressure: hold back while the socket's unwritten buffer is over the soft limit, then
+    // send one refetch per collection that was skipped; close past the hard limit.
+    const limits = sseBufferLimits()
+    const behind = new Set<string>()
+    let waitingDrain = false
+    const flushBehind = () => {
+      waitingDrain = false
+      if (closed) return
+      const cols = [...behind]
+      behind.clear()
+      for (const c of cols) write(staleCollectionFrame(c), c)
+    }
+    function write(frame: string, collection: string): void {
+      if (closed) return
+      const pending = raw.writableLength ?? 0
+      if (pending > limits.hard) {
+        cleanup()
+        return
+      }
+      if (pending > limits.soft || waitingDrain) {
+        behind.add(collection)
+        if (!waitingDrain) {
+          waitingDrain = true
+          raw.once('drain', flushBehind)
+        }
+        return
+      }
       try {
-        raw.write(`event: collection.update\ndata: ${JSON.stringify(payload)}\n\n`)
+        raw.write(frame)
       } catch {
         cleanup()
       }

@@ -64,6 +64,44 @@ export interface SocketRealtimeOptions {
   windowEvents?: Partial<Record<SocketRealtimeWindowEvent, boolean>>
   /** How long a reconnect waits for its catch-up answer before it counts as live again. */
   catchupTimeoutMs?: number
+  /**
+   * Upper bound of the random delay before a `catchup:full` or `access:changed` window event
+   * (default REACTION_JITTER_MS; 0 = at once). Both land on every tab at the same moment after a
+   * deploy or a role change, and each makes the tab refetch its lists — spread over a few
+   * seconds they stop arriving at the API as one wave.
+   */
+  reactionJitterMs?: number
+}
+
+/** Default spread for the reload reactions (catchup:full, access:changed). */
+export const REACTION_JITTER_MS = 3000
+
+/**
+ * Run `fn` after a random 0..maxMs delay; calls made while one is waiting (same `key`) share
+ * it, so a burst of the same notice is one reaction. maxMs <= 0 runs it now.
+ */
+export function createJitteredReaction(
+  maxMs: number = REACTION_JITTER_MS
+): (key: string, fn: () => void) => void {
+  const waiting = new Map<string, () => void>()
+  return (key, fn) => {
+    if (!(maxMs > 0)) {
+      fn()
+      return
+    }
+    const had = waiting.has(key)
+    waiting.set(key, fn) // the newest call's work runs (its detail is the freshest)
+    if (had) return
+    const t = setTimeout(
+      () => {
+        const run = waiting.get(key)
+        waiting.delete(key)
+        run?.()
+      },
+      Math.floor(Math.random() * maxMs)
+    )
+    ;(t as { unref?: () => void }).unref?.()
+  }
 }
 
 const WINDOW_EVENT_NAMES: Record<SocketRealtimeWindowEvent, string> = {
@@ -117,6 +155,8 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
   let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null, resumed: null }
   const statusListeners = new Set<(s: RealtimeStatus) => void>()
   const windowOn = (k: SocketRealtimeWindowEvent) => opts.windowEvents?.[k] !== false
+  const later = createJitteredReaction(opts.reactionJitterMs ?? REACTION_JITTER_MS)
+  const accessRoomsLeft = new Set<string>()
 
   const setStatus = (patch: Partial<RealtimeStatus>) => {
     const next = { ...status, ...patch }
@@ -252,7 +292,7 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
       }
     )
     s.on('catchup:full', (p?: { reason?: string }) => {
-      if (windowOn('catchupFull')) dispatch(WINDOW_EVENT_NAMES.catchupFull, {})
+      if (windowOn('catchupFull')) later('full', () => dispatch(WINDOW_EVENT_NAMES.catchupFull, {}))
       caughtUp(
         p?.reason === 'slow-consumer'
           ? 'Live updates resumed. This tab fell too far behind to send each change, so the lists and records on this page were reloaded.'
@@ -262,8 +302,15 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     })
     s.on('access:changed', (p: { rooms_left?: string[] }) => {
       forgetSettledReads()
-      if (p?.rooms_left?.length && windowOn('accessChanged'))
-        dispatch(WINDOW_EVENT_NAMES.accessChanged, p)
+      if (p?.rooms_left?.length && windowOn('accessChanged')) {
+        // Several notices inside the wait are one reaction naming every room taken away.
+        for (const r of p.rooms_left) accessRoomsLeft.add(r)
+        later('access', () => {
+          const rooms_left = [...accessRoomsLeft]
+          accessRoomsLeft.clear()
+          dispatch(WINDOW_EVENT_NAMES.accessChanged, { rooms_left })
+        })
+      }
     })
     s.on('config:update', (p: unknown) => {
       // Someone changed configuration: the refetch this triggers must reach the server.

@@ -24,6 +24,8 @@ vi.mock('@nivaro/shared', () => ({
     stats: () => ({ gaps: 0, missed: 0, replayed: 0, refetched: 0 })
   }),
   refetchEventsFor: () => [],
+  // Reload reactions run at once here (the 0–3 s spread is exercised in packages/shared).
+  createJitteredReaction: () => (_key: string, fn: () => void) => fn(),
   // #2476 — the replay socket tap is exercised in packages/shared (replay-socket.test.ts).
   tapReplaySocket: () => {},
   // #2477 — no event here is sampled for a delivery ack.
