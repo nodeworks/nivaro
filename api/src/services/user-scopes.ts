@@ -280,12 +280,20 @@ const MAX_DEPTH = 3
 
 /** Shortest hop route from `collection` to `target`. Null = unreachable.
  *  M2O/junction edges are preferred over O2M at equal depth (BFS pushes them
- *  first), since "belongs to" semantics beat "has many" for scoping. */
+ *  first), since "belongs to" semantics beat "has many" for scoping.
+ *  `avoid` = collections the route may not pass through (a dimension's
+ *  exclusions): an excluded collection is not that dimension's data, so a row
+ *  must not inherit the dimension from it either. Catalog rows pointing at
+ *  cifa_items (fiber jumpers, attenuator pads) resolved through cifa_items'
+ *  zone links, hid from every zone-restricted person and left the fiber
+ *  jumper Connector picker empty (staging 2026-10-28). */
 export async function resolveScopeHops(
   collection: string,
-  target: string
+  target: string,
+  avoid: readonly string[] = []
 ): Promise<ScopeHop[] | null> {
-  const key = `${collection}→${target}`
+  const avoidSet = new Set(avoid.filter((c) => c !== target && c !== collection))
+  const key = `${collection}→${target}${avoidSet.size ? `|${[...avoidSet].sort().join(',')}` : ''}`
   if (pathCache.has(key)) return pathCache.get(key) ?? null
   const g0 = resetGen
   const adj = await getAdjacency()
@@ -325,7 +333,7 @@ export async function resolveScopeHops(
       // match nothing (audit: 146 of 441 routes were reverse). A collection
       // with no forward route is simply unscoped for that dimension, which is
       // the safe direction — the items service still enforces RBAC and RLS.
-      .filter((e) => e.hop.kind !== 'o2m')
+      .filter((e) => e.hop.kind !== 'o2m' && !avoidSet.has(e.hop.to))
       .sort((a, b) => {
         const kindRank = (h: ScopeHop) => (h.kind === 'o2m' ? 1 : 0)
         return (
@@ -517,7 +525,7 @@ export async function scopeHopsFor(
     const hops = await segmentsToHops(collection, override)
     if (hops) return hops
   }
-  return resolveScopeHops(collection, dim.target_collection)
+  return resolveScopeHops(collection, dim.target_collection, dim.exclusions ?? [])
 }
 
 /** Resolve override segments (M2O field / alias field names) into hops. */

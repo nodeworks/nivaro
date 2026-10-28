@@ -353,6 +353,33 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
     expect(out).toEqual({ filters: [], deny: false })
   })
 
+  it('never routes through an excluded collection (catalog rows that point at one stay unscoped)', async () => {
+    // Staging 2026-10-28: fiber_jumpers.cifa → cifa_items → divisions. cifa_items is
+    // excluded from Zone, yet fiber_jumpers took the zone of its cifa item — none
+    // has one — so every zone-restricted person saw no jumpers (empty Connector picker).
+    const relations = [
+      { many_collection: 'fiber_jumpers', many_field: 'cifa', one_collection: 'cifa_items' },
+      { many_collection: 'cifa_items', many_field: 'division', one_collection: 'divisions' }
+    ]
+    const restrict = [scopeRow({ mode: 'restrict', values: JSON.stringify([10]) })]
+    installDb({ dimensions: [{ ...ZONE_DIM }], scopes: restrict, relations })
+    const routed = await getUserScopeEnforcement(makeUser(), 'fiber_jumpers')
+    expect(routed.filters).toHaveLength(1)
+
+    bustScopeDimensionCache()
+    bustUserScopeCache()
+    bustScopePathCache()
+    installDb({
+      dimensions: [{ ...ZONE_DIM, exclusions: JSON.stringify(['cifa_items']) }],
+      scopes: restrict,
+      relations
+    })
+    expect(await getUserScopeEnforcement(makeUser(), 'fiber_jumpers')).toEqual({
+      filters: [],
+      deny: false
+    })
+  })
+
   it('DENIES an excluded collection on a strict dimension — exclusion is not an exemption', async () => {
     // Sharp edge worth knowing: scopeHopsFor() returns null both for "explicitly
     // excluded" and for "no route found", and getUserScopeEnforcement cannot tell

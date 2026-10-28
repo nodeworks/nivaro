@@ -391,7 +391,7 @@ async function lintFindings(): Promise<Finding[]> {
         for (const c of cols) {
           if (c === dim.target_collection || excluded.includes(c) || emitted >= 10) continue
           try {
-            const hops = await resolveScopeHops(c, dim.target_collection)
+            const hops = await resolveScopeHops(c, dim.target_collection, excluded)
             if (!hops) {
               emitted++
               out.push({
