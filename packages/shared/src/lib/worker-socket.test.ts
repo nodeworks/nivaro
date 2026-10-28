@@ -7,7 +7,8 @@ import {
   shouldUseWorkerSocket,
   WORKER_SOCKET_PREF_KEY,
   WORKER_SOCKET_PROTO,
-  type WorkerSocketOptions
+  type WorkerSocketOptions,
+  workerUrlForBuild
 } from './worker-socket'
 
 /** The worker's side of the port: what the tab posted, and a way to answer. */
@@ -292,5 +293,21 @@ describe('createWorkerSocket: signed-out tabs stop minting ws tokens (staging 20
     noteUnauthorized()
     noteSignedIn()
     expect(port.sent('signed-in').length).toBe(0)
+  })
+})
+
+describe('workerUrlForBuild (2026-10-28)', () => {
+  it('puts the frontend build in the worker address so a new release gets a fresh worker', () => {
+    expect(workerUrlForBuild('/api/realtime/worker.js', 'a7b40d2d')).toBe(
+      '/api/realtime/worker.js?b=a7b40d2d'
+    )
+    expect(workerUrlForBuild('/api/realtime/worker.js?x=1', '0.3.39')).toBe(
+      '/api/realtime/worker.js?x=1&b=0.3.39'
+    )
+  })
+
+  it('leaves the address alone without a build (dev, an older host)', () => {
+    expect(workerUrlForBuild('/api/realtime/worker.js', null)).toBe('/api/realtime/worker.js')
+    expect(workerUrlForBuild('/api/realtime/worker.js', '  ')).toBe('/api/realtime/worker.js')
   })
 })

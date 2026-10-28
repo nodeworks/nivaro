@@ -113,6 +113,20 @@ export function workerSocketPreference(): 'on' | 'off' | null {
 }
 
 /**
+ * The worker's address carries the frontend build (2026-10-28). A SharedWorker is one per
+ * address, so without it a tab reloaded onto a new release joined the worker an older tab
+ * started — that worker (and the socket it owns) ran the old worker code and reported the old
+ * build for as long as any tab stayed open, and a Force refresh never replaced it. With the
+ * build in the address, the first tab on a new build starts a fresh worker; the old one goes
+ * when its last old tab reloads. The API ignores the parameter.
+ */
+export function workerUrlForBuild(url: string, build: unknown): string {
+  const b = typeof build === 'string' ? build.trim() : ''
+  if (!b) return url
+  return `${url}${url.includes('?') ? '&' : '?'}b=${encodeURIComponent(b.slice(0, 64))}`
+}
+
+/**
  * Whether a host should try the worker: supported, not switched off for this browser, and the
  * worker URL on this page's origin (a SharedWorker script must be same-origin).
  */
@@ -300,7 +314,9 @@ export function createWorkerSocket(opts: WorkerSocketOptions): WorkerSocket {
   const start = () => {
     if (!shouldUseWorkerSocket(opts.url)) return fallbackNow('unsupported')
     try {
-      const worker = new SharedWorker(opts.url, { name: opts.name ?? opts.app })
+      const worker = new SharedWorker(workerUrlForBuild(opts.url, opts.version?.build), {
+        name: opts.name ?? opts.app
+      })
       port = worker.port
       port.onmessage = onWorkerMessage
       port.onmessageerror = () => fallbackNow('message-error')
