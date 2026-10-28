@@ -32,8 +32,11 @@ const SERVER_RETURN_PATHS = [
 ]
 
 /** Slash / backslash smuggling: a backslash, an encoded slash or backslash, or
- *  a protocol-relative start, anywhere in the raw value. */
+ *  a protocol-relative start, in the PATH part of the value. A query value may
+ *  carry an encoded slash (`?return=%2Fcollections`) — it never changes where the
+ *  page loads (review A9, 2026-10-27). */
 const SMUGGLED = /\\|%2f|%5c|^\s*\/\s*\//i
+const pathPart = (value: string): string => value.split(/[?#]/)[0] ?? ''
 
 /** A same-origin path (pathname + search + hash), else the fallback. */
 export function safeRedirectPath(raw: string | null | undefined, fallback = '/'): string {
@@ -59,9 +62,9 @@ export function isServerPath(path: string): boolean {
 
 /** Where a sign-in may land: an SPA path, or a listed server page; else '/'. */
 export function postLoginTarget(raw: string | null | undefined): string {
-  if (!raw || SMUGGLED.test(raw)) return '/'
+  if (!raw || SMUGGLED.test(pathPart(raw))) return '/'
   const target = safeRedirectPath(raw)
-  if (SMUGGLED.test(target)) return '/'
+  if (SMUGGLED.test(pathPart(target))) return '/'
   if (!isServerPath(target)) return target
   return SERVER_RETURN_PATHS.some((re) => re.test(target)) ? target : '/'
 }

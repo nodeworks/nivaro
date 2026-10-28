@@ -7,6 +7,8 @@ const st = vi.hoisted(() => ({
   readable: new Set<string>(),
   fields: {} as Record<string, string[] | null>,
   rows: {} as Record<string, string[]>,
+  plucked: [] as string[],
+  relations: [] as Array<Record<string, unknown>>,
   visible: new Set<string>()
 }))
 vi.mock('../../../services/permissions.js', () => ({
@@ -22,9 +24,18 @@ vi.mock('../../../services/record-access.js', () => ({
 vi.mock('../../../db/index.js', () => ({
   db: (table: string) => {
     const b: Record<string, unknown> = {}
-    b.where = () => b
+    let many: unknown
+    b.where = (w: unknown) => {
+      if (w && typeof w === 'object') many = (w as { many_collection?: unknown }).many_collection
+      return b
+    }
     b.limit = () => b
-    b.pluck = async () => st.rows[table] ?? []
+    b.select = async () =>
+      table === 'nivaro_relations' ? st.relations.filter((r) => r.many_collection === many) : []
+    b.pluck = async (col: string) => {
+      st.plucked.push(`${table}.${col}`)
+      return st.rows[table] ?? []
+    }
     return b
   }
 }))
@@ -47,6 +58,8 @@ beforeEach(() => {
   st.fields = { vendors: ['name'] }
   st.rows = { orders: ['1', '2', '3'], vendors: ['8', '9'] }
   st.visible = new Set(['1', '3'])
+  st.relations = []
+  st.plucked = []
 })
 
 describe('fileUsageForReader', () => {
@@ -60,6 +73,45 @@ describe('fileUsageForReader', () => {
       usages: [{ table: 'orders', column: 'invoice_pdf', count: 2 }],
       total: 2
     })
+  })
+
+  it('judges an M2M junction row through the record that owns it (review A10)', async () => {
+    st.relations = [
+      // file leg: orders_files.directus_files_id → files, paired with orders_id
+      {
+        many_collection: 'orders_files',
+        many_field: 'directus_files_id',
+        one_collection: 'directus_files',
+        one_field: null,
+        junction_field: 'orders_id'
+      },
+      // parent leg: orders_files.orders_id → orders.attachments (the M2M alias)
+      {
+        many_collection: 'orders_files',
+        many_field: 'orders_id',
+        one_collection: 'orders',
+        one_field: 'attachments',
+        junction_field: 'directus_files_id'
+      }
+    ]
+    st.rows.orders_files = ['1', '2', '3', '3']
+    const out = await fileUsageForReader(req(false), 'F', {
+      usages: [{ table: 'orders_files', column: 'directus_files_id', count: 4 }],
+      total: 4
+    })
+    expect(st.plucked).toEqual(['orders_files.orders_id'])
+    expect(out).toEqual({
+      usages: [{ table: 'orders', column: 'attachments', count: 2 }],
+      total: 2
+    })
+
+    // the alias field hidden from the reader → the site stays hidden
+    st.fields = { orders: ['name'] }
+    const hidden = await fileUsageForReader(req(false), 'F', {
+      usages: [{ table: 'orders_files', column: 'directus_files_id', count: 4 }],
+      total: 4
+    })
+    expect(hidden).toEqual({ usages: [], total: 0 })
   })
 
   it('tolerates a malformed scan', async () => {

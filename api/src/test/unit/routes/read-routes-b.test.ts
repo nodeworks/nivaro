@@ -305,4 +305,20 @@ describe('picker batch-status', () => {
     expect(r.json().data.excluded).toEqual([])
     expect(m.whereIns.filter((w) => w.table === 'nivaro_picker_exclusions')).toEqual([])
   })
+  it('matches GUIDs case-blind against the visible set (review A8)', async () => {
+    const guid = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    m.tables.nivaro_picker_exclusions = [{ collection: 'vendors', item_id: guid }]
+    const { visibleIds } = await import('../../../services/record-access.js')
+    // the database answers in its own (upper-case) spelling
+    vi.mocked(visibleIds).mockImplementationOnce(
+      async (_g: unknown, ids: string[]) => new Set(ids.map((i) => i.toUpperCase()))
+    )
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/picker-exclusions/batch-status',
+      payload: { collection: 'vendors', ids: [guid] }
+    })
+    expect(r.json().data.excluded).toEqual([guid])
+  })
 })

@@ -40,9 +40,19 @@ describe('postLoginTarget', () => {
       '\\\\evil.example',
       '/api/message-actions/callback%2f..%2fauth',
       '/oauth/authorize%5c..',
-      '/queues/3?x=%2F%2Fevil'
+      '/queues%2f3?x=1'
     ])
       expect(postLoginTarget(raw), raw).toBe('/')
+  })
+
+  it('keeps an encoded slash inside a query value (review A9)', () => {
+    expect(postLoginTarget('/queues/3?x=%2F%2Fevil')).toBe('/queues/3?x=%2F%2Fevil')
+    expect(postLoginTarget('/collections/projects?return=%2Fqueues%2F3#h')).toBe(
+      '/collections/projects?return=%2Fqueues%2F3#h'
+    )
+    expect(postLoginTarget('/oauth/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb')).toBe(
+      '/oauth/authorize?redirect_uri=https%3A%2F%2Fapp.example%2Fcb'
+    )
   })
 
   it('allows exactly the listed server return pages', () => {

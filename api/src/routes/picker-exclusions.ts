@@ -122,7 +122,9 @@ export async function pickerExclusionRoutes(app: FastifyInstance) {
         }
         const gates = await compileAccessGates(req.user!, String(collection))
         const seen = await visibleIds(gates, asked)
-        unique = asked.filter((i) => seen.has(i))
+        // GUID keys come back in the database's spelling (upper case) — compare case-blind.
+        const seenUpper = new Set([...seen].map((i) => String(i).toUpperCase()))
+        unique = asked.filter((i) => seenUpper.has(i.toUpperCase()))
         if (unique.length === 0) return reply.send({ data: { excluded: [] } })
       }
       // SQL Server takes ~2100 bound parameters per statement.
