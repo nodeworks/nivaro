@@ -258,7 +258,7 @@ export function Hi({ text, q }: { text: string; q: string }) {
   return (
     <>
       {text.slice(0, i)}
-      <mark className='rounded-sm bg-[#00ceff]/25 px-0 text-inherit'>
+      <mark className='rounded-sm bg-nvr-cyan/20 px-0 text-inherit'>
         {text.slice(i, i + q.length)}
       </mark>
       {text.slice(i + q.length)}
@@ -772,6 +772,22 @@ export function CommandPalette() {
       if (digit < tabOrder.length) setTab(tabOrder[digit].key)
       return
     }
+    // With tabs showing, Tab belongs to the tab strip, so Backspace on an empty caret
+    // removes the last filter chip (the × buttons stay as mouse targets).
+    if (e.key === 'Backspace' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const el = e.target as HTMLInputElement
+      const last = chips[chips.length - 1]
+      if (
+        last?.without != null &&
+        el.selectionStart === 0 &&
+        el.selectionEnd === 0 &&
+        el.tagName === 'INPUT'
+      ) {
+        e.preventDefault()
+        setQuery(last.without)
+        return
+      }
+    }
     if (e.key === 'Tab' && showTabs) {
       e.preventDefault()
       cycleTab(e.shiftKey ? -1 : 1)
@@ -893,9 +909,6 @@ export function CommandPalette() {
                   )
                 })}
               </ScrollTabs>
-              <span className='shrink-0 px-2 text-[10px] text-muted-foreground'>
-                Tab · {ALT_KEY}1–9
-              </span>
             </div>
           )}
           {pendingCmd && (
@@ -945,7 +958,7 @@ export function CommandPalette() {
                         <CommandItem
                           value='tab-show-more'
                           onSelect={() => void tabPages.fetchNextPage()}
-                          className='text-[12px] text-nvr-cyan'
+                          className='text-[12px] text-cyan-700 dark:text-nvr-cyan'
                         >
                           {tabPages.isFetchingNextPage
                             ? 'Loading…'
@@ -992,7 +1005,9 @@ export function CommandPalette() {
                       >
                         <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
                         Ask… “{q}”
-                        <span className='ml-auto text-[11px] text-muted-foreground'>⌘J</span>
+                        <span className='ml-auto text-[11px] text-muted-foreground'>
+                          {MOD_KEY}J
+                        </span>
                       </CommandItem>
                       {showAiRow && (
                         <CommandItem

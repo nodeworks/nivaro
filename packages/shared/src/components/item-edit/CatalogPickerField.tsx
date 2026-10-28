@@ -2151,8 +2151,10 @@ export function CatalogPickerField({
                 <button
                   type='button'
                   aria-pressed={inStockOn}
-                  disabled={stockMatch === null}
-                  onClick={() => setInStock(!inStockPref)}
+                  aria-disabled={stockMatch === null ? 'true' : undefined}
+                  onClick={() => {
+                    if (stockMatch !== null) setInStock(!inStockPref)
+                  }}
                   data-catalog-in-stock={inStockOn ? 'on' : 'off'}
                   data-tip={
                     stockMatch === null
@@ -2162,7 +2164,7 @@ export function CatalogPickerField({
                         : 'Show only items with stock on hand'
                   }
                   className={cn(
-                    'inline-flex h-6 max-w-[220px] shrink-0 items-center gap-1 rounded border px-1.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50',
+                    'inline-flex h-6 max-w-[220px] shrink-0 items-center gap-1 rounded border px-1.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
                     inStockOn
                       ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-[#00728d] dark:border-nvr-cyan/40 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
                       : 'border-slate-200 bg-white text-slate-600 hover:bg-muted dark:border-border dark:bg-background dark:text-slate-300'
@@ -2187,6 +2189,11 @@ export function CatalogPickerField({
                     )}
                   </span>
                 </button>
+              )}
+              {stockCol && stockMatch === null && (
+                <span className='shrink-0 text-[11px] text-slate-500 dark:text-slate-400'>
+                  Pick a place first
+                </span>
               )}
               <span className='shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'>
                 {pickedCount} picked
@@ -2232,12 +2239,12 @@ export function CatalogPickerField({
             )}
 
             {search.trim().length > 0 && fullMatches.length === 0 && fullSearchFetching && (
-              <div className='flex items-center justify-center gap-2 border-b border-slate-100 px-3 py-3 text-slate-400 dark:border-border/50'>
+              <div className='flex items-center justify-center gap-2 border-b border-slate-100 px-3 py-3 text-slate-500 dark:border-border/50 dark:text-slate-400'>
                 <Loader2 className='h-3.5 w-3.5 animate-spin' /> Searching the catalog…
               </div>
             )}
             {search.trim().length > 0 && fullMatches.length === 0 && !fullSearchFetching && (
-              <p className='px-3 py-4 text-center text-slate-400'>
+              <p className='px-3 py-4 text-center text-slate-500 dark:text-slate-400'>
                 {inStockOn && rawMatches.length > 0 ? (
                   <>
                     Nothing in stock matches "{search.trim()}" —{' '}
@@ -2264,7 +2271,7 @@ export function CatalogPickerField({
                   <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
                     {fullMatches.length}
                   </span>
-                  <span className='text-[10px] text-slate-400'>
+                  <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                     across the entire catalog{inStockOn ? ', in stock only' : ''} — enter a quantity
                     to add
                   </span>
@@ -2300,7 +2307,7 @@ export function CatalogPickerField({
                                 <span
                                   data-catalog-recent
                                   data-tip={`You added this in the last ${recentDays} days`}
-                                  className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-muted dark:text-slate-400'
+                                  className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-400'
                                 >
                                   Recent
                                 </span>
@@ -2343,7 +2350,7 @@ export function CatalogPickerField({
               </p>
             )}
             {missingParents.length === 0 && (catalogLoading || sectionsPending) && (
-              <div className='flex items-center justify-center gap-2 py-6 text-slate-400'>
+              <div className='flex items-center justify-center gap-2 py-6 text-slate-500 dark:text-slate-400'>
                 <Loader2 className='h-4 w-4 animate-spin' /> Loading catalog…
               </div>
             )}
@@ -2351,10 +2358,21 @@ export function CatalogPickerField({
               !catalogLoading &&
               !sectionsPending &&
               sections.length === 0 && (
-                <p className='px-3 py-6 text-center text-slate-400'>
-                  {inStockOn && catalogRows.length > 0
-                    ? 'Nothing in this catalog is in stock here'
-                    : 'No catalog items'}
+                <p className='px-3 py-6 text-center text-slate-500 dark:text-slate-400'>
+                  {inStockOn && catalogRows.length > 0 ? (
+                    <>
+                      Nothing in this catalog is in stock here —{' '}
+                      <button
+                        type='button'
+                        onClick={() => setInStock(false)}
+                        className='font-medium text-[#00728d] underline-offset-2 hover:underline dark:text-nvr-cyan'
+                      >
+                        show all {catalogRows.length}
+                      </button>
+                    </>
+                  ) : (
+                    'No catalog items'
+                  )}
                 </p>
               )}
 

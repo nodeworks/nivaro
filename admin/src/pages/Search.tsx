@@ -24,6 +24,7 @@ import {
   collectionLabel,
   type GlobalSearchResponse,
   Hi,
+  MOD_KEY,
   personFlag,
   personLine,
   personName,
@@ -138,7 +139,7 @@ export function SearchPage() {
     set({ q: draft.trim(), tab: null, page: null })
   }
 
-  const { data, isFetching, isError } = useQuery({
+  const { data, isFetching, isError, refetch } = useQuery({
     queryKey: ['global-search', q],
     queryFn: () =>
       api
@@ -239,6 +240,7 @@ export function SearchPage() {
   })
 
   const { saved, available: savedAvailable } = useSavedSearches(true)
+  const alreadySaved = saved.some((s) => s.q === q && (s.scope ?? null) === collectionTab)
   const removeSaved = useDeleteSavedSearch()
   const [naming, setNaming] = useState<string | null>(null)
   const saveSearch = useSaveSearch(() => setNaming(null))
@@ -359,6 +361,7 @@ export function SearchPage() {
             <SearchIcon className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500 dark:text-muted-foreground' />
             <Input
               ref={inputRef}
+              autoFocus={!q}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder='Search records, people, comments, files…'
@@ -400,14 +403,12 @@ export function SearchPage() {
             <Button
               variant='outline'
               size='sm'
-              className='h-8 gap-1.5 text-[12px]'
-              onClick={() => setNaming(q)}
-              disabled={saved.some((s) => s.q === q && (s.scope ?? null) === collectionTab)}
-              data-tip={
-                saved.some((s) => s.q === q && (s.scope ?? null) === collectionTab)
-                  ? 'Already saved'
-                  : undefined
-              }
+              className={`h-8 gap-1.5 text-[12px] ${alreadySaved ? 'cursor-not-allowed opacity-50' : ''}`}
+              onClick={() => {
+                if (!alreadySaved) setNaming(q)
+              }}
+              aria-disabled={alreadySaved ? 'true' : undefined}
+              data-tip={alreadySaved ? 'Already saved' : undefined}
             >
               <BookmarkPlus className='h-3.5 w-3.5' />
               Save search
@@ -558,9 +559,17 @@ export function SearchPage() {
           )}
 
           {live && isError && (
-            <p className='rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[12.5px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
-              The search did not finish. Try again in a moment.
-            </p>
+            <div className='flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-[12.5px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
+              <p>The search did not finish. Try again in a moment.</p>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-7 shrink-0 text-[12px]'
+                onClick={() => void refetch()}
+              >
+                Try again
+              </Button>
+            </div>
           )}
 
           {live && !data && isFetching && <ResultsSkeleton />}
@@ -674,7 +683,7 @@ function AllResults({
               {collectionLabel(exact)} · {String(exact.id)}
             </span>
           </span>
-          <ArrowRight className='h-4 w-4 text-slate-400' />
+          <ArrowRight className='h-4 w-4 text-slate-400 dark:text-muted-foreground' />
         </Link>
       )}
       {groups.map((g) => (
@@ -875,8 +884,8 @@ function RecordsTable({
           <tr>
             <th className='w-[38%] px-3 py-1.5 font-medium'>Record</th>
             {showCollection && <th className='w-[14%] px-3 py-1.5 font-medium'>Collection</th>}
-            <th className='px-3 py-1.5 font-medium'>Why it matched</th>
-            <th className='w-[110px] px-3 py-1.5 font-medium'>Updated</th>
+            <th className='hidden px-3 py-1.5 font-medium sm:table-cell'>Why it matched</th>
+            <th className='hidden w-[110px] px-3 py-1.5 font-medium md:table-cell'>Updated</th>
           </tr>
         </thead>
         <tbody className='divide-y divide-slate-100 dark:divide-border'>
@@ -905,13 +914,18 @@ function RecordsTable({
                       {String(r.id)}
                     </span>
                   </Link>
+                  {why && (
+                    <span className='mt-0.5 block truncate text-[11px] text-slate-600 sm:hidden dark:text-muted-foreground'>
+                      {why}
+                    </span>
+                  )}
                 </td>
                 {showCollection && (
                   <td className='truncate px-3 py-1.5 text-slate-600 dark:text-muted-foreground'>
                     {collectionLabel(r)}
                   </td>
                 )}
-                <td className='truncate px-3 py-1.5 text-slate-600 dark:text-muted-foreground'>
+                <td className='hidden truncate px-3 py-1.5 text-slate-600 sm:table-cell dark:text-muted-foreground'>
                   {r.matched_value && !r.exact ? (
                     <>
                       <span className='text-slate-500 dark:text-muted-foreground'>
@@ -925,7 +939,7 @@ function RecordsTable({
                     why
                   )}
                 </td>
-                <td className='px-3 py-1.5 text-slate-500 tabular-nums dark:text-muted-foreground'>
+                <td className='hidden px-3 py-1.5 text-slate-500 tabular-nums md:table-cell dark:text-muted-foreground'>
                   {r.updated_at ? formatRelative(r.updated_at) : '—'}
                 </td>
               </tr>
@@ -1066,7 +1080,7 @@ function StartPanel({
           {saved.length === 0 ? (
             <p className='rounded-lg border border-dashed border-slate-300 px-3 py-4 text-[12px] text-slate-500 dark:border-border dark:text-muted-foreground'>
               Search, then <span className='font-medium'>Save search</span> to keep it here and in
-              Cmd+K.
+              {MOD_KEY}+K.
             </p>
           ) : (
             <ul className={box}>
@@ -1094,7 +1108,7 @@ function StartPanel({
                     aria-label={`Remove saved search ${s.name}`}
                     data-tip='Remove'
                     onClick={() => onRemoveSaved(s.id)}
-                    className='invisible rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-red-700 focus-visible:visible focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan group-hover:visible dark:text-muted-foreground dark:hover:bg-background dark:hover:text-red-400'
+                    className='opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-background dark:hover:text-red-400'
                   >
                     <Trash2 className='h-3.5 w-3.5' />
                   </button>
@@ -1110,7 +1124,7 @@ function StartPanel({
           <ul className={box}>
             {recentSearches.map((s) => (
               <li key={s} className={row}>
-                <History className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                <History className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-muted-foreground' />
                 <button
                   type='button'
                   onClick={() => onPick(s, null)}
@@ -1123,7 +1137,7 @@ function StartPanel({
                   aria-label={`Forget ${s}`}
                   data-tip='Forget'
                   onClick={() => onForget(s)}
-                  className='invisible rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus-visible:visible focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan group-hover:visible dark:text-muted-foreground dark:hover:bg-background dark:hover:text-foreground'
+                  className='opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-background dark:hover:text-foreground'
                 >
                   <X className='h-3.5 w-3.5' />
                 </button>

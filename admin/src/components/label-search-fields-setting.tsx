@@ -121,7 +121,7 @@ export function LabelSearchFieldsSetting({
               onClick={() => toggle(f)}
               aria-label={`Stop matching ${label(f)}`}
               data-tip={`Stop matching ${label(f)}`}
-              className='ml-0.5 rounded p-0.5 text-slate-500 hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
+              className='ml-0.5 rounded p-0.5 text-slate-500 hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
             >
               <X className='h-3 w-3' />
             </button>

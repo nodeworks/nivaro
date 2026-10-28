@@ -130,6 +130,8 @@ export function SearchWhyCard() {
     retry: false
   })
 
+  const stale =
+    !!asked && (asked.userId !== userId || asked.q !== text.trim() || asked.labels !== labelsOnly)
   const canAsk = !!userId && text.trim().length >= 2
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -189,8 +191,13 @@ export function SearchWhyCard() {
           disabled={!canAsk || isFetching}
           className='h-8 text-[12.5px]'
         >
-          {isFetching ? 'Checking…' : 'Check'}
+          {isFetching ? 'Checking…' : stale && data ? 'Check again' : 'Check'}
         </Button>
+        {stale && data && !isFetching && (
+          <span className='text-[11.5px] text-slate-600 dark:text-muted-foreground'>
+            Inputs changed. The result below is for the previous check.
+          </span>
+        )}
       </form>
 
       {asked && isFetching && !data && (
@@ -202,7 +209,11 @@ export function SearchWhyCard() {
       {asked && isError && (
         <p className='mt-4 text-[12.5px] text-red-600 dark:text-red-400'>{errorText(error)}</p>
       )}
-      {data && <WhyResult data={data} />}
+      {data && (
+        <div className={stale ? 'opacity-60' : undefined} aria-busy={stale || isFetching}>
+          <WhyResult data={data} />
+        </div>
+      )}
     </section>
   )
 }
