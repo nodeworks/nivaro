@@ -31,6 +31,7 @@ import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
+import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
 import { Badge } from '@/components/ui/badge'
@@ -7222,6 +7223,8 @@ interface BrowserConfig {
   live_events?: 'on' | 'batched' | 'off'
   /** List search (`?search=`) only over these columns; absent = every string/text field. */
   search_fields?: string[]
+  /** Search item 23 — extra text fields a labels-only global search also matches. */
+  label_search_fields?: string[]
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7472,6 +7475,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           data: {
             browser_config: BrowserConfig | null
             color?: string | null
+            display_template?: string | null
             fields?: Array<{ field: string; type: string }>
           }
         }>(`/collections/${tableName}`)
@@ -7511,7 +7515,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'record_tabs',
       'bulk_actions',
       'live_events',
-      'search_fields'
+      'search_fields',
+      'label_search_fields'
     ])
     const clean: BrowserConfig = {}
     for (const [k, v] of Object.entries(next)) if (!OWN.has(k) && v !== undefined) clean[k] = v
@@ -7527,6 +7532,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.live_events === 'batched' || next.live_events === 'off')
       clean.live_events = next.live_events
     if (next.search_fields?.length) clean.search_fields = next.search_fields
+    if (next.label_search_fields?.length) clean.label_search_fields = next.label_search_fields
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -7604,6 +7610,12 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           fields={col?.fields ?? []}
           value={cfg.search_fields}
           onChange={(v) => void patch({ search_fields: v })}
+        />
+        <LabelSearchFieldsSetting
+          fields={col?.fields ?? []}
+          displayTemplate={col?.display_template}
+          value={cfg.label_search_fields}
+          onChange={(v) => void patch({ label_search_fields: v })}
         />
         <div className='flex items-center justify-between gap-4'>
           <div>

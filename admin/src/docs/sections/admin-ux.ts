@@ -116,6 +116,46 @@ GET /api/global-search/records?q=acme&collection=customers&offset=0&limit=25
         'Changes apply at once on the server that saved them and within 30 seconds on the others. Once a synonym covers an empty search, the Found nothing row shows “Synonym added” with a link to try it.',
         'Stored in `nivaro_search_synonyms` (migration 498; configuration, so it travels with config promotion). Admin routes: `GET/POST /api/search-analytics/synonyms` (POST body `{terms, collection?, note?}`, 201 new / 200 merged), `PATCH/DELETE /api/search-analytics/synonyms/:id`.'
       ]
+    },
+    // ── A3 search block (label search fields, why, full-text) ──
+    { type: 'h3', id: 'global-search-label-fields', text: 'Label search fields' },
+    {
+      type: 'p',
+      text: 'A search limited to labels (`GET /api/global-search?labels=1`, the portal’s search bar) finds a record only by what its label shows. When a label is just a number, nobody finds the record by its name or project. **Table Editor → Settings → Collection Browser → Label search fields** lists extra text fields such a search also matches; the line under the picker says what a labels-only search will match with the current choice.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Stored as `browser_config.label_search_fields` (a list of field names) on the collection. Unset or empty = the label alone, as before.',
+        'Only text fields of the collection count; any other name is ignored. Each person still matches only fields they may read, so a label search field never reveals a value someone could not already see.',
+        'Read on the server with `labelSearchFieldsOf(browserConfig)` (services/search-fields.ts); `withLabelSearchFields(labelColumns, configured, textColumns)` adds them to the label columns.'
+      ]
+    },
+    { type: 'h3', id: 'global-search-why', text: 'Why can’t they find it?' },
+    {
+      type: 'p',
+      text: 'On Search analytics, **Why can’t they find it?** takes a person and the words they searched for. It runs the search as you and as them, collection by collection, and where they find fewer records it says what hides the rest — their role cannot view the collection, a row rule on their role, an access filter (User Scope, with the values they are limited to), or a match only in a field their role cannot read — with up to three example records you can open. Nothing is changed and the person is not told.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '`GET /api/global-search/why?q=&user_id=[&collection=a,b][&labels=1]` (administrators only; 403 otherwise) → `{ data: { q, user: {id, name, status, role_name, is_admin}, totals: {admin, user, hidden}, collections: [{ collection, display_name, admin_count, user_count, hidden, reasons: [{type, message, dimension_label?, allowed_values?, samples}], samples: [{id, label, reasons}] }] } }`.',
+        'Counts use the same per-collection match counts as the search tabs, read as each person; the reasons come from the same access checks as “Explain as user” on a record. Reason types: `permission`, `row_filter`, `scope`, `scope_strict`, `fields`, `unknown`.',
+        'An administrator target finds what you find. A suspended or inactive account is flagged: they cannot sign in to search at all.'
+      ]
+    },
+    { type: 'h3', id: 'global-search-fts', text: 'Full-text indexes (optional)' },
+    {
+      type: 'p',
+      text: 'A contains search reads every row of a table. Where a database administrator has built a SQL Server full-text index, search can answer from it instead. Nivaro never creates one on its own: `node scripts/search-fts.mjs --plan` lists collections with long text columns and their row counts; `--execute --table <t> --columns a,b` prints the statements and runs them only with `--yes`; `--drop --table <t> --yes` removes one.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Production databases that publish replication: full-text changes go to the DBA first.',
+        'A full-text search matches the start of words (“budg” finds “budget”), not any part of a word, and a just-saved row can take a few seconds to be found. Number and code columns stay on the ordinary contains search.',
+        'The server checks which indexes exist every 5 minutes (`ftsAvailable` in services/search-fts.ts) and ignores an index until its first population has finished.'
+      ]
     }
   ]
 }

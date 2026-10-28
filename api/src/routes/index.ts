@@ -123,6 +123,7 @@ import { geocodeRoutes } from './geocode.js'
 import { geocodeBackfillRoutes } from './geocode-backfill.js'
 import { geocodeSuggestRoutes } from './geocode-suggest.js'
 import { globalSearchRoutes } from './global-search.js'
+import { globalSearchWhyRoutes } from './global-search-why.js'
 import { healthRoutes } from './health.js'
 import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
@@ -736,6 +737,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(teamsBotRoutes, { prefix: '/teams' })
   await app.register(userActivityRoutes, { prefix: '/user-activity' })
   await app.register(globalSearchRoutes, { prefix: '/global-search' })
+  // GET /global-search/why — admin-only "why can't they find it?" (search item 25).
+  await app.register(globalSearchWhyRoutes, { prefix: '/global-search' })
   await app.register(savedViewsRoutes, { prefix: '/saved-views' })
   await app.register(apiAnalyticsRoutes, { prefix: '/api-analytics' })
   await app.register(partnerDependencyRoutes, { prefix: '/partner-dependencies' })

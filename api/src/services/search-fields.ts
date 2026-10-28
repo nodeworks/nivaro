@@ -15,19 +15,59 @@
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 
-export function parseSearchFields(browserConfig: unknown): string[] | null {
+/** A string[] of safe field names under `key` of browser_config (JSON text or an
+ *  object); null when unset, empty, malformed or holding no safe name. */
+function parseFieldList(browserConfig: unknown, key: string): string[] | null {
   try {
     const bc =
       typeof browserConfig === 'string'
         ? (JSON.parse(browserConfig) as Record<string, unknown>)
         : (browserConfig as Record<string, unknown> | null)
-    const raw = bc?.search_fields
+    const raw = bc?.[key]
     if (!Array.isArray(raw)) return null
     const names = raw.map((v) => String(v ?? '').trim()).filter((v) => IDENT.test(v))
     return names.length ? [...new Set(names)] : null
   } catch {
     return null
   }
+}
+
+export function parseSearchFields(browserConfig: unknown): string[] | null {
+  return parseFieldList(browserConfig, 'search_fields')
+}
+
+/**
+ * `browser_config.label_search_fields` (search item 23): extra text fields a
+ * labels-only search (`GET /global-search?labels=1`, a portal palette) also
+ * matches — e.g. an inventory request's name or project when its label shows
+ * only the request number. Same shape and rules as `search_fields`: unset,
+ * empty or malformed = null (the label columns alone, as before).
+ *
+ * The list is a CLAIM, never a grant: the search plan keeps only names that
+ * are string/text columns of the collection (`withLabelSearchFields`), and the
+ * caller's readable fields are applied after that like every other column.
+ */
+export function labelSearchFieldsOf(browserConfig: unknown): string[] | null {
+  return parseFieldList(browserConfig, 'label_search_fields')
+}
+
+/**
+ * The columns a labels-only search matches: the label's own columns, then the
+ * configured extras that are text columns of the table (`available`), without
+ * repeats. A configured name that is not a text column is ignored.
+ */
+export function withLabelSearchFields(
+  labelColumns: string[],
+  configured: string[] | null,
+  available: ReadonlySet<string> | readonly string[]
+): string[] {
+  if (!configured?.length) return labelColumns
+  const list = available as readonly string[]
+  const set = available as ReadonlySet<string>
+  const has = Array.isArray(available) ? (c: string) => list.includes(c) : (c: string) => set.has(c)
+  const out = [...labelColumns]
+  for (const c of configured) if (has(c) && !out.includes(c)) out.push(c)
+  return out
 }
 
 /** The searchable columns narrowed to the configured list; a configured list
