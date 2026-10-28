@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
+import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
@@ -228,8 +229,29 @@ type RecordHit = {
 
 /** The columns a search matches: every search column, or (labels-only) just the ones
  *  the record's label shows — so every hit visibly contains what was typed. */
-function searchColumns(p: PlanEntry, labelsOnly: boolean): string[] {
-  return labelsOnly ? p.labelColumns : p.columns
+export function searchColumns(
+  p: PlanEntry,
+  labelsOnly: boolean,
+  allowed?: string[] | null
+): string[] {
+  const cols = labelsOnly ? p.labelColumns : p.columns
+  // A column the caller may not read is never matched: a hit (or a count) found
+  // through it would say what it holds. null = every field.
+  return allowed == null || allowed.includes('*') ? cols : cols.filter((c) => allowed.includes(c))
+}
+
+/** Each plan collection's readable fields for the caller (null = all). */
+async function allowedByCollection(
+  user: User,
+  plan: PlanEntry[]
+): Promise<Map<string, string[] | null>> {
+  const out = new Map<string, string[] | null>()
+  await Promise.all(
+    plan.map(async (p) => {
+      out.set(p.collection, await getAllowedFields(user, 'read', p.collection).catch(() => []))
+    })
+  )
+  return out
 }
 
 /** A hit's label: the collection's display template over the row, else the matched text. */
@@ -265,9 +287,10 @@ async function searchRecords(
   labelsOnly = false
 ): Promise<RecordHit[]> {
   const readableSet = new Set(readable)
-  const plan = (await buildSearchPlan()).filter(
-    (p) => readableSet.has(p.collection) && searchColumns(p, labelsOnly).length > 0
-  )
+  const readablePlan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
+  const allowed = await allowedByCollection(user, readablePlan)
+  const colsOf = (p: PlanEntry) => searchColumns(p, labelsOnly, allowed.get(p.collection))
+  const plan = readablePlan.filter((p) => colsOf(p).length > 0)
   if (plan.length === 0) return []
 
   // Search synonyms (#1581): the phrase as typed plus its synonym forms. With
@@ -280,7 +303,7 @@ async function searchRecords(
     const parts: string[] = []
     const bindings: string[] = []
     for (const p of batch) {
-      const cols = searchColumns(p, labelsOnly)
+      const cols = colsOf(p)
       const casts = cols.map((c) => `CAST([${c}] AS nvarchar(200))`)
       // T-SQL COALESCE demands ≥2 arguments — a single column goes bare.
       const labelExpr = casts.length > 1 ? `COALESCE(${casts.join(', ')})` : casts[0]
@@ -339,16 +362,28 @@ async function searchRecords(
           filter: { id: { _in: ids } },
           limit: ids.length
         })
+        // Label and snippet come from the row as the caller READ it (field
+        // permissions applied), never from the raw scan: a hit found only through
+        // a column the caller may not read is dropped — showing it would say what
+        // that column holds.
+        const forms = phrases.map((ph) => ph.toLowerCase())
+        const cols = p ? colsOf(p) : []
         for (const item of items as Array<Record<string, unknown>>) {
-          const cand = candidates.find(
-            (x) => x.c === collection && String(x.id) === String(item.id)
-          )
+          const seen = cols
+            .map((c) => item[c])
+            .find(
+              (v) =>
+                v != null &&
+                typeof v !== 'object' &&
+                forms.some((f) => String(v).toLowerCase().includes(f))
+            )
+          if (seen === undefined) continue
           results.push({
             collection,
             display_name: p?.display_name ?? null,
             id: item.id,
-            label: hitLabel(p, item, String(cand?.label ?? item.id ?? '')),
-            snippet: String(cand?.label ?? '').slice(0, 120)
+            label: hitLabel(p, item, String(seen)),
+            snippet: String(seen).slice(0, 120)
           })
         }
       } catch {
@@ -488,13 +523,8 @@ function matchStatic(
 // ─── One collection's matches (the search's collection tabs) ─────────────────
 
 /** The items-service filter for "any search column contains the phrase (or a synonym)". */
-async function matchFilter(
-  p: PlanEntry,
-  q: string,
-  labelsOnly: boolean
-): Promise<Record<string, unknown>> {
+async function matchFilter(cols: string[], q: string): Promise<Record<string, unknown>> {
   const phrases = await searchPhrases(q).catch(() => [q])
-  const cols = searchColumns(p, labelsOnly)
   return { _or: phrases.flatMap((ph) => cols.map((c) => ({ [c]: { _contains: ph } }))) }
 }
 
@@ -511,11 +541,12 @@ export async function countMatches(
   labelsOnly = false
 ): Promise<Array<{ collection: string; display_name: string | null; count: number }>> {
   const readableSet = new Set(readable)
-  const plan = (await buildSearchPlan()).filter(
-    (p) =>
-      readableSet.has(p.collection) &&
-      collections.includes(p.collection) &&
-      searchColumns(p, labelsOnly).length > 0
+  const listed = (await buildSearchPlan()).filter(
+    (p) => readableSet.has(p.collection) && collections.includes(p.collection)
+  )
+  const allowed = await allowedByCollection(user, listed)
+  const plan = listed.filter(
+    (p) => searchColumns(p, labelsOnly, allowed.get(p.collection)).length > 0
   )
   const out: Array<{ collection: string; display_name: string | null; count: number }> = []
   for (let i = 0; i < plan.length; i += COUNT_CONCURRENCY) {
@@ -523,7 +554,7 @@ export async function countMatches(
       plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
         try {
           const r = await readItems(user, p.collection, {
-            filter: await matchFilter(p, q, labelsOnly),
+            filter: await matchFilter(searchColumns(p, labelsOnly, allowed.get(p.collection)), q),
             fields: ['id'],
             limit: 1
           })
@@ -550,15 +581,21 @@ export async function searchCollectionPage(
 ): Promise<{ data: RecordHit[]; total: number | null }> {
   if (!readable.includes(collection)) return { data: [], total: 0 }
   const p = (await buildSearchPlan()).find((x) => x.collection === collection)
-  if (!p || searchColumns(p, labelsOnly).length === 0) return { data: [], total: 0 }
+  if (!p) return { data: [], total: 0 }
+  const cols = searchColumns(
+    p,
+    labelsOnly,
+    await getAllowedFields(user, 'read', collection).catch(() => [])
+  )
+  if (cols.length === 0) return { data: [], total: 0 }
   const r = await readItems(user, collection, {
-    filter: await matchFilter(p, q, labelsOnly),
+    filter: await matchFilter(cols, q),
     sort: ['-id'],
     offset,
     limit
   })
   const data = (r.data as Array<Record<string, unknown>>).map((item) => {
-    const matched = matchedText(p, item, searchColumns(p, labelsOnly))
+    const matched = matchedText(p, item, cols)
     return {
       collection,
       display_name: p.display_name,
