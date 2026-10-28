@@ -17040,7 +17040,7 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
 {
   "data": {
     "records": [
-      { "collection": "customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
+      { "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
     ],
     "people": [
       { "id": "9F1C…", "first_name": "Ana", "last_name": "Acme", "email": "ana@example.com", "title": "Buyer", "department": "Procurement" }
@@ -17049,7 +17049,16 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
     "actions": [{ "label": "New customer", "path": "/collections/customers/new" }],
     "semantic": []
   }
-}</code></pre>
+}
+
+// Tabs: each collection's match count, counted as the caller (RBAC, row filters, User Scopes).
+// Pass the collections the first answer's records came from.
+GET /api/global-search/counts?q=acme&amp;collections=customers,orders
+{ "data": [{ "collection": "customers", "display_name": "Customers", "count": 41 }] }
+
+// One collection's matches, a page at a time (limit 1–50, default 25), newest first.
+GET /api/global-search/records?q=acme&amp;collection=customers&amp;offset=0&amp;limit=25
+{ "data": [{ "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }], "total": 41 }</code></pre>
           <h3 class="doc-h3" id="global-search-behavior">Search Behavior</h3>
           <ul class="doc-ul">
             <li>Record results are read as you: only collections you can read, and only rows your row filters and User Scopes let you open</li>

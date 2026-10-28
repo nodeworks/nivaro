@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
+import { withReadGate } from '../services/read-gate.js'
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
 import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
@@ -209,11 +210,41 @@ function escapeLike(v: string): string {
   return v.replace(/[\\%_[]/g, (m) => `\\${m}`)
 }
 
-async function searchRecords(
-  user: User,
-  readable: string[],
-  q: string
-): Promise<Array<{ collection: string; id: unknown; label: string; snippet: string }>> {
+type RecordHit = {
+  collection: string
+  display_name: string | null
+  id: unknown
+  label: string
+  snippet: string
+}
+
+/** A hit's label: the collection's display template over the row, else the matched text. */
+function hitLabel(
+  p: PlanEntry | undefined,
+  item: Record<string, unknown>,
+  matched: string
+): string {
+  let label = matched
+  if (p?.template) {
+    const rendered = p.template.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_m, tok: string) => {
+      const v = item[tok.split('.')[0]]
+      return v == null || typeof v === 'object' ? '' : String(v)
+    })
+    if (rendered.trim()) label = rendered.trim()
+  }
+  return label.slice(0, 80)
+}
+
+/** The first plan column holding a value, for a hit found by the items service. */
+function matchedText(p: PlanEntry, item: Record<string, unknown>): string {
+  for (const c of p.columns) {
+    const v = item[c]
+    if (v != null && typeof v !== 'object' && String(v).trim()) return String(v)
+  }
+  return String(item.id ?? '')
+}
+
+async function searchRecords(user: User, readable: string[], q: string): Promise<RecordHit[]> {
   const readableSet = new Set(readable)
   const plan = (await buildSearchPlan()).filter((p) => readableSet.has(p.collection))
   if (plan.length === 0) return []
@@ -277,7 +308,7 @@ async function searchRecords(
   }
 
   const planByName = new Map(plan.map((p) => [p.collection, p]))
-  const results: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
+  const results: RecordHit[] = []
   await Promise.all(
     [...byCollection.entries()].map(async ([collection, ids]) => {
       try {
@@ -290,21 +321,11 @@ async function searchRecords(
           const cand = candidates.find(
             (x) => x.c === collection && String(x.id) === String(item.id)
           )
-          let label = String(cand?.label ?? item.id ?? '')
-          if (p?.template) {
-            const rendered = p.template.replace(
-              /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g,
-              (_m, tok: string) => {
-                const v = item[tok.split('.')[0]]
-                return v == null || typeof v === 'object' ? '' : String(v)
-              }
-            )
-            if (rendered.trim()) label = rendered.trim()
-          }
           results.push({
             collection,
+            display_name: p?.display_name ?? null,
             id: item.id,
-            label: label.slice(0, 80),
+            label: hitLabel(p, item, String(cand?.label ?? item.id ?? '')),
             snippet: String(cand?.label ?? '').slice(0, 120)
           })
         }
@@ -434,6 +455,95 @@ function matchStatic(
     .map(({ label, path }) => ({ label, path }))
 }
 
+// ─── One collection's matches (the search's collection tabs) ─────────────────
+
+/** The items-service filter for "any search column contains the phrase (or a synonym)". */
+async function matchFilter(p: PlanEntry, q: string): Promise<Record<string, unknown>> {
+  const phrases = await searchPhrases(q).catch(() => [q])
+  return { _or: phrases.flatMap((ph) => p.columns.map((c) => ({ [c]: { _contains: ph } }))) }
+}
+
+const COUNT_CONCURRENCY = 4
+export const PAGE_MAX = 50
+
+/** How many records of each collection match, counted AS THE CALLER (RBAC, row filters,
+ *  User Scopes). A collection whose count fails is left out. Exported for tests. */
+export async function countMatches(
+  user: User,
+  readable: string[],
+  q: string,
+  collections: string[]
+): Promise<Array<{ collection: string; display_name: string | null; count: number }>> {
+  const readableSet = new Set(readable)
+  const plan = (await buildSearchPlan()).filter(
+    (p) => readableSet.has(p.collection) && collections.includes(p.collection)
+  )
+  const out: Array<{ collection: string; display_name: string | null; count: number }> = []
+  for (let i = 0; i < plan.length; i += COUNT_CONCURRENCY) {
+    await Promise.all(
+      plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
+        try {
+          const r = await readItems(user, p.collection, {
+            filter: await matchFilter(p, q),
+            fields: ['id'],
+            limit: 1
+          })
+          if (typeof r.total === 'number' && r.total > 0)
+            out.push({ collection: p.collection, display_name: p.display_name, count: r.total })
+        } catch {
+          /* unreadable or the filter was refused — no tab count */
+        }
+      })
+    )
+  }
+  return out.sort((a, b) => b.count - a.count)
+}
+
+/** One page of a collection's matches, read as the caller. Exported for tests. */
+export async function searchCollectionPage(
+  user: User,
+  readable: string[],
+  q: string,
+  collection: string,
+  offset: number,
+  limit: number
+): Promise<{ data: RecordHit[]; total: number | null }> {
+  if (!readable.includes(collection)) return { data: [], total: 0 }
+  const p = (await buildSearchPlan()).find((x) => x.collection === collection)
+  if (!p) return { data: [], total: 0 }
+  const r = await readItems(user, collection, {
+    filter: await matchFilter(p, q),
+    sort: ['-id'],
+    offset,
+    limit
+  })
+  const data = (r.data as Array<Record<string, unknown>>).map((item) => {
+    const matched = matchedText(p, item)
+    return {
+      collection,
+      display_name: p.display_name,
+      id: item.id,
+      label: hitLabel(p, item, matched),
+      snippet: matched.slice(0, 120)
+    }
+  })
+  return { data, total: typeof r.total === 'number' ? r.total : null }
+}
+
+/** Registered non-system collections the caller's role may read. */
+async function readableCollections(user: User): Promise<string[]> {
+  const collectionRows = await db('nivaro_collections').select('collection')
+  const candidates = collectionRows
+    .map((c: { collection: string }) => c.collection)
+    .filter((c: string) => !c.toLowerCase().startsWith('nivaro_'))
+  if (!user.role) return []
+  const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
+  if (role?.admin_access) return candidates
+  const policies = await db<Policy>('nivaro_policies').where({ role: user.role, action: 'read' })
+  const allowed = new Set(policies.map((p) => p.collection))
+  return allowed.has('*') ? candidates : candidates.filter((c) => allowed.has(c))
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function globalSearchRoutes(app: FastifyInstance) {
@@ -452,30 +562,9 @@ export async function globalSearchRoutes(app: FastifyInstance) {
       return reply.send({ data: { records: [], people: [], pages, actions } })
     }
 
-    // Registered, non-system collections
-    const collectionRows = await db('nivaro_collections').select('collection')
-    const candidates = collectionRows
-      .map((c: { collection: string }) => c.collection)
-      .filter((c: string) => !c.toLowerCase().startsWith('nivaro_'))
-
-    // Resolve readable collections in one pass (avoid per-collection can() round-trips)
-    let readable: string[]
+    // Readable collections in one pass (avoid per-collection can() round-trips)
     const user = req.user!
-    if (!user.role) {
-      readable = []
-    } else {
-      const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
-      if (role?.admin_access) {
-        readable = candidates
-      } else {
-        const policies = await db<Policy>('nivaro_policies').where({
-          role: user.role,
-          action: 'read'
-        })
-        const allowed = new Set(policies.map((p) => p.collection))
-        readable = allowed.has('*') ? candidates : candidates.filter((c) => allowed.has(c))
-      }
-    }
+    const readable = await readableCollections(user as User)
     // Field metadata — the semantic block below still labels via pickSearchFields
     const fieldRows = readable.length
       ? ((await db('nivaro_fields')
@@ -544,5 +633,48 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     }
 
     return reply.send({ data: { records, people, pages, actions, semantic } })
+  })
+
+  // GET /counts?q=&collections=a,b — each listed collection's match count as the caller
+  // (the search's tabs). The palette asks for the collections the first answer found.
+  app.get('/counts', async (req, reply) => {
+    const { q: rawQ, collections: rawCols } = req.query as { q?: string; collections?: string }
+    const q = (rawQ ?? '').trim()
+    const cols = (rawCols ?? '')
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => IDENT_RE.test(c))
+      .slice(0, 40)
+    if (q.length < 2 || cols.length === 0) return reply.send({ data: [] })
+    const user = req.user as User
+    // A COUNT per collection over contains-LIKEs: an expensive read, so it holds a slot.
+    const data = await withReadGate(
+      String(user.id),
+      async () => countMatches(user, await readableCollections(user), q, cols),
+      { label: 'global-search:counts' }
+    )
+    return reply.send({ data })
+  })
+
+  // GET /records?q=&collection=&offset=&limit= — one collection's matches, a page at a time.
+  app.get('/records', async (req, reply) => {
+    const query = req.query as { q?: string; collection?: string; offset?: string; limit?: string }
+    const q = (query.q ?? '').trim()
+    const collection = (query.collection ?? '').trim()
+    if (q.length < 2 || !IDENT_RE.test(collection)) return reply.send({ data: [], total: 0 })
+    const offset = Math.max(0, Math.floor(Number(query.offset) || 0))
+    const limit = Math.min(PAGE_MAX, Math.max(1, Math.floor(Number(query.limit) || 25)))
+    const user = req.user as User
+    try {
+      const page = await withReadGate(
+        String(user.id),
+        async () =>
+          searchCollectionPage(user, await readableCollections(user), q, collection, offset, limit),
+        { label: 'global-search:records' }
+      )
+      return reply.send(page)
+    } catch {
+      return reply.send({ data: [], total: 0 })
+    }
   })
 }
