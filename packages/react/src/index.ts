@@ -361,6 +361,7 @@ export {
   isCleanRecording,
   isCodeError,
   isListTimeout,
+  isReloadingForUpdate,
   isSignedOut,
   isSignedOutError,
   isStaleChunkError,

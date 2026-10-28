@@ -919,10 +919,14 @@ export {
   type ThemeAccent
 } from './lib/theme-accents'
 export {
+  beginReloadForUpdate,
   hasUnsavedWork,
+  isReloadingForUpdate,
   notifyUnsavedWorkChanged,
+  prepareForReload,
   registerUnsavedWork,
   subscribeUnsavedWork,
+  type UnsavedWorkOptions,
   unsavedWorkLabels,
   useUnsavedWork
 } from './lib/unsaved-work'

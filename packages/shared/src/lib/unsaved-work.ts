@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { getRecordOutbox, subscribeRecordOutbox } from './record-outbox'
 
 /**
@@ -18,6 +18,13 @@ import { getRecordOutbox, subscribeRecordOutbox } from './record-outbox'
 interface Source {
   label: string
   dirty: () => boolean
+  /** Keep this work through a reload (e.g. store the form's draft, which the page offers to
+   *  recover after it): true = safe to reload. Without it, the work holds a pushed reload. */
+  saveForReload?: () => boolean | Promise<boolean>
+}
+
+export interface UnsavedWorkOptions {
+  saveForReload?: () => boolean | Promise<boolean>
 }
 
 const sources = new Map<number, Source>()
@@ -35,9 +42,13 @@ export function notifyUnsavedWorkChanged(): void {
 }
 
 /** Report a source of unsaved work; the returned function removes it. */
-export function registerUnsavedWork(label: string, dirty: () => boolean): () => void {
+export function registerUnsavedWork(
+  label: string,
+  dirty: () => boolean,
+  opts: UnsavedWorkOptions = {}
+): () => void {
   const id = ++seq
-  sources.set(id, { label, dirty })
+  sources.set(id, { label, dirty, saveForReload: opts.saveForReload })
   notifyUnsavedWorkChanged()
   return () => {
     if (sources.delete(id)) notifyUnsavedWorkChanged()
@@ -73,6 +84,57 @@ export function hasUnsavedWork(): boolean {
   return unsavedWorkLabels().length > 0
 }
 
+const SAVE_FOR_RELOAD_TIMEOUT_MS = 3000
+
+/**
+ * Before a pushed reload (ForceReloadBanner): every dirty source that can keep its work through
+ * a reload saves it now. Answers what still holds the reload — sources that cannot, a save that
+ * failed or took longer than SAVE_FOR_RELOAD_TIMEOUT_MS, and the record outbox.
+ */
+export async function prepareForReload(): Promise<string[]> {
+  const kept = await Promise.all(
+    [...sources.values()].map(async (s): Promise<string | null> => {
+      let dirty = false
+      try {
+        dirty = s.dirty()
+      } catch {
+        dirty = false
+      }
+      if (!dirty) return null
+      let saved = false
+      if (s.saveForReload) {
+        try {
+          saved = await Promise.race([
+            Promise.resolve(s.saveForReload()),
+            new Promise<boolean>((r) => setTimeout(() => r(false), SAVE_FOR_RELOAD_TIMEOUT_MS))
+          ])
+        } catch {
+          saved = false
+        }
+      }
+      return saved ? null : s.label
+    })
+  )
+  // In registration order, once each.
+  const holding = [...new Set(kept.filter((l): l is string => l != null))]
+  const queued = outboxPending()
+  if (queued) holding.push(`${queued} save${queued === 1 ? '' : 's'} waiting to be sent`)
+  return holding
+}
+
+let reloadingForUpdate = false
+/** A pushed reload is going ahead with every form's work saved: leave-page prompts stand down
+ *  (the page offers the saved drafts back). Lapses if the reload does not happen. */
+export function beginReloadForUpdate(): void {
+  reloadingForUpdate = true
+  setTimeout(() => {
+    reloadingForUpdate = false
+  }, 5000)
+}
+export function isReloadingForUpdate(): boolean {
+  return reloadingForUpdate
+}
+
 /** Told when a source comes or goes, or the record outbox changes. */
 export function subscribeUnsavedWork(cb: () => void): () => void {
   listeners.add(cb)
@@ -83,16 +145,29 @@ export function subscribeUnsavedWork(cb: () => void): () => void {
   }
 }
 
-/** A form reports its dirty state while mounted. */
-export function useUnsavedWork(dirty: boolean, label = 'Unsaved changes'): void {
+/** A form reports its dirty state while mounted (and, optionally, how to keep it through a
+ *  pushed reload — the latest function is always the one called). */
+export function useUnsavedWork(
+  dirty: boolean,
+  label = 'Unsaved changes',
+  saveForReload?: () => boolean | Promise<boolean>
+): void {
+  const saveRef = useRef(saveForReload)
+  saveRef.current = saveForReload
+  const canSave = !!saveForReload
   useEffect(() => {
     if (!dirty) return
-    return registerUnsavedWork(label, () => true)
-  }, [dirty, label])
+    return registerUnsavedWork(
+      label,
+      () => true,
+      canSave ? { saveForReload: () => saveRef.current?.() ?? false } : {}
+    )
+  }, [dirty, label, canSave])
 }
 
 /** Tests only. */
 export function __resetUnsavedWorkForTests(): void {
   sources.clear()
   listeners.clear()
+  reloadingForUpdate = false
 }

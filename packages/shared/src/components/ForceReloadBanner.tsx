@@ -6,7 +6,12 @@ import {
   shouldObeyForceReload,
   thisTabForReload
 } from '../lib/force-reload'
-import { subscribeUnsavedWork, unsavedWorkLabels } from '../lib/unsaved-work'
+import {
+  beginReloadForUpdate,
+  prepareForReload,
+  subscribeUnsavedWork,
+  unsavedWorkLabels
+} from '../lib/unsaved-work'
 
 export type { ForceReloadDetail }
 
@@ -89,13 +94,30 @@ export function ForceReloadBanner() {
         setHeld(['unsaved changes on this page'])
       }, 1500)
     }
+    // Forms that keep their work through a reload (a record form stores its draft and offers
+    // it back after) save it and let the reload go ahead; only work that cannot be kept holds it.
+    let preparing = false
     const check = () => {
       const t = Date.now()
       setNow(t)
-      if (t < refresh.deadline || reloading.current || declined.current) return
-      const waiting = unsavedWorkLabels()
-      setHeld((cur) => (cur.join('|') === waiting.join('|') ? cur : waiting))
-      if (waiting.length === 0) reload()
+      if (t < refresh.deadline || reloading.current || declined.current || preparing) return
+      if (unsavedWorkLabels().length === 0) {
+        setHeld((cur) => (cur.length ? [] : cur))
+        reload()
+        return
+      }
+      preparing = true
+      void prepareForReload()
+        .then((waiting) => {
+          setHeld((cur) => (cur.join('|') === waiting.join('|') ? cur : waiting))
+          if (waiting.length === 0) {
+            beginReloadForUpdate()
+            reload()
+          }
+        })
+        .finally(() => {
+          preparing = false
+        })
     }
     const timer = setInterval(check, 1000)
     // A frozen or long-throttled tab: decide the moment it wakes, not a tick later.
@@ -145,9 +167,11 @@ export function ForceReloadBanner() {
       </span>
       <button
         type='button'
-        onClick={() => {
+        onClick={async () => {
           reloading.current = true
           if (refresh.id) markReloadFor(refresh.id)
+          // Saved drafts come back after the reload; anything else still gets the page's prompt.
+          if ((await prepareForReload()).length === 0) beginReloadForUpdate()
           window.location.reload()
           // A form's leave prompt may keep the page: let the hold pick up again.
           setTimeout(() => {

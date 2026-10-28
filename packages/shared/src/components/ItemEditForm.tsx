@@ -123,7 +123,7 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
-import { useUnsavedWork } from '../lib/unsaved-work'
+import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
@@ -3215,7 +3215,11 @@ function ItemEditFormView({
   }, [draft, pendingO2MRows, pendingO2MEdits, pendingO2MDeletes, m2mLinks, m2mUnlinks])
   const hasUnsaved = isDirty || unsavedSummary.total > 0
   // A remote force reload waits while this is true (ForceReloadBanner, lib/unsaved-work.ts).
-  useUnsavedWork(hasUnsaved, 'Unsaved record changes')
+  // Set by the draft persist effect below: store this form's draft now (true = kept).
+  const saveForReloadRef = useRef<() => Promise<boolean>>(async () => false)
+  // …unless the work is kept: a pushed reload first stores this form's draft (browser + server)
+  // and the reloaded page offers it back, so people on an open form still get the new build.
+  useUnsavedWork(hasUnsaved, 'Unsaved record changes', () => saveForReloadRef.current())
   useEffect(() => {
     onDirtyChange?.(hasUnsaved, unsavedSummary)
     window.dispatchEvent(
@@ -3229,6 +3233,8 @@ function ItemEditFormView({
   useEffect(() => {
     if (!hasUnsaved) return
     const h = (e: BeforeUnloadEvent) => {
+      // A pushed reload already stored this form's draft (ForceReloadBanner).
+      if (isReloadingForUpdate()) return
       e.preventDefault()
       e.returnValue = unsavedSummary.text
         ? `You have unsaved changes: ${unsavedSummary.text}.`
@@ -3330,11 +3336,25 @@ function ItemEditFormView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: `draft` is the re-run trigger; the payload reads draftRef for the synchronous mirror
   useEffect(() => {
     persistPendingRef.current = null
+    // A draft offer still open (or not yet checked): this form's edits are not stored, so a
+    // pushed reload waits for the person.
+    saveForReloadRef.current = async () => false
     if (recovery.state !== 'none' || recoveryCheckedKey !== recoveryKey) return
-    const run = () => {
+    // `forReload`: called by a pushed reload (saveForReloadRef) — it may only answer true when
+    // nothing the person did is lost by reloading now.
+    const run = async (forReload = false): Promise<boolean> => {
       persistPendingRef.current = null
-      if (draftSpentRef.current) return
+      // A create in flight: reloading now could lose or repeat it — wait for it.
+      if (draftSpentRef.current) return !forReload
       if (!isDirty) {
+        // Staged lines or links with a clean flag would be dropped below: keep the hold.
+        const staged =
+          pendingO2MRows.size +
+          pendingO2MEdits.size +
+          pendingO2MDeletes.size +
+          m2mLinks.size +
+          m2mUnlinks.size
+        if (forReload && staged > 0) return false
         void deleteDraft(recoveryKey)
         if (authUserId && serverDraftRef.current) {
           serverDraftRef.current = false
@@ -3342,7 +3362,7 @@ function ItemEditFormView({
             .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
             .catch(() => {})
         }
-        return
+        return true
       }
       const base = initialDataRef.current
       const fields: Record<string, unknown> = {}
@@ -3387,23 +3407,32 @@ function ItemEditFormView({
             .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
             .catch(() => {})
         }
-        return
+        // Nothing the person did (a new form's defaults / prefill come back on reload).
+        return true
       }
-      void saveDraft(stored)
+      const local = saveDraft(stored)
       // #24 — mirror to the server so the draft follows the person.
       if (authUserId) serverDraftRef.current = true
-      if (authUserId)
-        void client
-          .request(
-            put(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`, {
-              payload: stored,
-              saved_at: stored.saved_at
-            })
-          )
-          .catch(() => {})
+      const remote = authUserId
+        ? client
+            .request(
+              put(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`, {
+                payload: stored,
+                saved_at: stored.saved_at
+              })
+            )
+            .then(
+              () => true,
+              () => false
+            )
+        : Promise.resolve(false)
+      // Kept when either copy landed: the reloaded form looks in the browser, then the server.
+      if (await local) return true
+      return remote
     }
-    persistPendingRef.current = run
-    const t = setTimeout(run, 800)
+    saveForReloadRef.current = () => run(true)
+    persistPendingRef.current = () => void run()
+    const t = setTimeout(() => void run(), 800)
     return () => clearTimeout(t)
   }, [
     recovery.state,

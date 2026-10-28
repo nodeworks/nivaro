@@ -3,7 +3,11 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clientVersion, markReloadFor, obeyedReloads } from '../lib/client-version'
-import { __resetUnsavedWorkForTests, registerUnsavedWork } from '../lib/unsaved-work'
+import {
+  __resetUnsavedWorkForTests,
+  isReloadingForUpdate,
+  registerUnsavedWork
+} from '../lib/unsaved-work'
 import { FORCE_RELOAD_EVENT, ForceReloadBanner } from './ForceReloadBanner'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -84,24 +88,45 @@ const banner = () => document.querySelector('[data-nvr-force-reload]')
 describe('ForceReloadBanner — unsaved work holds the reload', () => {
   afterEach(() => __resetUnsavedWorkForTests())
 
-  it('waits while a form is dirty and reloads the moment it is saved', () => {
+  it('waits while a form is dirty and reloads the moment it is saved', async () => {
     const off = registerUnsavedWork('Record form', () => true)
     push(5)
-    act(() => vi.advanceTimersByTime(10_000))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
     expect(reload).not.toHaveBeenCalled()
     expect(banner()?.getAttribute('data-nvr-force-reload-held')).toBe('true')
     expect(banner()?.textContent).toContain('A reload is waiting')
     act(() => off())
-    act(() => vi.advanceTimersByTime(0))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(reload).toHaveBeenCalledTimes(1)
   })
 
-  it('Reload now skips the hold', () => {
+  it('reloads over a form that stored its draft, with leave prompts stood down', async () => {
+    const save = vi.fn(async () => true)
+    registerUnsavedWork('Record form', () => true, { saveForReload: save })
+    push(5)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000)
+    })
+    expect(save).toHaveBeenCalled()
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(isReloadingForUpdate()).toBe(true)
+  })
+
+  it('Reload now skips the hold', async () => {
     registerUnsavedWork('Record form', () => true)
     push(5)
-    act(() => vi.advanceTimersByTime(6_000))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000)
+    })
     expect(reload).not.toHaveBeenCalled()
-    act(() => (banner()?.querySelector('button') as HTMLButtonElement).click())
+    await act(async () => {
+      ;(banner()?.querySelector('button') as HTMLButtonElement).click()
+      await vi.advanceTimersByTimeAsync(0)
+    })
     expect(reload).toHaveBeenCalledTimes(1)
   })
 })
