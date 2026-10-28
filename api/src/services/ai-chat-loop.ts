@@ -20,6 +20,7 @@ import { MAIN_MODEL_TOOLS, saysCannotAnswer } from './ai-routing.js'
 import { consumeText, isAbortError, streamMessage } from './ai-stream.js'
 import { compactToolResult } from './ai-tool-payload.js'
 import type { ToolReuse } from './ai-tool-reuse.js'
+import { asData } from './ai-untrusted.js'
 import { isReplayableExtensionTool, withExtensionAiTools } from './extension-tools.js'
 
 /**
@@ -124,6 +125,19 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   routing?: { cheapModel: string; cheapClient: Anthropic | null; retryOf?: string | null }
   /** #2737 — reuse read-tool results kept for this conversation. */
   reuse?: ToolReuse
+  /** Wall-clock budget for the whole loop (ms); default chatDeadlineMs(). Background
+   *  research passes a longer one. */
+  deadlineMs?: number
+}
+
+/**
+ * Wall-clock budget for one Ask AI question (all rounds), in ms:
+ * AI_CHAT_DEADLINE_MS, default 4 minutes, at least 20 s.
+ */
+export function chatDeadlineMs(override?: number): number {
+  if (override != null && Number.isFinite(override) && override > 0) return override
+  const raw = Number(process.env.AI_CHAT_DEADLINE_MS)
+  return Number.isFinite(raw) && raw >= 20_000 ? raw : 240_000
 }
 
 /** What the status line says while a tool runs — generic over the tool set,
@@ -203,6 +217,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const { client, model, system, user, convo, onDelta, onStatus, shouldStop, onTrace } = opts
   const maxTokens = opts.maxTokens ?? 1500
   const maxRounds = Math.max(1, opts.maxRounds ?? MAX_ROUNDS)
+  // Review 2026-10-27 — a whole question has a wall-clock budget too: past it
+  // no new tool round starts and the loop goes straight to the wrap-up.
+  const deadlineAt = Date.now() + chatDeadlineMs(opts.deadlineMs)
   let trace: ChatTraceEntry[] = []
   let proposals: Array<Record<string, unknown>> = []
   let plans: Array<Record<string, unknown>> = []
@@ -336,6 +353,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   for (let round = 0; round < maxRounds; round++) {
     const shown = roundBase + round
+    if (round > 0 && Date.now() > deadlineAt) break
     if (shouldStop?.())
       return done({
         text: '',
@@ -468,10 +486,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         // #2765 — the model reads compact tables; the trace keeps the rows.
         const sent = compactToolResult(result)
         notePayload(block.name, sent.before, sent.after, !!kept)
+        // Tool results are data (record values, comments, file text) — framed
+        // so text inside them reads as data, never as instructions.
         results.push({
           type: 'tool_result',
           tool_use_id: block.id,
-          content: sent.content
+          content: asData(sent.content, `tool:${block.name}`)
         })
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Tool failed'

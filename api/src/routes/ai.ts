@@ -1423,9 +1423,6 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     return reply.send({ data: { findings, ...(routing ? { routing } : {}) } })
   })
 
-  // POST /ai/brief — render a short plain-text briefing from caller-supplied
-  // context (dashboard daily summaries etc.). The caller gathers the data —
-  // this endpoint only writes the words.
   // AI text cleanup (#217): grammar/clarity fix on user prose — returns the
   // corrected text ONLY, meaning preserved.
   app.post('/cleanup', { preHandler: authenticate }, async (req, reply) => {
@@ -1458,31 +1455,79 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     }
   })
 
+  // POST /ai/brief — render a short plain-text briefing from caller-supplied
+  // context (dashboard daily summaries, report explain, Traffic Map spikes).
+  // The caller gathers the data; the SYSTEM PROMPT is a server-side template
+  // (services/ai-brief.ts) — a caller can no longer set it. Per person: two
+  // briefs at once and ten a minute; a provider failure answers 502.
   app.post('/brief', { preHandler: authenticate }, async (req, reply) => {
+    if (!(await aiFeatureEnabled('brief'))) {
+      return reply.code(403).send({ error: 'AI briefings are disabled on this instance' })
+    }
+    const body = (req.body ?? {}) as {
+      context?: unknown
+      instructions?: unknown
+      template?: unknown
+    }
+    const context = typeof body.context === 'string' ? body.context : ''
+    if (!context.trim()) return reply.code(400).send({ error: 'context is required' })
     const client = await getAiClient()
     if (!client) {
       return reply
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { context, instructions } = req.body as { context?: string; instructions?: string }
-    if (!context?.trim()) return reply.code(400).send({ error: 'context is required' })
-
-    const system =
-      instructions?.slice(0, 1000) ||
-      'You write a short daily briefing for a business user from the data provided. Open with one summary sentence, then 3-5 concrete insights citing real numbers from the data, call out anything needing immediate attention, and end with one or two positives. Plain text only — no markdown, no headers. 150-220 words.'
-
-    const { model } = await getAiModelSettings()
-    const message = await client.messages.create({
-      model,
-      max_tokens: 512,
-      system,
-      messages: [{ role: 'user', content: context.slice(0, 16000) }]
-    })
-    const briefText = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
-
-    await logActivity({ action: 'ai-brief', user: req.user?.id, req })
-    return reply.send({ data: { brief: briefText } })
+    const { BRIEF_PER_MINUTE, briefSystemPrompt, briefUserContent, pickBriefTemplate } =
+      await import('../services/ai-brief.js')
+    const { allowUserFeatureCall, takeUserSlot } = await import('../services/ai-user-limits.js')
+    const userId = String(req.user!.id)
+    if (!allowUserFeatureCall('brief', userId, BRIEF_PER_MINUTE)) {
+      return reply
+        .code(429)
+        .header('Retry-After', '60')
+        .send({ error: 'Too many briefings — try again in a minute.', code: 'AI_RATE_LIMITED' })
+    }
+    const release = takeUserSlot('brief', userId, 2)
+    if (!release) {
+      return reply.code(429).send({
+        error: 'A briefing is already being written for you — wait for it to finish.',
+        code: 'AI_BUSY'
+      })
+    }
+    const { template, ignored } = pickBriefTemplate(body)
+    try {
+      const { summarizeModel } = await getAiModelSettings()
+      const message = await client.messages.create({
+        model: summarizeModel,
+        max_tokens: 512,
+        system: briefSystemPrompt(template),
+        messages: [{ role: 'user', content: briefUserContent(context) }]
+      })
+      const briefText = message.content
+        .filter((c) => c.type === 'text')
+        .map((c) => ('text' in c ? c.text : ''))
+        .join('')
+        .trim()
+      await logActivity({ action: 'ai-brief', user: req.user?.id, comment: template, req })
+      return reply.send({
+        data: { brief: briefText, template, ...(ignored ? { instructions_ignored: true } : {}) }
+      })
+    } catch (err) {
+      const status = (err as { statusCode?: number })?.statusCode
+      // our own 429s (per-person limits, budgets) keep their status
+      if (status === 429) {
+        return reply.code(429).send({
+          error: err instanceof Error ? err.message.slice(0, 300) : 'Too many AI requests',
+          code: (err as { code?: string }).code ?? 'AI_RATE_LIMITED'
+        })
+      }
+      req.log.warn({ err }, 'AI brief failed')
+      return reply
+        .code(502)
+        .send({ error: err instanceof Error ? err.message.slice(0, 200) : 'AI call failed' })
+    } finally {
+      release()
+    }
   })
 
   // POST /ai/validate — pre-save content validation against the collection's AI rules.
@@ -1862,7 +1907,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const memoryNotes = await readMemory(String(req.user!.id)).catch(() => [])
     const memoryBlock = memoryPromptBlock(memoryNotes)
 
-    const { buildChatSystemPrompt } = await import('../services/ai-chat.js')
+    const { buildChatSystemParts } = await import('../services/ai-chat.js')
     // Playbooks: similar past questions + the tool plans that answered them,
     // offered as worked examples. Only the newest user turn is matched.
     const question = history[history.length - 1].content
@@ -1896,23 +1941,52 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       cacheOn: answerCacheMinutes > 0 && !!redis,
       question
     })
-    const playbooks = docsShare ? [] : await retrievePlaybooks(question)
-    const system =
-      (await buildChatSystemPrompt(req.user!, {
-        playbooks: formatPlaybooksForPrompt(playbooks),
-        question,
-        ...(docsShare ? { catalogues: false } : {})
-      })) +
-      memoryBlock +
-      pageContext.block
+    const askerAdmin = await isAdminRole(req.user!.role)
+    // Playbooks: plans only, from the asker, the same role, or rated helpful.
+    const playbooks = docsShare
+      ? []
+      : await retrievePlaybooks(question, {
+          asker: {
+            userId: String(req.user!.id),
+            role: req.user!.role ? String(req.user!.role) : null,
+            admin: askerAdmin
+          }
+        })
+    const promptParts = await buildChatSystemParts(req.user!, {
+      playbooks: formatPlaybooksForPrompt(playbooks, String(req.user!.id)),
+      question,
+      ...(docsShare ? { catalogues: false } : {})
+    })
+    // Two system blocks (review 2026-10-27): the stable prefix carries the
+    // cache marker, the per-question tail (playbooks, guides for this
+    // question, memory, page context) rides after it unmarked. AI_SPLIT_SYSTEM=off
+    // sends one string as before.
+    const tail = `${promptParts.perQuestion}${memoryBlock}${pageContext.block}`
+    const system: string | Anthropic.TextBlockParam[] =
+      process.env.AI_SPLIT_SYSTEM === 'off' || !tail.trim()
+        ? promptParts.stable + tail
+        : [
+            { type: 'text', text: promptParts.stable, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: tail }
+          ]
     const playbooksUsed = playbooks.length
     // #723 — the same standalone question by the same person inside the
     // window answers from cache (per person: answers are permission-scoped).
     // A question asked with page context never is: the page, its rows and
     // the person's access to them all move under the same words.
+    // The key also carries what the answer's access depends on (review
+    // 2026-10-27): workspace, role, API-key scope and the configuration epoch
+    // (it moves on any role / policy write).
     const cacheKey =
       standalone && !pageContext.trace && answerCacheMinutes > 0 && redis
-        ? answerCache.personalAnswerKey(String(req.user!.id), answerCommand ?? null, question)
+        ? answerCache.personalAnswerKey(String(req.user!.id), answerCommand ?? null, question, {
+            tenant: currentTenantKey(),
+            workspace: (req as { workspaceId?: string | null }).workspaceId ?? null,
+            access: answerCache.accessSignature(req.user!),
+            epoch: await import('../db/config-epoch.js')
+              .then((m) => m.configEpochForRead())
+              .catch(() => null)
+          })
         : null
     // The docs audience is the one search_docs uses (the asker's role), and
     // the time zone rides the key because the prompt's date follows it.
@@ -1924,7 +1998,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         ? answerCache.sharedAnswerKey({
             tenant: currentTenantKey(),
             docsVersion,
-            admin: await isAdminRole(req.user!.role),
+            admin: askerAdmin,
             locale: answerCache.askLocale(req.user!.preferences, req.headers['accept-language']),
             timeZone: await userTimeZone(req.user! as { preferences?: unknown }),
             command: answerCommand ?? null,

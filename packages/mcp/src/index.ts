@@ -20,6 +20,7 @@ import {
   readMcpCapabilities,
   readMe
 } from '@nivaro/sdk'
+import { confirmSecretFor } from './confirm.js'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
 import { registerResources } from './resources.js'
@@ -52,6 +53,11 @@ export interface NivaroMcpOptions {
   token?: string
   /** A prebuilt SDK client — tests inject a mock here. */
   client?: NivaroClient
+  /**
+   * Key for destructive-tool confirmation tokens (confirm.ts). Default: derived
+   * from `token` (stable across replicas for the same credential), else random.
+   */
+  confirmSecret?: string
   /** Custom fetch (tests, proxies). */
   fetch?: typeof fetch
   /**
@@ -225,7 +231,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
         'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
         'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them.',
-        'create_item rehearses by default; pass dry_run: false to store. delete_item needs confirm: true.',
+        'create_item rehearses by default; pass dry_run: false to store. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
     }
@@ -234,7 +240,9 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   tagToolCalls(server)
   registerAccountTools(server, client)
   registerCollectionTools(server, client)
-  registerItemTools(server, client)
+  registerItemTools(server, client, {
+    confirmSecret: options.confirmSecret ?? confirmSecretFor(options.token ?? null)
+  })
   registerPipelineTools(server, client)
   const chatAccess: ChatAccess =
     options.chatAccess === 'read' || options.chatAccess === 'post' ? options.chatAccess : 'none'

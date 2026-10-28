@@ -216,24 +216,55 @@ export function renderInline(
     else if (tok.startsWith('[')) {
       const lm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)
       if (lm && isSafeAppPath(lm[2])) out.push(<InAppLink key={k++} href={lm[2]} label={lm[1]} />)
-      else if (lm && /^https?:\/\//.test(lm[2]))
-        out.push(
-          <a
-            key={k++}
-            href={lm[2]}
-            className='underline underline-offset-2'
-            target='_blank'
-            rel='noreferrer'
-          >
-            {lm[1]}
-          </a>
-        )
+      else if (lm && externalHost(lm[2]))
+        out.push(<ExternalLink key={k++} href={lm[2]} label={lm[1]} />)
       else out.push(tok)
     } else out.push(<em key={k++}>{tok.slice(1, -1)}</em>)
     last = idx + tok.length
   }
   if (last < text.length) out.push(plain(text.slice(last)))
   return out
+}
+
+/**
+ * The host of an outside http(s) link, or null when the href is not one
+ * (javascript:, data:, a malformed URL, credentials in the URL). Pure.
+ */
+export function externalHost(href: string): string | null {
+  if (!/^https?:\/\/\S+$/i.test(href)) return null
+  try {
+    const u = new URL(href)
+    if (u.username || u.password) return null
+    return u.hostname || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A link out of the app in an AI answer. The model writes the label, and the
+ * text it read (records, documents, logs) may carry a planted link, so the
+ * real destination's domain is always shown next to the label before anyone
+ * clicks (review 2026-10-27), and the link opens with no referrer.
+ */
+function ExternalLink({ href, label }: { href: string; label: string }) {
+  const host = externalHost(href) ?? ''
+  const labelIsUrl = label.trim() === href || label.trim() === host
+  return (
+    <a
+      href={href}
+      data-ai-link='external'
+      className='underline underline-offset-2'
+      target='_blank'
+      rel='noopener noreferrer nofollow'
+      data-tip={href}
+    >
+      {labelIsUrl ? host : label}
+      {!labelIsUrl && (
+        <span className='ml-1 whitespace-nowrap text-[0.85em] opacity-70'>({host} ↗)</span>
+      )}
+    </a>
+  )
 }
 
 /**

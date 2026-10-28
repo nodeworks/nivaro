@@ -444,20 +444,43 @@ describe('tools', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('delete_item needs confirm: true', async () => {
-    answer = () => undefined
+  it('delete_item deletes only with the confirm_token its own rehearsal returned', async () => {
+    answer = (c) =>
+      c._method === 'GET' ? { data: { id: 4, title: 'Hello', body: { x: 1 } } } : undefined
+    // confirm: true alone is no longer enough
     const refused = await mcp.callTool({
-      name: 'delete_item',
-      arguments: { collection: 'articles', id: 4 }
-    })
-    expect(refused.isError).toBe(true)
-    expect(textOf(refused).code).toBe('CONFIRM_REQUIRED')
-    expect(calls).toHaveLength(0)
-    const done = await mcp.callTool({
       name: 'delete_item',
       arguments: { collection: 'articles', id: 4, confirm: true }
     })
-    expect(calls[0]).toMatchObject({ _method: 'DELETE', _path: '/items/articles/4' })
+    expect(refused.isError).toBe(true)
+    expect(textOf(refused).code).toBe('CONFIRM_TOKEN_REQUIRED')
+    expect(calls).toHaveLength(0)
+    // the rehearsal reads the record and hands out a token
+    const rehearsal = await mcp.callTool({
+      name: 'delete_item',
+      arguments: { collection: 'articles', id: 4 }
+    })
+    const r = textOf(rehearsal) as {
+      dry_run: boolean
+      confirm_token: string
+      would_delete: { record: Record<string, unknown> }
+    }
+    expect(r.dry_run).toBe(true)
+    expect(r.would_delete.record).toEqual({ id: 4, title: 'Hello' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/items/articles/4' })
+    // a token for one record does not delete another
+    const wrong = await mcp.callTool({
+      name: 'delete_item',
+      arguments: { collection: 'articles', id: 5, dry_run: false, confirm_token: r.confirm_token }
+    })
+    expect(textOf(wrong).code).toBe('CONFIRM_TOKEN_INVALID')
+    expect(calls).toHaveLength(1)
+    const done = await mcp.callTool({
+      name: 'delete_item',
+      arguments: { collection: 'articles', id: 4, dry_run: false, confirm_token: r.confirm_token }
+    })
+    expect(calls[1]).toMatchObject({ _method: 'DELETE', _path: '/items/articles/4' })
     expect(textOf(done)).toEqual({ deleted: true, collection: 'articles', id: 4 })
   })
 

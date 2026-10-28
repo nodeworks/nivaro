@@ -202,6 +202,8 @@ async function runResearch(
       readOnly: true,
       maxRounds: RESEARCH_MAX_ROUNDS,
       maxTokens: RESEARCH_MAX_TOKENS,
+      // background research runs longer than an interactive question
+      deadlineMs: 20 * 60_000,
       shouldStop,
       onStatus: (st) => {
         if (!st.tool || st.done) return

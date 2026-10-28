@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { type ExplainFacts, explainFacts, GATHERERS } from './ai-explain.js'
 import { parseQualityConfig } from './ai-quality.js'
 import { weeklySpendFacts } from './ai-spend.js'
+import { tenantState } from './ai-tenant-state.js'
 import type { DigestSection } from './daily-digest.js'
 
 /**
@@ -218,7 +219,10 @@ export async function weeklyAudience(): Promise<string[]> {
   return rows.filter((r) => prefOn(r.preferences)).map((r) => String(r.id))
 }
 
-let cache: { at: number; section: DigestSection | null } | null = null
+// Per tenant: cloud mode serves many tenants from one process.
+const weeklyCache = tenantState<{ v: { at: number; section: DigestSection | null } | null }>(
+  () => ({ v: null })
+)
 
 /** The Monday section: both summaries as short lines, shared by every opted-in admin (cached). */
 export async function buildWeeklySection(
@@ -226,6 +230,7 @@ export async function buildWeeklySection(
   client?: Parameters<typeof explainFacts>[2]
 ): Promise<DigestSection | null> {
   if (!isMonday(now)) return null
+  const cache = weeklyCache().v
   if (cache && now.getTime() - cache.at < 30 * 60_000) return cache.section
   const lines: DigestSection['lines'] = []
   for (const [kind, gather] of [
@@ -241,7 +246,7 @@ export async function buildWeeklySection(
     }
   }
   const section = lines.length ? { title: 'Your weekly summary (AI-written)', lines } : null
-  cache = { at: now.getTime(), section }
+  weeklyCache().v = { at: now.getTime(), section }
   return section
 }
 

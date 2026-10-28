@@ -262,3 +262,48 @@ describe('tool results reused within a conversation (#2737)', () => {
     expect(reuse.puts).toBe(1)
   })
 })
+
+describe('review 2026-10-27: tool results as data, wall-clock deadline', () => {
+  it('a tool result reaches the model inside a <data> envelope', async () => {
+    const seen: Seen[] = []
+    await runChatLoop({
+      client: client('main', [toolMsg([{ tool: 'query_items' }]), textMsg('3.')], seen),
+      model: 'big',
+      system: 's',
+      user,
+      convo: ask()
+    })
+    expect(JSON.stringify(seen[1].messages)).toContain('<data source=\\"tool:query_items\\">')
+  })
+
+  it('past the deadline no new tool round starts — the loop wraps up', async () => {
+    const seen: Seen[] = []
+    const inner = client(
+      'main',
+      [
+        toolMsg([{ tool: 'query_items' }]),
+        toolMsg([{ tool: 'query_items' }]),
+        textMsg('From what I have: 3.')
+      ],
+      seen
+    )
+    const slow = {
+      messages: {
+        create: async (p: Anthropic.MessageCreateParams) => {
+          await new Promise((res) => setTimeout(res, 15))
+          return inner.messages.create(p as never)
+        }
+      }
+    } as unknown as Anthropic
+    const r = await runChatLoop({
+      client: slow,
+      model: 'big',
+      system: 's',
+      user,
+      convo: ask(),
+      deadlineMs: 5
+    })
+    expect(r.truncated).toBe(true)
+    expect(tools.ran).toHaveLength(1)
+  })
+})

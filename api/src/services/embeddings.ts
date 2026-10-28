@@ -187,13 +187,29 @@ export async function upsertItemEmbedding(
  * so similarity is computed in JS — fine at CMS scale, revisit if rows
  * grow into the hundreds of thousands.
  */
+/** Most vectors one search scores (newest first): EMBEDDING_SCAN_MAX, default 20,000. */
+export function embeddingScanMax(): number {
+  const n = Number(process.env.EMBEDDING_SCAN_MAX)
+  return Number.isFinite(n) && n >= 100 ? Math.floor(n) : 20_000
+}
+
 export async function searchEmbeddings(
   collection: string,
   queryVec: number[],
-  limit = 10
+  limit = 10,
+  opts: {
+    /** Only vectors of these fields (the caller's readable fields); null/absent = all. */
+    fields?: string[] | null
+    /** Scan cap (newest vectors first); default embeddingScanMax(). */
+    maxRows?: number
+  } = {}
 ): Promise<Array<{ item: string; field: string; score: number }>> {
-  const rows = (await db('nivaro_embeddings')
-    .where({ collection })
+  if (Array.isArray(opts.fields) && opts.fields.length === 0) return []
+  const q = db('nivaro_embeddings').where({ collection })
+  if (Array.isArray(opts.fields)) q.whereIn('field', opts.fields.slice(0, 500))
+  const rows = (await q
+    .orderBy('id', 'desc')
+    .limit(Math.max(1, opts.maxRows ?? embeddingScanMax()))
     .select('item', 'field', 'embedding')) as Array<{
     item: string
     field: string

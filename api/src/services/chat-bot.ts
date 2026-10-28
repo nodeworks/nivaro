@@ -7,6 +7,7 @@ import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { getAiClient } from './ai-client.js'
 import { tenantState } from './ai-tenant-state.js'
+import { asData } from './ai-untrusted.js'
 import { parseRoom } from './chat.js'
 import type { BotCall, Verdict, VerifyContext } from './chat-bot-audience.js'
 import type { RoomRecord } from './chat-records.js'
@@ -646,22 +647,30 @@ async function answerQuestion(
           put(msg, msg)
           continue
         }
+        // Results are data (logs, record values, comments): framed so text in
+        // them is never read as an instruction (review 2026-10-27).
         if (ops.OPS_TOOL_NAMES.has(block.name)) {
           const out = await ops.executeOpsTool(app, asker, room, block.name, input)
-          put(JSON.stringify(out ?? null).slice(0, 30_000), out ?? null)
+          put(
+            asData(JSON.stringify(out ?? null).slice(0, 30_000), `tool:${block.name}`),
+            out ?? null
+          )
           continue
         }
         const extTool = extensionBotTools.get(block.name)
         if (extTool) {
           const out = await extTool.handler(asker, input)
-          put(JSON.stringify(out ?? null).slice(0, 30_000), out ?? null)
+          put(
+            asData(JSON.stringify(out ?? null).slice(0, 30_000), `tool:${block.name}`),
+            out ?? null
+          )
           continue
         }
         // AS THE ASKER — RBAC/RLS/scopes apply to every tool call. The model
         // gets exactly the text the fingerprint covers (toolResultText), so a
         // replay that matches proves the reader could have seen all of it.
         const { result } = await executeChatTool(asker, block.name, input)
-        put(toolResultText(result), result)
+        put(asData(toolResultText(result), `tool:${block.name}`), result)
       } catch (err) {
         const msg = `Error: ${err instanceof Error ? err.message : 'Tool failed'}`
         put(msg, msg, true)
