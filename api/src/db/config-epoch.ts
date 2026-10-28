@@ -14,6 +14,7 @@
  *
  * Leaf module: no import from db/index.ts (which imports this).
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Knex } from 'knex'
 // Leaf too (no db import) — read for who made a configuration write (#1053).
 import { currentTraceMeta } from '../services/request-trace.js'
@@ -74,6 +75,78 @@ const DDL_TABLE_RE =
   /\b(?:alter|create|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?[["`]?(?:\w+[\]"`]?\.[["`]?)?(\w+)/i
 const DDL_RE = /^\s*(?:alter|create|drop|truncate)\b|\bsp_rename\b/i
 
+const WATCHED_SET = new Set(WATCHED)
+
+/** Comments and string literals removed (neither can make or hide a write), then the
+ *  [bracket] / "quote" / `tick` around names dropped. */
+function flatten(sql: string): string {
+  return sql
+    .replace(/N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi, (m) =>
+      m.startsWith('/') || m.startsWith('-') ? ' ' : "''"
+    )
+    .replace(/[[\]"`]/g, '')
+}
+
+// A (possibly schema-qualified) object name; #temp, ##global temp and @table variables keep
+// their sigil so they can be told apart from real tables.
+const NAME = String.raw`((?:\w+\.){0,2}[#@]{0,2}\w+)`
+const TOP = String.raw`(?:top\s*\([^)]*\)\s*(?:percent\s+)?)?`
+/** The object each DML statement in a batch writes to. */
+const DML_TARGET_RE = new RegExp(
+  String.raw`\b(?:insert\s+${TOP}(?:into\s+)?|update\s+${TOP}|delete\s+${TOP}(?:from\s+)?|merge\s+${TOP}(?:into\s+)?)${NAME}`,
+  'gi'
+)
+const ANY_DDL_RE = /\b(?:alter|create|drop|truncate)\s+\w+/gi
+const TABLE_DDL_RE =
+  /\b(?:alter|create|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?((?:\w+\.){0,2}#{0,2}\w+)/gi
+const INDEX_DDL_RE =
+  /\b(?:create|drop)\s+(?:unique\s+)?(?:(?:non)?clustered\s+)?(?:columnstore\s+)?index\s+\w+\s+on\s+((?:\w+\.){0,2}#{0,2}\w+)/gi
+
+const bare = (name: string) => (name.split('.').pop() ?? name).toLowerCase()
+const isScratch = (name: string) => /^[#@]/.test(bare(name))
+
+/** True when every DDL statement in the batch only builds or drops #temp tables and their
+ *  indexes — the scratch work of a report batch, never a schema change. */
+function ddlOnlyOnScratch(flat: string): boolean {
+  const all = flat.match(ANY_DDL_RE)?.length ?? 0
+  const tables = [...flat.matchAll(TABLE_DDL_RE)].map((m) => m[1])
+  // `create … index` matches ANY_DDL_RE once per statement (as "create unique", "create
+  // clustered", "create index"), so count index statements once each.
+  const indexes = [...flat.matchAll(INDEX_DDL_RE)].map((m) => m[1])
+  if (tables.length + indexes.length < all) return false
+  return [...tables, ...indexes].every(isScratch)
+}
+
+/**
+ * Exported for tests: the configuration tables a statement WRITES, or null when its targets
+ * cannot be told (a CTE update, an unrecognised shape) — the caller then falls back to "does it
+ * name one". A batch that only reads a watched table — a report joining nivaro_workflow_states,
+ * an UPDATE of a #temp built from it — writes none (2026-10-28: a 5-minute job's read batch
+ * moved the config epoch all day and every open form re-read its definition each time).
+ */
+export function configWriteTargets(sql: string): string[] | null {
+  const flat = flatten(sql)
+  const out = new Set<string>()
+  for (const m of flat.matchAll(DML_TARGET_RE)) {
+    const name = m[1]
+    if (isScratch(name)) continue
+    const t = bare(name)
+    if (WATCHED_SET.has(t)) {
+      out.add(t)
+      continue
+    }
+    // A CTE as the target: what it writes through is not visible here.
+    if (new RegExp(String.raw`\b${t}\s+as\s*\(`, 'i').test(flat)) return null
+    // `update a set … from nivaro_x a` / `delete a from nivaro_x as a`: resolve the alias.
+    const alias = new RegExp(
+      String.raw`\b(?:from|join)\s+((?:\w+\.){0,2}[#@]{0,2}\w+)\s+(?:as\s+)?${t}\b`,
+      'i'
+    ).exec(flat)
+    if (alias && !isScratch(alias[1]) && WATCHED_SET.has(bare(alias[1]))) out.add(bare(alias[1]))
+  }
+  return [...out]
+}
+
 /** Exported for tests: does this statement change configuration? */
 export function isConfigWrite(sql: string): boolean {
   if (!sql) return false
@@ -81,8 +154,45 @@ export function isConfigWrite(sql: string): boolean {
   if (/^\s*(?:select|with)\b/i.test(sql) && !/\b(?:insert|update|delete|merge)\b/i.test(sql)) {
     return false
   }
-  if (DDL_RE.test(sql)) return true
-  return WATCHED_RE.test(sql.replace(/[[\]]/g, ''))
+  // Dynamic SQL hides its statements in a string: keep the old, cautious rule for it.
+  if (/\bexec(?:ute)?\s*\(|\bsp_executesql\b/i.test(sql)) {
+    return DDL_RE.test(sql) || WATCHED_RE.test(sql.replace(/[[\]]/g, ''))
+  }
+  const flat = flatten(sql)
+  if (/\bsp_rename\b/i.test(flat)) return true
+  ANY_DDL_RE.lastIndex = 0
+  if (ANY_DDL_RE.test(flat) && !ddlOnlyOnScratch(flat)) return true
+  if (!WATCHED_RE.test(flat)) return false
+  const targets = configWriteTargets(sql)
+  // Unknown shape: keep the old, cautious rule — a statement that names a watched table.
+  if (targets === null) return true
+  return targets.length > 0
+}
+
+/**
+ * A person's own preference write (#perf 2026-10-28: Profile → my default scopes). Inside it,
+ * a statement whose ONLY configuration target is one of `tables` does not move the
+ * tenant-wide epoch: nothing another process caches for OTHER people depends on it, and the
+ * route that runs it refreshes the person's own copies. Any other configuration write in the
+ * same context still moves it.
+ */
+const personal = new AsyncLocalStorage<{ tables: Set<string> }>()
+
+export function runPersonalConfigWrite<T>(tables: string[], fn: () => Promise<T>): Promise<T> {
+  return personal.run({ tables: new Set(tables.map((t) => t.toLowerCase())) }, fn)
+}
+
+/** The driver seam's question: should this statement move the configuration epoch? */
+export function movesConfigEpoch(sql: string): boolean {
+  if (!isConfigWrite(sql)) return false
+  const p = personal.getStore()
+  if (!p) return true
+  const flat = flatten(sql)
+  ANY_DDL_RE.lastIndex = 0
+  if (ANY_DDL_RE.test(flat) && !ddlOnlyOnScratch(flat)) return true
+  const targets = configWriteTargets(sql)
+  if (!targets || targets.length === 0) return true
+  return !targets.every((t) => p.tables.has(t))
 }
 
 const ENABLED = process.env.CACHE_EPOCH !== 'off' && !process.env.CLOUD_META_DB_URL
@@ -176,7 +286,10 @@ function accumulate(sql: string): void {
   run.statements++
   run.to = now
   if (DDL_RE.test(sql)) run.ddl++
-  for (const t of tablesInStatement(sql)) run.tables.set(t, (run.tables.get(t) ?? 0) + 1)
+  // The tables the statement WRITES when that can be told; else every one it names.
+  const written = configWriteTargets(sql)
+  const named = written?.length ? written : tablesInStatement(sql)
+  for (const t of named) run.tables.set(t, (run.tables.get(t) ?? 0) + 1)
   try {
     const meta = currentTraceMeta()
     if (meta?.userId && run.users.size < 10) run.users.add(meta.userId)

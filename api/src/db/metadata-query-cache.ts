@@ -26,7 +26,7 @@
  * started reads what another process already read.
  */
 
-import { isConfigWrite, noteConfigWrite, onEpochReset } from './config-epoch.js'
+import { movesConfigEpoch, noteConfigWrite, onEpochReset } from './config-epoch.js'
 import {
   type L2Gen,
   metadataL2Get,
@@ -218,7 +218,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
 
     // Other processes on this database learn of a configuration write through
     // the epoch (db/config-epoch.ts).
-    if (isConfigWrite(sql)) noteConfigWrite(sql)
+    if (movesConfigEpoch(sql)) noteConfigWrite(sql)
 
     // Caches derived from owner resolution clear once the write has landed.
     const ownerWrite = ownerWriteKind(sql)

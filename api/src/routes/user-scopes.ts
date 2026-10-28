@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { runPersonalConfigWrite } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -226,6 +227,9 @@ export async function userScopesRoutes(app: FastifyInstance) {
   // ── Own scopes ──────────────────────────────────────────────────────────────
 
   app.get('/users/me/scopes', { preHandler: requireAuth }, async (req) => {
+    // Read fresh: a self-edit made on another replica does not move the tenant-wide config
+    // epoch (below), so this process's 60 s copy of the person's rows may be older than it.
+    bustUserScopeCache(req.user!.id)
     return { data: await describeUserScopes(req.user!.id) }
   })
 
@@ -239,20 +243,27 @@ export async function userScopesRoutes(app: FastifyInstance) {
       if (!dim) return reply.code(404).send({ error: 'Unknown dimension' })
       const values = sanitizeValues(req.body?.values)
       const where = { user: req.user!.id, dimension: dim.name, mode: 'default' }
-      const existing = await db('nivaro_user_scopes').where(where).first()
-      if (values.length === 0) {
-        if (existing) await db('nivaro_user_scopes').where({ id: existing.id }).del()
-      } else if (existing) {
-        await db('nivaro_user_scopes')
-          .where({ id: existing.id })
-          .update({ values: JSON.stringify(values), updated_at: new Date() })
-      } else {
-        await db('nivaro_user_scopes').insert({
-          ...where,
-          values: JSON.stringify(values),
-          updated_at: new Date()
-        })
-      }
+      // A person's own DEFAULT filter (never a restriction): it changes nothing anyone else
+      // reads, so it does not move the tenant-wide config epoch — which made every replica
+      // drop every metadata cache and every open form re-read its definition (19 times in
+      // 34 minutes at the 2026-10-28 demo). Their own copies are refreshed here and on the
+      // fresh GET above.
+      await runPersonalConfigWrite(['nivaro_user_scopes'], async () => {
+        const existing = await db('nivaro_user_scopes').where(where).first()
+        if (values.length === 0) {
+          if (existing) await db('nivaro_user_scopes').where({ id: existing.id }).del()
+        } else if (existing) {
+          await db('nivaro_user_scopes')
+            .where({ id: existing.id })
+            .update({ values: JSON.stringify(values), updated_at: new Date() })
+        } else {
+          await db('nivaro_user_scopes').insert({
+            ...where,
+            values: JSON.stringify(values),
+            updated_at: new Date()
+          })
+        }
+      })
       bustUserScopeCache(req.user!.id)
       return reply.send({ data: { saved: true, values } })
     }
