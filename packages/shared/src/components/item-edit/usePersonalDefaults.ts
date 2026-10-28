@@ -220,9 +220,13 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     const known = parts.filter((x): x is string => !!x)
     return known.length > 0 ? known.join(', ') : null
   }, [])
+  // Bumped by every reset (another record on this form instance): a pass started under an older
+  // generation writes nothing — no value, ledger entry or hint lands on the next record.
+  const genRef = useRef(0)
   const setHint = useCallback(
-    async (field: string, text: Promise<string>) => {
+    async (field: string, text: Promise<string>, gen: number) => {
       const t = await text
+      if (genRef.current !== gen) return
       hintsRef.current.set(field, t)
       publish()
     },
@@ -253,8 +257,11 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
 
   /** Steps 3–5 for one field, once. 'stale' = a parent moved while the checks ran. */
   const applyOnce = useCallback(
-    async (field: string): Promise<string[] | 'stale'> => {
+    async (field: string, gen: number): Promise<string[] | 'stale'> => {
       const o = optsRef.current
+      // The form moved on to another record while this step waited: write nothing (no rollback
+      // either — the draft now belongs to that record).
+      const moved = () => genRef.current !== gen
       const cands = byFieldRef.current.get(field) ?? []
       if (cands.length === 0 || !o.layoutAllows(field)) return []
       if (undoneRef.current.has(field) || !(o.canFill?.(field) ?? true)) return []
@@ -272,7 +279,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
               blockedBy in c.context &&
               !sameDefaultValue(c.context[blockedBy], view[blockedBy])
           )?.context[blockedBy]
-          await setHint(field, blockedHint(blockedBy, want))
+          await setHint(field, blockedHint(blockedBy, want), gen)
         }
         return []
       }
@@ -294,19 +301,21 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         const want = fillParents[p]
         const fillable = o.layoutAllows(p) && !undoneRef.current.has(p) && (o.canFill?.(p) ?? true)
         const ok = fillable ? await o.revalidate(p, want) : false
+        if (moved()) return []
         if (ok === null) {
           rollback()
           return []
         }
         if (!ok || !isEmptyValue(currentValue(p))) {
           rollback()
-          await setHint(field, blockedHint(p, want))
+          await setHint(field, blockedHint(p, want), gen)
           return []
         }
         write(p, want)
         filled.push([p, want])
       }
       const ok = await o.revalidate(field, pick.value)
+      if (moved()) return []
       if (ok === null) {
         // The check could not run (network): skip, and say nothing untrue.
         rollback()
@@ -320,7 +329,8 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
             l
               ? `Your default "${l}" is no longer available`
               : 'Your saved default is no longer available'
-          )
+          ),
+          gen
         )
         return []
       }
@@ -343,10 +353,10 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
 
   /** Answers the fields it wrote (parents first), [] when none. */
   const applyField = useCallback(
-    async (field: string): Promise<string[]> => {
+    async (field: string, gen: number): Promise<string[]> => {
       // A parent that moved while the checks ran makes the pick stale: pick again (bounded).
       for (let attempt = 0; attempt < 3; attempt++) {
-        const r = await applyOnce(field)
+        const r = await applyOnce(field, gen)
         if (r !== 'stale') return r
       }
       return []
@@ -357,12 +367,14 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const runPass = useCallback(
     async (fields: string[]) => {
       // Parents filled from a child's saved set count too, in the order they were written.
+      const gen = genRef.current
       const landed = new Set<string>()
       for (const f of fields) {
-        if (!mountedRef.current) return
-        for (const w of await applyField(f)) landed.add(w)
+        if (!mountedRef.current || genRef.current !== gen) return
+        for (const w of await applyField(f, gen)) landed.add(w)
         publish()
       }
+      if (genRef.current !== gen) return
       for (const f of landed) {
         if (ledgerRef.current.has(f)) optsRef.current.afterApply?.(f, ledgerRef.current.get(f))
       }
@@ -516,6 +528,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     repickRef.current.clear()
     queueRef.current.clear()
     appliedOnceRef.current = false
+    genRef.current += 1
     publish()
   }, [resetSig, publish])
 

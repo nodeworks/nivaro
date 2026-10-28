@@ -470,3 +470,30 @@ describe('usePersonalDefaults: fix round 1', () => {
     expect(api.ledger.has('tags')).toBe(false)
   })
 })
+
+describe('usePersonalDefaults: fix round 2', () => {
+  it('a pass still checking when the form moves to another record writes nothing', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const o: HarnessOpts = {
+      defaults: [d('zone', '2')],
+      resetKey: 'orders:new',
+      revalidate: async () => {
+        await gate
+        return true
+      }
+    }
+    await mount(o)
+    expect(calls.set).toEqual([])
+    // Create: the same form now shows the saved record.
+    await renderWith({ ...o, isNew: false, resetKey: 'orders:41' })
+    await act(async () => release())
+    await flush()
+    expect(calls.set).toEqual([])
+    expect(draft().zone).toBeUndefined()
+    expect(api.ledger.size).toBe(0)
+    expect(calls.auto).toEqual([])
+  })
+})

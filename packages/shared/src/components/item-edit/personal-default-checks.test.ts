@@ -161,3 +161,30 @@ describe('fix round 1', () => {
     expect(await gone.valueLabel('ship_to', '100')).toBeNull()
   })
 })
+
+describe('fix round 2', () => {
+  it('people are labelled through /users/:id (non-admins cannot read /items/<users>)', async () => {
+    for (const target of ['directus_users', 'nivaro_users']) {
+      const paths: string[] = []
+      const c = makePersonalDefaultChecks({
+        client: {
+          request: async (cmd: unknown) => {
+            const p = (cmd as { _path: string })._path
+            paths.push(p)
+            if (p === '/users/u7')
+              return { data: { id: 'u7', first_name: 'Ann', last_name: 'Lee' } }
+            throw Object.assign(new Error('Forbidden'), { status: 403 })
+          }
+        } as never,
+        collection: 'orders',
+        fields: [f('owner', { interface: 'select-dropdown-m2o' })],
+        relations: [
+          rel(9, { many_collection: 'orders', many_field: 'owner', one_collection: target })
+        ],
+        readValue: () => undefined
+      })
+      expect(await c.valueLabel('owner', 'u7')).toBe('Ann Lee')
+      expect(paths.some((p) => p.startsWith(`/items/${target}`))).toBe(false)
+    }
+  })
+})

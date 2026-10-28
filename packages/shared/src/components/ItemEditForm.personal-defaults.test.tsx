@@ -364,3 +364,46 @@ describe('ItemEditForm personal defaults: fix round 1', () => {
     expect(host.querySelector('[data-personal-default="title"]')).toBeNull()
   })
 })
+
+describe('ItemEditForm personal defaults: fix round 2', () => {
+  it("a default's rule staging onto a field the person already picked keeps their cascade dirty", async () => {
+    tagsFixture(false)
+    fx.fieldRules = [
+      { id: 1, collection: 'orders', trigger_field: 'title', target_field: 'tags', is_active: true }
+    ]
+    const gate = () => {
+      let open: () => void = () => {}
+      const p = new Promise<void>((r) => {
+        open = r
+      })
+      return { p, open: () => open() }
+    }
+    const defaultsGate = gate()
+    const zoneGate = gate()
+    const base = fx.answer
+    fx.answer = (cmd) => {
+      if (cmd._path === '/field-rules/evaluate') return { data: { tags: ['5'] } }
+      // The defaults arrive after the person's pick; that pick resolves its Zone slowly.
+      if (cmd._path === '/field-defaults/mine')
+        return defaultsGate.p.then(() => ({ data: fx.defaults }))
+      if (cmd._path === '/items/tags/8') return zoneGate.p.then(() => base?.(cmd))
+      return base?.(cmd)
+    }
+    const { calls } = await mountNew(vi.fn(), { grabStaging: true })
+    for (let i = 0; i < 80 && !staging; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10))
+      })
+    await act(async () => staging?.stageLink('tags', '8'))
+    await act(async () => defaultsGate.open())
+    await settle(() => (staging?.getStagedLinks('tags') ?? []).map(String).includes('5'))
+    const draftPut = () =>
+      calls.some((c) => c._method === 'PUT' && c._path === '/drafts/orders/new')
+    // Nothing set isDirty yet (a staged link alone does not): no recovery draft.
+    expect(draftPut()).toBe(false)
+    await act(async () => zoneGate.open())
+    await settle(draftPut)
+    // The person's pick filled Zone: their work, so the recovery draft is written.
+    expect(draftPut()).toBe(true)
+  })
+})

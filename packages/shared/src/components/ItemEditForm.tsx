@@ -4416,7 +4416,13 @@ function ItemEditFormView({
         // when this request was fired.
         const toStage = idsNeedingStaging(ids, m2mAliasFieldStatesRef.current[field]?.ids)
         if (quietTrigger && toStage.length > 0) {
-          pdQuietRef.current.add(field)
+          // The field becomes prefill only while it holds nothing the person staged: a cascade
+          // from their own pick on it must still mark the form dirty.
+          const held = (m2mAliasFieldStatesRef.current[field]?.ids ?? []).map(String)
+          const quietHeld = pdQuietLinksRef
+            .current(new Map([[info.stagingKey, held]]))
+            .get(info.stagingKey)
+          if (held.every((id) => quietHeld?.has(id))) pdQuietRef.current.add(field)
           const set = pdQuietRuleLinksRef.current.get(info.stagingKey) ?? new Set<string>()
           for (const id of toStage) set.add(String(id))
           pdQuietRuleLinksRef.current.set(info.stagingKey, set)

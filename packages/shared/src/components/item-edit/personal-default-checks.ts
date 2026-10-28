@@ -165,8 +165,8 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
     return scalarOk(fc, value)
   }
 
-  // The label the picker shows: the target's display template (the users picker's own
-  // template for nivaro_users), read as the caller; null when nothing but an id is known.
+  // The label the picker shows: the target's display template read as the caller, or a person's
+  // name; null when nothing but an id is known.
   const labels = new Map<string, Promise<string | null>>()
   function valueLabel(field: string, value: unknown): Promise<string | null> {
     const fc = byName.get(field)
@@ -186,12 +186,19 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
     const cached = labels.get(key)
     if (cached) return cached
     const p = (async () => {
+      // People: /users/:id answers every signed-in caller (directory columns), the way the
+      // list's RelationLabel reads them; /items/<users table> is refused to non-admins.
+      if (USER_SYSTEM_COLS.has(rel.target)) {
+        const u = await client
+          .request<{ data: Record<string, unknown> | null }>(get(`/users/${text}`))
+          .catch(() => null)
+        const name = u?.data ? userDisplayLabel(u.data).trim() : ''
+        return name && name !== text ? name : null
+      }
       const meta = await client
         .request<{ data: { display_template?: string | null } }>(get(`/collections/${rel.target}`))
         .catch(() => null)
-      const template =
-        meta?.data?.display_template ??
-        (USER_SYSTEM_COLS.has(rel.target) ? '{{first_name}} {{last_name}} ({{email}})' : null)
+      const template = meta?.data?.display_template ?? null
       const tokens = template ? [...template.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1]) : []
       const rows = await client
         .request<{ data: Array<Record<string, unknown>> }>(
@@ -204,11 +211,7 @@ export function makePersonalDefaultChecks(input: PersonalDefaultChecksInput) {
         .catch(() => null)
       const row = rows?.data?.[0]
       if (!row) return null
-      const shown = (
-        USER_SYSTEM_COLS.has(rel.target) && !meta?.data?.display_template
-          ? userDisplayLabel(row)
-          : renderDisplayTemplate(template, row)
-      ).trim()
+      const shown = renderDisplayTemplate(template, row).trim()
       // Nothing readable, or only the id again: no label.
       if (!/[\p{L}\p{N}]/u.test(shown) || shown === String(row.id) || shown === text) return null
       return shown
