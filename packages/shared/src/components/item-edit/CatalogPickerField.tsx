@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Plus,
   Search,
   Star,
   X
@@ -19,6 +20,7 @@ import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
@@ -1174,20 +1176,24 @@ export function CatalogPickerField({
       return Number.isNaN(n) ? String(v) : n.toLocaleString(undefined, { maximumFractionDigits: 2 })
     return String(v)
   }
-  // Cells shared by favorites + section rows; numeric (formatted) columns fixed width right,
-  // text columns flexible
+  // Cells shared by favorites + section rows; numeric (formatted) columns fixed width right.
+  // The first text column (the description) takes the free width; later text columns
+  // (part category, …) get a fixed narrower one. Cut-off text shows in full on hover.
+  const firstTextCol = displayCols.find((c) => !c.format)?.field
+  const colCls = (c: { field: string; format?: string }) =>
+    c.format
+      ? 'w-20 shrink-0 text-right'
+      : c.field === firstTextCol
+        ? 'min-w-0 flex-[3]'
+        : 'w-36 shrink-0'
   const colCells = (id: string, row: Record<string, unknown>) => (
     <>
       {displayCols.map((c) => (
-        <span
+        <TruncText
           key={c.field}
-          className={cn(
-            'truncate text-slate-500 dark:text-slate-400',
-            c.format ? 'w-20 shrink-0 text-right' : 'min-w-0 flex-1'
-          )}
-        >
-          {fmtVal(pathValue(row, c.field), c.format)}
-        </span>
+          text={fmtVal(pathValue(row, c.field), c.format)}
+          className={cn('text-slate-500 dark:text-slate-400', colCls(c))}
+        />
       ))}
       {relatedCols.map((rc) => (
         <span
@@ -1783,10 +1789,7 @@ export function CatalogPickerField({
                 {config.favorites && <span className='w-[18px] shrink-0' />}
                 <span className='w-36 shrink-0'>Item</span>
                 {displayCols.map((c) => (
-                  <span
-                    key={c.field}
-                    className={c.format ? 'w-20 shrink-0 text-right' : 'min-w-0 flex-1'}
-                  >
+                  <span key={c.field} className={cn('truncate', colCls(c))}>
                     {c.label ?? titleCase(c.field.split('.')[0])}
                   </span>
                 ))}
@@ -2167,12 +2170,10 @@ export function CatalogPickerField({
                           </span>
                         )}
                         {descCol && (
-                          <span
-                            className='min-w-0 flex-1 truncate text-slate-600 dark:text-slate-300'
-                            title={String(pathValue(catalogRowFor(e.key), descCol.field) ?? '')}
-                          >
-                            {fmtVal(pathValue(catalogRowFor(e.key), descCol.field), undefined)}
-                          </span>
+                          <TruncText
+                            text={fmtVal(pathValue(catalogRowFor(e.key), descCol.field), undefined)}
+                            className='min-w-0 flex-1 text-slate-600 dark:text-slate-300'
+                          />
                         )}
                         {!descCol && <span className='flex-1' />}
                         {chipCols.map((c) => {
@@ -2403,7 +2404,11 @@ export function CatalogPickerField({
 // One attribute-driven item builder: the resolver collection holds one row per
 // valid attribute combination with an FK to the catalog item. Picking every
 // attribute (options cascade: only combinations that exist remain) resolves the
-// item, which then takes a quantity like any other catalog row.
+// item, which then takes a quantity like any other catalog row. A section holds
+// any number of picks: every picked combination keeps its own row, and
+// "Add another" opens a fresh row (a request often needs several jumper types).
+
+type BuilderSel = Record<string, string>
 
 function BuilderCard({
   builder,
@@ -2425,7 +2430,12 @@ function BuilderCard({
   const client = useNivaroClient()
   const itemField = builder.item_field ?? defaultItemField
   const [expanded, setExpanded] = useState(false)
-  const [sel, setSel] = useState<Record<string, string>>({})
+  // Rows still being picked; a row whose combination gets a quantity moves to
+  // the picked list (it is then shown from the pick itself).
+  const nextKey = useRef(1)
+  const [drafts, setDrafts] = useState<Array<{ key: number; sel: BuilderSel }>>([
+    { key: 0, sel: {} }
+  ])
 
   const resolverFields = useMemo(
     () =>
@@ -2470,7 +2480,167 @@ function BuilderCard({
     }
     return { id: String(v), label: String(v) }
   }
+  const itemIdOf = (row: Record<string, unknown>): string | null => {
+    const v = row[itemField]
+    if (v == null) return null
+    return typeof v === 'object' ? String((v as Record<string, unknown>).id ?? '') || null : String(v)
+  }
+  const resolve = (sel: BuilderSel): string | null => {
+    if (!builder.attributes.every((a) => sel[a.field])) return null
+    const row = resolverRows.find((r) =>
+      builder.attributes.every((a) => attrOf(r, a.field)?.id === sel[a.field])
+    )
+    return row ? itemIdOf(row) : null
+  }
 
+  // Every combination already picked (quantity > 0), one row per catalog item.
+  const picked: Array<{ itemId: string; row: Record<string, unknown> }> = []
+  {
+    const seen = new Set<string>()
+    for (const row of resolverRows) {
+      const id = itemIdOf(row)
+      if (!id || seen.has(id) || (currentQty(id) ?? 0) <= 0) continue
+      seen.add(id)
+      picked.push({ itemId: id, row })
+    }
+  }
+  const pickedIds = new Set(picked.map((p) => p.itemId))
+  const openDrafts = drafts.filter((d) => {
+    const id = resolve(d.sel)
+    return !id || !pickedIds.has(id)
+  })
+  // A draft that became a pick is done; with none open, one fresh row stays.
+  const consumed = openDrafts.length !== drafts.length
+  useEffect(() => {
+    if (!consumed) return
+    setDrafts((prev) => {
+      const left = prev.filter((d) => {
+        const id = resolve(d.sel)
+        return !id || !pickedIds.has(id)
+      })
+      return left.length > 0 ? left : [{ key: nextKey.current++, sel: {} }]
+    })
+  })
+  const addDraft = () => setDrafts((prev) => [...prev, { key: nextKey.current++, sel: {} }])
+
+  const rowProps = {
+    builder,
+    resolverRows,
+    attrOf,
+    resolve,
+    catalogCol,
+    catalogFields,
+    tmpl,
+    qtyInput,
+    currentQty
+  }
+
+  return (
+    <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
+      <button
+        type='button'
+        onClick={() => setExpanded((e) => !e)}
+        className='flex w-full items-center gap-1.5 rounded-t-lg bg-slate-100/80 px-2 py-1.5 text-left dark:bg-muted'
+      >
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+            expanded && 'rotate-90'
+          )}
+        />
+        <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+          {builder.label}
+        </span>
+        {expanded && picked.length > 0 && (
+          <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+            {picked.length} picked
+          </span>
+        )}
+      </button>
+      {expanded && (
+        <div className='space-y-2 border-t border-slate-200 p-3 dark:border-border'>
+          {isLoading ? (
+            <div className='flex items-center gap-2 py-2 text-slate-400'>
+              <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
+            </div>
+          ) : resolverRows.length === 0 ? (
+            <p className='py-1 text-slate-400'>No options available for this section.</p>
+          ) : (
+            <>
+              {picked.map((p) => (
+                <BuilderRow
+                  key={`picked-${p.itemId}`}
+                  {...rowProps}
+                  sel={Object.fromEntries(
+                    builder.attributes.map((a) => [a.field, attrOf(p.row, a.field)?.id ?? ''])
+                  )}
+                  readOnly
+                />
+              ))}
+              {openDrafts.map((d) => (
+                <BuilderRow
+                  key={d.key}
+                  {...rowProps}
+                  sel={d.sel}
+                  onSel={(sel) =>
+                    setDrafts((prev) => prev.map((x) => (x.key === d.key ? { ...x, sel } : x)))
+                  }
+                  onRemove={
+                    openDrafts.length > 1 || picked.length > 0
+                      ? () => setDrafts((prev) => prev.filter((x) => x.key !== d.key))
+                      : undefined
+                  }
+                />
+              ))}
+              <button
+                type='button'
+                onClick={addDraft}
+                className='flex items-center gap-1 rounded px-1 py-0.5 text-[11px] font-medium text-[#009abe] hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-nvr-cyan'
+              >
+                <Plus className='h-3.5 w-3.5' />
+                Add another
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One combination in a builder section: the attribute picks, the item they
+ *  resolve to and its quantity. A picked row shows its picks read-only (change
+ *  the quantity, or set it to 0 to drop it). */
+function BuilderRow({
+  builder,
+  resolverRows,
+  attrOf,
+  resolve,
+  catalogCol,
+  catalogFields,
+  tmpl,
+  qtyInput,
+  currentQty,
+  sel,
+  onSel,
+  onRemove,
+  readOnly
+}: {
+  builder: CatalogBuilderConfig
+  resolverRows: Record<string, unknown>[]
+  attrOf: (row: Record<string, unknown>, field: string) => { id: string; label: string } | null
+  resolve: (sel: BuilderSel) => string | null
+  catalogCol: string
+  catalogFields: string
+  tmpl: string | undefined
+  qtyInput: (catalogId: string, catalogRow: Record<string, unknown>) => ReactNode
+  currentQty: (catalogId: string) => number | null
+  sel: BuilderSel
+  onSel?: (sel: BuilderSel) => void
+  onRemove?: () => void
+  readOnly?: boolean
+}) {
+  const client = useNivaroClient()
   // Rows matching the selections made for attributes BEFORE index i
   const matchingRows = (uptoIdx: number): Record<string, unknown>[] =>
     resolverRows.filter((row) =>
@@ -2480,14 +2650,8 @@ function BuilderCard({
         return attrOf(row, a.field)?.id === chosen
       })
     )
-
   const allSelected = builder.attributes.every((a) => sel[a.field])
-  const resolvedRow = allSelected
-    ? resolverRows.find((row) =>
-        builder.attributes.every((a) => attrOf(row, a.field)?.id === sel[a.field])
-      )
-    : undefined
-  const resolvedItemId = resolvedRow?.[itemField] != null ? String(resolvedRow[itemField]) : null
+  const resolvedItemId = resolve(sel)
 
   const { data: resolvedCatalogRow } = useQuery<Record<string, unknown> | null>({
     queryKey: ['catalog-builder-item', catalogCol, catalogFields, resolvedItemId],
@@ -2506,86 +2670,89 @@ function BuilderCard({
   })
 
   return (
-    <div className='rounded-lg border border-slate-200 text-[12px] dark:border-border'>
-      <button
-        type='button'
-        onClick={() => setExpanded((e) => !e)}
-        className='flex w-full items-center gap-1.5 rounded-t-lg bg-slate-100/80 px-2 py-1.5 text-left dark:bg-muted'
-      >
-        <ChevronRight
-          className={cn(
-            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
-            expanded && 'rotate-90'
-          )}
-        />
-        <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
-          {builder.label}
-        </span>
-      </button>
-      {expanded && (
-        <div className='space-y-2 border-t border-slate-200 p-3 dark:border-border'>
-          {isLoading ? (
-            <div className='flex items-center gap-2 py-2 text-slate-400'>
-              <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
+    <div className='flex flex-wrap items-end gap-3'>
+      {builder.attributes.map((a, i) => {
+        const opts = new Map<string, string>()
+        for (const row of matchingRows(i)) {
+          const av = attrOf(row, a.field)
+          if (av?.id) opts.set(av.id, av.label)
+        }
+        const sorted = [...opts.entries()].sort(([, la], [, lb]) =>
+          la.localeCompare(lb, undefined, { numeric: true })
+        )
+        const valueLabel = sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null
+        if (readOnly)
+          return (
+            <div key={a.field} className='w-44'>
+              <p className='mb-1 text-[10px] font-medium text-slate-500 dark:text-slate-400'>
+                {titleCase(a.field)}
+              </p>
+              <p className='truncate rounded border border-transparent px-2 py-1.5 text-slate-700 dark:text-slate-200'>
+                {valueLabel ?? '—'}
+              </p>
             </div>
-          ) : (
-            <div className='flex flex-wrap items-end gap-3'>
-              {builder.attributes.map((a, i) => {
-                const opts = new Map<string, string>()
-                for (const row of matchingRows(i)) {
-                  const av = attrOf(row, a.field)
-                  if (av?.id) opts.set(av.id, av.label)
-                }
-                const sorted = [...opts.entries()].sort(([, la], [, lb]) =>
-                  la.localeCompare(lb, undefined, { numeric: true })
-                )
-                return (
-                  <AttrSelect
-                    key={a.field}
-                    label={titleCase(a.field)}
-                    value={sel[a.field] ?? null}
-                    valueLabel={sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null}
-                    options={sorted}
-                    disabled={i > 0 && !sel[builder.attributes[i - 1].field]}
-                    onChange={(id) =>
-                      setSel((prev) => {
-                        const next: Record<string, string> = {}
-                        // keep selections up to this attr; clear later ones
-                        for (let j = 0; j < i; j++) {
-                          const f = builder.attributes[j].field
-                          if (prev[f]) next[f] = prev[f]
-                        }
-                        if (id) next[a.field] = id
-                        return next
-                      })
-                    }
-                  />
-                )
-              })}
-              <div className='flex min-h-[28px] flex-1 items-center gap-2'>
-                {resolvedItemId && resolvedCatalogRow ? (
-                  <>
-                    <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
-                      {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
-                    </span>
-                    {(currentQty(resolvedItemId) ?? 0) > 0 && (
-                      <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
-                        picked
-                      </span>
-                    )}
-                    {qtyInput(resolvedItemId, resolvedCatalogRow)}
-                  </>
-                ) : allSelected ? (
-                  <span className='text-slate-400'>No matching item for this combination</span>
-                ) : (
-                  <span className='text-slate-400'>Pick each attribute to resolve an item</span>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+          )
+        return (
+          <AttrSelect
+            key={a.field}
+            label={titleCase(a.field)}
+            value={sel[a.field] ?? null}
+            valueLabel={valueLabel}
+            options={sorted}
+            disabled={i > 0 && !sel[builder.attributes[i - 1].field]}
+            onChange={(id) => {
+              const next: BuilderSel = {}
+              // keep selections up to this attr; clear later ones
+              for (let j = 0; j < i; j++) {
+                const f = builder.attributes[j].field
+                if (sel[f]) next[f] = sel[f]
+              }
+              if (id) next[a.field] = id
+              onSel?.(next)
+            }}
+          />
+        )
+      })}
+      <div className='flex min-h-[28px] flex-1 items-center gap-2'>
+        {resolvedItemId && resolvedCatalogRow ? (
+          <>
+            <span className='min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'>
+              {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
+            </span>
+            {(currentQty(resolvedItemId) ?? 0) > 0 && (
+              <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                picked
+              </span>
+            )}
+            {qtyInput(resolvedItemId, resolvedCatalogRow)}
+          </>
+        ) : allSelected ? (
+          <span className='flex-1 text-slate-400'>No matching item for this combination</span>
+        ) : (
+          <span className='flex-1 text-slate-400'>Pick each attribute to resolve an item</span>
+        )}
+        {onRemove && (
+          <button
+            type='button'
+            onClick={onRemove}
+            aria-label='Remove this row'
+            className='rounded p-1 text-slate-400 hover:bg-muted hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:hover:text-slate-300'
+          >
+            <X className='h-3.5 w-3.5' />
+          </button>
+        )}
+      </div>
     </div>
+  )
+}
+
+/** One line of text cut with an ellipsis; when it is cut, hovering shows all of it. */
+function TruncText({ text, className }: { text: string; className?: string }) {
+  const ref = useOverflowTip<HTMLSpanElement>(text)
+  return (
+    <span ref={ref} className={cn('truncate', className)}>
+      {text}
+    </span>
   )
 }
 
