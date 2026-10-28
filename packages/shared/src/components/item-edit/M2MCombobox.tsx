@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { parseAllowedCollections } from '../../lib/allowed-collections'
 import { get } from '../../lib/commands'
+import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { cn, userOptionFilter } from '../../lib/utils'
@@ -407,9 +408,7 @@ export function M2MCombobox({
                   (serverSort
                     ? [...options]
                     : [...options].sort((a, b) =>
-                        optionSort === '-label'
-                          ? getLabel(b).localeCompare(getLabel(a))
-                          : getLabel(a).localeCompare(getLabel(b))
+                        compareByMatch(getLabel(a), getLabel(b), search, optionSort === '-label')
                       )
                   ).map((opt) => {
                     const optId = String(opt.id)
@@ -755,9 +754,7 @@ export function M2MSingleSelectCombobox({
                     .sort((a, b) =>
                       serverSort
                         ? 0
-                        : optionSort === '-label'
-                          ? getLabel(b).localeCompare(getLabel(a))
-                          : getLabel(a).localeCompare(getLabel(b))
+                        : compareByMatch(getLabel(a), getLabel(b), search, optionSort === '-label')
                     )
                     .map((opt) => {
                       const optId = String(opt.id)

@@ -39,3 +39,38 @@ export function narrowSearchColumns(searchable: string[], configured: string[] |
   const kept = searchable.filter((c) => want.has(c))
   return kept.length ? kept : searchable
 }
+
+/** Text columns a fallback search (no field metadata) never reads: secrets, images, JSON. */
+const NEVER_SEARCHED = /password|token|secret|totp|external_id/i
+const NOT_SEARCHABLE = /avatar|preferences|last_page|_directory$|^directory_|^entra_|_json$|^data$/i
+/** What a person search reads: who they are, not what is stored about them. */
+const PEOPLE_SEARCH_COLUMNS: Record<string, string[]> = {
+  nivaro_users: [
+    'first_name',
+    'last_name',
+    'email',
+    'title',
+    'department',
+    'company',
+    'office_location',
+    'city',
+    'employee_id'
+  ]
+}
+
+/**
+ * The columns a list search reads on a collection with no field metadata
+ * (nivaro_users is served from virtual meta), from the table's own text
+ * columns. Never a secret (matching one would let a caller confirm a token by
+ * probing for it) and never a blob: an avatar is a base64 data URI and
+ * preferences / *_directory are JSON — "Robert Lee" matched Glo Dendy through
+ * her avatar bytes and her manager's name (2026-10-28). People collections
+ * search the person columns only.
+ */
+export function fallbackSearchColumns(collection: string, textCols: string[]): string[] {
+  const cols = textCols.filter((c) => !NEVER_SEARCHED.test(c) && !NOT_SEARCHABLE.test(c))
+  const people = PEOPLE_SEARCH_COLUMNS[collection]
+  if (!people) return cols
+  const kept = cols.filter((c) => people.includes(c))
+  return kept.length ? kept : cols
+}

@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
+import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
 import { UserAvatar } from '../UserAvatar'
@@ -676,9 +677,12 @@ export function RelationCombobox({
                 (serverSort
                   ? [...shownOptions]
                   : [...shownOptions].sort((a, b) =>
-                      optionSort === '-label'
-                        ? applyDisplayTemplate(tmpl, b).localeCompare(applyDisplayTemplate(tmpl, a))
-                        : applyDisplayTemplate(tmpl, a).localeCompare(applyDisplayTemplate(tmpl, b))
+                      compareByMatch(
+                        applyDisplayTemplate(tmpl, a),
+                        applyDisplayTemplate(tmpl, b),
+                        query,
+                        optionSort === '-label'
+                      )
                     )
                 )
                   .filter((item) => !pinnedId || String(item.id) !== pinnedId)

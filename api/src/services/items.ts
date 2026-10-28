@@ -105,7 +105,7 @@ import {
   applyRowRulesOnCreate,
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
-import { narrowSearchColumns, parseSearchFields } from './search-fields.js'
+import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -4241,10 +4241,8 @@ export async function readItems(
           [collection]
         )
         .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME))) as string[]
-      // Never search a secret: these are stripped from responses, and matching
-      // on them would let a caller confirm a token by probing for it.
-      searchCols = textCols.filter((c) => !/password|token|secret|totp|external_id/i.test(c))
-      // Nor a column outside the caller's field list (a match is a read).
+      searchCols = fallbackSearchColumns(collection, textCols)
+      // Never a column outside the caller's field list (a match is a read).
       if (allowedFields) searchCols = searchCols.filter((c) => allowedFields.includes(c))
     }
 
