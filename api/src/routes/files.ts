@@ -12,7 +12,11 @@ import {
   mayReadFile,
   readableFileIdList
 } from '../services/file-access.js'
-import { STORED_FILE_SECURITY_HEADERS, storedFileServing } from '../services/file-serving-safety.js'
+import {
+  STORED_FILE_SECURITY_HEADERS,
+  storedFileSecurityHeaders,
+  storedFileServing
+} from '../services/file-serving-safety.js'
 import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
 import { fileUsageForReader } from '../services/file-usage-visible.js'
 import {
@@ -461,7 +465,7 @@ export async function filesRoutes(app: FastifyInstance) {
       // download (H1), and the browser keeps the declared type (nosniff).
       const serving = storedFileServing(mime.lookup(storageKey) || 'application/octet-stream')
       return reply
-        .headers(STORED_FILE_SECURITY_HEADERS)
+        .headers(storedFileSecurityHeaders(serving.contentType))
         .header('Content-Type', serving.contentType)
         .header('Content-Disposition', serving.mode)
         .send(buffer)

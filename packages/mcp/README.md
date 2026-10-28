@@ -120,7 +120,7 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | `aggregate_items` | Counts, sums, averages, min/max grouped by up to four fields, over the same rows a filtered read would return. |
 | `create_item` | **Rehearses by default** (`dry_run: true`): rules, generated ids, validation and database constraints run and the report says what would be stored, nothing is written. `dry_run: false` stores the record. |
 | `update_item` | Patches the named fields. `change_reason` carries the reason a collection may require; a 422 names the fields that need one. |
-| `delete_item` | Deletes one record; refused unless `confirm: true`. |
+| `delete_item` | Deletes one record in two steps: the first call rehearses and returns a `confirm_token` for that record (valid 10 minutes); the delete needs `dry_run: false` plus that token. `confirm: true` alone is refused. |
 | `list_pipeline_state` | Current state, the transitions the key's user may run (with ids), who owns the current state, the newest history entries. |
 | `transition` | Runs one transition by id, with an optional comment; the API's role, condition and requirement checks apply. |
 | `ask_data` | A plain-language question answered by the instance's own data assistant, which queries the collections as the key's user and returns the answer plus the tool trace. Needs an AI provider configured on the instance. |

@@ -1000,6 +1000,22 @@ export const aiOverview: DocSection = {
     {
       type: 'note',
       text: 'AI features are available to admin users only. The "AI" button on fields and the "Summarize" button in the header are hidden for non-admin users.'
+    },
+    { type: 'h2', id: 'ai-limits', text: 'Per-person limits and timeouts' },
+    {
+      type: 'pre',
+      code: `# .env — all optional
+AI_USER_CALLS_PER_MINUTE=120     # AI calls one person may make per minute (per process); 0 = off
+AI_USER_DAILY_TOKENS=10000000    # tokens one person may use per day (from nivaro_ai_calls); 0 = off
+AI_CALL_TIMEOUT_MS=60000         # per call; grows with max_tokens, capped at 5 minutes
+AI_CHAT_DEADLINE_MS=240000       # Ask AI wraps up after this (background research: 20 minutes)
+AI_VALIDATION_HARD_FAIL=open     # hard-mode AI validation lets saves through when the check cannot run
+AI_SPLIT_SYSTEM=off              # one system block instead of a cached stable part + per-question tail
+EMBEDDING_SCAN_MAX=20000         # newest vectors semantic search ranks over`
+    },
+    {
+      type: 'p',
+      text: 'Over a limit the call answers 429 `AI_RATE_LIMITED` or `AI_DAILY_TOKENS`. Calls with no person behind them (scheduled jobs) are never limited. Hard-mode AI validation refuses the save with 503 `AI_VALIDATION_UNAVAILABLE` when the check cannot run, unless `AI_VALIDATION_HARD_FAIL=open`.'
     }
   ]
 }
@@ -1198,7 +1214,7 @@ Content-Type: application/json
     { type: 'h2', id: 'ai-brief', text: 'Briefing' },
     {
       type: 'p',
-      text: 'The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. Default style: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words. Pass `instructions` to override the style entirely.'
+      text: 'The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. The prompt that writes it is chosen on the server from a fixed list — pass `template`: `daily` (the default: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words), `report-compare`, `report-explain` or `traffic-spike`. Custom `instructions` are ignored (the answer carries `instructions_ignored: true`); the context is treated as data, never as instructions. Each person may run 2 briefs at once and 10 a minute (429 beyond).'
     },
     {
       type: 'pre',
@@ -1208,11 +1224,13 @@ Content-Type: application/json
 
 {
   "context": "User: Jane (admin). Today: Mon Aug 3.\\n\\nActive workflows (25 rows): [...]\\nBudget health: [...]",
-  "instructions": "Optional replacement system prompt (max 1000 chars)"
+  "template": "daily"
 }
 
 → 200 { "data": { "brief": "Good morning — three workflows need attention today..." } }
 → 400 { "error": "context is required" }
+→ 429 { "error": "Too many briefs at once" }
+→ 502 { "error": "The AI provider did not answer" }
 → 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }`
     },
     {

@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
-import { STORED_FILE_SECURITY_HEADERS } from './file-serving-safety.js'
+import { storedFileSecurityHeaders } from './file-serving-safety.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
 import { getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
@@ -122,7 +122,7 @@ export async function sendStoredObject(
   // Stored bytes are user content: the browser keeps the declared type and
   // anything it renders as a document gets an opaque origin with no script (H1).
   reply
-    .headers(STORED_FILE_SECURITY_HEADERS)
+    .headers(storedFileSecurityHeaders(opts.contentType))
     .header('Accept-Ranges', 'bytes')
     .header('Content-Type', opts.contentType)
   if (opts.disposition) reply.header('Content-Disposition', opts.disposition)

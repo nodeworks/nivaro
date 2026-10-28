@@ -202,8 +202,10 @@ export function aiReview(body: {
 export function aiBrief(body: {
   /** The data to brief over (capped server-side at 16k chars). */
   context: string
-  /** Optional system-style instructions (capped at 1k chars). */
+  /** Which server-side prompt writes the brief (default `daily`). */
+  template?: 'daily' | 'report-compare' | 'report-explain' | 'traffic-spike'
+  /** @deprecated Ignored unless it is the exact text of a template; use `template`. */
   instructions?: string
-}): Command<{ data: { brief: string } }> {
+}): Command<{ data: { brief: string; instructions_ignored?: boolean } }> {
   return cmd('POST', '/ai/brief', undefined, body)
 }

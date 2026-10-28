@@ -612,11 +612,11 @@ RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default`
     {
       type: 'pre',
       code: `# .env
-RATE_LIMIT_ANON_PER_MINUTE=300   # default 300; 0 = off`
+RATE_LIMIT_ANON_PER_MINUTE=300   # default 300 when TRUST_PROXY is set, else off; 0 = off`
     },
     {
       type: 'p',
-      text: 'This one is on by default. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its calls without a signed-in session wait for the next minute. Signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example `TRUST_PROXY=1`) or to their addresses; `TRUST_PROXY=true` lets a caller choose the address it is counted under.'
+      text: 'This one is on by default when TRUST_PROXY is set (without it every caller would share the proxy\'s address); set RATE_LIMIT_ANON_PER_MINUTE to turn it on anyway. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its anonymous calls wait for the next minute. A call that carries a token, an API key or a session cookie is never refused by this limit (it only counts when the credential fails), and signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example `TRUST_PROXY=1`) or to their addresses; `TRUST_PROXY=true` lets a caller choose the address it is counted under.'
     },
     {
       type: 'h3',

@@ -3542,12 +3542,16 @@ const WidgetCard = memo(function WidgetCard({
                       rows: (d?.rows ?? []).slice(0, 10),
                       tiles: d?.tiles ?? null
                     }
+                    const hasPrev =
+                      d?.prev_value != null || (d?.series ?? []).some((sv) => sv.prev != null)
                     return client.request<{ data?: { text?: string }; text?: string }>(
                       post('/ai/brief', {
                         context: JSON.stringify(context),
-                        instructions:
-                          d?.prev_value != null || (d?.series ?? []).some((sv) => sv.prev != null)
-                            ? 'Compare the current period against the previous one in 2-4 plain sentences: overall direction, the biggest movers up and down, and anything anomalous. No preamble.'
+                        // `template` picks the server's prompt; `instructions` (the same
+                        // text) keeps an older API answering the same way.
+                        template: hasPrev ? 'report-compare' : 'report-explain',
+                        instructions: hasPrev
+                          ? 'Compare the current period against the previous one in 2-4 plain sentences: overall direction, the biggest movers up and down, and anything anomalous. No preamble.'
                             : 'In 2-3 plain sentences, explain what this report metric shows and what stands out (biggest contributor, direction of change). No preamble.'
                       })
                     )

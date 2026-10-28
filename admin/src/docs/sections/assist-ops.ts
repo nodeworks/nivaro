@@ -334,6 +334,19 @@ GET /api/auth/saml/metadata     # SP metadata for your IdP`
       type: 'p',
       text: 'A first sign-in creates the account automatically. A returning person is matched by the identity provider subject first; email only links a pre-provisioned account on its first sign-in. Settings → Sign-in providers → New accounts picks the role a new account starts in (after any directory-group mapping) and the role it moves to once the person submits an access request. Admin roles cannot be chosen.'
     },
+    { type: 'h2', id: 'sso-second-provider', text: 'Signing in through a second provider' },
+    {
+      type: 'p',
+      text: 'An account that already signed in through one provider is not taken over by an email match from another. A second provider links to it only when the Microsoft account id (oid) is the same, when both providers are the same family (the same issuer), or when that provider is allowed to link by email. A link made this way keeps the first provider matching by subject.'
+    },
+    {
+      type: 'pre',
+      code: `# .env — provider keys that may link an existing account by email
+SSO_LINK_BY_EMAIL=saml          # primary | saml | <additional provider key> | * ; default none
+
+# without the env var: this instance's settings override (nivaro_settings_overrides)
+{ "sso_link_by_email": ["saml"] }`
+    },
     {
       type: 'pre',
       code: `POST /api/users/me/access-request

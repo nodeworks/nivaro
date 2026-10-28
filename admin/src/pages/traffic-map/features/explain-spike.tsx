@@ -100,6 +100,7 @@ function ExplainSpike({ sel, d }: { sel: Selection; d: InspectorData }) {
     mutationFn: async () => {
       const res = await api.post('/ai/brief', {
         context: explainContext(sel, d, model.events, catalog, win),
+        template: 'traffic-spike',
         instructions: EXPLAIN_INSTRUCTIONS
       })
       return String((res?.data as { data?: { brief?: string } })?.data?.brief ?? '')
