@@ -37,6 +37,11 @@ export type PersonalDefaultsApi = {
   /** Deletes the default `defaultFor(field)` answers. */
   clear(field: string): Promise<void>
   refresh(): void
+  /** The field has a value to save (reads M2M ids too, which are not in the draft). */
+  hasValue(field: string): boolean
+  /** What `save(field)` would store, top-down (allowed parents with a value, then the field),
+   *  as the labels a person knows ("Zone 2", "Boston"). For the confirm line. */
+  describeSave(field: string): Promise<string[]>
   /** The field still holds the value its personal default put there (pill). */
   applied(field: string): boolean
   hintFor(field: string): string | null
@@ -549,6 +554,29 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     void qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
   }, [qc, collection])
 
+  const hasValue = useCallback(
+    (field: string) => !isEmptyValue(currentValue(field)),
+    [currentValue]
+  )
+  const describeSave = useCallback(
+    async (field: string): Promise<string[]> => {
+      const o = optsRef.current
+      const fields = [
+        ...[...cascadeParents(field, o.rulesFor)]
+          .reverse()
+          .filter((p) => o.layoutAllows(p) && !isEmptyValue(currentValue(p))),
+        field
+      ]
+      return Promise.all(
+        fields.map(async (f) => {
+          const v = currentValue(f)
+          return (await label(f, v)) ?? asList(plain(v)).map(String).join(', ')
+        })
+      )
+    },
+    [currentValue, label]
+  )
+
   const save = useCallback(
     async (field: string) => {
       const o = optsRef.current
@@ -591,11 +619,13 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       save,
       clear,
       refresh,
+      hasValue,
+      describeSave,
       applied: (f) => ledger.has(f),
       hintFor,
       undo
     }),
-    [defaultFor, save, clear, refresh, ledger, hintFor, undo]
+    [defaultFor, save, clear, refresh, hasValue, describeSave, ledger, hintFor, undo]
   )
 
   return { ledger, hintFor, undo, onPersonChange, release, appliedNow, context }

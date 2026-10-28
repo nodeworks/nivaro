@@ -703,7 +703,14 @@ export const FieldRow = memo(function FieldRow({
     relations,
     collection,
     itemId,
-    openRelated: affordances?.openRelated
+    openRelated: affordances?.openRelated,
+    // Only a field the person can edit here may carry a personal default.
+    editable:
+      !locked &&
+      !field.readonly &&
+      !field.computed_formula &&
+      !(field.hidden && !field.layout_assigned) &&
+      !isDisplayFormulaRow(field)
   })
   const softLock = usePresenceSoftLock(wrapperRef)
   // #2703: labels and help that change with the record's state or the viewer's role.
