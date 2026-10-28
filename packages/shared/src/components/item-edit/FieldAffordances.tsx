@@ -539,6 +539,7 @@ function FieldContextMenu({
       className='rounded-lg border border-slate-200 bg-white p-1 shadow-xl outline-none dark:border-border dark:bg-card'
     >
       {confirm ? (
+        // biome-ignore lint/a11y/useSemanticElements: a fieldset would add border/legend chrome to the menu panel
         <div
           data-personal-default-confirm
           role='group'
