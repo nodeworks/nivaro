@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-28T14:48:32.182Z",
+  "generated_at": "2026-10-28T15:11:32.523Z",
   "releases": [
+    {
+      "version": "0.3.40",
+      "tag": "v0.3.40",
+      "date": "2026-10-28T11:11:18-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "shared worker reports the newest open tab's build",
+              "hash": "a799eec6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "locks",
+              "text": "an open file picker is not leaving the record",
+              "hash": "1df9892f1"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.39",
       "tag": "v0.3.39",
-      "date": "2026-10-28T10:48:18-04:00",
+      "date": "2026-10-28T10:48:32-04:00",
       "sections": [
         {
           "label": "Fixed",
