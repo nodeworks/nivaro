@@ -157,6 +157,17 @@ describe('body limits (M20)', () => {
     expect(anonymousBodyTooLarge({ headers: big, session: { userId: 'U1' } }, small)).toBe(false)
     expect(anonymousBodyTooLarge({ headers: { 'content-length': '10' } }, small)).toBe(false)
   })
+
+  it('webhook flows sign their body and keep their ceiling without a credential (A6)', () => {
+    const small = 1024 * 1024
+    const big = { 'content-length': String(small + 1) }
+    const url = '/api/flows/webhook/abc?x=1'
+    expect(anonymousBodyTooLarge({ headers: big, url }, small)).toBe(false)
+    expect(needsStreamingCap({ method: 'POST', headers: {}, url }, small)).toBe(false)
+    // only the webhook path: other flow routes still need a credential
+    expect(anonymousBodyTooLarge({ headers: big, url: '/api/flows/123' }, small)).toBe(true)
+    expect(anonymousBodyTooLarge({ headers: big, url: '/api/flows/webhookx/1' }, small)).toBe(true)
+  })
 })
 
 describe('source map guard', () => {

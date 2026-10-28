@@ -15,7 +15,8 @@
  *     never read through bodyLimit.
  *
  * Above the global default, a request must carry a credential (a signed-in session or an
- * Authorization header) — an anonymous caller never gets a large body parsed.
+ * Authorization header) — an anonymous caller never gets a large body parsed. Webhook flows
+ * (`SELF_AUTHENTICATING_BODY_PREFIXES`) sign the body itself and are exempt.
  *
  * Leaf module.
  */
@@ -140,10 +141,25 @@ export function routeBodyLimit(
 type CredReq = {
   headers: Record<string, string | string[] | undefined>
   session?: { userId?: unknown } | null
+  url?: string
+}
+
+/**
+ * Routes whose callers authenticate the BODY itself instead of sending a credential header:
+ * webhook flows (HMAC signature over the body / shared secret, checked by the route). They keep
+ * their route ceiling without a session or Authorization header (review A6, 2026-10-27).
+ */
+export const SELF_AUTHENTICATING_BODY_PREFIXES: readonly string[] = ['/api/flows/webhook/']
+
+export function isSelfAuthenticatingBodyRoute(url: string | undefined): boolean {
+  const path = String(url ?? '').split('?')[0] ?? ''
+  return SELF_AUTHENTICATING_BODY_PREFIXES.some((p) => path.startsWith(p))
 }
 
 function hasCredential(req: CredReq): boolean {
-  return !!req.headers.authorization || !!req.session?.userId
+  return (
+    !!req.headers.authorization || !!req.session?.userId || isSelfAuthenticatingBodyRoute(req.url)
+  )
 }
 
 /** A Content-Length header that is a plain non-negative integer, else null (unknown). */
