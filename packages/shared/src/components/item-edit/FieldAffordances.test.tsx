@@ -214,8 +214,8 @@ describe('field menu: Save as my default', () => {
     expect(document.body.textContent).toContain('Save Zone 2 · Cambridge as your defaults?')
     await click(button('Save'))
     const puts = writes().filter((r) => r._method === 'PUT')
-    expect(puts.map((r) => r._body?.field)).toEqual(['zone', 'ship_to'])
-    expect(puts[1]._body).toMatchObject({
+    expect(puts.map((r) => r._body?.field)).toEqual(['ship_to', 'zone'])
+    expect(puts[0]._body).toMatchObject({
       collection: 'orders',
       field: 'ship_to',
       value: 100,

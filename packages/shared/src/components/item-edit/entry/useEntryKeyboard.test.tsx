@@ -38,7 +38,14 @@ function Form({
   )
   return (
     <form>
-      {f('title', <input id='title' />)}
+      {f(
+        'title',
+        <>
+          <button type='button' id='menu' data-field-menu-trigger='title' />
+          <button type='button' id='undo' data-personal-default-undo='title' />
+          <input id='title' />
+        </>
+      )}
       {f('vendor', <input id='vendor' />)}
       {f('notes', <textarea id='notes' />)}
       {f('amount', <input id='amount' />)}
@@ -79,6 +86,13 @@ describe('useEntryKeyboard (#2707 #2708)', () => {
     const e = press($('title'), 'Enter')
     expect(e.defaultPrevented).toBe(true)
     expect(document.activeElement).toBe($('vendor'))
+  })
+
+  it('entering a field lands on its input, never the field menu or a default undo', async () => {
+    await render(<Form config={{ tab_order: ['amount', 'title'] }} />)
+    $('amount').focus()
+    press($('amount'), 'Tab')
+    expect(document.activeElement).toBe($('title'))
   })
 
   it('leaves Enter alone in a text area', async () => {

@@ -596,11 +596,15 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
             context: captureContext(f, view, o.rulesFor)
           })
         )
-      // Allowed parents with a value first (Zone, then Region), then the field itself.
-      for (const p of [...parents].reverse())
-        if (o.layoutAllows(p) && !isEmptyValue(view[p])) await one(p)
-      await one(field)
-      await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+      // The field first: if it is refused nothing else is saved. Then the allowed parents
+      // (Zone, then Region). The cache is refreshed whatever happened.
+      try {
+        await one(field)
+        for (const p of [...parents].reverse())
+          if (o.layoutAllows(p) && !isEmptyValue(view[p])) await one(p)
+      } finally {
+        await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+      }
     },
     [client, qc, collection, currentValue, viewOf]
   )

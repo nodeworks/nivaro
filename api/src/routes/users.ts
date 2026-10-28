@@ -1557,8 +1557,10 @@ export async function usersRoutes(app: FastifyInstance) {
     if (id === req.user!.id) return reply.code(400).send({ error: 'Cannot delete yourself' })
     const deletedUser = safeUser(await getUser(id))
     // Personal field defaults go first: their FK to the user is NO ACTION.
-    await deleteDefaultsForUser(id)
-    await db('nivaro_users').where({ id }).delete()
+    await db.transaction(async (trx) => {
+      await deleteDefaultsForUser(id, trx)
+      await trx('nivaro_users').where({ id }).delete()
+    })
     const activityId = await logActivity({
       action: 'delete',
       user: req.user!.id,

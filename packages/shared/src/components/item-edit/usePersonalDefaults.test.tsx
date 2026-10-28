@@ -153,12 +153,15 @@ async function flush(n = 10) {
   }
 }
 
+let failField: string | null = null
 let renderWith: (o: HarnessOpts) => Promise<void>
 
 async function mount(o: HarnessOpts) {
   const client = {
     request: vi.fn(async (cmd: { _method?: string; _path: string }) => {
       requests.push(cmd)
+      if (failField && (cmd as { _body?: { field?: string } })._body?.field === failField)
+        throw new Error('refused')
       if (cmd._path === '/field-defaults/mine' && (cmd._method ?? 'GET') === 'GET')
         return { data: o.defaults }
       return { data: null }
@@ -187,6 +190,7 @@ beforeEach(() => {
   seq = 0
   calls = { set: [], auto: [], after: [] }
   requests = []
+  failField = null
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -364,12 +368,31 @@ describe('PersonalDefaultsContext value', () => {
     await act(async () => ctx.save('ship_to'))
     const puts = requests.filter((r) => r._method === 'PUT').map((r) => r._body)
     expect(puts).toEqual([
+      {
+        collection: 'orders',
+        field: 'ship_to',
+        value: '100',
+        context: { region: '10', zone: '2' }
+      },
       { collection: 'orders', field: 'zone', value: '2', context: {} },
-      { collection: 'orders', field: 'region', value: '10', context: { zone: '2' } },
-      { collection: 'orders', field: 'ship_to', value: '100', context: { region: '10', zone: '2' } }
+      { collection: 'orders', field: 'region', value: '10', context: { zone: '2' } }
     ])
     expect(inval).toHaveBeenCalledWith({ queryKey: ['field-defaults', 'orders'] })
     expect(ctx.allowed('ship_to')).toBe(true)
+  })
+
+  it('a refused field saves no parents and still refreshes the cache', async () => {
+    const { qc } = await mount({
+      defaults: [],
+      initial: { zone: '2', region: '10', ship_to: '100' }
+    })
+    const inval = vi.spyOn(qc, 'invalidateQueries')
+    failField = 'ship_to'
+    await expect(act(async () => api.context.save('ship_to'))).rejects.toThrow('refused')
+    expect(requests.filter((r) => r._method === 'PUT')).toHaveLength(1)
+    await vi.waitFor(() =>
+      expect(inval).toHaveBeenCalledWith({ queryKey: ['field-defaults', 'orders'] })
+    )
   })
 
   it('defaultFor answers the default for the current context; clear deletes it', async () => {

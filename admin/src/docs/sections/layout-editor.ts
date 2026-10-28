@@ -1151,7 +1151,7 @@ export const layoutPersonalDefaults: DocSection = {
     { type: 'h2', id: 'layout-personal-defaults-manage', text: 'My defaults and admin override' },
     {
       type: 'p',
-      text: "Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change, Clear and Add. Administrators see the same card on a person's page (Personal defaults) and can set or clear values for them; each change is written to the activity log with who, for whom, field and value. Admin routes judge every value as the target person, so an admin cannot save something that person could not."
+      text: "Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change and Clear. Administrators see a similar card on a person's page (Personal defaults) that also has Add, and can set or clear values for them; each change is written to the activity log with who, for whom and which field. A set is logged with the value; a clear is logged without it. Admin routes judge every value as the target person, so an admin cannot save something that person could not."
     },
     { type: 'h2', id: 'layout-personal-defaults-api', text: 'API' },
     {

@@ -11442,7 +11442,7 @@ PATCH/DELETE /api/bulk-actions/defs/:id
           </ul>
           <div class="doc-note">Precedence on a new record: a restored draft, then an explicit prefill (a link or template that supplies the value), then the personal default, then the layout and rule defaults. A personal default only ever fills an empty field on a new record; it never overwrites an existing record, and the server never injects it.</div>
           <h2 class="doc-h2" id="layout-personal-defaults-manage">My defaults and admin override</h2>
-          <p class="doc-p">Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change, Clear and Add. Administrators see the same card on a person's page (Personal defaults) and can set or clear values for them; each change is written to the activity log with who, for whom, field and value. Admin routes judge every value as the target person, so an admin cannot save something that person could not.</p>
+          <p class="doc-p">Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change and Clear. Administrators see a similar card on a person's page (Personal defaults) that also has Add, and can set or clear values for them; each change is written to the activity log with who, for whom and which field. A set is logged with the value; a clear is logged without it. Admin routes judge every value as the target person, so an admin cannot save something that person could not.</p>
           <h2 class="doc-h2" id="layout-personal-defaults-api">API</h2>
           <pre class="doc-pre"><code>GET    /api/field-defaults/mine[?collection=&amp;on_layout=1]
 PUT    /api/field-defaults/mine { collection, field, value, context? }
