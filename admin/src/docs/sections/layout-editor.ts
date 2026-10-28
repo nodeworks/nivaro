@@ -1119,3 +1119,55 @@ POST /api/ai-design/layouts/:id/proposals/:pid/resolve { outcome: 'applied' | 'r
     }
   ]
 }
+
+export const layoutPersonalDefaults: DocSection = {
+  id: 'layout-personal-defaults',
+  label: 'Personal defaults',
+  content: [
+    { type: 'h1', id: 'layout-personal-defaults', text: 'Personal defaults' },
+    {
+      type: 'p',
+      text: 'A personal default is a starting value a person saves for a field, so every new record of that collection opens with it already filled in. Each person keeps their own; nobody else sees or inherits them. An administrator opts a field in on the form, and each person then chooses their own values.'
+    },
+    { type: 'h2', id: 'layout-personal-defaults-enable', text: 'Opt a field in (layout editor)' },
+    {
+      type: 'p',
+      text: 'Select the field on the canvas and turn on **Personal default** under Rules in the inspector. The switch is part of the placement, so it applies to that field on that form only, and it is offered for fields that hold a value (not computed fields). Only fields a person may set on create, and may read, can be saved.'
+    },
+    { type: 'h2', id: 'layout-personal-defaults-use', text: 'Saving and using a default' },
+    {
+      type: 'ul',
+      items: [
+        'Open the field menu (the ⋯ on a field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it.',
+        'On a **new** record the saved value is filled in automatically and the field shows a small pill. **Undo** on the pill clears it again.',
+        'If the person changes a parent field (for example the zone), children that still hold a default are re-picked for the new context. Anything the person typed or picked themselves is never touched.',
+        'A default is saved together with the parent values it was chosen under (its context), so one person can keep a different default per zone. Up to 20 contexts per field.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Precedence on a new record: a restored draft, then an explicit prefill (a link or template that supplies the value), then the personal default, then the layout and rule defaults. A personal default only ever fills an empty field on a new record; it never overwrites an existing record, and the server never injects it.'
+    },
+    { type: 'h2', id: 'layout-personal-defaults-manage', text: 'My defaults and admin override' },
+    {
+      type: 'p',
+      text: 'Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change, Clear and Add. Administrators see the same card on a person\'s page (Personal defaults) and can set or clear values for them; each change is written to the activity log with who, for whom, field and value. Admin routes judge every value as the target person, so an admin cannot save something that person could not.'
+    },
+    { type: 'h2', id: 'layout-personal-defaults-api', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET    /api/field-defaults/mine[?collection=&on_layout=1]
+PUT    /api/field-defaults/mine { collection, field, value, context? }
+DELETE /api/field-defaults/mine/:id
+GET    /api/field-defaults/mine/allowed[?any=1]
+GET    /api/field-defaults/users/:userId        (admin)
+PUT    /api/field-defaults/users/:userId        (admin)
+DELETE /api/field-defaults/users/:userId/:id    (admin)
+GET    /api/field-defaults/users/:userId/allowed (admin)`
+    },
+    {
+      type: 'note',
+      text: 'Stored in nivaro_user_field_defaults (migration 506). The value is checked on save: the person must be able to create and read the collection, set the field on create, and (for relations) read the chosen record. One-to-many and any-collection (M2A) fields are not supported. Personal data: environment promotion must skip this table.'
+    }
+  ]
+}

@@ -669,6 +669,7 @@
           <a class="docs-nav-item" data-section="layout-summary-panel" href="#s-layout-summary-panel">Layout Summary Panel</a>
           <a class="docs-nav-item" data-section="layout-page-slots" href="#s-layout-page-slots">Layout Page Slots</a>
           <a class="docs-nav-item" data-section="layout-conditional" href="#s-layout-conditional">Conditional Layouts by Role</a>
+          <a class="docs-nav-item" data-section="layout-personal-defaults" href="#s-layout-personal-defaults">Personal defaults</a>
           <a class="docs-nav-item" data-section="layout-ai-features" href="#s-layout-ai-features">Per-Layout AI Features</a>
         </div>
       </div>
@@ -11423,6 +11424,36 @@ PATCH/DELETE /api/bulk-actions/defs/:id
 // The layout is only eligible for users in one of these roles.</code></pre>
           <div class="doc-note">When several layouts qualify for a user, the server picks the best match — a role-scoped layout wins over the unconditional active layout. A layout with no conditions remains the default fallback for everyone else; a role-restricted record-conditional layout (e.g. an admin-only PUB layout matched by workflow_type) resolves for admins and falls through to the next allowed layout for everyone else.</div>
           <!-- /SYNC:layout-conditional -->
+        </div>
+
+        <!-- LAYOUT PERSONAL DEFAULTS -->
+        <div class="doc-section" id="s-layout-personal-defaults" data-toc='[{"id":"layout-personal-defaults","label":"Personal defaults"},{"id":"layout-personal-defaults-enable","label":"Opt a field in (layout editor)"},{"id":"layout-personal-defaults-use","label":"Saving and using a default"},{"id":"layout-personal-defaults-manage","label":"My defaults and admin override"},{"id":"layout-personal-defaults-api","label":"API"}]'>
+          <!-- SYNC:layout-personal-defaults -->
+          <h1 class="doc-h1" id="layout-personal-defaults">Personal defaults</h1>
+          <p class="doc-p">A personal default is a starting value a person saves for a field, so every new record of that collection opens with it already filled in. Each person keeps their own; nobody else sees or inherits them. An administrator opts a field in on the form, and each person then chooses their own values.</p>
+          <h2 class="doc-h2" id="layout-personal-defaults-enable">Opt a field in (layout editor)</h2>
+          <p class="doc-p">Select the field on the canvas and turn on **Personal default** under Rules in the inspector. The switch is part of the placement, so it applies to that field on that form only, and it is offered for fields that hold a value (not computed fields). Only fields a person may set on create, and may read, can be saved.</p>
+          <h2 class="doc-h2" id="layout-personal-defaults-use">Saving and using a default</h2>
+          <ul class="doc-ul">
+            <li>Open the field menu (the ⋯ on a field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it.</li>
+            <li>On a **new** record the saved value is filled in automatically and the field shows a small pill. **Undo** on the pill clears it again.</li>
+            <li>If the person changes a parent field (for example the zone), children that still hold a default are re-picked for the new context. Anything the person typed or picked themselves is never touched.</li>
+            <li>A default is saved together with the parent values it was chosen under (its context), so one person can keep a different default per zone. Up to 20 contexts per field.</li>
+          </ul>
+          <div class="doc-note">Precedence on a new record: a restored draft, then an explicit prefill (a link or template that supplies the value), then the personal default, then the layout and rule defaults. A personal default only ever fills an empty field on a new record; it never overwrites an existing record, and the server never injects it.</div>
+          <h2 class="doc-h2" id="layout-personal-defaults-manage">My defaults and admin override</h2>
+          <p class="doc-p">Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change, Clear and Add. Administrators see the same card on a person's page (Personal defaults) and can set or clear values for them; each change is written to the activity log with who, for whom, field and value. Admin routes judge every value as the target person, so an admin cannot save something that person could not.</p>
+          <h2 class="doc-h2" id="layout-personal-defaults-api">API</h2>
+          <pre class="doc-pre"><code>GET    /api/field-defaults/mine[?collection=&amp;on_layout=1]
+PUT    /api/field-defaults/mine { collection, field, value, context? }
+DELETE /api/field-defaults/mine/:id
+GET    /api/field-defaults/mine/allowed[?any=1]
+GET    /api/field-defaults/users/:userId        (admin)
+PUT    /api/field-defaults/users/:userId        (admin)
+DELETE /api/field-defaults/users/:userId/:id    (admin)
+GET    /api/field-defaults/users/:userId/allowed (admin)</code></pre>
+          <div class="doc-note">Stored in nivaro_user_field_defaults (migration 506). The value is checked on save: the person must be able to create and read the collection, set the field on create, and (for relations) read the chosen record. One-to-many and any-collection (M2A) fields are not supported. Personal data: environment promotion must skip this table.</div>
+          <!-- /SYNC:layout-personal-defaults -->
         </div>
 
         <!-- LAYOUT AI FEATURES -->

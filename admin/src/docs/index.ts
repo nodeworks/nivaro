@@ -287,7 +287,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
-import { layoutEditor } from './sections/layout-editor.js'
+import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import {
@@ -1005,6 +1005,7 @@ export const navSections: NavGroup[] = [
       layoutSummaryPanel,
       layoutPageSlots,
       layoutConditional,
+      layoutPersonalDefaults,
       layoutAiFeatures
     ]
   },
