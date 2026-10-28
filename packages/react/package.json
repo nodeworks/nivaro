@@ -1,6 +1,6 @@
 {
   "name": "@nivaro/react",
-  "version": "0.3.28",
+  "version": "0.3.29",
   "description": "React hooks and components for Nivaro CMS forms",
   "type": "module",
   "main": "./dist/index.js",
