@@ -54,9 +54,10 @@ afterEach(() => {
 describe('tenant:join by handshake session (A2)', () => {
   const sign = (sid: string) =>
     `nivaro_session=${encodeURIComponent(new fastifyCookie.Signer(config.SESSION_SECRET, 'sha256').sign(sid))}`
-  const redis = (values: Record<string, string>) => ({
-    mget: vi.fn(async (...keys: string[]) => keys.map((k) => values[k] ?? null))
-  })
+  const redis = (values: Record<string, string>) =>
+    ({
+      mget: vi.fn(async (...keys: string[]) => keys.map((k) => values[k] ?? null))
+    }) as unknown as Parameters<typeof handshakeSessionUser>[1]
   const sock = (headers: Record<string, string>) => ({ handshake: { headers } })
 
   beforeEach(() => {

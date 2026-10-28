@@ -15,6 +15,11 @@ vi.mock('@anthropic-ai/sdk', () => ({
   default: vi.fn().mockImplementation(() => ({ messages: { create: mockCreate } }))
 }))
 vi.mock('../../config.js', () => ({ config: { ANTHROPIC_API_KEY: 'test-key' } }))
+// AI validation goes through the one client factory (review B, 2026-10-27).
+vi.mock('../../services/ai-client.js', () => ({
+  getAiClient: vi.fn(async () => ({ messages: { create: mockCreate } })),
+  getAiModelSettings: vi.fn(async () => ({ extractModel: 'extract-model' }))
+}))
 vi.mock('../../db/index.js', () => ({ db: vi.fn() }))
 
 import Fastify from 'fastify'

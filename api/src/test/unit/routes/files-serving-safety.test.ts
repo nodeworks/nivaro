@@ -132,7 +132,12 @@ async function get(url: string, headers: Record<string, string> = {}) {
 
 function expectHardened(res: { headers: Record<string, unknown> }) {
   expect(res.headers['x-content-type-options']).toBe('nosniff')
-  expect(res.headers['content-security-policy']).toBe("sandbox; default-src 'none'")
+  // PDFs drop `sandbox` (Firefox/Safari viewers blank under it, review A14) but load nothing.
+  expect(res.headers['content-security-policy']).toBe(
+    res.headers['content-type'] === 'application/pdf'
+      ? "default-src 'none'; object-src 'none'"
+      : "sandbox; default-src 'none'"
+  )
 }
 
 beforeEach(() => vi.clearAllMocks())

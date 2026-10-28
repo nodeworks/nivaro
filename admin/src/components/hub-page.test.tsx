@@ -56,7 +56,7 @@ describe('HubPage', () => {
     // Focus follows the selection, so the next arrow press keeps working.
     expect(screen.getByRole('tab', { name: 'Tuning' })).toHaveFocus()
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'End' })
-    expect(screen.getByTestId('where').textContent).toBe('/database/redis')
+    expect(screen.getByTestId('where').textContent).toBe('/database/caches')
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' })
     expect(screen.getByTestId('where').textContent).toBe('/database')
   })

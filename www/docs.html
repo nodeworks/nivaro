@@ -8551,7 +8551,7 @@ POST /api/config-conformance/runs/:id/plan  {"field", "rule"}  administrators</c
           <!-- /SYNC:ai-plans -->
         </div>
 
-        <div class="doc-section" id="s-ai-overview" data-toc='[{"id":"ai-overview","label":"AI Features"}]'>
+        <div class="doc-section" id="s-ai-overview" data-toc='[{"id":"ai-overview","label":"AI Features"},{"id":"ai-limits","label":"Per-person limits and timeouts"}]'>
           <!-- SYNC:ai-overview -->
           <h1 class="doc-h1" id="ai-overview">AI Features</h1>
           <p class="doc-p">Nivaro includes Claude-powered AI features for content generation and record summarization. AI features are admin-only and require an Anthropic API key. The key can be configured in two ways: set the <code class="doc-code">ANTHROPIC_API_KEY</code> environment variable on the server, or enter it in Settings → AI Features → Anthropic API Key. The settings value takes precedence when the env var is absent. When no key is found, all AI endpoints return <code class="doc-code">503 Service Unavailable</code>.</p>
@@ -8561,6 +8561,16 @@ POST /api/config-conformance/runs/:id/plan  {"field", "rule"}  administrators</c
               <tr><td>Summarize</td><td>Item editor — page header</td><td>Produces a 2-3 sentence plain-English summary of the full record for a business user.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">AI features are available to admin users only. The "AI" button on fields and the "Summarize" button in the header are hidden for non-admin users.</div>
+          <h2 class="doc-h2" id="ai-limits">Per-person limits and timeouts</h2>
+          <pre class="doc-pre"><code># .env — all optional
+AI_USER_CALLS_PER_MINUTE=120     # AI calls one person may make per minute (per process); 0 = off
+AI_USER_DAILY_TOKENS=10000000    # tokens one person may use per day (from nivaro_ai_calls); 0 = off
+AI_CALL_TIMEOUT_MS=60000         # per call; grows with max_tokens, capped at 5 minutes
+AI_CHAT_DEADLINE_MS=240000       # Ask AI wraps up after this (background research: 20 minutes)
+AI_VALIDATION_HARD_FAIL=open     # hard-mode AI validation lets saves through when the check cannot run
+AI_SPLIT_SYSTEM=off              # one system block instead of a cached stable part + per-question tail
+EMBEDDING_SCAN_MAX=20000         # newest vectors semantic search ranks over</code></pre>
+          <p class="doc-p">Over a limit the call answers 429 <code class="doc-code">AI_RATE_LIMITED</code> or <code class="doc-code">AI_DAILY_TOKENS</code>. Calls with no person behind them (scheduled jobs) are never limited. Hard-mode AI validation refuses the save with 503 <code class="doc-code">AI_VALIDATION_UNAVAILABLE</code> when the check cannot run, unless <code class="doc-code">AI_VALIDATION_HARD_FAIL=open</code>.</p>
           <!-- /SYNC:ai-overview -->
         </div>
 
@@ -8639,18 +8649,20 @@ Content-Type: application/json
 → 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }</code></pre>
           <p class="doc-p">Severity is always one of <code class="doc-code">error</code> / <code class="doc-code">warning</code> / <code class="doc-code">suggestion</code>; an empty findings array means the record looks ready to submit. Each call is activity-logged as <code class="doc-code">ai-review</code>.</p>
           <h2 class="doc-h2" id="ai-brief">Briefing</h2>
-          <p class="doc-p">The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. Default style: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words. Pass <code class="doc-code">instructions</code> to override the style entirely.</p>
+          <p class="doc-p">The caller gathers the data (custom queries, aggregates, anything) and sends it as one text block — the endpoint only writes the words. The prompt that writes it is chosen on the server from a fixed list — pass <code class="doc-code">template</code>: <code class="doc-code">daily</code> (the default: one-sentence opener, 3-5 concrete insights citing real numbers, immediate-attention callouts, one or two positives, plain text, 150-220 words), <code class="doc-code">report-compare</code>, <code class="doc-code">report-explain</code> or <code class="doc-code">traffic-spike</code>. Custom <code class="doc-code">instructions</code> are ignored (the answer carries <code class="doc-code">instructions_ignored: true</code>); the context is treated as data, never as instructions. Each person may run 2 briefs at once and 10 a minute (429 beyond).</p>
           <pre class="doc-pre"><code>POST /api/ai/brief
 Authorization: Bearer &lt;token&gt;
 Content-Type: application/json
 
 {
   "context": "User: Jane (admin). Today: Mon Aug 3.\n\nActive workflows (25 rows): [...]\nBudget health: [...]",
-  "instructions": "Optional replacement system prompt (max 1000 chars)"
+  "template": "daily"
 }
 
 → 200 { "data": { "brief": "Good morning — three workflows need attention today..." } }
 → 400 { "error": "context is required" }
+→ 429 { "error": "Too many briefs at once" }
+→ 502 { "error": "The AI provider did not answer" }
 → 503 { "error": "AI features require ANTHROPIC_API_KEY to be configured" }</code></pre>
           <div class="doc-note">Context is capped at 16,000 characters and the response at 512 tokens. Responses are not cached server-side — callers that want a once-per-day briefing should cache client-side.</div>
           <!-- /SYNC:ai-review-brief -->
@@ -13863,7 +13875,7 @@ POST /api/items/pages
         <!-- ════ SECURITY & INFRASTRUCTURE ════ -->
 
         <!-- MULTI-DATABASE SUPPORT -->
-        <div class="doc-section" id="s-sso-providers" data-toc='[{"id":"sso-providers","label":"SSO Providers (OIDC + SAML)"},{"id":"sso-new-accounts","label":"New accounts"}]'>
+        <div class="doc-section" id="s-sso-providers" data-toc='[{"id":"sso-providers","label":"SSO Providers (OIDC + SAML)"},{"id":"sso-new-accounts","label":"New accounts"},{"id":"sso-second-provider","label":"Signing in through a second provider"}]'>
           <!-- SYNC:sso-providers -->
           <h1 class="doc-h1" id="sso-providers">SSO Providers (OIDC + SAML)</h1>
           <p class="doc-p">The OIDC login flow works with any compliant issuer — Microsoft is just the default branding. SAML 2.0 is available as a second SSO method alongside it.</p>
@@ -13880,6 +13892,13 @@ GET /api/auth/saml/metadata     # SP metadata for your IdP</code></pre>
           <div class="doc-note">Email claims fall back to upn / preferred_username (email-shaped values only) for issuers that do not send a plain email claim. TOTP second factor applies to both flows.</div>
           <h2 class="doc-h2" id="sso-new-accounts">New accounts</h2>
           <p class="doc-p">A first sign-in creates the account automatically. A returning person is matched by the identity provider subject first; email only links a pre-provisioned account on its first sign-in. Settings → Sign-in providers → New accounts picks the role a new account starts in (after any directory-group mapping) and the role it moves to once the person submits an access request. Admin roles cannot be chosen.</p>
+          <h2 class="doc-h2" id="sso-second-provider">Signing in through a second provider</h2>
+          <p class="doc-p">An account that already signed in through one provider is not taken over by an email match from another. A second provider links to it only when the Microsoft account id (oid) is the same, when both providers are the same family (the same issuer), or when that provider is allowed to link by email. A link made this way keeps the first provider matching by subject.</p>
+          <pre class="doc-pre"><code># .env — provider keys that may link an existing account by email
+SSO_LINK_BY_EMAIL=saml          # primary | saml | &lt;additional provider key&gt; | * ; default none
+
+# without the env var: this instance's settings override (nivaro_settings_overrides)
+{ "sso_link_by_email": ["saml"] }</code></pre>
           <pre class="doc-pre"><code>POST /api/users/me/access-request
 { "reason": "Forecasting for the Central zone", "divisions": [1, 2], "vendor": null }
 
@@ -14684,8 +14703,8 @@ RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default</code
           <p class="doc-p">The instance limit counts per signed-in user, per bearer token, or per address for callers without a credential. A record page makes more than a hundred calls, so a low value refuses people using the app.</p>
           <h3 class="doc-h3" id="rate-limits-anonymous">A limit for callers who are not signed in</h3>
           <pre class="doc-pre"><code># .env
-RATE_LIMIT_ANON_PER_MINUTE=300   # default 300; 0 = off</code></pre>
-          <p class="doc-p">This one is on by default. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its calls without a signed-in session wait for the next minute. Signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example <code class="doc-code">TRUST_PROXY=1</code>) or to their addresses; <code class="doc-code">TRUST_PROXY=true</code> lets a caller choose the address it is counted under.</p>
+RATE_LIMIT_ANON_PER_MINUTE=300   # default 300 when TRUST_PROXY is set, else off; 0 = off</code></pre>
+          <p class="doc-p">This one is on by default when TRUST_PROXY is set (without it every caller would share the proxy's address); set RATE_LIMIT_ANON_PER_MINUTE to turn it on anyway. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its anonymous calls wait for the next minute. A call that carries a token, an API key or a session cookie is never refused by this limit (it only counts when the credential fails), and signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example <code class="doc-code">TRUST_PROXY=1</code>) or to their addresses; <code class="doc-code">TRUST_PROXY=true</code> lets a caller choose the address it is counted under.</p>
           <h3 class="doc-h3" id="rate-limits-public">Public queries, public dashboards and request size</h3>
           <pre class="doc-pre"><code># .env
 PUBLIC_QUERY_MIN_CACHE_S=60   # anonymous runs of a public custom query are cached at least this long
