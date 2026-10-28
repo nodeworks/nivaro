@@ -1,10 +1,88 @@
 {
-  "generated_at": "2026-10-28T15:26:34.710Z",
+  "generated_at": "2026-10-28T18:05:57.654Z",
   "releases": [
+    {
+      "version": "0.3.42",
+      "tag": "v0.3.42",
+      "date": "2026-10-28T14:05:44-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "Remove from header on a header strip item",
+              "hash": "44557893f"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog-picker",
+              "text": "builder sections pick one combination and Add it",
+              "hash": "e98018665"
+            },
+            {
+              "section": "Added",
+              "scope": "catalog-picker",
+              "text": "builders take several picks; description gets the width",
+              "hash": "70ae0e928"
+            },
+            {
+              "section": "Added",
+              "scope": "replay",
+              "text": "Share button copies a link to the recording",
+              "hash": "71c2f993b"
+            },
+            {
+              "section": "Added",
+              "scope": "pipeline",
+              "text": "owner avatars in the Progress panel open the user card",
+              "hash": "d77a60537"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "header",
+              "text": "info icon lines up with the copy icon",
+              "hash": "28ff6d6e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "header",
+              "text": "who-changed-it shows as an info icon, not a cut-off line",
+              "hash": "935996bd3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "scopes",
+              "text": "a dimension's route never passes through an excluded collection",
+              "hash": "5ef8801c9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "replay",
+              "text": "live mode shows the content view; one steady scale per recording",
+              "hash": "b088d6d24"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "Online list shows role and name from the user row, refreshes on change",
+              "hash": "8890accd2"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.41",
       "tag": "v0.3.41",
-      "date": "2026-10-28T11:26:21-04:00",
+      "date": "2026-10-28T11:26:34-04:00",
       "sections": [
         {
           "label": "Fixed",
