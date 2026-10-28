@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-10-28T18:57:55.187Z",
+  "generated_at": "2026-10-28T19:34:39.260Z",
   "releases": [
+    {
+      "version": "0.3.44",
+      "tag": "v0.3.44",
+      "date": "2026-10-28T15:34:26-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "catalog-picker",
+              "text": "resizable columns with fit-to-content and reset",
+              "hash": "eb67e374a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "the Online list follows people to another page live",
+              "hash": "f6bdbe897"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "catalog-picker",
+              "text": "builders keep fixed dropdowns, no column resizing",
+              "hash": "9f035a355"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.43",
       "tag": "v0.3.43",
-      "date": "2026-10-28T14:57:41-04:00",
+      "date": "2026-10-28T14:57:55-04:00",
       "sections": [
         {
           "label": "Added",
