@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { Info } from 'lucide-react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
-import { formatDateTime, formatRelative } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 
 /**
- * "updated 2h ago · import (Bid Import)" under a header chip — the newest
+ * An info icon on a header chip ("Changed by … · when" on hover) — the newest
  * revision that touched THAT field. One request per record covers every
  * header field (react-query dedupes on the shared key). A field nobody has
  * changed since creation shows nothing: the stamp marks edits, not birth.
@@ -45,18 +46,29 @@ export function HeaderFreshness({
   collection,
   itemId,
   field,
-  fields
+  fields,
+  className
 }: {
   collection: string
   itemId: string
   field: string
   /** Every header field — the shared query key. */
   fields: string[]
+  /** Placement on the tile (the band puts it top-right, beside Copy). */
+  className?: string
 }) {
   const { data } = useFieldTouches(collection, itemId, fields)
   const t = data?.[field]
   if (!t) return null
   const machine = t.via !== 'user'
+  const iconCls = cn(
+    'h-3 w-3',
+    machine ? 'text-amber-600/80 dark:text-amber-300/80' : 'text-slate-400 dark:text-slate-500'
+  )
+  const boxCls = cn(
+    'inline-flex h-4 w-4 items-center justify-center rounded opacity-70 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+    className
+  )
   // #617 — an inbound write names its caller and opens the request.
   if (t.caller && t.activity_id) {
     return (
@@ -70,26 +82,22 @@ export function HeaderFreshness({
           type='button'
           data-copy-skip
           data-field-touch-caller={t.caller.key}
-          className='mt-0.5 block max-w-full truncate text-left text-[10px] leading-none text-amber-700/80 underline decoration-dotted underline-offset-2 hover:text-amber-800 dark:text-amber-300/80 dark:hover:text-amber-200 [[data-header-dense]_&]:hidden'
+          aria-label={`Changed by ${t.caller.name} ${formatRelative(t.at)} — open the request`}
+          className={boxCls}
           data-tip={`${t.caller.name} · ${formatDateTime(t.at)} — click for the request`}
+          onClick={(e) => e.stopPropagation()}
         >
-          {t.caller.name} · {formatRelative(t.at)}
+          <Info className={iconCls} />
         </button>
       </InboundRequestPopover>
     )
   }
+  const who = machine && t.via !== 'import' ? `${t.who} (${t.via})` : t.who
+  const tip = `Changed by ${who} · ${formatDateTime(t.at)} (${formatRelative(t.at)})`
   return (
-    <span
-      data-copy-skip
-      className={
-        machine
-          ? 'mt-0.5 block truncate text-[10px] leading-none text-amber-700/80 dark:text-amber-300/80 [[data-header-dense]_&]:hidden'
-          : 'mt-0.5 block truncate text-[10px] leading-none text-slate-400 dark:text-slate-500 [[data-header-dense]_&]:hidden'
-      }
-      data-tip={`${t.who} · ${formatDateTime(t.at)}`}
-    >
-      {formatRelative(t.at)}
-      {machine ? ` · ${t.via === 'import' ? t.who : t.via}` : ''}
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: focusable so keyboard users get the tip
+    <span data-copy-skip tabIndex={0} role='img' aria-label={tip} data-tip={tip} className={boxCls}>
+      <Info className={iconCls} />
     </span>
   )
 }

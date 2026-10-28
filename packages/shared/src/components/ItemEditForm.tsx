@@ -12861,16 +12861,6 @@ function ItemEditFormView({
                                                                   field={f.cmsField.field}
                                                                 />
                                                               )}
-                                                            {!f.cmsField.computed_type &&
-                                                              !isNew &&
-                                                              !viewingAddendum && (
-                                                                <HeaderFreshness
-                                                                  collection={collection}
-                                                                  itemId={itemId}
-                                                                  field={f.cmsField.field}
-                                                                  fields={headerTouchFields}
-                                                                />
-                                                              )}
                                                           </>
                                                         ) : (
                                                           <span
@@ -12924,6 +12914,21 @@ function ItemEditFormView({
                                                         )
                                                       })()}
                                                     </span>
+                                                    {/* Who last changed it, as an info icon beside the
+                                                      copy button: a line under the value was cut off
+                                                      in short tiles and sat inside the value's link. */}
+                                                    {f.cmsField &&
+                                                      !f.cmsField.computed_type &&
+                                                      !isNew &&
+                                                      !viewingAddendum && (
+                                                        <HeaderFreshness
+                                                          collection={collection}
+                                                          itemId={itemId}
+                                                          field={f.cmsField.field}
+                                                          fields={headerTouchFields}
+                                                          className='absolute top-2 right-6'
+                                                        />
+                                                      )}
                                                     {copiedHeaderField === f.field ? (
                                                       <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                                     ) : (
