@@ -103,22 +103,24 @@ export function RecordHeaderActionButtons({
   return (
     <>
       {actions.map((a) => (
-        <button
+        // Same Button, size and type as the pipeline's transition buttons beside them.
+        <Button
           key={`${a.source}:${a.key}`}
           type='button'
+          size='sm'
+          variant='outline'
           data-record-header-action={a.key}
           data-tip={headerTip(a)}
           onClick={() => onPick(a)}
           className={cn(
-            'inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-[13px] font-medium shadow-sm transition-colors',
-            a.variant === 'danger'
-              ? 'border-red-300 text-red-600 hover:bg-red-50 dark:border-red-500/40 dark:text-red-400 dark:hover:bg-red-500/10'
-              : 'border-slate-300 bg-background text-slate-700 hover:bg-accent dark:border-border dark:text-slate-200'
+            'shrink-0 gap-1.5 text-[12px]',
+            a.variant === 'danger' &&
+              'border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-500/40 dark:text-red-400 dark:hover:bg-red-500/10'
           )}
         >
           {iconFor(a)}
           {a.label}
-        </button>
+        </Button>
       ))}
     </>
   )

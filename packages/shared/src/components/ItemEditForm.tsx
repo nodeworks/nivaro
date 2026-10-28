@@ -5199,11 +5199,13 @@ function ItemEditFormView({
   const pipelineCollection = viewingAddendum ? 'nivaro_addendums' : collection
   const pipelineItem = viewingAddendum ? addendumViewId : itemId
   // Registry actions flagged for the header (Hold / Remove Hold), beside the
-  // transitions; never on a new record or while viewing an addendum.
+  // transitions; never on a new record. While an addendum is open they still act
+  // on the record itself (Rob 2026-10-28: a record with an active addendum can be
+  // put on hold), their guards read from the record, not the addendum's draft.
   const headerRegistryActions = useRecordHeaderActions(
     collection,
-    isNew || viewingAddendum || designOn ? null : String(itemId),
-    draft
+    isNew || designOn ? null : String(itemId),
+    viewingAddendum ? null : draft
   )
   const [headerRegistryPick, setHeaderRegistryPick] = useState<AvailableBulkAction | null>(null)
 
