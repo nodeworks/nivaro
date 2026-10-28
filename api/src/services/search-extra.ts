@@ -92,7 +92,7 @@ export interface FileHitRow {
 
 export interface ExtraDeps {
   commentRows(phrase: string, cap: number): Promise<TextRow[]>
-  noteRows(phrase: string, cap: number): Promise<TextRow[]>
+  noteRows(user: User, phrase: string, cap: number): Promise<TextRow[]>
   visibleIds(user: User, collection: string, ids: string[], isAdmin: boolean): Promise<string[]>
   recordLabels(user: User, byCollection: Map<string, Set<string>>): Promise<Record<string, string>>
   displayNames(collections: string[]): Promise<Map<string, string>>
@@ -154,7 +154,7 @@ async function tableRows(table: string): Promise<number> {
   return rows
 }
 
-async function noteRows(phrase: string, cap: number): Promise<TextRow[]> {
+async function noteRows(user: User, phrase: string, cap: number): Promise<TextRow[]> {
   const out: TextRow[] = []
   const like = likeOf(phrase)
   try {
@@ -218,13 +218,28 @@ async function noteRows(phrase: string, cap: number): Promise<TextRow[]> {
       )
       if (!textCol || !names.has('id')) continue
       try {
-        const rows = (await db(rel.many_collection)
+        const found = (await db(rel.many_collection)
           .whereNotNull(rel.many_field)
           .whereRaw(`[${textCol}] ${LIKE}`, [like])
           .limit(cap)
-          .select({ id: 'id', item: rel.many_field, text: textCol })) as Array<
-          Record<string, unknown>
-        >
+          .select({ id: 'id' })) as Array<{ id: unknown }>
+        if (found.length === 0) continue
+        // The note rows are re-read AS THE CALLER (their own policy, row filter,
+        // User Scopes and field list), and the snippet comes only from what that
+        // read returned: a note table, or its text column, the caller may not
+        // read never shows — nor confirms a match.
+        const { readItems } = await import('./items.js')
+        const read = (
+          await readItems(user, rel.many_collection, {
+            filter: { id: { _in: found.map((f) => f.id) } },
+            fields: ['id', rel.many_field, textCol],
+            limit: found.length,
+            count: false
+          })
+        ).data as Array<Record<string, unknown>>
+        const rows = read
+          .filter((r) => r[rel.many_field] != null && typeof r[textCol] === 'string')
+          .map((r) => ({ id: r.id, item: r[rel.many_field], text: r[textCol] }))
         for (const r of rows) {
           out.push({
             id: `note:${rel.many_collection}:${String(r.id)}`,
@@ -424,7 +439,7 @@ export async function searchTextHits(
 ): Promise<ExtraHit[]> {
   const [comments, notes] = await Promise.all([
     deps.commentRows(q, RAW_CAP).catch(() => [] as TextRow[]),
-    deps.noteRows(q, RAW_CAP).catch(() => [] as TextRow[])
+    deps.noteRows(user, q, RAW_CAP).catch(() => [] as TextRow[])
   ])
   const rows = [...comments, ...notes]
   if (rows.length === 0) return []
