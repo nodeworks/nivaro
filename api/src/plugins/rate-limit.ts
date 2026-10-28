@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
+import { SESSION_COOKIE } from '../auth/session.js'
+import { parseTrustProxy } from '../lib/trust-proxy.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
 
@@ -10,12 +12,15 @@ import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker
  * Two layers, both registered AFTER the session plugin so a caller is keyed by WHO they
  * verifiably are, not by a credential they merely sent (M15, security audit 2026-10-27):
  *
- * 1. Anonymous limit — ON by default (RATE_LIMIT_ANON_PER_MINUTE, default 300; 0 = off).
+ * 1. Anonymous limit — RATE_LIMIT_ANON_PER_MINUTE (0 = off). Unset: 300 when TRUST_PROXY is
+ *    set (req.ip is the real client), else OFF — behind a proxy with TRUST_PROXY unset every
+ *    client shares the proxy's address and one bucket (review A1, 2026-10-27).
  *    Keyed per client IP (req.ip, i.e. after TRUST_PROXY). Every response that ends with no
  *    signed-in caller (no verified session, no authenticated principal) counts against its
- *    IP; once over, that IP's requests without a verified session are refused — bearer
- *    requests too, so guessing tokens from one address is capped. Signed-in traffic never
- *    counts, so a busy record page is never refused by it.
+ *    IP; once over, that IP's requests are refused UNLESS they carry an Authorization header
+ *    or the session cookie — those are only counted (a bad credential still spends the
+ *    budget), so a valid API key or session is never locked out by signed-out traffic from
+ *    the same address. Signed-in traffic never counts.
  * 2. Per-caller limit — OFF unless RATE_LIMIT_PER_MINUTE is set (> 0). Nivaro ships with no
  *    per-caller limit (2026-09-14 — the old 1000/min default 429'd real record pages: a large
  *    record form is 100+ requests). Keyed by the verified session user, else the bearer
@@ -48,10 +53,17 @@ export function resolveLimit(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
 }
 
-/** Anonymous requests per IP per minute; default 300, 0 = off. */
+/**
+ * Anonymous requests per IP per minute; 0 = off. Unset: 300 when TRUST_PROXY names a proxy
+ * (so req.ip is the client), else 0 — without it every client may share the proxy's address.
+ */
 export function resolveAnonLimit(env: NodeJS.ProcessEnv = process.env): number {
   const v = env.RATE_LIMIT_ANON_PER_MINUTE
-  if (v === undefined || String(v).trim() === '') return 300
+  if (v === undefined || String(v).trim() === '') {
+    const trust = parseTrustProxy(env.TRUST_PROXY).value
+    const trusted = Array.isArray(trust) ? trust.length > 0 : Boolean(trust)
+    return trusted ? 300 : 0
+  }
   const raw = Number(v)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
 }
@@ -67,6 +79,24 @@ interface LimitedRequest {
 export function sessionUser(req: { session?: { userId?: unknown } | null }): string | null {
   const id = req.session?.userId
   return typeof id === 'string' && id ? id : null
+}
+
+/**
+ * Does the request carry a credential (Authorization header or the session cookie)? The
+ * anonymous limit counts such a request when the credential fails, but never refuses it.
+ */
+export function carriesCredential(req: {
+  headers: Record<string, string | string[] | undefined>
+}): boolean {
+  const auth = req.headers.authorization
+  if (typeof auth === 'string' && auth.trim()) return true
+  const cookie = req.headers.cookie
+  const list = Array.isArray(cookie) ? cookie : cookie ? [cookie] : []
+  return list.some((c) =>
+    String(c)
+      .split(';')
+      .some((part) => part.trimStart().startsWith(`${SESSION_COOKIE}=`))
+  )
 }
 
 /** Per-caller key: verified user, else bearer hash, else IP. */
@@ -154,7 +184,7 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
       `rl:anon:${tenantPart()}${windowStart}:${req.ip}`
 
     app.addHook('onRequest', async (req, reply) => {
-      if (exemptFromLimits(req) || sessionUser(req)) return
+      if (exemptFromLimits(req) || sessionUser(req) || carriesCredential(req)) return
       const r = redis()
       if (!r) return
       const { nowSec, windowStart, resetAt } = windowNow()
@@ -192,6 +222,10 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
       }
     })
     app.log.info({ limit: anonLimit }, 'Anonymous rate limit ready (per IP, per minute)')
+  } else {
+    app.log.info(
+      'Anonymous rate limit off (set TRUST_PROXY, or RATE_LIMIT_ANON_PER_MINUTE, to enable)'
+    )
   }
 
   if (limit <= 0) {

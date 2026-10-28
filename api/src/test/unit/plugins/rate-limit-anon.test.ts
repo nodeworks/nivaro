@@ -11,6 +11,7 @@ vi.mock('../../../services/traffic-breaker.js', () => ({
 
 import {
   callerRateLimitPlugin,
+  carriesCredential,
   clientKey,
   exemptFromLimits,
   resolveAnonLimit,
@@ -80,9 +81,13 @@ afterEach(() => {
 })
 
 describe('rate limit settings', () => {
-  it('anonymous limit defaults on (300), per-caller limit defaults off', () => {
-    expect(resolveAnonLimit({})).toBe(300)
-    expect(resolveAnonLimit({ RATE_LIMIT_ANON_PER_MINUTE: '0' })).toBe(0)
+  it('anonymous limit defaults on (300) only behind a trusted proxy; per-caller off', () => {
+    expect(resolveAnonLimit({})).toBe(0)
+    expect(resolveAnonLimit({ TRUST_PROXY: 'false' })).toBe(0)
+    expect(resolveAnonLimit({ TRUST_PROXY: '1' })).toBe(300)
+    expect(resolveAnonLimit({ TRUST_PROXY: '10.0.0.0/8' })).toBe(300)
+    expect(resolveAnonLimit({ RATE_LIMIT_ANON_PER_MINUTE: '50' })).toBe(50)
+    expect(resolveAnonLimit({ RATE_LIMIT_ANON_PER_MINUTE: '0', TRUST_PROXY: '1' })).toBe(0)
     expect(resolveLimit({})).toBe(0)
     expect(resolveLimit({ RATE_LIMIT_PER_MINUTE: '600' })).toBe(600)
   })
@@ -118,13 +123,28 @@ describe('anonymous limit', () => {
     await app.close()
   })
 
-  it('bad bearer tokens spend the budget; once over, bearer requests from that address wait too', async () => {
-    const { app } = await build({ RATE_LIMIT_ANON_PER_MINUTE: '2' })
+  it('bad bearer tokens spend the budget but a credentialed request is never refused (A1)', async () => {
+    const { app, redis } = await build({ RATE_LIMIT_ANON_PER_MINUTE: '2' })
     const bad = { ...remote, headers: { authorization: 'Bearer guess' } }
-    expect((await app.inject({ url: '/api/thing', ...bad })).statusCode).toBe(200)
-    expect((await app.inject({ url: '/api/thing', ...bad })).statusCode).toBe(200)
-    expect((await app.inject({ url: '/api/thing', ...bad })).statusCode).toBe(429)
+    for (let i = 0; i < 3; i++) {
+      expect((await app.inject({ url: '/api/thing', ...bad })).statusCode).toBe(200)
+    }
+    expect([...redis.store.values()].reduce((a, b) => a + b, 0)).toBe(3)
+    // the bucket is full: a plain anonymous request waits, a valid key still gets through
+    expect((await app.inject({ url: '/api/thing', ...remote })).statusCode).toBe(429)
+    const good = { ...remote, headers: { authorization: 'Bearer good' } }
+    expect((await app.inject({ url: '/api/thing', ...good })).statusCode).toBe(200)
+    // so does a request carrying the session cookie
+    const cookie = { ...remote, headers: { cookie: 'a=1; nivaro_session=abc' } }
+    expect((await app.inject({ url: '/api/thing', ...cookie })).statusCode).toBe(200)
     await app.close()
+  })
+
+  it('recognises the session cookie among others', () => {
+    expect(carriesCredential({ headers: { cookie: 'x=1; nivaro_session=s' } })).toBe(true)
+    expect(carriesCredential({ headers: { cookie: 'x=1; other_session=s' } })).toBe(false)
+    expect(carriesCredential({ headers: { authorization: 'Bearer t' } })).toBe(true)
+    expect(carriesCredential({ headers: {} })).toBe(false)
   })
 
   it('signed-in traffic never counts and is never refused', async () => {
