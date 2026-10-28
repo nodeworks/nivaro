@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  PackageCheck,
   Plus,
   Search,
   Star,
@@ -20,17 +21,20 @@ import {
   useState
 } from 'react'
 import { createPortal } from 'react-dom'
-import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
+import { useItemEditAuth, useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
+import { matchesSearch, tokenize } from '../../lib/search-text'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { SearchHighlight } from '../SearchHighlight'
 import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { ColResizeHandle, fitWidth, ResetColumnsButton, useColumnWidths } from './catalog-columns'
+import { orderCatalogMatches, rowMatchesFields } from './catalog-search'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import {
@@ -41,7 +45,7 @@ import {
 } from './line-qty'
 import { resolveM2MRelatedCollection } from './M2MCombobox'
 import { useO2MStaging } from './O2MStagingContext'
-import { RelationCombobox } from './RelationCombobox'
+import { RelatedItemLabel, RelationCombobox } from './RelationCombobox'
 import type { CMSField, CMSRelation } from './types'
 
 /** A to-many `section_by`, resolved: the junction between catalog items and
@@ -148,6 +152,12 @@ export interface CatalogModeConfig {
      *  across ALL matching rows per item (e.g. open-order quantity per item),
      *  instead of the default last-row value. */
     aggregate?: 'sum'
+    /** This column is the item's STOCK (on-hand at the match's place): the
+     *  catalog gets an "In stock at <place>" toggle beside its search that keeps
+     *  search results, favorites and section rows to items whose value is > 0.
+     *  Unset, a column keyed `on_hand` counts as stock; `false` opts it out. The
+     *  place's name is the label of the first '$parent.<field>' in `match`. */
+    stock?: boolean
   }>
   /** Flags rows whose entered qty exceeds a related column's value (e.g. warehouse
    *  on-hand): amber tint + inline shortfall note in sections AND the Summary.
@@ -179,6 +189,11 @@ export interface CatalogModeConfig {
   submission_errors?: boolean | { match_fields?: string[] }
   /** Per-user starred catalog items: star toggles + a Favorites section pinned first. */
   favorites?: boolean
+  /** Items this person added recently (child rows they created on ANY parent,
+   *  read as them) float to the top of search results with a "Recent" chip.
+   *  Default on, 30 days; `false` = off. Needs a creator column on the child
+   *  collection (user_created / created_by / creator). */
+  recent?: boolean | { days?: number }
   /** related_columns KEYS shown as table columns in the favorites manager
    *  drawer (full-catalog browse + star). Values roll up across ALL rows the
    *  column's `match` currently resolves to — i.e. only the warehouses the
@@ -832,21 +847,167 @@ export function CatalogPickerField({
       otherSearchFields: [...text].filter((f) => !shown.has(f))
     }
   }, [catalogMeta, catalogCol, tmpl, config.columns])
+  // ── In-stock toggle (#21) ────────────────────────────────────────────────
+  // The related column that IS stock (`stock: true`, else one keyed `on_hand`):
+  // with the toggle on, search results, favorites and section rows keep to
+  // items whose value is > 0 where the column's `match` points (the parent's
+  // supporting warehouse). Off until that place is chosen.
+  const stockIdx = useMemo(() => {
+    const rcs = config.related_columns ?? []
+    const flagged = rcs.findIndex((rc) => rc.stock === true)
+    return flagged !== -1
+      ? flagged
+      : rcs.findIndex((rc) => rc.key === 'on_hand' && rc.stock !== false)
+  }, [config.related_columns])
+  const stockCol = stockIdx === -1 ? null : ((config.related_columns ?? [])[stockIdx] ?? null)
+  const stockMatch = stockCol ? resolveRelatedMatch(stockCol.match, parentDraft) : null
+  /** The parent field naming the place (first top-level '$parent.<field>' in match). */
+  const stockPlaceField = useMemo(() => {
+    for (const v of Object.values(stockCol?.match ?? {}))
+      if (typeof v === 'string' && v.startsWith('$parent.')) return v.slice('$parent.'.length)
+    return null
+  }, [stockCol])
+  const stockPlaceId = stockPlaceField ? parentDraft?.[stockPlaceField] : null
+  const stockPlaceLabel = stockPlaceField
+    ? (parentDraftCtx?.fieldLabels?.[stockPlaceField] ?? titleCase(stockPlaceField))
+    : null
+  const stockStoreKey = catalogCol
+    ? `nvr:catalog-in-stock:${catalogCol}:${relatedCollection}.${manyField}`
+    : null
+  const [inStockPref, setInStockPref] = useState(false)
+  useEffect(() => {
+    if (!stockStoreKey) return
+    try {
+      setInStockPref(localStorage.getItem(stockStoreKey) === '1')
+    } catch {
+      /* storage blocked: the toggle just starts off */
+    }
+  }, [stockStoreKey])
+  const setInStock = (on: boolean) => {
+    setInStockPref(on)
+    if (!stockStoreKey) return
+    try {
+      if (on) localStorage.setItem(stockStoreKey, '1')
+      else localStorage.removeItem(stockStoreKey)
+    } catch {
+      /* a per-browser convenience only */
+    }
+  }
+  const inStockOn = !!stockCol && inStockPref && stockMatch !== null
+  // The catalog's reverse alias onto the stock collection, when one exists,
+  // lets the SEARCH itself keep to stocked items (25 results are 25 stocked
+  // ones); without it the fetched page is narrowed here and fetched wider.
+  const stockAlias = useMemo(() => {
+    if (!stockCol) return null
+    const rel = (catalogMeta?.relations ?? []).find(
+      (r) =>
+        r.many_collection === stockCol.collection &&
+        r.many_field === stockCol.item_field &&
+        r.one_collection === catalogCol &&
+        !!r.one_field &&
+        !r.junction_field
+    )
+    return (rel?.one_field as string | undefined) ?? null
+  }, [stockCol, catalogMeta, catalogCol])
+  const stockSearchFilter = useMemo<Record<string, unknown> | null>(
+    () =>
+      inStockOn && stockAlias && stockCol && stockMatch
+        ? { [stockAlias]: { _some: { ...stockMatch, [stockCol.value_field]: { _gt: 0 } } } }
+        : null,
+    [inStockOn, stockAlias, stockCol, stockMatch]
+  )
+  const stockFilterKey = JSON.stringify(stockSearchFilter)
+  const searchLimit = inStockOn && !stockSearchFilter ? 100 : 25
+  const withStock = (params: Record<string, unknown>, filter?: Record<string, unknown>) => {
+    const parts = [filter, stockSearchFilter].filter(Boolean) as Record<string, unknown>[]
+    if (parts.length === 0) return params
+    return { ...params, filter: JSON.stringify(parts.length === 1 ? parts[0] : { _and: parts }) }
+  }
+
+  // ── Recently picked (#20) ────────────────────────────────────────────────
+  // Catalog items this person put on any parent in the last N days: their own
+  // child rows (read as them), newest first. Cached a few minutes.
+  const viewerId = useItemEditAuth().userId
+  const recentDays =
+    config.recent === false
+      ? 0
+      : (typeof config.recent === 'object' && Number(config.recent?.days)) || 30
+  const creatorField = ['user_created', 'created_by', 'creator'].find((f) =>
+    childFields.some((cf) => cf.field === f)
+  )
+  const createdAtField = ['date_created', 'created_at'].find((f) =>
+    childFields.some((cf) => cf.field === f)
+  )
+  const { data: recentIds = [] } = useQuery<string[]>({
+    queryKey: [
+      'catalog-recent-picks',
+      relatedCollection,
+      config.item_field,
+      viewerId,
+      creatorField,
+      createdAtField,
+      recentDays
+    ],
+    queryFn: async () => {
+      const since = new Date(Date.now() - recentDays * 86_400_000).toISOString()
+      const filter: Record<string, unknown> = { [creatorField as string]: { _eq: viewerId } }
+      if (createdAtField) filter[createdAtField] = { _gte: since }
+      const rows = await client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, {
+            fields: config.item_field,
+            filter: JSON.stringify(filter),
+            limit: 500,
+            count: 'false',
+            ...(createdAtField ? { sort: `-${createdAtField}` } : {})
+          })
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => [] as Record<string, unknown>[])
+      const out: string[] = []
+      for (const r of rows) {
+        const v = r[config.item_field]
+        const id = v != null && typeof v === 'object' ? (v as { id?: unknown }).id : v
+        if (id != null && id !== '' && !out.includes(String(id))) out.push(String(id))
+        if (out.length >= 150) break
+      }
+      return out
+    },
+    enabled: recentDays > 0 && !!viewerId && !!creatorField && !readOnly,
+    staleTime: 5 * 60_000
+  })
+  const recentSet = useMemo(() => new Set(recentIds), [recentIds])
+
   const fullSearchOn = !!catalogCol && fullSearchQ.trim().length > 0
+  // search_rank=1: the server orders the shown-field tier exact → prefix →
+  // word starts → other over `search_fields` in THIS order (label fields first,
+  // so the item number is the primary column), then by the caller's sort.
   const { data: shownSearchRows = [], isFetching: shownSearchFetching } = useQuery<
     Record<string, unknown>[]
   >({
-    queryKey: ['catalog-shown-search', catalogCol, catalogFields, fullSearchQ, shownSearchFields],
+    queryKey: [
+      'catalog-shown-search',
+      catalogCol,
+      catalogFields,
+      fullSearchQ,
+      shownSearchFields,
+      stockFilterKey,
+      searchLimit
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${catalogCol}`, {
-            search: fullSearchQ,
-            search_fields: shownSearchFields.join(','),
-            fields: catalogFields,
-            limit: 25,
-            sort: catalogSortField
-          })
+          get(
+            `/items/${catalogCol}`,
+            withStock({
+              search: fullSearchQ,
+              search_fields: shownSearchFields.join(','),
+              search_rank: '1',
+              fields: catalogFields,
+              limit: searchLimit,
+              sort: catalogSortField
+            })
+          )
         )
         .then((r) => r.data ?? []),
     enabled: fullSearchOn && shownSearchFields.length > 0,
@@ -857,40 +1018,97 @@ export function CatalogPickerField({
   const { data: fullSearchRows = [], isFetching: allSearchFetching } = useQuery<
     Record<string, unknown>[]
   >({
-    queryKey: ['catalog-full-search', catalogCol, catalogFields, fullSearchQ, otherFieldsParam],
+    queryKey: [
+      'catalog-full-search',
+      catalogCol,
+      catalogFields,
+      fullSearchQ,
+      otherFieldsParam,
+      stockFilterKey,
+      searchLimit
+    ],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${catalogCol}`, {
-            search: fullSearchQ,
-            fields: [catalogFields, otherFieldsParam].filter(Boolean).join(','),
-            limit: 25,
-            sort: catalogSortField
-          })
+          get(
+            `/items/${catalogCol}`,
+            withStock({
+              search: fullSearchQ,
+              fields: [catalogFields, otherFieldsParam].filter(Boolean).join(','),
+              limit: searchLimit,
+              sort: catalogSortField
+            })
+          )
         )
         .then((r) => r.data ?? []),
     enabled: fullSearchOn,
     staleTime: 30_000,
     placeholderData: (p) => p
   })
+  // Recent picks that match, wherever they would rank — one small read over
+  // just those ids, so a recent item never drops below the first page.
+  const recentSearchKey = recentIds.join(',')
+  const { data: recentSearchRows = [] } = useQuery<Record<string, unknown>[]>({
+    queryKey: [
+      'catalog-recent-search',
+      catalogCol,
+      catalogFields,
+      fullSearchQ,
+      otherFieldsParam,
+      recentSearchKey,
+      stockFilterKey
+    ],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(
+            `/items/${catalogCol}`,
+            withStock(
+              {
+                search: fullSearchQ,
+                fields: [catalogFields, otherFieldsParam].filter(Boolean).join(','),
+                limit: 10,
+                count: 'false'
+              },
+              { id: { _in: recentIds } }
+            )
+          )
+        )
+        .then((r) => r.data ?? [])
+        .catch(() => [] as Record<string, unknown>[]),
+    enabled: fullSearchOn && recentIds.length > 0,
+    staleTime: 30_000,
+    placeholderData: (p) => p
+  })
   const fullSearchFetching = shownSearchFetching || allSearchFetching
   // Pure search results: the box searches the FULL catalog and shows matches
   // in their own band — it never filters the favorites or section lists
-  // (narrowing those alongside read as everything vanishing).
-  const fullMatches = useMemo(() => {
-    const seen = new Set(shownSearchRows.map((r) => String(r.id)))
-    return [...shownSearchRows, ...fullSearchRows.filter((r) => !seen.has(String(r.id)))]
-  }, [shownSearchRows, fullSearchRows])
+  // (narrowing those alongside read as everything vanishing). Order: an exact
+  // item-number hit, then this person's recent picks, then the shown-field tier
+  // by rank (server search_rank, re-applied here with the client twin so an
+  // older API ranks the page too), then matches only in other fields.
+  const rawMatches = useMemo(
+    () =>
+      orderCatalogMatches({
+        shown: shownSearchRows,
+        other: fullSearchRows,
+        recent: recentSearchRows,
+        shownFields: shownSearchFields,
+        q: fullSearchQ
+      }),
+    [shownSearchRows, fullSearchRows, recentSearchRows, shownSearchFields, fullSearchQ]
+  )
   /** Why a row matched when its shown fields do not hold the search: "Manufacturer: PPC". */
   const hiddenMatchOf = (row: Record<string, unknown>): string | null => {
     if (shownSearchFields.length === 0) return null
     if (shownSearchRows.some((r) => String(r.id) === String(row.id))) return null
-    const words = fullSearchQ.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (rowMatchesFields(row, shownSearchFields, fullSearchQ)) return null
+    const words = tokenize(fullSearchQ)
     for (const f of otherSearchFields) {
       const v = row[f]
       if (v == null || typeof v === 'object') continue
       const text = String(v)
-      if (words.some((w) => text.toLowerCase().includes(w)))
+      if (words.some((w) => matchesSearch(text, w)))
         return `${titleCase(f)}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`
     }
     return null
@@ -904,9 +1122,9 @@ export function CatalogPickerField({
     for (const r of catalogRows) ids.add(String(r.id))
     for (const e of pickedEntries) ids.add(e.key)
     for (const id of pinnedIds) ids.add(id)
-    for (const r of fullMatches) ids.add(String(r.id))
+    for (const r of rawMatches) ids.add(String(r.id))
     return [...ids]
-  }, [catalogRows, pickedEntries, pinnedIds, fullMatches])
+  }, [catalogRows, pickedEntries, pinnedIds, rawMatches])
   const relatedResults = useQueries({
     queries: (config.related_columns ?? []).map((rc) => {
       const match = resolveRelatedMatch(rc.match, parentDraft)
@@ -964,6 +1182,23 @@ export function CatalogPickerField({
     if (idx === -1) return undefined
     return (relatedResults[idx]?.data as Record<string, unknown> | undefined)?.[itemId]
   }
+  // In-stock filter (#21) over the SAME lookup the stock column renders from:
+  // an item with no row at the place has none. While the lookup loads nothing
+  // is hidden (rows would blink out and back).
+  const stockMap =
+    stockIdx === -1
+      ? undefined
+      : (relatedResults[stockIdx]?.data as Record<string, unknown> | undefined)
+  const stockLoading = inStockOn && !!relatedResults[stockIdx]?.isFetching
+  const isInStock = (id: string) => {
+    if (!inStockOn || stockMap === undefined) return true
+    const n = Number(stockMap[id])
+    return Number.isFinite(n) && n > 0
+  }
+  const fullMatches = inStockOn ? rawMatches.filter((r) => isInStock(String(r.id))) : rawMatches
+  const shownPinnedRows = inStockOn
+    ? pinnedRowsData.filter((r) => isInStock(String(r.id)))
+    : pinnedRowsData
 
   // qty_warning: entered qty vs the configured related column (warehouse
   // on-hand). Reads the SAME resolved lookup the columns render from, so
@@ -1295,7 +1530,8 @@ export function CatalogPickerField({
       : c.field === firstTextCol
         ? ['min-w-0 flex-[3]', '']
         : ['w-36 shrink-0', '']
-  const colCells = (id: string, row: Record<string, unknown>) => (
+  /** `hl` = the search to mark in text columns (search results only). */
+  const colCells = (id: string, row: Record<string, unknown>, hl?: string) => (
     <>
       {displayCols.map((c) => {
         const [def, extra] = colDef(c)
@@ -1303,6 +1539,7 @@ export function CatalogPickerField({
           <TruncText
             key={c.field}
             text={fmtVal(pathValue(row, c.field), c.format)}
+            highlight={c.format ? undefined : hl}
             {...catCols.box(c.field, def, cn('text-slate-500 dark:text-slate-400', extra))}
           />
         )
@@ -1327,7 +1564,7 @@ export function CatalogPickerField({
   // Host-provided detail drawer (e.g. a stock-planning drawer for the catalog
   // collection): when an opener is registered, item labels become links.
   const itemOpenable = canOpenCatalogItem(catalogCol)
-  const itemLabel = (catalogId: string, text: string, cls: string, fit?: boolean) =>
+  const itemLabel = (catalogId: string, text: string, cls: string, fit?: boolean, hl?: string) =>
     itemOpenable ? (
       <button
         type='button'
@@ -1339,19 +1576,25 @@ export function CatalogPickerField({
           'text-left underline decoration-slate-300 decoration-1 underline-offset-2 hover:text-[#009abe] hover:decoration-[#009abe] dark:decoration-slate-600'
         )}
       >
-        {text}
+        {hl ? <SearchHighlight text={text} query={hl} /> : text}
       </button>
     ) : (
       <span className={cls} data-cpf-fit={fit || undefined}>
-        {text}
+        {hl ? <SearchHighlight text={text} query={hl} /> : text}
       </span>
     )
   /** The Item cell of a catalog row (resizable), with an optional note after the label. */
-  const itemCell = (catalogId: string, text: string, note?: ReactNode) => {
+  const itemCell = (catalogId: string, text: string, note?: ReactNode, hl?: string) => {
     const b = catCols.box('item', hasExtraCols ? 'w-36 shrink-0' : 'min-w-0 flex-1')
     return (
       <span {...b} className={cn('flex min-w-0 items-center gap-1.5', b.className)}>
-        {itemLabel(catalogId, text, 'min-w-0 truncate text-slate-700 dark:text-slate-200', true)}
+        {itemLabel(
+          catalogId,
+          text,
+          'min-w-0 truncate text-slate-700 dark:text-slate-200',
+          true,
+          hl
+        )}
         {note}
       </span>
     )
@@ -1396,6 +1639,8 @@ export function CatalogPickerField({
       Array<{ id: string; label: string; row: Record<string, unknown> }>
     >()
     for (const row of catalogRows) {
+      // In stock only (#21): an item with no row at the place has none.
+      if (inStockOn && stockMap !== undefined && !(Number(stockMap[String(row.id)]) > 0)) continue
       const label = applyDisplayTemplate(tmpl, row)
       const secs = sectionAliasRel
         ? (sectionNamesByItem.get(String(row.id)) ?? [])
@@ -1426,7 +1671,9 @@ export function CatalogPickerField({
     sectionAliasRel,
     sectionNamesByItem,
     sectionsPending,
-    resolvedLinkFilter
+    resolvedLinkFilter,
+    inStockOn,
+    stockMap
   ])
 
   // First load: collapse everything except sections holding picked rows
@@ -1900,6 +2147,47 @@ export function CatalogPickerField({
                 placeholder='Search catalog…'
                 className='w-full bg-transparent text-[12px] outline-none placeholder:text-slate-400'
               />
+              {stockCol && (
+                <button
+                  type='button'
+                  aria-pressed={inStockOn}
+                  disabled={stockMatch === null}
+                  onClick={() => setInStock(!inStockPref)}
+                  data-catalog-in-stock={inStockOn ? 'on' : 'off'}
+                  data-tip={
+                    stockMatch === null
+                      ? `Choose ${stockPlaceLabel ?? 'where stock is counted'} to show only items in stock there`
+                      : inStockOn
+                        ? 'Showing only items with stock on hand — click to show everything'
+                        : 'Show only items with stock on hand'
+                  }
+                  className={cn(
+                    'inline-flex h-6 max-w-[220px] shrink-0 items-center gap-1 rounded border px-1.5 text-[11px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-not-allowed disabled:opacity-50',
+                    inStockOn
+                      ? 'border-nvr-cyan/40 bg-nvr-cyan/10 text-[#00728d] dark:border-nvr-cyan/40 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-muted dark:border-border dark:bg-background dark:text-slate-300'
+                  )}
+                >
+                  {stockLoading ? (
+                    <Loader2 className='h-3 w-3 shrink-0 animate-spin' />
+                  ) : (
+                    <PackageCheck className='h-3 w-3 shrink-0' />
+                  )}
+                  <span className='truncate'>
+                    In stock
+                    {stockMatch !== null && stockPlaceField && stockPlaceId != null && (
+                      <>
+                        {' at '}
+                        <StockPlaceName
+                          parentCollection={parentCollection}
+                          field={stockPlaceField}
+                          id={stockPlaceId}
+                        />
+                      </>
+                    )}
+                  </span>
+                </button>
+              )}
               <span className='shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'>
                 {pickedCount} picked
               </span>
@@ -1950,7 +2238,20 @@ export function CatalogPickerField({
             )}
             {search.trim().length > 0 && fullMatches.length === 0 && !fullSearchFetching && (
               <p className='px-3 py-4 text-center text-slate-400'>
-                No CIFAs match "{search.trim()}"
+                {inStockOn && rawMatches.length > 0 ? (
+                  <>
+                    Nothing in stock matches "{search.trim()}" —{' '}
+                    <button
+                      type='button'
+                      onClick={() => setInStock(false)}
+                      className='font-medium text-[#00728d] underline-offset-2 hover:underline dark:text-nvr-cyan'
+                    >
+                      show {rawMatches.length} out of stock
+                    </button>
+                  </>
+                ) : (
+                  <>No items match "{search.trim()}"</>
+                )}
               </p>
             )}
             {search.trim().length > 0 && fullMatches.length > 0 && (
@@ -1964,7 +2265,8 @@ export function CatalogPickerField({
                     {fullMatches.length}
                   </span>
                   <span className='text-[10px] text-slate-400'>
-                    across the entire catalog — enter a quantity to add
+                    across the entire catalog{inStockOn ? ', in stock only' : ''} — enter a quantity
+                    to add
                   </span>
                   {fullSearchFetching && (
                     <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
@@ -1990,19 +2292,35 @@ export function CatalogPickerField({
                         applyDisplayTemplate(tmpl, r),
                         (() => {
                           const why = hiddenMatchOf(r)
-                          return why ? (
-                            <span
-                              data-catalog-match-why
-                              data-tip={`Matched on ${why}`}
-                              data-cpf-fit
-                              className='min-w-0 max-w-[160px] shrink-[4] truncate rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
-                            >
-                              {why}
-                            </span>
-                          ) : null
-                        })()
+                          const recent = recentSet.has(id)
+                          if (!why && !recent) return null
+                          return (
+                            <>
+                              {recent && (
+                                <span
+                                  data-catalog-recent
+                                  data-tip={`You added this in the last ${recentDays} days`}
+                                  className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-muted dark:text-slate-400'
+                                >
+                                  Recent
+                                </span>
+                              )}
+                              {why && (
+                                <span
+                                  data-catalog-match-why
+                                  data-tip={`Matched on ${why}`}
+                                  data-cpf-fit
+                                  className='min-w-0 max-w-[160px] shrink-[4] truncate rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
+                                >
+                                  {why}
+                                </span>
+                              )}
+                            </>
+                          )
+                        })(),
+                        fullSearchQ
                       )}
-                      {colCells(id, r)}
+                      {colCells(id, r, fullSearchQ)}
                       <span className='flex w-3.5 shrink-0 items-center justify-center'>
                         {savingIds.has(id) && (
                           <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
@@ -2033,7 +2351,11 @@ export function CatalogPickerField({
               !catalogLoading &&
               !sectionsPending &&
               sections.length === 0 && (
-                <p className='px-3 py-6 text-center text-slate-400'>No catalog items</p>
+                <p className='px-3 py-6 text-center text-slate-400'>
+                  {inStockOn && catalogRows.length > 0
+                    ? 'Nothing in this catalog is in stock here'
+                    : 'No catalog items'}
+                </p>
               )}
 
             {config.favorites && (
@@ -2062,7 +2384,7 @@ export function CatalogPickerField({
                       Favorites
                     </span>
                     <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                      {pinnedRowsData.length}
+                      {shownPinnedRows.length}
                     </span>
                   </button>
                   <button
@@ -2074,13 +2396,15 @@ export function CatalogPickerField({
                     Manage
                   </button>
                 </div>
-                {!collapsed.has('__favorites__') && pinnedRowsData.length === 0 && (
+                {!collapsed.has('__favorites__') && shownPinnedRows.length === 0 && (
                   <p className='border-b border-slate-100 px-3 py-2 text-center text-[11px] text-slate-400 dark:border-border/50'>
-                    No favorites yet — Manage lets you search the full catalog and star items.
+                    {pinnedRowsData.length > 0
+                      ? 'None of your favorites are in stock here.'
+                      : 'No favorites yet — Manage lets you search the full catalog and star items.'}
                   </p>
                 )}
                 {!collapsed.has('__favorites__') &&
-                  pinnedRowsData.map((r, i) => {
+                  shownPinnedRows.map((r, i) => {
                     const id = String(r.id)
                     const qty = currentQty(id)
                     const shortfall = qtyShortfall(id)
@@ -2864,13 +3188,55 @@ function BuilderCard({
   )
 }
 
+/** The label of the record a parent field points at (the supporting
+ *  warehouse's name), through the parent collection's relation. Same query
+ *  keys + shapes as the picker's own relation / display-template reads. */
+function StockPlaceName({
+  parentCollection,
+  field,
+  id
+}: {
+  parentCollection?: string
+  field: string
+  id: unknown
+}) {
+  const client = useNivaroClient()
+  const { data: rels = [] } = useQuery<CMSRelation[]>({
+    queryKey: ['collection-relations', parentCollection],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/collections/${parentCollection}`))
+        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    enabled: !!parentCollection,
+    staleTime: 10 * 60_000
+  })
+  const target =
+    rels.find(
+      (r) => r.many_collection === parentCollection && r.many_field === field && !r.junction_field
+    )?.one_collection ?? null
+  const { data: meta } = useQuery<{ display_template?: string }>({
+    queryKey: ['col-meta', target],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string } }>(get(`/collections/${target}`))
+        .then((r) => r.data),
+    enabled: !!target,
+    staleTime: 300_000
+  })
+  if (!target) return <>this {titleCase(field)}</>
+  return <RelatedItemLabel collection={target} id={id} displayTemplate={meta?.display_template} />
+}
+
 /** One line of text cut with an ellipsis; when it is cut, hovering shows all of it. */
 function TruncText({
   text,
+  highlight,
   className,
   ...rest
 }: {
   text: string
+  /** Search text to mark inside (lib/search-text.ts). */
+  highlight?: string
   className?: string
   style?: CSSProperties
   'data-cpf-col'?: string
@@ -2878,7 +3244,7 @@ function TruncText({
   const ref = useOverflowTip<HTMLSpanElement>(text)
   return (
     <span ref={ref} className={cn('truncate', className)} {...rest}>
-      {text}
+      {highlight ? <SearchHighlight text={text} query={highlight} /> : text}
     </span>
   )
 }

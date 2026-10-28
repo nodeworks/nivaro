@@ -101,7 +101,7 @@ export const apiOverview: DocSection = {
         [
           'SIGN_IN_DISABLED',
           '401',
-          'The account belongs to a role with sign-in turned off (the role\'s app access). Every session and token of that account is refused.'
+          "The account belongs to a role with sign-in turned off (the role's app access). Every session and token of that account is refused."
         ],
         ['ADMIN_ONLY', '403', 'The route is for administrators.']
       ]
@@ -154,12 +154,12 @@ export const apiOverview: DocSection = {
         [
           'RECORD_LOCKED',
           '409',
-          'Another person holds the record\'s edit lock. The message names them.'
+          "Another person holds the record's edit lock. The message names them."
         ],
         [
           'EDIT_LOCKED',
           '403',
-          'The record is in a step that only its creator, the step\'s owners and administrators may edit (the collection\'s summary-mode `edit_lock` rule). Child rows the rule lists are refused the same way.'
+          "The record is in a step that only its creator, the step's owners and administrators may edit (the collection's summary-mode `edit_lock` rule). Child rows the rule lists are refused the same way."
         ]
       ]
     },
@@ -335,6 +335,11 @@ export const apiItems: DocSection = {
           'search_fields',
           'none',
           'Comma list narrowing `search` to these string/text fields for this request, e.g. `search=ppc&search_fields=cifa_number,description`. Only ever narrows (on top of the collection’s own list); unknown names are ignored, and a list matching none searches as without it. Catalog pickers search what their rows show first this way.'
+        ],
+        [
+          'search_rank',
+          '0',
+          'With `search`, `search_rank=1` orders the matches by how well they match the searched columns before the request’s own `sort`: the first `search_fields` column equal to the text, another column equal to it, the first column starting with it, another starting with it, every word starting a word of some column, then the rest. Only the order changes — which rows match stays the search, and only the readable columns the search reads are compared. Ignored with keyset paging (`after`). Catalog pickers rank their search this way.'
         ],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']

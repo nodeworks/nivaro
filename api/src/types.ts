@@ -184,6 +184,10 @@ export interface ItemsQuery {
   /** Narrow `search` to these text fields (only ever narrows; unknown names are
    *  ignored, and a list matching none searches every field as before). */
   search_fields?: string[]
+  /** With `search`: order matches by how well they match the searched columns
+   *  (exact → prefix → word starts → other; services/search-rank.ts), then by
+   *  `sort`. Ignored with keyset paging. Never changes which rows match. */
+  search_rank?: boolean
   /** Keyset paging: `start` (or empty) for the first page, then the
    *  `next_cursor` of the page before. Replaces offset/page when given. */
   after?: string

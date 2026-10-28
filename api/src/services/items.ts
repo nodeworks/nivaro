@@ -108,6 +108,7 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
+import { rankColumns, searchRankOrder } from './list-search-rank.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -4174,13 +4175,19 @@ export async function readItems(
 
   if (Object.keys(fittedFilter).length && !labelIds) applyFilters(q, fittedFilter, collection, rels)
 
-  if (sort.length) {
-    await applySorts(q, sort, collection, rels)
-  } else if (!(collection === 'nivaro_users' && search && orderByPeopleRelevance(q, search))) {
-    // A people search with no sort of its own ranks by name (services/people-search-rank.ts);
-    // anything else: MSSQL requires ORDER BY when OFFSET is used.
-    q.orderByRaw('(SELECT NULL)')
+  // `search_rank` (services/list-search-rank.ts) orders by match quality FIRST, so the caller's
+  // sort waits until the searched columns are known (the search block below).
+  const rankSearch = !!(query.search_rank && search && !keyset)
+  const applyListOrder = async () => {
+    if (sort.length) {
+      await applySorts(q, sort, collection, rels)
+    } else if (!(collection === 'nivaro_users' && search && orderByPeopleRelevance(q, search))) {
+      // A people search with no sort of its own ranks by name (services/people-search-rank.ts);
+      // anything else: MSSQL requires ORDER BY when OFFSET is used.
+      q.orderByRaw('(SELECT NULL)')
+    }
   }
+  if (!rankSearch) await applyListOrder()
 
   const countQ = dbRead(collection).count('* as count')
   // Help-video recordings, renders and posters never read as file rows.
@@ -4314,8 +4321,18 @@ export async function readItems(
       }
       applySearch(q)
       applySearch(countQ)
+      // Ranked: only the readable columns the search itself reads, so the order
+      // never answers anything the match did not already.
+      if (rankSearch) {
+        const order = searchRankOrder(search, rankColumns(searchCols, query.search_fields), {
+          table: collection,
+          mssql
+        })
+        if (order) q.orderByRaw(order.sql, order.bindings)
+      }
     }
   }
+  if (rankSearch) await applyListOrder()
 
   // Picker exclusions — when ?picker=1, hide excluded records from results
   if ((req?.query as Record<string, string>)?.picker === '1') {

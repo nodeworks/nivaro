@@ -851,6 +851,10 @@ export const adminUxListSignals: DocSection = {
     },
     {
       type: 'p',
+      text: 'Catalog search order: an exact hit on the first label field (the item number) comes first, then items you added on any record in the last 30 days (marked Recent; `catalog_mode.recent: false` turns it off, `{days}` changes the window; needs a creator column such as `user_created` on the line collection), then the label/column matches ranked exact → starts with → word starts (`search_rank=1`), then matches only in other columns with a “Matched on …” chip. The typed words are marked in labels and text columns. A related column marked `stock: true` (or one keyed `on_hand` with no flag) adds an “In stock at <place>” toggle beside the search: search results, favorites and sections keep to items whose value is above 0 where its `match` points (the place is named from the first `$parent.<field>` in `match`). It stays off until that parent field has a value, and is remembered per catalog in this browser. When the catalog collection has a reverse alias onto the stock collection the search itself is narrowed (`_some`); otherwise a wider page is fetched and narrowed in the picker.'
+    },
+    {
+      type: 'p',
       text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API.'
     },
     { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },

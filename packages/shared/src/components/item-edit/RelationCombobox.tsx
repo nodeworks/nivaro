@@ -8,6 +8,7 @@ import { get, post } from '../../lib/commands'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
+import { SearchHighlight } from '../SearchHighlight'
 import { UserAvatar } from '../UserAvatar'
 
 /** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
@@ -724,7 +725,8 @@ export function RelationCombobox({
                             data-tip='Online now'
                           />
                         )}
-                        {label}
+                        {/* The typed words marked in the label (lib/search-text.ts). */}
+                        <SearchHighlight text={label} query={query} />
                         {dupDetail.has(String(item.id)) && (
                           <span
                             className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'

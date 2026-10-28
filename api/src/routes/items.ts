@@ -290,6 +290,7 @@ export async function itemsRoutes(app: FastifyInstance) {
               .filter(Boolean)
           }
         : {}),
+      ...(q.search_rank === '1' || q.search_rank === 'true' ? { search_rank: true } : {}),
       filter: parsedFilter,
       ...(q.after !== undefined ? { after: String(q.after) } : {}),
       ...(q.count === '0' || q.count === 'false'
