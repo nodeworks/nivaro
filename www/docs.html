@@ -17023,7 +17023,7 @@ POST   /api/ideas/:id/link                 admin: { collection, id } → 'relate
           <!-- /SYNC:admin-navigation -->
         </div>
 
-        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"},{"id":"global-search-synonyms","label":"Synonyms"}]'>
+        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"},{"id":"global-search-synonyms","label":"Synonyms"},{"id":"global-search-label-fields","label":"Label search fields"},{"id":"global-search-why","label":"Why can’t they find it?"},{"id":"global-search-fts","label":"Full-text indexes (optional)"}]'>
           <!-- SYNC:global-search -->
           <h1 class="doc-h1" id="global-search">Global Search (Cmd+K)</h1>
           <p class="doc-p">Press Cmd+K (Ctrl+K on Windows/Linux) anywhere in the admin UI to open the command palette. Search runs across every collection you have read access to, admin pages, and quick actions. Results are ranked by relevance and category as you type, with RBAC enforced on all item results.</p>
@@ -17042,8 +17042,13 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
 {
   "data": {
     "records": [
-      { "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp", "snippet": "Acme Corp" }
+      { "collection": "customers", "display_name": "Customers", "id": "cust-123", "label": "Acme Corp",
+        "snippet": "Acme Corp", "matched_field": "name", "matched_label": "Name",
+        "matched_value": "Acme Corp", "score": 340, "mine": true, "updated_at": "2026-10-27T14:02:00Z" }
     ],
+    "exact": null,
+    "suggestions": [],
+    "query": { "text": "acme", "scope": null, "filters": [] },
     "people": [
       { "id": "9F1C…", "first_name": "Ana", "last_name": "Acme", "email": "ana@example.com", "title": "Buyer", "department": "Procurement" }
     ],
@@ -17053,13 +17058,64 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
   }
 }
 
+// matched_*: the field the text was found in and its value as you may read it (a field
+// your role cannot read is never matched). score: exact id 1000 &gt; equals 300 &gt; starts
+// with 200 &gt; a word starts with 160 &gt; contains 100 &gt; near spelling 20–60, plus +40 when
+// it is yours (you created it, are a named owner on it, or opened it from search in the
+// last 30 days — mine: true) and up to +55 when other people opened it for this query.
+// Boosts only reorder results you can already see.
+
+// Exact id: a one-token query with a digit (AB26-77260, B1234-2, PO-00042) equal to a
+// business-id column (string *_id / *_number / *_no, numeric *_number for digits) comes
+// back as data.exact (exact: true) and first in records. Scoped, the record id too.
+GET /api/global-search?q=AB26-77260
+
+// Typo tolerance: when fewer than 3 results matched, a near-spelling pass over name
+// columns (tables up to 200k rows) adds hits below every real match; suggestions then
+// lists the closest names ("did you mean").
+
+// Prefix scopes: search one collection. "@" = people only. The map is config:
+// nivaro_settings.search_scopes (when the column exists) and/or the "search_scopes" key
+// of this instance's settings overrides, e.g. {"wf":"workflows","ir":"inventory_request"}.
+GET /api/global-search?q=wf: canton
+GET /api/global-search?q=@ana
+
+// Field filters: field:value (the field key or its label, e.g. vendor-name:acme). Text
+// fields contain, numbers/booleans equal, comparisons with &gt;= &lt;= &gt; &lt; (amount:&gt;=10k),
+// dates take ranges (due:2026-10, due:last-week). Unscoped, a filter searches only the
+// collections that have that field. Scoped, bare amounts ($12,500 exact, 12.5k ±5%) and
+// dates (Oct 2026, 2026-10, last week, this month, today) go to the collection's money
+// and created-date fields. Filters run through the items service as you; a token that
+// names no readable field stays search text. data.query.filters lists what applied:
+GET /api/global-search?q=wf: status:open $12,500
+// "query": { "text": "", "scope": "wf", "filters": [
+//   { "field": "status", "label": "Status", "op": "contains", "value": "open" },
+//   { "field": "total_amount", "label": "Total", "op": "eq", "value": "12500" } ] }
+
 // labels=1 (on all three): match only the fields each record's label shows (its display
-// template), so every hit visibly contains the text. Collections whose label shows no
-// text field sit out.
+// template), plus the collection's browser_config.label_search_fields, so every hit
+// visibly contains the text (or names the extra field it matched in matched_label).
+// Collections whose label shows no text field sit out.
 GET /api/global-search?q=acme&amp;labels=1
 
+// Preview pane: label, pipeline state, current owners and up to 6 fields (the form's
+// header fields, else the display template's), read as you; 404 when you cannot open it.
+GET /api/global-search/preview?collection=customers&amp;id=cust-123
+{ "data": { "collection": "customers", "id": "cust-123", "label": "Acme Corp",
+  "state": { "label": "In review", "color": "#00ceff" }, "owners": [{ "id": "…", "name": "Sam Ray" }],
+  "fields": [{ "label": "City", "value": "Denver" }], "updated_at": "…", "updated_by": "Ana Acme" } }
+
+// What was opened (feeds learned ranking; log_id = the search-analytics log row, when known).
+POST /api/global-search/click { "q": "acme", "collection": "customers", "id": "cust-123", "position": 0, "log_id": 812 }
+
+// Saved searches — your own, in your preferences (at most 25).
+GET    /api/global-search/saved
+POST   /api/global-search/saved { "name": "Open WFs", "q": "wf: status:open", "scope": "wf" }
+DELETE /api/global-search/saved/:id
+
 // Tabs: each collection's match count, counted as the caller (RBAC, row filters, User Scopes).
-// Pass the collections the first answer's records came from.
+// Pass the collections the first answer's records came from. counts and records read the
+// same scopes and field filters as the main search (a tab is scoped to its collection).
 GET /api/global-search/counts?q=acme&amp;collections=customers,orders
 { "data": [{ "collection": "customers", "display_name": "Customers", "count": 41 }] }
 
@@ -17091,6 +17147,27 @@ GET /api/global-search/records?q=acme&amp;collection=customers&amp;offset=0&amp;
             <li>Adding a group that shares a word with an existing group of the same scope merges into it. A group holds 2–10 words, stored lower-case.</li>
             <li>Changes apply at once on the server that saved them and within 30 seconds on the others. Once a synonym covers an empty search, the Found nothing row shows “Synonym added” with a link to try it.</li>
             <li>Stored in <code class="doc-code">nivaro_search_synonyms</code> (migration 498; configuration, so it travels with config promotion). Admin routes: <code class="doc-code">GET/POST /api/search-analytics/synonyms</code> (POST body <code class="doc-code">{terms, collection?, note?}</code>, 201 new / 200 merged), <code class="doc-code">PATCH/DELETE /api/search-analytics/synonyms/:id</code>.</li>
+          </ul>
+          <h3 class="doc-h3" id="global-search-label-fields">Label search fields</h3>
+          <p class="doc-p">A search limited to labels (<code class="doc-code">GET /api/global-search?labels=1</code>, the portal’s search bar) finds a record only by what its label shows. When a label is just a number, nobody finds the record by its name or project. **Table Editor → Settings → Collection Browser → Label search fields** lists extra text fields such a search also matches; the line under the picker says what a labels-only search will match with the current choice.</p>
+          <ul class="doc-ul">
+            <li>Stored as <code class="doc-code">browser_config.label_search_fields</code> (a list of field names) on the collection. Unset or empty = the label alone, as before.</li>
+            <li>Only text fields of the collection count; any other name is ignored. Each person still matches only fields they may read, so a label search field never reveals a value someone could not already see.</li>
+            <li>Read on the server with <code class="doc-code">labelSearchFieldsOf(browserConfig)</code> (services/search-fields.ts); <code class="doc-code">withLabelSearchFields(labelColumns, configured, textColumns)</code> adds them to the label columns.</li>
+          </ul>
+          <h3 class="doc-h3" id="global-search-why">Why can’t they find it?</h3>
+          <p class="doc-p">On Search analytics, **Why can’t they find it?** takes a person and the words they searched for. It runs the search as you and as them, collection by collection, and where they find fewer records it says what hides the rest — their role cannot view the collection, a row rule on their role, an access filter (User Scope, with the values they are limited to), or a match only in a field their role cannot read — with up to three example records you can open. Nothing is changed and the person is not told.</p>
+          <ul class="doc-ul">
+            <li><code class="doc-code">GET /api/global-search/why?q=&amp;user_id=[&amp;collection=a,b][&amp;labels=1]</code> (administrators only; 403 otherwise) → <code class="doc-code">{ data: { q, user: {id, name, status, role_name, is_admin}, totals: {admin, user, hidden}, collections: [{ collection, display_name, admin_count, user_count, hidden, reasons: [{type, message, dimension_label?, allowed_values?, samples}], samples: [{id, label, reasons}] }] } }</code>.</li>
+            <li>Counts use the same per-collection match counts as the search tabs, read as each person; the reasons come from the same access checks as “Explain as user” on a record. Reason types: <code class="doc-code">permission</code>, <code class="doc-code">row_filter</code>, <code class="doc-code">scope</code>, <code class="doc-code">scope_strict</code>, <code class="doc-code">fields</code>, <code class="doc-code">unknown</code>.</li>
+            <li>An administrator target finds what you find. A suspended or inactive account is flagged: they cannot sign in to search at all.</li>
+          </ul>
+          <h3 class="doc-h3" id="global-search-fts">Full-text indexes (optional)</h3>
+          <p class="doc-p">A contains search reads every row of a table. Where a database administrator has built a SQL Server full-text index, search can answer from it instead. Nivaro never creates one on its own: <code class="doc-code">node scripts/search-fts.mjs --plan</code> lists collections with long text columns and their row counts; <code class="doc-code">--execute --table &lt;t&gt; --columns a,b</code> prints the statements and runs them only with <code class="doc-code">--yes</code>; <code class="doc-code">--drop --table &lt;t&gt; --yes</code> removes one.</p>
+          <ul class="doc-ul">
+            <li>Production databases that publish replication: full-text changes go to the DBA first.</li>
+            <li>A full-text search matches the start of words (“budg” finds “budget”), not any part of a word, and a just-saved row can take a few seconds to be found. Number and code columns stay on the ordinary contains search.</li>
+            <li>The server checks which indexes exist every 5 minutes (<code class="doc-code">ftsAvailable</code> in services/search-fts.ts) and ignores an index until its first population has finished.</li>
           </ul>
           <!-- /SYNC:global-search -->
         </div>
