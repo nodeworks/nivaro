@@ -4029,7 +4029,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <p class="doc-p">Nivaro auto-generates a GraphQL schema from the live <code class="doc-code">nivaro_collections</code> + <code class="doc-code">nivaro_fields</code> metadata — the same source used to build the OpenAPI spec. Every non-hidden collection gets query and mutation fields automatically. Schema is rebuilt in the <code class="doc-code">onReady</code> hook when the server starts, and can be manually rebuilt at runtime.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>GET /api/graphql</td><td>Redirects a browser to the admin app&#39;s bundled GraphiQL explorer (<code class="doc-code">/graphql</code>). Administrators can run it as any named API key (Security → API keys → Run the playground as a key).</td></tr>
+            <tbody><tr><tr><td>GET /api/graphql</td><td>Redirects a browser to the admin app's bundled GraphiQL explorer (<code class="doc-code">/graphql</code>). Administrators can run it as any named API key (Security → API keys → Run the playground as a key).</td></tr>
               <tr><td>POST /api/graphql</td><td>GraphQL endpoint. Body: { query, variables?, operationName? }.</td></tr>
               <tr><td>POST /api/graphql/rebuild</td><td>Admin — rebuild the schema from current nivaro_collections/fields.</td></tr></tr></tbody>
           </table></div>
@@ -4588,9 +4588,9 @@ query {
         <div class="doc-section" id="s-graphql-auth" data-toc='[{"id":"graphql-auth","label":"GraphQL Authentication"}]'>
           <!-- SYNC:graphql-auth -->
           <h1 class="doc-h1" id="graphql-auth">GraphQL Authentication</h1>
-          <p class="doc-p">GraphQL requests authenticate the same way as REST requests — session cookie or static token Bearer header. Unauthenticated requests are allowed to reach the endpoint but all resolvers return <code class="doc-code">UNAUTHENTICATED</code> errors.</p>
+          <p class="doc-p">GraphQL requests authenticate the same way as REST requests — session cookie or static token Bearer header. Unauthenticated requests are allowed to reach the endpoint but all resolvers return <code class="doc-code">UNAUTHENTICATED</code> errors, and schema introspection (<code class="doc-code">__schema</code>, <code class="doc-code">__type</code>) is refused. A graphql-ws connection that signs nothing in is closed with 4403. Nested lists are capped per request: <code class="doc-code">GRAPHQL_MAX_NESTED_QUERIES</code> (default 25,000 nested reads) and <code class="doc-code">GRAPHQL_MAX_NESTED_ROWS</code> (default 250,000 nested rows), 0 = off; past either the request answers <code class="doc-code">QUERY_TOO_COSTLY</code>. A nested <code class="doc-code">filter</code> or <code class="doc-code">sort</code> may name only fields the caller can read, and never a credential.</p>
           <h3 class="doc-h3">Using GraphiQL</h3>
-          <p class="doc-p">Open <code class="doc-code">GET /api/graphql</code> in a browser — it redirects to the admin app&#39;s GraphiQL explorer at <code class="doc-code">/graphql</code>. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:</p>
+          <p class="doc-p">Open <code class="doc-code">GET /api/graphql</code> in a browser — it redirects to the admin app's GraphiQL explorer at <code class="doc-code">/graphql</code>. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:</p>
           <pre class="doc-pre"><code>{ "Authorization": "Bearer 3a7f2b9c1d4e..." }</code></pre>
           <h3 class="doc-h3">Programmatic requests</h3>
           <pre class="doc-pre"><code>// With fetch
@@ -14667,7 +14667,7 @@ const result = await callExternalApi(apiId, {
         </div>
 
         <!-- RATE LIMITING -->
-        <div class="doc-section" id="s-rate-limits" data-toc='[{"id":"rate-limits","label":"Rate Limiting &amp; Headers"},{"id":"rate-limits-api-key-overrides","label":"A limit on one API key"},{"id":"rate-limits-configuration","label":"A limit for the whole instance"},{"id":"rate-limits-headers","label":"Response headers"},{"id":"rate-limits-exceeded","label":"When the limit is passed"}]'>
+        <div class="doc-section" id="s-rate-limits" data-toc='[{"id":"rate-limits","label":"Rate Limiting &amp; Headers"},{"id":"rate-limits-api-key-overrides","label":"A limit on one API key"},{"id":"rate-limits-configuration","label":"A limit for the whole instance"},{"id":"rate-limits-anonymous","label":"A limit for callers who are not signed in"},{"id":"rate-limits-public","label":"Public queries, public dashboards and request size"},{"id":"rate-limits-headers","label":"Response headers"},{"id":"rate-limits-exceeded","label":"When the limit is passed"}]'>
           <!-- SYNC:rate-limits -->
           <h1 class="doc-h1" id="rate-limits">Rate Limiting &amp; Headers</h1>
           <p class="doc-p">There are two limits, and both are off until someone sets them. An API key may carry its own calls-per-minute limit. The instance may carry one limit for every caller. Both count in one-minute windows that start on the minute.</p>
@@ -14682,6 +14682,16 @@ const result = await callExternalApi(apiId, {
           <pre class="doc-pre"><code># .env
 RATE_LIMIT_PER_MINUTE=600    # unset or 0 = no instance limit, the default</code></pre>
           <p class="doc-p">The instance limit counts per signed-in user, per bearer token, or per address for callers without a credential. A record page makes more than a hundred calls, so a low value refuses people using the app.</p>
+          <h3 class="doc-h3" id="rate-limits-anonymous">A limit for callers who are not signed in</h3>
+          <pre class="doc-pre"><code># .env
+RATE_LIMIT_ANON_PER_MINUTE=300   # default 300; 0 = off</code></pre>
+          <p class="doc-p">This one is on by default. Every answer that ends without a signed-in caller counts against the address it came from: anonymous calls, and calls whose token or session did not check out. Once an address is over, its calls without a signed-in session wait for the next minute. Signed-in traffic never counts. Health checks, the Teams bot endpoint and webhook flows are left out. The address is the one TRUST_PROXY resolves, so set TRUST_PROXY to the number of proxies in front of Nivaro (for example <code class="doc-code">TRUST_PROXY=1</code>) or to their addresses; <code class="doc-code">TRUST_PROXY=true</code> lets a caller choose the address it is counted under.</p>
+          <h3 class="doc-h3" id="rate-limits-public">Public queries, public dashboards and request size</h3>
+          <pre class="doc-pre"><code># .env
+PUBLIC_QUERY_MIN_CACHE_S=60   # anonymous runs of a public custom query are cached at least this long
+PUBLIC_LINK_CACHE_S=60        # a public dashboard link computes its widgets at most this often
+BODY_LIMIT_MB=1               # request body ceiling for most routes</code></pre>
+          <p class="doc-p">Imports, uploads, layout and payload editors, MCP, record writes and other routes that receive large bodies keep the larger ceiling (the file size limit plus 8 MB), and so do extension routes. A body above BODY_LIMIT_MB is only read for a signed-in caller or a request with an Authorization header.</p>
           <h3 class="doc-h3" id="rate-limits-headers">Response headers</h3>
           <pre class="doc-pre"><code>X-RateLimit-Limit: 120          # calls allowed per minute
 X-RateLimit-Remaining: 117       # calls left in this window
@@ -19549,11 +19559,12 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Situation</th><th>What happens</th></tr></thead>
             <tbody><tr><tr><td>New or empty volume on <code class="doc-code">/app/uploads</code></td><td>Handed to uid 1000; the API runs as <code class="doc-code">node</code>.</td></tr>
-              <tr><td>Volume with files uid 1000 cannot write (made by an image older than 0.3.5, or NFS with root_squash)</td><td>Nothing is changed and the API keeps running as root, so uploads keep working. One line in the log names the fix.</td></tr>
-              <tr><td>The switch is refused (<code class="doc-code">cap_drop: ALL</code> removes CAP_SETUID and CAP_SETGID)</td><td>The API keeps running as root with one warning line. TMPDIR and HOME move under <code class="doc-code">/tmp</code> when root may not write uid 1000's folders.</td></tr>
+              <tr><td>Volume with files uid 1000 cannot write (made by an image older than 0.3.5, or NFS with root_squash)</td><td>Nothing is changed and the API keeps running as root, so uploads keep working. A WARNING banner in the log, at every start, names the reason and the fix.</td></tr>
+              <tr><td>The switch is refused (<code class="doc-code">cap_drop: ALL</code> removes CAP_SETUID and CAP_SETGID)</td><td>The API keeps running as root, with the same WARNING banner. TMPDIR and HOME move under <code class="doc-code">/tmp</code> when root may not write uid 1000's folders.</td></tr>
               <tr><td>The deployment sets <code class="doc-code">user:</code> (for example <code class="doc-code">user: 1000:1000</code>)</td><td>That user is used as is; the entrypoint only creates TMPDIR and HOME and warns when <code class="doc-code">/app/uploads</code> is not writable.</td></tr>
-              <tr><td><code class="doc-code">NIVARO_RUN_AS=root</code></td><td>Stays root on purpose.</td></tr></tr></tbody>
+              <tr><td><code class="doc-code">NIVARO_RUN_AS=root</code></td><td>Stays root on purpose (the banner still prints).</td></tr></tr></tbody>
           </table></div>
+          <p class="doc-p">The entrypoint never refuses to start over this. Whenever it stays root it also sets <code class="doc-code">NIVARO_RUNNING_AS_ROOT=1</code> and <code class="doc-code">NIVARO_ROOT_REASON</code> in the process environment. Both runners set <code class="doc-code">NODE_ENV=production</code>; a deployment that sets NODE_ENV itself still wins.</p>
           <div class="doc-note doc-warn">To finish the move to uid 1000 on an old volume, change its owner once, for example <code class="doc-code">docker run --rm -v nivaro_uploads:/app/uploads alpine chown -R 1000:1000 /app/uploads</code>. The entrypoint never runs <code class="doc-code">chown -R</code> itself: on a large share it can take hours, and NFS with root_squash refuses it. It decides from the top folder and its first 50 entries.</div>
           <h2 class="doc-h2" id="release-image-paths">What it writes (read-only root filesystem)</h2>
           <p class="doc-p">The process writes only to the three paths below, so you can run it with a read-only root filesystem (<code class="doc-code">read_only: true</code>, <code class="doc-code">docker run --read-only</code>).</p>
