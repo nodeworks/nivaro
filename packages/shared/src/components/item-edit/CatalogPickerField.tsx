@@ -10,7 +10,15 @@ import {
   Star,
   X
 } from 'lucide-react'
-import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient, useParentDraft, useReimportHandler } from '../../context'
 import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open'
@@ -22,6 +30,13 @@ import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { useOverflowTip } from '../TipLayer'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
+import {
+  ColResizeHandle,
+  fitWidth,
+  ResetColumnsButton,
+  textWidth,
+  useColumnWidths
+} from './catalog-columns'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import {
@@ -1247,43 +1262,82 @@ export function CatalogPickerField({
   // Cells shared by favorites + section rows; numeric (formatted) columns fixed width right.
   // The first text column (the description) takes the free width; later text columns
   // (part category, …) get a fixed narrower one. Cut-off text shows in full on hover.
+  // Every column can be resized, fitted to its content or reset (catalog-columns.tsx);
+  // the widths are this browser's, per catalog and table.
+  const colStoreBase = catalogCol ? `${catalogCol}:${relatedCollection}.${manyField}` : null
+  const catCols = useColumnWidths(colStoreBase && `${colStoreBase}:catalog`)
+  const sumCols = useColumnWidths(colStoreBase && `${colStoreBase}:summary`)
+  const pickerRootRef = useRef<HTMLDivElement>(null)
+  const fitCol = (cols: typeof catCols, key: string) => {
+    const w = fitWidth(pickerRootRef.current, key)
+    if (w != null) cols.setWidth(key, w)
+  }
+  /** A header cell with a resize handle on its right edge. */
+  const headCell = (
+    cols: typeof catCols,
+    key: string,
+    label: string,
+    def: string,
+    extra?: string
+  ) => {
+    const b = cols.box(key, def, extra)
+    return (
+      <span key={key} {...b} className={cn('relative', b.className)}>
+        <span data-cpf-fit className='block truncate'>
+          {label}
+        </span>
+        <ColResizeHandle
+          label={label}
+          onResize={(px) => cols.setWidth(key, px)}
+          onFit={() => fitCol(cols, key)}
+        />
+      </span>
+    )
+  }
   const firstTextCol = displayCols.find((c) => !c.format)?.field
-  const colCls = (c: { field: string; format?: string }) =>
+  const colDef = (c: { field: string; format?: string }): [string, string] =>
     c.format
-      ? 'w-20 shrink-0 text-right'
+      ? ['w-20 shrink-0', 'text-right']
       : c.field === firstTextCol
-        ? 'min-w-0 flex-[3]'
-        : 'w-36 shrink-0'
+        ? ['min-w-0 flex-[3]', '']
+        : ['w-36 shrink-0', '']
   const colCells = (id: string, row: Record<string, unknown>) => (
     <>
-      {displayCols.map((c) => (
-        <TruncText
-          key={c.field}
-          text={fmtVal(pathValue(row, c.field), c.format)}
-          className={cn('text-slate-500 dark:text-slate-400', colCls(c))}
-        />
-      ))}
+      {displayCols.map((c) => {
+        const [def, extra] = colDef(c)
+        return (
+          <TruncText
+            key={c.field}
+            text={fmtVal(pathValue(row, c.field), c.format)}
+            {...catCols.box(c.field, def, cn('text-slate-500 dark:text-slate-400', extra))}
+          />
+        )
+      })}
       {relatedCols.map((rc) => (
         <span
           key={rc.key}
-          className='w-20 shrink-0 truncate text-right text-slate-500 dark:text-slate-400'
+          {...catCols.box(
+            `rel:${rc.key}`,
+            'w-20 shrink-0',
+            'truncate text-right text-slate-500 dark:text-slate-400'
+          )}
         >
           {fmtVal(relatedValue(rc.key, id), rc.format)}
         </span>
       ))}
+      {/* Takes the slack once every column has a set width, so Qty stays at the right. */}
+      <span aria-hidden className='ml-auto' />
     </>
   )
-  const itemLabelCls = hasExtraCols
-    ? 'w-36 shrink-0 truncate text-slate-700 dark:text-slate-200'
-    : 'min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200'
 
   // Host-provided detail drawer (e.g. a stock-planning drawer for the catalog
   // collection): when an opener is registered, item labels become links.
   const itemOpenable = canOpenCatalogItem(catalogCol)
-  const itemLabel = (catalogId: string, text: string, cls: string) =>
+  const itemLabel = (catalogId: string, text: string, cls: string, fit?: boolean) =>
     itemOpenable ? (
       <button
         type='button'
+        data-cpf-fit={fit || undefined}
         onClick={() => catalogCol && openCatalogItem(catalogCol, catalogId, parentDraft)}
         title='View stock & planning detail'
         className={cn(
@@ -1294,8 +1348,20 @@ export function CatalogPickerField({
         {text}
       </button>
     ) : (
-      <span className={cls}>{text}</span>
+      <span className={cls} data-cpf-fit={fit || undefined}>
+        {text}
+      </span>
     )
+  /** The Item cell of a catalog row (resizable), with an optional note after the label. */
+  const itemCell = (catalogId: string, text: string, note?: ReactNode) => {
+    const b = catCols.box('item', hasExtraCols ? 'w-36 shrink-0' : 'min-w-0 flex-1')
+    return (
+      <span {...b} className={cn('flex min-w-0 items-center gap-1.5', b.className)}>
+        {itemLabel(catalogId, text, 'min-w-0 truncate text-slate-700 dark:text-slate-200', true)}
+        {note}
+      </span>
+    )
+  }
 
   const labelFor = (catalogId: string): string => {
     const row =
@@ -1825,7 +1891,7 @@ export function CatalogPickerField({
   }
 
   return (
-    <div className='space-y-3'>
+    <div ref={pickerRootRef} className='space-y-3'>
       {/* Read-only (Summary mode, read views): the catalog browser — search,
           sections, favorites, builders — is picking chrome; only the Summary
           table of what was picked (with its totals) renders. */}
@@ -1843,6 +1909,7 @@ export function CatalogPickerField({
               <span className='shrink-0 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'>
                 {pickedCount} picked
               </span>
+              <ResetColumnsButton show={catCols.customized} onReset={catCols.reset} />
             </div>
 
             {hasExtraCols && (
@@ -1852,20 +1919,32 @@ export function CatalogPickerField({
               // never bleed through while pinned.
               <div
                 ref={stickyHeaderRefCb}
-                className='sticky top-0 z-[5] flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted'
+                className='sticky top-0 z-[5] flex items-center gap-4 border-b border-slate-200 bg-slate-50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
               >
                 {config.favorites && <span className='w-[18px] shrink-0' />}
-                <span className='w-36 shrink-0'>Item</span>
-                {displayCols.map((c) => (
-                  <span key={c.field} className={cn('truncate', colCls(c))}>
-                    {c.label ?? titleCase(c.field.split('.')[0])}
-                  </span>
-                ))}
-                {relatedCols.map((rc) => (
-                  <span key={rc.key} className='w-20 shrink-0 text-right'>
-                    {rc.label ?? titleCase(rc.key)}
-                  </span>
-                ))}
+                {headCell(catCols, 'item', 'Item', 'w-36 shrink-0')}
+                {displayCols.map((c) => {
+                  const [def, extra] = colDef(c)
+                  return headCell(
+                    catCols,
+                    c.field,
+                    c.label ?? titleCase(c.field.split('.')[0]),
+                    def,
+                    extra
+                  )
+                })}
+                {relatedCols.map((rc) =>
+                  headCell(
+                    catCols,
+                    `rel:${rc.key}`,
+                    rc.label ?? titleCase(rc.key),
+                    'w-20 shrink-0',
+                    'text-right'
+                  )
+                )}
+                <span aria-hidden className='ml-auto' />
+                {/* The rows' status slot (saving / short of stock): fixed, so columns line up. */}
+                <span aria-hidden className='w-3.5 shrink-0' />
                 <span className='w-20 shrink-0 text-right'>Qty</span>
               </div>
             )}
@@ -1904,7 +1983,7 @@ export function CatalogPickerField({
                     <div
                       key={id}
                       className={cn(
-                        'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                        'flex items-center gap-4 border-b border-slate-100 px-3 py-1 dark:border-border/50',
                         i % 2 === 0
                           ? 'bg-white dark:bg-background'
                           : 'bg-slate-50/50 dark:bg-muted/30',
@@ -1912,23 +1991,29 @@ export function CatalogPickerField({
                       )}
                     >
                       {starButton(id)}
-                      {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
-                      {(() => {
-                        const why = hiddenMatchOf(r)
-                        return why ? (
-                          <span
-                            data-catalog-match-why
-                            data-tip={`Matched on ${why}`}
-                            className='max-w-[160px] shrink-0 truncate rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
-                          >
-                            {why}
-                          </span>
-                        ) : null
-                      })()}
-                      {colCells(id, r)}
-                      {savingIds.has(id) && (
-                        <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
+                      {itemCell(
+                        id,
+                        applyDisplayTemplate(tmpl, r),
+                        (() => {
+                          const why = hiddenMatchOf(r)
+                          return why ? (
+                            <span
+                              data-catalog-match-why
+                              data-tip={`Matched on ${why}`}
+                              data-cpf-fit
+                              className='min-w-0 max-w-[160px] shrink-[4] truncate rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
+                            >
+                              {why}
+                            </span>
+                          ) : null
+                        })()
                       )}
+                      {colCells(id, r)}
+                      <span className='flex w-3.5 shrink-0 items-center justify-center'>
+                        {savingIds.has(id) && (
+                          <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                        )}
+                      </span>
                       {qtyInput(id, r)}
                     </div>
                   )
@@ -2009,7 +2094,7 @@ export function CatalogPickerField({
                       <div
                         key={id}
                         className={cn(
-                          'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                          'flex items-center gap-4 border-b border-slate-100 px-3 py-1 dark:border-border/50',
                           i % 2 === 0
                             ? 'bg-white dark:bg-background'
                             : 'bg-slate-50/50 dark:bg-muted/30',
@@ -2018,17 +2103,20 @@ export function CatalogPickerField({
                         )}
                       >
                         {starButton(id)}
-                        {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
+                        {itemCell(id, applyDisplayTemplate(tmpl, r))}
                         {colCells(id, r)}
-                        {shortfall && (
-                          <AlertTriangle
-                            className='h-3.5 w-3.5 shrink-0 text-amber-500'
-                            aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
-                          />
-                        )}
-                        {savingIds.has(id) && (
-                          <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                        )}
+                        <span className='flex w-3.5 shrink-0 items-center justify-center'>
+                          {savingIds.has(id) ? (
+                            <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                          ) : (
+                            shortfall && (
+                              <AlertTriangle
+                                className='h-3.5 w-3.5 text-amber-500'
+                                aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
+                              />
+                            )
+                          )}
+                        </span>
                         {qtyInput(id, r)}
                       </div>
                     )
@@ -2070,7 +2158,7 @@ export function CatalogPickerField({
                         {s.items.length}
                       </span>
                       {pickedInSection > 0 && (
-                        <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                        <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#00728d] dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
                           {pickedInSection} picked
                         </span>
                       )}
@@ -2083,7 +2171,7 @@ export function CatalogPickerField({
                           <div
                             key={it.id}
                             className={cn(
-                              'flex items-center gap-2 border-b border-slate-100 px-3 py-1 dark:border-border/50',
+                              'flex items-center gap-4 border-b border-slate-100 px-3 py-1 dark:border-border/50',
                               i % 2 === 0
                                 ? 'bg-white dark:bg-background'
                                 : 'bg-slate-50/50 dark:bg-muted/30',
@@ -2092,17 +2180,20 @@ export function CatalogPickerField({
                             )}
                           >
                             {starButton(it.id)}
-                            {itemLabel(it.id, it.label, itemLabelCls)}
+                            {itemCell(it.id, it.label)}
                             {colCells(it.id, it.row)}
-                            {shortfall && (
-                              <AlertTriangle
-                                className='h-3.5 w-3.5 shrink-0 text-amber-500'
-                                aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
-                              />
-                            )}
-                            {savingIds.has(it.id) && (
-                              <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />
-                            )}
+                            <span className='flex w-3.5 shrink-0 items-center justify-center'>
+                              {savingIds.has(it.id) ? (
+                                <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
+                              ) : (
+                                shortfall && (
+                                  <AlertTriangle
+                                    className='h-3.5 w-3.5 text-amber-500'
+                                    aria-label={`${qtyWarningLabel} ${shortfall.available} — ${shortfall.qty} requested`}
+                                  />
+                                )
+                              )}
+                            </span>
                             {qtyInput(it.id, it.row)}
                           </div>
                         )
@@ -2127,6 +2218,7 @@ export function CatalogPickerField({
                 addQty={(id, total, row) => commitQty(id, String(total), row)}
                 qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
                 readOnly={readOnly}
+                colStoreKey={colStoreBase && `${colStoreBase}:builder:${b.label}`}
               />
             ))}
         </>
@@ -2181,23 +2273,48 @@ export function CatalogPickerField({
               if (v == null || v === '') return '—'
               return fmtVal(v, format)
             }
-            const numHead = (label: string) => (
-              <span className='w-20 shrink-0 text-right text-[11px] font-medium text-slate-500'>
-                {label}
-              </span>
-            )
+            const numHead = (label: string, key?: string) =>
+              key ? (
+                headCell(
+                  sumCols,
+                  key,
+                  label,
+                  'w-20 shrink-0',
+                  'text-right text-[11px] font-medium text-slate-500 dark:text-slate-400'
+                )
+              ) : (
+                <span className='w-20 shrink-0 text-right text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                  {label}
+                </span>
+              )
+            // Fixed-content cells (an input) keep their width; the rest resize.
+            const sumKey = (c: string) =>
+              editableFields.includes(c) && !readOnly ? undefined : `s:${c}`
             return (
               <div>
-                <div className='flex items-center gap-2 border-b border-slate-200 px-3 py-1.5 dark:border-border'>
-                  <span className='flex-1 text-[11px] font-medium text-slate-500'>Item</span>
+                <div className='flex items-center gap-4 border-b border-slate-200 px-3 py-1.5 dark:border-border'>
+                  <span className='flex flex-1 items-center gap-1 text-[11px] font-medium text-slate-500 dark:text-slate-400'>
+                    Item
+                    {readOnly && (
+                      <ResetColumnsButton
+                        show={sumCols.customized}
+                        onReset={sumCols.reset}
+                        className='-my-1'
+                      />
+                    )}
+                  </span>
                   {copyCols.map((c) => (
-                    <Fragment key={c}>{numHead(titleCase(c))}</Fragment>
+                    <Fragment key={c}>{numHead(titleCase(c), sumKey(c))}</Fragment>
                   ))}
                   {numHead(titleCase(qtyField))}
                   {computeCols.map((c) => (
-                    <Fragment key={c}>{numHead(titleCase(c))}</Fragment>
+                    <Fragment key={c}>{numHead(titleCase(c), `s:${c}`)}</Fragment>
                   ))}
-                  {!readOnly && <span className='w-6 shrink-0' />}
+                  {!readOnly && (
+                    <span className='-my-1 flex w-6 shrink-0 justify-end'>
+                      <ResetColumnsButton show={sumCols.customized} onReset={sumCols.reset} />
+                    </span>
+                  )}
                 </div>
                 {pickedEntries.map((e, i) => {
                   const rowDbId = e.row.id != null ? String(e.row.id) : null
@@ -2219,7 +2336,7 @@ export function CatalogPickerField({
                     >
                       <div
                         className={cn(
-                          'flex items-center gap-2',
+                          'flex items-center gap-4',
                           isStagedDelete && 'line-through decoration-slate-400'
                         )}
                       >
@@ -2276,7 +2393,11 @@ export function CatalogPickerField({
                           ) : (
                             <span
                               key={c}
-                              className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
+                              {...sumCols.box(
+                                `s:${c}`,
+                                'w-20 shrink-0',
+                                'truncate text-right tabular-nums text-slate-600 dark:text-slate-300'
+                              )}
                             >
                               {fmtVal(e.row[c], config.field_formats?.[c])}
                             </span>
@@ -2299,7 +2420,11 @@ export function CatalogPickerField({
                               <span
                                 key={c}
                                 data-tip='Not counted — this line is removed when you save'
-                                className='w-20 shrink-0 text-right tabular-nums text-slate-400 dark:text-slate-500'
+                                {...sumCols.box(
+                                  `s:${c}`,
+                                  'w-20 shrink-0',
+                                  'text-right tabular-nums text-slate-400 dark:text-slate-500'
+                                )}
                               >
                                 —
                               </span>
@@ -2312,7 +2437,11 @@ export function CatalogPickerField({
                           return (
                             <span
                               key={c}
-                              className='w-20 shrink-0 text-right tabular-nums text-slate-600 dark:text-slate-300'
+                              {...sumCols.box(
+                                `s:${c}`,
+                                'w-20 shrink-0',
+                                'truncate text-right tabular-nums text-slate-600 dark:text-slate-300'
+                              )}
                             >
                               {fmtVal(v, config.field_formats?.[c])}
                             </span>
@@ -2432,21 +2561,30 @@ export function CatalogPickerField({
                   const cell = (col: string) => (
                     <span
                       key={col}
-                      className='w-20 shrink-0 text-right text-[12px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'
+                      {...sumCols.box(
+                        `s:${col}`,
+                        'w-20 shrink-0',
+                        'truncate text-right text-[12px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'
+                      )}
                     >
                       {fmtVal(sumOf(col), fmtFor(col))}
                     </span>
                   )
                   return (
-                    <div className='flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-muted/40'>
-                      <span className='flex-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
+                    <div className='flex items-center gap-4 border-t border-slate-200 bg-slate-50 px-3 py-1.5 dark:border-border dark:bg-muted/40'>
+                      <span className='flex-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
                         Total
                       </span>
                       {/* copy columns are UNIT values (price) — a sum of unit
                           prices is meaningless, keep the cells blank */}
-                      {copyCols.map((c) => (
-                        <span key={c} className='w-20 shrink-0' />
-                      ))}
+                      {copyCols.map((c) => {
+                        const k = sumKey(c)
+                        return k ? (
+                          <span key={c} {...sumCols.box(k, 'w-20 shrink-0')} />
+                        ) : (
+                          <span key={c} className='w-20 shrink-0' />
+                        )
+                      })}
                       <span className='w-20 shrink-0 text-right text-[12px] font-semibold tabular-nums text-slate-800 dark:text-slate-100'>
                         {fmtVal(sumOf(qtyField), 'number')}
                       </span>
@@ -2498,7 +2636,8 @@ function BuilderCard({
   currentQty,
   addQty,
   qtyStep,
-  readOnly
+  readOnly,
+  colStoreKey
 }: {
   builder: CatalogBuilderConfig
   defaultItemField: string
@@ -2510,10 +2649,13 @@ function BuilderCard({
   addQty: (catalogId: string, qty: number, catalogRow: Record<string, unknown>) => Promise<void>
   qtyStep: number | 'any'
   readOnly?: boolean
+  /** Where this builder's dropdown widths are remembered (catalog-columns.tsx). */
+  colStoreKey: string | null
 }) {
   const client = useNivaroClient()
   const itemField = builder.item_field ?? defaultItemField
   const [expanded, setExpanded] = useState(false)
+  const cols = useColumnWidths(colStoreKey)
   const [sel, setSel] = useState<Record<string, string>>({})
   const [qty, setQty] = useState('1')
   const [adding, setAdding] = useState(false)
@@ -2642,7 +2784,7 @@ function BuilderCard({
               <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
             </div>
           ) : (
-            <div className='flex flex-wrap items-end gap-3'>
+            <div className='flex flex-wrap items-end gap-4'>
               {builder.attributes.map((a, i) => {
                 const opts = new Map<string, string>()
                 for (const row of matchingRows(i)) {
@@ -2655,6 +2797,19 @@ function BuilderCard({
                 return (
                   <AttrSelect
                     key={a.field}
+                    width={cols.widths[a.field]}
+                    onResize={(px) => cols.setWidth(a.field, px, 96)}
+                    onFit={(font) =>
+                      cols.setWidth(
+                        a.field,
+                        // the longest choice + the box's padding, chevron and gap
+                        textWidth(
+                          [titleCase(a.field), 'Select…', ...sorted.map(([, l]) => l)],
+                          font
+                        ) + 44,
+                        96
+                      )
+                    }
                     label={titleCase(a.field)}
                     value={sel[a.field] ?? null}
                     valueLabel={sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null}
@@ -2675,6 +2830,11 @@ function BuilderCard({
                   />
                 )
               })}
+              <ResetColumnsButton
+                show={cols.customized}
+                onReset={cols.reset}
+                className='mb-[5px]'
+              />
               <div className='flex min-h-[28px] flex-1 items-center gap-2'>
                 {resolvedItemId && resolvedCatalogRow ? (
                   <>
@@ -2682,7 +2842,7 @@ function BuilderCard({
                       {applyDisplayTemplate(tmpl, resolvedCatalogRow)}
                     </span>
                     {(currentQty(resolvedItemId) ?? 0) > 0 && (
-                      <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#009abe]'>
+                      <span className='rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#00728d] dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
                         {currentQty(resolvedItemId)} in summary
                       </span>
                     )}
@@ -2734,10 +2894,19 @@ function BuilderCard({
 }
 
 /** One line of text cut with an ellipsis; when it is cut, hovering shows all of it. */
-function TruncText({ text, className }: { text: string; className?: string }) {
+function TruncText({
+  text,
+  className,
+  ...rest
+}: {
+  text: string
+  className?: string
+  style?: CSSProperties
+  'data-cpf-col'?: string
+}) {
   const ref = useOverflowTip<HTMLSpanElement>(text)
   return (
-    <span ref={ref} className={cn('truncate', className)}>
+    <span ref={ref} className={cn('truncate', className)} {...rest}>
       {text}
     </span>
   )
@@ -2750,7 +2919,10 @@ function AttrSelect({
   valueLabel,
   options,
   disabled,
-  onChange
+  onChange,
+  width,
+  onResize,
+  onFit
 }: {
   label: string
   value: string | null
@@ -2758,6 +2930,11 @@ function AttrSelect({
   options: Array<[string, string]>
   disabled?: boolean
   onChange: (id: string | null) => void
+  /** The person's width for this dropdown (px); unset = the default. */
+  width?: number
+  onResize?: (px: number) => void
+  /** Fit to the longest choice, measured in the box's own font. */
+  onFit?: (font: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -2770,21 +2947,41 @@ function AttrSelect({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
   return (
-    <div ref={rootRef} className='relative'>
+    <div ref={rootRef} className='relative' style={width != null ? { width } : undefined}>
       <p className='mb-1 text-[10px] font-medium text-slate-500 dark:text-slate-400'>{label}</p>
       <button
         type='button'
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className='flex w-44 items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-background dark:text-slate-200'
+        className={cn(
+          'flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-left text-[12px] text-slate-700 hover:border-slate-300 disabled:opacity-50 dark:border-border dark:bg-background dark:text-slate-200',
+          width != null ? 'w-full' : 'w-44'
+        )}
       >
         <span className={cn('truncate', !valueLabel && 'text-slate-400')}>
           {valueLabel ?? 'Select…'}
         </span>
         <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
       </button>
+      {onResize && onFit && (
+        <ColResizeHandle
+          label={label}
+          min={96}
+          onResize={onResize}
+          onFit={() => {
+            const box = rootRef.current?.querySelector('button')
+            const cs = box ? getComputedStyle(box) : null
+            onFit(cs ? `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}` : '12px sans-serif')
+          }}
+        />
+      )}
       {open && (
-        <div className='absolute z-50 mt-1 max-h-52 w-44 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-md'>
+        <div
+          className={cn(
+            'absolute z-50 mt-1 max-h-52 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-md',
+            width != null ? 'w-full min-w-44' : 'w-44'
+          )}
+        >
           {value && (
             <button
               type='button'
