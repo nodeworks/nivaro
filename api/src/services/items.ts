@@ -4220,11 +4220,16 @@ export async function readItems(
     ])
     const actualColSet = new Set(columnTypes.keys())
     // browser_config.search_fields narrows the columns (services/search-fields.ts).
+    // A request may narrow further (`search_fields`, e.g. a catalog picker searching
+    // only what its rows show); like the collection's list, it never widens.
     let searchCols = narrowSearchColumns(
-      fieldMeta
-        .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
-        .map((f) => f.field),
-      parseSearchFields(collectionMeta?.browser_config)
+      narrowSearchColumns(
+        fieldMeta
+          .filter((f) => ['string', 'text'].includes(f.type) && actualColSet.has(f.field))
+          .map((f) => f.field),
+        parseSearchFields(collectionMeta?.browser_config)
+      ),
+      query.search_fields?.length ? query.search_fields : null
     )
 
     // A collection with NO registered field metadata (nivaro_users is served

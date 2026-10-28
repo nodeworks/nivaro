@@ -282,6 +282,14 @@ export async function itemsRoutes(app: FastifyInstance) {
       offset: q.offset ? Number(q.offset) : undefined,
       page: q.page ? Number(q.page) : undefined,
       search: q.search,
+      ...(q.search_fields
+        ? {
+            search_fields: String(q.search_fields)
+              .split(',')
+              .map((f) => f.trim())
+              .filter(Boolean)
+          }
+        : {}),
       filter: parsedFilter,
       ...(q.after !== undefined ? { after: String(q.after) } : {}),
       ...(q.count === '0' || q.count === 'false'

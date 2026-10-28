@@ -399,13 +399,18 @@ export function CatalogPickerField({
   const { data: catalogMeta } = useQuery<{
     display_template?: string
     relations?: CMSRelation[]
+    fields?: Array<{ field: string; type?: string }>
   }>({
     queryKey: ['col-meta', catalogCol],
     queryFn: () =>
       client
-        .request<{ data: { display_template?: string; relations?: CMSRelation[] } }>(
-          get(`/collections/${catalogCol}`)
-        )
+        .request<{
+          data: {
+            display_template?: string
+            relations?: CMSRelation[]
+            fields?: Array<{ field: string; type?: string }>
+          }
+        }>(get(`/collections/${catalogCol}`))
         .then((r) => r.data),
     enabled: !!catalogCol,
     staleTime: 300_000
@@ -795,29 +800,92 @@ export function CatalogPickerField({
     const first = [...(tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)][0]?.[1]
     return first && !first.includes('.') ? first : 'id'
   }, [tmpl])
-  const { data: fullSearchRows = [], isFetching: fullSearchFetching } = useQuery<
+  // Matches in what a row SHOWS (its label fields and plain display columns, e.g.
+  // CIFA # + description) come first; matches only in other text fields
+  // (manufacturer, part numbers) follow with a chip saying which field matched —
+  // "PPC" is a manufacturer of 1,357 items, which read as noise (Rob 2026-10-28).
+  const { shownSearchFields, otherSearchFields } = useMemo(() => {
+    const aliases = new Set(
+      (catalogMeta?.relations ?? [])
+        .filter((r) => r.one_collection === catalogCol && r.one_field)
+        .map((r) => r.one_field as string)
+    )
+    const text = new Set(
+      (catalogMeta?.fields ?? [])
+        .filter((f) => (f.type === 'string' || f.type === 'text') && !aliases.has(f.field))
+        .map((f) => f.field)
+    )
+    const shown = new Set<string>()
+    for (const m of (tmpl ?? '').matchAll(/\{\{([\w.]+)\}\}/g)) if (text.has(m[1])) shown.add(m[1])
+    for (const c of config.columns ?? []) if (text.has(c.field)) shown.add(c.field)
+    return {
+      shownSearchFields: [...shown],
+      otherSearchFields: [...text].filter((f) => !shown.has(f))
+    }
+  }, [catalogMeta, catalogCol, tmpl, config.columns])
+  const fullSearchOn = !!catalogCol && fullSearchQ.trim().length > 0
+  const { data: shownSearchRows = [], isFetching: shownSearchFetching } = useQuery<
     Record<string, unknown>[]
   >({
-    queryKey: ['catalog-full-search', catalogCol, catalogFields, fullSearchQ],
+    queryKey: ['catalog-shown-search', catalogCol, catalogFields, fullSearchQ, shownSearchFields],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown>[] }>(
           get(`/items/${catalogCol}`, {
             search: fullSearchQ,
+            search_fields: shownSearchFields.join(','),
             fields: catalogFields,
             limit: 25,
             sort: catalogSortField
           })
         )
         .then((r) => r.data ?? []),
-    enabled: !!catalogCol && fullSearchQ.trim().length > 0,
+    enabled: fullSearchOn && shownSearchFields.length > 0,
     staleTime: 30_000,
     placeholderData: (p) => p
   })
+  const otherFieldsParam = otherSearchFields.join(',')
+  const { data: fullSearchRows = [], isFetching: allSearchFetching } = useQuery<
+    Record<string, unknown>[]
+  >({
+    queryKey: ['catalog-full-search', catalogCol, catalogFields, fullSearchQ, otherFieldsParam],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${catalogCol}`, {
+            search: fullSearchQ,
+            fields: [catalogFields, otherFieldsParam].filter(Boolean).join(','),
+            limit: 25,
+            sort: catalogSortField
+          })
+        )
+        .then((r) => r.data ?? []),
+    enabled: fullSearchOn,
+    staleTime: 30_000,
+    placeholderData: (p) => p
+  })
+  const fullSearchFetching = shownSearchFetching || allSearchFetching
   // Pure search results: the box searches the FULL catalog and shows matches
   // in their own band — it never filters the favorites or section lists
   // (narrowing those alongside read as everything vanishing).
-  const fullMatches = fullSearchRows
+  const fullMatches = useMemo(() => {
+    const seen = new Set(shownSearchRows.map((r) => String(r.id)))
+    return [...shownSearchRows, ...fullSearchRows.filter((r) => !seen.has(String(r.id)))]
+  }, [shownSearchRows, fullSearchRows])
+  /** Why a row matched when its shown fields do not hold the search: "Manufacturer: PPC". */
+  const hiddenMatchOf = (row: Record<string, unknown>): string | null => {
+    if (shownSearchFields.length === 0) return null
+    if (shownSearchRows.some((r) => String(r.id) === String(row.id))) return null
+    const words = fullSearchQ.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    for (const f of otherSearchFields) {
+      const v = row[f]
+      if (v == null || typeof v === 'object') continue
+      const text = String(v)
+      if (words.some((w) => text.toLowerCase().includes(w)))
+        return `${titleCase(f)}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`
+    }
+    return null
+  }
 
   // Related per-item lookups (config.related_columns): one batched query per
   // column against its collection, matched by the item FK plus resolved match
@@ -1845,6 +1913,18 @@ export function CatalogPickerField({
                     >
                       {starButton(id)}
                       {itemLabel(id, applyDisplayTemplate(tmpl, r), itemLabelCls)}
+                      {(() => {
+                        const why = hiddenMatchOf(r)
+                        return why ? (
+                          <span
+                            data-catalog-match-why
+                            data-tip={`Matched on ${why}`}
+                            className='max-w-[160px] shrink-0 truncate rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
+                          >
+                            {why}
+                          </span>
+                        ) : null
+                      })()}
                       {colCells(id, r)}
                       {savingIds.has(id) && (
                         <Loader2 className='h-3 w-3 shrink-0 animate-spin text-slate-400' />

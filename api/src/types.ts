@@ -181,6 +181,9 @@ export interface ItemsQuery {
   offset?: number
   page?: number
   search?: string
+  /** Narrow `search` to these text fields (only ever narrows; unknown names are
+   *  ignored, and a list matching none searches every field as before). */
+  search_fields?: string[]
   /** Keyset paging: `start` (or empty) for the first page, then the
    *  `next_cursor` of the page before. Replaces offset/page when given. */
   after?: string

@@ -331,6 +331,11 @@ export const apiItems: DocSection = {
           'none',
           'Every word must appear in one of the string/text fields (contains match). A collection can name the columns searched in Table Editor → Settings → Collection Browser → Search columns (`browser_config.search_fields`); leaving long notes out keeps search fast on big tables.'
         ],
+        [
+          'search_fields',
+          'none',
+          'Comma list narrowing `search` to these string/text fields for this request, e.g. `search=ppc&search_fields=cifa_number,description`. Only ever narrows (on top of the collection’s own list); unknown names are ignored, and a list matching none searches as without it. Catalog pickers search what their rows show first this way.'
+        ],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']
       ]
