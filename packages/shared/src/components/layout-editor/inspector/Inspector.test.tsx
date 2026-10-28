@@ -769,6 +769,50 @@ describe('Inspector', () => {
       expect(lastOverrides(apply)).toMatchObject({ repeat_last: true })
     })
 
+    it('Rules tab: Personal default writes overrides.personal_default and clears it again', async () => {
+      const { apply } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      const sw = () => host.querySelector('[data-setting="field.personal_default"] [role="switch"]')
+      expect(host.querySelector('[data-setting="field.personal_default"]')?.textContent).toContain(
+        'On this form, people can save their own starting value for this field, and new records start with it.'
+      )
+      await click(sw())
+      expect(apply).toHaveBeenCalledTimes(1)
+      const [ops, opts] = apply.mock.calls[0]
+      expect(ops).toEqual([
+        {
+          op: 'update_placement',
+          at: { field: 'title', group_key: 'main' },
+          patch: { overrides: { personal_default: true } }
+        }
+      ])
+      expect(opts.label).toBe('Allow personal defaults for Title')
+
+      // Mount again on a placement that already has it on: clicking removes the key.
+      const base = makeBundle()
+      const bundle: LayoutBundle = {
+        ...base,
+        placements: base.placements.map((p) =>
+          p.field === 'title' ? { ...p, overrides: { personal_default: true } } : p
+        )
+      }
+      const again = await mount(field('title'), { bundle })
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      await click(sw())
+      const [ops2, opts2] = again.apply.mock.calls[0]
+      expect(ops2[0].patch).toEqual({ overrides: null })
+      expect(opts2.label).toBe('Stop personal defaults for Title')
+    })
+
+    it('Personal default is offered on an M2M picker but not on an O2M list', async () => {
+      await mount(field('tags'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      expect(host.querySelector('[data-setting="field.personal_default"]')).not.toBeNull()
+      await mount(field('lines'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      expect(host.querySelector('[data-setting="field.personal_default"]')).toBeNull()
+    })
+
     it('Look tab: a label rule and a counter', async () => {
       const { apply } = await mount(field('title'))
       await click(

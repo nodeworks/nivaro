@@ -10,7 +10,12 @@ import { FieldDefaultValueControl } from '../editors/field-default-value'
 import { PipelineStateConditionRow, RoleConditionRow } from '../editors/lock-conditions'
 import { useLayoutEditorHost } from '../host'
 import { tintCard } from '../panel-style'
-import { ConfirmChangeSetting, RecommendedToggle, RepeatLastToggle } from './BehaviourSettings'
+import {
+  ConfirmChangeSetting,
+  PersonalDefaultToggle,
+  RecommendedToggle,
+  RepeatLastToggle
+} from './BehaviourSettings'
 import { useFieldCtx } from './field-context'
 import { AddButton, Choice, Section, Segmented, Setting, TextInput, Toggle } from './kit'
 import {
@@ -132,6 +137,7 @@ export function RulesTab() {
           )
         }
       />
+      <PersonalDefaultToggle />
       <ConfirmChangeSetting />
       <RepeatLastToggle />
       {(info.computedType === 'rollup' || info.computedType === 'write') && (

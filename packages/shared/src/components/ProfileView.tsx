@@ -47,6 +47,7 @@ import { TeamsConnect } from './profile/TeamsConnect'
 export { DelegationCard }
 
 import { NotificationSourcesCard } from './NotificationSourcesCard'
+import { MyDefaultsCard } from './profile/MyDefaultsCard'
 import { UserScopesCard } from './profile/PersonAccess'
 import { PersonProfile } from './profile/PersonProfile'
 import { ConfirmButton, Field, SectionCard, Toggle } from './profile/primitives'
@@ -1985,6 +1986,8 @@ function OwnProfile({
           <ProfileFieldsCard />
           <TimezoneCard />
           <DisplayPrefsCard />
+          {/* Starting values for new records; hidden when nothing is saved or offered. */}
+          <MyDefaultsCard />
           <LinkAppCard />
           <AiMemoryCard />
           <AiHistoryCard />

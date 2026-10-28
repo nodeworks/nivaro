@@ -1,4 +1,14 @@
-import { Copy, ExternalLink, Eye, History, Lock, Sigma, X } from 'lucide-react'
+import {
+  Copy,
+  ExternalLink,
+  Eye,
+  History,
+  Lock,
+  Sigma,
+  UserRound,
+  UserRoundX,
+  X
+} from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -6,6 +16,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState
 } from 'react'
@@ -14,7 +25,9 @@ import { toast } from 'sonner'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
+import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
+import { usePersonalDefaultsApi } from './usePersonalDefaults'
 
 /**
  * Per-field affordances the record form hands down to every FieldRow without
@@ -183,6 +196,19 @@ interface MenuItem {
   hint?: string
   run: () => void
   disabled?: boolean
+  /** Keep the menu open after the click (the item continues in the panel itself). */
+  stay?: boolean
+}
+
+/** The server's refusal text (`{ error, code }`), else the thrown message. */
+function refusalText(e: unknown, fallback: string): string {
+  const x = e as {
+    response?: { data?: { error?: string } }
+    data?: { error?: string }
+    error?: string
+    message?: string
+  }
+  return x?.response?.data?.error ?? x?.data?.error ?? x?.error ?? x?.message ?? fallback
 }
 
 /**
@@ -213,7 +239,8 @@ export function useFieldContextMenu({
   relations,
   collection,
   itemId,
-  openRelated
+  openRelated,
+  editable = false
 }: {
   wrapperRef: RefObject<HTMLDivElement | null>
   field: CMSField
@@ -222,10 +249,51 @@ export function useFieldContextMenu({
   collection: string
   itemId: string
   openRelated?: (collection: string, id: string) => void
+  /** The person can edit this field on this form (not read-only, computed or hidden):
+   *  only then may the menu offer "Save as my default". */
+  editable?: boolean
 }) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
+  // Personal defaults: "Save as my default" asks inline (in the menu panel) before it saves.
+  const personalDefaults = usePersonalDefaultsApi()
+  const [confirming, setConfirming] = useState(false)
+  const [parts, setParts] = useState<string[] | null>(null)
+  const [saving, setSaving] = useState(false)
   const openAt = useCallback((x: number, y: number) => setAt({ x, y }), [])
-  const close = useCallback(() => setAt(null), [])
+  // Opened from the ⋯ button: focus goes back there when the menu closes (unless the person
+  // clicked into something else that took focus).
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const close = useCallback(() => {
+    setAt(null)
+    setConfirming(false)
+    setParts(null)
+    setSaving(false)
+    const back = returnFocusRef.current
+    returnFocusRef.current = null
+    if (back)
+      window.setTimeout(() => {
+        if (
+          back.isConnected &&
+          (!document.activeElement || document.activeElement === document.body)
+        )
+          back.focus()
+      }, 0)
+  }, [])
+  const isOpen = at !== null
+  /** The ⋯ button in the label row (touch has no right-click): toggles the same menu under it. */
+  const openFrom = useCallback(
+    (el: HTMLElement) => {
+      if (isOpen) {
+        close()
+        return
+      }
+      const r = el.getBoundingClientRect()
+      targetRef.current = null
+      returnFocusRef.current = el
+      openAt(r.left, r.bottom + 4)
+    },
+    [isOpen, close, openAt]
+  )
   // The element under the cursor when the menu opened. "Copy value" reads
   // THIS, not the field's draft value: an inline grid is one FieldRow whose
   // alias value is never in the draft (rows live in their own query), so the
@@ -345,21 +413,125 @@ export function useFieldContextMenu({
             }
           } satisfies MenuItem
         ]
+      : []),
+    ...(personalDefaults?.allowed(field.field) && editable && personalDefaults.hasValue(field.field)
+      ? [
+          {
+            key: 'save-default',
+            label: 'Save as my default',
+            icon: <UserRound className='h-3.5 w-3.5' />,
+            stay: true,
+            run: () => {
+              setParts(null)
+              setConfirming(true)
+              personalDefaults.describeSave(field.field).then(
+                (p) => setParts(p),
+                () => setParts([])
+              )
+            }
+          } satisfies MenuItem
+        ]
+      : []),
+    ...(personalDefaults?.allowed(field.field) && personalDefaults.defaultFor(field.field)
+      ? [
+          {
+            key: 'clear-default',
+            label: 'Clear my default',
+            icon: <UserRoundX className='h-3.5 w-3.5' />,
+            // Runs at once (a menu pick is deliberate); the toast's Undo saves it back.
+            run: () => {
+              personalDefaults.clear(field.field).then(
+                (removed) =>
+                  toast.success(
+                    'Your default was cleared',
+                    removed
+                      ? {
+                          action: {
+                            label: 'Undo',
+                            onClick: () => {
+                              personalDefaults.restore(removed).then(
+                                () => toast.success('Your default is back'),
+                                (e) =>
+                                  toast.error(refusalText(e, 'Could not put your default back'))
+                              )
+                            }
+                          }
+                        }
+                      : undefined
+                  ),
+                (e) => toast.error(refusalText(e, 'Could not clear your default'))
+              )
+            }
+          } satisfies MenuItem
+        ]
       : [])
   ]
 
-  const menu = at ? <FieldContextMenu at={at} items={items} onClose={close} /> : null
-  return { onContextMenu, onKeyDown, menu }
+  const confirm =
+    confirming && personalDefaults
+      ? {
+          text: parts?.length
+            ? `Save ${parts.join(' · ')} as your ${parts.length > 1 ? 'defaults' : 'default'}?`
+            : 'Save as your default?',
+          ready: parts !== null && !saving,
+          saving,
+          onCancel: close,
+          onSave: () => {
+            setSaving(true)
+            personalDefaults.save(field.field).then(
+              () => {
+                toast.success(
+                  parts?.length
+                    ? `Saved ${parts.join(' · ')} as your default${parts.length > 1 ? 's' : ''}`
+                    : 'Your default was saved'
+                )
+                close()
+              },
+              (e) => {
+                toast.error(refusalText(e, 'Could not save your default'))
+                close()
+              }
+            )
+          }
+        }
+      : null
+  const menu = at ? (
+    <FieldContextMenu
+      at={at}
+      items={items}
+      onClose={close}
+      confirm={confirm}
+      anchor={wrapperRef.current}
+    />
+  ) : null
+  // The ⋯ button shows only where the menu offers something about this field beyond the copy
+  // items every field has: today, Save / Clear my default.
+  const hasFieldItems = items.some((i) => i.key === 'save-default' || i.key === 'clear-default')
+  return { onContextMenu, onKeyDown, menu, openFrom, isOpen, hasFieldItems }
+}
+
+type MenuConfirm = {
+  text: string
+  ready: boolean
+  saving?: boolean
+  onSave: () => void
+  onCancel: () => void
 }
 
 function FieldContextMenu({
   at,
   items,
-  onClose
+  onClose,
+  confirm,
+  anchor
 }: {
   at: { x: number; y: number }
   items: MenuItem[]
   onClose: () => void
+  confirm?: MenuConfirm | null
+  /** The field wrapper: inside a modal sheet the panel portals into that [role=dialog]
+   *  (a body portal inherits the modal lock's pointer-events:none and the focus trap). */
+  anchor?: HTMLElement | null
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [cursor, setCursor] = useState(0)
@@ -367,12 +539,29 @@ function FieldContextMenu({
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
+      const t = e.target as HTMLElement | null
+      if (ref.current?.contains(t)) return
+      // This field's own ⋯ button toggles the menu itself (closing here would reopen it).
+      if (t?.closest?.('[data-field-menu-trigger]') && anchor?.contains(t)) return
+      onClose()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
+      } else if (confirm) {
+        // Enter / Space act on the focused button; Tab stays between Cancel and Save.
+        if (e.key === 'Tab') {
+          e.preventDefault()
+          const btns = [cancelRef.current, saveRef.current].filter(
+            (b): b is HTMLButtonElement => !!b && !b.disabled
+          )
+          if (btns.length === 0) return
+          const i = btns.indexOf(document.activeElement as HTMLButtonElement)
+          const next = e.shiftKey ? i - 1 : i + 1
+          btns[((next % btns.length) + btns.length) % btns.length]?.focus()
+        }
+        return
       } else if (e.key === 'ArrowDown') {
         e.preventDefault()
         setCursor((c) => (c + 1) % Math.max(1, enabled.length))
@@ -384,7 +573,7 @@ function FieldContextMenu({
         const it = enabled[cursor]
         if (it) {
           it.run()
-          onClose()
+          if (!it.stay) onClose()
         }
       }
     }
@@ -395,54 +584,118 @@ function FieldContextMenu({
       window.removeEventListener('mousedown', onDown, true)
       window.removeEventListener('keydown', onKey, true)
     }
-  }, [onClose, enabled, cursor])
+  }, [onClose, enabled, cursor, confirm, anchor])
+  const saveRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const confirmOpen = !!confirm
+  const confirmReady = !!confirm?.ready
+  // Cancel is never disabled: focus lands there at once, then moves to Save when it enables.
+  useEffect(() => {
+    if (confirmOpen) cancelRef.current?.focus()
+  }, [confirmOpen])
+  useEffect(() => {
+    if (!confirmReady) return
+    const a = document.activeElement
+    if (a === cancelRef.current || a === ref.current || a === document.body)
+      saveRef.current?.focus()
+  }, [confirmReady])
 
-  // Keep the panel on screen.
+  // Keep the panel on screen: its real height once drawn (the confirm line wraps to 1–3 rows).
   const w = 240
-  const h = items.length * 30 + 12
-  const x = Math.min(at.x, window.innerWidth - w - 8)
-  const y = Math.min(at.y, window.innerHeight - h - 8)
+  const [h, setH] = useState(() => (confirm ? 96 : items.length * 30 + 12))
+  useLayoutEffect(() => {
+    const drawn = ref.current?.offsetHeight
+    if (drawn && drawn !== h) setH(drawn)
+  })
+  const x = Math.max(8, Math.min(at.x, window.innerWidth - w - 8))
+  const y = Math.max(8, Math.min(at.y, window.innerHeight - h - 8))
+  const host = (anchor?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
+  const place: React.CSSProperties =
+    host === document.body
+      ? { position: 'fixed', left: x, top: y }
+      : (() => {
+          const c = host.getBoundingClientRect()
+          return {
+            position: 'absolute',
+            left: x - c.left + host.scrollLeft - host.clientLeft,
+            top: y - c.top + host.scrollTop - host.clientTop
+          }
+        })()
   return createPortal(
     <div
       ref={ref}
-      role='menu'
+      // While it asks "Save … as your default?" the panel is a small non-modal dialog, not a menu.
+      {...(confirm
+        ? { role: 'dialog', 'aria-modal': false, 'aria-label': 'Save as my default' }
+        : { role: 'menu', 'aria-label': 'Field options' })}
       tabIndex={-1}
       data-field-context-menu
-      style={{ position: 'fixed', left: x, top: y, width: w, zIndex: 110 }}
+      style={{ ...place, width: w, zIndex: 110 }}
       className='rounded-lg border border-slate-200 bg-white p-1 shadow-xl outline-none dark:border-border dark:bg-card'
     >
-      {items.map((it) => {
-        const idx = enabled.indexOf(it)
-        const active = idx === cursor && !it.disabled
-        return (
-          <button
-            key={it.key}
-            type='button'
-            role='menuitem'
-            disabled={it.disabled}
-            onMouseEnter={() => idx >= 0 && setCursor(idx)}
-            onClick={() => {
-              it.run()
-              onClose()
-            }}
-            className={cn(
-              'flex h-[30px] w-full items-center gap-2 rounded-sm px-2 text-left text-[12.5px] font-medium text-slate-700 dark:text-slate-200',
-              active && 'bg-accent text-accent-foreground',
-              it.disabled && 'cursor-not-allowed opacity-40'
-            )}
+      {confirm ? (
+        <div data-personal-default-confirm className='space-y-2 px-2 py-1.5'>
+          <p
+            aria-live='polite'
+            className='text-[12.5px] leading-snug text-slate-700 dark:text-slate-200'
           >
-            <span className='shrink-0 text-slate-500'>{it.icon}</span>
-            <span className='min-w-0 flex-1 truncate'>{it.label}</span>
-            {it.hint && (
-              <span className='max-w-[90px] truncate font-mono text-[10.5px] text-slate-400'>
-                {it.hint}
-              </span>
-            )}
-          </button>
-        )
-      })}
+            {confirm.text}
+          </p>
+          <div className='flex justify-end gap-1.5'>
+            <button
+              ref={cancelRef}
+              type='button'
+              onClick={confirm.onCancel}
+              className={PERSONAL_DEFAULT_GHOST_BUTTON}
+            >
+              <X className='h-3 w-3' aria-hidden /> Cancel
+            </button>
+            <button
+              ref={saveRef}
+              type='button'
+              disabled={!confirm.ready}
+              onClick={confirm.onSave}
+              className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50'
+            >
+              {confirm.saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {confirm
+        ? null
+        : items.map((it) => {
+            const idx = enabled.indexOf(it)
+            const active = idx === cursor && !it.disabled
+            return (
+              <button
+                key={it.key}
+                type='button'
+                role='menuitem'
+                disabled={it.disabled}
+                onMouseEnter={() => idx >= 0 && setCursor(idx)}
+                onClick={() => {
+                  it.run()
+                  if (!it.stay) onClose()
+                }}
+                className={cn(
+                  'flex h-[30px] w-full items-center gap-2 rounded-sm px-2 text-left text-[12.5px] font-medium text-slate-700 dark:text-slate-200',
+                  active && 'bg-accent text-accent-foreground',
+                  it.disabled && 'cursor-not-allowed opacity-40'
+                )}
+              >
+                <span className='shrink-0 text-slate-500'>{it.icon}</span>
+                <span className='min-w-0 flex-1 truncate'>{it.label}</span>
+                {it.hint && (
+                  <span className='max-w-[90px] truncate font-mono text-[10.5px] text-slate-400'>
+                    {it.hint}
+                  </span>
+                )}
+              </button>
+            )
+          })}
     </div>,
-    document.body
+    host
   )
 }
 

@@ -8,10 +8,12 @@ import { createPortal } from 'react-dom'
  * anywhere in the app use this instead.
  *
  * Mount it once per surface; mounting it again (a record form rendered inside
- * a collection browser, say) is harmless — only the FIRST live instance
- * listens and renders, so tooltips never double up.
+ * a collection browser, an app shell that mounts one for every page) is
+ * harmless — only the OLDEST live instance listens and renders, so tooltips
+ * never double up. When the owner unmounts (a page that mounted its own is
+ * left), the next live instance takes over, so the shell's copy keeps working.
  */
-let mountedInstances = 0
+const liveInstances: Array<(owns: boolean) => void> = []
 
 export function TipLayer() {
   const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null)
@@ -19,11 +21,13 @@ export function TipLayer() {
   const tipRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    mountedInstances += 1
-    const isOwner = mountedInstances === 1
-    setOwns(isOwner)
+    liveInstances.push(setOwns)
+    if (liveInstances[0] === setOwns) setOwns(true)
     return () => {
-      mountedInstances -= 1
+      const i = liveInstances.indexOf(setOwns)
+      if (i < 0) return
+      liveInstances.splice(i, 1)
+      if (i === 0) liveInstances[0]?.(true)
     }
   }, [])
 

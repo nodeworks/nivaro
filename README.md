@@ -173,6 +173,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Chaos engineering** — time-boxed fault drills (database, Redis, partners, storage, clock, browser, socket) with steady-state checks, auto-abort, a Stop all button, game days, a results report and CI drills; refused in cloud mode and on production unless enabled
 - **Realtime delivery** — one socket per browser (SharedWorker), a delivery SLO with a health view, and chaos drills that prove clients recover from drops
 - **Faster reads** — ETag/304 on config and list reads, cached totals, keyset paging, hover prefetch, and slow reads that run in the background and report progress
+- **Personal Field Defaults** — opt a field in on a form and each person saves their own starting value (per parent context, e.g. per zone); new records open pre-filled with an undoable pill; manage under Profile → My defaults, admins can set them for others
 - **Layout Editor extras** — staged edits until you save, A/B tests between two forms, merge two forms, phone versions, freeze edits, row groups, soft-required fields, display formulas, and form-shaped spreadsheets
 - **Product analytics** — searches that found nothing, dead and rage clicks, support-request trends, first-open and acted-on rates, and cumulative flow for pipelines
 

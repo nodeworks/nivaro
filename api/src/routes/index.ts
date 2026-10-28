@@ -110,6 +110,7 @@ import { externalApiObservabilityRoutes } from './external-api-observability.js'
 import { externalApisRoutes } from './external-apis.js'
 import { featureFlagRoutes } from './feature-flags.js'
 import { fieldConfigRoutes } from './field-config.js'
+import { fieldDefaultsRoutes } from './field-defaults.js'
 import { fieldGroupsRoutes } from './field-groups.js'
 import { fieldHistoryRoutes } from './field-history.js'
 import { fieldRulesRoutes } from './field-rules.js'
@@ -616,6 +617,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(blackoutDatesRoutes, { prefix: '/blackout-dates' })
   await app.register(rulesRoutes, { prefix: '/rules' })
   await app.register(fieldRulesRoutes, { prefix: '/field-rules' })
+  await app.register(fieldDefaultsRoutes, { prefix: '/field-defaults' })
   await app.register(pinnedRoutes, { prefix: '/pinned' })
   await app.register(dashboardsRoutes, { prefix: '/dashboards' })
   await app.register(reportsRoutes, { prefix: '/reports' })

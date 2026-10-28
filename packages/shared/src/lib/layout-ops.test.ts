@@ -71,3 +71,29 @@ describe('applyLayoutOps — kind changes never strand fields', () => {
     ).toBe('A text block holds text, not fields')
   })
 })
+
+describe('applyLayoutOps — personal_default survives the placement ops', () => {
+  const base = cases.find((c) => c.name.startsWith('error: a section cannot'))
+    ?.before as LayoutBundle
+  const first = base.placements[0]
+  const at = { field: first.field, group_key: first.group_key }
+  const overridesOf = (b: LayoutBundle) =>
+    b.placements.find((p) => p.field === first.field && p.group_key === first.group_key)?.overrides
+
+  it('is stored as sent, kept beside other keys, and clears back to null', () => {
+    const on = applyLayoutOps(base, [
+      {
+        op: 'update_placement',
+        at,
+        patch: { overrides: { required: true, personal_default: true } }
+      }
+    ])
+    expect(overridesOf(on)).toEqual({ required: true, personal_default: true })
+    const off = applyLayoutOps(on, [
+      { op: 'update_placement', at, patch: { overrides: { required: true } } }
+    ])
+    expect(overridesOf(off)).toEqual({ required: true })
+    const none = applyLayoutOps(off, [{ op: 'update_placement', at, patch: { overrides: null } }])
+    expect(overridesOf(none)).toBeNull()
+  })
+})

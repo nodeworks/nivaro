@@ -318,6 +318,12 @@ export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
 export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
+export {
+  type PersonalDefaultsApi,
+  PersonalDefaultsContext,
+  personalDefaultsKey,
+  usePersonalDefaultsApi
+} from './components/item-edit/usePersonalDefaults'
 export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
