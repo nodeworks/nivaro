@@ -2,6 +2,7 @@ import {
   bindClientChaosSocket,
   type ClockSample,
   type CollectionUpdateEvent,
+  createJitteredReaction,
   createLeaderSocket,
   createRoomGapTracker,
   createSocketRealtime,
@@ -104,6 +105,10 @@ function refetchRooms(rooms: string[]) {
   for (const ev of refetchEventsFor(rooms)) relayLocal(ev.event, ev.payload)
   window.dispatchEvent(new CustomEvent('nvr:realtime-stale', { detail: { rooms } }))
 }
+/** catchup:full and access:changed reach every tab at once (deploy, role change): each tab's
+ *  reload reaction waits a random 0–3 s so the refetches do not hit the API as one wave. */
+const later = createJitteredReaction()
+const accessRoomsLeft = new Set<string>()
 const roomGaps = createRoomGapTracker({
   request: (req) => socket?.emit('catchup:room', req),
   dispatch: relayLocal,
@@ -354,7 +359,12 @@ export function getSocket(): Socket {
   socket.on('access:changed', (p: { rooms_left?: string[] }) => {
     forgetSettledReads()
     if (!p?.rooms_left?.length) return
-    window.dispatchEvent(new CustomEvent('nvr:access-changed', { detail: p }))
+    for (const r of p.rooms_left) accessRoomsLeft.add(r)
+    later('access', () => {
+      const rooms_left = [...accessRoomsLeft]
+      accessRoomsLeft.clear()
+      window.dispatchEvent(new CustomEvent('nvr:access-changed', { detail: { rooms_left } }))
+    })
   })
   socket.on('auth:ok', () => {
     // A new server socket: room counters start over (the reconnect catch-up covers the gap).
@@ -457,7 +467,7 @@ export function getSocket(): Socket {
     }
   )
   socket.on('catchup:full', (p?: { reason?: string }) => {
-    window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+    later('full', () => window.dispatchEvent(new CustomEvent('nvr:catchup-full')))
     caughtUp(
       p?.reason === 'slow-consumer'
         ? 'Live updates resumed. This tab fell too far behind to send each change, so the lists and records on this page were reloaded.'
@@ -485,11 +495,13 @@ export function getSocket(): Socket {
   // below); hand the room's viewer list to the shared presence hook.
   if (!usesWorkerSocket())
     socket.on('record:viewers', (payload: unknown) => relayLiveEvent('record:viewers', payload))
-  // #2475 — on the shared socket the record rooms ride this connection too (the per-record
-  // socket in use-record-presence relays these itself otherwise).
-  if (usesWorkerSocket())
-    for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
-      socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
+  // Record rooms ride this connection in both modes (use-record-presence joins them here), so the
+  // record notices are relayed once here for every record page. `access:changed` reaches the live
+  // hooks the same way on a per-tab socket; on the shared one the adapter hands it over.
+  for (const ev of ['record:integrity', 'record:automation', 'owners:changed', 'record:signal'])
+    socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
+  if (!usesWorkerSocket())
+    socket.on('access:changed', (payload: unknown) => relayLiveEvent('access:changed', payload))
   return socket
 }
 

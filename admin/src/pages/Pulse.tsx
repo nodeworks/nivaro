@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Radio } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { io } from 'socket.io-client'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { mintWsToken } from '@/lib/socket'
-import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
+import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
 /**
@@ -37,7 +35,6 @@ function toneFor(action: string): string {
   return '#94a3b8'
 }
 
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 const MAX_EVENTS = 150
 const BUCKETS = 30
 
@@ -64,27 +61,30 @@ export function PulsePage() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect when the signed-in person changes
   useEffect(() => {
-    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
-
-    socket.on('connect', async () => {
-      const token = await mintWsToken()
-      if (token) socket.emit('auth', { token })
-    })
-    socket.on('auth:ok', () => {
+    // The app's one socket (getSocket: the shared worker, or this tab's own) — signed in there.
+    const socket = getSocket()
+    const onAuth = () => {
       socket.emit('pulse:join')
       setConnected(true)
-    })
-    socket.on('activity:pulse', (e: PulseEvent) => {
+    }
+    const onPulse = (e: PulseEvent) => {
       setEvents((prev) => [{ ...e, live: true }, ...prev].slice(0, MAX_EVENTS))
       const minute = Math.floor(Date.now() / 60_000)
       countsRef.current.set(minute, (countsRef.current.get(minute) ?? 0) + 1)
-    })
-    socket.on('disconnect', () => setConnected(false))
+    }
+    const onDisconnect = () => setConnected(false)
+    socket.on('auth:ok', onAuth)
+    socket.on('activity:pulse', onPulse)
+    socket.on('disconnect', onDisconnect)
+    // Already signed in: join now (a join before sign-in is ignored; auth:ok joins again).
+    if (socket.connected) onAuth()
 
     const tick = setInterval(() => forceTick((n) => n + 1), 10_000)
     return () => {
       socket.emit('pulse:leave')
-      socket.disconnect()
+      socket.off('auth:ok', onAuth)
+      socket.off('activity:pulse', onPulse)
+      socket.off('disconnect', onDisconnect)
       clearInterval(tick)
     }
   }, [user?.id])

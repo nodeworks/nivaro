@@ -132,7 +132,11 @@ describe('createSocketRealtime', () => {
 
   it('turns catchup:full, access:changed, config:update and force-refresh into window events', () => {
     const s = fakeSocket()
-    createSocketRealtime({ socket: s, windowEvents: { forceRefresh: false } }).on('x', () => {})
+    createSocketRealtime({
+      socket: s,
+      windowEvents: { forceRefresh: false },
+      reactionJitterMs: 0
+    }).on('x', () => {})
     const seen: string[] = []
     for (const n of [
       'nvr:catchup-full',
@@ -147,6 +151,32 @@ describe('createSocketRealtime', () => {
     s.serverSends('config:update', { surface: 'layout' })
     s.serverSends('client:force-refresh', { seconds: 5 })
     expect(seen).toEqual(['nvr:catchup-full', 'nvr:access-changed', 'nvr:config-update'])
+  })
+
+  it('spreads catchup:full and access:changed reactions over a random delay, merged', () => {
+    vi.useFakeTimers()
+    const s = fakeSocket()
+    createSocketRealtime({ socket: s, reactionJitterMs: 3000 }).on('x', () => {})
+    const full: unknown[] = []
+    const access: Array<{ rooms_left?: string[] }> = []
+    const onFull = () => full.push(1)
+    const onAccess = (e: Event) => access.push((e as CustomEvent).detail)
+    window.addEventListener('nvr:catchup-full', onFull)
+    window.addEventListener('nvr:access-changed', onAccess)
+    try {
+      s.serverSends('catchup:full')
+      s.serverSends('catchup:full')
+      s.serverSends('access:changed', { rooms_left: ['collection:a'] })
+      s.serverSends('access:changed', { rooms_left: ['collection:b'] })
+      expect(full).toEqual([])
+      expect(access).toEqual([])
+      vi.advanceTimersByTime(3000)
+      expect(full).toEqual([1])
+      expect(access).toEqual([{ rooms_left: ['collection:a', 'collection:b'] }])
+    } finally {
+      window.removeEventListener('nvr:catchup-full', onFull)
+      window.removeEventListener('nvr:access-changed', onAccess)
+    }
   })
 
   it('counts as live again when a catch-up never answers', () => {

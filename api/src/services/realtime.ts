@@ -1,5 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import {
+  AUTO_BATCH_WINDOW_MS,
+  autoBatchDue,
   isQuietPresenceWrite,
   type LiveMode,
   liveModeNow,
@@ -89,6 +91,11 @@ export function broadcastCollectionUpdate(
     })
     if (mode === 'batched') {
       queueBatched(collection, payload)
+      return Promise.resolve(null)
+    }
+    // A burst on an `on` collection (bulk write) goes out batched past the rate (auto-batch).
+    if (autoBatchDue(collection)) {
+      queueBatched(collection, payload, AUTO_BATCH_WINDOW_MS)
       return Promise.resolve(null)
     }
     return journaledEmit(`collection:${collection}`, 'collection:update', payload)

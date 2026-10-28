@@ -35,8 +35,10 @@ import {
   bindVerdict,
   canSeeRecordRoom,
   checkBind,
+  collectionJoinAllowed,
   encodeBoundToken,
   endRoomSockets,
+  forgetJoinVerdicts,
   isKnownCollection,
   masqRoom,
   parseWsTokenValue,
@@ -592,5 +594,58 @@ describe('collection:join names (isKnownCollection)', () => {
     hasTable.mockImplementation(async () => false)
     // Tenant B asks its own database rather than reading A's cached answer.
     expect(await inTenant('B')).toBe(false)
+  })
+})
+
+describe('recheck single flight + shared verdicts (review 2026-10-27)', () => {
+  it("shares one person's room verdicts across their sockets in one pass", async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
+    vi.mocked(can).mockClear()
+    const tabs = [1, 2, 3].map(() => fakeSocket(ANA, ['collection:orders', 'collection:items']))
+    await runLocalRecheck(fakeIo(tabs.map((t) => t.socket)) as never, { all: true })
+    // Two rooms, three sockets: two permission checks, not six.
+    expect(vi.mocked(can)).toHaveBeenCalledTimes(2)
+  })
+
+  it('a recheck arriving mid-pass is merged into ONE follow-up pass', async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let calls = 0
+    vi.mocked(can).mockImplementation(async () => {
+      calls++
+      if (calls === 1) await gate
+      return true
+    })
+    const { socket } = fakeSocket(ANA, ['collection:orders'])
+    const io = fakeIo([socket]) as never
+    const first = runLocalRecheck(io, { all: true })
+    const second = runLocalRecheck(io, { all: false, userIds: ['ANA'] })
+    const third = runLocalRecheck(io, { all: false, userIds: ['BOB'] })
+    expect(second).toBe(third)
+    release()
+    await Promise.all([first, second, third])
+    // The first pass and ONE merged follow-up: two checks of the one room.
+    expect(calls).toBe(2)
+    vi.mocked(can).mockImplementation(async () => true)
+  })
+
+  it('collection joins share a verdict briefly; a recheck forgets it', async () => {
+    vi.mocked(can).mockClear()
+    forgetJoinVerdicts()
+    expect(await collectionJoinAllowed(ANA, 'orders', null, 1000)).toBe(true)
+    expect(await collectionJoinAllowed(ANA, 'orders', null, 2000)).toBe(true)
+    expect(vi.mocked(can)).toHaveBeenCalledTimes(1)
+    // An API-key socket is judged on its own (its key narrows what it may read).
+    await collectionJoinAllowed(ANA, 'orders', { kind: 'apikey', id: 4 }, 2000)
+    expect(vi.mocked(can)).toHaveBeenCalledTimes(2)
+    // After the TTL, and after any access change, it asks again.
+    await collectionJoinAllowed(ANA, 'orders', null, 20_000)
+    expect(vi.mocked(can)).toHaveBeenCalledTimes(3)
+    forgetJoinVerdicts('ana')
+    await collectionJoinAllowed(ANA, 'orders', null, 20_001)
+    expect(vi.mocked(can)).toHaveBeenCalledTimes(4)
   })
 })

@@ -436,11 +436,30 @@ function hooksOf(socket: Socket): SocketAccessHooks | null {
   return (socket.data?.nvrAccess as SocketAccessHooks | undefined) ?? null
 }
 
+/**
+ * Room verdicts shared inside ONE recheck pass (review 2026-10-27): a role or policy change
+ * re-gates every socket, and a person's tabs (and their collection rooms) used to run the same
+ * permission checks once per socket. Keyed by person, role, API key and room; rooms whose
+ * answer depends on the socket's own sign-in or tenant (session:, masq:, tenant:, all) are
+ * never shared. A new pass starts a new memo, so nothing outlives the change it judges.
+ */
+export type RoomVerdictMemo = Map<string, Promise<boolean>>
+
+const SOCKET_SPECIFIC_ROOM = /^(session:|masq:|tenant:|all$)/
+
+function verdictKey(user: User, bind: SocketBind | null | undefined, room: string): string | null {
+  const bare = splitTenantRoom(room).room
+  if (SOCKET_SPECIFIC_ROOM.test(bare)) return null
+  const key = bind?.kind === 'apikey' ? `k${bind.id}:${bind.sim ?? ''}` : '-'
+  return `${String(user.id).toUpperCase()}\u0000${user.role ?? ''}\u0000${key}\u0000${room}`
+}
+
 /** Re-run every joined room's gate for one socket (or only rooms `only` accepts). */
 export async function recheckSocketRooms(
   socket: Socket,
   user: User,
-  only?: (room: string) => boolean
+  only?: (room: string) => boolean,
+  memo?: RoomVerdictMemo
 ): Promise<string[]> {
   const hooks = hooksOf(socket)
   let adminVerdict: Promise<boolean> | null = null
@@ -456,12 +475,64 @@ export async function recheckSocketRooms(
   for (const room of [...socket.rooms]) {
     if (room === socket.id) continue
     if (only && !only(splitTenantRoom(room).room)) continue
-    if (await roomStillAllowed(user, room, isAdmin, ctx)) continue
+    const key = memo ? verdictKey(user, ctx.bind, room) : null
+    let verdict = key ? memo?.get(key) : undefined
+    if (!verdict) {
+      verdict = roomStillAllowed(user, room, isAdmin, ctx)
+      if (key) memo?.set(key, verdict)
+    }
+    if (await verdict) continue
     if (hooks) hooks.leaveRoom(room)
     else socket.leave(room)
     left.push(room)
   }
   return left
+}
+
+// ── Join verdicts for the reconnect burst (review 2026-10-27) ──────────────
+
+/**
+ * After a deploy every tab reconnects and re-joins its collection rooms at once; a person with
+ * several tabs ran the same `can(read)` once per tab and room. This keeps a collection-room
+ * join verdict for JOIN_VERDICT_TTL_MS per person + role + API key + tenant + collection.
+ * Any access recheck clears it (forgetJoinVerdicts), and every recheck re-gates the rooms a
+ * socket holds with fresh checks — the memo only ever answers a join, never a recheck.
+ */
+const JOIN_VERDICT_TTL_MS = 10_000
+const JOIN_VERDICT_MAX = 20_000
+const joinVerdicts = new Map<string, { at: number; ok: Promise<boolean> }>()
+
+/** Drop cached join verdicts — everyone's, or one person's. */
+export function forgetJoinVerdicts(userId?: string): void {
+  if (!userId) {
+    joinVerdicts.clear()
+    return
+  }
+  const want = `${String(userId).toUpperCase()}\u0000`
+  for (const k of joinVerdicts.keys()) if (k.includes(`\u0001${want}`)) joinVerdicts.delete(k)
+}
+
+/** May `user` join `collection:<collection>`? `can(read)`, shared for a short while. */
+export function collectionJoinAllowed(
+  user: User,
+  collection: string,
+  bind?: SocketBind | null,
+  now: number = Date.now()
+): Promise<boolean> {
+  const keyPart = bind?.kind === 'apikey' ? `k${bind.id}:${bind.sim ?? ''}` : '-'
+  const key = `${currentTenantKey()}\u0001${String(user.id).toUpperCase()}\u0000${user.role ?? ''}\u0000${keyPart}\u0000${collection}`
+  const hit = joinVerdicts.get(key)
+  if (hit && now - hit.at < JOIN_VERDICT_TTL_MS) return hit.ok
+  const ok = can(user, 'read', collection).then(
+    (v) => !!v,
+    (err) => {
+      joinVerdicts.delete(key)
+      throw err
+    }
+  )
+  if (joinVerdicts.size >= JOIN_VERDICT_MAX) joinVerdicts.clear()
+  joinVerdicts.set(key, { at: now, ok })
+  return ok
 }
 
 // ── Ending sockets ─────────────────────────────────────────────────────────
@@ -534,6 +605,7 @@ let pendingTimer: ReturnType<typeof setTimeout> | null = null
  * A no-op before the socket server exists.
  */
 export function requestAccessRecheck(target: RecheckTarget = { all: true }): void {
+  forgetJoinVerdicts()
   if (!pending) pending = { all: false, users: new Set(), prefixes: new Set() }
   if (target.roomPrefixes?.length) {
     for (const p of target.roomPrefixes) if (p) pending.prefixes.add(p)
@@ -610,8 +682,59 @@ function inGroupTenant(group: Socket[], fn: () => Promise<void>): Promise<void> 
   return inSocketTenant(group[0], fn)()
 }
 
+/**
+ * Single flight per process (review 2026-10-27): a recheck that arrives while a pass runs (this
+ * replica's own debounce, or another replica's via serverSideEmit) is merged into ONE pass that
+ * starts when the current one ends — never two passes over every socket at once.
+ */
+let recheckRunning: Promise<void> | null = null
+let recheckQueued: { target: RecheckTarget; resolve: () => void; done: Promise<void> } | null = null
+
+function mergeTargets(a: RecheckTarget, b: RecheckTarget): RecheckTarget {
+  if (a.all || b.all) return { all: true }
+  const out: RecheckTarget = {
+    all: false,
+    userIds: [...new Set([...(a.userIds ?? []), ...(b.userIds ?? [])])]
+  }
+  // Named people get all their rooms re-gated either way; prefixes narrow everyone else.
+  const prefixes = new Set([...(a.roomPrefixes ?? []), ...(b.roomPrefixes ?? [])])
+  if (prefixes.size) out.roomPrefixes = [...prefixes]
+  return out
+}
+
 /** This node's share of a recheck: fresh user rows, inactive accounts closed, rooms re-gated. */
-export async function runLocalRecheck(io: SocketIOServer, target: RecheckTarget): Promise<void> {
+export function runLocalRecheck(io: SocketIOServer, target: RecheckTarget): Promise<void> {
+  // Join verdicts cached for the reconnect burst may predate this change.
+  forgetJoinVerdicts()
+  if (recheckRunning) {
+    if (recheckQueued) {
+      recheckQueued.target = mergeTargets(recheckQueued.target, target)
+      return recheckQueued.done
+    }
+    let resolve: () => void = () => {}
+    const done = new Promise<void>((r) => {
+      resolve = r
+    })
+    recheckQueued = { target, resolve, done }
+    return done
+  }
+  recheckRunning = (async () => {
+    let next: RecheckTarget | null = target
+    let finished: (() => void) | null = null
+    while (next) {
+      await runRecheckPass(io, next).catch(() => {})
+      finished?.()
+      const queued = recheckQueued
+      recheckQueued = null
+      next = queued?.target ?? null
+      finished = queued?.resolve ?? null
+    }
+    recheckRunning = null
+  })()
+  return recheckRunning
+}
+
+async function runRecheckPass(io: SocketIOServer, target: RecheckTarget): Promise<void> {
   const wanted = new Set((target.userIds ?? []).map((u) => String(u).toUpperCase()))
   const prefixes = target.all ? [] : (target.roomPrefixes ?? [])
   const inPrefix = (room: string) => prefixes.some((p) => room.startsWith(p))
@@ -628,6 +751,8 @@ export async function runLocalRecheck(io: SocketIOServer, target: RecheckTarget)
       const ids = [...new Set(group.map((s) => String(hooksOf(s)?.user()?.id)))]
       const rows = await freshUsers(ids).catch(() => null)
       if (!rows) return
+      // One memo per tenant group: room verdicts are shared by a person's sockets.
+      const memo: RoomVerdictMemo = new Map()
       for (const socket of group) {
         const hooks = hooksOf(socket)
         const old = hooks?.user()
@@ -639,10 +764,15 @@ export async function runLocalRecheck(io: SocketIOServer, target: RecheckTarget)
         }
         const user = { ...old, ...row } as User
         hooks.applyUser(user)
-        const named = wanted.has(String(old.id).toUpperCase())
-        const left = await recheckSocketRooms(socket, user, named ? undefined : inPrefix).catch(
-          () => [] as string[]
-        )
+        // A full pass (policy / role change, `all`) re-gates every room of every socket; it
+        // used to fall through to the prefix filter, which with no prefixes matched nothing.
+        const named = target.all || wanted.has(String(old.id).toUpperCase())
+        const left = await recheckSocketRooms(
+          socket,
+          user,
+          named ? undefined : inPrefix,
+          memo
+        ).catch(() => [] as string[])
         // Only a socket that lost something hears about it (the client re-reads on it).
         if (left.length) socket.emit('access:changed', { rooms_left: left })
       }
@@ -720,6 +850,7 @@ export async function sweepSockets(io: SocketIOServer, sweepDeps: SweepDeps): Pr
       for (let i = 0; i < keys.length; i++) byKey.set(keys[i], values[i] ?? null)
       const apiKeys = keyIds.length ? await loadApiKeys(keyIds).catch(() => null) : new Map()
       if (apiKeys === null) return
+      const memo: RoomVerdictMemo = new Map()
 
       for (const socket of group) {
         const hooks = hooksOf(socket)
@@ -761,7 +892,10 @@ export async function sweepSockets(io: SocketIOServer, sweepDeps: SweepDeps): Pr
         const user = { ...old, ...row } as User
         hooks.applyUser(user)
         if (roleChanged) {
-          const left = await recheckSocketRooms(socket, user).catch(() => [] as string[])
+          forgetJoinVerdicts(String(user.id))
+          const left = await recheckSocketRooms(socket, user, undefined, memo).catch(
+            () => [] as string[]
+          )
           if (left.length) socket.emit('access:changed', { rooms_left: left })
         }
       }

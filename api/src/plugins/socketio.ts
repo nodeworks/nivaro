@@ -34,7 +34,6 @@ import { INSTANCE_ID } from '../services/instance-roster.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
-import { can } from '../services/permissions.js'
 import { createPresenceChangedCoalescer } from '../services/presence-changed.js'
 import {
   distinctViewerIds,
@@ -89,6 +88,7 @@ import { registerReplayWatch } from '../services/replay-watch.js'
 import {
   canJoinTicketTopic,
   canSeeRecordRoom,
+  collectionJoinAllowed,
   isKnownCollection,
   masqRoom,
   parseWsTokenValue,
@@ -103,6 +103,7 @@ import {
   userWithApiKey,
   visibleRecordIds
 } from '../services/socket-access.js'
+import { handshakeSessionUser } from '../services/socket-handshake-session.js'
 import {
   type EngineConnLike,
   instrumentHandlers,
@@ -637,6 +638,14 @@ export function createWatchRoomGate(): {
  * process holding the session); `SOCKET_POLLING=off` turns it off where the balancer is not
  * sticky, and clients then fall back to the read-only SSE stream instead.
  */
+/** How long a socket that has asked for nothing (no `auth`, no `tenant:join`) may stay
+ *  (SOCKET_AUTH_TIMEOUT_MS, default 5000, 1000–120000). */
+export function socketAuthTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.SOCKET_AUTH_TIMEOUT_MS)
+  if (!Number.isFinite(n) || n <= 0) return 5000
+  return Math.min(120_000, Math.max(1000, Math.floor(n)))
+}
+
 export function socketPollingAllowed(): boolean {
   return (process.env.SOCKET_POLLING ?? 'on').toLowerCase() !== 'off'
 }
@@ -1066,17 +1075,33 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       buffer.check()
     }
 
-    // Zombie socket reaper (#310): a connection that never authenticates is
-    // holding a slot for nothing — drop it after 45s. Legit clients auth
-    // within the first second of connecting.
+    // Zombie socket reaper (#310): a connection that never authenticates is holding a slot for
+    // nothing. One that has said nothing at all (no `auth`, no `tenant:join`) goes after
+    // SOCKET_AUTH_TIMEOUT_MS (default 5 s — legit clients ask within the first second); one
+    // whose sign-in is still on its way (a ws-token mint on a busy API) keeps the old 45 s, so
+    // a slow sign-in is never dropped and retried into a loop. A socket admitted to its tenant
+    // room by its session cookie (tenant:join, A2) is not a zombie.
+    let signInAsked = false
+    const isZombie = () =>
+      socket.connected && !socketMeta.get(socket.id)?.user && !socket.data.nvrTenantSession
+    const quietTimer = setTimeout(() => {
+      if (!signInAsked && isZombie()) {
+        app.log.debug({ socketId: socket.id }, 'Dropping silent unauthenticated socket')
+        socket.disconnect(true)
+      }
+    }, socketAuthTimeoutMs())
+    quietTimer.unref?.()
     const zombieTimer = setTimeout(() => {
-      if (socket.connected && !socketMeta.get(socket.id)?.user) {
+      if (isZombie()) {
         app.log.debug({ socketId: socket.id }, 'Dropping unauthenticated socket')
         socket.disconnect(true)
       }
     }, 45_000)
     zombieTimer.unref?.()
-    socket.once('disconnect', () => clearTimeout(zombieTimer))
+    socket.once('disconnect', () => {
+      clearTimeout(quietTimer)
+      clearTimeout(zombieTimer)
+    })
 
     // RTT sampling for the diagnostics page (#270): app-level ping so we
     // measure the full path our own events travel.
@@ -1528,21 +1553,36 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
 
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
-    socket.on('auth', inSocketTenant(socket, onAuth))
+    socket.on('auth', (payload: { token?: string }) => {
+      signInAsked = true
+      return inSocketTenant(socket, onAuth)(payload)
+    })
 
     // Cloud: only the tenant this socket's host resolved to (any other tenant's room would
     // hand this socket that tenant's broadcasts); self-hosted there are no tenants to cross.
-    socket.on('tenant:join', async (tenantId: string) => {
-      if (typeof tenantId !== 'string' || tenantId.length === 0) return
-      // Signed-in sockets only (an anonymous socket joins nothing, self-hosted included).
-      if (!authenticatedUser) return
-      if (process.env.CLOUD_META_DB_URL) {
-        const t = await socketTenant(socket)
-        if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
-      }
-      socket.join(`tenant:${tenantId}`)
-      socket.emit('tenant:joined', { tenantId })
-    })
+    // Signed-in sockets, or (A2) a same-origin socket whose handshake carries a live session
+    // cookie — a UI bundle that only listens to its tenant room (the cloud billing bundle) has
+    // no ws token to sign in with. Such a socket gets this room and nothing else, and sits in
+    // its session's room so a sign-out closes it like any other.
+    socket.on(
+      'tenant:join',
+      inSocketTenant(socket, async (tenantId: string) => {
+        if (typeof tenantId !== 'string' || tenantId.length === 0) return
+        signInAsked = true
+        if (process.env.CLOUD_META_DB_URL) {
+          const t = await socketTenant(socket)
+          if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
+        }
+        if (!authenticatedUser) {
+          const viaCookie = await handshakeSessionUser(socket, app.redis ?? null)
+          if (!viaCookie || !socket.connected) return
+          socket.data.nvrTenantSession = true
+          socket.join(sessionRoom(viaCookie.sid))
+        }
+        socket.join(`tenant:${tenantId}`)
+        socket.emit('tenant:joined', { tenantId })
+      })
+    )
 
     /**
      * Idle flips arrive as they happen instead of riding the next heartbeat,
@@ -1656,7 +1696,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         // A real collection name only: `orders:5` would name another room kind.
         if (!(await isKnownCollection(collection))) return
         try {
-          const allowed = await can(user, 'read', collection)
+          // can(read), shared for a few seconds across this person's tabs (reconnect burst).
+          const allowed = await collectionJoinAllowed(
+            user,
+            collection,
+            (socket.data.nvrBind as SocketBind | undefined) ?? null
+          )
           const room = allowed ? await collectionRoom(collection) : null
           if (room) socket.join(room)
         } catch (err) {

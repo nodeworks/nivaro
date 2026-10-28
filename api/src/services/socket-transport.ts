@@ -412,19 +412,38 @@ export function eventNameOf(encoded: string): string | null {
   return end > 0 ? encoded.slice(i + 2, end) : null
 }
 
+/**
+ * The last packet parsed, and its payload. A broadcast hands the SAME encoded string to every
+ * socket in the room, one after another, so every coalescing socket after the first reads the
+ * payload from here instead of parsing it again (300 sockets = one JSON.parse, not 300).
+ * Payloads are never mutated downstream (the coalescer only reads them), so sharing is safe.
+ */
+let lastParsed: { encoded: string; payload: Record<string, unknown> | null } | null = null
+/** The packet a payload came from, so a payload sent on as it was is not encoded again. */
+const encodedOfPayload = new WeakMap<object, string>()
+
 /** Payload of a plain `2["collection:update",{…}]` packet, or null. */
 export function collectionUpdateOf(encoded: string): Record<string, unknown> | null {
   if (!encoded.startsWith('2["collection:update",')) return null
+  if (lastParsed && lastParsed.encoded === encoded) return lastParsed.payload
+  let payload: Record<string, unknown> | null = null
   try {
     const parsed = JSON.parse(encoded.slice(1)) as unknown[]
     const p = parsed[1]
-    return p && typeof p === 'object' ? (p as Record<string, unknown>) : null
+    payload = p && typeof p === 'object' ? (p as Record<string, unknown>) : null
   } catch {
-    return null
+    payload = null
   }
+  if (payload) encodedOfPayload.set(payload, encoded)
+  lastParsed = { encoded, payload }
+  return payload
 }
 
 export function encodeEvent(event: string, payload: unknown): string {
+  if (event === 'collection:update' && payload && typeof payload === 'object') {
+    const known = encodedOfPayload.get(payload)
+    if (known) return known
+  }
   return `2${JSON.stringify([event, payload])}`
 }
 

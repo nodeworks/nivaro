@@ -26,7 +26,8 @@ import { noteAdapterLag } from './traffic-taps/realtime.js'
  * entries written by OTHER replicas to its local sockets. Everything else the
  * app emits (presence, typing, notifications) still rides the adapter.
  *
- * Trimmed to the event journal's window (5,000 entries, 15 minutes).
+ * Trimmed to the event journal's window (REALTIME_JOURNAL_MAX entries, default 5,000; 15
+ * minutes). The journal's one-step emit script appends to it (event-journal.ts EMIT_SCRIPT).
  * `REALTIME_EVENT_STREAM=off` keeps the old adapter path. When Redis is
  * unavailable at emit time the caller falls back to the adapter, so delivery
  * never depends on the stream being up.
@@ -36,8 +37,15 @@ import { noteAdapterLag } from './traffic-taps/realtime.js'
  * replaced (they then reconnect and catch up from the journal).
  */
 
-const STREAM_KEY = 'nvr:ev:stream'
+export const STREAM_KEY = 'nvr:ev:stream'
 export const STREAM_MAXLEN = 5000
+
+/** The stream's length cap: the journal's (REALTIME_JOURNAL_MAX, default 5000, 1000–200000). */
+export function streamMaxLen(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.REALTIME_JOURNAL_MAX)
+  if (!Number.isFinite(n) || n <= 0) return STREAM_MAXLEN
+  return Math.min(200_000, Math.max(1000, Math.floor(n)))
+}
 const STREAM_WINDOW_MS = 900_000
 const READ_COUNT = 500
 const BLOCK_MS = 5000
@@ -147,7 +155,7 @@ export async function publishToStream(
       STREAM_KEY,
       'MAXLEN',
       '~',
-      String(STREAM_MAXLEN),
+      String(streamMaxLen()),
       '*',
       ...encodeStreamEntry(entry, opts)
     )
@@ -158,6 +166,16 @@ export async function publishToStream(
     stats.lastError = err instanceof Error ? err.message.slice(0, 200) : String(err)
     stats.lastErrorAt = new Date().toISOString()
     return false
+  }
+}
+
+/** The journal's one-step emit appended (or failed to append) an entry itself. */
+export function notePublishedToStream(ok: boolean): void {
+  if (ok) stats.published++
+  else {
+    stats.publishFailed++
+    stats.lastError = 'XADD refused inside the emit script'
+    stats.lastErrorAt = new Date().toISOString()
   }
 }
 
