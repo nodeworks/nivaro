@@ -25,7 +25,8 @@ import {
   markManagedDropped,
   putBackManaged,
   saveManagedVersion,
-  stampDeployed
+  stampDeployed,
+  unmarkManagedDropped
 } from '../../../../services/managed-procedures/store.js'
 import { fakeStore, resetFakeStore, rowsOf, seedRow } from './fake-store.js'
 
@@ -98,6 +99,48 @@ describe('saveManagedVersion', () => {
     await save(BODY, { description: 'Totals', owner: 'efp-ops' })
     const r = await save(BODY2)
     expect(r.procedure).toMatchObject({ description: 'Totals', owner: 'efp-ops' })
+  })
+
+  it('an unchanged body with a new owner or description updates them without a new version (R1)', async () => {
+    await save(BODY, { description: 'Totals', owner: null })
+    const r = await save(BODY, { owner: 'efp-ops', description: 'Spend totals', userId: 'u2' })
+    expect(r).toMatchObject({ version: 1, unchanged: true })
+    expect(r.procedure).toMatchObject({
+      owner: 'efp-ops',
+      description: 'Spend totals',
+      updated_by: 'u2'
+    })
+    expect(rowsOf(MANAGED_TABLE)[0]).toMatchObject({ owner: 'efp-ops', version: 1 })
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(1)
+  })
+
+  it('an unchanged body with the same owner and description writes nothing', async () => {
+    await save(BODY, { owner: 'efp-ops' })
+    const before = { ...rowsOf(MANAGED_TABLE)[0] }
+    const r = await save(BODY, { owner: 'efp-ops', userId: 'u2' })
+    expect(r.unchanged).toBe(true)
+    expect(rowsOf(MANAGED_TABLE)[0]).toEqual(before)
+  })
+
+  it('a stale base version is 409 PROC_STALE even when the hash matches (R3)', async () => {
+    const first = await save("CREATE PROCEDURE spend_totals AS SELECT 'open'")
+    // A case-only edit: same body_hash, new version.
+    const second = await save("CREATE PROCEDURE spend_totals AS SELECT 'OPEN'", {
+      baseHash: first.procedure.body_hash,
+      baseVersion: 1
+    })
+    expect(second).toMatchObject({ version: 2, unchanged: false })
+    expect(second.procedure.body_hash).toBe(first.procedure.body_hash)
+    await expect(
+      save("CREATE PROCEDURE spend_totals AS SELECT 'Open'", {
+        baseHash: first.procedure.body_hash,
+        baseVersion: 1
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'PROC_STALE', extra: { current: { version: 2 } } })
+    expect(rowsOf(VERSIONS_TABLE)).toHaveLength(2)
+    await expect(
+      save("CREATE PROCEDURE spend_totals AS SELECT 'Open'", { baseVersion: 2 })
+    ).resolves.toMatchObject({ version: 3 })
   })
 
   it('refuses an invalid name (400 PROC_NAME_INVALID)', async () => {
@@ -284,6 +327,27 @@ describe('markManagedDropped', () => {
     })
     expect(d.dropped_at).toBeInstanceOf(Date)
     expect(rowsOf(VERSIONS_TABLE)).toHaveLength(1)
+  })
+})
+
+describe('unmarkManagedDropped', () => {
+  it('puts a row back as it was before the drop (its drop did not run)', async () => {
+    const s = await save()
+    const d = await markManagedDropped('spend_totals', 'u1')
+    expect(await unmarkManagedDropped(s.procedure)).toBe(true)
+    expect(rowsOf(MANAGED_TABLE)[0]).toMatchObject({
+      dropped_at: null,
+      updated_by: s.procedure.updated_by,
+      version: d.version
+    })
+  })
+
+  it('does nothing when a later save moved the row on', async () => {
+    const s = await save()
+    await markManagedDropped('spend_totals', 'u1')
+    await save(BODY2)
+    expect(await unmarkManagedDropped(s.procedure)).toBe(false)
+    expect(rowsOf(MANAGED_TABLE)[0]).toMatchObject({ version: 2, dropped_at: null })
   })
 })
 

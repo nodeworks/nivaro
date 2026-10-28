@@ -448,21 +448,27 @@ export async function managedDrift(): Promise<DriftEntry[]> {
     }
   }
   for (const r of managed) {
-    const l = live.get(r.name.toLowerCase())
-    const status: DriftStatus = imports.has(r.name.toLowerCase())
-      ? 'conflict'
-      : r.dropped_at
-        ? l == null
-          ? 'dropped'
-          : 'dropped-but-live'
-        : l == null
-          ? 'not-deployed'
-          : sameDeployedBody(r.body, l)
-            ? 'in-sync'
-            : 'drifted'
+    const status = managedStatusOf(
+      r,
+      live.get(r.name.toLowerCase()) ?? null,
+      imports.has(r.name.toLowerCase())
+    )
     out.push({ name: r.name, kind: 'managed', id: r.id, status })
   }
   return out
+}
+
+/** One managed row's drift status against its live text (null = not live; '' = live but
+ *  unreadable). `importOwned`: an import definition also names it (the import wins). */
+export function managedStatusOf(
+  row: Pick<ManagedProcedure, 'body' | 'dropped_at'>,
+  live: string | null,
+  importOwned = false
+): DriftStatus {
+  if (importOwned) return 'conflict'
+  if (row.dropped_at) return live == null ? 'dropped' : 'dropped-but-live'
+  if (live == null) return 'not-deployed'
+  return sameDeployedBody(row.body, live) ? 'in-sync' : 'drifted'
 }
 
 const BLOCKERS_SHOWN = 10

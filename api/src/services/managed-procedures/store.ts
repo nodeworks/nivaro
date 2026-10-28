@@ -164,17 +164,54 @@ export async function listManagedProcedures(): Promise<ManagedProcedure[]> {
   return rows.map(toManaged)
 }
 
+/** The owner / description a save was given (absent keys are left alone), trimmed to size. */
+function metadataPatch(input: {
+  owner?: string | null
+  description?: string | null
+}): Partial<Pick<ManagedProcedure, 'owner' | 'description'>> {
+  const patch: Partial<Pick<ManagedProcedure, 'owner' | 'description'>> = {}
+  if (input.owner !== undefined) patch.owner = input.owner?.slice(0, TEXT_MAX) ?? null
+  if (input.description !== undefined) {
+    patch.description = input.description?.slice(0, DESCRIPTION_MAX) ?? null
+  }
+  return patch
+}
+
+/**
+ * Update owner / description in place — no version, body untouched. Only the keys that differ
+ * from `current` are written, guarded on the row still being at `current.version` (a save that
+ * moved it on wins). Resolves the row as it now is.
+ */
+export async function updateManagedMetadata(
+  current: ManagedProcedure,
+  patch: Partial<Pick<ManagedProcedure, 'owner' | 'description'>>,
+  userId: string | null
+): Promise<ManagedProcedure> {
+  const changed = Object.fromEntries(
+    Object.entries(patch).filter(([k, v]) => current[k as 'owner' | 'description'] !== v)
+  )
+  if (Object.keys(changed).length === 0) return current
+  const hit = await db(MANAGED_TABLE)
+    .where({ id: current.id, version: current.version })
+    .update({ ...changed, updated_at: new Date(), updated_by: userId })
+  if (Number(hit) !== 1) return current
+  return (await getManagedProcedure(current.name)) ?? current
+}
+
 /**
  * Save a body as the next version of `name` (creating the row as version 1).
  *
  * Refusals, in order: invalid name (400 PROC_NAME_INVALID); import-owned name (409 APP_MANAGED,
  * `extra.definition` = the import key); a body whose real header defines another procedure
- * (400 PROC_HEADER_MISMATCH); `baseHash` given and not the current `body_hash` (409 PROC_STALE,
- * `extra.current`). `baseHash: null` means "I am creating it" — stale when a row exists.
+ * (400 PROC_HEADER_MISMATCH); `baseHash` given and not the current `body_hash`, or `baseVersion`
+ * given and not the current `version` (409 PROC_STALE, `extra.current`). `baseHash: null` /
+ * `baseVersion: null` mean "I am creating it" — stale when a row exists. The version catches what
+ * the hash cannot: a case-only edit saves a new version with the same body_hash.
  *
  * The stored body is the CREATE OR ALTER form. A body that normalizes to the current hash of a
  * live (not dropped) row, and differs from it at most in header spelling and whitespace (case
- * kept — a case-only edit is saved), is `unchanged` and nothing is written. Otherwise the row
+ * kept — a case-only edit is saved), is `unchanged`: no version is written; an `owner` or
+ * `description` given and different is updated in place (no version bump). Otherwise the row
  * and its version row are written in one transaction, guarded on the row being what we read — a
  * writer that got in between makes this 409 PROC_STALE. `previous` is the row before the save (null
  * for a new one), for putBackManaged().
@@ -185,6 +222,7 @@ export async function saveManagedVersion(input: {
   note: string
   userId: string | null
   baseHash?: string | null
+  baseVersion?: number | null
   owner?: string | null
   description?: string | null
 }): Promise<{
@@ -209,6 +247,9 @@ export async function saveManagedVersion(input: {
   if (input.baseHash !== undefined && (current?.body_hash ?? null) !== input.baseHash) {
     throw staleError(current)
   }
+  if (input.baseVersion !== undefined && (current?.version ?? null) !== input.baseVersion) {
+    throw staleError(current)
+  }
 
   const body = toCreateOrAlter(raw)
   const bodyHash = procBodyHash(body)
@@ -220,7 +261,8 @@ export async function saveManagedVersion(input: {
     current.dropped_at == null &&
     sameDeployedBody(current.body, body)
   ) {
-    return { procedure: current, version: current.version, unchanged: true, previous: current }
+    const procedure = await updateManagedMetadata(current, metadataPatch(input), userId)
+    return { procedure, version: current.version, unchanged: true, previous: current }
   }
 
   const now = new Date()
@@ -231,11 +273,8 @@ export async function saveManagedVersion(input: {
     version,
     updated_at: now,
     updated_by: userId,
-    dropped_at: null
-  }
-  if (input.owner !== undefined) patch.owner = input.owner?.slice(0, TEXT_MAX) ?? null
-  if (input.description !== undefined) {
-    patch.description = input.description?.slice(0, DESCRIPTION_MAX) ?? null
+    dropped_at: null,
+    ...metadataPatch(input)
   }
 
   let id: number
@@ -324,6 +363,23 @@ export async function markManagedDropped(
     .where('id', current.id)
     .update({ dropped_at: now, updated_at: now, updated_by: userId })
   return (await getManagedProcedure(name)) ?? { ...current, dropped_at: now }
+}
+
+/**
+ * Undo markManagedDropped() whose drop did not run: put dropped_at / updated_* back as they were
+ * in `previous` (the row read before the mark). Guarded on the row still being at that version
+ * and marked dropped — a save since then is left alone. Resolves whether it wrote.
+ */
+export async function unmarkManagedDropped(previous: ManagedProcedure): Promise<boolean> {
+  const hit = await db(MANAGED_TABLE)
+    .where({ id: previous.id, version: previous.version })
+    .whereNotNull('dropped_at')
+    .update({
+      dropped_at: previous.dropped_at,
+      updated_at: previous.updated_at,
+      updated_by: previous.updated_by
+    })
+  return Number(hit) === 1
 }
 
 /** A managed proc's saved versions, newest first (no bodies). Empty when it is not managed. */
