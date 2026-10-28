@@ -1,10 +1,278 @@
 {
-  "generated_at": "2026-10-28T19:50:06.119Z",
+  "generated_at": "2026-10-28T23:57:19.247Z",
   "releases": [
+    {
+      "version": "0.3.46",
+      "tag": "v0.3.46",
+      "date": "2026-10-28T19:56:58-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "My defaults on the profile, admin card on people pages",
+              "hash": "aca87cec3"
+            },
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "form state and allowed fields for My defaults",
+              "hash": "a62f75fc0"
+            },
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "Save / Clear my default in the field menu",
+              "hash": "8d8c004f1"
+            },
+            {
+              "section": "Added",
+              "scope": "record form",
+              "text": "apply personal field defaults on new records",
+              "hash": "03ff2b35b"
+            },
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "pure decision module for personal field defaults",
+              "hash": "9228db6e9"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "wire the search program together",
+              "hash": "d73806de5"
+            },
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "Personal default toggle on a layout placement",
+              "hash": "eb27fab76"
+            },
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "service + /api/field-defaults routes",
+              "hash": "48cc658b8"
+            },
+            {
+              "section": "Added",
+              "scope": "admin search",
+              "text": "palette recents, preview, commands + /search page",
+              "hash": "b66edde0d"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "catalog ranking, in-stock toggle, shared search-text lib",
+              "hash": "dcddb243f"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "label search fields, why-can't-they-find-it, full-text helpers",
+              "hash": "f68a3bff7"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "exact ids, scopes, field filters, typo pass, ranking signals, preview, saved searches",
+              "hash": "fe781313a"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "extra hits, commands and people facets for global search",
+              "hash": "9ee21235a"
+            },
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "nivaro_user_field_defaults table (migration 506)",
+              "hash": "1427d52b1"
+            },
+            {
+              "section": "Added",
+              "scope": "record header",
+              "text": "Hold buttons sit beside More",
+              "hash": "909e7814a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "migrations",
+              "text": "506 guards its T-SQL by dialect",
+              "hash": "137fa7277"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "final review fixes for personal defaults",
+              "hash": "c8e281509"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "design review fixes for personal defaults UI",
+              "hash": "c8f6101dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "My defaults review round 1",
+              "hash": "1b4929832"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "focus and keyboard handling in the save-default confirm",
+              "hash": "ad4fbe487"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "never show a record's primary key in search",
+              "hash": "e633e3cc2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "personal defaults review round 2",
+              "hash": "7582feb30"
+            },
+            {
+              "section": "Fixed",
+              "scope": "procedures",
+              "text": "the Procedures page never deploys over or drops an app-managed proc",
+              "hash": "26fbf46e6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "review fixes for cancellable report queries",
+              "hash": "e32cf002a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config epoch",
+              "text": "review fixes for write-target detection",
+              "hash": "8053277a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "reports",
+              "text": "cancel superseded report widget queries",
+              "hash": "2308a0732"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config epoch",
+              "text": "count only writes TO configuration tables",
+              "hash": "a8c49e4e7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "personal defaults review round 1",
+              "hash": "ae828f1a0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "personal defaults re-derive only what a pass wrote",
+              "hash": "95a09cbf4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "note hits are read as the caller, not only gated by their record",
+              "hash": "cdaf03155"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search, catalog",
+              "text": "design-review fixes for the search UI and catalog picker",
+              "hash": "fab57eb23"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "personal defaults tie-break prefers the more specific context",
+              "hash": "e551750c2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "offer Personal default on M2M pickers",
+              "hash": "256875490"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "cap id reads at 4 in flight, surface real read errors",
+              "hash": "9595f9385"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "scroll tabs no longer re-render forever",
+              "hash": "1d647c8d6"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "field defaults",
+              "text": "Personal defaults section, README bullet, synced www/docs.html",
+              "hash": "4f99cecda"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync search program docs",
+              "hash": "afdc89c0f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "biome format for the personal defaults section",
+              "hash": "f87e6df44"
+            },
+            {
+              "section": "Other",
+              "scope": "field defaults",
+              "text": "lint-ignore the confirm group role",
+              "hash": "4a64dbe7f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "sort the list-search-rank import",
+              "hash": "14085fb46"
+            }
+          ]
+        }
+      ],
+      "count": 40
+    },
     {
       "version": "0.3.45",
       "tag": "v0.3.45",
-      "date": "2026-10-28T15:49:52-04:00",
+      "date": "2026-10-28T15:50:06-04:00",
       "sections": [
         {
           "label": "Fixed",
