@@ -12935,7 +12935,7 @@ function ItemEditFormView({
                                                       <button
                                                         type='button'
                                                         aria-label='Copy value'
-                                                        className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                        className='absolute top-2 right-2 flex h-3 w-3 cursor-pointer items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity'
                                                         onClick={(e) => {
                                                           const cell =
                                                             e.currentTarget.closest<HTMLElement>(

@@ -66,7 +66,7 @@ export function HeaderFreshness({
     machine ? 'text-amber-600/80 dark:text-amber-300/80' : 'text-slate-400 dark:text-slate-500'
   )
   const boxCls = cn(
-    'inline-flex h-4 w-4 items-center justify-center rounded opacity-70 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+    'flex h-3 w-3 items-center justify-center rounded-sm opacity-70 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
     className
   )
   // #617 — an inbound write names its caller and opens the request.
