@@ -12165,6 +12165,14 @@ function ItemEditFormView({
                                             document.body
                                           )}
                                       </HeaderTools>
+                                      {/* Hold / Remove Hold (registry header actions) sit right
+                                        beside More, ahead of the record and pipeline actions. */}
+                                      {!isNew && (
+                                        <RecordHeaderActionButtons
+                                          actions={headerRegistryActions}
+                                          onPick={setHeaderRegistryPick}
+                                        />
+                                      )}
                                       {/* Record actions stay inline beside Save, never in the
                                         folded ⋯ panel: on a narrower screen Push to Fusion was
                                         only reachable behind an unlabeled ⋯ and read as gone. */}
@@ -12364,12 +12372,6 @@ function ItemEditFormView({
                                             onBeforeTransition={saveThenTransition}
                                           />
                                         )}
-                                      {!isNew && (
-                                        <RecordHeaderActionButtons
-                                          actions={headerRegistryActions}
-                                          onPick={setHeaderRegistryPick}
-                                        />
-                                      )}
                                     </div>
                                   </header>
                                 )}
