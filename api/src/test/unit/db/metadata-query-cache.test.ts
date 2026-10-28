@@ -80,4 +80,19 @@ describe('metadata query cache — what clears it', () => {
     ).toBe(false)
     expect(isInvalidatingWrite('insert into [nivaro_activity] ([action]) values (@p0)')).toBe(false)
   })
+
+  it('uses the config-epoch target rule: reads into #temp do not clear, real writes do', () => {
+    expect(
+      isInvalidatingWrite(
+        'CREATE TABLE #s (id INT); INSERT INTO #s SELECT id FROM nivaro_fields; UPDATE #s SET id = 1'
+      )
+    ).toBe(false)
+    expect(
+      isInvalidatingWrite('DELETE FROM #t OUTPUT deleted.id INTO nivaro_relations (id) WHERE 1 = 1')
+    ).toBe(true)
+    expect(isInvalidatingWrite('WITH c (id) AS (SELECT id FROM nivaro_fields) DELETE FROM c')).toBe(
+      true
+    )
+    expect(isInvalidatingWrite('DROP TABLE #a, nivaro_fields')).toBe(true)
+  })
 })

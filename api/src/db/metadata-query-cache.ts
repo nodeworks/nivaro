@@ -26,7 +26,14 @@
  * started reads what another process already read.
  */
 
-import { movesConfigEpoch, noteConfigWrite, onEpochReset } from './config-epoch.js'
+import {
+  hasDynamicSql,
+  hasSchemaChange,
+  movesConfigEpoch,
+  noteConfigWrite,
+  onEpochReset,
+  writeTargetsIn
+} from './config-epoch.js'
 import {
   type L2Gen,
   metadataL2Get,
@@ -119,13 +126,23 @@ export function isColumnInfoRead(sql: string): boolean {
   return COLUMN_INFO_RE.test(sql)
 }
 
-/** Exported for tests: does this statement invalidate the cache? */
+const WRITE_TABLES: ReadonlySet<string> = new Set(
+  [...TABLES].filter((t) => !t.includes('.')).map((t) => t.toLowerCase())
+)
+
+/** Exported for tests: does this statement invalidate the cache? Same target rule as the
+ *  config epoch (db/config-epoch.ts writeTargetsIn): a write TO a cached table, real DDL, or
+ *  an unrecognised / dynamic statement that names one — never a report batch that only reads
+ *  a cached table into #temp tables. */
 export function isInvalidatingWrite(sql: string): boolean {
   if (/^\s*(?:select|with)\b/i.test(sql) && !/\b(?:insert|update|delete|merge)\b/i.test(sql)) {
     return false
   }
-  if (DDL_RE.test(sql)) return true
-  return NAMES_RE.test(sql.replace(/[[\]]/g, ''))
+  if (hasDynamicSql(sql)) return DDL_RE.test(sql) || NAMES_RE.test(sql.replace(/[[\]]/g, ''))
+  if (hasSchemaChange(sql)) return true
+  if (!NAMES_RE.test(sql.replace(/[[\]]/g, ''))) return false
+  const targets = writeTargetsIn(sql, WRITE_TABLES)
+  return targets === null || targets.length > 0
 }
 
 export function clearMetadataQueryCache(): void {

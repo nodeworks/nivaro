@@ -77,74 +77,136 @@ const DDL_RE = /^\s*(?:alter|create|drop|truncate)\b|\bsp_rename\b/i
 
 const WATCHED_SET = new Set(WATCHED)
 
-/** Comments and string literals removed (neither can make or hide a write), then the
- *  [bracket] / "quote" / `tick` around names dropped. */
+/**
+ * Comments and string literals removed (neither can make or hide a write), in ONE left-to-right
+ * pass so a quote inside a [bracketed name] or a comment marker inside a string reads as what it
+ * is. Delimited names keep their text without the delimiters; characters a bare name cannot hold
+ * (a space, an apostrophe in `[it's]`) become `_`.
+ */
 function flatten(sql: string): string {
-  return sql
-    .replace(/N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi, (m) =>
-      m.startsWith('/') || m.startsWith('-') ? ' ' : "''"
-    )
-    .replace(/[[\]"`]/g, '')
+  return sql.replace(
+    /\[[^\]]*\]?|"[^"]*"?|`[^`]*`?|N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi,
+    (m) => {
+      const c = m[0]
+      if (c === '[' || c === '"' || c === '`') {
+        const close = c === '[' ? ']' : c
+        const inner = m.length > 1 && m.endsWith(close) ? m.slice(1, -1) : m.slice(1)
+        return inner.replace(/[^\w.#@]/g, '_')
+      }
+      if (c === '/' || c === '-') return ' '
+      return "''"
+    }
+  )
 }
 
 // A (possibly schema-qualified) object name; #temp, ##global temp and @table variables keep
 // their sigil so they can be told apart from real tables.
-const NAME = String.raw`((?:\w+\.){0,2}[#@]{0,2}\w+)`
+const NAME_SRC = String.raw`(?:\w+\.){0,2}[#@]{0,2}\w+`
+const NAME = `(${NAME_SRC})`
 const TOP = String.raw`(?:top\s*\([^)]*\)\s*(?:percent\s+)?)?`
 /** The object each DML statement in a batch writes to. */
 const DML_TARGET_RE = new RegExp(
   String.raw`\b(?:insert\s+${TOP}(?:into\s+)?|update\s+${TOP}|delete\s+${TOP}(?:from\s+)?|merge\s+${TOP}(?:into\s+)?)${NAME}`,
   'gi'
 )
+/** `… OUTPUT inserted.x INTO <table>` writes a second table. */
+const OUTPUT_INTO_RE = new RegExp(String.raw`\boutput\b[\s\S]*?\binto\s+${NAME}`, 'gi')
+/** Every DML keyword, except a MERGE's own `when … then insert|update|delete` actions. */
+const DML_KEYWORD_RE = /(?<!\bthen\s+)\b(?:insert|update|delete|merge)\b/gi
 const ANY_DDL_RE = /\b(?:alter|create|drop|truncate)\s+\w+/gi
-const TABLE_DDL_RE =
-  /\b(?:alter|create|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?((?:\w+\.){0,2}#{0,2}\w+)/gi
-const INDEX_DDL_RE =
-  /\b(?:create|drop)\s+(?:unique\s+)?(?:(?:non)?clustered\s+)?(?:columnstore\s+)?index\s+\w+\s+on\s+((?:\w+\.){0,2}#{0,2}\w+)/gi
+const TABLE_DDL_RE = new RegExp(
+  String.raw`\b(?:alter|create|drop|truncate)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?(${NAME_SRC}(?:\s*,\s*${NAME_SRC})*)`,
+  'gi'
+)
+const INDEX_DDL_RE = new RegExp(
+  String.raw`\b(?:create|drop)\s+(?:unique\s+)?(?:(?:non)?clustered\s+)?(?:columnstore\s+)?index\s+\w+\s+on\s+${NAME}`,
+  'gi'
+)
 
 const bare = (name: string) => (name.split('.').pop() ?? name).toLowerCase()
 const isScratch = (name: string) => /^[#@]/.test(bare(name))
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** True when every DDL statement in the batch only builds or drops #temp tables and their
- *  indexes — the scratch work of a report batch, never a schema change. */
+ *  indexes — the scratch work of a report batch, never a schema change. A `DROP TABLE #a, x`
+ *  list is judged name by name. */
 function ddlOnlyOnScratch(flat: string): boolean {
   const all = flat.match(ANY_DDL_RE)?.length ?? 0
-  const tables = [...flat.matchAll(TABLE_DDL_RE)].map((m) => m[1])
+  const tableStatements = [...flat.matchAll(TABLE_DDL_RE)]
+  const tables = tableStatements.flatMap((m) => m[1].split(',').map((n) => n.trim()))
   // `create … index` matches ANY_DDL_RE once per statement (as "create unique", "create
   // clustered", "create index"), so count index statements once each.
   const indexes = [...flat.matchAll(INDEX_DDL_RE)].map((m) => m[1])
-  if (tables.length + indexes.length < all) return false
+  if (tableStatements.length + indexes.length < all) return false
   return [...tables, ...indexes].every(isScratch)
+}
+
+/** True when the batch holds DDL on a real (non-#temp) object, or sp_rename. */
+export function hasSchemaChange(sql: string): boolean {
+  const flat = flatten(sql)
+  if (/\bsp_rename\b/i.test(flat)) return true
+  ANY_DDL_RE.lastIndex = 0
+  return ANY_DDL_RE.test(flat) && !ddlOnlyOnScratch(flat)
+}
+
+/** Dynamic SQL hides its statements in a string literal. */
+export function hasDynamicSql(sql: string): boolean {
+  return /\bexec(?:ute)?\s*\(|\bsp_executesql\b/i.test(sql)
+}
+
+/**
+ * The tables of `tables` (bare lower-case names) a statement WRITES, or null when its targets
+ * cannot be told — the caller then falls back to "does it name one". Targets: each DML
+ * statement's object (aliases resolved through every `from|join|using <table> <alias>` binding),
+ * `OUTPUT … INTO <table>`; #temp and @table targets are skipped. null when: the target is a CTE
+ * (what it writes through is not visible), an alias is bound to different tables, or the batch
+ * holds more DML keywords than targets were found (an unrecognised shape).
+ */
+export function writeTargetsIn(sql: string, tables: ReadonlySet<string>): string[] | null {
+  const flat = flatten(sql)
+  const out = new Set<string>()
+  const dml = [...flat.matchAll(DML_TARGET_RE)]
+  const keywords = flat.match(DML_KEYWORD_RE)?.length ?? 0
+  if (keywords > dml.length) return null
+  const names = [...dml.map((m) => m[1]), ...[...flat.matchAll(OUTPUT_INTO_RE)].map((m) => m[1])]
+  for (const name of names) {
+    if (isScratch(name)) continue
+    const t = bare(name)
+    if (tables.has(t)) {
+      out.add(t)
+      continue
+    }
+    const tr = escapeRe(t)
+    // A CTE (with or without a column list) as the target.
+    if (new RegExp(String.raw`\b${tr}\s*(?:\([^)]*\))?\s+as\s*\(`, 'i').test(flat)) return null
+    // `update a set … from nivaro_x a` / `delete a from nivaro_x as a`: resolve the alias
+    // through EVERY binding — a batch may reuse one alias for several tables.
+    const bindings = [
+      ...flat.matchAll(
+        new RegExp(String.raw`\b(?:from|join|using)\s+(${NAME_SRC})\s+(?:as\s+)?${tr}\b`, 'gi')
+      )
+    ].map((m) => m[1])
+    if (bindings.length === 0) continue
+    const real = bindings.filter((b) => !isScratch(b)).map(bare)
+    const hit = real.find((b) => tables.has(b))
+    if (hit) {
+      out.add(hit)
+      continue
+    }
+    if (new Set(bindings.map((b) => b.toLowerCase())).size > 1) return null
+  }
+  return [...out]
 }
 
 /**
  * Exported for tests: the configuration tables a statement WRITES, or null when its targets
- * cannot be told (a CTE update, an unrecognised shape) — the caller then falls back to "does it
- * name one". A batch that only reads a watched table — a report joining nivaro_workflow_states,
- * an UPDATE of a #temp built from it — writes none (2026-10-28: a 5-minute job's read batch
- * moved the config epoch all day and every open form re-read its definition each time).
+ * cannot be told (see writeTargetsIn). A batch that only reads a watched table — a report
+ * joining nivaro_workflow_states, an UPDATE of a #temp built from it — writes none
+ * (2026-10-28: a 5-minute job's read batch moved the config epoch all day and every open form
+ * re-read its definition each time).
  */
 export function configWriteTargets(sql: string): string[] | null {
-  const flat = flatten(sql)
-  const out = new Set<string>()
-  for (const m of flat.matchAll(DML_TARGET_RE)) {
-    const name = m[1]
-    if (isScratch(name)) continue
-    const t = bare(name)
-    if (WATCHED_SET.has(t)) {
-      out.add(t)
-      continue
-    }
-    // A CTE as the target: what it writes through is not visible here.
-    if (new RegExp(String.raw`\b${t}\s+as\s*\(`, 'i').test(flat)) return null
-    // `update a set … from nivaro_x a` / `delete a from nivaro_x as a`: resolve the alias.
-    const alias = new RegExp(
-      String.raw`\b(?:from|join)\s+((?:\w+\.){0,2}[#@]{0,2}\w+)\s+(?:as\s+)?${t}\b`,
-      'i'
-    ).exec(flat)
-    if (alias && !isScratch(alias[1]) && WATCHED_SET.has(bare(alias[1]))) out.add(bare(alias[1]))
-  }
-  return [...out]
+  return writeTargetsIn(sql, WATCHED_SET)
 }
 
 /** Exported for tests: does this statement change configuration? */
@@ -155,14 +217,11 @@ export function isConfigWrite(sql: string): boolean {
     return false
   }
   // Dynamic SQL hides its statements in a string: keep the old, cautious rule for it.
-  if (/\bexec(?:ute)?\s*\(|\bsp_executesql\b/i.test(sql)) {
+  if (hasDynamicSql(sql)) {
     return DDL_RE.test(sql) || WATCHED_RE.test(sql.replace(/[[\]]/g, ''))
   }
-  const flat = flatten(sql)
-  if (/\bsp_rename\b/i.test(flat)) return true
-  ANY_DDL_RE.lastIndex = 0
-  if (ANY_DDL_RE.test(flat) && !ddlOnlyOnScratch(flat)) return true
-  if (!WATCHED_RE.test(flat)) return false
+  if (hasSchemaChange(sql)) return true
+  if (!WATCHED_RE.test(flatten(sql))) return false
   const targets = configWriteTargets(sql)
   // Unknown shape: keep the old, cautious rule — a statement that names a watched table.
   if (targets === null) return true
@@ -187,9 +246,7 @@ export function movesConfigEpoch(sql: string): boolean {
   if (!isConfigWrite(sql)) return false
   const p = personal.getStore()
   if (!p) return true
-  const flat = flatten(sql)
-  ANY_DDL_RE.lastIndex = 0
-  if (ANY_DDL_RE.test(flat) && !ddlOnlyOnScratch(flat)) return true
+  if (hasSchemaChange(sql)) return true
   const targets = configWriteTargets(sql)
   if (!targets || targets.length === 0) return true
   return !targets.every((t) => p.tables.has(t))

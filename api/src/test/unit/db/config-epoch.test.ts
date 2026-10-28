@@ -78,6 +78,62 @@ describe('isConfigWrite — only what a statement WRITES counts (2026-10-28)', (
     const sql = 'with x as (select * from nivaro_fields where id = 1) update x set note = 1'
     expect(configWriteTargets(sql)).toBeNull()
     expect(isConfigWrite(sql)).toBe(true)
+    // A CTE with a column list.
+    const withCols = 'WITH c (id) AS (SELECT id FROM nivaro_fields) DELETE FROM c'
+    expect(configWriteTargets(withCols)).toBeNull()
+    expect(isConfigWrite(withCols)).toBe(true)
+  })
+
+  // Review of db6a7453b: shapes that must never read as "not a config write".
+  it('resolves an alias through every binding, cautiously when they disagree', () => {
+    expect(
+      isConfigWrite(
+        'UPDATE r SET a = 1 FROM items r; UPDATE r SET name = @p0 FROM nivaro_roles r WHERE r.id = @p1'
+      )
+    ).toBe(true)
+    expect(
+      isConfigWrite(
+        'UPDATE a SET v = (SELECT TOP 1 v FROM #src a) FROM nivaro_settings_overrides a WHERE a.id = 1'
+      )
+    ).toBe(true)
+    // An alias bound to two different non-config tables: cannot tell → null.
+    expect(
+      configWriteTargets(
+        'UPDATE r SET a = 1 FROM items r; UPDATE r SET b = 2 FROM orders r; SELECT * FROM nivaro_fields'
+      )
+    ).toBeNull()
+  })
+
+  it('counts OUTPUT … INTO a configuration table', () => {
+    const sql = 'DELETE FROM #t OUTPUT deleted.id INTO nivaro_relations (id) WHERE 1 = 1'
+    expect(configWriteTargets(sql)).toEqual(['nivaro_relations'])
+    expect(isConfigWrite(sql)).toBe(true)
+  })
+
+  it('is cautious when the batch has more DML keywords than targets it recognised', () => {
+    const odd = 'UPDATE; SELECT 1 FROM nivaro_fields'
+    expect(configWriteTargets(odd)).toBeNull()
+    expect(isConfigWrite(odd)).toBe(true)
+    // A MERGE's own `then update` / `then insert` actions are not extra statements.
+    expect(
+      configWriteTargets(
+        'merge #x as t using nivaro_fields as s on t.id = s.id when matched then update set t.a = 1 when not matched then insert (id) values (s.id);'
+      )
+    ).toEqual([])
+  })
+
+  it('judges every name of a DROP TABLE list', () => {
+    expect(isConfigWrite('DROP TABLE #a, nivaro_fields')).toBe(true)
+    expect(isConfigWrite('DROP TABLE #a, #b; INSERT INTO #a SELECT 1 FROM nivaro_fields')).toBe(
+      false
+    )
+  })
+
+  it('reads bracketed names that hold an apostrophe', () => {
+    expect(isConfigWrite("UPDATE [it's] SET a = 1; UPDATE [nivaro_fields] SET b = 2")).toBe(true)
+    expect(
+      isConfigWrite("UPDATE [it's] SET a = (SELECT TOP 1 id FROM [nivaro_fields]) WHERE b = 'x'")
+    ).toBe(false)
   })
 
   it('names the tables a statement writes', () => {
