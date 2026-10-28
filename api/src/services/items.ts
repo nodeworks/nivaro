@@ -56,6 +56,7 @@ import {
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
 import { keysetSecret } from './keyset-secret.js'
+import { rankColumns, searchRankOrder } from './list-search-rank.js'
 import {
   aliasReadable,
   m2aIdKey,
@@ -108,7 +109,6 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
-import { rankColumns, searchRankOrder } from './list-search-rank.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
