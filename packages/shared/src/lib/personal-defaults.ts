@@ -92,9 +92,16 @@ export function pickDefault(
   candidates: SavedDefault[],
   draft: Record<string, unknown>
 ): { pick: SavedDefault | null; fillParents: Record<string, unknown>; blockedBy: string | null } {
-  let best: { c: SavedDefault; score: number; fill: Record<string, unknown> } | null = null
+  let best: {
+    c: SavedDefault
+    score: number
+    size: number
+    fill: Record<string, unknown>
+  } | null = null
   let blockedBy: string | null = null
-  const newestFirst = [...candidates].sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+  const newestFirst = [...candidates].sort((a, b) =>
+    a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0
+  )
   for (const c of newestFirst) {
     let score = 0
     let bad: string | null = null
@@ -111,8 +118,11 @@ export function pickDefault(
       if (!blockedBy) blockedBy = bad
       continue
     }
-    // Newest-first iteration + strict > keeps the newest on ties.
-    if (!best || score > best.score) best = { c, score, fill }
+    // Most matching keys, then more context keys; newest-first iteration with
+    // strict > keeps the newest on a full tie.
+    const size = Object.keys(c.context ?? {}).length
+    if (!best || score > best.score || (score === best.score && size > best.size))
+      best = { c, score, size, fill }
   }
   if (!best) return { pick: null, fillParents: {}, blockedBy }
   return { pick: best.c, fillParents: best.fill, blockedBy: null }

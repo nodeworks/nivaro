@@ -87,6 +87,13 @@ describe('pickDefault', () => {
     const b = sd(2, 11, { region: 3 }, '2026-02-01')
     expect(pickDefault([a, b], { region: 3 }).pick).toBe(b)
   })
+  it('tie on matches prefers more context keys, then newest', () => {
+    const older = sd(1, 10, { zone: 2, region: 'Boston' }, '2026-01-01')
+    const newer = sd(2, 11, {}, '2026-02-01')
+    const r = pickDefault([newer, older], {})
+    expect(r.pick).toBe(older)
+    expect(r.fillParents).toEqual({ zone: 2, region: 'Boston' })
+  })
   it('multi-value compares sorted id lists', () => {
     const c = sd(1, 10, { zones: [2, 1] }, '2026-01-01')
     expect(pickDefault([c], { zones: ['1', '2'] }).pick).toBe(c)
