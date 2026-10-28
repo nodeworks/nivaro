@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-28T19:34:39.260Z",
+  "generated_at": "2026-10-28T19:50:06.119Z",
   "releases": [
+    {
+      "version": "0.3.45",
+      "tag": "v0.3.45",
+      "date": "2026-10-28T15:49:52-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "force reload",
+              "text": "a pushed reload goes over record forms by keeping their drafts",
+              "hash": "efd276e64"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.44",
       "tag": "v0.3.44",
-      "date": "2026-10-28T15:34:26-04:00",
+      "date": "2026-10-28T15:34:39-04:00",
       "sections": [
         {
           "label": "Added",
