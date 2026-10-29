@@ -1,7 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import {
+  markAnswerSeen,
+  openQuestionsFor,
+  questionNames,
+  questionsAskedBy,
+  questionView
+} from '../services/agent-questions.js'
+import { mcpConnOf } from '../services/mcp-calls.js'
 import { span } from '../services/request-trace.js'
+import { taskColumns } from '../services/tasks.js'
 import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
 
 /**
@@ -39,6 +48,11 @@ export async function myWorkRoutes(app: FastifyInstance) {
       'a.last_name as assignee_last',
       'g.name as team_name'
     ]
+    // #3223 — a task handed to an agent names the connection; an agent caller gets its own list.
+    const agentCols = (await taskColumns().catch(() => null))?.agent === true
+    if (agentCols) taskCols.push('t.agent_assignee', 't.agent_name')
+    const conn = mcpConnOf(req)
+    const agentConn = conn && /^[ok]/.test(conn) ? conn : null
     const taskBase = () =>
       db('nivaro_tasks as t')
         .leftJoin('nivaro_users as a', 'a.id', 't.assignee')
@@ -53,6 +67,16 @@ export async function myWorkRoutes(app: FastifyInstance) {
         .limit(50)
         .select(taskCols)
 
+    const [questionRows, answerRows, agentTasks] = await Promise.all([
+      // #3220 — what assistants asked me, and (for an agent caller) answers it has not collected.
+      openQuestionsFor(userId, 25).catch(() => []),
+      agentConn ? questionsAskedBy(agentConn, { status: 'unseen', limit: 25 }) : [],
+      agentConn && agentCols
+        ? taskBase()
+            .where('t.agent_assignee', agentConn)
+            .catch(() => [])
+        : Promise.resolve([])
+    ])
     const [ownedResult, tasks, approvalSteps, notifications, teamTasks, requested] =
       await Promise.all([
         // Owned records + SLA, most urgent first — the same set Ask AI's
@@ -92,7 +116,9 @@ export async function myWorkRoutes(app: FastifyInstance) {
       ])
 
     // The record each task sits on, the way people name it.
-    const allTasks = [...tasks, ...teamTasks, ...requested] as Array<Record<string, unknown>>
+    const allTasks = [...tasks, ...teamTasks, ...requested, ...agentTasks] as Array<
+      Record<string, unknown>
+    >
     const byCol = new Map<string, string[]>()
     for (const t of allTasks) {
       if (!t.collection || !t.item) continue
@@ -125,6 +151,17 @@ export async function myWorkRoutes(app: FastifyInstance) {
       }))
 
     const owned = ownedResult.owned
+    const qNames = await questionNames(
+      [...questionRows, ...answerRows].flatMap((q) => [q.asker, q.recipient])
+    ).catch(() => new Map<string, string | null>())
+    const questions = await Promise.all(
+      questionRows.map((q) => questionView(q, { id: userId, isAsker: false }, qNames))
+    )
+    const answers = await Promise.all(
+      answerRows.map((q) => questionView(q, { id: userId, isAsker: true }, qNames))
+    )
+    // The agent has now read these answers: the next my_work does not repeat them.
+    for (const q of answerRows) await markAnswerSeen(q)
 
     return reply.send({
       data: {
@@ -133,6 +170,15 @@ export async function myWorkRoutes(app: FastifyInstance) {
         tasks: named(tasks as Array<Record<string, unknown>>),
         team_tasks: named(teamTasks as Array<Record<string, unknown>>),
         requested: named(requested as Array<Record<string, unknown>>),
+        // #3223 / #3220 — present only for an agent connection (OAuth app or API key).
+        ...(agentConn
+          ? {
+              agent: { connection: agentConn },
+              agent_tasks: named(agentTasks as Array<Record<string, unknown>>),
+              answers
+            }
+          : {}),
+        questions,
         on_a_team: teamIds.length > 0,
         approvals: approvalSteps,
         notifications,
@@ -144,7 +190,9 @@ export async function myWorkRoutes(app: FastifyInstance) {
           team_tasks: teamTasks.length,
           requested: requested.length,
           approvals: approvalSteps.length,
-          notifications: notifications.length
+          notifications: notifications.length,
+          questions: questions.length,
+          ...(agentConn ? { agent_tasks: agentTasks.length, answers: answers.length } : {})
         }
       }
     })

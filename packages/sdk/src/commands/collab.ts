@@ -46,6 +46,9 @@ export interface Task {
   team_name?: string | null
   /** The record's human id (TP26-80366). */
   item_label?: string | null
+  /** #3223 — the agent connection the task is handed to (assignee = the person it acts for). */
+  agent_assignee?: string | null
+  agent_name?: string | null
 }
 
 export interface MyTask extends Task {
@@ -126,6 +129,8 @@ export function createTask(body: {
   due_date?: string | null
   priority?: TaskPriority
   done_when?: TaskDoneWhenRule[] | null
+  /** #3223 — hand it to an agent connection (o<grant id> | k<api key id>) instead of a person. */
+  agent?: string | null
 }): Command<{ data: Task & { delegated_from: UUID | null } }> {
   return cmd('POST', '/tasks', undefined, body)
 }
@@ -140,6 +145,8 @@ export function updateTask(
     status: TaskStatus
     priority: TaskPriority
     done_when: TaskDoneWhenRule[] | null
+    /** #3223 — hand to an agent connection; null takes it back. */
+    agent: string | null
   }>
 ): Command<{ data: Task }> {
   return cmd('PATCH', `/tasks/${id}`, undefined, body)
@@ -997,6 +1004,13 @@ export interface MyWorkSummary {
     item: string | null
     timestamp: ISODate
   }>
+  /** #3220 — questions assistants asked the caller (open). */
+  questions?: import('./agents.js').AgentQuestion[]
+  /** #3223 / #3220 — present only when the caller is an agent connection. */
+  agent?: { connection: string }
+  agent_tasks?: Array<Task & { item_label?: string | null }>
+  /** Answers to this connection's questions it had not collected (now collected). */
+  answers?: import('./agents.js').AgentQuestion[]
   counts: {
     owned: number
     owned_breached: number
@@ -1004,6 +1018,9 @@ export interface MyWorkSummary {
     tasks: number
     approvals: number
     notifications: number
+    questions?: number
+    agent_tasks?: number
+    answers?: number
   }
 }
 

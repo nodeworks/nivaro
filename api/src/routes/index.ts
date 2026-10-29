@@ -18,6 +18,8 @@ import { accessInsightRoutes } from './access-insights.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
+import { agentQuestionRoutes } from './agent-questions.js'
+import { agentTriggerRoutes } from './agent-triggers.js'
 import { aiRoutes } from './ai.js'
 import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
@@ -771,6 +773,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mcpToolRoutes, { prefix: '/mcp-tools' })
   await app.register(oauthConnectionRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
+  // Agents working with people (#3210, #3220)
+  await app.register(agentTriggerRoutes, { prefix: '/agent-triggers' })
+  await app.register(agentQuestionRoutes, { prefix: '/agent-questions' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

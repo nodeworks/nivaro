@@ -12,6 +12,7 @@ import {
   type McpSession,
   mcpSessionsEnabled,
   openSession,
+  QUESTION_COLLECTION,
   removeSubscription,
   touchSession,
   validSessionId,
@@ -69,9 +70,12 @@ export async function resolveLiveSession(
 
 /** May the caller read this record? Asked through the items API as the caller. */
 async function readable(f: typeof fetch, collection: string, id: string): Promise<boolean | null> {
-  const res = await f(
-    `http://mcp.local/api/items/${encodeURIComponent(collection)}/${encodeURIComponent(id)}?fields=id`
-  )
+  // #3220 — an agent question is read through its own route (asker, recipient, admin).
+  const path =
+    collection === QUESTION_COLLECTION
+      ? `/api/agent-questions/${encodeURIComponent(id)}`
+      : `/api/items/${encodeURIComponent(collection)}/${encodeURIComponent(id)}?fields=id`
+  const res = await f(`http://mcp.local${path}`)
   if (res.ok) return true
   if (res.status === 401 || res.status === 403 || res.status === 404) return false
   return null

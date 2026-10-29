@@ -90,6 +90,44 @@ export function orderedTriggerKeyCount(): number {
   return orderChains.size
 }
 
+/**
+ * In-process listeners on trigger events, beside the flows (#3210 agent triggers listen for
+ * 'workflow-transition'). A listener runs after the event is emitted, fire-and-forget; a throw
+ * is swallowed so it can never break the emit.
+ */
+type TriggerListener = (payload: Record<string, unknown>, userId?: string) => unknown
+const _listeners = new Map<string, Set<TriggerListener>>()
+
+export function onTriggerEmitted(triggerType: string, listener: TriggerListener): () => void {
+  let set = _listeners.get(triggerType)
+  if (!set) {
+    set = new Set()
+    _listeners.set(triggerType, set)
+  }
+  set.add(listener)
+  return () => {
+    _listeners.get(triggerType)?.delete(listener)
+  }
+}
+
+function notifyListeners(
+  triggerType: string,
+  payload: Record<string, unknown>,
+  userId?: string
+): void {
+  const set = _listeners.get(triggerType)
+  if (!set?.size) return
+  for (const fn of set) {
+    try {
+      const r = fn(payload, userId)
+      if (r && typeof (r as Promise<unknown>).catch === 'function')
+        (r as Promise<unknown>).catch(() => undefined)
+    } catch {
+      /* a listener never breaks the emit */
+    }
+  }
+}
+
 /** Fire all active flows registered to this extension trigger type. Fire-and-forget. */
 export function emitTrigger(
   triggerType: string,
@@ -98,6 +136,7 @@ export function emitTrigger(
   userId?: string,
   opts?: { excludeFlowIds?: string[]; orderKey?: string; orderTimeoutMs?: number }
 ): void {
+  notifyListeners(triggerType, payload, userId)
   const exclude = new Set((opts?.excludeFlowIds ?? []).map((id) => String(id).toUpperCase()))
   const run = async (): Promise<void> => {
     const { executeFlow } = await loadExecutor()

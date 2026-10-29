@@ -44,6 +44,23 @@ export function parseRecordUri(uri: string): { collection: string; id: string } 
   }
 }
 
+const QUESTION_URI = /^nivaro:\/\/question\/([0-9a-f-]{36})$/i
+
+/** `nivaro://question/<id>` — an ask_human question (#3220). */
+export function questionUri(id: string): string {
+  return `nivaro://question/${id}`
+}
+
+/**
+ * What a subscribe may follow: a record, or an ask_human question (the host reads it as the
+ * `nivaro_agent_questions` table, through its own route).
+ */
+export function parseSubscribableUri(uri: string): { collection: string; id: string } | null {
+  const q = QUESTION_URI.exec(uri)
+  if (q) return { collection: 'nivaro_agent_questions', id: q[1].toLowerCase() }
+  return parseRecordUri(uri)
+}
+
 /** A refusal the host can answer a subscribe with; it reaches the client as a JSON-RPC error. */
 export interface SubscriptionRefusal {
   error: string
@@ -92,11 +109,11 @@ export function registerRecordResource(
   server.server.registerCapabilities({ resources: { subscribe: true } })
   server.server.setRequestHandler(SubscribeRequestSchema, async (request) => {
     const uri = request.params.uri
-    const record = parseRecordUri(uri)
+    const record = parseSubscribableUri(uri)
     if (!record)
       throw new McpError(
         ErrorCode.InvalidParams,
-        'Only records can be subscribed to: nivaro://record/<collection>/<id>'
+        'Only records and questions can be subscribed to: nivaro://record/<collection>/<id> or nivaro://question/<id>'
       )
     const refusal = await host.subscribe({ uri, ...record })
     if (refusal) {

@@ -2349,6 +2349,29 @@ export async function buildServer() {
         })
       }
 
+      // Agents (#3210, #3220): agent-trigger retries that are due (a process that scheduled
+      // one may have restarted), and ask_human questions past their expiry.
+      app.cron.schedule(
+        'agent-trigger-retries',
+        '* * * * *',
+        async () => {
+          const { drainDueDeliveries } = await import('./services/agent-trigger-delivery.js')
+          const n = await drainDueDeliveries()
+          if (n) app.log.info(`agent-trigger-retries: ${n} delivery attempt(s)`)
+        },
+        { description: 'Sends agent-trigger wake-ups whose retry is due.' }
+      )
+      app.cron.schedule(
+        'agent-questions-expire',
+        '*/15 * * * *',
+        async () => {
+          const { expireQuestions } = await import('./services/agent-questions.js')
+          const n = await expireQuestions()
+          if (n) app.log.info(`agent-questions-expire: ${n} question(s) expired`)
+        },
+        { description: 'Marks agent questions nobody answered in time as expired.' }
+      )
+
       // #1462 — monthly API usage statements, per key that opted in.
       app.cron.schedule(
         'api-key-usage-statements',

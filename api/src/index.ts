@@ -2,6 +2,7 @@ import { config } from './config.js'
 import { closeDb, migrationSource, runMigrationsSafely } from './db/index.js'
 import { registerCoreTriggers } from './flows/core-triggers.js'
 import { registerActivityHooks } from './hooks/activity.js'
+import { registerAgentTriggerHooks } from './hooks/agent-triggers.js'
 import { registerAggregateCapHooks, setApp as setAggregateCapApp } from './hooks/aggregate-caps.js'
 import { registerAiValidationHooks, setApp as setAiValidationApp } from './hooks/ai-validation.js'
 import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
@@ -84,6 +85,7 @@ async function main() {
     registerRecordIntegrityHooks()
     registerSnoozeWakeHooks()
     registerTaskDoneWhenHooks()
+    registerAgentTriggerHooks()
     registerWorkflowAutoHooks()
     registerCoreTriggers()
   }
