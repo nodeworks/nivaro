@@ -57,6 +57,10 @@ beforeAll(async () => {
         data: { would_create: true, dry_run: (req.query as { dry_run?: string }).dry_run }
       }))
       api.patch('/items/:collection/:id', async () => ({ data: { id: 1 } }))
+      api.post('/comments', async () => ({ data: { id: 3, created_at: 't', mentions: [] } }))
+      api.get('/mcp/capabilities', async () => ({
+        data: { admin_tools: true, chat: 'none', update_preview: true }
+      }))
     },
     { prefix: '/api' }
   )
@@ -85,7 +89,9 @@ describe('/api/mcp-console (#2468)', () => {
     expect(byName.whoami.write).toBe(false)
     expect(byName.health).toBeTruthy() // an admin tool
     expect(byName.create_item).toMatchObject({ write: true, dry_run_arg: true })
-    expect(byName.update_item).toMatchObject({ write: true, dry_run_arg: false })
+    // update_item previews with its own dry_run (#3222); add_comment cannot rehearse.
+    expect(byName.update_item).toMatchObject({ write: true, dry_run_arg: true })
+    expect(byName.add_comment).toMatchObject({ write: true, dry_run_arg: false })
     expect(byName.read_items.input_schema.properties.collection).toBeTruthy()
   })
 
@@ -128,32 +134,52 @@ describe('/api/mcp-console (#2468)', () => {
       url: '/api/mcp-console/run',
       headers: asAdmin,
       payload: {
-        tool: 'update_item',
-        arguments: { collection: 'articles', id: '1', data: { title: 'y' } }
+        tool: 'add_comment',
+        arguments: { collection: 'articles', id: '1', text: 'y' }
       }
     })
     const body = held.json()
     expect(body.dry_run).toBe('held')
     expect(body.is_error).toBe(true)
     expect(body.calls.find((c: { held?: boolean }) => c.held)).toMatchObject({
-      method: 'PATCH',
-      path: '/api/items/articles/1',
-      body: { title: 'y' }
+      method: 'POST',
+      path: '/api/comments',
+      body: { collection: 'articles', item: '1', text: 'y' }
     })
-    expect(reached.some((r) => r.method === 'PATCH')).toBe(false)
+    expect(reached.some((r) => r.method === 'POST')).toBe(false)
 
     const real = await app.inject({
       method: 'POST',
       url: '/api/mcp-console/run',
       headers: asAdmin,
       payload: {
-        tool: 'update_item',
-        arguments: { collection: 'articles', id: '1', data: { title: 'y' } },
+        tool: 'add_comment',
+        arguments: { collection: 'articles', id: '1', text: 'y' },
         dry_run: false
       }
     })
     expect(real.json().dry_run).toBe('off')
-    expect(reached.some((r) => r.method === 'PATCH')).toBe(true)
+    expect(reached.some((r) => r.method === 'POST' && r.url === '/api/comments')).toBe(true)
+  })
+
+  it('previews update_item through its own dry_run, never a real PATCH', async () => {
+    reached.length = 0
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp-console/run',
+      headers: asAdmin,
+      payload: {
+        tool: 'update_item',
+        arguments: { collection: 'articles', id: '1', data: { title: 'y' } }
+      }
+    })
+    const body = res.json()
+    expect(body.dry_run).toBe('tool')
+    expect(body.arguments.dry_run).toBe(true)
+    // The capability check the stdio server makes before a preview.
+    expect(reached.some((r) => r.url === '/api/mcp/capabilities')).toBe(true)
+    expect(reached.some((r) => r.method === 'PATCH' && r.url.includes('dry_run=1'))).toBe(true)
+    expect(reached.some((r) => r.method === 'PATCH' && !r.url.includes('dry_run=1'))).toBe(false)
   })
 
   it('refuses a tool the admin does not have', async () => {

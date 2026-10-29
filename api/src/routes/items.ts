@@ -46,6 +46,7 @@ import {
   readItems,
   readOne,
   rehearseCreate,
+  rehearseUpdate,
   updateOne,
   upsertInfoOf,
   upsertKeysOf
@@ -361,6 +362,27 @@ export async function itemsRoutes(app: FastifyInstance) {
         )
       )
       return reply.send(result)
+    } catch (err) {
+      return handleError(err, reply)
+    }
+  })
+
+  // Filter check (build_filter, #3211): the filter gates a list read applies, run over every
+  // clause on its own so ALL problems are named, plus type / choice checks and a corrected
+  // filter. Reads metadata only, never a row.
+  //   GET /items/orders/filter-check?filter={"status":{"_eq":"Open"}}
+  app.get('/:collection/filter-check', async (req, reply) => {
+    const { collection } = req.params as { collection: string }
+    const q = req.query as Record<string, string>
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(q.filter ?? '{}')
+    } catch {
+      return reply.code(400).send({ error: 'Invalid filter: must be valid JSON', code: 'BAD_JSON' })
+    }
+    try {
+      const { checkFilter } = await import('../services/filter-check.js')
+      return reply.send({ data: await checkFilter(req.user!, collection, parsed) })
     } catch (err) {
       return handleError(err, reply)
     }
@@ -1814,6 +1836,48 @@ export async function itemsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
+    // A rehearsal (#3222): everything an update runs, the UPDATE rolled back, the before/after
+    // diff answered. Any caller with ?dry_run=1 — a sandbox key too (nothing is stored).
+    if (q.dry_run === '1' || q.dry_run === 'true') {
+      if (req.user?.api_key_sandbox && /^nivaro_/i.test(collection)) {
+        return reply.code(403).send({ error: 'Sandbox keys cannot write system collections' })
+      }
+      try {
+        const lockRefusal = await editLockRefusal(req, collection, id)
+        if (lockRefusal) {
+          const body = lockRefusal.body
+          return reply.send({
+            dry_run: true,
+            ok: false,
+            status: lockRefusal.status,
+            would: null,
+            id,
+            changes: [],
+            unchanged: [],
+            hidden: [],
+            filled: [],
+            ignored: [],
+            links: {},
+            nested: {},
+            notes: ['Nothing was saved.'],
+            error: body.error,
+            code: body.code,
+            locked_by_name: body.locked_by_name
+          })
+        }
+        const report = await rehearseUpdate(
+          req.user!,
+          collection,
+          id,
+          (req.body ?? {}) as Record<string, unknown>,
+          req,
+          req.workspaceId ?? undefined
+        )
+        return reply.send(report)
+      } catch (err) {
+        return handleError(err, reply)
+      }
+    }
     if (req.user?.api_key_sandbox) {
       const sim = await simulateSandboxWrite(req, collection, 'update', id)
       return reply.code(sim.code).send(sim.body)
