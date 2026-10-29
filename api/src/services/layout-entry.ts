@@ -62,6 +62,10 @@ export type EntryConfig = {
   /** Glossary terms in help text get a dotted underline (default on). */
   glossary?: boolean
   presets?: EntryPreset[]
+  /** Form density for the people using it (#3182): absent = comfortable. */
+  density?: 'compact'
+  /** First-use tour of the form's sections (#3192). */
+  tour?: boolean
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -104,6 +108,8 @@ export function sanitizeEntryConfig(raw: unknown): EntryConfig | null {
   if (v.enter_next === true) out.enter_next = true
   if (v.adaptive === true) out.adaptive = true
   if (v.glossary === false) out.glossary = false
+  if (v.density === 'compact') out.density = 'compact'
+  if (v.tour === true) out.tour = true
   if (typeof v.adaptive_threshold === 'number' && Number.isFinite(v.adaptive_threshold)) {
     const n = Math.min(ENTRY_THRESHOLD_MAX, Math.max(1, Math.round(v.adaptive_threshold)))
     if (n !== ENTRY_THRESHOLD_DEFAULT) out.adaptive_threshold = n

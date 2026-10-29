@@ -2286,7 +2286,7 @@ function applyOneFilterOp(
 }
 
 /** Every operator applyOneFilterOp compiles. */
-const FILTER_OPS = new Set([
+export const FILTER_OPS: ReadonlySet<string> = new Set([
   '_eq',
   '_neq',
   '_gt',
@@ -3970,6 +3970,107 @@ async function partitionRowCount(collection: string): Promise<number | null> {
   }
 }
 
+/**
+ * The filter half of a list read's gates, in the order readItems runs them: relations of every
+ * collection the filter reaches primed, the named fields checked, and the compiler's own walk
+ * (unknown field, unknown operator, a nested key under a field that links to nothing, a value
+ * the column cannot hold in a range). Answers the fitted copy the query compiles from. ONE
+ * definition for readItems and the filter checker (build_filter, #3211), so the two never drift.
+ */
+async function compileFilterGates(
+  collection: string,
+  filter: Record<string, unknown>,
+  sort: string[],
+  conditions: Array<FilterCondition | OrCondition> | undefined,
+  rels: CMSRelation[]
+): Promise<Record<string, unknown>> {
+  // For each related collection referenced in the filter or sort, pre-load their
+  // relations into the cache so the synchronous applyFilters can access them.
+  await primeRelCacheForFilter(filter, collection, rels)
+  await primeVirtualSql(collection)
+  await primeVirtualFilters(filter)
+  await assertFilterableFields(collection, filter, sort, conditions, rels)
+  // Compiled from a copy: fitting values to column types rewrites operators.
+  const fittedFilter = cloneFilterTree(filter)
+  await assertFilterCompiles(fittedFilter, collection, rels)
+  return fittedFilter
+}
+
+/**
+ * A filter checker for one caller and collection (build_filter, #3211): the collection gates a
+ * list read applies (servable, registered, readable, table present — refused exactly as
+ * readItems refuses them), then a function that runs every FILTER gate of a list read over a
+ * filter without reading a row. The function throws the same coded 400 the read would.
+ */
+export async function filterCheckerFor(
+  user: User,
+  collection: string
+): Promise<(filter: Record<string, unknown>) => Promise<void>> {
+  await assertServable(user, collection, 'read')
+  clearRelCache()
+  const [col, allowed, rels, noTable] = await Promise.all([
+    getCollection(collection),
+    can(user, 'read', collection),
+    getRelsForCollection(collection),
+    tableIsMissing(collection)
+  ])
+  if (!col) throw new CollectionNotFoundError(collection)
+  if (!allowed) throw new ForbiddenError()
+  if (noTable) throw new CollectionTableMissingError(collection)
+  return async (filter) => {
+    assertNoSensitivePaths(collection, filter, [], undefined)
+    await assertReadableSystemPaths(user, collection, filter, [], undefined)
+    await compileFilterGates(collection, filter, [], undefined, rels)
+  }
+}
+
+/** Where one filter path lands: the collection and field its last segment names. */
+export interface FilterPathTarget {
+  collection: string
+  /** The stored field compared — an M2O compared by operators is its FK column. */
+  field: string
+  /** The last hop was a relation (the field is the link itself, compared by id). */
+  link: boolean
+}
+
+/**
+ * Resolve a filter leaf's field segments (no operators, no _and/_or/_some/_none) the way the
+ * compiler walks them: an M2O hops to the related collection, a to-many alias to its rows (an
+ * M2M to the other side). Null when a segment names nothing the compiler would follow.
+ */
+export async function resolveFilterPath(
+  collection: string,
+  segments: string[]
+): Promise<FilterPathTarget | null> {
+  let current = collection
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i]
+    const last = i === segments.length - 1
+    const rels = await getRelsForCollection(current)
+    const m2o = findM2ORelation(seg, current, rels)
+    if (m2o) {
+      if (last) return { collection: current, field: m2o.fkField, link: true }
+      current = m2o.rel.one_collection as string
+      continue
+    }
+    const o2m = findO2MRelation(seg, current, rels)
+    if (o2m) {
+      if (last) return { collection: current, field: seg, link: true }
+      current = o2m.many_collection
+      continue
+    }
+    const m2m = findM2MRelation(seg, current, rels)
+    if (m2m) {
+      if (last) return { collection: current, field: seg, link: true }
+      current = m2m.otherCollection
+      continue
+    }
+    if (!last) return null
+    return { collection: current, field: seg, link: false }
+  }
+  return null
+}
+
 export async function readItems(
   user: User,
   collection: string,
@@ -4136,15 +4237,7 @@ export async function readItems(
     }
   }
 
-  // For each related collection referenced in the filter or sort, pre-load their
-  // relations into the cache so the synchronous applyFilters can access them.
-  await primeRelCacheForFilter(filter, collection, rels)
-  await primeVirtualSql(collection)
-  await primeVirtualFilters(filter)
-  await assertFilterableFields(collection, filter, sort, conditions, rels)
-  // Compiled from a copy: fitting values to column types rewrites operators.
-  const fittedFilter = cloneFilterTree(filter)
-  await assertFilterCompiles(fittedFilter, collection, rels)
+  const fittedFilter = await compileFilterGates(collection, filter, sort, conditions, rels)
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
@@ -6382,8 +6475,12 @@ export async function updateOne(
     outcome?: CreateOutcome
     /** The payload is the caller's own (write routes): read-only fields are dropped too. */
     callerPayload?: boolean
+    /** Rehearse (#3222): everything up to the write, the UPDATE tried and rolled back, and an
+     *  UpdateDryRunReport answered instead of the record. See rehearseUpdate. */
+    dryRun?: boolean
   }
 ) {
+  const dry = opts?.dryRun === true
   await assertServable(user, collection, 'update')
   assertRecordId(id)
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
@@ -6491,7 +6588,8 @@ export async function updateOne(
     payload: data,
     user,
     database: db,
-    req
+    req,
+    ...(dry ? { dryRun: true } : {})
   }
   // Before-hooks see the change reason the caller (or the natural-key upsert
   // branch) supplied and may REPLACE it — an extension speaking for an
@@ -6651,6 +6749,31 @@ export async function updateOne(
     previousData
   )
   const columnPayload = filterToActualColumns(securedPayload, actualCols)
+  if (dry) {
+    const report = await reportUpdateRehearsal({
+      user,
+      collection,
+      id,
+      req,
+      workspaceId,
+      plain: ctx.payload as Record<string, unknown>,
+      columnPayload,
+      actualCols,
+      callerFields,
+      previousData: previousData ?? null,
+      aliasWrites,
+      nestedWrites,
+      changeReason,
+      applyScopes: async (q) => {
+        await applyWorkspaceScope(q, collection, workspaceId)
+        if (rowFilter) applyRowFilter(q, rowFilter, user)
+        writeScope.apply(q)
+      },
+      callerPayload: opts?.callerPayload === true
+    })
+    dryReports.add(report)
+    return report as unknown as Awaited<ReturnType<typeof readOne>>
+  }
   // A payload of only alias/virtual fields (e.g. an M2A alias like
   // internal_contact) leaves nothing to write — knex throws on an empty
   // .update(). Skip the UPDATE but still run the read-back + after hooks so
@@ -6733,6 +6856,240 @@ export async function updateOne(
   })
 
   return result
+}
+
+// ── Rehearsed updates (`dry_run`, #3222) ────────────────────────────────────
+
+/** What an update WOULD do to one record. Nothing is stored. */
+export interface UpdateDryRunReport {
+  dry_run: true
+  ok: boolean
+  /** The status the real request would answer. */
+  status: number
+  would: 'update' | null
+  id: string | number
+  /** Stored fields the write would change, as the caller reads them before and after. */
+  changes: Array<{ field: string; from: unknown; to: unknown }>
+  /** Fields the write names whose value would stay as it is. */
+  unchanged: string[]
+  /** Fields the write would change that the caller may not read: names only. */
+  hidden: string[]
+  /** Changed fields the caller did not send (rules, derived values, audit stamps). */
+  filled: string[]
+  /** Keys of the payload that are stored nowhere. */
+  ignored: string[]
+  /** Many-to-many links the payload would add, per alias. */
+  links: Record<string, Array<string | number>>
+  /** Child rows the payload would add, per alias. */
+  nested: Record<string, DryRunNestedRow[]>
+  notes: string[]
+  change_reason?: string
+  error?: string
+  code?: string
+  violations?: unknown
+  fields?: unknown
+  conflicts?: unknown
+}
+
+/** A link value as its id (`{id: 5}` → 5), for comparing a read against a stored value. */
+function storedValueOf(v: unknown): unknown {
+  return v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) && 'id' in v
+    ? (v as { id: unknown }).id
+    : v
+}
+
+async function reportUpdateRehearsal(a: {
+  user: User
+  collection: string
+  id: string | number
+  req?: FastifyRequest
+  workspaceId?: string
+  /** The payload after hooks, rules, row rules and computed fields — plain (not encrypted). */
+  plain: Record<string, unknown>
+  /** The column write as it would go out (encrypted fields encrypted). */
+  columnPayload: Record<string, unknown>
+  actualCols: Set<string>
+  callerFields: Set<string>
+  previousData: Record<string, unknown> | null
+  aliasWrites: Array<{ field: string; ids: Array<string | number> }>
+  nestedWrites: Array<{
+    field: string
+    collection: string
+    fk: string
+    rows: Array<Record<string, unknown>>
+  }>
+  changeReason: string
+  applyScopes: (q: Knex.QueryBuilder) => Promise<void>
+  callerPayload: boolean
+}): Promise<UpdateDryRunReport> {
+  const notes: string[] = []
+  // Audit stamps follow every real column write, so the rehearsal shows them too.
+  const stamped = { ...a.columnPayload }
+  if (Object.keys(stamped).length > 0)
+    await applyAuditSpecials(a.collection, stamped, a.user, 'update', a.callerFields, a.actualCols)
+  if (Object.keys(stamped).length > 0 && !/^nivaro_|^directus_/i.test(a.collection)) {
+    // The database's own word on the change: tried inside a transaction, rolled back.
+    const trx = await db.transaction()
+    try {
+      const q = trx(a.collection).where({ id: a.id })
+      await a.applyScopes(q)
+      await q.update(stamped)
+    } finally {
+      await trx.rollback().catch(() => {})
+    }
+  } else if (Object.keys(stamped).length > 0) {
+    notes.push('The update itself was not tried, so refusals of the database are not covered.')
+  }
+  // Before and after AS THE CALLER READS THEM: a field outside their read list is named only.
+  const current = (await readOne(a.user, a.collection, a.id, a.workspaceId).catch(
+    () => null
+  )) as Record<string, unknown> | null
+  const changes: UpdateDryRunReport['changes'] = []
+  const unchanged: string[] = []
+  const hidden: string[] = []
+  for (const field of Object.keys(stamped)) {
+    if (field === 'id') continue
+    const to = field in a.plain ? a.plain[field] : stamped[field]
+    if (current && field in current) {
+      if (sameStored(storedValueOf(current[field]), storedValueOf(to))) unchanged.push(field)
+      else changes.push({ field, from: current[field] ?? null, to: to ?? null })
+    } else if (a.previousData && sameStored(a.previousData[field], stamped[field])) {
+      unchanged.push(field)
+    } else hidden.push(field)
+  }
+  const nested: Record<string, DryRunNestedRow[]> = {}
+  for (const w of a.nestedWrites) {
+    const list: DryRunNestedRow[] = []
+    for (let i = 0; i < w.rows.length; i++) {
+      try {
+        const r = await rehearseCreate(
+          a.user,
+          w.collection,
+          { ...w.rows[i], [w.fk]: a.id },
+          a.req,
+          a.workspaceId,
+          { insert: false, callerPayload: a.callerPayload }
+        )
+        list.push({
+          index: i,
+          ok: r.ok,
+          data: r.data,
+          ...(r.ok ? {} : { status: r.status, error: r.error, code: r.code })
+        })
+      } catch (err) {
+        const d = describeWriteRefusal(err)
+        list.push({
+          index: i,
+          ok: false,
+          status: err instanceof ForbiddenError ? 403 : d.status,
+          error: err instanceof ForbiddenError ? 'Forbidden' : d.error,
+          code: d.code
+        })
+      }
+    }
+    nested[w.field] = list
+  }
+  const childFailed = Object.values(nested).some((l) => l.some((r) => !r.ok))
+  const known = new Set([
+    ...a.actualCols,
+    ...a.aliasWrites.map((w) => w.field),
+    ...a.nestedWrites.map((w) => w.field)
+  ])
+  const links = Object.fromEntries(
+    a.aliasWrites.filter((w) => w.ids.length > 0).map((w) => [w.field, w.ids])
+  )
+  if (
+    changes.length === 0 &&
+    hidden.length === 0 &&
+    Object.keys(links).length === 0 &&
+    Object.keys(nested).length === 0
+  )
+    notes.push('Nothing would change: every value sent already matches the record.')
+  if (!current) notes.push('You cannot read this record back, so its values are not shown.')
+  notes.push(
+    'Nothing was saved. After-save rules, hooks, notifications, rollups and webhooks did not run.'
+  )
+  return {
+    dry_run: true,
+    ok: !childFailed,
+    status: childFailed ? 422 : 200,
+    would: 'update',
+    id: a.id,
+    changes,
+    unchanged,
+    hidden,
+    filled: [...changes.map((c) => c.field), ...hidden].filter((f) => !a.callerFields.has(f)),
+    ignored: [...a.callerFields].filter((k) => !known.has(k)),
+    links,
+    nested,
+    notes,
+    ...(a.changeReason ? { change_reason: a.changeReason } : {}),
+    ...(childFailed
+      ? {
+          error: 'A child row would be refused, so nothing would be saved',
+          code: 'NESTED_ROW_REFUSED'
+        }
+      : {})
+  }
+}
+
+/**
+ * Rehearse an update (#3222): contracts, permissions, row filters and User Scopes, the edit
+ * lock, mid-air collisions, before-hooks (told it is a rehearsal), change-reason rules, rules,
+ * field rules, row rules, computed fields, validation, relation limits and picker rules all
+ * run; the UPDATE is tried inside a transaction that is rolled back, so the database's own
+ * refusals are found too. Nothing is stored; no after-hook, activity row, revision,
+ * notification, webhook, rollup or broadcast happens.
+ *
+ * A caller who may not update the collection, a collection that does not exist and a record
+ * the caller cannot reach are refused as they would be for a real update.
+ */
+export async function rehearseUpdate(
+  user: User,
+  collection: string,
+  id: string | number,
+  data: Record<string, unknown>,
+  req?: FastifyRequest,
+  workspaceId?: string
+): Promise<UpdateDryRunReport> {
+  try {
+    const out = await updateOne(
+      user,
+      collection,
+      id,
+      structuredClone(data ?? {}),
+      req,
+      workspaceId,
+      { dryRun: true, callerPayload: true }
+    )
+    if (out && typeof out === 'object' && dryReports.has(out))
+      return out as unknown as UpdateDryRunReport
+    throw new Error('The rehearsal produced no report')
+  } catch (err) {
+    if (
+      err instanceof CollectionNotFoundError ||
+      err instanceof ForbiddenError ||
+      err instanceof ItemNotFoundError
+    )
+      throw err
+    const conflicts = (err as { conflicts?: unknown }).conflicts
+    return {
+      dry_run: true,
+      ok: false,
+      would: null,
+      id,
+      changes: [],
+      unchanged: [],
+      hidden: [],
+      filled: [],
+      ignored: [],
+      links: {},
+      nested: {},
+      notes: ['Nothing was saved.'],
+      ...describeWriteRefusal(err),
+      ...(conflicts !== undefined ? { conflicts } : {})
+    }
+  }
 }
 
 export async function deleteOne(

@@ -21,6 +21,14 @@ export interface FormUsageEvent {
   sections?: { shown: string[]; opened: string[] }
   /** On a save: milliseconds from opening the form to the save (#2614). */
   save_ms?: number | null
+  /** Saves refused since the last event (#3185): how many, and the fields each named. */
+  refused?: SaveRefusals
+}
+
+/** Field → refusals in this chunk: required and empty, or another rule broken. */
+export interface SaveRefusals {
+  tries: number
+  fields: Record<string, { required: number; invalid: number }>
 }
 
 export interface BeaconTransport {
@@ -146,6 +154,54 @@ export class StepClock {
   }
 }
 
+/**
+ * Refused saves in one form session (#3185): each refusal counts once, and
+ * each field it names once per refusal. Text from the form decides the kind:
+ * a required field left empty, or any other rule.
+ */
+export class RefusalTally {
+  private tries = 0
+  private fields: SaveRefusals['fields'] = {}
+
+  note(errors: Record<string, string>, kind?: 'required' | 'invalid') {
+    const keys = Object.keys(errors).filter((k) => /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k))
+    if (keys.length === 0) return
+    this.tries++
+    for (const k of keys.slice(0, 60)) {
+      if (!this.fields[k]) this.fields[k] = { required: 0, invalid: 0 }
+      const t = this.fields[k]
+      const msg = errors[k] ?? ''
+      const required =
+        kind === 'required' ||
+        (kind == null &&
+          (msg === 'This field is required' || /^At least one .+ is required$/.test(msg)))
+      if (required) t.required++
+      else t.invalid++
+    }
+  }
+
+  /** What to send, and start counting afresh; null when nothing was refused. */
+  take(): SaveRefusals | null {
+    if (this.tries === 0) return null
+    const out = { tries: this.tries, fields: this.fields }
+    this.tries = 0
+    this.fields = {}
+    return out
+  }
+
+  /** Put an unsent chunk back (the event was not sent). */
+  restore(r: SaveRefusals | null) {
+    if (!r) return
+    this.tries += r.tries
+    for (const [k, v] of Object.entries(r.fields)) {
+      if (!this.fields[k]) this.fields[k] = { required: 0, invalid: 0 }
+      const t = this.fields[k]
+      t.required += v.required
+      t.invalid += v.invalid
+    }
+  }
+}
+
 /** A session shorter than this that saved nothing is a remount, not a use. */
 export const MIN_SESSION_MS = 400
 /** A new record left within this long was not really started: no abandon. */
@@ -172,9 +228,12 @@ export function sessionEvent(s: {
   sections?: { shown: string[]; opened: string[] }
   /** Milliseconds from opening the form to the save, when it saved (#2614). */
   saveMs?: number | null
+  /** Saves refused since the last event (#3185). */
+  refused?: SaveRefusals | null
 }): FormUsageEvent | null {
-  if (!s.saved && !s.openSent && s.elapsed < MIN_SESSION_MS) return null
-  if (!s.saved && s.openSent && s.total <= 0) return null
+  const refused = s.refused && s.refused.tries > 0 ? s.refused : null
+  if (!s.saved && !refused && !s.openSent && s.elapsed < MIN_SESSION_MS) return null
+  if (!s.saved && !refused && s.openSent && s.total <= 0) return null
   const ev: FormUsageEvent = {
     layout_id: s.layoutId,
     collection: s.collection,
@@ -187,6 +246,7 @@ export function sessionEvent(s: {
   }
   if (s.sections && (s.sections.shown.length || s.sections.opened.length)) ev.sections = s.sections
   if (s.saved && s.saveMs != null && s.saveMs > 0) ev.save_ms = Math.round(s.saveMs)
+  if (refused) ev.refused = refused
   return ev
 }
 

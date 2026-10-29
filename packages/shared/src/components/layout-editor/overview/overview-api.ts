@@ -42,8 +42,8 @@ export async function fetchExplain(
     collection: string
     item: string | number
     role_id?: string | null
-    /** #2715: as on a small screen. */
-    viewport?: 'phone' | null
+    /** #2715 / #3183: as on a small or tablet-width screen. */
+    viewport?: 'phone' | 'tablet' | null
     /** #2714: as on this day (yyyy-mm-dd). */
     at?: string | null
   }

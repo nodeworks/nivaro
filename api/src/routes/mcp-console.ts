@@ -26,7 +26,7 @@ const DRY_RUN_CODE = 'MCP_CONSOLE_DRY_RUN'
 const MAX_CALLS = 100
 const MAX_BODY_CHARS = 4_000
 
-interface ToolInfo {
+export interface ToolInfo {
   name: string
   title?: string
   description?: string
@@ -44,8 +44,8 @@ export interface ConsoleCall {
   body?: unknown
 }
 
-const isWrite = (t: ToolInfo) => t.annotations?.readOnlyHint !== true
-const hasDryRunArg = (t: ToolInfo) => !!t.inputSchema?.properties?.dry_run
+export const isWrite = (t: ToolInfo) => t.annotations?.readOnlyHint !== true
+export const hasDryRunArg = (t: ToolInfo) => !!t.inputSchema?.properties?.dry_run
 
 function bodyOf(raw: unknown): unknown {
   if (typeof raw !== 'string' || !raw) return undefined
@@ -114,7 +114,7 @@ export function compactOf(result: { content?: unknown }): { value: unknown; char
   }
 }
 
-async function connect(req: FastifyRequest, f: typeof fetch) {
+export async function connect(req: FastifyRequest, f: typeof fetch) {
   const { createNivaroMcpServer } = await loadMcp()
   const [{ Client }, { InMemoryTransport }] = await Promise.all([
     import('@modelcontextprotocol/sdk/client/index.js'),
@@ -141,7 +141,7 @@ async function connect(req: FastifyRequest, f: typeof fetch) {
   }
 }
 
-const base = (app: FastifyInstance, req: FastifyRequest) =>
+export const base = (app: FastifyInstance, req: FastifyRequest) =>
   injectFetch(app, req, { cookie: true, inner: false, app: 'mcp-console' })
 
 export async function mcpConsoleRoutes(app: FastifyInstance) {

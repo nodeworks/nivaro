@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   onSectionUse,
+  RefusalTally,
   reportSectionUse,
   SectionTally,
   StepClock,
@@ -119,5 +120,36 @@ describe('section use and time to save (#2730 #2614)', () => {
     off()
     reportSectionUse({ layoutId: 99, collection: 'c', kind: 'opened', key: 'gone' })
     expect(seen).toEqual(['shown:early', 'opened:late'])
+  })
+})
+
+describe('refused saves (#3185)', () => {
+  it('counts each refusal once and each field once per refusal, by kind', () => {
+    const t = new RefusalTally()
+    expect(t.take()).toBeNull()
+    t.note({ title: 'This field is required', amount: 'Must be at least 1' })
+    t.note({ title: 'This field is required', lines: 'At least one Line item is required' })
+    t.note({ 'not a field': 'x' })
+    t.note({ amount: 'Too big' }, 'invalid')
+    expect(t.take()).toEqual({
+      tries: 3,
+      fields: {
+        title: { required: 2, invalid: 0 },
+        amount: { required: 0, invalid: 2 },
+        lines: { required: 1, invalid: 0 }
+      }
+    })
+    expect(t.take()).toBeNull()
+  })
+
+  it('a refusal alone is worth an event; an unsent chunk goes back', () => {
+    const refused = { tries: 1, fields: { title: { required: 1, invalid: 0 } } }
+    const ev = sessionEvent({ ...base, openSent: true, total: 0, elapsed: 9000, refused })
+    expect(ev?.refused).toEqual(refused)
+    expect(sessionEvent({ ...base, openSent: true, total: 0, elapsed: 9000 })).toBeNull()
+    const t = new RefusalTally()
+    t.restore(refused)
+    t.note({ title: 'This field is required' })
+    expect(t.take()?.fields.title).toEqual({ required: 2, invalid: 0 })
   })
 })

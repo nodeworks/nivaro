@@ -20,6 +20,7 @@ import {
   readMcpCapabilities,
   readMe
 } from '@nivaro/sdk'
+import { restrictTools } from './allow.js'
 import { confirmSecretFor } from './confirm.js'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
@@ -32,6 +33,9 @@ import { registerChaosTools } from './tools/chaos.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
+import { registerDataTools } from './tools/data.js'
+import { registerDrillTools } from './tools/drill.js'
+import { registerFormTools } from './tools/forms.js'
 import { registerInfrastructureTools } from './tools/infrastructure.js'
 import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
@@ -84,6 +88,12 @@ export interface NivaroMcpOptions {
    * server reaches the same tools through list_instance_tools / call_instance_tool.
    */
   instanceTools?: InstanceToolEntry[]
+  /**
+   * Only these tools (#3205, a connection's tool allowlist); omitted or null = every tool the
+   * options above register. It only removes tools — a name here that the options do not
+   * register (an admin tool for a non-admin) is not added.
+   */
+  allowedTools?: readonly string[] | null
 }
 
 export interface NivaroMcp {
@@ -118,6 +128,9 @@ export const TOOL_NAMES = [
   'list_revisions',
   'list_record_files',
   'read_file',
+  'compare_records',
+  'build_filter',
+  'changes_since',
   'search',
   'find_people',
   'list_custom_queries',
@@ -133,6 +146,9 @@ export const TOOL_NAMES = [
   'list_dashboards',
   'read_dashboard',
   'run_report',
+  'drill_widget',
+  'form_state',
+  'render_form',
   'list_instance_tools',
   'call_instance_tool'
 ] as const
@@ -168,6 +184,7 @@ export const LAYOUT_TOOL_NAMES = [
   'describe_layout',
   'which_form',
   'explain_field',
+  'lint_layout',
   'propose_layout_ops'
 ] as const
 
@@ -230,14 +247,17 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'Start with list_collections / describe_collection to learn names and fields,',
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
         'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
-        'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them.',
-        'create_item rehearses by default; pass dry_run: false to store. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
+        'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them; drill_widget shows the rows behind one.',
+        'build_filter checks a filter before you use it; compare_records diffs two records or a record and a revision; changes_since follows what changed since your last look by cursor.',
+        'form_state says which fields a form shows, requires and locks for some values; render_form draws it.',
+        'create_item rehearses by default; pass dry_run: false to store. update_item with dry_run: true previews a change without saving it. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
     }
   )
 
   tagToolCalls(server)
+  if (options.allowedTools) restrictTools(server, options.allowedTools)
   registerAccountTools(server, client)
   registerCollectionTools(server, client)
   registerItemTools(server, client, {
@@ -248,11 +268,14 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     options.chatAccess === 'read' || options.chatAccess === 'post' ? options.chatAccess : 'none'
   registerWorkTools(server, client, { chat: chatAccess !== 'none' })
   registerRecordTools(server, client)
+  registerDataTools(server, client)
   registerLookupTools(server, client)
   registerSupportTools(server, client)
   registerApprovalTools(server, client)
   registerStatusTools(server, client)
   registerDashboardTools(server, client)
+  registerDrillTools(server, client)
+  registerFormTools(server, client)
   registerInstanceTools(server, client)
   registerChatTools(server, client, chatAccess)
   if (options.adminTools === true) {
@@ -278,6 +301,7 @@ export async function serveStdio(options: NivaroMcpOptions): Promise<NivaroMcp> 
   return mcp
 }
 
+export { restrictTools } from './allow.js'
 export { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from './annotations.js'
 export type { SubscriptionHost, SubscriptionRefusal } from './record-resource.js'
 export { parseRecordUri, RECORD_URI_TEMPLATE, recordUri } from './record-resource.js'

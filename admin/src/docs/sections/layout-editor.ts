@@ -58,7 +58,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Pick Phone under Screen to see which form the record opens with on a small screen, and a day under On day to test active dates on another day.'
+      text: 'Pick Tablet or Phone under Screen to see which form the record opens with on a tablet-width or small screen, and a day under On day to test active dates on another day.'
     },
     { type: 'h3', id: 'layout-editor-active-dates', text: 'Active dates' },
     {
@@ -69,6 +69,11 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (`viewport=phone` on `/collection-layouts/active`): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.'
+    },
+    { type: 'h3', id: 'layout-editor-tablet-version', text: 'Tablet version' },
+    {
+      type: 'p',
+      text: "Form settings → Who gets this form → Tablet version → Make a tablet version copies the form for tablet-width screens (for example two columns where the desktop form has three). Record pages ask for it (`viewport=tablet` on `/collection-layouts/active`) on a screen 640–1023 px wide, or on a touch screen (no hover, coarse pointer) up to 1366 px — an iPad in landscape. After the usual rules pick a form, its tablet version opens in its place. On a phone, a form with no phone version opens its tablet version when it has one. Like a phone version, a tablet version never opens on its own, needs no rules of its own, keeps its own roles and active dates, and sits under its form on the overview. A form is a phone version or a tablet version, never both, and a version cannot have versions of its own. The screen is read once when the record opens, so turning the device never swaps the form under someone's edits."
     },
     { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
     {
@@ -83,7 +88,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-editor', text: 'The editor' },
     {
       type: 'p',
-      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Compact / Expand all / Collapse all, Show how full each field is, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
+      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Zoom and Fit to screen, Compact / Expand all / Collapse all, Show how full each field is, Show where saves fail, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
     },
     { type: 'h3', id: 'layout-editor-canvas', text: 'Canvas' },
     {
@@ -117,6 +122,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Sections, tabs and steps, slot cards (pipeline, comments, tasks, owners, PDF, extension panels), header strip items, the subtitle and widgets each get an inspector of their own.'
+    },
+    {
+      type: 'p',
+      text: 'Pin settings you use: hover a setting and click the star at its left to pin it. Pinned settings show under Pinned at the top of their tab, for every field or section that has them, in the order you pinned them; click the star again to unpin. Pins are yours and kept in this browser. A read-only view of a parent layout’s part shows its settings in place.'
     },
     { type: 'h3', id: 'layout-editor-scope', text: 'This form only vs every form' },
     {
@@ -174,9 +183,19 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Theme preview: Tools → Preview in dark shows the canvas in the dark theme without changing the app's theme. When the app is already dark the tool is off, because a dark app cannot show a light canvas."
     },
+    { type: 'h3', id: 'layout-editor-density', text: 'Form density' },
+    {
+      type: 'p',
+      text: "Form settings → How it's laid out → Density sets how tightly the record form is spaced for the people filling it in, in the admin app and in efp-new. Comfortable is the usual spacing. Compact tightens section headings and bodies, the gaps between fields and between a label and its control, and, with a mouse, makes inputs a little shorter; touch screens keep full-size controls. It changes the record form and its summary view (and the canvas while you edit), not the editor's zoom."
+    },
+    { type: 'h3', id: 'layout-editor-tour', text: 'First-use tour' },
+    {
+      type: 'p',
+      text: "Form settings → Entering data → First-use tour turns on a short guided tour for people opening the form for the first time. Each section on screen is one step, in page order: its name, then its help text, or, without help text, the fields it holds and how many are required. Sections in another tab, steps not reached yet and sections hidden by their rules are left out. Next, Back and Skip tour (Esc closes; the arrow keys move while the tour has focus); on a phone the tour sits at the bottom of the screen. Finishing or skipping it is remembered per person and form in the person's preferences (`form_tours_done`, on every device), so it starts by itself only once; a Tour button above the record header replays it. Write section help text for the best tour."
+    },
     {
       type: 'note',
-      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets }`. It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
+      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets, density, tour }` (`density` is only ever `compact`; `tour` only `true`). It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
     },
     { type: 'h3', id: 'layout-editor-drag', text: 'Drag and drop' },
     {
@@ -185,6 +204,12 @@ export const layoutEditor: DocSection = {
         'The whole element is the handle: field, section header, tab, step or slot card. Keyboard drag works too (focus, Space to lift, arrows to move, Space to drop, Escape to cancel).',
         'The drag preview is a copy of the element as it looks on the form, under the cursor at any scroll position; the canvas scrolls when you near its edge.',
         'While you drag a field, panel, header item or section, a trash zone rises at the bottom of the screen. Drop on it to take the thing off this form: a field keeps its data, a section goes with its tabs and fields. It is one Undo step and, with Autosave off, nothing changes until Save (Discard throws it away).',
+        'The trash says what depends on what you are dragging, before you let go: "Region drives 3 rules", and over the trash what they do (shows or hides Billing, fills Tax code, narrows the choices of Site). It counts section conditions, step skips, picker cascades, field rules, grid cascades and row rules, calculated fields and starting values that read the field. A field still placed somewhere else on the form warns of nothing, and neither do rules about things leaving in the same drop.',
+        'After a drop on the trash, a small chip shows where you dropped: "Removed Region · Undo". Undo there is the same as ⌘Z. The chip goes after a few seconds (not while the pointer is on it), when you press Escape, or as soon as another change becomes the last step.',
+        'Select several fields (Shift- or ⌘-click) and drag one of them: they all move together and land one after another where the line shows, in the order they are on the form. The preview shows how many. Dropping them on the trash removes them all; pinned fields stay where they are.',
+        'Hold Alt (Option on a Mac) while dragging to copy instead of move: the preview gets a + badge. A field is placed again where you drop it, with its width, label and settings, so it shows in both places (not in a section that already holds it). A section, tab or step is duplicated with its fields and the copy lands where you drop it. Header items and page cards show once and do not copy. Press or release Alt at any time during the drag.',
+        "Drop a section on another section's header to join them: the header lights up and says Join into Basics. The dragged section's fields follow the other's, in order, and it goes; the section you dropped on keeps its settings, and a field both hold shows once. Tabs join tabs and steps join steps (drop on the middle of the tab). The very top edge of the header still reorders. Arrange → Join does the same for the section right below.",
+        'On a touch screen, tap to select. Press and hold a field or section for a moment, then drag; a quick swipe still scrolls the canvas. The width handle on a selected field is finger-sized there.',
         'An insertion slot opens where the element will land, within a section or across sections, including into an empty section. Dropping on a section header puts the field first in that section; sections reorder by dropping anywhere on the target section.',
         "Widths change with the inspector's width control, snapping to the grid fractions.",
         'Alt+arrow moves the selected item in one keystroke, without picking it up. A field: Alt+↑ / Alt+↓ moves it one place in its section; Alt+← / Alt+→ moves it to the end of the previous section or the start of the next. A section moves up or down the page; a tab or step moves left or right. Each keystroke is one Undo step.'
@@ -193,7 +218,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-multi-select', text: 'Several fields at once' },
     {
       type: 'p',
-      text: 'Shift-click (or ⌘ / Ctrl-click) fields to select several; click one again to take it out. The inspector then shows what they share: width, Required, Read-only, Hidden and Section. Each change applies to all of them as one Undo step. "Section" moves them to the end of that section, in the order they are on the form; a field the section already holds stays where it is. Sections, header items and page cards are selected one at a time. Dragging moves one item; use Section to move several.'
+      text: 'Shift-click (or ⌘ / Ctrl-click) fields to select several; click one again to take it out. The inspector then shows what they share: width, Required, Read-only, Hidden and Section. Each change applies to all of them as one Undo step. "Section" moves them to the end of that section, in the order they are on the form; a field the section already holds stays where it is. Sections, header items and page cards are selected one at a time. Drag one of the selected fields to move them all, or use Section.'
     },
     { type: 'h3', id: 'layout-editor-auto-arrange', text: 'Auto-arrange' },
     {
@@ -213,6 +238,7 @@ export const layoutEditor: DocSection = {
         'Outline (Tools → Outline) lists the header strip, steps, tabs, sections and their fields beside the canvas. Clicking a row selects it on the canvas, and selecting on the canvas marks its row. Drag rows to reorder: the same moves as dragging on the canvas, one Undo step each. Parts that come from a parent layout show but do not move. The outline stays open for you until you close it.',
         "The inspector's header shows where the selection sits, for example Field · Flow › Billing. Click a part to select that step, tab or section.",
         'Tools has Compact canvas (smaller spacing and inputs in the editor only, kept for you in this browser; the record page is unchanged), Expand all (every section open and every step and tab laid out one under another) and Collapse all (every section folded; steps and tabs back to one at a time).',
+        'Zoom (Tools → Zoom): a slider from 30% to 150% in 5% steps, with − and +, Fit to screen and 100%. It zooms the canvas only, is kept for you in this browser and stacks with Compact canvas. Fit to screen fits the form’s width into the canvas: a tablet or phone frame, two roles side by side at a device width, or every device at once; never above 100%. While the canvas is zoomed, a small chip at its bottom right shows the zoom with the same controls.',
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
@@ -234,9 +260,30 @@ export const layoutEditor: DocSection = {
         "Convert to… turns a section into a tab or step (it joins the holder just above it when that holder shows the same way, else a new holder takes its place), a tab or step into a section (an emptied holder goes), tabs into steps and back, or a holder's tabs into sections. Each choice lists what it would change before you press Convert. A holder shows all its tabs one way, so one tab becomes a step only with its siblings.",
         'Copy rules to other sections… copies Hidden for, Read-only for and (from a tab or step) Only when onto the sections you tick. Step conditions are skipped on plain sections, where they do nothing.',
         'Pin in the editor marks a section so it cannot be dragged and takes no drops, with its fields and tabs, while you arrange the rest. Alt+arrow skips it too. The pin only affects the editor; the form people see is unchanged.',
+        "A single field, panel or header item can be pinned the same way: right-click it (or Arrange) → Pin in the editor. It keeps its spot: it does not drag, nothing drops on it, and Alt+arrow neither moves it nor swaps a neighbour past it. A Pinned tag shows on it. The flag is stored in the placement's overrides (`editor_pinned`, the same key a pinned section keeps in its swap settings), which the record form ignores; copies and duplicates are never pinned.",
         'Split the section here (on a selected field) moves that field and everything after it to a new section right below, named “… (continued)”, in the same order. The first part keeps all its settings; the new part takes its look, rules and visibility, but not its intro, collapsed summary or field swap. A split cannot fall inside a row of fields side by side.',
         'Join with … (on a section, tab or step) moves the fields of the section right below into this one, after its own, and removes the emptied section. This section keeps its settings; a field both hold shows once.',
         'Put side by side under one label (with two to six fields of one section selected) puts them in one row, such as Street / City / Zip or Qty / Unit. The row shows one label and one required marker; each input is captioned with its own name. Rename or take a row apart in the section’s inspector under Side by side; take one field out from its own inspector.'
+      ]
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-placing',
+      text: 'Copy, paste, put back and paint'
+    },
+    {
+      type: 'p',
+      text: 'These work from the keyboard (when you are not typing in a box) and from the Arrange menu. Each one is one Undo step, and nothing is saved until you save.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Copy and paste (⌘C / ⌘V, Ctrl elsewhere): select a field, several fields or a section and copy it. Paste puts it after the selection, on this form or on another form of the same collection: open the other form in the Forms list and paste there. A field keeps every setting (label on this form, width, rules, help text); a section keeps its settings, its tabs and its fields. Pasting into a form of another collection is refused. Fields the other form’s collection does not have are skipped and listed, and a field already in the section you paste into is left alone.',
+        'Paste field names: paste a list of field names, keys or labels (one per line, or with commas, straight out of a spreadsheet) onto the canvas and every field that matches is placed after the selection, in the list’s order. In the Add panel, paste the list into the search box, or use Place a list of fields, to see what matches before you place it. Names that match nothing are listed.',
+        'Slash to add: point at the gap between two fields (or the end of a section) and type /, or type / on a focused field, to search for a field, panel or new section and add it right there.',
+        'Put back as saved: right-click a field or section, or use the button at the top of its inspector, to put just that one back the way it is on the saved form: its settings, its section and its place. With autosave on, it goes back to how it was when you opened the form. Something that is not on the saved form comes off; a new section’s fields go back where they were.',
+        'Recently removed: everything taken off the form while the editor is open (Remove, the trash, a join, a deleted section) is listed at the top of the Add panel. Put back returns it where it was, with its settings. A field whose section has gone since lands after the selection.',
+        'Format painter: right-click a field and choose Copy look and rules (⌥⌘C), then select other fields and choose Paint the look (⌥⌘V). Width, required, read-only, hidden, lock rules and the rest of its look go onto them; each field keeps its own label, help text, placeholder and translations, and its input type unless the fields are of the same kind. With several fields selected, right-click one of them to give the others its look in one go.'
       ]
     },
     {
@@ -251,7 +298,8 @@ export const layoutEditor: DocSection = {
         'Stick to the top (a section’s inspector) keeps that section, such as totals or status, at the top of the form while people scroll the rest. A form has one sticky section: turning it on for one turns it off for the other. It does not stick on phone widths, nor on the canvas, where it is tagged “Sticks to the top”.',
         'When nothing is filled (a section’s inspector) is the text the read view and the PDF show for a section none of whose fields has a value, such as “No shipping details yet”, instead of a list of dashes.',
         'Rows of fields side by side print the same way everywhere: one label on the record page, and on the read view and the PDF their values on one line, joined by a dot.',
-        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.'
+        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.',
+        'Even out a row: when the selected field shares a row with fields of other widths, Even out this row (under Width in its inspector, or in the Arrange menu) gives every field in the row the same width, filling it: two fields ½ each, three ⅓, four ¼. With several fields selected, every row they touch evens out. Hidden and folded fields take no room; a row of fields side by side under one label evens out its members. It is one Undo step, and no other row moves.'
       ]
     },
     { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
@@ -267,6 +315,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "Download as a sheet writes every label, help text and placeholder on the form, with your unsaved edits, to Excel. Edit the amber columns and upload the file back: the editor lists every difference with a tick box, and Apply changes the ticked ones as one Undo step. Clearing a cell removes the text this form set, so the field's own text shows again. Rows for fields or sections that were removed are left out."
+    },
+    {
+      type: 'p',
+      text: 'Layout file (Outputs): Download as YAML writes the saved form — its settings, every section, step, tab and slot card in page order, and each field with only the settings that differ from a new placement — as a text file to keep and review as code. Import a layout file reads one back into the form you have open: the editor shows what it would change (added, moved, removed and changed, form settings, and anything it could not keep: a parent form, widget or name that does not exist here, fields the collection does not have), and Apply to the draft makes every change as one Undo step. Nothing is written until you Save, through the same save as any edit. A field placed once in the file and once on the form but in another section moves (its history stays). Whether a form is active and its place in the order are never in the file; a name or link name another form here already uses is kept as it is. A file from another collection, or for another kind of layout, is refused with the reasons.'
     },
     {
       type: 'p',
@@ -359,6 +411,15 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Form settings → Tools → Freeze edits stops changes to a layout until a date (a go-live or an audit), with a reason people read. Until that day the server refuses every save, restore, settings change and delete of the layout with the reason (400 `LAYOUT_FROZEN`). An administrator can still save by giving an override note: the editor asks for it at Save, the note becomes the version note in History and an activity entry (`layout-freeze-override`). Lifting the freeze early is a save too, so it asks for a note. The freeze lifts by itself on its date; copies of a frozen layout are not frozen.'
     },
+    {
+      type: 'h3',
+      id: 'layout-editor-collapsed-summary',
+      text: 'Collapsed sections show key values'
+    },
+    {
+      type: 'p',
+      text: 'Select a section and, under When collapsed → Show these values in the heading, tick the fields whose values should show while it is closed — two or three read best. The record form shows them in a line under the closed heading; the summary view shows the first three in the heading itself (a grid or link list shows its row or item count). Leave out empty values drops blank ones. Only fields placed in the section can be picked.'
+    },
     { type: 'h3', id: 'layout-editor-sections-on-open', text: 'Sections that load when opened' },
     {
       type: 'p',
@@ -420,6 +481,8 @@ export const layoutEditor: DocSection = {
         'Workflow state: pick a state of a pipeline bound to the collection and the form shows it as if the record were there — the fields that state locks, and what each move out of it needs (tagged Needed to move on) — without finding a record in that state.',
         'What if: pick a field a step’s "Only when" condition reads, then one of the values the condition tests, Empty, or any value. The canvas lays it over the record and tags the steps that appear (Appears) or disappear (Hides, seen with Show hidden).',
         'Device: Desktop, Tablet (768 px) or Phone (390 px). The form measures its own width, so columns wrap exactly as on that screen.',
+        'Device → All: desktop (1024 px), tablet and phone side by side, each a working canvas: select on any of them; drag on the desktop one and the others follow. Use Tools → Fit to screen to see all three at once. With two roles side by side, each role shows at full width instead.',
+        'Sample record: under the record search, Use a sample record fills the form with made-up values built from each field’s type, its choices and its name (an email field gets an address, a date field a date near today); a picker gets one of the related records you can read. It is offered first when the collection has no records yet. New sample makes another; × goes back. Nothing is saved or sent: the values live in the preview only. Ids, system and computed columns, lists and files are left empty.',
         'Who sees each field: every field is tinted by how many roles see it (every role, most, some, few, none — legend in the strip) with a chip such as 3/5 roles; click the chip for the roles that can edit it, only read it, or never see it. It combines each role’s permissions with this form’s section and lock rules; administrators see everything and are not counted.'
       ]
     },
@@ -513,8 +576,13 @@ export const layoutEditor: DocSection = {
         'A picker that narrows its choices by a field that is not on the form.',
         'Empty sections, steps and tabs holders.',
         'Steps and sections no record reaches (their show-when rules can never hold, or contradict the record rules of the form, or every role but administrators is hidden from them), and fields that sit only there or are hidden everywhere they are placed.',
-        'Accessibility: fields without a label, a required field whose label (and so its required mark) is hidden, a half-width field that sits after a wider one although it would fit beside the field above it, and a chosen colour that reads below 3:1 on the light or dark background.'
+        'Accessibility: fields without a label, a required field whose label (and so its required mark) is hidden, a half-width field that sits after a wider one although it would fit beside the field above it, and a chosen colour that reads below 3:1 on the light or dark background.',
+        'Label style (tips): a label or section title not in sentence case (Change to … is one click; Change all N labels to sentence case fixes every one in one step), a label longer than the house limit, an abbreviation such as Qty or Dept (with the plain word as the fix), help text that only repeats the label (removed in one click when this form set it), and two fields showing the same label (a warning).'
       ]
+    },
+    {
+      type: 'p',
+      text: 'Label style is house style for every form on the instance. Turn off this check on a finding turns that check off for everyone; the Label style block at the end of the panel turns each check on or off, sets the longest label (40 characters unless you set one), adds abbreviations ("PM = project manager", one per line) and lists words that keep their capital (names such as Fusion; days and months always do). A fix on a field label sets this form\'s label; the field\'s own label in the data model stays. Style tips together cost a form at most 5 health points.'
     },
     {
       type: 'p',
@@ -744,6 +812,11 @@ export const layoutEditor: DocSection = {
         'Rarely opened sections: the form also counts, per visit, each section it showed and whether the person opened it (expanded it, clicked or typed in it). A section that starts open and was opened on 10% of visits or fewer (at least 20 visits) is suggested to start collapsed; the first section of the form or of a step is never suggested, nor any section on an accordion form. Start them collapsed is one change, which Undo reverses.'
       ]
     },
+    { type: 'h3', id: 'layout-editor-refusals', text: 'Where saves fail' },
+    {
+      type: 'p',
+      text: 'The record form also counts each save it refuses and the fields the refusal named: a required field left empty, or a value a rule turned down (a format, a range, a limit, or a refusal from the server that names the field). Show where saves fail (Tools, or the Usage tab) tints each field on the canvas by the share of save attempts refused on it over the last 30 days: amber from 5%, red from 20%, with a chip such as "12% refused" whose tip splits it into required and other rules. Fields with refusals below 5% get the chip only, and nothing is tinted until the form has 5 save attempts. The Usage tab lists the fields saves fail on most. Like the rest of usage, only counts are stored, and records saved outside the form (imports, the API) do not count.'
+    },
     { type: 'h3', id: 'layout-editor-ab-test', text: 'A/B test two versions of a form' },
     {
       type: 'p',
@@ -858,6 +931,17 @@ GET  /api/collection-layouts/explain?collection=orders&item=42[&role_id=<uuid>][
      → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
 GET  /api/collection-layouts/lint-context?collection=orders
      → { data: { fields, roles, requirements } }   // what the Problems panel reads
+GET  /api/collection-layouts/lint-style
+     → { data: { off: [rule], max_label_length: number | null, jargon: [{ term, say }], allow_words } }
+PATCH /api/collection-layouts/lint-style  { off?, max_label_length?, jargon?, allow_words? }
+     // label house style, per instance; style rules: label-sentence-case, label-too-long,
+     // label-jargon, help-repeats-label, label-duplicate (400 names every bad field)
+GET  /api/collection-layouts/:id/file[?download=1]
+     → { data: { filename, text, rev } }   // the saved layout as YAML; download=1 answers the file
+POST /api/collection-layouts/:id/file/parse  { text }
+     → { data: { target: { layout, groups, placements }, warnings, source } }
+     // read only; 400 { error, problems: [...] } for a file that cannot be used.
+     // The editor plans ops from its draft to target and saves them through :id/ops
 GET  /api/collection-layouts/health?collection=orders
      → { data: { rows: [{ layout_id, score, costs, counts, unreachable_fields }] } }
 GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]
@@ -867,6 +951,20 @@ GET  /api/collection-layouts/field-access?collection=orders
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
 GET  /api/collection-layouts/:id/dependencies
      → { layout, groups, nodes, extensions }   // what relies on the layout
+GET  /api/collection-layouts/:id/lint
+     → { data: { layout, score, costs, counts, findings: [{ id, rule, severity, where, target,
+                 message, fix? }] } }   // the Problems panel's checks on the SAVED form (MCP lint_layout)
+
+# Form state and form image (anyone signed in, as themselves; role: administrators only)
+POST /api/collection-layouts/form-state  { collection, item?, layout_id?, values?, role?, viewport? }
+     → { data: { layout, as, can_update, derived, groups, fields: [{ field, label, section, visible,
+                 required, locked, missing?, hidden_by?, locked_by?, why? }], summary } }
+     // the form the record opens with (record rules read the values too), and what it
+     // shows, requires and locks; derived = what its field rules would fill in (MCP form_state)
+POST /api/collection-layouts/render-form  { …same, theme?: 'light'|'dark', show_hidden? }
+     → { data: { mime: 'image/png', base64, bytes, width, layout, as, summary } }
+     // a PNG of that form; values only where the caller (and the role) may read them.
+     // Chromium runs locally or on the render server (RENDER_URL); 503 RENDER_UNAVAILABLE otherwise
 
 # Create, read and change a layout (administrators)
 POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true | string[],
@@ -1003,7 +1101,9 @@ POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, s
 GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
 GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
 GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
-     // beacon events may also carry sections: { shown: [group key], opened: [group key] } and save_ms;
+GET  /api/layout-usage/:layoutId/refusals?days=30 → { data: { saves, refused, attempts, fields: [{ field, required, invalid, refusals, rate }] } }   (admin)
+     // beacon events may also carry sections: { shown: [group key], opened: [group key] }, save_ms
+     // and refused: { tries, fields: { <field>: { required, invalid } } };
      // friction answers sections: [{ key, shown, opened }]
 
 # A/B test (administrators)

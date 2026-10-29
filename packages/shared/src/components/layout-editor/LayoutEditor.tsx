@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   ListOrdered,
   Lock,
+  OctagonAlert,
   Percent,
   Plus,
   Table2,
@@ -73,6 +74,7 @@ import {
 } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
+import { useTrashWarning } from './dnd/trash-links'
 import { stagedTip, useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
@@ -82,7 +84,7 @@ import { TabOrderBar, useTabOrderEditor } from './entry/tab-order'
 import { previewThemeClass, ThemePreviewTool, useAppIsDark } from './entry/theme-preview'
 import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
 import { useDriverHover } from './explain/driver-hover'
-import type { OpenSource } from './explain/field-sources'
+import { fieldLabel, type OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
@@ -97,6 +99,7 @@ import { FormSettings, Inspector } from './inspector-slot'
 import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
+import { useLabelStyleControls } from './lint/LabelStyle'
 import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
 import { FieldStateMatrix } from './matrix/FieldStateMatrix'
@@ -104,7 +107,8 @@ import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
 import { FindTool, OutlineTool, ShortcutsTool, ViewTools } from './nav/NavTools'
 import { OutlinePanel } from './nav/OutlinePanel'
 import { useEditorNav } from './nav/useEditorNav'
-import { COMPACT_ZOOM } from './nav/view-prefs'
+import { effectiveZoom, fitZoom } from './nav/view-prefs'
+import { ZoomChip } from './nav/ZoomControls'
 import { OutputsButton } from './outputs/OutputsButton'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
@@ -117,11 +121,14 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
+import { PlaceToolsProvider, usePlaceTools } from './PlaceTools'
 import { amberStrip, segOption, segTrack } from './panel-style'
 import { usePersonalDefaultMarks } from './personal-default-marks'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
+import { previewNaturalWidth } from './preview/preview-model'
+import { useRemovalLog } from './removed-log'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import {
   LinkedSectionsProvider,
@@ -129,6 +136,7 @@ import {
   useLinkedSections
 } from './reuse/linked-sections'
 import { useRailCopy } from './reuse/useRailCopy'
+import { SlashInsert } from './SlashInsert'
 import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
@@ -138,6 +146,7 @@ import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
+import { useRefusalLens } from './usage/refusal-lens'
 import { UsagePanel } from './usage/UsagePanel'
 import {
   usageTodayText,
@@ -707,8 +716,11 @@ export function LayoutEditor({
   const onSaved = useSavedRefresh(collection)
   // Record / Stop (#2663) sees every apply; the draft saves as before.
   const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
-  // #3194: linked library sections change only in the library; the guard says so.
-  const { draft, value: linked } = useLinkedSections(currentId, recorded)
+  // Recently removed (#3191): every apply is read for what it takes off the form.
+  const { draft: logged, removed } = useRemovalLog(recorded, currentId)
+  // #3194: linked library sections change only in the library; the guard says so
+  // (outermost, so a refused change never reaches the removal log).
+  const { draft, value: linked } = useLinkedSections(currentId, logged)
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
@@ -732,6 +744,8 @@ export function LayoutEditor({
         : undefined,
     [showFill, fill]
   )
+  // Where saves fail (#3185), the error-rate lens: off unless turned on (Tools or the Usage tab).
+  const refusalLens = useRefusalLens(currentId)
   const [preview, setPreview] = useState<PreviewAs>({
     record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
     roleId: null
@@ -753,6 +767,8 @@ export function LayoutEditor({
   usePretendDownScope(LAYOUT_PRETEND_SCOPE)
   const pretendOptions = useMemo(() => layoutPretendDownOptions(canvasLayout), [canvasLayout])
   const lint = useLayoutLint(collection, bundle, parent)
+  // Label house style (#3184): turn a check off from a finding, or tune it.
+  const labelStyle = useLabelStyleControls(panel === 'checks')
   // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
   const { data: savedBundle } = useLayoutBundle(currentId)
   const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
@@ -776,7 +792,11 @@ export function LayoutEditor({
   // The Rules view (#2632 #2640 #2633): rule tags and default ghosts on the canvas.
   const [rulesOn, setRulesOn] = useRulesView()
   const explain = useCanvasExplain(collection, canvasLayout, rulesOn)
-  const ghosts = useDefaultGhosts(collection, canvasLayout, rulesOn && !preview.record)
+  const ghosts = useDefaultGhosts(
+    collection,
+    canvasLayout,
+    rulesOn && !preview.record && !preview.sample
+  )
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
@@ -956,6 +976,17 @@ export function LayoutEditor({
     [bundle, onSelect]
   )
   useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
+  // #3190: the trash says what depends on a field before it leaves the form.
+  const trashFieldLabel = useCallback(
+    (f: string) => fieldLabel(f, explain.describe),
+    [explain.describe]
+  )
+  const warnTrash = useTrashWarning(collection, explain.deps, trashFieldLabel, explain.groupLabel)
+  // #3204: the trash's Undo chip runs the draft's undo while the removal is the last step.
+  const dndUndo = useMemo(
+    () => ({ run: draft.undo, label: draft.undoLabel }),
+    [draft.undo, draft.undoLabel]
+  )
 
   // Who else is here and what they selected (#2651).
   const peers = useLayoutPresence(currentId, selected ? targetKey(selected) : null)
@@ -1053,7 +1084,7 @@ export function LayoutEditor({
   const onAskCite = useCallback(
     (c: AskCite) => {
       if (c.kind === 'record')
-        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` } }))
+        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` }, sample: null }))
       else if (c.kind === 'layout') openLayoutRef.current(c.id)
       else {
         const p = bundle?.placements.find((x) => x.field === c.field)
@@ -1087,7 +1118,39 @@ export function LayoutEditor({
     canvasShown: !(arrangeable && view === 'table')
   })
   const outlineShown = nav.outlineOpen && !!bundle && arrangeable
+  // #3188 canvas zoom: the slider times compact's own shrink; Fit divides the
+  // pane by the preview's natural width (a device frame, every device at once).
+  const canvasPaneRef = useRef<HTMLElement | null>(null)
+  const canvasZoom = effectiveZoom(nav.zoom, nav.compact)
+  const { zoom: navZoom, setZoom: setNavZoom, compact: navCompact } = nav
+  const naturalWidth = previewNaturalWidth(
+    preview.device,
+    preview.roleId && preview.compareRoleId ? 2 : 1
+  )
+  const zoomControl = useMemo(
+    () => ({
+      value: navZoom,
+      onChange: setNavZoom,
+      onFit: () =>
+        setNavZoom(fitZoom(canvasPaneRef.current?.clientWidth ?? 0, naturalWidth, navCompact))
+    }),
+    [navZoom, setNavZoom, navCompact, naturalWidth]
+  )
   const warning = host.warning ?? overview?.warning ?? null
+
+  // Copy / paste, pasted field lists, the format painter, put back as saved (#3179 #3201 #3202 #3197).
+  const placeTools = usePlaceTools({
+    bundle,
+    savedBundle: savedBundle ?? null,
+    collection,
+    layoutId: currentId,
+    layoutName,
+    fields,
+    selection,
+    apply: draft.apply,
+    onSelection: setSelection,
+    rootRef: bodyRef
+  })
 
   // Overlay mode is a modal dialog over the record page.
   const dialogProps = overlay
@@ -1195,7 +1258,8 @@ export function LayoutEditor({
                         compact: nav.compact,
                         onCompact: nav.setCompact,
                         onExpandAll: nav.expandAll,
-                        onCollapseAll: nav.collapseAll
+                        onCollapseAll: nav.collapseAll,
+                        zoom: zoomControl
                       }
                     : null
                 }
@@ -1209,6 +1273,16 @@ export function LayoutEditor({
                 checked={showFill}
                 onClick={() => setShowFill(!showFill)}
                 data={{ 'data-editor-fill-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ToolButton
+                label='Show where saves fail'
+                icon={<OctagonAlert className='h-3.5 w-3.5' />}
+                hint='Tint each field by how often a save is refused on it'
+                checked={refusalLens.on}
+                onClick={() => refusalLens.setOn(!refusalLens.on)}
+                data={{ 'data-editor-refusal-toggle': '' }}
               />
             )}
             {bundle && arrangeable && (
@@ -1397,279 +1471,296 @@ export function LayoutEditor({
       )}
       <RuleLoopsBanner explain={explain} onShow={showField} />
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
-      <LinkedSectionsProvider value={linked}>
-        <LayoutDndProvider
-          bundle={bundle}
-          apply={draft.apply}
-          onDragActive={onDragActive}
-          onDropOnLayout={copyToLayout}
-        >
-          <div className='flex min-h-0 flex-1 overflow-hidden'>
-            {/* The outline takes the left panel's place while it is open: three side
+      <LayoutDndProvider
+        bundle={bundle}
+        apply={draft.apply}
+        onDragActive={onDragActive}
+        onDropOnLayout={copyToLayout}
+        selection={selection}
+        undo={dndUndo}
+        warnTrash={warnTrash}
+      >
+        <div className='flex min-h-0 flex-1 overflow-hidden'>
+          {/* The outline takes the left panel's place while it is open: three side
             panels at once left the canvas ~330px wide at 1440. Hidden, not unmounted,
             so the Add / Usage tab and its scroll survive. */}
-            <aside
-              className={cn(
-                'flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
-                outlineShown && 'hidden'
-              )}
-            >
-              <div
-                role='tablist'
-                aria-label='Left panel'
-                className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
-              >
-                <button
-                  type='button'
-                  role='tab'
-                  aria-selected={left === 'layouts'}
-                  data-editor-tab='layouts'
-                  className={leftTab(left === 'layouts')}
-                  onClick={() => setLeft('layouts')}
-                >
-                  Forms
-                </button>
-                <button
-                  type='button'
-                  role='tab'
-                  aria-selected={left === 'add'}
-                  data-editor-tab='add'
-                  className={leftTab(left === 'add')}
-                  onClick={() => setLeft('add')}
-                  disabled={!bundle}
-                  data-tip='Add a field, section, panel or widget after the selection'
-                >
-                  <Plus className='h-3.5 w-3.5' />
-                  Add
-                </button>
-                <button
-                  type='button'
-                  role='tab'
-                  aria-selected={left === 'usage'}
-                  data-editor-tab='usage'
-                  className={leftTab(left === 'usage')}
-                  onClick={() => setLeft('usage')}
-                  disabled={!bundle}
-                  data-tip='How this form is used and where it slows people down'
-                >
-                  <BarChart3 className='h-3.5 w-3.5' />
-                  Usage
-                </button>
-              </div>
-              <div className='min-h-0 flex-1 overflow-y-auto'>
-                {left === 'add' && bundle ? (
-                  <AddPanel
-                    bundle={bundle}
-                    collection={collection}
-                    selected={selected}
-                    apply={draft.apply}
-                    onSelect={onSelect}
-                  />
-                ) : left === 'usage' && bundle ? (
-                  <UsagePanel
-                    bundle={bundle}
-                    collection={collection}
-                    fields={fields}
-                    apply={draft.apply}
-                    showFill={showFill}
-                    onShowFill={setShowFill}
-                    onOpenLayout={openLayout}
-                  />
-                ) : (
-                  <LayoutsRail
-                    collection={collection}
-                    currentId={currentId}
-                    onOpen={openLayout}
-                    settingsOpen={panel === 'settings'}
-                    onSettings={() => setPanel('settings')}
-                    dropTargets
-                  />
-                )}
-              </div>
-            </aside>
-            {outlineShown && bundle && (
-              <aside
-                data-editor-outline-panel=''
-                className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
-              >
-                <OutlinePanel
-                  bundle={bundle}
-                  nodes={nav.nodes}
-                  selection={selection}
-                  onPick={nav.selectAndReveal}
-                  onMoved={onMoved}
-                  apply={draft.apply}
-                  onClose={() => nav.setOutlineOpen(false)}
-                />
-              </aside>
+          <aside
+            className={cn(
+              'flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
+              outlineShown && 'hidden'
             )}
-            {/* A flex column so the canvas below gets the pane's height exactly: a record form
+          >
+            <div
+              role='tablist'
+              aria-label='Left panel'
+              className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
+            >
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'layouts'}
+                data-editor-tab='layouts'
+                className={leftTab(left === 'layouts')}
+                onClick={() => setLeft('layouts')}
+              >
+                Forms
+              </button>
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'add'}
+                data-editor-tab='add'
+                className={leftTab(left === 'add')}
+                onClick={() => setLeft('add')}
+                disabled={!bundle}
+                data-tip='Add a field, section, panel or widget after the selection'
+              >
+                <Plus className='h-3.5 w-3.5' />
+                Add
+              </button>
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'usage'}
+                data-editor-tab='usage'
+                className={leftTab(left === 'usage')}
+                onClick={() => setLeft('usage')}
+                disabled={!bundle}
+                data-tip='How this form is used and where it slows people down'
+              >
+                <BarChart3 className='h-3.5 w-3.5' />
+                Usage
+              </button>
+            </div>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
+              {left === 'add' && bundle ? (
+                <AddPanel
+                  bundle={bundle}
+                  collection={collection}
+                  selected={selected}
+                  apply={draft.apply}
+                  onSelect={onSelect}
+                  removed={removed.entries}
+                />
+              ) : left === 'usage' && bundle ? (
+                <UsagePanel
+                  bundle={bundle}
+                  collection={collection}
+                  fields={fields}
+                  apply={draft.apply}
+                  showFill={showFill}
+                  onShowFill={setShowFill}
+                  onOpenLayout={openLayout}
+                />
+              ) : (
+                <LayoutsRail
+                  collection={collection}
+                  currentId={currentId}
+                  onOpen={openLayout}
+                  settingsOpen={panel === 'settings'}
+                  onSettings={() => setPanel('settings')}
+                  dropTargets
+                />
+              )}
+            </div>
+          </aside>
+          {outlineShown && bundle && (
+            <aside
+              data-editor-outline-panel=''
+              className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+            >
+              <OutlinePanel
+                bundle={bundle}
+                nodes={nav.nodes}
+                selection={selection}
+                onPick={nav.selectAndReveal}
+                onMoved={onMoved}
+                apply={draft.apply}
+                onClose={() => nav.setOutlineOpen(false)}
+              />
+            </aside>
+          )}
+          {/* A flex column so the canvas below gets the pane's height exactly: a record form
               scrolls inside its own body, and anything taller (tables, matrices, a summary)
               still scrolls the pane. A min-h-full chain here let the form's body take the
               whole pane height under its header, so the pane scrolled into blank space. */}
-            <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
-              {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
-              {compareState.compare && (view === 'canvas' || !arrangeable) && (
-                <CompareBanner compare={compareState.compare} onClose={compareState.close} />
-              )}
-              {bundle && arrangeable && view === 'states' ? (
-                <FieldStateMatrix
+          <main ref={canvasPaneRef} className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
+            {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
+            {compareState.compare && (view === 'canvas' || !arrangeable) && (
+              <CompareBanner compare={compareState.compare} onClose={compareState.close} />
+            )}
+            {bundle && arrangeable && view === 'states' ? (
+              <FieldStateMatrix
+                bundle={bundle}
+                parent={parent}
+                collection={collection}
+                apply={draft.apply}
+                onSelect={onSelect}
+              />
+            ) : bundle && arrangeable && view === 'roles' ? (
+              <RoleSectionMatrix
+                bundle={bundle}
+                parent={parent}
+                apply={draft.apply}
+                onSelect={onSelect}
+              />
+            ) : bundle && arrangeable && view === 'table' ? (
+              <PlacementsTable
+                bundle={bundle}
+                collection={collection}
+                apply={draft.apply}
+                flush={draft.flush}
+                selection={selection}
+                onSelect={onSelect}
+                onSelection={setSelection}
+              />
+            ) : bundle ? (
+              <div
+                data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
+                data-canvas-zoom={arrangeable ? canvasZoom : undefined}
+                // Compact (#2627) and the zoom slider (#3188): editor-only zoom; the record
+                // page is unchanged.
+                style={arrangeable && canvasZoom !== 1 ? { zoom: canvasZoom } : undefined}
+                className={cn(
+                  'flex min-h-0 flex-1 flex-col',
+                  previewThemeClass(previewDark, appDark),
+                  previewDark && !appDark && 'bg-background text-foreground'
+                )}
+              >
+                <PreviewPanes
+                  collection={collection}
                   bundle={bundle}
                   parent={parent}
-                  collection={collection}
-                  apply={draft.apply}
-                  onSelect={onSelect}
+                  preview={preview}
+                  onPreview={setPreview}
+                  // #3196: a sample record's made-up values stand in for a real one.
+                  record={preview.sample ?? record}
+                  fields={fields}
+                  renderPane={(pane) => (
+                    <Canvas
+                      collection={collection}
+                      bundle={bundle}
+                      parent={parent}
+                      roleId={pane.roleId}
+                      stateKey={pane.stateKey}
+                      marks={withAiMarks(pane.marks)}
+                      overlay={tabOrder.overlay(refusalLens.wrap(pane.overlay))}
+                      ruleMarks={ruleMarks}
+                      ghost={ghost}
+                      deps={explain.deps}
+                      noDnd={pane.noDnd}
+                      record={pane.record}
+                      selected={selected}
+                      selection={selection}
+                      onSelect={canvasSelect}
+                      showHidden={showHidden}
+                      fold={nav.fold}
+                      reveal={nav.reveal}
+                      apply={draft.apply}
+                      whenIdle={draft.whenIdle}
+                      fillRate={fillRate}
+                      unsaved={unsavedOf}
+                      peers={peersOf}
+                      compare={compareState.compare}
+                      lastChanges={compareState.compare ? undefined : lastChanges}
+                    />
+                  )}
                 />
-              ) : bundle && arrangeable && view === 'roles' ? (
-                <RoleSectionMatrix
+              </div>
+            ) : draft.error ? (
+              <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
+            ) : (
+              <div className='flex flex-col gap-3 p-6'>
+                <Skeleton className='h-10 w-full rounded-lg' />
+                <Skeleton className='h-48 w-full rounded-lg' />
+              </div>
+            )}
+            {bundle && arrangeable && view === 'canvas' && <ZoomChip zoom={zoomControl} />}
+          </main>
+          <aside
+            data-editor-inspector=''
+            className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
+          >
+            {bundle &&
+              (panel === 'ask' ? (
+                <AskPanel
+                  layoutId={currentId}
+                  layoutName={layoutName}
+                  kind={layoutKindOf(bundle.layout)}
                   bundle={bundle}
-                  parent={parent}
-                  apply={draft.apply}
-                  onSelect={onSelect}
+                  thread={askThread}
+                  setThread={setAskThread}
+                  pending={askPending}
+                  onPendingTaken={() => setAskPending(null)}
+                  jump={jumpSetting}
+                  onCite={onAskCite}
+                  recordId={preview.record?.id ?? null}
                 />
-              ) : bundle && arrangeable && view === 'table' ? (
-                <PlacementsTable
+              ) : panel === 'checks' ? (
+                <LintPanel
+                  findings={lint.findings}
+                  health={lint.health}
+                  ready={lint.ready}
+                  onSelect={(t) => setSelection([t])}
+                  apply={draft.apply}
+                  onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                  onTurnOff={labelStyle.onTurnOff}
+                  styleSettings={labelStyle.settings}
+                />
+              ) : panel === 'settings' ? (
+                <FormSettings
                   bundle={bundle}
-                  collection={collection}
                   apply={draft.apply}
                   flush={draft.flush}
+                  collection={collection}
+                  previewRoleId={preview.roleId}
+                  onPreviewRoleChange={onPreviewRoleChange}
+                  onAskWhere={
+                    host.isAdmin
+                      ? (q) => {
+                          setAskPending(q)
+                          setPanel('ask')
+                        }
+                      : undefined
+                  }
+                />
+              ) : selection.length > 1 ? (
+                <BulkInspector
+                  bundle={bundle}
                   selection={selection}
-                  onSelect={onSelect}
+                  apply={draft.apply}
+                  collection={collection}
                   onSelection={setSelection}
                 />
-              ) : bundle ? (
-                <div
-                  data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
-                  // Compact (#2627): editor-only zoom; the record page is unchanged.
-                  style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
-                  className={cn(
-                    'flex min-h-0 flex-1 flex-col',
-                    previewThemeClass(previewDark, appDark),
-                    previewDark && !appDark && 'bg-background text-foreground'
-                  )}
-                >
-                  <PreviewPanes
-                    collection={collection}
-                    bundle={bundle}
-                    parent={parent}
-                    preview={preview}
-                    onPreview={setPreview}
-                    record={record}
-                    fields={fields}
-                    renderPane={(pane) => (
-                      <Canvas
-                        collection={collection}
-                        bundle={bundle}
-                        parent={parent}
-                        roleId={pane.roleId}
-                        stateKey={pane.stateKey}
-                        marks={withAiMarks(pane.marks)}
-                        overlay={tabOrder.overlay(pane.overlay)}
-                        ruleMarks={ruleMarks}
-                        ghost={ghost}
-                        deps={explain.deps}
-                        noDnd={pane.noDnd}
-                        record={pane.record}
-                        selected={selected}
-                        selection={selection}
-                        onSelect={canvasSelect}
-                        showHidden={showHidden}
-                        fold={nav.fold}
-                        reveal={nav.reveal}
-                        apply={draft.apply}
-                        whenIdle={draft.whenIdle}
-                        fillRate={fillRate}
-                        unsaved={unsavedOf}
-                        peers={peersOf}
-                        compare={compareState.compare}
-                        lastChanges={compareState.compare ? undefined : lastChanges}
-                      />
-                    )}
-                  />
-                </div>
-              ) : draft.error ? (
-                <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
               ) : (
-                <div className='flex flex-col gap-3 p-6'>
-                  <Skeleton className='h-10 w-full rounded-lg' />
-                  <Skeleton className='h-48 w-full rounded-lg' />
-                </div>
-              )}
-            </main>
-            <aside
-              data-editor-inspector=''
-              className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
-            >
-              {bundle &&
-                (panel === 'ask' ? (
-                  <AskPanel
-                    layoutId={currentId}
-                    layoutName={layoutName}
-                    kind={layoutKindOf(bundle.layout)}
-                    bundle={bundle}
-                    thread={askThread}
-                    setThread={setAskThread}
-                    pending={askPending}
-                    onPendingTaken={() => setAskPending(null)}
-                    jump={jumpSetting}
-                    onCite={onAskCite}
-                    recordId={preview.record?.id ?? null}
-                  />
-                ) : panel === 'checks' ? (
-                  <LintPanel
-                    findings={lint.findings}
-                    health={lint.health}
-                    ready={lint.ready}
-                    onSelect={(t) => setSelection([t])}
-                    apply={draft.apply}
-                    onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
-                  />
-                ) : panel === 'settings' ? (
-                  <FormSettings
-                    bundle={bundle}
-                    apply={draft.apply}
-                    flush={draft.flush}
-                    collection={collection}
-                    previewRoleId={preview.roleId}
-                    onPreviewRoleChange={onPreviewRoleChange}
-                    onAskWhere={
-                      host.isAdmin
-                        ? (q) => {
-                            setAskPending(q)
-                            setPanel('ask')
-                          }
-                        : undefined
-                    }
-                  />
-                ) : selection.length > 1 ? (
-                  <BulkInspector
-                    bundle={bundle}
-                    selection={selection}
-                    apply={draft.apply}
-                    collection={collection}
-                    onSelection={setSelection}
-                  />
-                ) : (
-                  <Inspector
-                    bundle={bundle}
-                    target={selected}
-                    apply={draft.apply}
-                    flush={draft.flush}
-                    collection={collection}
-                    openLayout={openLayout}
-                    onSelect={nav.selectAndReveal}
-                  />
-                ))}
-            </aside>
-          </div>
-        </LayoutDndProvider>
-      </LinkedSectionsProvider>
+                <Inspector
+                  bundle={bundle}
+                  target={selected}
+                  apply={draft.apply}
+                  flush={draft.flush}
+                  collection={collection}
+                  openLayout={openLayout}
+                  onSelect={nav.selectAndReveal}
+                />
+              ))}
+          </aside>
+        </div>
+      </LayoutDndProvider>
       <StructureActions
         bundle={bundle}
         selection={selection}
         apply={draft.apply}
         onSelection={setSelection}
         rootRef={bodyRef}
+        extraItems={placeTools.menuItems}
+      />
+      <SlashInsert
+        bundle={bundle}
+        fields={fields}
+        apply={draft.apply}
+        onSelect={onSelect}
+        rootRef={bodyRef}
+        enabled={!(arrangeable && view !== 'canvas')}
       />
       <UnsavedConfirm
         request={leaveAsk}
@@ -1717,8 +1808,14 @@ export function LayoutEditor({
     </div>
   )
 
+  // #3194: the linked sections' state reaches the canvas, inspector and Add panel.
+  const shown = <LinkedSectionsProvider value={linked}>{body}</LinkedSectionsProvider>
   if (!overlay)
-    return <EntryEditorContext.Provider value={entryApi}>{body}</EntryEditorContext.Provider>
+    return (
+      <EntryEditorContext.Provider value={entryApi}>
+        <PlaceToolsProvider value={placeTools}>{shown}</PlaceToolsProvider>
+      </EntryEditorContext.Provider>
+    )
   // Fixed under the page outlet would be offset by its transform: portal out —
   // into the hosting modal when there is one (a body portal would sit under
   // its pointer/scroll lock), else body.
@@ -1727,7 +1824,9 @@ export function LayoutEditor({
     <>
       <span ref={setMarker} hidden data-layout-editor-marker='' />
       <EntryEditorContext.Provider value={entryApi}>
-        {container && createPortal(body, container)}
+        <PlaceToolsProvider value={placeTools}>
+          {container && createPortal(shown, container)}
+        </PlaceToolsProvider>
       </EntryEditorContext.Provider>
     </>
   )

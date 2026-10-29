@@ -1,6 +1,10 @@
 // A group's `visible_when` rules ([{field, op, value}], all must hold): the
 // one evaluator the record form (conditional steps, #139) and the layout
 // editor's "what if" preview share, so the preview cannot drift from the form.
+//
+// TWIN FILE: packages/shared/src/lib/visible-when.ts and
+// api/src/services/visible-when.ts must stay byte-identical (the API's form
+// state, #3218, judges sections with it; an API test compares the two files).
 
 export interface VisibleWhenRule {
   field?: string

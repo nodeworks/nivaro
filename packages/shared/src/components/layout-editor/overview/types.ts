@@ -19,6 +19,8 @@ export type OverviewReasonKind =
   /** #2614: an A/B test version, standing in for its original for half of one role. */
   | 'ab'
   | 'phone'
+  /** #3183: a tablet version, standing in for its desktop form on tablet-width screens. */
+  | 'tablet'
 
 export interface OverviewReason {
   kind: OverviewReasonKind
@@ -29,6 +31,9 @@ export interface OverviewReason {
   /** kind 'phone' (#2715): the desktop form this phone version stands in for. */
   phone_of?: number
   phone_of_name?: string
+  /** kind 'tablet' (#3183): the desktop form this tablet version stands in for. */
+  tablet_of?: number
+  tablet_of_name?: string
   desktop_kind?: OverviewReasonKind
 }
 
@@ -71,6 +76,9 @@ export interface OverviewRow {
   /** #2715: this form's phone version / the form this one is the phone version of. */
   phone_version?: { layout_id: number; name: string } | null
   phone_of?: number | null
+  /** #3183: this form's tablet version / the form this one is the tablet version of. */
+  tablet_version?: { layout_id: number; name: string } | null
+  tablet_of?: number | null
   /** #2717: edits refused until this day. */
   frozen?: { until: string; reason: string } | null
 }
@@ -84,7 +92,7 @@ export interface ExplainResponse {
   layout_id: number | null
   reason: OverviewReason | null
   checked: Array<{ layout_id: number; matched: boolean; why: string }>
-  /** The day and screen the answer is for (#2714 #2715). */
+  /** The day and screen the answer is for (#2714 #2715 #3183). */
   at?: string | null
-  viewport?: 'phone' | null
+  viewport?: 'phone' | 'tablet' | null
 }

@@ -64,6 +64,13 @@ interface LayoutGroup {
    *  (lib/visible-when.ts) and "hide this section while everything in it is empty". */
   visible_when?: string | null
   hide_when_empty?: boolean | number | null
+  /** #3195: values a collapsed section shows in its heading (the edit form's summary strip). */
+  summary_fields?:
+    | string
+    | string[]
+    | Array<string | { field?: string; label?: string | null }>
+    | null
+  summary_hide_empty?: boolean | number | null
 }
 interface LayoutAssignment {
   field: string
@@ -117,6 +124,36 @@ const parseOverrides = (o: LayoutAssignment['overrides']): Record<string, unknow
   } catch {
     return {}
   }
+}
+
+/** #3195: how many values a collapsed heading shows before it would crowd the title. */
+export const COLLAPSED_SUMMARY_MAX = 3
+
+/** A group's summary_fields (JSON text or a list of names / {field, label}) as entries. */
+export function collapsedSummaryEntries(
+  raw: LayoutGroup['summary_fields']
+): Array<{ field: string; label: string | null }> {
+  let v: unknown = raw
+  if (typeof v === 'string') {
+    try {
+      v = JSON.parse(v)
+    } catch {
+      v = v ? (v as string).split(',').map((x) => x.trim()) : []
+    }
+  }
+  if (!Array.isArray(v)) return []
+  const out: Array<{ field: string; label: string | null }> = []
+  for (const e of v) {
+    if (typeof e === 'string' && e) out.push({ field: e, label: null })
+    else if (e && typeof e === 'object' && typeof (e as { field?: unknown }).field === 'string') {
+      const label = (e as { label?: unknown }).label
+      out.push({
+        field: (e as { field: string }).field,
+        label: typeof label === 'string' && label.trim() ? label.trim() : null
+      })
+    }
+  }
+  return out.filter((e) => !e.field.startsWith('__'))
 }
 
 const fmtDate = (v: unknown) => {
@@ -1652,6 +1689,23 @@ function RecordReadViewBody({
       items.every((a) => (isGrid(a) || isM2M(a) ? relCount(a) === 0 : isBlank(record[a.field])))
     // #2697: fields side by side under one label read as one fact.
     const scalarUnits = planFieldGrid(scalars, { rows: structure.rows }).units
+    // #3195: the values a collapsed section shows in its heading — the section's own
+    // fields only, in the order the layout lists them, at most three.
+    const collapsedSummary = g.is_collapsed
+      ? collapsedSummaryEntries(g.summary_fields)
+          .map((e) => {
+            const a = items.find((x) => x.field === e.field)
+            return a ? { a, label: e.label || labelFor(a) } : null
+          })
+          .filter((x): x is { a: LayoutAssignment; label: string } => !!x)
+          .filter(
+            ({ a }) =>
+              !g.summary_hide_empty ||
+              !record ||
+              (isGrid(a) || isM2M(a) ? relCountOf(a) !== 0 : !isBlank(record[a.field]))
+          )
+          .slice(0, COLLAPSED_SUMMARY_MAX)
+      : []
     // Board width is CONFIGURATION (group.read_width, Table Editor), never a
     // function of what loaded. Auto = half for a short fact list, full when
     // the section holds a grid, a widget, a live slot or many fields.
@@ -1783,6 +1837,7 @@ function RecordReadViewBody({
           { kind: 'group', key: g.key },
           <>
             <h3
+              data-read-head=''
               className={`group/rs relative flex items-center justify-between gap-2 px-5 py-2.5 text-[12.5px] font-semibold text-slate-700 dark:text-slate-200 ${
                 isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
               }`}
@@ -1791,14 +1846,49 @@ function RecordReadViewBody({
               card's right edge like every other section's, and the toggle's hit area
               (after:inset-0) still covers the whole heading, chevron included. */}
               {g.is_collapsed ? (
-                <button
-                  type='button'
-                  onClick={() => toggleOpen(g.key)}
-                  aria-expanded={isOpen(g)}
-                  className='min-w-0 flex-1 text-left after:absolute after:inset-0 group-hover/rs:text-slate-900 dark:group-hover/rs:text-white'
-                >
-                  {g.label}
-                </button>
+                <>
+                  <button
+                    type='button'
+                    onClick={() => toggleOpen(g.key)}
+                    aria-expanded={isOpen(g)}
+                    className={`min-w-0 text-left after:absolute after:inset-0 group-hover/rs:text-slate-900 dark:group-hover/rs:text-white ${
+                      collapsedSummary.length > 0 && !isOpen(g) ? 'shrink-0' : 'flex-1'
+                    }`}
+                  >
+                    {g.label}
+                  </button>
+                  {!isOpen(g) && collapsedSummary.length > 0 && (
+                    // #3195: two or three values while the section is closed. Not
+                    // interactive: the heading's toggle covers the whole row.
+                    <span
+                      data-read-collapsed-summary={g.key}
+                      className='pointer-events-none flex min-w-0 flex-1 items-baseline gap-x-3 overflow-hidden whitespace-nowrap text-[12px] font-normal'
+                    >
+                      {collapsedSummary.map(({ a, label }) => (
+                        <span key={a.field} className='flex min-w-0 shrink items-baseline gap-1'>
+                          <span className='shrink-0 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500'>
+                            {label}
+                          </span>
+                          <span className='min-w-0 truncate font-medium text-slate-700 dark:text-slate-300'>
+                            {!record ? (
+                              '…'
+                            ) : isGrid(a) || isM2M(a) ? (
+                              relCountOf(a) == null ? (
+                                '…'
+                              ) : (
+                                `${relCountOf(a)} ${isGrid(a) ? (relCountOf(a) === 1 ? 'row' : 'rows') : relCountOf(a) === 1 ? 'item' : 'items'}`
+                              )
+                            ) : isBlank(record[a.field]) ? (
+                              <span className='text-slate-300 dark:text-slate-600'>—</span>
+                            ) : (
+                              renderValue(a)
+                            )}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                </>
               ) : (
                 <span className='min-w-0 flex-1'>{g.label}</span>
               )}
@@ -1826,7 +1916,7 @@ function RecordReadViewBody({
             report, or an "Invoice Approvals" card holding only a review
             widget could never say it has content and hide_empty would drop
             it for good. */}
-            <div className='px-5 pb-5 pt-4' hidden={!isOpen(g)}>
+            <div data-read-body='' className='px-5 pb-5 pt-4' hidden={!isOpen(g)}>
               {nothingFilled && (
                 <p
                   data-read-empty={g.key}

@@ -89,17 +89,37 @@ describe('ChatPanel Online tab person row', () => {
     expect(html).toContain('break-words')
   })
 
-  it('shows no page line when the person has no current page', () => {
+  it('says "Tab in background" when an online person has no current page yet', () => {
     const html = render({
       rows: [{ ...ZONED, page: null, current_path: null }],
       users: [ZONED_USER]
     })
     expect(html).toContain('data-chat-online-meta')
-    expect(html).not.toContain('data-chat-online-page')
+    expect(html).toContain('data-chat-online-page="background"')
+    expect(html).toContain('Tab in background')
+  })
+
+  it('an away person gets no background line', () => {
+    const html = render({
+      rows: [{ ...ZONED, page: null, current_path: null, away: true }],
+      users: [ZONED_USER]
+    })
+    expect(html).not.toContain('Tab in background')
+  })
+
+  it('with only the page part on and no page, the background line stands in for "Online"', () => {
+    const html = render({
+      rows: [{ ...ZONED, role_name: null, scopes: [], page: null, current_path: null }],
+      users: [{ ...ZONED_USER, role_name: null }]
+    })
+    expect(html).not.toContain('data-chat-online-meta')
+    expect(html).toContain('Tab in background')
+    expect(html).not.toContain('>Online<')
   })
 
   it('falls back to "Online" when no configured part renders', () => {
     const html = render({
+      fields: ['role', 'scopes'],
       rows: [{ ...ZONED, role_name: null, scopes: [], page: null, current_path: null }],
       users: [{ ...ZONED_USER, role_name: null }]
     })

@@ -21,7 +21,7 @@ import {
   judgeMediaWorker,
   readMediaWorker
 } from '../services/media-handoff.js'
-import { hasLocalChromium, htmlToPdfLocal } from '../services/pdf-layout.js'
+import { hasLocalChromium, htmlToPdfLocal, htmlToPngLocal } from '../services/pdf-layout.js'
 import { pdfPageImagesLocal } from '../services/pdf-pages.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
@@ -48,6 +48,7 @@ import { NIVARO_VERSION } from '../version.js'
  *
  *   GET  /api/internal/render/health        → { ok, chromium, ffmpeg, version }
  *   POST /api/internal/render/pdf           → application/pdf ({ html, format, landscape, margin })
+ *   POST /api/internal/render/png           → image/png ({ html, width, max_height, scale }) — #3216
  *   POST /api/internal/render/pdf-pages     → { pages: [base64 JPEG], total } (body: the PDF;
  *                                              ?max_pages=&width=) — #3186 paper forms
  *   POST /api/internal/render/file/:op      → JSON (probe-*) or the output file
@@ -339,6 +340,40 @@ export async function internalRenderRoutes(app: FastifyInstance) {
           allowOrigins: callerOrigins(b.allow_origins)
         })
         return reply.header('content-type', 'application/pdf').send(pdf)
+      } finally {
+        release()
+      }
+    }
+  )
+
+  // A page as a PNG (#3216 form images). Shares the PDF slots: one Chromium.
+  app.post<{
+    Body: {
+      html?: unknown
+      width?: unknown
+      max_height?: unknown
+      scale?: unknown
+      allow_origins?: unknown
+    }
+  }>(
+    '/internal/render/png',
+    { bodyLimit: RENDER_PDF_MAX_BYTES + 64 * 1024, compress: false },
+    async (req, reply) => {
+      if (!(await hasLocalChromium()))
+        return refuse(reply, 503, 'RENDER_UNAVAILABLE', 'This render server has no Chromium')
+      const b = req.body ?? {}
+      if (typeof b.html !== 'string' || !b.html)
+        return refuse(reply, 400, 'RENDER_BAD_REQUEST', 'html is required')
+      const release = await pdfSlots.acquire()
+      if (!release) return busy(reply)
+      try {
+        const png = await htmlToPngLocal(b.html, {
+          width: Number(b.width) || undefined,
+          maxHeight: Number(b.max_height) || undefined,
+          scale: Number(b.scale) || undefined,
+          allowOrigins: callerOrigins(b.allow_origins)
+        })
+        return reply.header('content-type', 'image/png').send(png)
       } finally {
         release()
       }

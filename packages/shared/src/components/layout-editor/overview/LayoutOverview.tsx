@@ -803,6 +803,12 @@ function explainWords(
         { text: reason.phone_of_name ?? 'its form', strong: true },
         { text: ' opens' }
       ]
+    case 'tablet':
+      return [
+        { text: 'on a tablet, the tablet version of ' },
+        { text: reason.tablet_of_name ?? 'its form', strong: true },
+        { text: ' opens' }
+      ]
     default:
       return reason.type_use ? [{ text: reason.type_use }] : []
   }
@@ -837,8 +843,11 @@ function ExplainStrip({
           {result.roleName && (
             <span className='text-slate-500 dark:text-muted-foreground'> as {result.roleName}</span>
           )}
-          {result.viewport === 'phone' && (
-            <span className='text-slate-500 dark:text-muted-foreground'> on a phone</span>
+          {(result.viewport === 'phone' || result.viewport === 'tablet') && (
+            <span className='text-slate-500 dark:text-muted-foreground'>
+              {' '}
+              on a {result.viewport}
+            </span>
           )}
           {result.at && result.at !== localDay() && (
             <span className='text-slate-500 dark:text-muted-foreground'>

@@ -52,6 +52,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { changeSetsRoutes } from './change-sets.js'
+import { changesRoutes } from './changes.js'
 import { chaosRoutes } from './chaos.js'
 import { chaosFredisRoutes } from './chaos-fredis.js'
 import { chaosGamedayRoutes } from './chaos-gameday.js'
@@ -120,6 +121,7 @@ import { filesRoutes } from './files.js'
 import { findReplaceRoutes } from './find-replace.js'
 import { flowRegistryRoutes } from './flow-registry.js'
 import { flowsRoutes, webhookFlowRoute } from './flows.js'
+import { formToolsRoutes } from './form-tools.js'
 import { geocodeRoutes } from './geocode.js'
 import { geocodeBackfillRoutes } from './geocode-backfill.js'
 import { geocodeSuggestRoutes } from './geocode-suggest.js'
@@ -169,6 +171,9 @@ import { mailTypeRoutes } from './mail-types.js'
 import { mcpRoutes } from './mcp.js'
 import { mcpConnectionRoutes } from './mcp-connections.js'
 import { mcpConsoleRoutes } from './mcp-console.js'
+import { mcpContractTestRoutes } from './mcp-contract-tests.js'
+import { mcpScopeRoutes } from './mcp-scopes.js'
+import { mcpSuggestionRoutes } from './mcp-suggestions.js'
 import { mcpToolRoutes } from './mcp-tools.js'
 import { meNotificationRoutes } from './me-notifications.js'
 import { mergeRoutes } from './merge.js'
@@ -575,6 +580,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiMemoryAdminRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
+  await app.register(changesRoutes, { prefix: '/changes' })
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })
   await app.register(helpVideosRoutes, { prefix: '/help-videos' })
@@ -685,6 +691,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(layoutDependencyRoutes, { prefix: '/collection-layouts' })
   // #2596: GET /collection-layouts/why (static path beside the layouts routes' /:id).
   await app.register(layoutWhyRoutes, { prefix: '/collection-layouts' })
+  // #3216–#3218: form state, form image and stored-layout lint (the MCP form tools).
+  await app.register(formToolsRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutCollabRoutes, { prefix: '/layout-collab' })
   await app.register(formPreviewPublicRoutes, { prefix: '/form-preview' })
   await app.register(layoutInspectRoutes, { prefix: '/layout-inspect' })
@@ -771,6 +779,11 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(mcpToolRoutes, { prefix: '/mcp-tools' })
   await app.register(oauthConnectionRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
+  // #3205 / #3214 connection limits + tool kits, #3206 composite tool suggestions,
+  // #3215 tool contract tests.
+  await app.register(mcpScopeRoutes, { prefix: '/mcp-connections' })
+  await app.register(mcpSuggestionRoutes, { prefix: '/mcp-tools' })
+  await app.register(mcpContractTestRoutes, { prefix: '/mcp-console/tests' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

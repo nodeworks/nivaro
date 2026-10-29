@@ -25,7 +25,8 @@ const chipCls =
 const DEVICES: Array<{ value: PreviewDevice; label: string; tip: string }> = [
   { value: 'desktop', label: 'Desktop', tip: 'The full canvas width' },
   { value: 'tablet', label: 'Tablet', tip: '768 px wide' },
-  { value: 'phone', label: 'Phone', tip: '390 px wide' }
+  { value: 'phone', label: 'Phone', tip: '390 px wide' },
+  { value: 'all', label: 'All', tip: 'Desktop, tablet and phone side by side' }
 ]
 
 export function fieldName(fields: DescribeField[], field: string): string {

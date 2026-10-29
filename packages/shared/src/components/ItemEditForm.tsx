@@ -167,6 +167,14 @@ import {
   type RemoteFieldChange
 } from './item-edit/FieldAffordances'
 import { FieldRow } from './item-edit/FieldRow'
+import {
+  buildTourSteps,
+  FormTour,
+  FormTourButton,
+  sectionKeysOnScreen,
+  useFormTourSeen
+} from './item-edit/FormTour'
+import { formDensityOf, useFormDensityCss } from './item-edit/form-density'
 import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
   GroupSection,
@@ -196,6 +204,7 @@ import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { deferredSections } from './item-edit/lazy-sections'
 import { checkNumberEntry, NUMBER_FIELD_TYPES, ruleValueFor } from './item-edit/line-qty'
+import { liveRecordWrite } from './item-edit/live-record-marks'
 import {
   computeLiveRollup,
   isDerivedForRecord,
@@ -242,7 +251,6 @@ import {
   invalidateRecordNotes,
   RecordInsightsButton
 } from './item-edit/RecordInsights'
-import { liveRecordWrite } from './item-edit/live-record-marks'
 import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
@@ -5918,6 +5926,9 @@ function ItemEditFormView({
   // Entry ergonomics (#2702-#2728): the layout's entry config, and the beginner / expert
   // mode of an adaptive form (guided steps for a person's first records, tabs after).
   const entryCfg = useMemo(() => entryConfigOf(layoutMeta), [layoutMeta])
+  // Form density (#3182): compact tightens the form's spacing; comfortable is today's.
+  const formDensity = formDensityOf(entryCfg)
+  useFormDensityCss(formDensity === 'compact')
   const entryMode = useEntryMode({
     collection,
     layoutId: layoutMeta?.id ?? null,
@@ -7603,6 +7614,8 @@ function ItemEditFormView({
       }
     }
     if (Object.keys(errs).length > 0) {
+      // Where saves fail (#3185): the fields this refusal names, for the layout editor.
+      formUsage.markRefused(errs)
       setValidationErrors(errs)
       setShowValidationSummary(true)
       // One problem: say exactly what it is. Several: the count — the summary
@@ -8221,6 +8234,7 @@ function ItemEditFormView({
         // is the lines grid, on whichever step holds it.
         const bad = refusedFieldOf(err, new Set(allFields.map((f) => f.field)))
         if (bad) {
+          formUsage.markRefused({ [bad.field]: bad.message })
           setValidationErrors({ [bad.field]: bad.message })
           setTimeout(() => jumpToField(bad.field), 150)
         }
@@ -8904,6 +8918,36 @@ function ItemEditFormView({
   // flush on unmount keeps what was typed for the next open instead. Only the
   // record on screen asks (efp-new keeps background record tabs mounted).
   const formRootRef = useRef<HTMLDivElement | null>(null)
+  // First-use tour (#3192): the form's sections, one step each, the first time this
+  // person opens this form (entry_config.tour); the Tour button replays it.
+  const tourLayoutId = layoutMeta?.id != null ? Number(layoutMeta.id) : null
+  const tourOn = entryCfg.tour === true && !designOn && tourLayoutId != null
+  const tourSteps = useMemo(
+    () => (tourOn ? buildTourSteps(groups, groupedMap) : new Map()),
+    [tourOn, groups, groupedMap]
+  )
+  const tourSeen = useFormTourSeen({
+    layoutId: tourOn ? tourLayoutId : null,
+    userId: authUserId,
+    enabled: tourOn
+  })
+  const [tourOpen, setTourOpen] = useState(false)
+  const tourAutoRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!tourOn || tourSeen.seen || !tourSeen.known || tourAutoRef.current === tourLayoutId) return
+    // Once the sections have painted; never over a dialog already open.
+    const t = window.setTimeout(() => {
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return
+      if (!sectionKeysOnScreen(formRootRef.current).some((k) => tourSteps.has(k))) return
+      tourAutoRef.current = tourLayoutId
+      setTourOpen(true)
+    }, 800)
+    return () => window.clearTimeout(t)
+  }, [tourOn, tourSeen.seen, tourSeen.known, tourLayoutId, tourSteps])
+  const closeTour = useCallback(() => {
+    setTourOpen(false)
+    tourSeen.markSeen()
+  }, [tourSeen.markSeen])
   const recordSurface = useRecordSurface()
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
   useLeaveLinkGuard(
@@ -10359,7 +10403,7 @@ function ItemEditFormView({
       sectionOrder.filter((x): x is FieldGroup => typeof x !== 'string' && !x.container_id)
     )
     return (
-      <div className='nvr-stagger space-y-4'>
+      <div data-section-stack='' className='nvr-stagger space-y-4'>
         {sectionOrder.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return sectionShell(item, key ?? i, stickyKey)
@@ -10721,7 +10765,7 @@ function ItemEditFormView({
       ...tabGroups.map((g) => ({ key: g.key, label: g.label }))
     ]
     return (
-      <div className='space-y-4'>
+      <div data-section-stack='' className='space-y-4'>
         {ungroupedFields.length > 0 && renderUngrouped()}
         <div
           ref={tabStripRef}
@@ -10922,7 +10966,7 @@ function ItemEditFormView({
     })
 
     return (
-      <div className='nvr-stagger space-y-4 min-w-0 flex-1'>
+      <div data-section-stack='' className='nvr-stagger space-y-4 min-w-0 flex-1'>
         {preTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
           return sectionShell(item as FieldGroup | string, key ?? i)
@@ -11332,6 +11376,9 @@ function ItemEditFormView({
                               </Dialog>
                               <div
                                 ref={formRootRef}
+                                data-form-density={
+                                  formDensity === 'compact' ? 'compact' : undefined
+                                }
                                 className={cn('flex flex-1 min-h-0 flex-col', className)}
                               >
                                 {showHeader && (
@@ -12834,12 +12881,28 @@ function ItemEditFormView({
                                   />
                                 )}
 
-                                {(entryCfg.badge || (!designOn && entryMode.switchable)) && (
+                                {(entryCfg.badge ||
+                                  (!designOn && entryMode.switchable) ||
+                                  (tourOn && tourSteps.size > 0)) && (
                                   <EntryStrip
                                     badge={entryCfg.badge}
                                     mode={!designOn && entryMode.switchable ? entryMode.mode : null}
                                     auto={entryMode.auto}
                                     onMode={entryMode.set}
+                                    tour={
+                                      tourOn && tourSteps.size > 0 ? (
+                                        <FormTourButton onClick={() => setTourOpen(true)} />
+                                      ) : undefined
+                                    }
+                                  />
+                                )}
+                                {tourOpen && tourOn && (
+                                  <FormTour
+                                    key={tourLayoutId ?? 0}
+                                    rootRef={formRootRef}
+                                    steps={tourSteps}
+                                    formName={String(layoutMeta?.name ?? '')}
+                                    onClose={closeTour}
                                   />
                                 )}
                                 {showHeader &&
@@ -13405,6 +13468,7 @@ function ItemEditFormView({
                                 >
                                   <div
                                     ref={bodyRef}
+                                    data-form-body=''
                                     className={cn(
                                       'p-6 space-y-4',
                                       summaryEnabled ? 'flex-1 overflow-y-auto' : ''

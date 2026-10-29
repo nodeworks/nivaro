@@ -69,7 +69,8 @@ describe('lint context readers', () => {
         readonly: false,
         cascade_parents: ['vendor'],
         col_span: 6,
-        type: null
+        type: null,
+        note: null
       }
     ])
   })

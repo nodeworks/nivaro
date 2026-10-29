@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   createContext,
   type PointerEvent,
+  type TouchEvent,
   useCallback,
   useContext,
   useEffect,
@@ -24,14 +25,30 @@ export type DragState = {
   overKey: string | null
   side: DropSide | null
   indicator: CSSProperties | null
+  /** #3178: every node a selection drag carries (the active one included); null = just it. */
+  carried: string[] | null
+  /** #3199: Alt is held — the drop copies instead of moving. */
+  copy: boolean
+  /** #3198: the drop joins the dragged section into the one under it (that one's name). */
+  merge: string | null
 }
-export const IDLE: DragState = { activeKey: null, overKey: null, side: null, indicator: null }
+export const IDLE: DragState = {
+  activeKey: null,
+  overKey: null,
+  side: null,
+  indicator: null,
+  carried: null,
+  copy: false,
+  merge: null
+}
+
+type Listeners = Record<string, ((e: PointerEvent | TouchEvent) => void) | undefined>
 
 export class DndStore {
   bundle: LayoutBundle | null = null
   state: DragState = IDLE
-  /** Registered element → its pointer activator (dnd-kit's onPointerDown). */
-  activators = new WeakMap<Element, () => ((e: PointerEvent) => void) | undefined>()
+  /** Registered element → its activators (dnd-kit's onPointerDown, onTouchStart). */
+  activators = new WeakMap<Element, () => Listeners | undefined>()
   /** Droppable id → registered element (the overlay copies it, the drop line measures it). */
   nodes = new Map<string, HTMLElement>()
   /** A width is being dragged on the canvas (#2701): the column guides show. */
@@ -52,6 +69,9 @@ export class DndStore {
       s.activeKey === cur.activeKey &&
       s.overKey === cur.overKey &&
       s.side === cur.side &&
+      s.copy === cur.copy &&
+      s.merge === cur.merge &&
+      s.carried === cur.carried &&
       JSON.stringify(s.indicator) === JSON.stringify(cur.indicator)
     )
       return
@@ -73,8 +93,14 @@ export class DndStore {
   /** What one node renders from: a node re-renders only when its slice changes. */
   slice(key: string): string {
     const s = this.state
-    const over = s.overKey === key ? `${s.side}${JSON.stringify(s.indicator)}` : ''
-    return `${s.activeKey === key ? 1 : 0}|${over}`
+    const over = s.overKey === key ? `${s.side}${s.merge ?? ''}${JSON.stringify(s.indicator)}` : ''
+    return `${this.isCarried(key) ? 1 : 0}|${over}`
+  }
+
+  /** Is the node `key` part of the current drag (the dragged one, or carried with it)? */
+  isCarried(key: string): boolean {
+    const s = this.state
+    return s.activeKey === key || (s.carried?.includes(key) ?? false)
   }
 
   /** Remember `el` under `id` (and forget the element it replaces). */
@@ -119,6 +145,8 @@ export interface NodeDnd {
   dragging: boolean
   slot: DropSide | null
   indicator: CSSProperties | null
+  /** #3198: the drop would join the dragged section into this one: its name. */
+  merge: string | null
 }
 
 /**
@@ -166,11 +194,7 @@ export function useDesignDndNode(dnd: DesignDnd, t: DesignTarget, opts: NodeDndO
       // Keyboard drags start only from the node itself, never from a button
       // inside it (a section's header, its chevron).
       setActivatorNodeRef(el)
-      if (el && store)
-        store.activators.set(
-          el,
-          () => listeners.current?.onPointerDown as ((e: PointerEvent) => void) | undefined
-        )
+      if (el && store) store.activators.set(el, () => listeners.current as Listeners | undefined)
     },
     [key, setActivatorNodeRef, setDrag, setDrop, store]
   )
@@ -180,17 +204,19 @@ export function useDesignDndNode(dnd: DesignDnd, t: DesignTarget, opts: NodeDndO
       props: dnd.draggableProps(t, opts.disabled ? { disabled: true } : undefined),
       dragging: dnd.isDragging(t),
       slot: dnd.dropSlot(t),
-      indicator: dnd.dropIndicator?.(t) ?? null
+      indicator: dnd.dropIndicator?.(t) ?? null,
+      merge: null
     }
   const s = store.state
   const over = s.overKey === key
   return {
-    // The pointer activator is not spread here: LayoutDndProvider relays
-    // pointerdown to it. The keyboard one stays on the node.
+    // The pointer and touch activators are not spread here: LayoutDndProvider
+    // relays pointerdown and touchstart to them. The keyboard one stays on the node.
     props: live ? { ref, ...drag.attributes, onKeyDown: drag.listeners?.onKeyDown } : {},
-    dragging: s.activeKey === key,
+    dragging: store.isCarried(key),
     slot: over ? s.side : null,
-    indicator: over ? s.indicator : null
+    indicator: over ? s.indicator : null,
+    merge: over ? s.merge : null
   }
 }
 

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useApiFetchConfig } from '../../context'
 import {
   onSectionUse,
   queueFormUsage,
+  RefusalTally,
   SectionTally,
   StepClock,
   sessionEvent
@@ -29,7 +30,11 @@ export function useFormUsageBeacon({
   itemId: string | null
   /** The open tab / step key; one key for a form without steps. */
   step: string
-}): { markSaved: () => void } {
+}): {
+  markSaved: () => void
+  /** A save the form refused (#3185): field → the message it showed. */
+  markRefused: (errors: Record<string, string>, kind?: 'required' | 'invalid') => void
+} {
   const fetchCfg = useApiFetchConfig()
   const cfgRef = useRef(fetchCfg)
   cfgRef.current = fetchCfg
@@ -41,6 +46,7 @@ export function useFormUsageBeacon({
     saved: boolean
     elapsed: number
     saveMs: number | null
+    refusals: RefusalTally
   } | null>(null)
 
   const on = enabled && layoutId != null && !!collection
@@ -53,7 +59,8 @@ export function useFormUsageBeacon({
       openSent: false,
       saved: false,
       elapsed: 0,
-      saveMs: null as number | null
+      saveMs: null as number | null,
+      refusals: new RefusalTally()
     }
     session.current = s
     // Sections shown and opened on this form (#2730), sent once each per session.
@@ -65,6 +72,7 @@ export function useFormUsageBeacon({
       const { steps, total } = s.clock.take(Date.now())
       s.elapsed += total
       const pending = sections.pending()
+      const refused = s.refusals.take()
       const ev = sessionEvent({
         layoutId,
         collection,
@@ -77,9 +85,13 @@ export function useFormUsageBeacon({
         elapsed: s.elapsed,
         final,
         sections: pending,
-        saveMs: s.saveMs
+        saveMs: s.saveMs,
+        refused
       })
-      if (!ev) return
+      if (!ev) {
+        s.refusals.restore(refused)
+        return
+      }
       sections.markSent(pending)
       s.openSent = true
       s.saved = false
@@ -117,5 +129,10 @@ export function useFormUsageBeacon({
     if (!s.saved) s.saveMs = s.elapsed + s.clock.peek(Date.now())
     s.saved = true
   }, [])
-  return { markSaved }
+  const markRefused = useCallback(
+    (errors: Record<string, string>, kind?: 'required' | 'invalid') =>
+      session.current?.refusals.note(errors, kind),
+    []
+  )
+  return useMemo(() => ({ markSaved, markRefused }), [markSaved, markRefused])
 }

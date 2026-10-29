@@ -61,6 +61,8 @@ export interface DropHint {
   side: DropSide
   axis: 'x' | 'y'
   body: boolean
+  /** #3198: a section over another section's header joins it (dnd/merge-drop.ts). */
+  merge?: boolean
 }
 
 /** The two extra forms of a table layout: zones with no group row, fields only. */

@@ -14,6 +14,7 @@ import {
   type Filter,
   type NivaroClient,
   readItems,
+  readMcpCapabilities,
   rehearseCreateItem,
   updateItem
 } from '@nivaro/sdk'
@@ -56,6 +57,49 @@ const filterInput = jsonObject
     'Filter object: { status: { _eq: "active" }, owner: { last_name: { _contains: "Smith" } }, tags: { _some: { name: { _eq: "x" } } }, _and/_or: [...] }. Operators: _eq _neq _gt _gte _lt _lte _in _nin _null _nnull _contains _starts_with _ends_with.'
   )
 
+/** PATCH /items/:collection/:id?dry_run=1 — the update rehearsed, nothing saved (#3222). */
+export function rehearseUpdateCommand(
+  collection: string,
+  id: string | number,
+  data: Record<string, unknown>
+): Command<Record<string, unknown>> {
+  return {
+    _method: 'PATCH',
+    _path: `/items/${collection}/${id}`,
+    _params: { dry_run: 1 },
+    _body: data
+  }
+}
+
+/** A rehearsal report cut for a model: long values clipped, empty parts left out. */
+export function compactUpdateReport(report: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { dry_run: true }
+  for (const [k, v] of Object.entries(report)) {
+    if (k === 'dry_run') continue
+    if (Array.isArray(v) && v.length === 0) continue
+    if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue
+    if (k === 'changes' && Array.isArray(v)) {
+      out.changes = (v as Array<Record<string, unknown>>).map((c) => ({
+        field: c.field,
+        from: clipValue(c.from),
+        to: clipValue(c.to)
+      }))
+      continue
+    }
+    out[k] = v
+  }
+  return out
+}
+
+function clipValue(v: unknown): unknown {
+  if (typeof v === 'string') return v.length > 300 ? `${v.slice(0, 300)}…` : v
+  if (v && typeof v === 'object') {
+    const json = JSON.stringify(v)
+    return json.length > 300 ? `${json.slice(0, 300)}… (truncated)` : v
+  }
+  return v
+}
+
 /** A short preview of the record a rehearsal would delete (scalars only, a dozen fields). */
 function previewOf(row: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -74,6 +118,16 @@ export function registerItemTools(
   opts: { confirmSecret?: string } = {}
 ) {
   const confirmSecret = opts.confirmSecret ?? confirmSecretFor(null)
+  // Whether the instance rehearses a PATCH with ?dry_run=1. An older one would SAVE it, so a
+  // preview is only sent once the instance says it can (asked once per server).
+  let previewSupport: Promise<boolean> | null = null
+  const canPreviewUpdates = () => {
+    previewSupport ??= client
+      .request(readMcpCapabilities())
+      .then((res) => (res.data as { update_preview?: unknown })?.update_preview === true)
+      .catch(() => false)
+    return previewSupport
+  }
   server.registerTool(
     'read_items',
     {
@@ -233,7 +287,7 @@ export function registerItemTools(
     {
       title: 'Update a record',
       description:
-        'Patch the fields given on one record. A collection may require a reason for certain field changes — the refusal (code CHANGE_REASON_REQUIRED) names them; retry with change_reason set. A 409 MIDAIR_COLLISION means someone else changed the same fields first.',
+        'Patch the fields given on one record. Pass dry_run: true first to PREVIEW: every rule, hook, validation and database check runs and the answer lists each field that would change (from → to), the fields rules would fill in and why a save would be refused — nothing is saved. A collection may require a reason for certain field changes — the refusal (code CHANGE_REASON_REQUIRED) names them; retry with change_reason set. A 409 MIDAIR_COLLISION means someone else changed the same fields first.',
       inputSchema: {
         collection: collectionName,
         id: recordId,
@@ -241,16 +295,36 @@ export function registerItemTools(
         change_reason: z
           .string()
           .optional()
-          .describe("Why the change is made, recorded in the record's history.")
+          .describe("Why the change is made, recorded in the record's history."),
+        dry_run: z
+          .boolean()
+          .optional()
+          .describe('true previews the change (before/after) without saving; default false saves.')
       },
       annotations: WRITE_IDEMPOTENT
     },
-    async ({ collection, id, data, change_reason }) => {
+    async ({ collection, id, data, change_reason, dry_run }) => {
       try {
         const payload = { ...(toObject(data) ?? {}) }
         if (change_reason) payload._change_reason = change_reason
         if (Object.keys(payload).length === 0) {
           return refuse('data must name at least one field to change', 'EMPTY_PATCH')
+        }
+        if (dry_run === true) {
+          if (!(await canPreviewUpdates())) {
+            return refuse(
+              'This instance cannot preview updates (it needs a newer Nivaro). Nothing was sent or saved.',
+              'PREVIEW_UNSUPPORTED'
+            )
+          }
+          const report = await client.request(rehearseUpdateCommand(collection, id, payload))
+          if (report?.dry_run !== true) {
+            return refuse(
+              'The instance did not answer with a preview. Check the record with read_item before trying again.',
+              'PREVIEW_NOT_RETURNED'
+            )
+          }
+          return ok(compactUpdateReport(report))
         }
         const res = await client.request(updateItem(collection, id, payload))
         return ok(res.data)

@@ -43,10 +43,11 @@ export type RenderFileOp =
   | 'convert-music'
 
 /** The longest each kind of peer call may take before it is abandoned. */
-const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'health' | 'encoders', number> = {
+const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'png' | 'health' | 'encoders', number> = {
   health: 5_000,
   encoders: 60_000,
   pdf: 120_000,
+  png: 60_000,
   'probe-video': 120_000,
   'probe-streams': 120_000,
   remux: 20 * 60_000,
@@ -54,7 +55,9 @@ const OP_TIMEOUT_MS: Record<RenderFileOp | 'pdf' | 'health' | 'encoders', number
   'convert-music': 15 * 60_000
 }
 
-export function renderOpTimeoutMs(op: RenderFileOp | 'pdf' | 'health' | 'encoders'): number {
+export function renderOpTimeoutMs(
+  op: RenderFileOp | 'pdf' | 'png' | 'health' | 'encoders'
+): number {
   return OP_TIMEOUT_MS[op]
 }
 
@@ -306,6 +309,44 @@ export async function peerHtmlToPdf(
   if (!res.ok) throw await peerFailure(res)
   try {
     return await readCapped(res, RENDER_PDF_OUT_MAX_BYTES)
+  } catch (err) {
+    if ((err as RenderError).code === 'RENDER_PEER_TOO_LARGE') throw err
+    throw networkFailure(err)
+  }
+}
+
+/** The largest PNG the client accepts back from the peer (a form image, #3216). */
+export const RENDER_PNG_OUT_MAX_BYTES = 24 * 1024 * 1024
+
+/** Render HTML to a PNG on the peer. Same contract as pdf-layout's htmlToPng. */
+export async function peerHtmlToPng(
+  html: string,
+  opts: { width?: number; maxHeight?: number; scale?: number; allowOrigins?: string[] } = {}
+): Promise<Buffer> {
+  const { url, token } = peerOrThrow('pdf')
+  const body = JSON.stringify({
+    html,
+    width: opts.width,
+    max_height: opts.maxHeight,
+    scale: opts.scale,
+    allow_origins: opts.allowOrigins
+  })
+  if (Buffer.byteLength(body) > RENDER_PDF_MAX_BYTES)
+    throw renderError(413, 'RENDER_TOO_LARGE', 'This page is too large to turn into an image.')
+  let res: Response
+  try {
+    res = await fetch(`${url}${RENDER_PEER_PREFIX}/png`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body,
+      signal: withTimeout(renderOpTimeoutMs('png'))
+    })
+  } catch (err) {
+    throw networkFailure(err)
+  }
+  if (!res.ok) throw await peerFailure(res)
+  try {
+    return await readCapped(res, RENDER_PNG_OUT_MAX_BYTES)
   } catch (err) {
     if ((err as RenderError).code === 'RENDER_PEER_TOO_LARGE') throw err
     throw networkFailure(err)

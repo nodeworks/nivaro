@@ -159,6 +159,32 @@ export function sectionOp(bundle: LayoutBundle, selected: DesignTarget | null): 
   }
 }
 
+/** A gap on the canvas (#3181): in a field zone, or between the form's top-level parts. */
+export type Gap = (Spot & { top: false }) | { top: true; index: number }
+
+/**
+ * The gap beside a canvas node: before or after a field (or header tile), at
+ * the end of a section, tab or Ungrouped (a holder: its first tab), and for a
+ * panel card or text block the top-level slot before or after it.
+ */
+export function gapSpot(bundle: LayoutBundle, t: DesignTarget, before: boolean): Gap | null {
+  const b = normalize(bundle)
+  if (t.kind === 'group') {
+    if (t.key === UNGROUPED_KEY) return { top: false, group_key: null, index: zoneSize(b, null) }
+    const g = b.groups.find((x) => x.key === t.key)
+    if (!g) return null
+    if (FIELD_HOLDERS.has(g.type) || g.type === 'container')
+      return { top: false, ...fieldSpot(b, { kind: 'group', key: g.key }) }
+    if (g.parent_key !== null) return null
+    return { top: true, index: before ? g.sort : g.sort + 1 }
+  }
+  const gk = t.kind === 'header' ? HEADER_GROUP_KEY : t.group_key
+  const row = b.placements.find((p) => p.field === t.field && p.group_key === gk)
+  if (!row) return null
+  if (isCanvasSlot(row)) return { top: true, index: before ? row.sort : row.sort + 1 }
+  return { top: false, group_key: row.group_key, index: before ? row.sort : row.sort + 1 }
+}
+
 /** One `place` op for a field, widget or slot at `spot`. */
 export function placeOp(field: string, spot: Spot, patch?: PlacementPatch): LayoutOp {
   return {

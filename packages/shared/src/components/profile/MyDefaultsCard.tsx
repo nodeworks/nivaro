@@ -302,8 +302,8 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
       title={forOther ? 'Personal defaults' : 'My defaults'}
       hint={
         forOther
-          ? 'Starting values their new records are filled in with'
-          : 'Starting values your new records are filled in with'
+          ? `New records ${name?.trim() ? firstName : 'they'} start are filled in with these`
+          : 'New records you start are filled in with these'
       }
       testId='my-defaults'
       actions={
@@ -342,42 +342,52 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
           </button>
         </div>
       ) : (rows ?? []).length === 0 ? (
-        <p data-default-empty className='text-[12px] text-slate-500 dark:text-slate-400'>
-          {forOther ? `${firstName} hasn’t saved any defaults yet.` : 'No defaults yet.'} On a
-          record form, open a field’s ⋯ menu and choose{' '}
-          <span className='font-medium text-slate-700 dark:text-slate-200'>Save as my default</span>
+        <p
+          data-default-empty
+          className='max-w-[65ch] text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'
+        >
+          {forOther ? `${firstName} hasn’t saved any defaults yet.` : 'You have no defaults yet.'}{' '}
+          {forOther ? 'They can' : 'On a new record, fill in a field and'} choose{' '}
+          <span className='font-medium text-slate-800 dark:text-slate-100'>Make default</span>{' '}
+          beside its label
           {forOther
             ? (allowed?.length ?? 0) > 0
-              ? ' — or add one here.'
+              ? ', or add one here.'
               : '.'
-            : ' — new records then start with that value.'}
+            : ': your next new records start with that value.'}
         </p>
       ) : (
-        <div className='space-y-4'>
-          {groups.map((g) => (
-            <section key={g.collection} data-default-group={g.collection}>
-              <h4 className='mb-1 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-                {g.label}
-              </h4>
-              <ul className='divide-y divide-slate-100 dark:divide-border/60'>
-                {(rows ?? [])
-                  .filter((r) => r.collection === g.collection)
-                  .map((r) => (
-                    <DefaultRowItem
-                      key={r.id}
-                      row={r}
-                      meta={metas.get(r.collection) ?? EMPTY_META}
-                      parts={parts.get(String(r.id))}
-                      labels={labels}
-                      base={base}
-                      onSaved={() => refresh(r.collection)}
-                      onClear={() => clear.mutate(r)}
-                      clearing={clear.isPending && clear.variables?.id === r.id}
-                    />
-                  ))}
-              </ul>
-            </section>
-          ))}
+        <div className='space-y-5'>
+          {groups.map((g) => {
+            const count = (rows ?? []).filter((r) => r.collection === g.collection).length
+            return (
+              <section key={g.collection} data-default-group={g.collection}>
+                <h4 className='flex items-baseline gap-1.5 border-b border-slate-200 pb-1.5 text-[12.5px] font-semibold text-slate-800 dark:border-border dark:text-slate-100'>
+                  <span data-default-group-label>{g.label}</span>
+                  <span className='text-[11.5px] font-normal tabular-nums text-slate-500 dark:text-slate-400'>
+                    {count}
+                  </span>
+                </h4>
+                <ul className='divide-y divide-slate-100 dark:divide-border/60'>
+                  {(rows ?? [])
+                    .filter((r) => r.collection === g.collection)
+                    .map((r) => (
+                      <DefaultRowItem
+                        key={r.id}
+                        row={r}
+                        meta={metas.get(r.collection) ?? EMPTY_META}
+                        parts={parts.get(String(r.id))}
+                        labels={labels}
+                        base={base}
+                        onSaved={() => refresh(r.collection)}
+                        onClear={() => clear.mutate(r)}
+                        clearing={clear.isPending && clear.variables?.id === r.id}
+                      />
+                    ))}
+                </ul>
+              </section>
+            )
+          })}
         </div>
       )}
       {forOther && allowed?.length === 0 && (
@@ -459,11 +469,21 @@ function DefaultRowItem({
   const contextLoading = (parts?.context ?? []).length > 0 && context.some((c) => c === null)
 
   return (
-    <li data-default-row={row.id} className='group flex items-start gap-3 py-2'>
-      <div className='min-w-0 flex-1 gap-3 sm:grid sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)]'>
+    <li
+      data-default-row={row.id}
+      data-editing={editing ? '' : undefined}
+      className={cn(
+        '-mx-2 flex flex-col gap-2 rounded-md px-2 py-2.5 sm:flex-row sm:items-start sm:gap-3',
+        editing && 'bg-slate-50 dark:bg-muted/40'
+      )}
+    >
+      <div className='min-w-0 flex-1 gap-x-4 gap-y-1 sm:grid sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]'>
         <p
           data-default-field
-          className='truncate pt-px text-[12px] text-slate-500 dark:text-slate-400'
+          className={cn(
+            'truncate text-[12.5px] text-slate-600 dark:text-slate-300',
+            editing ? 'sm:pt-2' : 'sm:pt-px'
+          )}
         >
           {fieldLabel(meta, row.field)}
         </p>
@@ -491,7 +511,7 @@ function DefaultRowItem({
                   : undefined
               }
               className={cn(
-                'truncate text-[12.5px]',
+                'truncate text-[13px]',
                 value.state === 'gone' || value.state === 'failed'
                   ? 'italic text-slate-500 dark:text-slate-400'
                   : stale
@@ -502,17 +522,18 @@ function DefaultRowItem({
               {value.text}
             </p>
           )}
-          <p className='mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
+          <p className='mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
             {contextLoading ? (
               <Skeleton className='h-3 w-28' />
             ) : context.length > 0 ? (
-              <span data-default-context>for {context.join(' · ')}</span>
+              <span data-default-context>For {context.join(' · ')}</span>
             ) : null}
-            {(contextLoading || context.length > 0) && <span aria-hidden>·</span>}
-            <span>
-              Saved {formatDate(row.updated_at)}
-              {row.updated_by ? ' by an admin' : ''}
-            </span>
+            {!editing && (contextLoading || context.length > 0) && <span aria-hidden>·</span>}
+            {!editing && (
+              <span>
+                {row.updated_by ? 'Set by an admin' : 'Saved'} {formatDate(row.updated_at)}
+              </span>
+            )}
             {stale && (
               <span data-tip={STALE_EXPLAINED}>
                 <Pill tone='amber' testId='stale'>
@@ -525,26 +546,18 @@ function DefaultRowItem({
         </div>
       </div>
       {!editing && (
-        <div
-          className={cn(
-            'flex shrink-0 items-center gap-0.5 transition-opacity duration-150',
-            // Reserve the slot; show on hover / keyboard focus, always on touch and when stale.
-            // …and while Clear is armed (the pointer may have left before the second press).
-            !stale &&
-              'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 [&:has([data-armed])]:opacity-100'
-          )}
-        >
+        // Always visible: hover-only actions hid the only way to change or clear a default.
+        <div className='flex shrink-0 items-center gap-1 sm:pt-px'>
           {!stale && fc && (
             <button
               ref={changeRef}
               type='button'
               data-default-change
               aria-label={`Change the default for ${fieldLabel(meta, row.field)}`}
-              data-tip='Change'
               onClick={() => setEditing(true)}
-              className='rounded p-1.5 text-slate-500 transition-colors hover:bg-muted hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-400 dark:hover:text-slate-100'
+              className={PERSONAL_DEFAULT_GHOST_BUTTON}
             >
-              <Pencil className='h-3.5 w-3.5' />
+              <Pencil className='h-3 w-3' /> Change
             </button>
           )}
           <ConfirmButton
@@ -553,15 +566,15 @@ function DefaultRowItem({
             title={`Clear the default for ${fieldLabel(meta, row.field)}`}
             confirmTitle={`Clear the default for ${fieldLabel(meta, row.field)}?`}
             confirmLabel={
-              <span data-default-clear className='px-1 text-[11.5px] font-semibold'>
-                Clear?
+              <span data-default-clear className='px-0.5 text-[11.5px] font-semibold'>
+                Clear it?
               </span>
             }
-            className='inline-flex h-7 items-center rounded px-1.5 text-slate-500 transition-colors hover:bg-muted hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:opacity-50 dark:text-slate-400 dark:hover:text-red-400'
+            className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-500 transition-colors hover:bg-muted hover:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:opacity-50 dark:text-slate-400 dark:hover:text-red-400'
             armedClassName='bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/15'
           >
-            <span data-default-clear className='inline-flex items-center'>
-              <UserRoundX className='h-3.5 w-3.5' />
+            <span data-default-clear className='inline-flex items-center gap-1'>
+              <UserRoundX className='h-3 w-3' /> Clear
             </span>
           </ConfirmButton>
         </div>
@@ -657,7 +670,7 @@ function SaveCancel({
   onCancel: () => void
 }) {
   return (
-    <span className='flex items-center gap-1.5'>
+    <span className='flex h-9 shrink-0 items-center gap-1.5'>
       <button type='button' onClick={onCancel} className={PERSONAL_DEFAULT_GHOST_BUTTON}>
         <X className='h-3 w-3' /> Cancel
       </button>
@@ -745,14 +758,29 @@ function DefaultEditor({
       }}
     >
       <legend className='sr-only'>Change the default for {field.label || field.field}</legend>
-      <div data-default-control>
-        <DefaultValueControl
-          collection={row.collection}
-          field={field}
-          relations={relations}
-          context={row.context ?? {}}
-          value={draft}
-          onChange={setDraft}
+      <div className='flex flex-wrap items-start gap-2'>
+        <div data-default-control className='min-w-[12rem] max-w-[28rem] flex-1'>
+          <DefaultValueControl
+            collection={row.collection}
+            field={field}
+            relations={relations}
+            context={row.context ?? {}}
+            value={draft}
+            onChange={setDraft}
+          />
+        </div>
+        <SaveCancel
+          canSave={!isEmptyValue(draft)}
+          pending={save.isPending}
+          onCancel={onCancel}
+          onSave={() =>
+            save.mutate({
+              collection: row.collection,
+              field: row.field,
+              value: draft,
+              context: row.context ?? {}
+            })
+          }
         />
       </div>
       {error && (
@@ -760,19 +788,6 @@ function DefaultEditor({
           {error}
         </p>
       )}
-      <SaveCancel
-        canSave={!isEmptyValue(draft)}
-        pending={save.isPending}
-        onCancel={onCancel}
-        onSave={() =>
-          save.mutate({
-            collection: row.collection,
-            field: row.field,
-            value: draft,
-            context: row.context ?? {}
-          })
-        }
-      />
     </fieldset>
   )
 }
