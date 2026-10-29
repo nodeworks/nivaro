@@ -547,6 +547,7 @@ export type {
 } from './components/support/types'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
+export { UndoButton, type UndoPreviewAnswer } from './components/UndoButton'
 export { UserAvatar } from './components/UserAvatar'
 export type { InputBinding } from './components/WidgetSlot'
 export { WidgetSlot } from './components/WidgetSlot'

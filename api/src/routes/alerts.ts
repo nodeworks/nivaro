@@ -3,6 +3,11 @@ import { db } from '../db/index.js'
 import { evaluateAlerts } from '../hooks/alerts.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { detectionTypeOf, preparePatternDefinition } from '../services/activity-pattern-alerts.js'
+import {
+  ACTIVITY_PATTERN_KIND,
+  invalidateActivityPatternRules
+} from '../services/activity-pattern-gate.js'
 import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { can } from '../services/permissions.js'
 
@@ -39,7 +44,7 @@ function formatDef(row: AlertDefinitionRow) {
     ...row,
     is_active: row.is_active === true || row.is_active === 1,
     filters: parseJson(row.filters),
-    detection_type: row.detection_type === 'anomaly' ? 'anomaly' : 'threshold',
+    detection_type: detectionTypeOf(row.detection_type),
     sensitivity: row.sensitivity != null ? Number(row.sensitivity) : null
   }
 }
@@ -128,7 +133,12 @@ export async function alertsRoutes(app: FastifyInstance) {
       sensitivity?: number | null
     }
 
-    const detectionType = body.detection_type === 'anomaly' ? 'anomaly' : 'threshold'
+    const detectionType = detectionTypeOf(body.detection_type)
+    // #23 — activity-pattern kind: config in `filters`, placeholders for field/operator.
+    if (detectionType === ACTIVITY_PATTERN_KIND) {
+      const bad = await preparePatternDefinition(body as Record<string, unknown>, req.user!)
+      if (bad) return reply.code(400).send({ error: bad })
+    }
 
     if (!body.name || !body.collection || !body.field) {
       return reply.code(400).send({ error: 'name, collection, field are required' })
@@ -166,6 +176,7 @@ export async function alertsRoutes(app: FastifyInstance) {
       })
       .returning('id')
     const id = typeof idRow === 'object' ? (idRow as { id: number }).id : idRow
+    invalidateActivityPatternRules()
 
     const created = await db('nivaro_alert_definitions').where({ id }).first<AlertDefinitionRow>()
     await logActivity({
@@ -203,6 +214,19 @@ export async function alertsRoutes(app: FastifyInstance) {
         sensitivity: number | null
       }>
 
+      // #23 — an activity-pattern rule re-checks its config (and record filter) on change.
+      if (
+        detectionTypeOf(body.detection_type ?? existing.detection_type) === ACTIVITY_PATTERN_KIND &&
+        ('filters' in body || 'collection' in body || body.detection_type != null)
+      ) {
+        const bad = await preparePatternDefinition(
+          body as Record<string, unknown>,
+          req.user!,
+          existing
+        )
+        if (bad) return reply.code(400).send({ error: bad })
+      }
+
       const patch: Record<string, unknown> = { updated_at: new Date() }
       if (body.name != null) patch.name = body.name
       if (body.category != null) patch.category = body.category
@@ -215,7 +239,7 @@ export async function alertsRoutes(app: FastifyInstance) {
       if (body.cooldown_minutes != null) patch.cooldown_minutes = body.cooldown_minutes
       if (body.is_active != null) patch.is_active = body.is_active ? 1 : 0
       if (body.detection_type != null) {
-        patch.detection_type = body.detection_type === 'anomaly' ? 'anomaly' : 'threshold'
+        patch.detection_type = detectionTypeOf(body.detection_type)
       }
       if ('sensitivity' in body) {
         patch.sensitivity = body.sensitivity != null ? Number(body.sensitivity) : null
@@ -233,6 +257,7 @@ export async function alertsRoutes(app: FastifyInstance) {
 
       await db('nivaro_alert_definitions').where({ id }).update(patch)
       if (gate.confirmed) await logAudienceConfirm(req, 'alert', id, gate.confirmed)
+      invalidateActivityPatternRules()
       const updated = await db('nivaro_alert_definitions').where({ id }).first<AlertDefinitionRow>()
       await logActivity({
         action: 'update',
@@ -256,6 +281,7 @@ export async function alertsRoutes(app: FastifyInstance) {
       await db('nivaro_alert_log').where({ alert_definition: id }).delete()
       await db('nivaro_alert_subscriptions').where({ alert_definition: id }).delete()
       await db('nivaro_alert_definitions').where({ id }).delete()
+      invalidateActivityPatternRules()
 
       await logActivity({
         action: 'delete',

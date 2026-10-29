@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { noteActivityForPatterns } from './activity-pattern-gate.js'
 import { chainFields } from './chain-columns.js'
 import { attributionColumns } from './mcp-attribution.js'
 import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
@@ -12,6 +13,10 @@ import { tenantScopedRoom } from './tenant-rooms.js'
 let _pulseApp: FastifyInstance | null = null
 export function setPulseApp(app: FastifyInstance): void {
   _pulseApp = app
+}
+/** The server, once registered (activity-pattern alerts deliver through notifyUser with it). */
+export function pulseApp(): FastifyInstance | null {
+  return _pulseApp
 }
 
 // The origin column arrives with migration 340; until an instance has run it,
@@ -77,6 +82,8 @@ export async function logActivity(opts: {
   req?: FastifyRequest
   /** Who wrote it — person | machine | import | integration (#518). */
   origin?: string | null
+  /** An update's changed field names — for activity-pattern alerts only, never stored. */
+  changed_fields?: string[]
 }): Promise<number | null> {
   try {
     const rows = (await db('nivaro_activity')
@@ -101,6 +108,16 @@ export async function logActivity(opts: {
     const row = rows[0] as { id: number } | number
     const id = typeof row === 'object' && row !== null ? row.id : (row as number)
     noteDerivedWrite('activity')
+    // #23 — activity-pattern alerts: no I/O here without a matching rule; fire-and-forget.
+    noteActivityForPatterns({
+      activity_id: id ?? null,
+      action: opts.action,
+      user: opts.user ?? null,
+      collection: opts.collection ?? null,
+      item: opts.item ?? null,
+      changed_fields: opts.changed_fields,
+      at: new Date()
+    })
     try {
       // Cloud: the writing tenant's pulse room (tenant-rooms.ts).
       _pulseApp?.io?.to(tenantScopedRoom('pulse')).emit('activity:pulse', {

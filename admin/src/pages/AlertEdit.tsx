@@ -29,6 +29,14 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import {
+  ActivityPatternBuilder,
+  type ActivityPatternConfig,
+  EMPTY_PATTERN,
+  filterToRows,
+  type PatternFilterRow,
+  rowsToFilter
+} from '@/components/alerts/activity-pattern-builder'
 import { api, type Collection } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, titleCase } from '@/lib/utils'
@@ -47,7 +55,7 @@ interface AlertDefinition {
   cooldown_minutes: number
   is_active: boolean
   filters: Record<string, unknown> | null
-  detection_type: 'threshold' | 'anomaly'
+  detection_type: 'threshold' | 'anomaly' | 'activity_pattern'
   sensitivity: number | null
 }
 
@@ -102,7 +110,13 @@ export function AlertEditPage() {
   const [operator, setOperator] = useState('gt')
   const [threshold, setThreshold] = useState<number>(0)
   const [unit, setUnit] = useState('count')
-  const [detectionType, setDetectionType] = useState<'threshold' | 'anomaly'>('threshold')
+  const [detectionType, setDetectionType] = useState<'threshold' | 'anomaly' | 'activity_pattern'>(
+    'threshold'
+  )
+  // #23 — the activity-pattern kind's config (stored in `filters`) + its record-filter rows.
+  const [pattern, setPattern] = useState<ActivityPatternConfig>(EMPTY_PATTERN)
+  const [patternRows, setPatternRows] = useState<PatternFilterRow[]>([])
+  const isPattern = detectionType === 'activity_pattern'
   const [whatIf, setWhatIf] = useState<{
     matching_now: number
     sample: Array<{ id: unknown; value: unknown }>
@@ -143,10 +157,16 @@ export function AlertEditPage() {
       setUnit(existing.unit)
       setCooldownMinutes(existing.cooldown_minutes)
       setIsActive(existing.is_active)
-      setDetectionType(existing.detection_type === 'anomaly' ? 'anomaly' : 'threshold')
+      setDetectionType(existing.detection_type ?? 'threshold')
       setSensitivity(existing.sensitivity ?? 2.0)
 
-      if (existing.filters && typeof existing.filters === 'object') {
+      if (existing.detection_type === 'activity_pattern') {
+        const cfg = { ...EMPTY_PATTERN, ...(existing.filters as Partial<ActivityPatternConfig>) }
+        setPattern(cfg)
+        setPatternRows(filterToRows(cfg.record_filter) ?? [])
+        setCollection(existing.collection === '*' ? '' : existing.collection)
+        setField('')
+      } else if (existing.filters && typeof existing.filters === 'object') {
         setFilterRows(
           Object.entries(existing.filters).map(([k, v]) => ({
             field: k,
@@ -196,6 +216,27 @@ export function AlertEditPage() {
 
     if (!name.trim()) {
       toast.error('Name is required')
+      return
+    }
+    if (isPattern) {
+      saveMutation.mutate({
+        name: name.trim(),
+        category,
+        collection: collection.trim() || '*',
+        field: '*',
+        operator: 'pattern',
+        threshold: 0,
+        unit: 'count',
+        cooldown_minutes: Number(cooldownMinutes),
+        is_active: isActive,
+        filters: {
+          ...pattern,
+          record_filter: collection.trim() ? rowsToFilter(patternRows) : null,
+          changed_fields: collection.trim() ? pattern.changed_fields : []
+        } as unknown as Record<string, unknown>,
+        detection_type: 'activity_pattern',
+        sensitivity: null
+      })
       return
     }
     if (!collection.trim()) {
@@ -333,9 +374,7 @@ export function AlertEditPage() {
         {/* Collection + Field */}
         <div className='grid grid-cols-2 gap-4'>
           <div className='space-y-1.5'>
-            <Label>
-              Collection <span className='text-destructive'>*</span>
-            </Label>
+            <Label>Collection {!isPattern && <span className='text-destructive'>*</span>}</Label>
             <Popover open={colOpen} onOpenChange={setColOpen}>
               <PopoverTrigger asChild>
                 <button
@@ -356,6 +395,8 @@ export function AlertEditPage() {
                         ({collection})
                       </span>
                     </span>
+                  ) : isPattern ? (
+                    'Any collection'
                   ) : (
                     'Select collection…'
                   )}
@@ -367,6 +408,21 @@ export function AlertEditPage() {
                   <CommandInput placeholder='Search collections…' />
                   <CommandEmpty>No collection found.</CommandEmpty>
                   <CommandGroup className='max-h-60 overflow-y-auto'>
+                    {isPattern && (
+                      <CommandItem
+                        value='__any__'
+                        onSelect={() => {
+                          setCollection('')
+                          setPatternRows([])
+                          setColOpen(false)
+                        }}
+                      >
+                        <Check
+                          className={cn('mr-2 h-4 w-4', !collection ? 'opacity-100' : 'opacity-0')}
+                        />
+                        <span className='flex-1'>Any collection</span>
+                      </CommandItem>
+                    )}
                     {realCollections.map((c) => (
                       <CommandItem
                         key={c.collection}
@@ -395,7 +451,7 @@ export function AlertEditPage() {
             </Popover>
             <p className='text-xs text-muted-foreground'>Collection to monitor</p>
           </div>
-          <div className='space-y-1.5'>
+          <div className={cn('space-y-1.5', isPattern && 'hidden')}>
             <Label>
               Field <span className='text-destructive'>*</span>
             </Label>
@@ -438,13 +494,34 @@ export function AlertEditPage() {
             >
               Anomaly
             </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant={detectionType === 'activity_pattern' ? 'default' : 'ghost'}
+              className='h-7 px-3 text-xs'
+              onClick={() => setDetectionType('activity_pattern')}
+            >
+              Activity pattern
+            </Button>
           </div>
           <p className='text-xs text-muted-foreground'>
             {detectionType === 'threshold'
               ? 'Fire when the field value crosses a fixed threshold'
-              : 'Fire when the field value deviates statistically from its recent history'}
+              : detectionType === 'anomaly'
+                ? 'Fire when the field value deviates statistically from its recent history'
+                : 'Fire when the activity log shows a kind of change — who did what, where'}
           </p>
         </div>
+
+        {isPattern && (
+          <ActivityPatternBuilder
+            value={pattern}
+            onChange={setPattern}
+            collection={collection}
+            filterRows={patternRows}
+            onFilterRowsChange={setPatternRows}
+          />
+        )}
 
         {/* Threshold mode: Operator + Threshold + Unit */}
         {detectionType === 'threshold' && (
@@ -513,7 +590,7 @@ export function AlertEditPage() {
         )}
 
         {/* Cooldown */}
-        <div className='space-y-1.5'>
+        <div className={cn('space-y-1.5', isPattern && 'hidden')}>
           <Label htmlFor='alert-cooldown'>Cooldown (minutes)</Label>
           <Input
             id='alert-cooldown'
@@ -540,7 +617,7 @@ export function AlertEditPage() {
         </div>
 
         {/* Scope filters */}
-        <div className='space-y-2'>
+        <div className={cn('space-y-2', isPattern && 'hidden')}>
           <div className='flex items-center justify-between'>
             <div>
               <Label>Scope Filters</Label>

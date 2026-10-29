@@ -123,7 +123,8 @@ export function registerActivityHooks() {
       item: ctx.keys?.[0] != null ? String(ctx.keys[0]) : undefined,
       comment: ctx.changeReason,
       origin,
-      req: ctx.req
+      req: ctx.req,
+      changed_fields: meta.changed_fields
     })
     if (level === 'all' && activityId && ctx.result && ctx.keys?.[0] != null) {
       await writeRevision({
