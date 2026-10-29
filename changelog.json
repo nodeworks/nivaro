@@ -1,10 +1,122 @@
 {
-  "generated_at": "2026-10-29T01:03:25.738Z",
+  "generated_at": "2026-10-29T01:49:06.783Z",
   "releases": [
+    {
+      "version": "0.3.48",
+      "tag": "v0.3.48",
+      "date": "2026-10-28T21:48:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "Procedures page edits through config with history and adopt",
+              "hash": "19ef48dcb"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "SQL checks, tuning and imports respect app-managed procedures",
+              "hash": "729c9ee7b"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "create, edit, drop, adopt and undo through config",
+              "hash": "27fd3b883"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "deploy managed and import procedures by live definition",
+              "hash": "c535c799c"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "config store for managed procedures",
+              "hash": "633f238ac"
+            },
+            {
+              "section": "Added",
+              "scope": "procedures",
+              "text": "managed procedure tables and one owner answer",
+              "hash": "37bff4a35"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "managed procedures",
+              "text": "final review fixes",
+              "hash": "e552a230c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "Procedures page keeps unsaved edits; review design fixes",
+              "hash": "34b4dcc0c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "procedures",
+              "text": "writer review fixes (dropped revert, inert dropped rows)",
+              "hash": "b9a7b943a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "procedures",
+              "text": "drift guard, stamp-failure logs, undo adoptions",
+              "hash": "76eb30e05"
+            },
+            {
+              "section": "Fixed",
+              "scope": "procedures",
+              "text": "deploy service review fixes (phases, import conflicts, case)",
+              "hash": "9b8a5f2cb"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "procedures",
+              "text": "app-managed procedures",
+              "hash": "bd5ec927f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "biome format for managed-procedures section",
+              "hash": "4598f0945"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "proc:adopt script entry",
+              "hash": "b21ced843"
+            }
+          ]
+        }
+      ],
+      "count": 14
+    },
     {
       "version": "0.3.47",
       "tag": "v0.3.47",
-      "date": "2026-10-28T21:03:06-04:00",
+      "date": "2026-10-28T21:03:25-04:00",
       "sections": [
         {
           "label": "Added",
