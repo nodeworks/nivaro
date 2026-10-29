@@ -118,14 +118,17 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
+import { PlaceToolsProvider, usePlaceTools } from './PlaceTools'
 import { amberStrip, segOption, segTrack } from './panel-style'
 import { usePersonalDefaultMarks } from './personal-default-marks'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { previewNaturalWidth } from './preview/preview-model'
+import { useRemovalLog } from './removed-log'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
+import { SlashInsert } from './SlashInsert'
 import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
@@ -700,7 +703,9 @@ export function LayoutEditor({
   useEffect(() => setCurrentId(layoutId), [layoutId])
   const onSaved = useSavedRefresh(collection)
   // Record / Stop (#2663) sees every apply; the draft saves as before.
-  const { draft, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  // Recently removed (#3191): every apply is read for what it takes off the form.
+  const { draft, removed } = useRemovalLog(recorded, currentId)
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
@@ -1103,6 +1108,20 @@ export function LayoutEditor({
   )
   const warning = host.warning ?? overview?.warning ?? null
 
+  // Copy / paste, pasted field lists, the format painter, put back as saved (#3179 #3201 #3202 #3197).
+  const placeTools = usePlaceTools({
+    bundle,
+    savedBundle: savedBundle ?? null,
+    collection,
+    layoutId: currentId,
+    layoutName,
+    fields,
+    selection,
+    apply: draft.apply,
+    onSelection: setSelection,
+    rootRef: bodyRef
+  })
+
   // Overlay mode is a modal dialog over the record page.
   const dialogProps = overlay
     ? {
@@ -1478,6 +1497,7 @@ export function LayoutEditor({
                   selected={selected}
                   apply={draft.apply}
                   onSelect={onSelect}
+                  removed={removed.entries}
                 />
               ) : left === 'usage' && bundle ? (
                 <UsagePanel
@@ -1687,6 +1707,15 @@ export function LayoutEditor({
         apply={draft.apply}
         onSelection={setSelection}
         rootRef={bodyRef}
+        extraItems={placeTools.menuItems}
+      />
+      <SlashInsert
+        bundle={bundle}
+        fields={fields}
+        apply={draft.apply}
+        onSelect={onSelect}
+        rootRef={bodyRef}
+        enabled={!(arrangeable && view !== 'canvas')}
       />
       <UnsavedConfirm
         request={leaveAsk}
@@ -1735,7 +1764,11 @@ export function LayoutEditor({
   )
 
   if (!overlay)
-    return <EntryEditorContext.Provider value={entryApi}>{body}</EntryEditorContext.Provider>
+    return (
+      <EntryEditorContext.Provider value={entryApi}>
+        <PlaceToolsProvider value={placeTools}>{body}</PlaceToolsProvider>
+      </EntryEditorContext.Provider>
+    )
   // Fixed under the page outlet would be offset by its transform: portal out —
   // into the hosting modal when there is one (a body portal would sit under
   // its pointer/scroll lock), else body.
@@ -1744,7 +1777,9 @@ export function LayoutEditor({
     <>
       <span ref={setMarker} hidden data-layout-editor-marker='' />
       <EntryEditorContext.Provider value={entryApi}>
-        {container && createPortal(body, container)}
+        <PlaceToolsProvider value={placeTools}>
+          {container && createPortal(body, container)}
+        </PlaceToolsProvider>
       </EntryEditorContext.Provider>
     </>
   )

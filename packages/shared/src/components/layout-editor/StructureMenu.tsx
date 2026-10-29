@@ -96,8 +96,18 @@ type Measurable = { getBoundingClientRect(): DOMRect }
 type View = 'menu' | 'convert' | 'rules'
 interface MenuState {
   targets: DesignTarget[]
+  /** The node the menu was opened on (one of `targets`; null from an Arrange button). */
+  origin: DesignTarget | null
   anchor: Measurable
   view: View
+}
+
+/** What extra menu rows (placing tools: copy, paste, look, put back) are told. */
+export interface StructureMenuExtra {
+  targets: DesignTarget[]
+  origin: DesignTarget | null
+  run: (plan: StructurePlan, opts?: { toastNotes?: boolean }) => boolean
+  close: () => void
 }
 
 const pointAnchor = (x: number, y: number): Measurable => ({
@@ -150,6 +160,8 @@ export interface StructureActionsProps {
   onSelection: (next: DesignTarget[]) => void
   /** The editor's body: right-clicks and Arrange buttons inside it open the menu. */
   rootRef: RefObject<HTMLElement | null>
+  /** More rows after the structure actions (the placing tools, #3179 #3197 #3202). */
+  extraItems?: (ctx: StructureMenuExtra) => ReactNode
 }
 
 /**
@@ -161,7 +173,8 @@ export function StructureActions({
   selection,
   apply,
   onSelection,
-  rootRef
+  rootRef,
+  extraItems
 }: StructureActionsProps) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const live = useRef({ bundle, selection, apply, onSelection })
@@ -216,6 +229,7 @@ export function StructureActions({
       const keyboard = e.button !== 2 && e.clientX === 0 && e.clientY === 0
       setMenu({
         targets,
+        origin: t,
         anchor: keyboard ? (el as HTMLElement) : pointAnchor(e.clientX, e.clientY),
         view: 'menu'
       })
@@ -224,7 +238,12 @@ export function StructureActions({
       const el = e.target as HTMLElement
       if (!inside(el)) return
       const detail = (e as CustomEvent<{ targets: DesignTarget[]; view?: View }>).detail
-      setMenu({ targets: detail.targets, anchor: el, view: detail.view ?? 'menu' })
+      setMenu({
+        targets: detail.targets,
+        origin: detail.targets.length === 1 ? detail.targets[0] : null,
+        anchor: el,
+        view: detail.view ?? 'menu'
+      })
     }
     document.addEventListener('contextmenu', onContext, true)
     document.addEventListener(STRUCTURE_MENU_EVENT, onOpen)
@@ -272,6 +291,12 @@ export function StructureActions({
             targets={menu.targets}
             run={run}
             onView={(view) => setMenu({ ...menu, view })}
+            extra={extraItems?.({
+              targets: menu.targets,
+              origin: menu.origin,
+              run,
+              close: () => setMenu(null)
+            })}
           />
         )}
       </PopoverContent>
@@ -295,7 +320,7 @@ function targetKeyOf(t: DesignTarget): string {
 const itemCls =
   'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 outline-none transition-colors hover:bg-muted focus-visible:bg-muted dark:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-transparent'
 
-function MenuItem({
+export function MenuItem({
   icon,
   children,
   hint,
@@ -357,12 +382,14 @@ function MenuView({
   bundle,
   targets,
   run,
-  onView
+  onView,
+  extra
 }: {
   bundle: LayoutBundle
   targets: DesignTarget[]
   run: (plan: StructurePlan, opts?: { toastNotes?: boolean }) => boolean
   onView: (v: View) => void
+  extra?: ReactNode
 }) {
   const one = targets.length === 1 ? targets[0] : null
   const group =
@@ -486,11 +513,12 @@ function MenuView({
           </MenuItem>
         </>
       )}
-      {!group && fieldTargets.length === 0 && (
+      {!group && fieldTargets.length === 0 && !extra && (
         <p className={cn(effectText, 'px-2 py-1')}>
           Select a section or fields to duplicate, wrap or convert.
         </p>
       )}
+      {extra}
     </div>
   )
 }

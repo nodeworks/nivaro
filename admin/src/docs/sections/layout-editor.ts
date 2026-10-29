@@ -246,6 +246,26 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'h3',
+      id: 'layout-editor-placing',
+      text: 'Copy, paste, put back and paint'
+    },
+    {
+      type: 'p',
+      text: 'These work from the keyboard (when you are not typing in a box) and from the Arrange menu. Each one is one Undo step, and nothing is saved until you save.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Copy and paste (⌘C / ⌘V, Ctrl elsewhere): select a field, several fields or a section and copy it. Paste puts it after the selection, on this form or on another form of the same collection: open the other form in the Forms list and paste there. A field keeps every setting (label on this form, width, rules, help text); a section keeps its settings, its tabs and its fields. Pasting into a form of another collection is refused. Fields the other form’s collection does not have are skipped and listed, and a field already in the section you paste into is left alone.',
+        'Paste field names: paste a list of field names, keys or labels (one per line, or with commas, straight out of a spreadsheet) onto the canvas and every field that matches is placed after the selection, in the list’s order. In the Add panel, paste the list into the search box, or use Place a list of fields, to see what matches before you place it. Names that match nothing are listed.',
+        'Slash to add: point at the gap between two fields (or the end of a section) and type /, or type / on a focused field, to search for a field, panel or new section and add it right there.',
+        'Put back as saved: right-click a field or section, or use the button at the top of its inspector, to put just that one back the way it is on the saved form: its settings, its section and its place. With autosave on, it goes back to how it was when you opened the form. Something that is not on the saved form comes off; a new section’s fields go back where they were.',
+        'Recently removed: everything taken off the form while the editor is open (Remove, the trash, a join, a deleted section) is listed at the top of the Add panel. Put back returns it where it was, with its settings. A field whose section has gone since lands after the selection.',
+        'Format painter: right-click a field and choose Copy look and rules (⌥⌘C), then select other fields and choose Paint the look (⌥⌘V). Width, required, read-only, hidden, lock rules and the rest of its look go onto them; each field keeps its own label, help text, placeholder and translations, and its input type unless the fields are of the same kind. With several fields selected, right-click one of them to give the others its look in one go.'
+      ]
+    },
+    {
+      type: 'h3',
       id: 'layout-editor-structure',
       text: 'Show more, sticky sections and empty text'
     },
