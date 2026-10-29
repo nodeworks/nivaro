@@ -16,6 +16,7 @@ const local = vi.hoisted(() => ({
   chromium: true,
   ffmpeg: true,
   pdfCalls: [] as Array<{ html: string; opts: unknown }>,
+  pagesCalls: [] as Array<{ size: number; opts: unknown }>,
   probe: { duration_ms: 4200, width: 1280, height: 720, has_audio: true },
   convertFails: null as null | { statusCode: number; code: string; message: string }
 }))
@@ -25,6 +26,13 @@ vi.mock('../../../services/pdf-layout.js', () => ({
   htmlToPdfLocal: async (html: string, opts: unknown) => {
     local.pdfCalls.push({ html, opts })
     return Buffer.from(`%PDF-1.7 ${html.length}`)
+  }
+}))
+vi.mock('../../../services/pdf-pages.js', () => ({
+  pdfPageImagesLocal: async (pdf: Buffer, opts: { maxPages?: number; width?: number }) => {
+    local.pagesCalls.push({ size: pdf.length, opts })
+    if (pdf.includes('broken')) throw new Error('InvalidPDFException')
+    return { pages: [Buffer.from('jpeg-1'), Buffer.from('jpeg-2')], total: 5 }
   }
 }))
 vi.mock('../../../services/ffmpeg.js', () => ({
@@ -70,6 +78,7 @@ import {
   peerEncoders,
   peerFileOp,
   peerHtmlToPdf,
+  peerPdfPages,
   plainHttpAllowed,
   probeRenderPeer,
   renderPeerTarget,
@@ -177,6 +186,27 @@ describe('render peer routes', () => {
       margin: '14mm',
       allowOrigins: ['https://efp.example.com']
     })
+  })
+
+  it("draws a PDF's first pages for the client (#3186)", async () => {
+    const out = await peerPdfPages(Buffer.from('%PDF-1.7 scanned form'), {
+      maxPages: 3,
+      width: 1400
+    })
+    expect(out.pages.map((p) => p.toString())).toEqual(['jpeg-1', 'jpeg-2'])
+    expect(out.total).toBe(5)
+    expect(local.pagesCalls.at(-1)?.opts).toEqual({ maxPages: 3, width: 1400 })
+    // Not a PDF, or one pdf.js cannot read: refused with a code, never a crash.
+    await expect(
+      peerPdfPages(Buffer.from('hello'), { maxPages: 1, width: 800 })
+    ).rejects.toMatchObject({ statusCode: 400, code: 'RENDER_BAD_REQUEST' })
+    await expect(
+      peerPdfPages(Buffer.from('%PDF-broken'), { maxPages: 1, width: 800 })
+    ).rejects.toMatchObject({ statusCode: 422, code: 'RENDER_PDF_UNREADABLE' })
+    local.chromium = false
+    await expect(
+      peerPdfPages(Buffer.from('%PDF-1.7'), { maxPages: 1, width: 800 })
+    ).rejects.toMatchObject({ statusCode: 503, code: 'RENDER_UNAVAILABLE' })
   })
 
   it('a wrong client token comes back as a readable 503', async () => {

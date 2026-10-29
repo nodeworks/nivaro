@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import type Anthropic from '@anthropic-ai/sdk'
+import sharp from 'sharp'
 import { db } from '../../db/index.js'
 import {
   AiImagesUnsupportedError,
@@ -10,6 +11,7 @@ import {
 } from '../ai-client.js'
 import { ACCEPTED_EXTENSIONS, extractDocumentText, MAX_TEXT_CHARS } from '../document-extract.js'
 import { isPersonField } from '../layout-usage.js'
+import { pdfPageImages } from '../pdf-pages.js'
 import { asArray, cleanText, parseJsonLoose, titleCase } from './model.js'
 
 /**
@@ -79,6 +81,8 @@ export interface CandidateField {
   type: string | null
   /** The step / section the label sat in on the document. */
   group: string | null
+  /** #3186: a field key to create it with — snake_case of the label, not taken yet. */
+  key?: string
 }
 
 export interface ComposedForm {
@@ -95,6 +99,15 @@ export interface ComposedForm {
 }
 
 export const COMPOSE_MAX_BYTES = 10 * 1024 * 1024
+/** #3186: a paper form photographed page by page — up to this many files, this much in all. */
+export const COMPOSE_MAX_FILES = 6
+export const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024
+/** Pictures one request sends the model (photos plus drawn PDF pages). */
+export const COMPOSE_MAX_IMAGES = 8
+/** A picture's longest side after resizing: legible handwriting, a sane token count. */
+const IMAGE_MAX_SIDE = 2000
+/** Anthropic refuses an image over 5 MB (base64); keep a margin. */
+const IMAGE_MAX_BYTES = 3_700_000
 export const MAX_GROUPS = 15
 const MAX_FIELDS_PER_GROUP = 80
 const MAX_PROMPT_FIELDS = 300
@@ -182,7 +195,7 @@ export const COMPOSE_SYSTEM: Record<ComposeMode, string> = {
 ${ANSWER_SHAPE}
 ${COMMON_RULES} Leave "unmatched", "locks" and "requirements" empty.`,
   picture: `You rebuild a legacy form (a screenshot, scan, PDF or spreadsheet of a paper or Excel form) as a data-entry form on a business application's existing fields.
-Read the document's labels and layout, match each label to the field of the input with the same meaning, and keep the document's order and grouping (its boxes, headings or pages become sections or steps).
+Read the document's labels and layout, match each label to the field of the input with the same meaning, and keep the document's order and grouping (its boxes, headings or pages become sections or steps). Several pictures, pages or files are pages of the same form, in order; a handwritten entry is an example value, never a label.
 ${ANSWER_SHAPE}
 ${COMMON_RULES} A label no field matches goes in "unmatched" with a guessed type — never in "groups". "source" = the heading on the document. Leave "locks" and "requirements" empty.`,
   sop: `You turn a process document (an SOP) into a data-entry form on a business application's existing fields: one step per stage of the process.
@@ -360,6 +373,9 @@ export function parseComposeAnswer(
           ? `The AI named no field of this collection (it used: ${dropped.slice(0, 6).join(', ')})`
           : 'The AI found nothing to put on the form')
     )
+  // Suggested keys for the labels no field matched (never created here).
+  const taken = new Set(ctx.fields.map((f) => f.field.toLowerCase()))
+  for (const c of candidates) c.key = candidateKey(c.label, taken)
   return {
     name: cleanText(parsed.name, 60),
     layout: mode === 'sop' || parsed.layout === 'steps' ? 'steps' : 'sections',
@@ -370,6 +386,25 @@ export function parseComposeAnswer(
     dropped,
     explanation: cleanText(parsed.explanation, 300)
   }
+}
+
+/** "Date of birth" → date_of_birth: a key for a new field, unlike any taken one. */
+export function candidateKey(label: string, taken: Set<string>): string {
+  const base =
+    label
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48)
+      .replace(/_+$/, '') || 'field'
+  const start = /^[a-z]/.test(base) ? base : `f_${base}`
+  let key = start
+  for (let n = 2; taken.has(key); n++) key = `${start}_${n}`
+  taken.add(key)
+  return key
 }
 
 // ─── Model + uploaded documents ─────────────────────────────────────────────
@@ -443,23 +478,27 @@ const isPdf = (doc: UploadedDoc) =>
  */
 export async function documentContent(
   doc: UploadedDoc,
-  opts: { pdfBlocks: boolean }
+  opts: {
+    pdfBlocks: boolean
+    /** #3186: a form's PDF on a provider without PDF blocks is sent as page pictures. */
+    pdfPagesFirst?: boolean
+    /** Pictures still allowed in this request (photos + drawn pages). */
+    images?: number
+    /** Injectable for tests: draws PDF pages (locally or on the render peer). */
+    drawPages?: typeof pdfPageImages
+  }
 ): Promise<{ blocks: Anthropic.ContentBlockParam[]; method: string }> {
   const image = imageTypeOf(doc)
-  if (image)
-    return {
-      blocks: [
-        {
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: image as 'image/png',
-            data: doc.buffer.toString('base64')
-          }
-        }
-      ],
-      method: 'image'
-    }
+  if (image) {
+    const pic = await preparePicture(doc.buffer, image)
+    return { blocks: [imageBlock(pic.data, pic.type)], method: 'image' }
+  }
+  const room = Math.max(0, Math.min(opts.images ?? 4, 4))
+  const draw = opts.drawPages ?? pdfPageImages
+  if (isPdf(doc) && !opts.pdfBlocks && opts.pdfPagesFirst && room > 0) {
+    const pages = await pagesOf(doc, room, draw)
+    if (pages) return pages
+  }
   if (isPdf(doc) && opts.pdfBlocks)
     return {
       blocks: [
@@ -475,12 +514,16 @@ export async function documentContent(
       method: 'pdf'
     }
   const extracted = await extractDocumentText(doc.buffer, doc.filename, doc.mimetype)
-  if (extracted.text.trim().length < 20)
+  if (extracted.text.trim().length < 20) {
+    // A scanned PDF: look at its pages instead (#3186).
+    const pages = isPdf(doc) && room > 0 ? await pagesOf(doc, room, draw) : null
+    if (pages) return pages
     throw new ComposeRefusal(
       isPdf(doc)
         ? 'This PDF has no readable text (a scan?). Upload a picture of it (PNG or JPG) instead.'
         : 'No readable text in this file.'
     )
+  }
   return {
     blocks: [
       {
@@ -490,6 +533,97 @@ export async function documentContent(
     ],
     method: extracted.method
   }
+}
+
+function imageBlock(data: Buffer, type: string): Anthropic.ContentBlockParam {
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: type as 'image/jpeg', data: data.toString('base64') }
+  }
+}
+
+/**
+ * A photo as the model should see it (#3186): turned upright from its EXIF
+ * orientation (phones store most photos sideways), at most IMAGE_MAX_SIDE on
+ * its longest side and under the provider's per-image limit. A screenshot
+ * (PNG) stays PNG while it fits; anything else becomes JPEG. A GIF and a
+ * picture sharp cannot read go as they came.
+ */
+export async function preparePicture(
+  buffer: Buffer,
+  type: string
+): Promise<{ data: Buffer; type: string }> {
+  if (type === 'image/gif') return { data: buffer, type }
+  try {
+    const img = sharp(buffer, { failOn: 'none' }).rotate().resize({
+      width: IMAGE_MAX_SIDE,
+      height: IMAGE_MAX_SIDE,
+      fit: 'inside',
+      withoutEnlargement: true
+    })
+    if (type === 'image/png') {
+      const png = await img.clone().png({ compressionLevel: 9 }).toBuffer()
+      if (png.length <= IMAGE_MAX_BYTES) return { data: png, type: 'image/png' }
+    }
+    for (const quality of [85, 70, 55]) {
+      const jpg = await img.clone().flatten({ background: '#ffffff' }).jpeg({ quality }).toBuffer()
+      if (jpg.length <= IMAGE_MAX_BYTES || quality === 55) return { data: jpg, type: 'image/jpeg' }
+    }
+  } catch {
+    /* not readable here: send it as it came */
+  }
+  return { data: buffer, type }
+}
+
+/** A PDF's first pages as pictures, or null when they cannot be drawn here or on the render peer. */
+async function pagesOf(
+  doc: UploadedDoc,
+  room: number,
+  draw: typeof pdfPageImages
+): Promise<{ blocks: Anthropic.ContentBlockParam[]; method: string } | null> {
+  let drawn: Awaited<ReturnType<typeof pdfPageImages>>
+  try {
+    drawn = await draw(doc.buffer, { maxPages: room, width: 1600 })
+  } catch {
+    return null
+  }
+  if (!drawn.pages.length) return null
+  const blocks: Anthropic.ContentBlockParam[] = []
+  for (const [i, page] of drawn.pages.entries()) {
+    blocks.push({ type: 'text', text: `Page ${i + 1} of ${drawn.total}:` })
+    blocks.push(imageBlock(page, 'image/jpeg'))
+  }
+  if (drawn.total > drawn.pages.length)
+    blocks.push({
+      type: 'text',
+      text: `(Only the first ${drawn.pages.length} of ${drawn.total} pages are shown.)`
+    })
+  return { blocks, method: 'pdf-pages' }
+}
+
+/**
+ * Several uploads (pages of one paper form, photographed one by one) as one
+ * message: each labelled with its file name, pictures counted against
+ * COMPOSE_MAX_IMAGES.
+ */
+export async function documentsContent(
+  docs: UploadedDoc[],
+  opts: { pdfBlocks: boolean; pdfPagesFirst?: boolean; drawPages?: typeof pdfPageImages }
+): Promise<{ blocks: Anthropic.ContentBlockParam[]; method: string }> {
+  if (docs.length === 1) return documentContent(docs[0], { ...opts, images: COMPOSE_MAX_IMAGES })
+  const blocks: Anthropic.ContentBlockParam[] = []
+  const methods: string[] = []
+  let images = COMPOSE_MAX_IMAGES
+  for (const [i, doc] of docs.entries()) {
+    if (imageTypeOf(doc) && images <= 0)
+      throw new ComposeRefusal(`At most ${COMPOSE_MAX_IMAGES} pictures in one go`)
+    const part = await documentContent(doc, { ...opts, images })
+    images -= part.blocks.filter((b) => b.type === 'image').length
+    blocks.push({ type: 'text', text: `File ${i + 1} of ${docs.length}: "${doc.filename}"` })
+    blocks.push(...part.blocks)
+    if (!methods.includes(part.method)) methods.push(part.method)
+  }
+  return { blocks, method: methods.join('+') }
 }
 
 /** Ask the model and check its answer: the whole of one compose request. */

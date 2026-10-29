@@ -629,11 +629,15 @@ export const layoutEditor: DocSection = {
       type: 'ul',
       items: [
         'Describe it: "a returns form with a manager approval step". The steps or sections are built from the fields this collection already has. Any name the AI makes up is left out and listed.',
-        'From a picture or PDF: a screenshot, scan, PDF or spreadsheet of an old form (up to 10 MB). Its labels are matched to fields, and its order and grouping are kept. Labels with no field are listed as candidate new fields. They are never created for you.',
+        'From a paper form or PDF: a photo, scan, screenshot, PDF or spreadsheet of an old form — up to 6 files at once (10 MB each, 25 MB together), so a form of several pages can be photographed page by page. Its labels are matched to fields, and its order and grouping are kept. Photos are turned upright and shrunk before they are read. A scanned PDF (no text in it), and any form PDF where the AI provider cannot read PDFs, is read from pictures of its first four pages, drawn on this server or on the render server. Labels with no field are listed under Fields you may want to create, each with a suggested field key, and Copy the list copies them for the data model. They are never created for you.',
         'From a process document: one step per stage, with the passage each step came from. You also get suggested read-only fields per pipeline state (ticked) and required fields (unticked: Required counts for every state).',
         'Lighter version for a role: pick a role. You see the fields its people changed in the last 180 days, and the fields it would hide. Create lighter version makes a new form that inherits from this one, is shown only to that role, and hides the unused fields.',
         'Sections by meaning: at the top of the Add panel (and under AI). Each field not on the form gets a suggested section, based on what the field means. This helps on a new collection that has no usage history yet.'
       ]
+    },
+    {
+      type: 'p',
+      text: 'Each build is one AI call and counts against the per-person AI limits (AI_USER_CALLS_PER_MINUTE, AI_USER_DAILY_TOKENS); past them the panel says when to try again. iPhone photos (HEIC) are not read: share them as JPEG.'
     },
     {
       type: 'note',

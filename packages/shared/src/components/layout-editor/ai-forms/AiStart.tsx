@@ -16,7 +16,7 @@ import { stashBuild } from './pending'
 
 const OPTIONS: Array<{ mode: ComposeMode; label: string; icon: typeof Wand2 }> = [
   { mode: 'describe', label: 'Describe it', icon: Wand2 },
-  { mode: 'picture', label: 'From a picture or PDF', icon: FileImage },
+  { mode: 'picture', label: 'From a paper form or PDF', icon: FileImage },
   { mode: 'sop', label: 'From a process document', icon: FileText }
 ]
 

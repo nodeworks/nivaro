@@ -22,6 +22,7 @@ import {
   readMediaWorker
 } from '../services/media-handoff.js'
 import { hasLocalChromium, htmlToPdfLocal } from '../services/pdf-layout.js'
+import { pdfPageImagesLocal } from '../services/pdf-pages.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import {
   bearerMatches,
@@ -34,6 +35,7 @@ import {
   RENDER_META_HEADER,
   RENDER_MUSIC_MAX_BYTES,
   RENDER_PDF_MAX_BYTES,
+  RENDER_PDF_PAGES_MAX_BYTES,
   RENDER_TOKEN_MIN_LENGTH,
   type RenderFileOp,
   renderPeerToken
@@ -46,6 +48,8 @@ import { NIVARO_VERSION } from '../version.js'
  *
  *   GET  /api/internal/render/health        → { ok, chromium, ffmpeg, version }
  *   POST /api/internal/render/pdf           → application/pdf ({ html, format, landscape, margin })
+ *   POST /api/internal/render/pdf-pages     → { pages: [base64 JPEG], total } (body: the PDF;
+ *                                              ?max_pages=&width=) — #3186 paper forms
  *   POST /api/internal/render/file/:op      → JSON (probe-*) or the output file
  *                                              (remux, convert-upload, convert-music)
  *   GET  /api/internal/render/encoders      → { hardware } (help-video encoder report)
@@ -257,6 +261,12 @@ export async function internalRenderRoutes(app: FastifyInstance) {
 
   // A raw stream: the file goes straight to disk through byteCap.
   app.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload))
+  // A PDF whose pages to draw (#3186): small enough to hold in memory.
+  app.addContentTypeParser(
+    'application/pdf',
+    { parseAs: 'buffer', bodyLimit: RENDER_PDF_PAGES_MAX_BYTES },
+    (_req, body, done) => done(null, body)
+  )
   app.addHook('onRequest', async (req, reply) => {
     if (authFails.blocked(req.ip)) return refuse(reply, 429, 'RENDER_TOKEN', 'Too many attempts')
     if (!bearerMatches(req.headers.authorization, token)) {
@@ -329,6 +339,32 @@ export async function internalRenderRoutes(app: FastifyInstance) {
           allowOrigins: callerOrigins(b.allow_origins)
         })
         return reply.header('content-type', 'application/pdf').send(pdf)
+      } finally {
+        release()
+      }
+    }
+  )
+
+  // #3186: a PDF's first pages as JPEGs (pdf.js in Chromium, nothing loaded from the network).
+  app.post<{ Querystring: { max_pages?: string; width?: string } }>(
+    '/internal/render/pdf-pages',
+    { bodyLimit: RENDER_PDF_PAGES_MAX_BYTES, compress: false },
+    async (req, reply) => {
+      if (!(await hasLocalChromium()))
+        return refuse(reply, 503, 'RENDER_UNAVAILABLE', 'This render server has no Chromium')
+      const pdf = req.body
+      if (!Buffer.isBuffer(pdf) || pdf.subarray(0, 5).toString('latin1') !== '%PDF-')
+        return refuse(reply, 400, 'RENDER_BAD_REQUEST', 'The body must be a PDF')
+      const release = await pdfSlots.acquire()
+      if (!release) return busy(reply)
+      try {
+        const out = await pdfPageImagesLocal(pdf, {
+          maxPages: Number(req.query.max_pages),
+          width: Number(req.query.width)
+        })
+        return reply.send({ pages: out.pages.map((p) => p.toString('base64')), total: out.total })
+      } catch {
+        return refuse(reply, 422, 'RENDER_PDF_UNREADABLE', 'The PDF could not be drawn')
       } finally {
         release()
       }

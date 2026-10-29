@@ -83,7 +83,7 @@ export function AiFormsButton({
             />
             <MenuRow
               icon={<FileImage className='h-3.5 w-3.5' />}
-              title='From a picture or PDF'
+              title='From a paper form or PDF'
               sub='An old paper, PDF or Excel form, matched to fields'
               onClick={() => setView('picture')}
             />

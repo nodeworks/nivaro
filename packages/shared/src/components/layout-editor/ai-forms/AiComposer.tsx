@@ -1,4 +1,4 @@
-import { FileUp, Quote, Sparkles } from 'lucide-react'
+import { Copy, FileUp, Quote, Sparkles, X } from 'lucide-react'
 import { type ReactNode, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import type { LayoutBundle } from '../../../lib/layout-ops'
@@ -9,6 +9,8 @@ import { effectText, inputBase, tintCard } from '../panel-style'
 import {
   COMPOSE_ACCEPT,
   COMPOSE_MAX_BYTES,
+  COMPOSE_MAX_FILES,
+  COMPOSE_MAX_TOTAL_BYTES,
   type ComposeMode,
   type ComposeResult,
   composeFromFile,
@@ -30,8 +32,8 @@ export const MODE_COPY: Record<ComposeMode, { title: string; hint: string }> = {
     hint: 'Built from this collection’s fields. Anything the AI names that is not a field is left out and listed.'
   },
   picture: {
-    title: 'From a picture or PDF',
-    hint: 'A screenshot, scan, PDF or spreadsheet of the old form. Its labels are matched to fields; labels with no field are listed, never created. Read once, never stored. Up to 10 MB.'
+    title: 'From a paper form, picture or PDF',
+    hint: 'A photo, scan, PDF or spreadsheet of the old form (several photos for a form of several pages). Its labels are matched to fields; labels with no field are listed as fields you may want to create, never created. Read once, never stored. Up to 6 files, 10 MB each.'
   },
   sop: {
     title: 'From a process document',
@@ -75,14 +77,36 @@ export function AiComposer({
   const client = useNivaroClient()
   const { data: fields = [] } = useOverviewFields(collection)
   const [text, setText] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [phase, setPhase] = useState<Phase>({ kind: 'input' })
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   const fileRef = useRef<HTMLInputElement | null>(null)
   const env = useMemo(() => ({ fields }), [fields])
   const copy = MODE_COPY[mode]
 
-  const ready = mode === 'describe' ? text.trim().length >= 6 : !!file
+  const ready = mode === 'describe' ? text.trim().length >= 6 : files.length > 0
+
+  /** Add picked files (a form photographed page by page), within the limits. */
+  const addFiles = (picked: File[]) => {
+    const next = [...files]
+    for (const f of picked) {
+      if (f.size > COMPOSE_MAX_BYTES) {
+        setPhase({ kind: 'input', error: `${f.name} is larger than 10 MB` })
+        return
+      }
+      if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f)
+    }
+    if (next.length > COMPOSE_MAX_FILES) {
+      setPhase({ kind: 'input', error: `Up to ${COMPOSE_MAX_FILES} files at once` })
+      return
+    }
+    if (next.reduce((n, f) => n + f.size, 0) > COMPOSE_MAX_TOTAL_BYTES) {
+      setPhase({ kind: 'input', error: 'The files are larger than 25 MB together' })
+      return
+    }
+    setFiles(next)
+    setPhase({ kind: 'input' })
+  }
 
   const run = async () => {
     if (!ready) return
@@ -94,7 +118,7 @@ export function AiComposer({
           : await composeFromFile(client, {
               collection,
               mode,
-              file: file as File,
+              files,
               note: text
             })
       setChosen(
@@ -142,38 +166,58 @@ export function AiComposer({
       <p className={head}>{copy.title}</p>
       <p className={quiet}>{copy.hint}</p>
       {mode !== 'describe' && (
-        <div className='flex items-center gap-2'>
+        <div className='space-y-1.5'>
           <input
             ref={fileRef}
             type='file'
             accept={COMPOSE_ACCEPT}
+            multiple
             className='hidden'
             data-ai-compose-file=''
             onChange={(e) => {
-              const f = e.target.files?.[0] ?? null
+              const picked = Array.from(e.target.files ?? [])
               e.target.value = ''
-              if (f && f.size > COMPOSE_MAX_BYTES) {
-                setPhase({ kind: 'input', error: `${f.name} is larger than 10 MB` })
-                return
-              }
-              setFile(f)
-              setPhase({ kind: 'input' })
+              if (picked.length) addFiles(picked)
             }}
           />
           <button
             type='button'
             className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
+              'inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
             )}
+            disabled={files.length >= COMPOSE_MAX_FILES}
             onClick={() => fileRef.current?.click()}
           >
             <FileUp className='h-3.5 w-3.5' />
-            {file ? 'Choose another file' : 'Choose a file'}
+            {files.length ? 'Add another page or file' : 'Choose files'}
           </button>
-          {file && (
-            <span className='min-w-0 truncate text-[12px] text-slate-600 dark:text-muted-foreground'>
-              {file.name} · {formatFileSize(file.size)}
-            </span>
+          {files.length > 0 && (
+            <ul className='space-y-0.5' data-ai-compose-files=''>
+              {files.map((f, i) => (
+                <li
+                  key={`${f.name}:${f.size}`}
+                  className='flex min-w-0 items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'
+                >
+                  {files.length > 1 && (
+                    <span className='w-4 shrink-0 text-right tabular-nums text-slate-400 dark:text-muted-foreground'>
+                      {i + 1}
+                    </span>
+                  )}
+                  <span className='min-w-0 flex-1 truncate'>
+                    {f.name} · {formatFileSize(f.size)}
+                  </span>
+                  <button
+                    type='button'
+                    aria-label={`Remove ${f.name}`}
+                    data-tip='Remove'
+                    onClick={() => setFiles(files.filter((x) => x !== f))}
+                    className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 transition-colors hover:bg-muted hover:text-slate-700 dark:hover:text-foreground'
+                  >
+                    <X className='h-3.5 w-3.5' />
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
@@ -276,6 +320,11 @@ function Review({
         The AI proposes
       </p>
       {form.explanation && <p className={quiet}>{form.explanation}</p>}
+      {result.read_as?.includes('pdf-pages') && (
+        <p className={quiet} data-ai-read-as=''>
+          Read from pictures of the PDF’s pages.
+        </p>
+      )}
       {plan.steps.length > 0 ? (
         <ol className='list-decimal space-y-1 pl-5 text-[12.5px] leading-snug text-slate-700 dark:text-foreground'>
           {plan.steps.map((s, i) => (
@@ -329,25 +378,7 @@ function Review({
           </ul>
         </Block>
       )}
-      {form.candidates.length > 0 && (
-        <Block title='Labels with no field'>
-          <p className={quiet}>
-            Not created. Add them as fields in the data model first if the form needs them.
-          </p>
-          <ul className='mt-1 space-y-0.5' data-ai-candidates=''>
-            {form.candidates.map((c) => (
-              <li key={c.label} className='text-[12.5px] text-slate-700 dark:text-foreground'>
-                {c.label}
-                <span className='text-slate-500 dark:text-muted-foreground'>
-                  {[c.type, c.group ? `in ${c.group}` : null].filter(Boolean).length
-                    ? ` · ${[c.type, c.group ? `in ${c.group}` : null].filter(Boolean).join(' · ')}`
-                    : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Block>
-      )}
+      {form.candidates.length > 0 && <Candidates candidates={form.candidates} />}
       {plan.notes.map((n) => (
         <p key={n} className={noteCls}>
           {n}
@@ -368,6 +399,60 @@ function Review({
         </button>
       </div>
     </div>
+  )
+}
+
+/** Labels on the paper form no field matched: fields you may want to create (#3186). */
+function Candidates({ candidates }: { candidates: ComposeResult['form']['candidates'] }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    const lines = candidates.map((c) => [c.label, c.key ?? '', c.type ?? ''].join('\t'))
+    try {
+      await navigator.clipboard.writeText(['Label\tKey\tType', ...lines].join('\n'))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* clipboard refused (not a secure page): the list stays on screen */
+    }
+  }
+  return (
+    <Block title='Fields you may want to create'>
+      <p className={quiet}>
+        Labels on the form no field matched. Nothing is created: add the ones you need in the data
+        model, then build again to place them.
+      </p>
+      <ul className='mt-1 space-y-1' data-ai-candidates=''>
+        {candidates.map((c) => {
+          const meta = [c.type, c.group ? `in ${c.group}` : null].filter(Boolean).join(' · ')
+          return (
+            <li
+              key={c.label}
+              className='flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[12.5px] text-slate-700 dark:text-foreground'
+            >
+              <span className='min-w-0 break-words'>{c.label}</span>
+              {meta && <span className='text-slate-500 dark:text-muted-foreground'>· {meta}</span>}
+              {c.key && (
+                <span
+                  data-tip='Suggested field key'
+                  className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'
+                >
+                  {c.key}
+                </span>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+      <button
+        type='button'
+        className={cn(ghostBtn, '-ml-2.5 mt-0.5')}
+        onClick={() => void copy()}
+        data-ai-candidates-copy=''
+      >
+        <Copy className='h-3.5 w-3.5' />
+        {copied ? 'Copied' : 'Copy the list'}
+      </button>
+    </Block>
   )
 }
 

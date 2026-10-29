@@ -54,6 +54,8 @@ export interface CandidateField {
   label: string
   type: string | null
   group: string | null
+  /** #3186: a suggested key for the new field (not created). */
+  key?: string
 }
 
 export interface ComposedForm {

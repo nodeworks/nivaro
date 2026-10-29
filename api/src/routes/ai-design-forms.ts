@@ -3,11 +3,13 @@ import { db } from '../db/index.js'
 import {
   COMPOSE_ACCEPT,
   COMPOSE_MAX_BYTES,
+  COMPOSE_MAX_FILES,
+  COMPOSE_MAX_TOTAL_BYTES,
   type ComposeMode,
   ComposeRefusal,
   composeAsk,
   composeForm,
-  documentContent,
+  documentsContent,
   loadComposeContext,
   providerReadsPdf,
   type UploadedDoc
@@ -34,6 +36,12 @@ const COLLECTION_RE = /^[A-Za-z0-9_]{1,64}$/
 function modelFailure(reply: FastifyReply, err: unknown, what: string) {
   if (err instanceof ComposeRefusal) return reply.code(422).send({ error: err.message })
   const status = (err as { statusCode?: number }).statusCode
+  // The per-person AI limits (ai-user-limits.ts) say what to do in their own words.
+  if (status === 429)
+    return reply.code(429).send({
+      error: (err as Error).message,
+      code: (err as { code?: string }).code ?? 'AI_RATE_LIMITED'
+    })
   if (status === 503) return reply.code(503).send({ error: new AiUnavailableError().message })
   return reply
     .code(502)
@@ -80,13 +88,15 @@ export async function aiDesignFormRoutes(app: FastifyInstance) {
     }
   )
 
-  // ── Form from a picture / PDF (#2669) or a process document (#2670) ────────
-  // multipart: collection, mode (picture | sop), note (optional), file. The
-  // file is read in memory and never stored.
+  // ── Form from a picture / PDF (#2669 #3186) or a process document (#2670) ──
+  // multipart: collection, mode (picture | sop), note (optional), file (up to
+  // COMPOSE_MAX_FILES of them: a paper form photographed page by page). Files
+  // are read in memory and never stored.
 
   app.post('/layouts/compose/file', async (req, reply) => {
     const fields: Record<string, string> = {}
-    let doc: UploadedDoc | null = null
+    let docs: UploadedDoc[] = []
+    let total = 0
     try {
       for await (const part of req.parts()) {
         if (part.type === 'field') {
@@ -94,27 +104,47 @@ export async function aiDesignFormRoutes(app: FastifyInstance) {
           continue
         }
         const buffer = await part.toBuffer()
-        if (doc) continue
+        if (docs.length >= COMPOSE_MAX_FILES)
+          return reply.code(400).send({ error: `At most ${COMPOSE_MAX_FILES} files at once` })
         if (buffer.length > COMPOSE_MAX_BYTES)
-          return reply.code(413).send({ error: 'The file is larger than 10 MB' })
-        doc = { buffer, filename: part.filename || 'document', mimetype: part.mimetype || null }
+          return reply
+            .code(413)
+            .send({ error: `${part.filename || 'A file'} is larger than 10 MB` })
+        total += buffer.length
+        if (total > COMPOSE_MAX_TOTAL_BYTES)
+          return reply.code(413).send({ error: 'The files are larger than 25 MB together' })
+        docs.push({
+          buffer,
+          filename: part.filename || 'document',
+          mimetype: part.mimetype || null
+        })
       }
     } catch {
       return reply.code(400).send({ error: 'Could not read the upload' })
     }
-    if (!doc) return reply.code(400).send({ error: 'Choose a file' })
-    const name = doc.filename.toLowerCase()
-    if (!COMPOSE_ACCEPT.some((ext) => name.endsWith(ext)))
-      return reply
-        .code(400)
-        .send({ error: `Unsupported file type. Accepted: ${COMPOSE_ACCEPT.join(', ')}` })
+    if (!docs.length) return reply.code(400).send({ error: 'Choose a file' })
+    for (const doc of docs) {
+      const name = doc.filename.toLowerCase()
+      if (/\.(heic|heif)$/.test(name))
+        return reply.code(400).send({
+          error: `${doc.filename} is an iPhone photo (HEIC). Share it as JPEG (or take a screenshot) and upload that.`
+        })
+      if (!COMPOSE_ACCEPT.some((ext) => name.endsWith(ext)))
+        return reply
+          .code(400)
+          .send({ error: `Unsupported file type. Accepted: ${COMPOSE_ACCEPT.join(', ')}` })
+    }
     const mode: ComposeMode = fields.mode === 'sop' ? 'sop' : 'picture'
     const ctx = await composeContextFor(reply, fields.collection)
     if (!ctx) return
     const ask = await composeAsk('chat')
     if (!ask) return reply.code(503).send({ error: new AiUnavailableError().message })
     try {
-      const content = await documentContent(doc, { pdfBlocks: await providerReadsPdf() })
+      const content = await documentsContent(docs, {
+        pdfBlocks: await providerReadsPdf(),
+        // A form's look is its layout: show the pages when the provider cannot take the PDF.
+        pdfPagesFirst: mode === 'picture'
+      })
       const form = await composeForm(ask, ctx, {
         mode,
         text: cleanText(fields.note, 500),
@@ -130,7 +160,7 @@ export async function aiDesignFormRoutes(app: FastifyInstance) {
     } catch (err) {
       return modelFailure(reply, err, 'read the document')
     } finally {
-      doc = null
+      docs = []
     }
   })
 

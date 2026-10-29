@@ -35,6 +35,9 @@ export interface SlimResult {
 export const COMPOSE_ACCEPT =
   '.png,.jpg,.jpeg,.gif,.webp,.pdf,.docx,.xlsx,.xls,.xlsm,.csv,.txt,.md,.eml,.html,.htm'
 export const COMPOSE_MAX_BYTES = 10 * 1024 * 1024
+/** #3186: a paper form photographed page by page — files per request, bytes in all. */
+export const COMPOSE_MAX_FILES = 6
+export const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024
 
 export async function composeFromText(
   client: Client,
@@ -50,13 +53,13 @@ export async function composeFromText(
 /** multipart, like the Ask AI attachments: the client has no multipart command. */
 export async function composeFromFile(
   client: Client,
-  input: { collection: string; mode: 'picture' | 'sop'; file: File; note?: string }
+  input: { collection: string; mode: 'picture' | 'sop'; files: File[]; note?: string }
 ): Promise<ComposeResult> {
   const form = new FormData()
   form.append('collection', input.collection)
   form.append('mode', input.mode)
   if (input.note?.trim()) form.append('note', input.note.trim())
-  form.append('file', input.file, input.file.name)
+  for (const f of input.files) form.append('file', f, f.name)
   const token = client.getToken()
   const res = await fetch(`${client.url}/api/ai-design/layouts/compose/file`, {
     method: 'POST',
