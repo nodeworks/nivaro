@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-10-28T23:57:19.247Z",
+  "generated_at": "2026-10-29T01:03:25.738Z",
   "releases": [
+    {
+      "version": "0.3.47",
+      "tag": "v0.3.47",
+      "date": "2026-10-28T21:03:06-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "field defaults",
+              "text": "visible Make / Update / Clear default control",
+              "hash": "d487f81ef"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "no ⋯ button in the field label row",
+              "hash": "c642d0d97"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record form",
+              "text": "\"was empty · someone\" notes only for real live writes",
+              "hash": "0c2434d5d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "field defaults",
+              "text": "Make default review round 1",
+              "hash": "b8ad4e3ed"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "field defaults",
+              "text": "describe the visible default control",
+              "hash": "0ace6ac68"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.46",
       "tag": "v0.3.46",
-      "date": "2026-10-28T19:56:58-04:00",
+      "date": "2026-10-28T19:57:19-04:00",
       "sections": [
         {
           "label": "Added",
