@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-29T18:51:21.518Z",
+  "generated_at": "2026-10-29T19:39:45.327Z",
   "releases": [
+    {
+      "version": "0.3.54",
+      "tag": "v0.3.54",
+      "date": "2026-10-29T15:39:30-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "excluded-from-pickers rows read as not on offer",
+              "hash": "b684237b6"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.53",
       "tag": "v0.3.53",
-      "date": "2026-10-29T14:51:05-04:00",
+      "date": "2026-10-29T14:51:21-04:00",
       "sections": [
         {
           "label": "Added",
