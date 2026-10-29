@@ -16,6 +16,7 @@ import {
   type RuleLayer,
   sanitizeNotifyRules
 } from './notification-layers.js'
+import { buildDeliveryReason, derivePathKind, reasonColumn } from './notification-reason.js'
 import { snapshotRevisionFor } from './notification-snapshot.js'
 import {
   actionsFor,
@@ -863,6 +864,15 @@ async function recipientOwnsRecord(
  *  lookup for plain record rows. */
 export async function computeLane(
   userId: string,
+  row: Parameters<typeof computeLaneDetailed>[1]
+): Promise<NotificationLane> {
+  return (await computeLaneDetailed(userId, row)).lane
+}
+
+/** The lane plus whether it came from the recipient owning the record (#3078: the "owner of
+ *  the state" path). `owns` is only known when the ownership lookup ran. */
+export async function computeLaneDetailed(
+  userId: string,
   row: {
     subject: string
     category: NotifyCategory
@@ -871,8 +881,8 @@ export async function computeLane(
     collection?: string | null
     item?: string | number | null
   }
-): Promise<NotificationLane> {
-  if (row.critical) return 'critical'
+): Promise<{ lane: NotificationLane; owns: boolean }> {
+  if (row.critical) return { lane: 'critical', owns: false }
   const byRow = laneFromRow({
     subject: row.subject,
     category: row.category,
@@ -880,11 +890,12 @@ export async function computeLane(
     action: row.target?.action ?? null,
     actions: actionsFor(row.target, { category: row.category })
   })
-  if (byRow !== 'fyi') return byRow
+  if (byRow !== 'fyi') return { lane: byRow, owns: false }
   const collection = row.target?.collection ?? row.collection
   const item = row.target?.id ?? row.item
-  if (row.target && row.target.kind !== 'record') return 'fyi'
-  return (await recipientOwnsRecord(userId, collection, item)) ? 'needs_you' : 'fyi'
+  if (row.target && row.target.kind !== 'record') return { lane: 'fyi', owns: false }
+  const owns = await recipientOwnsRecord(userId, collection, item)
+  return { lane: owns ? 'needs_you' : 'fyi', owns }
 }
 
 /** Column values the raw nivaro_notifications writers (subscription hooks,
@@ -1005,7 +1016,7 @@ export async function notifyUser(
       subject: opts.subject
     })
 
-  const computedLane = await computeLane(userId, {
+  const { lane: computedLane, owns: ownsRecord } = await computeLaneDetailed(userId, {
     subject: opts.subject,
     category: decision.category,
     critical: decision.critical,
@@ -1055,18 +1066,36 @@ export async function notifyUser(
       : { status: 'not_requested' }
   }
   let notifId: number | null = null
-  // "Why me?" (#77): the caller's source when it named one, else the honest
-  // default — the recipient's notification rules for the category are on.
+  // "Why me?" (#77 / #3078): the caller's source when it named one, else the path derived from
+  // what is known — a mention, a direct message, an alert, owning the record's state, the role's
+  // default rules, or the recipient's own rules for the category.
+  const pathKind = derivePathKind({
+    sourceKind: opts.source?.kind ?? null,
+    sender: opts.sender ?? null,
+    category: decision.category,
+    ownsRecord,
+    inappLayer: decision.layers?.inapp ?? null
+  })
+  const catLabel = NOTIFY_CATEGORY_LABELS[decision.category]
   const why: NotificationDetail['why'] = {
-    kind: opts.source?.kind ?? (opts.sender ? 'message' : 'rules'),
+    kind: pathKind,
     text:
       opts.why ??
-      (opts.sender
+      (pathKind === 'message'
         ? 'Sent to you directly.'
-        : `Your notification rules for "${NOTIFY_CATEGORY_LABELS[decision.category]}" are on.`),
-    label: opts.source?.label ?? null,
+        : pathKind === 'mention'
+          ? 'You were @-mentioned.'
+          : pathKind === 'owner'
+            ? "You own this record's current state."
+            : pathKind === 'role_default'
+              ? `Your role's default notification rules for "${catLabel}" are on.`
+              : `Your notification rules for "${catLabel}" are on.`),
+    label:
+      opts.source?.label ?? (pathKind === 'role_default' ? (decision.role?.name ?? null) : null),
     id: opts.source?.id ?? null
   }
+  // #3078 — what happened, stored with the row (column-probed: migration 514).
+  const reasonCols = await reasonColumn(buildDeliveryReason(decision, why))
   // The ack flags are server-owned: only opts.ack_required sets them.
   const {
     ack_required: _ar,
@@ -1104,6 +1133,7 @@ export async function notifyUser(
           lane,
           delivery: JSON.stringify(delivery),
           detail,
+          ...reasonCols,
           // #706 — the row is a step of whatever chain told this person.
           ...(await chainFields('nivaro_notifications'))
         })

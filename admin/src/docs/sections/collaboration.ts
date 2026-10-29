@@ -575,6 +575,25 @@ PUT    /api/notifications/role-defaults/:roleId   (admin) { "rules": { "quiet_st
 DELETE /api/notifications/role-defaults/:roleId   (admin) → 204, back to the system defaults
 GET    /api/notifications/my-rule-defaults        → { role, rules } for the signed-in person`
     },
+    { type: 'h3', id: 'notification-why', text: 'Why did I get this?' },
+    {
+      type: 'p',
+      text: 'Every bell and inbox row has a "Why?" that names the path that sent it — a record watch, a subscription, owning the record\'s current state, an @mention, an alert subscription, a direct message, a task or flow, or your role\'s default rules — and, per channel, the rule that picked it (the category rule, quiet hours, a critical bypass, daily summary) with the layer it came from: your own rules, the role default (named), or the system default. Unread-escalation steps that fired later are listed too. Links go to your subscriptions (for watches, subscriptions and alerts) and to Profile → Notification rules.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The answer is what happened, not a re-simulation: it is stored on the row (`nivaro_notifications.delivery_reason`) when the delivery decision runs. Rows written before that say "Sent before reasons were recorded" and show what the row itself still knows.',
+        'Profile → Notification rules → "Test my rules" runs the Notification Bench simulate for the signed-in person only — pick a category and "right now" or "tonight at 11 PM" to see each channel\'s outcome and the deciding rule. Nothing is sent.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/notifications/:id/why        → { recorded, reason: { path, category, critical, role, layers, channels, rules, escalation? }, why, delivery }
+                                           own notifications only (404 otherwise)
+POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, "at": "<ISO, optional>" }
+                                         → { decision, layers, role, quiet_hours, push_subscriptions } for the caller`
+    },
     { type: 'h3', text: 'Record bundles in the bell' },
     {
       type: 'p',

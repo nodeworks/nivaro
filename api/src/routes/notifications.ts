@@ -136,6 +136,9 @@ function serialize(row: Record<string, unknown>) {
     // older rows; "as it was" falls back to the newest revision before the
     // timestamp).
     revision_id: row.revision_id != null ? Number(row.revision_id) : null,
+    // #3078 — the stored "why did I get this" (GET /:id/why reads it); false = written before
+    // reasons were recorded (or by a raw writer behind migration 514).
+    reason_recorded: row.delivery_reason != null && row.delivery_reason !== '',
     created_at: (row.timestamp as Date | string | null) ?? null,
     target,
     kind: target?.kind ?? null,

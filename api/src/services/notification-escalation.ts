@@ -6,7 +6,7 @@ import {
   ACK_DONE_LIKE,
   ACK_PENDING_LIKE,
   ackPending,
-  getNotifyPrefs,
+  getNotifyPrefsLayered,
   NOTIFY_CATEGORY_LABELS,
   type NotificationDelivery,
   type NotifyCategory,
@@ -14,6 +14,8 @@ import {
   notifyUser,
   parseDelivery
 } from './notification-channels.js'
+import { layerOf } from './notification-layers.js'
+import { appendEscalationReason } from './notification-reason.js'
 import { parseStoredTarget, resolveTargetUrl } from './notification-target.js'
 import { sendWebPush } from './web-push.js'
 
@@ -70,8 +72,12 @@ async function runChannelEscalation(
   const since = new Date(now.getTime() - WINDOW_DAYS * 86_400_000)
 
   for (const userId of userIds) {
-    const prefs = await getNotifyPrefs(userId)
+    const layered = await getNotifyPrefsLayered(userId)
+    const prefs = layered.own || layered.role ? layered.merged : null
     const esc = escalationOf(prefs)
+    // #3078 — which layer (their own rules / the role default) set the step that fired.
+    const stepLayer = (cat: NotifyCategory, step: 'push_after_min' | 'email_after_min') =>
+      layerOf(layered.own, layered.role?.rules, `escalation.${cat}.${step}`)
     if (!esc) continue
     const categories = (Object.keys(esc) as NotifyCategory[]).filter(
       (c) => esc[c] && (esc[c]?.push_after_min || esc[c]?.email_after_min)
@@ -133,6 +139,12 @@ async function runChannelEscalation(
         stamps.push_at = now.toISOString()
         changed = true
         if (sent > 0) out.pushed++
+        await appendEscalationReason(row.id, {
+          channel: 'push',
+          after_min: rule.push_after_min,
+          layer: stepLayer(row.category, 'push_after_min'),
+          at: now.toISOString()
+        })
       }
       // Step 2: email — unless the original delivery already emailed.
       if (
@@ -175,6 +187,12 @@ async function runChannelEscalation(
             stamps.email_log_id = mail.log_id
             changed = true
             if (mail.status === 'sent') out.emailed++
+            await appendEscalationReason(row.id, {
+              channel: 'email',
+              after_min: rule.email_after_min,
+              layer: stepLayer(row.category, 'email_after_min'),
+              at: now.toISOString()
+            })
           } catch {
             // SMTP failure — try again next tick (no stamp)
           }

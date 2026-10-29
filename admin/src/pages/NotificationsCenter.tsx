@@ -44,6 +44,7 @@ export function NotificationsCenterPage() {
           app='admin'
           mailLogUrl={(id) => `/delivery?id=${id}`}
           subscriptionsPath='/alerts/subscriptions'
+          rulesPath='/profile#notification-rules'
           onNotice={(m) => toast.success(m)}
           onError={(m) => toast.error(m)}
         />

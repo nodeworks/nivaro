@@ -154,6 +154,8 @@ export interface NotificationCenterViewProps {
   mailLogUrl?: (mailLogId: number) => string | null
   /** Host route of the subscriptions page (a watch's "Why me?" links there). */
   subscriptionsPath?: string | null
+  /** Host route of Profile → Notification rules — "Why?" offers a change link there (#3078). */
+  rulesPath?: string | null
   /** Toast hooks — hosts wire their own toaster. */
   onNotice?: (message: string) => void
   onError?: (message: string) => void
@@ -166,6 +168,7 @@ export function NotificationCenterView({
   app,
   mailLogUrl,
   subscriptionsPath,
+  rulesPath,
   onNotice,
   onError,
   className
@@ -538,7 +541,9 @@ export function NotificationCenterView({
             detail={n.detail}
             why={n.why}
             delivery={n.delivery}
+            notificationId={n.id}
             subscriptionsPath={subscriptionsPath}
+            rulesPath={rulesPath}
             onNavigate={onNavigate}
             className='mt-1'
           />

@@ -28,7 +28,7 @@ import {
   Undo2,
   UserRound
 } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
@@ -43,6 +43,7 @@ import {
   NotificationRulesEditor,
   type NotifyRulesValue
 } from './notifications/NotificationRulesEditor'
+import { TestMyRules } from './notifications/TestMyRules'
 import { AgentsPanel } from './profile/AgentsPanel'
 import { AiHistoryCard, AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
@@ -254,6 +255,14 @@ export function NotificationRulesCard() {
   })
   const teamsAvailable = teamsFacts?.available === true
   const teamsLinked = teamsFacts?.link?.status === 'active'
+  // #3078 — "Change your notification rules" links land on /profile#notification-rules.
+  const cardRef = useRef<HTMLDivElement>(null)
+  const loaded = prefs != null
+  useEffect(() => {
+    if (!loaded || typeof window === 'undefined') return
+    if (window.location.hash !== '#notification-rules') return
+    cardRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [loaded])
   const np = (prefs?.notification_prefs ?? {}) as NotifyRulesValue
   // #3077 — the person's role defaults: every value they never set follows these.
   const { data: roleDefaults } = useQuery({
@@ -389,6 +398,7 @@ export function NotificationRulesCard() {
   return (
     <div
       id='notification-rules'
+      ref={cardRef}
       data-profile-card='notifications'
       className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
     >
@@ -546,6 +556,13 @@ export function NotificationRulesCard() {
                   ]}
                   onChange={(v: string) => setCatSound(cat, v)}
                 />
+                <div className='flex flex-wrap items-center gap-2'>
+                  <TestMyRules />
+                  <span className='text-[11px] text-slate-400'>
+                    see what would happen to a notification for you right now, and which rule
+                    decides it
+                  </span>
+                </div>
               </div>
             )
           }}

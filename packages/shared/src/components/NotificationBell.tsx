@@ -120,6 +120,8 @@ export interface NotificationBellProps {
   allPath?: string | null
   /** Path of the subscriptions page — a watch's "Why me?" offers a Manage link. */
   subscriptionsPath?: string | null
+  /** Path of Profile → Notification rules — "Why?" offers a change link there (#3078). */
+  rulesPath?: string | null
   /** Called with an error message when an inline action fails. */
   onActionError?: (message: string) => void
   /** Where the panel opens relative to the trigger. 'below' (default) keeps
@@ -153,6 +155,7 @@ export function NotificationBell({
   renderTrigger,
   allPath,
   subscriptionsPath,
+  rulesPath,
   onActionError,
   panelPlacement = 'below',
   tabBadge = true
@@ -440,7 +443,9 @@ export function NotificationBell({
         detail={n.detail}
         why={n.why}
         delivery={n.delivery}
+        notificationId={n.id}
         subscriptionsPath={subscriptionsPath}
+        rulesPath={rulesPath}
         onNavigate={navigateAndClose}
         className={`-mt-1 pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
       />

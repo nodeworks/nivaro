@@ -6,6 +6,7 @@ import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
+import { rawWriterReason, reasonColumn } from './notification-reason.js'
 import { queueOfficeGeocode } from './office-geocode.js'
 import { orderByPeopleRelevance } from './people-search-rank.js'
 import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
@@ -323,7 +324,20 @@ export async function findOrCreateFromOIDC(profile: {
           timestamp: new Date(),
           sender: null,
           message: msg.trim().slice(0, 500),
-          ...notificationRowMeta({ subject: 'Welcome!', category: 'system' })
+          ...notificationRowMeta({ subject: 'Welcome!', category: 'system' }),
+          ...(await reasonColumn(
+            rawWriterReason({
+              path: {
+                kind: 'welcome',
+                text: 'This is the welcome message every new account receives once.',
+                label: 'Welcome message',
+                id: null
+              },
+              category: 'system',
+              ruleText: 'Every new account receives the welcome message once.',
+              layer: 'system'
+            })
+          ))
         })
       })
       .catch(() => {})

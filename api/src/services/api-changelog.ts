@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
+import { rawWriterReason, reasonColumn } from './notification-reason.js'
 
 /**
  * API surface changelogs: GraphQL (#163) — type/field diffs on every schema
@@ -96,7 +97,20 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
         message: message.slice(0, 500),
         collection: null,
         item: null,
-        ...notificationRowMeta({ subject, category: 'system' })
+        ...notificationRowMeta({ subject, category: 'system' }),
+        ...(await reasonColumn(
+          rawWriterReason({
+            path: {
+              kind: 'api_changelog',
+              text: 'You are an administrator; a schema change can break an integration.',
+              label: null,
+              id: null
+            },
+            category: 'system',
+            ruleText: 'Schema changes are always posted to administrators.',
+            layer: 'system'
+          })
+        ))
       })
     }
   } catch {

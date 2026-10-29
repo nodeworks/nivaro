@@ -126,6 +126,7 @@ export function NotificationBell({
         mailLogUrl={(id) => `/delivery?id=${id}`}
         allPath='/notifications'
         subscriptionsPath='/alerts/subscriptions'
+        rulesPath='/profile#notification-rules'
         onActionError={(m) => toast.error(m)}
         // The sidebar footer sits bottom-left inside an overflow-clipped rail:
         // portal the panel beside the trigger instead of below it.
