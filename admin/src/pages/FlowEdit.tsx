@@ -75,6 +75,8 @@ const NOTIFY_CATEGORY_OPTIONS = [
 ]
 
 import { Textarea } from '@/components/ui/textarea'
+import { FlowDiagram } from '@/components/diagram/DiagramPanels'
+import { DiagramTabs, type EditorView } from '@/components/diagram/DiagramTabs'
 import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -4391,6 +4393,7 @@ export function FlowEditPage() {
   const navigate = useNavigate()
   const goBack = useGoBack('/flows')
   const queryClient = useQueryClient()
+  const [view, setView] = useState<EditorView>('editor')
 
   const { data: flow, isLoading } = useQuery({
     queryKey: ['flows', id],
@@ -4615,6 +4618,8 @@ export function FlowEditPage() {
         )}
       </div>
 
+      <DiagramTabs value={view} onChange={setView} />
+
       {isLoading ? (
         <div className='flex-1 p-6 space-y-4 max-w-xl'>
           <Skeleton className='h-40 w-full rounded-xl' />
@@ -4624,6 +4629,14 @@ export function FlowEditPage() {
         <div className='flex-1 flex items-center justify-center text-[13px] text-slate-400'>
           Flow not found.
         </div>
+      ) : view === 'diagram' ? (
+        <FlowDiagram
+          flowId={id!}
+          name={flow.name}
+          trigger={flow.trigger}
+          triggerOptions={flow.trigger_options}
+          operations={flow.operations}
+        />
       ) : (
         <div className='flex flex-1 min-h-0 overflow-hidden'>
           {/* Settings panel */}
