@@ -32,6 +32,7 @@ import { registerChaosTools } from './tools/chaos.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
+import { registerDataTools } from './tools/data.js'
 import { registerInfrastructureTools } from './tools/infrastructure.js'
 import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
@@ -118,6 +119,9 @@ export const TOOL_NAMES = [
   'list_revisions',
   'list_record_files',
   'read_file',
+  'compare_records',
+  'build_filter',
+  'changes_since',
   'search',
   'find_people',
   'list_custom_queries',
@@ -231,7 +235,8 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
         'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
         'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them.',
-        'create_item rehearses by default; pass dry_run: false to store. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
+        'build_filter checks a filter before you use it; compare_records diffs two records or a record and a revision; changes_since follows what changed since your last look by cursor.',
+        'create_item rehearses by default; pass dry_run: false to store. update_item with dry_run: true previews a change without saving it. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
     }
@@ -248,6 +253,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     options.chatAccess === 'read' || options.chatAccess === 'post' ? options.chatAccess : 'none'
   registerWorkTools(server, client, { chat: chatAccess !== 'none' })
   registerRecordTools(server, client)
+  registerDataTools(server, client)
   registerLookupTools(server, client)
   registerSupportTools(server, client)
   registerApprovalTools(server, client)
