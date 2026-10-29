@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-29T17:55:13.668Z",
+  "generated_at": "2026-10-29T18:51:21.518Z",
   "releases": [
+    {
+      "version": "0.3.53",
+      "tag": "v0.3.53",
+      "date": "2026-10-29T14:51:05-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "Admin only section in the row Actions menu",
+              "hash": "0972a283b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "drop sync:picker-active-exclusions",
+              "hash": "264b69d6c"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "sync:picker-active-exclusions script",
+              "hash": "31abdbe7e"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.52",
       "tag": "v0.3.52",
-      "date": "2026-10-29T13:54:58-04:00",
+      "date": "2026-10-29T13:55:13-04:00",
       "sections": [
         {
           "label": "Fixed",
