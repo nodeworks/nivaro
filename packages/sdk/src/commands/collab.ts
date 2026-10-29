@@ -377,6 +377,17 @@ export interface NotificationItem {
   category?: string | null
   /** Per-channel delivery outcome (in-app / push / email / sms). */
   delivery?: Record<string, unknown> | null
+  archived?: boolean
+  /** Set when the sender asked for an explicit acknowledgement. */
+  ack?: { required: true; at: ISODate | null; by: string | null } | null
+  sender?: UUID | null
+  sender_name?: string | null
+  snoozed_until?: ISODate | null
+  snooze_until_change?: boolean
+  /** The record's revision current when the notification was written. */
+  revision_id?: number | null
+  /** Where opening it leads, for the app named by `app` (else the recipient's). */
+  url?: string | null
 }
 
 export interface NotificationPage {
@@ -395,6 +406,8 @@ export interface NotificationPage {
     ids: number[]
     rows: NotificationItem[]
   }>
+  /** Page 1: acknowledgement-required rows, pinned whatever the filter. */
+  pinned?: NotificationItem[]
   total: number
   page: number
   limit: number
@@ -405,7 +418,17 @@ export interface NotificationPage {
 export function listNotifications(query?: {
   page?: number
   limit?: number
-  status?: 'all' | 'inbox' | 'read'
+  /** 'archived' lists only archived rows (they are left out of every other view). */
+  status?: 'all' | 'inbox' | 'read' | 'archived'
+  /** Unread only (same as `status: 'inbox'`). */
+  unread?: boolean
+  /** Contains-match on subject or message. */
+  search?: string
+  collection?: string
+  /** A sender's user id. */
+  sender?: string
+  /** true = only the snoozed (sleeping) rows. */
+  snoozed?: boolean
   app?: string
   /** 'critical' | 'needs_you' | 'fyi' | 'attention' (= critical + needs_you). */
   lane?: string
@@ -418,6 +441,11 @@ export function listNotifications(query?: {
   if (query?.page != null) params.page = query.page
   if (query?.limit != null) params.limit = query.limit
   if (query?.status) params.status = query.status
+  if (query?.unread) params.unread = 'true'
+  if (query?.search) params.search = query.search
+  if (query?.collection) params.collection = query.collection
+  if (query?.sender) params.sender = query.sender
+  if (query?.snoozed) params.snoozed = 'true'
   if (query?.app) params.app = query.app
   if (query?.lane) params.lane = query.lane
   if (query?.category) params.category = query.category

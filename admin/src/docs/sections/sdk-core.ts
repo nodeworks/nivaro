@@ -39,10 +39,31 @@ const nivaro = createNivaro('https://nivaro.example.com', {
 // Full options
 const nivaro = createNivaro('https://nivaro.example.com', {
   token: 'nvk_abc123...',
-  workspace: 'workspace-uuid',  // optional: workspace to target
-  headers: { 'X-Custom': 'value' },  // optional: extra headers
-  timeoutMs: 90_000,  // optional: abandon a GET read that has not answered (off by default)
+  headers: { 'x-workspace': 'workspace-uuid', 'x-nivaro-app': 'my-app' },  // extra headers (or a function)
+  timeoutMs: 90_000,  // abandon a GET read that has not answered (off by default)
+  retry: 2,           // retry GETs on 408/429/502/503/504 + network errors, honouring Retry-After (off by default)
+  debug: true,        // one console.debug line per request: method, path, status, ms, request id
+  onRequest: (req) => { req.headers['traceparent'] = currentTrace() },
+  onResponse: (res) => metrics.observe(res.path, res.status, res.durationMs, res.requestId),
+  onError: (err, where) => logger.warn({ where, err }),
 })`
+    },
+    { type: 'h3', text: 'Errors' },
+    {
+      type: 'p',
+      text: 'Every non-2xx answer throws a `NivaroError` (an `Error`): `status`, the API machine `code` (e.g. `QUOTA_EXCEEDED`, `SERVER_BUSY`), `requestId` (the `x-nivaro-request-id` the server stamped — quote it when reporting a problem), the parsed body on `response`, `method`, `path` and `retryAfterMs`. A GET past `timeoutMs` throws a `TimeoutError`; a caller abort (`withSignal`) throws the platform `AbortError`.'
+    },
+    {
+      type: 'pre',
+      code: `import { isNivaroError, readItem } from '@nivaro/sdk'
+
+try {
+  await nivaro.request(readItem('orders', 42))
+} catch (err) {
+  if (isNivaroError(err) && err.status === 404) return null
+  if (isNivaroError(err)) console.error(err.code, err.message, 'request', err.requestId)
+  throw err
+}`
     },
     { type: 'h3', text: 'Client methods' },
     {
@@ -92,7 +113,38 @@ export const sdkAuth: DocSection = {
     { type: 'h1', id: 'sdk-auth', text: 'SDK — Authentication' },
     {
       type: 'p',
-      text: 'The SDK supports two authentication methods: static tokens (for backends/scripts) and session cookies (for browser SPAs).'
+      text: 'The SDK sends whatever `token` you give it as `Authorization: Bearer`; without one it rides the browser session cookie.'
+    },
+    {
+      type: 'table',
+      head: ['Credential', 'Where it comes from', 'Notes'],
+      rows: [
+        [
+          'Named API key `nvk_…`',
+          'API Keys page / createApiKey()',
+          'Scopes, expiry, IP allowlist, rate limit; sandbox keys never write. Sockets: use a ws-token.'
+        ],
+        [
+          'Static user token',
+          'generateToken() / generateUserToken()',
+          'Acts as that user; also signs a socket in directly.'
+        ],
+        [
+          'Session cookie',
+          'OIDC / SAML / password sign-in in the browser',
+          'No token; `credentials: include`. Sockets: use a ws-token.'
+        ],
+        [
+          'View-as token `nvm_…`',
+          'An admin’s View-as',
+          'Acts as the viewed person; ends with the View-as.'
+        ],
+        [
+          'OAuth access token `nvo_…`',
+          'Remote MCP clients (OAuth 2.1)',
+          'Accepted on /api/mcp and its tool calls only — never on other routes.'
+        ]
+      ]
     },
     { type: 'h3', text: 'Static tokens (server-side / CLI)' },
     {
@@ -166,6 +218,17 @@ nivaro.setToken(null)
 
 // Admin: revoke another user's token
 await nivaro.request(revokeUserToken('user-uuid'))`
+    },
+    { type: 'h3', text: 'Session helpers' },
+    {
+      type: 'pre',
+      code: `import { readMe, logout, logoutAll, readWsToken, readAuthProviders } from '@nivaro/sdk'
+
+const { data: me } = await nivaro.request(readMe())
+const { data: providers } = await nivaro.request(readAuthProviders())  // public: which sign-ins exist
+const { token } = await nivaro.request(readWsToken())   // one-time socket token (2 min)
+await nivaro.request(logout())      // end this session (cookie sign-in)
+await nivaro.request(logoutAll())   // end every session of mine`
     }
   ]
 }
@@ -198,8 +261,23 @@ const { data, total, limit, offset } = await nivaro.request(
 )
 // data → T[]
 
-// Single item
-const { data: article } = await nivaro.request(readItem('articles', '123'))
+// Search a few fields by relevance, a cached total, relation labels flattened in
+const found = await nivaro.request(
+  readItems('articles', {
+    search: 'pump',
+    search_fields: ['title', 'code'],
+    search_rank: true,
+    count: 'approx',  // or false to skip the count (total → null)
+    labels: true,
+  })
+)
+
+// Keyset paging for walking a large collection
+let res = await nivaro.request(readItems('articles', { after: 'start', limit: 500 }))
+while (res.next_cursor) res = await nivaro.request(readItems('articles', { after: res.next_cursor, limit: 500 }))
+
+// Single item (optionally projected)
+const { data: article } = await nivaro.request(readItem('articles', '123', { fields: ['id', 'title'] }))
 // data → T`
     },
     { type: 'h3', text: 'Create items' },
@@ -238,29 +316,60 @@ const { data: updated } = await nivaro.request(
 
 await nivaro.request(deleteItem('articles', '123'))`
     },
-    { type: 'h3', text: 'Bulk operations' },
+    { type: 'h3', text: 'Bulk, batch and rehearsed writes' },
+    {
+      type: 'p',
+      text: 'Every row goes through the items service as the caller — permissions, row filters, User Scopes, validation, hooks and revisions apply row by row; one refused row never fails the others unless you ask for all-or-nothing.'
+    },
     {
       type: 'pre',
-      code: `import { bulkCreateItems, bulkUpdateItems, bulkDeleteItems } from '@nivaro/sdk'
+      code: `import {
+  bulkWriteItems, queueBulkWriteItems, readBulkRun, batchItems,
+  bulkUpdateItems, bulkDeleteItems, bulkTransitionItems,
+  rehearseCreateItem, rehearseUpdateItem, checkItemFilter
+} from '@nivaro/sdk'
 
-// Bulk create
-const { data: created } = await nivaro.request(
-  bulkCreateItems('articles', [
-    { title: 'Article 1', status: 'draft' },
-    { title: 'Article 2', status: 'draft' },
-  ])
+// Up to 500 rows: a row with an id is an update, without one a create (207, per-row status)
+const { data: out } = await nivaro.request(
+  bulkWriteItems('articles', [{ title: 'A' }, { id: '124', status: 'published' }])
 )
+// out.results[i] → { index, op, status, id?, error?, code? }; atomic: true = creates, all or nothing
 
-// Bulk update
-const { data: updated } = await nivaro.request(
-  bulkUpdateItems('articles', [
-    { id: '123', status: 'published' },
-    { id: '124', status: 'published' },
-  ])
-)
+// Bigger runs in the background, results kept 24 h
+const { data: queued } = await nivaro.request(queueBulkWriteItems('articles', rows))
+const { data: results } = await nivaro.request(readBulkRun('articles', queued.run_id))
 
-// Bulk delete
-await nivaro.request(bulkDeleteItems('articles', ['123', '124']))`
+// Up to 100 creates + updates, one result per row
+await nivaro.request(batchItems('articles', { create: [{ title: 'B' }], update: [{ id: '9', title: 'C' }] }))
+
+// The same values on several records; a transition on several records; delete several
+await nivaro.request(bulkUpdateItems('articles', ['123', '124'], { status: 'published' }))
+await nivaro.request(bulkTransitionItems('articles', ['123'], 'transition-uuid', 'Approved'))
+await nivaro.request(bulkDeleteItems('articles', ['123', '124']))
+
+// Rehearse: everything runs, nothing is saved
+const plan = await nivaro.request(rehearseUpdateItem('articles', '123', { status: 'published' }))
+// plan.changes → [{ field, from, to }]; plan.ok / plan.error / plan.code when it would be refused
+const check = await nivaro.request(checkItemFilter('articles', { status: { _eq: 'live' } }))`
+    },
+    { type: 'h3', text: 'Lookups, trash and history' },
+    {
+      type: 'pre',
+      code: `import {
+  readItem, readItemBySlug, readItemDistinct, listTrash, restoreTrashItem,
+  readOwnerHistory, readCommentCounts
+} from '@nivaro/sdk'
+
+const { data: a } = await nivaro.request(readItem('articles', '123', { fields: ['id', 'author.email'] }))
+const { data: page } = await nivaro.request(readItemBySlug('pages', 'about-us'))
+const { data: statuses } = await nivaro.request(readItemDistinct('articles', 'status'))
+
+// Deleted records (admins: all; everyone else: their own deletions)
+const { data: trash } = await nivaro.request(listTrash({ collection: 'articles', days: 30 }))
+await nivaro.request(restoreTrashItem(trash[0].id))
+
+const { data: owners } = await nivaro.request(readOwnerHistory('articles', '123'))  // per pipeline state
+const { data: counts } = await nivaro.request(readCommentCounts('articles', ['123', '124']))`
     },
     { type: 'h3', text: 'Singletons' },
     {
@@ -298,12 +407,12 @@ const { data: updated } = await nivaro.request(
       type: 'pre',
       code: `import { readRevisions, readRevision } from '@nivaro/sdk'
 
-// All changes to an item (newest first)
+// All changes to an item (newest first, up to 100; no paging)
 const { data: revisions } = await nivaro.request(readRevisions('articles', '123'))
-// Each revision: { id, action ('create'|'update'|'delete'), data, delta, timestamp, user_id, first_name, last_name }
+// Each revision: { id, action, data, delta, timestamp, user_id, first_name, last_name, comment, event? }
 
 // Single revision detail
-const { data: rev } = await nivaro.request(readRevision('rev-uuid'))
+const { data: rev } = await nivaro.request(readRevision(revisions[0].id!))
 // rev.data → full snapshot at that point in time
 // rev.delta → only the fields that changed (for updates)`
     }
@@ -1064,65 +1173,76 @@ export const sdkNotifications: DocSection = {
     { type: 'h1', id: 'sdk-notifications', text: 'SDK — Notifications & Inbox' },
     {
       type: 'p',
-      text: 'Manage your notification inbox. Notifications are created by rules, workflows, comments (@mentions), and alerts — use these endpoints to read, mark as read, and delete them.'
+      text: "Read and work the caller's own inbox. Notifications are created by rules, pipelines, comments (@mentions), alerts and people. Every command acts on the caller's own rows only."
     },
     {
       type: 'pre',
       code: `import {
-  readNotifications, readNotificationCount,
-  markNotificationRead, markAllNotificationsRead, deleteNotification
+  listNotifications, readUnreadNotificationCount,
+  markNotificationRead, markNotificationsRead, markAllNotificationsRead, deleteNotification
 } from '@nivaro/sdk'
 
-// List your inbox notifications (paginated)
-const { data: notifs, total, offset } = await nivaro.request(
-  readNotifications({ limit: 50, offset: 0 })
+// One page of the inbox (default 50, max 200). Filters match the notification center's own.
+const page = await nivaro.request(
+  listNotifications({ page: 1, limit: 50, lane: 'attention', search: 'invoice', unread: true })
 )
-// notifs → Notification[] — { id, subject, message, status, timestamp, collection, item }
+// page.data → NotificationItem[]; page.pinned → acknowledgement-required rows (page 1)
+// status: 'inbox' | 'read' | 'archived' | 'all'; snoozed: true lists only sleeping rows
 
-// Get unread count (lightweight, for badge)
-const { data: counts } = await nivaro.request(readNotificationCount())
-// counts → { unread: 5, total: 42 }
+// Badge figures, split by lane
+const counts = await nivaro.request(readUnreadNotificationCount())
+// → { unread: 5, attention: 3, lanes: { critical, needs_you, fyi } }
 
-// Mark one as read
-await nivaro.request(markNotificationRead(notif.id))
-
-// Mark all as read
+await nivaro.request(markNotificationRead(id))
+await nivaro.request(markNotificationsRead([id1, id2]))
 await nivaro.request(markAllNotificationsRead())
-
-// Delete one
-await nivaro.request(deleteNotification(notif.id))`
+await nivaro.request(deleteNotification(id))`
     },
-    { type: 'h3', text: 'Real-time notifications via Socket.io' },
-    {
-      type: 'p',
-      text: 'For live notifications as they arrive, subscribe to the Socket.io event:'
-    },
+    { type: 'h3', text: 'Snooze, acknowledge, bulk actions, mutes' },
     {
       type: 'pre',
-      code: `import { createRealtime } from '@nivaro/sdk'
+      code: `import {
+  snoozeNotification, acknowledgeNotification, bulkNotificationAction,
+  archiveReadNotifications, listSentNotifications, readRecordMute, toggleRecordMute
+} from '@nivaro/sdk'
+
+await nivaro.request(snoozeNotification(id, { until: '2026-11-02T09:00:00Z' }))
+await nivaro.request(snoozeNotification(id, { untilChange: true }))  // wake when the record moves
+await nivaro.request(acknowledgeNotification(id))  // when the sender asked for an acknowledgement
+
+// One action over explicit ids (≤1000) or everything matching a filter (≤2000)
+await nivaro.request(bulkNotificationAction({ action: 'archive', filter: { status: 'read', lane: 'fyi' } }))
+await nivaro.request(archiveReadNotifications(30))  // read rows older than 30 days
+
+// What I sent, with each recipient's read / acknowledgement state
+const { data: sent } = await nivaro.request(listSentNotifications({ lane: 'all' }))
+
+// Mute one record's notifications for me
+const { data: mute } = await nivaro.request(toggleRecordMute('orders', 42))  // { muted: true }`
+    },
+    { type: 'h3', text: 'Delivery history and reminders' },
+    {
+      type: 'pre',
+      code: `import { readNotificationHistory, listReminders, createReminder, deleteReminder } from '@nivaro/sdk'
+
+// What actually reached me: in-app rows, alert firings, report alerts, digest-queued emails
+const { data: history } = await nivaro.request(readNotificationHistory(80))
+// history[i] → { kind, at, title, detail, collection?, item?, status?, channels: ['in-app', 'push'] }
+
+const { data: r } = await nivaro.request(createReminder({ note: 'Call vendor', remind_at: '2026-11-03T14:00:00Z' }))
+const { data: mine } = await nivaro.request(listReminders())
+await nivaro.request(deleteReminder(r.id))`
+    },
+    { type: 'h3', text: 'Live notifications' },
+    {
+      type: 'pre',
+      code: `import { createRealtime, NOTIFICATIONS_CHANNEL, readWsToken } from '@nivaro/sdk'
 
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com')
+rt.connect('https://nivaro.example.com', () => nivaro.request(readWsToken()).then((r) => r.token))
 
-// Subscribe to your notifications room
-rt.subscribe(\`user:\${userId}\`, { event: 'notification:new' }, (notif) => {
-  console.log('New notification:', notif.subject)
-  // Update badge, toast, etc.
-})`
-    },
-    {
-      type: 'table',
-      head: ['Field', 'Type', 'Description'],
-      rows: [
-        ['id', 'string', 'UUID.'],
-        ['subject', 'string', 'Notification title.'],
-        ['message', 'string', 'Full message body.'],
-        ['status', 'string', '"inbox" | "read"'],
-        ['timestamp', 'string', 'ISO 8601 when created.'],
-        ['collection', 'string | null', 'Related collection (if from an item event).'],
-        ['item', 'string | null', 'Related item ID.'],
-        ['sender', 'string | null', 'User who triggered it (if applicable).']
-      ]
+// notification:new for the signed-in person
+rt.subscribe(NOTIFICATIONS_CHANNEL, {}, ([notif]) => console.log('New notification', notif))`
     }
   ]
 }
@@ -1131,76 +1251,96 @@ export const sdkActivity: DocSection = {
   id: 'sdk-activity',
   label: 'Activity & Revisions',
   content: [
-    { type: 'h1', id: 'sdk-activity', text: 'SDK — Activity & Revisions' },
+    { type: 'h1', id: 'sdk-activity', text: 'SDK — Activity, Revisions & Logs' },
     {
       type: 'p',
-      text: 'The activity log records all changes and actions in your CMS. Revisions give you full audit trail and rollback capability.'
+      text: 'The audit log records every change and notable action; revisions are a record\'s own history; the change feed, request log, job runs and mail log answer "what happened" from the API itself. Reads of the system-wide logs are for administrators.'
     },
-    { type: 'h3', text: 'Activity log' },
+    { type: 'h3', text: 'Audit log (administrators)' },
     {
       type: 'pre',
-      code: `import { readActivity } from '@nivaro/sdk'
+      code: `import { readActivity, readActivityEntry, listActivityActions, logExport } from '@nivaro/sdk'
 
-// All activity, newest first (system-wide audit log; administrators only — 403 otherwise)
+// Newest first; limit default 25, max 200
 const { data: entries, total } = await nivaro.request(
-  readActivity({ limit: 50, offset: 0 })
+  readActivity({ collection: 'orders', action: 'update', user: 'user-uuid', limit: 50 })
 )
-// entries → Activity[] — { id, action, collection, item, user_id, timestamp, ... }
+// entries[i] → { id, action, collection, item, user, timestamp, ip, comment, origin,
+//                first_name, last_name, user_email, via_agent }
 
-// Filter by collection, action, or user
-const { data: creates } = await nivaro.request(
-  readActivity({
-    collection: 'inventory_requests',
-    action: 'create',  // 'create' | 'update' | 'delete' | 'schema-*'
-    user_id: 'user-uuid',  // optional
-    limit: 25,
-  })
-)`
+const { data: entry } = await nivaro.request(readActivityEntry(entries[0].id))  // + user_agent
+const { data: actions } = await nivaro.request(listActivityActions())  // every action in the log
+
+// Anyone signed in: report an export made in the browser (an \`export\` audit row)
+await nivaro.request(logExport({ collection: 'orders', row_count: 120, format: 'csv' }))`
     },
-    { type: 'h3', text: 'Revisions (item-level history)' },
+    { type: 'h3', text: 'Revisions (a record’s history)' },
     {
       type: 'pre',
-      code: `import { readRevisions, readRevision } from '@nivaro/sdk'
+      code: `import { readRevisions, readRevision, readLatestRevisionId, rollbackRevision } from '@nivaro/sdk'
 
-// All revisions for a specific item (newest first)
-const { data: revisions } = await nivaro.request(
-  readRevisions('inventory_requests', itemId, { limit: 50 })
-)
-// revisions → Revision[] — each revision includes action, full snapshot, and delta
+// Newest first: up to 100 revisions plus folded pipeline moves and O2M child events.
+// Same gate as opening the record; snapshots are cut to the fields you may read. No paging.
+const { data: revisions } = await nivaro.request(readRevisions('orders', 42))
+for (const rev of revisions) {
+  if (rev.event) console.log('moved', rev.event.from_label, '→', rev.event.to_label)
+  else console.log(rev.action, 'by', rev.first_name, 'changed', Object.keys(rev.delta ?? {}))
+}
 
-revisions.forEach(rev => {
-  console.log(
-    \`\${rev.action.toUpperCase()} by \${rev.first_name} at \${rev.timestamp}\`
-  )
-  if (rev.delta) {
-    console.log('Changed:', Object.keys(rev.delta))
-  }
-})
-
-// Single revision detail with full snapshot and delta
-const { data: rev } = await nivaro.request(readRevision(revisionId))
-console.log('Full snapshot:', rev.data)
-console.log('Changed fields:', rev.delta)`
+const { data: rev } = await nivaro.request(readRevision(revisions[0].id!))
+const { data: latest } = await nivaro.request(readLatestRevisionId('orders', 42))  // { latest }
+await nivaro.request(rollbackRevision(rev.id!))  // through the items service, as you`
     },
-    { type: 'h3', text: 'Revision shape' },
+    { type: 'h3', text: 'Change feed' },
     {
-      type: 'table',
-      head: ['Field', 'Type', 'Description'],
-      rows: [
-        ['id', 'string', 'Revision UUID.'],
-        ['action', 'string', '"create" | "update" | "delete"'],
-        ['collection', 'string', 'Collection name.'],
-        ['item_id', 'string', 'Item ID (null for create).'],
-        ['data', 'Record', 'Full snapshot of the record at that revision.'],
-        ['delta', 'Record | null', 'Only changed fields (for updates). Null for create/delete.'],
-        ['timestamp', 'string', 'ISO 8601 datetime.'],
-        ['user_id', 'string', 'User who made the change.'],
-        ['first_name / last_name / user_email', 'string', 'Display info from nivaro_users.']
-      ]
+      type: 'pre',
+      code: `import { readChanges } from '@nivaro/sdk'
+
+// Ids, actions and changed field NAMES only, for records you can see now
+let page = (await nivaro.request(readChanges({ since: '2026-10-29T12:00:00Z', collections: ['orders'] }))).data
+while (page.has_more) page = (await nivaro.request(readChanges({ cursor: page.cursor }))).data
+// keep page.cursor and call again later for what changed since`
+    },
+    { type: 'h3', text: 'API request log, key usage, jobs and mail (administrators)' },
+    {
+      type: 'pre',
+      code: `import {
+  listApiRequests, readApiAnalyticsByKey, readApiKeyUsage, readApiKeyMonthlyUsage,
+  listJobRuns, readJobRunLog, cancelJobRun, readBusyJobs,
+  listMailLog, readMailLogEntry, resendMail, listRecordMail
+} from '@nivaro/sdk'
+
+const { data: failures } = await nivaro.request(listApiRequests({ status: '5xx', hours: 6 }))
+const { data: byKey } = await nivaro.request(readApiAnalyticsByKey(24))
+const { data: usage } = await nivaro.request(readApiKeyUsage(keyId))          // last 30 days
+const csv = await nivaro.request(readApiKeyMonthlyUsage(keyId, '2026-10', 'csv'))
+
+const { data: runs } = await nivaro.request(listJobRuns({ status: 'error' }))
+const { data: log } = await nivaro.request(readJobRunLog(runs[0].id))        // { run, lines }
+const { data: busy } = await nivaro.request(readBusyJobs())
+
+const { data: mails } = await nivaro.request(listMailLog({ status: 'failed' }))
+await nivaro.request(resendMail(mails[0].id))
+// Anyone who can read the record: the mail sent about it (headers only)
+const { data: recordMail } = await nivaro.request(listRecordMail('orders', 42))`
+    },
+    { type: 'h3', text: 'Your own jobs and background reads' },
+    {
+      type: 'pre',
+      code: `import { listMyJobs, startBackgroundRun, readBackgroundRun, readBackgroundRunResult } from '@nivaro/sdk'
+
+const { data: jobs } = await nivaro.request(listMyJobs())  // running or finished in the last 30 min
+
+// Hand a slow read to the server; it is replayed as you
+const { data: run } = await nivaro.request(
+  startBackgroundRun({ method: 'POST', url: '/api/custom-queries/q/execute', body: { params: {} } })
+)
+const { data: now } = await nivaro.request(readBackgroundRun(run.id))
+if (now.status === 'completed') console.log(await nivaro.request(readBackgroundRunResult(run.id)))`
     },
     {
       type: 'note',
-      text: 'Revisions are immutable — they form a complete audit trail. You can compare any two revisions to see exactly what changed. For rollback, use the delta as a PATCH to the current item.'
+      text: 'Every API answer carries an `x-nivaro-request-id` header — the id the slow-trace buffer, the access log and the request log share. The client puts it on `NivaroError.requestId` and on the `onResponse` hook (see Setup). A cross-origin browser call can only read it when the API exposes the header through CORS.'
     }
   ]
 }
@@ -1287,13 +1427,13 @@ console.log('Created:', result.createArticle.id)`
       code: `// GraphQL subscriptions require a separate WebSocket transport
 // Use the Socket.io realtime client instead — it's simpler and handles reconnection
 
-import { createRealtime } from '@nivaro/sdk'
+import { createRealtime, readWsToken } from '@nivaro/sdk'
 
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com')
+rt.connect('https://nivaro.example.com', () => nivaro.request(readWsToken()).then((r) => r.token))
 
-rt.subscribe('articles', { event: 'update' }, (article) => {
-  console.log('Article updated:', article)
+rt.subscribe('articles', { event: 'update' }, (changes) => {
+  console.log('Articles changed:', changes.map((c) => c.item))
 })`
     },
     {
@@ -1461,75 +1601,56 @@ export const sdkRealtime: DocSection = {
     { type: 'h1', id: 'sdk-realtime', text: 'SDK — Realtime (Socket.io)' },
     {
       type: 'p',
-      text: 'Subscribe to live events (item updates, notifications, presence) via Socket.io. The SDK wraps Socket.io with a simple subscribe/unsubscribe API.'
+      text: 'Hear record changes and notifications as they happen. `createRealtime()` signs the socket in, joins one read-gated room per subscribed collection, and re-joins after every reconnect. Events carry ids, the action and changed field NAMES only — never values; read the record through the REST API when you need it.'
     },
-    { type: 'h3', text: 'Basic setup' },
+    { type: 'h3', text: 'Connect and sign in' },
     {
       type: 'pre',
-      code: `import { createRealtime } from '@nivaro/sdk'
+      code: `import { createNivaro, createRealtime, readWsToken } from '@nivaro/sdk'
 
-// Create and connect
+const nivaro = createNivaro('https://nivaro.example.com', { token: process.env.NIVARO_TOKEN })
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com', { token: 'nvk_...' })`
+
+// A ws-token works for every sign-in (session cookie, API key, static token). It is single-use,
+// so pass a getter: it is asked again on every reconnect.
+rt.connect('https://nivaro.example.com', () => nivaro.request(readWsToken()).then((r) => r.token))
+
+// A user's static token or a View-as token may be passed as a plain string instead.
+rt.onAuthenticated((userId) => console.log('signed in as', userId))`
     },
-    { type: 'h3', text: 'Subscribe to events' },
+    { type: 'h3', text: 'Subscribe to a collection' },
     {
       type: 'pre',
-      code: `// Subscribe to all updates on a collection
-const unsubscribe = rt.subscribe(
-  'articles',
-  { event: 'update' },
-  (article) => {
-    console.log('Article updated:', article)
-    // article → full updated item snapshot
+      code: `const unsubscribe = rt.subscribe('orders', { event: 'update' }, (changes) => {
+  for (const c of changes) {
+    // c → { collection, item, action, changed_fields?, source?, coalesced?, many? }
+    if (c.many) refetchList()          // a burst too large to list ids
+    else refetchRow(c.item)
   }
-)
+})
 
-// Subscribe to updates on a specific item
-rt.subscribe(
-  'articles:123',
-  { event: 'update' },
-  (article) => console.log('This article changed')
-)
+rt.subscribe('orders', { event: '*' }, (changes) => {})  // create + update + delete
 
-// Subscribe to your notifications
-rt.subscribe(
-  \`user:\${userId}\`,
-  { event: 'notification:new' },
-  (notif) => console.log('New notification:', notif.subject)
-)
-
-// Subscribe to presence changes on an item
-rt.subscribe(
-  'articles:123',
-  { event: 'presence' },
-  (users) => console.log(\`\${users.length} users viewing\`)
-)`
-    },
-    { type: 'h3', text: 'Event types' },
-    {
-      type: 'table',
-      head: ['Event', 'Fires On', 'Data'],
-      rows: [
-        ['create', 'New item added', 'Full item snapshot'],
-        ['update', 'Item field changed', 'Full item snapshot (with updated values)'],
-        ['delete', 'Item deleted', 'Item ID and deletion timestamp'],
-        ['notification:new', 'Notification created', 'Notification object'],
-        ['presence', 'User joins/leaves/edits', 'Array of currently viewing users']
-      ]
-    },
-    { type: 'h3', text: 'Unsubscribe and disconnect' },
-    {
-      type: 'pre',
-      code: `// Unsubscribe from a room
-unsubscribe()
-
-// Disconnect from server (closes all subscriptions)
+unsubscribe()   // leaves the room when no subscription on it is left
 rt.disconnect()`
     },
     {
+      type: 'table',
+      head: ['Event', 'Fires on', 'Payload (one RealtimeChange per record)'],
+      rows: [
+        ['create', 'A record was created', '{ collection, item, action: "create" }'],
+        ['update', 'A record changed', '{ collection, item, action: "update", changed_fields? }'],
+        ['delete', 'A record was deleted', '{ collection, item, action: "delete" }'],
+        [
+          'NOTIFICATIONS_CHANNEL',
+          'notification:new for the signed-in person',
+          'The notification object'
+        ]
+      ]
+    },
+    {
       type: 'note',
-      text: 'Socket.io is multiplexed over the same URL as the API (e.g., https://nivaro.example.com). No separate server configuration needed. The Redis pub/sub adapter means events propagate across all server replicas.'
+      text: 'Wire protocol: the client emits `auth {token}` after connecting (the server answers `auth:ok`), then `collection:join {collection}` per room; the server sends `collection:update` (bursts coalesced as `{ items, many, count, coalesced: true }`) and `notification:new`. A collection whose realtime mode is `off` sends nothing — poll it. SDK 0.2.x and earlier emitted `subscribe` and listened for `items:*`, which the server never handled.'
     }
   ]
 }
