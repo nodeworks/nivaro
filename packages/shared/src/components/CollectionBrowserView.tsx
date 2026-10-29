@@ -138,6 +138,7 @@ import { HScrollProxy } from './HScrollProxy'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
+import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
@@ -781,6 +782,11 @@ export function RowActionsMenu({
     staleTime: 5 * 60_000
   })
   const mayDelete = isAdmin || roleMayDelete(myPermissions, collection)
+  // Admin-only row tools: leave this record out of every relation picker, or offer it again.
+  const pickerExclusion = usePickerExclusion(collection, String(id), {
+    enabled: open && isAdmin,
+    onDone: () => setOpen(false)
+  })
   const [confirmDelete, setConfirmDelete] = useState(false)
   // "Discuss" (#968) only where chat is hosted and the collection has rooms.
   const roomTypes = useRecordRoomTypes(open)
@@ -1425,6 +1431,36 @@ export function RowActionsMenu({
                   )
                   toast.success('Link copied')
                 })}
+                {isAdmin && (
+                  <>
+                    {divider}
+                    <p
+                      data-row-admin-actions
+                      className='px-3 pb-0.5 pt-1 text-[9.5px] font-bold uppercase tracking-wider text-slate-400'
+                    >
+                      Admin only
+                    </p>
+                    <button
+                      type='button'
+                      data-row-picker-exclusion
+                      data-excluded={pickerExclusion.excluded ? 'true' : 'false'}
+                      disabled={pickerExclusion.isLoading || pickerExclusion.toggle.isPending}
+                      onClick={() => pickerExclusion.toggle.mutate()}
+                      data-tip={
+                        pickerExclusion.excluded
+                          ? 'Hidden from every picker — offer it again'
+                          : 'Hide from every picker that would offer it'
+                      }
+                      className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-slate-50 disabled:cursor-default disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800'
+                    >
+                      {pickerExclusion.isLoading
+                        ? 'Checking pickers…'
+                        : pickerExclusion.excluded
+                          ? 'Include in pickers'
+                          : 'Exclude from pickers'}
+                    </button>
+                  </>
+                )}
                 {mayDelete && (
                   <>
                     {divider}

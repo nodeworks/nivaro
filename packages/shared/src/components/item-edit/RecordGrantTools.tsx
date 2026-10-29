@@ -16,6 +16,52 @@ function errorText(e: unknown, fallback: string): string {
 }
 
 /**
+ * Whether one record is left out of every relation picker, and the switch that
+ * changes it (POST / DELETE /picker-exclusions). Administrators may always
+ * switch it; others only where the form grants it (allow_disable_pickers) —
+ * the server checks that grant against `layoutSlug` (= ?layout=). Shared by
+ * the record page's More menu and the list / queue row menu.
+ */
+export function usePickerExclusion(
+  collection: string,
+  itemId: string,
+  opts: { enabled?: boolean; layoutSlug?: string | null; onDone?: () => void } = {}
+) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const key = ['picker-exclusion', collection, itemId]
+  const { data, isLoading } = useQuery({
+    queryKey: key,
+    queryFn: () =>
+      client
+        .request<{ data: { excluded: boolean } }>(
+          get(`/picker-exclusions/status/${collection}/${itemId}`)
+        )
+        .then((r) => r.data),
+    enabled: opts.enabled ?? true,
+    staleTime: 60_000
+  })
+  const excluded = data?.excluded ?? false
+  const toggle = useMutation({
+    mutationFn: () => {
+      const body = { collection, item_id: itemId, layout: opts.layoutSlug ?? null }
+      return client.request(
+        excluded
+          ? ({ _method: 'DELETE', _path: '/picker-exclusions', _body: body } as SdkCommand<unknown>)
+          : post('/picker-exclusions', body)
+      )
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: key })
+      toast.success(excluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
+      opts.onDone?.()
+    },
+    onError: (e) => toast.error(errorText(e, 'Could not change picker visibility'))
+  })
+  return { excluded, isLoading, toggle }
+}
+
+/**
  * "Disable in pickers" for one record — a More-menu row that takes the record
  * out of every relation picker (or puts it back). Shown when the form grants
  * it (allow_disable_pickers) or to administrators; the server checks the same
@@ -30,35 +76,7 @@ export function PickerExclusionToggle({
   itemId: string
   layoutSlug?: string | null
 }) {
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const key = ['picker-exclusion', collection, itemId]
-  const { data } = useQuery({
-    queryKey: key,
-    queryFn: () =>
-      client
-        .request<{ data: { excluded: boolean } }>(
-          get(`/picker-exclusions/status/${collection}/${itemId}`)
-        )
-        .then((r) => r.data),
-    staleTime: 60_000
-  })
-  const excluded = data?.excluded ?? false
-  const toggle = useMutation({
-    mutationFn: () => {
-      const body = { collection, item_id: itemId, layout: layoutSlug ?? null }
-      return client.request(
-        excluded
-          ? ({ _method: 'DELETE', _path: '/picker-exclusions', _body: body } as SdkCommand<unknown>)
-          : post('/picker-exclusions', body)
-      )
-    },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: key })
-      toast.success(excluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
-    },
-    onError: (e) => toast.error(errorText(e, 'Could not change picker visibility'))
-  })
+  const { excluded, toggle } = usePickerExclusion(collection, itemId, { layoutSlug })
   return (
     <button
       type='button'

@@ -1739,6 +1739,10 @@ export const pickerExclusionsGuide: DocSection = {
       type: 'p',
       text: '**Bulk:** in any collection browser, select records → click "Disable in pickers" or "Enable in pickers" above the bulk action bar.'
     },
+    {
+      type: 'p',
+      text: '**From a list or queue row (administrators):** open the row\'s Actions menu → **Admin only** → "Exclude from pickers", or "Include in pickers" on a record that is already excluded.'
+    },
     { type: 'h3', text: 'Behavior on existing references' },
     {
       type: 'p',
