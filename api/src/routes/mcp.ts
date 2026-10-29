@@ -278,7 +278,9 @@ export async function mcpRoutes(app: FastifyInstance) {
    */
   app.get('/mcp/capabilities', { preHandler: requireAuth }, async (req) => {
     const { adminTools, chatAccess } = mcpToolOptions(req)
-    return { data: { admin_tools: adminTools, chat: chatAccess } }
+    // update_preview: PATCH /items/:c/:id?dry_run=1 rehearses (#3222). An older instance would
+    // SAVE that request, so the stdio server only sends it when this says so.
+    return { data: { admin_tools: adminTools, chat: chatAccess, update_preview: true } }
   })
 
   // GET (the event stream) and DELETE (end the session) exist only inside a live session;

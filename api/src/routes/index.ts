@@ -52,6 +52,7 @@ import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
 import { changeSetsRoutes } from './change-sets.js'
+import { changesRoutes } from './changes.js'
 import { chaosRoutes } from './chaos.js'
 import { chaosFredisRoutes } from './chaos-fredis.js'
 import { chaosGamedayRoutes } from './chaos-gameday.js'
@@ -575,6 +576,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiMemoryAdminRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
+  await app.register(changesRoutes, { prefix: '/changes' })
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })
   await app.register(helpVideosRoutes, { prefix: '/help-videos' })
