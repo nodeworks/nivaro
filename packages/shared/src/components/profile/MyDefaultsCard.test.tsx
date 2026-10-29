@@ -249,7 +249,7 @@ describe('MyDefaultsCard', () => {
     )
     // Sorted by the collection's name as people see it.
     expect(groups).toEqual(['invoices', 'orders'])
-    const heading = host.querySelector('[data-default-group="orders"] h4')
+    const heading = host.querySelector('[data-default-group="orders"] [data-default-group-label]')
     expect(heading?.textContent).toBe('Purchase orders')
     expect(rowEl(1)?.querySelector('[data-default-field]')?.textContent).toBe('Ship-to')
   })
@@ -258,7 +258,7 @@ describe('MyDefaultsCard', () => {
     await mount()
     expect(rowEl(1)?.querySelector('[data-default-value]')?.textContent).toBe('Cambridge')
     expect(rowEl(1)?.querySelector('[data-default-context]')?.textContent).toBe(
-      'for Zone 2 · Boston'
+      'For Zone 2 · Boston'
     )
     expect(rowEl(2)?.querySelector('[data-default-context]')).toBeNull()
     expect(rowEl(2)?.querySelector('[data-default-value]')?.textContent).toBe('Rush order')
@@ -375,7 +375,7 @@ describe('MyDefaultsCard', () => {
     // Armed: no tip over "Clear?", the cluster stays shown, and screen readers hear the step.
     expect(btn?.hasAttribute('data-tip')).toBe(false)
     expect(btn?.hasAttribute('data-armed')).toBe(true)
-    expect(btn?.parentElement?.className).toContain('[&:has([data-armed])]:opacity-100')
+    expect(btn?.parentElement?.className).not.toContain('opacity-0')
     expect(btn?.querySelector('[aria-live=polite]')?.textContent).toBe('Press again to confirm')
   })
 
@@ -396,7 +396,7 @@ describe('MyDefaultsCard', () => {
     ]
     await mount()
     await settle(() => !!rowEl(7)?.querySelector('[data-default-context]'))
-    expect(rowEl(7)?.querySelector('[data-default-context]')?.textContent).toBe('for Legacy Area')
+    expect(rowEl(7)?.querySelector('[data-default-context]')?.textContent).toBe('For Legacy Area')
   })
 
   it('Change focuses the control, Escape cancels, and focus returns to Change', async () => {
@@ -419,7 +419,7 @@ describe('MyDefaultsCard', () => {
     await mount()
     await settle(() => !!host.querySelector('[data-default-empty]'))
     expect(host.querySelector('[data-default-empty]')?.textContent).toMatch(
-      /⋯ menu.*Save as my default/
+      /Make default.*beside its label/
     )
   })
 
