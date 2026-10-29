@@ -106,6 +106,15 @@ export const mcpDocs: DocSection = {
       type: 'p',
       text: 'The hosted endpoint lists each of these tools by name. The npm server reaches the same tools through `list_instance_tools` and `call_instance_tool`. Both call `GET /api/mcp-tools` and `POST /api/mcp-tools/:name/call` as the key’s user; named tools are stored in `nivaro_settings.mcp_tools` (migration 473).'
     },
+    {
+      type: 'h3',
+      id: 'mcp-tool-suggestions',
+      text: 'Suggested tools from how assistants work'
+    },
+    {
+      type: 'p',
+      text: 'The same page lists **Suggested from use**: runs of tool calls assistants keep making one after another — say `search` → `read_item` → `update_item` — found in the last 14 days of MCP calls. A run counts once per working session (calls less than five minutes apart), repeats of one tool in a row count as one step, runs made only of looking around (`whoami`, `list_collections`…) are left out, and a short run is hidden when a longer one covers nearly all of its sessions. Each suggestion shows the steps, how many sessions, people and connections used it, and the collections its calls touched. **Create tool** opens the editor with a name and description filled in — a saved query when every step only reads, a flow when one writes — and you pick the query or flow (arguments are never recorded, so Nivaro cannot write the query for you). **Not useful** hides a suggestion (`GET /api/mcp-tools/suggestions`, `POST /api/mcp-tools/suggestions/dismiss {key}`; migration 509).'
+    },
     { type: 'h2', id: 'mcp-keys', text: 'Sign-in or API key' },
     {
       type: 'p',
@@ -120,6 +129,29 @@ export const mcpDocs: DocSection = {
     {
       type: 'p',
       text: 'Every assistant you allowed is a connection: `GET /api/oauth/connections` lists them (name, when you connected, when it was last used, and whether it may use chat) and `DELETE /api/oauth/connections/:id` disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (`oauth-connect`, `oauth-revoke`). Suspending an account ends its connections too: every request checks the account is still active.'
+    },
+    { type: 'h2', id: 'mcp-limits', text: 'Limit what a connection may use' },
+    {
+      type: 'p',
+      text: 'Each connected app and each API key used for MCP can be limited further than its person: to some **tools**, to some **collections**, and to some **actions** (read, create, change, delete). Limits only take away — a connection never gets more than its person can do, and an API key keeps its own scopes on top. Set them under **Limits** on a connection in your profile’s **What my agents did** tab, or as an administrator on **MCP → Connections** (the **May use** column), where you can also **Lock** a limit so only administrators can change it and add a note the person sees. **Limit an API key** sets one on a key before it has made its first MCP call.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Tools: the connection is only offered the tools it may use, and every API call a tool makes is checked again on the server — a call made for a tool outside the list is refused (403 `MCP_TOOL_NOT_ALLOWED`), whatever the assistant sends.',
+        'Collections and actions work like an API key limited to collections: every read and write the assistant makes is held to them, people’s names stay readable so records still show who is who, and administrator tools are off while collections or actions are limited.',
+        'Limits apply to `/api/mcp` and the calls its tools make. An API key used directly against the REST API keeps only its own scopes.',
+        'Changes are logged (`mcp-connection-scope`) and reach every server within about ten seconds. Disconnecting an app removes its limits.'
+      ]
+    },
+    { type: 'h3', id: 'mcp-kits', text: 'Tool kits' },
+    {
+      type: 'p',
+      text: 'A kit is a ready set of tools for one job, picked on the consent page when someone connects an assistant (**What it may use**: everything you can do, or a kit) or later on the connection. Three are built in: **Buyer** (find and read records, raise and update requests, move them along, approvals, tasks and comments), **Operations** (queues and the support desk, saved queries and the instance’s own tools, nothing deleted) and **Administrator (look only)** (every read plus health, jobs, traffic, access, layout and infrastructure diagnostics, no record changes). Administrators add their own on the **Kits** tab of **MCP → Connections**. A kit with its connection’s own lists meets in what both allow; a kit that is removed while in use is refused, and a connection whose kit is gone can use nothing until it gets another.'
+    },
+    {
+      type: 'p',
+      text: 'Routes under `/api/mcp-connections`: `GET /catalog` (tools, kits, actions), `GET /kits`, `POST /kits`, `PUT /kits/:key`, `DELETE /kits/:key` (administrators), `PUT|DELETE /mine/:conn/scope` (your own signed-in connections, signed in as yourself), `PUT|DELETE /:conn/scope` (administrators; body `{kit, tools, collections, actions, locked, note}`, each list `null` = no limit). Stored in `nivaro_mcp_connection_scopes` and `nivaro_mcp_tool_kits` (migration 509).'
     },
     { type: 'h2', id: 'mcp-live', text: 'Live record updates' },
     {
@@ -147,6 +179,15 @@ export const mcpDocs: DocSection = {
     {
       type: 'p',
       text: 'Your profile has a **What my agents did** tab (`/profile?tab=agents`). It lists each connected app with its last 14 days of tool calls (calls a day, refused and failed calls, the tools it used most, how much it read back) and a Disconnect button, then every tool call newest first: the app, the tool, the record it touched and how it ended. Open a call to see the changes it made. Each change can be undone while nothing else has changed the record since: an edit puts back the values from before, a new record is deleted. Undo runs as you, so your permissions and the record’s rules apply, and it is logged (`mcp-undo`).'
+    },
+    { type: 'h3', id: 'mcp-contract-tests', text: 'Tool contract tests' },
+    {
+      type: 'p',
+      text: 'After a run, **Save as test** keeps the call as a contract test: the tool, the arguments, the tool’s input schema as it is now and the **shape** of the answer — its keys and types, never its values. **Contract tests** in the console’s header lists them all; each tool also shows its own under the form. A run calls the tool again as you with every write held (a dry run), then fails when the tool is gone, needs an input the test does not give, no longer takes one it does, changed an input’s type or allowed values, now refuses where it answered (or the other way round), or answers with a key missing or a type changed. New keys and empty answers are only notes, and inside rows of data (`data`, `rows`, `items`…) a missing field is a note, since a record’s fields depend on the record. When a tool changed on purpose, **Accept changes** takes the last run as the new contract.'
+    },
+    {
+      type: 'p',
+      text: 'In CI: `NIVARO_URL=… NIVARO_TOKEN=<an administrator’s API key> pnpm mcp:contract-tests` runs every test that is on and exits 1 when one fails (`--ids 3,7` for some, `--json` for the whole answer). Routes under `/api/mcp-console/tests` (administrators): `GET /`, `POST /` `{name, tool, arguments, output, is_error}`, `PATCH /:id` `{name?, enabled?, accept?}`, `DELETE /:id`, `POST /run` `{ids?}`. A connection’s top tools on **MCP → Connections** open the console on that tool, ready to save a test. Stored in `nivaro_mcp_contract_tests` (migration 509).'
     },
     { type: 'h2', id: 'mcp-admin', text: 'For administrators' },
     {
