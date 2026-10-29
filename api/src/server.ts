@@ -57,6 +57,7 @@ import { pruneAiCalls } from './services/ai-log.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
+import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
@@ -214,6 +215,16 @@ export async function buildServer() {
   // Ahead of the request log, so the log keeps the answer the caller received.
   app.addHook('onSend', async (req, reply, payload) => {
     const body = scopeRefusalBody(req, reply.statusCode, payload)
+    if (body === null) return payload
+    void reply.header('content-length', Buffer.byteLength(body))
+    return body
+  })
+  // Error answers that say what to do: hint / fields / request_id on 4xx-5xx JSON bodies, and
+  // database refusals in field labels (services/error-enrich.ts). After the scope rewrite, ahead
+  // of the request log.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode < 400) return payload
+    const body = await enrichErrorPayload(req, reply, payload)
     if (body === null) return payload
     void reply.header('content-length', Buffer.byteLength(body))
     return body
@@ -621,6 +632,7 @@ export async function buildServer() {
       const refusal = err.statusCode == null ? describeDbRefusal(err) : null
       if (refusal) {
         req.log.info({ code: refusal.code, url: req.url }, refusal.message)
+        noteDbRefusal(req, err)
         return reply.code(refusal.status).send({
           statusCode: refusal.status,
           error: STATUS_CODES[refusal.status] ?? 'Error',

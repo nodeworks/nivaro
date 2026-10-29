@@ -58,7 +58,29 @@ export const apiOverview: DocSection = {
   "statusCode": 401,
   "error": "Unauthorized",
   "message": "This API key expired on 2026-09-01",
-  "code": "API_KEY_EXPIRED"
+  "code": "API_KEY_EXPIRED",
+  "hint": "Create a new key under API keys and use it instead.",
+  "request_id": "4f0c2a9e-…"
+}`
+    },
+    {
+      type: 'p',
+      text: 'Every error answer also says what to do. `hint` is one plain sentence (chosen by `code`, else by status). `fields` lists the field keys the refusal is about, so a form can mark them. `request_id` matches the `x-nivaro-request-id` header and the API log; quote it when you report a problem. A key the route already set is never replaced, and `error`, `message` and `code` keep their values.'
+    },
+    {
+      type: 'p',
+      text: 'A write the database refuses is told in the collection’s field labels: a duplicate value names the field and your value ("Another record already has this PO number (4471)"), a missing link names the field you picked, a left-out required column answers `REQUIRED_VALUE_MISSING`, and a delete still linked to names the records that point at it. Constraint, table and column names never appear.'
+    },
+    {
+      type: 'pre',
+      code: `HTTP/1.1 422 Unprocessable Entity
+
+{
+  "error": "Supplier site is required",
+  "code": "REQUIRED_VALUE_MISSING",
+  "hint": "Fill in Supplier site, then save again.",
+  "fields": ["supplier_site"],
+  "request_id": "4f0c2a9e-…"
 }`
     },
     { type: 'h3', text: 'Sign-in and credential codes' },
@@ -115,6 +137,11 @@ export const apiOverview: DocSection = {
         ['RECORD_IN_USE', '409', 'The record cannot be removed while other records point at it.'],
         ['DUPLICATE_RECORD', '409', 'A record with the same unique value already exists.'],
         ['VALUE_TOO_LONG', '422', 'A value is longer than its field allows.'],
+        [
+          'REQUIRED_VALUE_MISSING',
+          '422',
+          'A field that must have a value was left out or sent empty. `fields` names it.'
+        ],
         [
           'FIELD_NOT_FILTERABLE',
           '400',

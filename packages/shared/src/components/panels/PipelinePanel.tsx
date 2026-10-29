@@ -17,6 +17,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { errorToastOptions } from '../../lib/error-toast'
 import {
   signalSentence,
   useRecordSignalPeers,
@@ -1947,6 +1948,8 @@ function PipelinePanelInner({
       const resp = (err as { response?: { status?: number } })?.response
       toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
+        // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
+        ...errorToastOptions(err, { action: 'Transition' }),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
         ...(isAccessRefusal(err)
@@ -2593,6 +2596,8 @@ function PipelineTransitionButtonsInner({
       const resp = (err as { response?: { status?: number } })?.response
       toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
+        // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
+        ...errorToastOptions(err, { action: 'Transition' }),
         // #1867: a refusal carries "Why?" — the role, owner or access rule
         // that stopped it, and who can change it.
         ...(isAccessRefusal(err)

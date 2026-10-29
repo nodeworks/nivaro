@@ -19,6 +19,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
+import { errorSentence } from '../../lib/error-message'
 import { type ImportLogError, type ImportLogLine, parseImportLog } from '../../lib/import-log'
 import { cn, formatDateTime, formatFileSize, formatNumber, titleCase } from '../../lib/utils'
 import { ExplainButton } from '../ai/ExplainButton'
@@ -733,8 +734,7 @@ function Records({
       void qc.invalidateQueries({ queryKey: ['staged-import-run-items', runId] })
       void qc.invalidateQueries({ queryKey: ['staged-import-run', runId] })
     },
-    onError: (err: Error & { response?: { error?: string } }) =>
-      setMessage(err.response?.error ?? err.message)
+    onError: (err: Error) => setMessage(errorSentence(err, 'That did not work'))
   })
 
   const facets = items.data?.facets ?? {}
@@ -1043,8 +1043,7 @@ function RevertPanel({
       )
       onDone()
     },
-    onError: (err: Error & { response?: { error?: string } }) =>
-      setResult(err.response?.error ?? err.message)
+    onError: (err: Error) => setResult(errorSentence(err, 'That did not work'))
   })
 
   const p = preview.data?.data
@@ -1383,8 +1382,7 @@ export function RunDetailSheet({
                     </p>
                     {rebuild.isError && (
                       <p className='mt-1.5 max-w-[64ch] text-[12px] text-slate-700 dark:text-foreground'>
-                        {(rebuild.error as Error & { response?: { error?: string } }).response
-                          ?.error ?? (rebuild.error as Error).message}
+                        {errorSentence(rebuild.error, 'The rebuild did not start')}
                       </p>
                     )}
                   </section>

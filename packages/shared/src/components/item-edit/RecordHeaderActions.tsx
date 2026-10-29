@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { errorToastOptions } from '../../lib/error-toast'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
 import {
@@ -173,7 +174,8 @@ export function RecordHeaderActionDialog({
       onDone?.()
       onClose()
     },
-    onError: (err: unknown) => toast.error(userErrorMessage(err, 'The action did not run'))
+    onError: (err: unknown) =>
+      toast.error(userErrorMessage(err, 'The action did not run'), errorToastOptions(err))
   })
   return (
     <Dialog

@@ -18,7 +18,74 @@ export interface DbRefusal {
     | 'VALUE_TOO_LONG'
     | 'VALUE_TYPE_MISMATCH'
     | 'VALUE_OUT_OF_RANGE'
+    | 'REQUIRED_VALUE_MISSING'
   message: string
+}
+
+/**
+ * What a constraint refusal names, for an answer that speaks in field labels
+ * (services/db-refusal-labels.ts). Internal: never sent as it is — the
+ * constraint, table and column names stay on the server.
+ */
+export interface DbRefusalDetail {
+  kind: 'fk_missing' | 'fk_in_use' | 'duplicate' | 'not_null' | 'too_long'
+  /** The constraint or unique index the database named. */
+  constraint?: string
+  /** The table the message names, without database or schema ('orders'). For
+   *  fk_missing it is the REFERENCED table; for fk_in_use the one still linking. */
+  table?: string
+  /** The column the message names (fk_in_use: the linking column on `table`). */
+  column?: string
+  /** The duplicate key value as the database printed it — the caller's own value. */
+  value?: string
+}
+
+const lastPart = (name: string): string => (name.split('.').pop() ?? name).replace(/^\[|\]$/g, '')
+
+/** The detail behind a refusal describeDbRefusal / describeValueRefusal recognises. */
+export function refusalDetail(err: unknown): DbRefusalDetail | null {
+  const text = refusalText(err)
+  if (!text) return null
+  const fk =
+    /(INSERT|UPDATE|MERGE|DELETE) statement conflicted with the (FOREIGN KEY|REFERENCE)[A-Z ]* constraint "([^"]+)"/i.exec(
+      text
+    )
+  if (fk) {
+    const removing = /^delete$/i.test(fk[1]) || /^reference$/i.test(fk[2])
+    const table = /table "([^"]+)"/i.exec(text)?.[1]
+    const column = /table "[^"]+", column '([^']+)'/i.exec(text)?.[1]
+    return {
+      kind: removing ? 'fk_in_use' : 'fk_missing',
+      constraint: fk[3],
+      ...(table ? { table: lastPart(table) } : {}),
+      ...(column ? { column } : {})
+    }
+  }
+  const unique =
+    /Violation of (?:UNIQUE KEY|PRIMARY KEY) constraint '([^']+)'/i.exec(text) ??
+    /Cannot insert duplicate key row in object '[^']+' with unique index '([^']+)'/i.exec(text)
+  if (unique) {
+    const table = /object '([^']+)'/i.exec(text)?.[1]
+    const value = /The duplicate key value is \((.*?)\)\.?(?:\s|$|·)/i.exec(text)?.[1]
+    return {
+      kind: 'duplicate',
+      constraint: unique[1],
+      ...(table ? { table: lastPart(table) } : {}),
+      ...(value !== undefined ? { value } : {})
+    }
+  }
+  const notNull = /Cannot insert the value NULL into column '([^']+)', table '([^']+)'/i.exec(text)
+  if (notNull) return { kind: 'not_null', column: notNull[1], table: lastPart(notNull[2]) }
+  if (/String or binary data would be truncated/i.test(text)) {
+    const col = /column '([^']+)'/i.exec(text)?.[1]
+    const table = /in table '([^']+)'/i.exec(text)?.[1]
+    return {
+      kind: 'too_long',
+      ...(col ? { column: col } : {}),
+      ...(table ? { table: lastPart(table) } : {})
+    }
+  }
+  return null
 }
 
 /** The driver's messages as one string: knex/mssql wraps them in an
@@ -103,6 +170,16 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
       status: 400,
       code: 'VALUE_TYPE_MISMATCH',
       message: "A value does not match its field's type"
+    }
+  }
+  // 515: a column that needs a value got none — on a create, a field the
+  // caller left out. Only where the row came from the caller (see above).
+  const notNull = /Cannot insert the value NULL into column '([^']+)'/i.exec(text)
+  if (notNull || /Cannot insert the value NULL into column/i.test(text)) {
+    return {
+      status: 422,
+      code: 'REQUIRED_VALUE_MISSING',
+      message: notNull ? `${notNull[1]} needs a value` : 'A required value is missing'
     }
   }
   if (

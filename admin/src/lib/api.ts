@@ -1,4 +1,9 @@
-import { clientChaosAxiosInterceptor, forgetSettledReads } from '@nivaro/shared'
+import {
+  clientChaosAxiosInterceptor,
+  forgetSettledReads,
+  isBareStatusText,
+  userErrorMessage
+} from '@nivaro/shared'
 import axios, { AxiosError } from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 import { readMasquerade } from './masquerade'
@@ -96,6 +101,14 @@ api.interceptors.response.use(
       if (interceptor) {
         interceptor.handler(status, err.response?.data ?? {}, err.response?.headers ?? {})
       }
+    }
+
+    // Screens that toast `err.message` showed "Request failed with status code 409". The
+    // server's own sentence (or what the status means) replaces it; `response` is untouched,
+    // so codes, hints and fields still read from it (@nivaro/shared describeError).
+    if (err?.response && isBareStatusText(err.message)) {
+      const said = userErrorMessage(err, '')
+      if (said) err.message = said
     }
 
     return Promise.reject(err)

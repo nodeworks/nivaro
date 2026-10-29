@@ -55,6 +55,8 @@ import {
   formatDateFilter,
   parseDateFilter
 } from '../lib/date-filter'
+import { errorSentence } from '../lib/error-message'
+import { errorToastOptions } from '../lib/error-toast'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
 import { deliverLive, releaseLiveOwner } from '../lib/focus-mode'
 import {
@@ -1022,7 +1024,11 @@ export function RowActionsMenu({
       invalidateRecordQueries(qc, collection, [id])
       onAfterTransition?.()
     },
-    onError: (err: unknown) => toast.error(userErrorMessage(err, 'Transition failed'))
+    onError: (err: unknown) =>
+      toast.error(
+        userErrorMessage(err, 'Transition failed'),
+        errorToastOptions(err, { action: 'Transition' })
+      )
   })
 
   // One-record run of a registry action — the same endpoints the selection
@@ -1069,7 +1075,7 @@ export function RowActionsMenu({
     },
     onError: (err: unknown) => {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? userErrorMessage(err, 'Action failed'))
+      toast.error(resp?.error ?? userErrorMessage(err, 'Action failed'), errorToastOptions(err))
     }
   })
 
@@ -1100,7 +1106,7 @@ export function RowActionsMenu({
     },
     onError: (err: unknown) => {
       const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? userErrorMessage(err, 'Push failed'))
+      toast.error(resp?.error ?? userErrorMessage(err, 'Push failed'), errorToastOptions(err))
     }
   })
 
@@ -3803,7 +3809,8 @@ function BulkBar({
       onClear()
       setMode('actions')
     } catch (e) {
-      setNote(userErrorMessage(e, 'Bulk action failed'))
+      // What happened and what to do, in one line (lib/error-message.ts).
+      setNote(errorSentence(e, 'Bulk action failed'))
     } finally {
       endBulkProgress(progress)
       setBusy(false)

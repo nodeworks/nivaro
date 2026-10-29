@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { errorSentence, rowErrorSentence } from '../../lib/error-message'
 import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
 import { Button } from '../ui/button'
@@ -1608,7 +1609,8 @@ function FailedRowRepair({
     mutationFn: ({ row, values }: { row: number; values: Record<string, unknown> }) =>
       client.request(post(`/imports/${jobId}/repair-row`, { values })).then(() => row),
     onSuccess: (row) => setDone((d) => ({ ...d, [row]: 'ok' })),
-    onError: (err: Error, vars) => setDone((d) => ({ ...d, [vars.row]: err.message }))
+    onError: (err: Error, vars) =>
+      setDone((d) => ({ ...d, [vars.row]: errorSentence(err, 'The row was not created') }))
   })
   if (rows.length === 0) {
     return (
@@ -1622,8 +1624,11 @@ function FailedRowRepair({
               key={`${e.row}-${e.error}`}
               className='flex gap-3 border-b border-red-100 px-3 py-1.5 text-[11.5px] last:border-b-0 dark:border-red-900/60'
             >
-              <span className='shrink-0 font-mono tabular-nums text-slate-400'>{e.row}</span>
-              <span className='text-red-700 dark:text-red-400'>{e.error}</span>
+              {/* One plain sentence per row: "Row 14: Warehouse 'X' doesn't exist — …" */}
+              <span className='text-red-700 dark:text-red-400'>
+                <span className='font-medium tabular-nums'>Row {e.row}:</span>{' '}
+                {rowErrorSentence(e.error)}
+              </span>
             </div>
           ))}
         </div>
@@ -1660,7 +1665,7 @@ function FailedRowRepair({
                   <td className='px-2 py-1 font-mono tabular-nums text-slate-400'>
                     {r.row}
                     <p className='max-w-[120px] whitespace-normal text-[10px] text-red-500'>
-                      {r.error}
+                      {rowErrorSentence(r.error)}
                     </p>
                   </td>
                   {fields.map((f) => (
