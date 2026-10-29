@@ -27,6 +27,13 @@ import { botUserId, chatBotName } from '../services/chat-bot.js'
 import { customEmojiExists } from '../services/chat-emoji.js'
 import { recordChatDelivery } from '../services/chat-health.js'
 import {
+  MEMBER_PAGE_DEFAULT,
+  pageRoomMembers,
+  parseLimit,
+  parseOffset,
+  wantsPaging
+} from '../services/chat-member-page.js'
+import {
   castVote,
   closeDuePolls,
   closePoll,
@@ -1452,6 +1459,16 @@ export async function chatRoutes(app: FastifyInstance) {
     const row = await channelTarget(req.params.id)
     if (!row) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, row.room))) return reply.code(403).send(forbidden)
+    // #3082: paging params switch to the paged shape; without them the old full list.
+    if (wantsPaging(req.query as Record<string, unknown>)) {
+      const qs = req.query as Record<string, unknown>
+      const page = await pageRoomMembers(row.room, {
+        q: typeof qs.q === 'string' ? qs.q : '',
+        limit: parseLimit(qs.limit),
+        offset: parseOffset(qs.offset)
+      })
+      return { data: page.rows, total: page.total, has_more: page.has_more }
+    }
     const rows = await db('nivaro_chat_memberships as m')
       .leftJoin('nivaro_users as u', 'u.id', 'm.user')
       .where('m.room', row.room)
@@ -1821,6 +1838,25 @@ export async function chatRoutes(app: FastifyInstance) {
 
   // ── Room info (#978, #980) ────────────────────────────────────────────────
 
+  /** #3082: a page of a room's members (online first, searchable) for the info drawer. */
+  app.get<{ Params: { room: string } }>('/rooms/:room/members', async (req, reply) => {
+    const room = decodeURIComponent(req.params.room)
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    if (parseRoom(room).kind === 'dm') return { data: [], total: 0, has_more: false }
+    const qs = req.query as Record<string, unknown>
+    const page = await pageRoomMembers(room, {
+      q: typeof qs.q === 'string' ? qs.q : '',
+      limit: parseLimit(qs.limit),
+      offset: parseOffset(qs.offset)
+    })
+    return {
+      data: page.rows.map((r) => ({ id: r.user, name: r.name, title: r.title, online: r.online })),
+      total: page.total,
+      has_more: page.has_more,
+      online_total: page.online_total
+    }
+  })
+
   app.get<{ Params: { room: string } }>('/rooms/:room/info', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
@@ -1854,20 +1890,27 @@ export async function chatRoutes(app: FastifyInstance) {
       .where({ room })
       .orderBy('id', 'asc')
       .first('date_created')) as { date_created?: Date } | undefined
-    const users = memberIds.length
-      ? ((await db('nivaro_users')
-          .whereIn('id', memberIds.slice(0, 500))
-          .select('id', 'first_name', 'last_name', 'email', 'title', 'status')) as Array<
-          Record<string, unknown>
-        >)
-      : []
+    // #3082: a big room answers with its first page (online first) + the true counts;
+    // the drawer pages the rest through GET /rooms/:room/members.
+    const bigPage =
+      parsed.kind !== 'dm' && memberIds.length > MEMBER_PAGE_DEFAULT
+        ? await pageRoomMembers(room, { limit: MEMBER_PAGE_DEFAULT })
+        : null
+    const users =
+      memberIds.length && !bigPage
+        ? ((await db('nivaro_users')
+            .whereIn('id', memberIds.slice(0, 500))
+            .select('id', 'first_name', 'last_name', 'email', 'title', 'status')) as Array<
+            Record<string, unknown>
+          >)
+        : []
     // Online = heartbeat within 70s — the Online tab's rule; visibility of
     // people follows the room itself (you can see who shares a room with you).
     const since = new Date(Date.now() - 70_000)
     const online = new Set(
       (
         (await db('user_presence')
-          .whereIn('user_id', memberIds.slice(0, 500))
+          .whereIn('user_id', bigPage ? [] : memberIds.slice(0, 500))
           .where('last_seen', '>=', since)
           .andWhere((q) => q.whereNull('is_online').orWhere('is_online', true))
           .pluck('user_id')
@@ -1905,17 +1948,27 @@ export async function chatRoutes(app: FastifyInstance) {
       data: {
         room,
         kind: parsed.kind,
-        members: users
-          .filter((u) => u.status !== 'suspended')
-          .map((u) => ({
-            id: String(u.id),
-            name: [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? ''),
-            title: u.title ?? null,
-            online: online.has(String(u.id).toUpperCase())
-          }))
-          .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)),
-        member_count: users.filter((u) => u.status !== 'suspended').length,
-        online_count: [...online].length,
+        members: bigPage
+          ? bigPage.rows.map((r) => ({
+              id: r.user,
+              name: r.name,
+              title: r.title,
+              online: r.online
+            }))
+          : users
+              .filter((u) => u.status !== 'suspended')
+              .map((u) => ({
+                id: String(u.id),
+                name:
+                  [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? ''),
+                title: u.title ?? null,
+                online: online.has(String(u.id).toUpperCase())
+              }))
+              .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name)),
+        member_count: bigPage
+          ? bigPage.total
+          : users.filter((u) => u.status !== 'suspended').length,
+        online_count: bigPage ? bigPage.online_total : [...online].length,
         created_by: creator
           ? [creator.first_name, creator.last_name].filter(Boolean).join(' ') ||
             String(creator.email ?? '')

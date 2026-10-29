@@ -115,6 +115,7 @@ import {
   useMyPreferences,
   useOpenRoomRegistration,
   useOutbox,
+  usePagedMembers,
   usePeerReadAt,
   useRecordBrowserTimezone,
   useRoomMembership,
@@ -140,6 +141,7 @@ import { HuddleStage } from './huddle/HuddleStage'
 import { useHuddleLive } from './huddle/huddle-live'
 import { huddleRefOf, stripHuddleRef } from './huddle/huddle-schedule'
 import { useHuddle } from './huddle/useHuddle'
+import { MemberLoadMore, MemberOnlineDot, MemberSearchBox } from './MemberPaging'
 import { actionsForMessage, MessageActionsMenu, useMessageActions } from './MessageActions'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import { PollCard } from './PollCard'
@@ -2680,28 +2682,25 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
   const cfg = useChatConfig()
   const { isAdmin } = useItemEditAuth()
   const [open, setOpen] = useState(false)
-  const { members, loading } = useChannelMembers(channel.id)
+  // #3082: the list pages from the server (online first, searchable, true total).
+  const [memberQ, setMemberQ] = useState('')
+  const debouncedMemberQ = useDebouncedValue(memberQ, 250)
+  const paged = usePagedMembers(
+    `channel-${channel.id}`,
+    `/chat/channels/${channel.id}/members`,
+    debouncedMemberQ,
+    open
+  )
+  const members = paged.members
+  const loading = paged.loading
   const { addMember, removeMember } = useChannelAdmin(channel.id)
   const [search, setSearch] = useState('')
   const debounced = useDebouncedValue(search, 250)
   const meId = cfg.me?.id.toUpperCase() ?? ''
   const canEdit = isAdmin || (!!meId && String(channel.created_by ?? '').toUpperCase() === meId)
   const { users } = useUserSearch(debounced, open && canEdit && !!search.trim())
-  const memberIds = new Set(members.map((m) => String(m.user).toUpperCase()))
-  const nameOf = (m: {
-    first_name: string | null
-    last_name: string | null
-    email: string | null
-    user: string
-  }) => [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || m.user
-  const sorted = [...members].sort((a, b) => {
-    const ua = String(a.user).toUpperCase()
-    const ub = String(b.user).toUpperCase()
-    if (ua === meId) return -1
-    if (ub === meId) return 1
-    return nameOf(a).localeCompare(nameOf(b))
-  })
-
+  const memberIds = new Set(members.map((m) => m.id.toUpperCase()))
+  const sorted = members
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -2718,7 +2717,7 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
           data-chat-group-members
         >
           <Users className='h-3.5 w-3.5' strokeWidth={2} />
-          {members.length > 0 && members.length}
+          {paged.total > 0 && paged.total}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -2729,23 +2728,29 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
       >
         <div className={cn('border-b px-3 py-2', th.divider)}>
           <p className='text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400'>
-            In this conversation {members.length > 0 && `· ${members.length}`}
+            In this conversation {paged.total > 0 && `· ${paged.total.toLocaleString('en-US')}`}
           </p>
+          {(paged.total > 10 || memberQ) && (
+            <MemberSearchBox value={memberQ} onChange={setMemberQ} className='mt-1.5' />
+          )}
         </div>
         <div className='max-h-[280px] overflow-y-auto py-1'>
           {loading && <p className='px-3 py-2 text-[12px] text-slate-400'>Loading…</p>}
+          {!loading && sorted.length === 0 && memberQ.trim() && (
+            <p className='px-3 py-2 text-[12px] text-slate-400'>No one matches.</p>
+          )}
           {sorted.map((m) => {
-            const uid = String(m.user).toUpperCase()
-            const nm = nameOf(m)
+            const uid = m.id.toUpperCase()
+            const nm = m.name
             const isMe = uid === meId
             const isOwner = String(channel.created_by ?? '').toUpperCase() === uid
             return (
               <div
-                key={m.user}
+                key={m.id}
                 className='group flex items-center gap-2 px-3 py-1.5'
-                data-chat-group-member={m.user}
+                data-chat-group-member={m.id}
               >
-                <Avatar id={m.user} name={nm} size={26} />
+                <Avatar id={m.id} name={nm} size={26} />
                 <span className='min-w-0 flex-1'>
                   <span className='block truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
                     {nm}
@@ -2755,12 +2760,13 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
                     <span className='block text-[10.5px] text-slate-400'>Started the group</span>
                   )}
                 </span>
+                <MemberOnlineDot online={m.online} />
                 {canEdit && !isMe && (
                   <button
                     type='button'
                     title={`Remove ${nm}`}
                     aria-label={`Remove ${nm}`}
-                    onClick={() => removeMember.mutate(m.user)}
+                    onClick={() => removeMember.mutate(m.id)}
                     className='rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-red-500 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-muted'
                   >
                     <X className='h-3 w-3' />
@@ -2769,6 +2775,11 @@ function GroupMembersButton({ channel, onLeft }: { channel: ChannelMeta; onLeft:
               </div>
             )
           })}
+          <MemberLoadMore
+            hasMore={paged.hasMore}
+            loading={paged.loadingMore}
+            onLoad={paged.loadMore}
+          />
         </div>
         {canEdit && (
           <div className={cn('border-t px-3 py-2', th.divider)}>

@@ -900,9 +900,25 @@ export function updateChatChannel(
   return cmd('PATCH', `/chat/channels/${id}`, undefined, body)
 }
 
-/** Members of a channel (visible to anyone who can see the room). */
-export function listChatChannelMembers(id: number): Command<{ data: ChatChannelMember[] }> {
-  return cmd('GET', `/chat/channels/${id}/members`)
+/**
+ * Members of a channel (visible to anyone who can see the room). With no
+ * options the full list comes back (old shape). Pass `limit` (default 50, max
+ * 200), `offset` and/or `q` (name, @handle, email local part) to get one page,
+ * online people first, plus `total` and `has_more`.
+ */
+export function listChatChannelMembers(
+  id: number,
+  opts?: { limit?: number; offset?: number; q?: string }
+): Command<{
+  data: Array<ChatChannelMember & { name?: string; title?: string | null; online?: boolean }>
+  total?: number
+  has_more?: boolean
+}> {
+  const query: Record<string, string | number> = {}
+  if (opts?.limit !== undefined) query.limit = opts.limit
+  if (opts?.offset !== undefined) query.offset = opts.offset
+  if (opts?.q !== undefined) query.q = opts.q
+  return cmd('GET', `/chat/channels/${id}/members`, Object.keys(query).length ? query : undefined)
 }
 
 /** Add someone to a channel (owner or admin). */
