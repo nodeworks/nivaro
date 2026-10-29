@@ -1,3 +1,4 @@
+import { unsavedWorkLabels } from '@nivaro/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -174,7 +175,10 @@ describe('Procedures page', () => {
     await openProc('p_import')
     const link = await screen.findByRole('link', { name: /Open import definition/ })
     expect(link).toHaveAttribute('href', '/imports?definition=po_lines')
-    expect(screen.getByLabelText('Definition of p_import')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('Definition of p_import (read-only)')).toHaveTextContent(
+      'CREATE PROCEDURE p_import AS SELECT 1'
+    )
+    expect(screen.queryByLabelText('Definition of p_import')).toBeNull()
     expect(screen.queryByRole('button', { name: /Drop/ })).toBeNull()
   })
 
@@ -182,10 +186,9 @@ describe('Procedures page', () => {
     post.mockResolvedValue({ data: { data: { version: 6, unchanged: false } } })
     wrap(<ProceduresPage />)
     await openProc('p_gone')
-    expect(await screen.findByLabelText('Definition of p_gone')).toHaveValue(
+    expect(await screen.findByLabelText('Definition of p_gone (read-only)')).toHaveTextContent(
       'CREATE OR ALTER PROCEDURE p_gone AS SELECT 5'
     )
-    expect(screen.getByLabelText('Definition of p_gone')).toHaveAttribute('readonly')
     fireEvent.click(screen.getByRole('button', { name: /Restore version 5/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Restore$/ }))
     await waitFor(() =>
@@ -294,5 +297,25 @@ describe('Procedures page', () => {
         expect.objectContaining({ create: true, definition: expect.stringContaining('p_fresh') })
       )
     )
+  })
+
+  it('an unsaved edit reports itself and is not dropped by switching procedures', async () => {
+    wrap(<ProceduresPage />)
+    await openProc('p_plain')
+    fireEvent.change(await screen.findByLabelText('Definition of p_plain'), {
+      target: { value: 'CREATE PROCEDURE p_plain AS SELECT 8' }
+    })
+    await waitFor(() => expect(unsavedWorkLabels()).toContain('Procedure edit'))
+    await openProc('p_import')
+    expect(screen.getByText(/You have unsaved changes to/)).toBeInTheDocument()
+    expect(screen.getByLabelText('Definition of p_plain')).toHaveValue(
+      'CREATE PROCEDURE p_plain AS SELECT 8'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByText(/You have unsaved changes to/)).toBeNull()
+    await openProc('p_import')
+    fireEvent.click(screen.getByRole('button', { name: 'Discard and open p_import' }))
+    expect(await screen.findByLabelText('Definition of p_import (read-only)')).toBeInTheDocument()
+    await waitFor(() => expect(unsavedWorkLabels()).not.toContain('Procedure edit'))
   })
 })

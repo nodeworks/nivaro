@@ -8,6 +8,7 @@ import {
   procedureChip,
   procedureState,
   readProcError,
+  restoreCopy,
   restoreRequest,
   saveRequest
 } from './status'
@@ -298,5 +299,16 @@ describe('readProcError', () => {
       code: null,
       message: 'Deploy failed'
     })
+  })
+})
+
+describe('restoreCopy', () => {
+  it('says no new version is saved when the text matches the current one', () => {
+    expect(restoreCopy({ version: 1, body_hash: 'a' }, 3, 'a', false)).toMatch(
+      /same text as version 3, so no new version is saved/
+    )
+    expect(restoreCopy({ version: 1, body_hash: 'a' }, 3, 'b', false)).toMatch(/saved as version 4/)
+    // A dropped proc always gets a new version (it is revived).
+    expect(restoreCopy({ version: 3, body_hash: 'a' }, 3, 'a', true)).toMatch(/saved as version 4/)
   })
 })

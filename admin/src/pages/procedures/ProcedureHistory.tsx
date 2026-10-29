@@ -4,13 +4,14 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { personName, usePeople } from '@/lib/people'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
-import { personName, usePeople } from '../payload-templates/panel-api'
 import { DiffView } from './DiffView'
 import {
   deployedVersion,
   type ProcDetail,
   type ProcState,
+  restoreCopy,
   type VersionDetail,
   type VersionSummary
 } from './status'
@@ -55,7 +56,10 @@ export function ProcedureHistory({
   })
   const versions = versionsQ.data ?? []
   const people = usePeople(versions.map((v) => v.created_by))
-  const deployed = deployedVersion(versions, state.dropped ? null : config?.deployed_hash)
+  const deployed = deployedVersion(
+    versions,
+    state.status === 'dropped' ? null : config?.deployed_hash
+  )
   const [picked, setPicked] = useState<number | null>(null)
   const pickedSummary = versions.find((v) => v.version === picked) ?? null
 
@@ -129,12 +133,14 @@ export function ProcedureHistory({
                               deployed
                             </span>
                           )}
-                          <span className='text-slate-700 dark:text-slate-200'>
-                            {who ?? 'Someone'}
-                          </span>
-                          <span aria-hidden>·</span>
-                          <span data-tip={formatDateTime(v.created_at)}>
-                            {formatRelative(v.created_at)}
+                          <span className='whitespace-nowrap'>
+                            <span className='text-slate-700 dark:text-slate-200'>
+                              {who ?? 'Someone'}
+                            </span>{' '}
+                            <span aria-hidden>·</span>{' '}
+                            <span data-tip={formatDateTime(v.created_at)}>
+                              {formatRelative(v.created_at)}
+                            </span>
                           </span>
                         </span>
                         <span className='mt-0.5 line-clamp-2 block break-words text-[12px] text-slate-700 dark:text-slate-300'>
@@ -166,6 +172,7 @@ export function ProcedureHistory({
               who={personName(people.data, pickedSummary.created_by)}
               current={config.version}
               currentBody={config.body}
+              currentHash={config.body_hash}
               dropped={state.dropped}
               dirty={dirty}
               busy={busy}
@@ -191,6 +198,7 @@ function VersionCompare({
   who,
   current,
   currentBody,
+  currentHash,
   dropped,
   dirty,
   busy,
@@ -202,6 +210,7 @@ function VersionCompare({
   who: string | null
   current: number
   currentBody: string
+  currentHash: string
   dropped: boolean
   dirty: boolean
   busy: boolean
@@ -264,8 +273,8 @@ function VersionCompare({
           {confirming ? (
             <>
               <span className='basis-full text-[12px] text-slate-700 dark:text-slate-200'>
-                Restore version {summary.version}? It is saved as version {current + 1} and deployed
-                to this database.{dirty ? ' Your unsaved edit is discarded.' : ''}
+                {restoreCopy(summary, current, currentHash, dropped)}
+                {dirty ? ' Your unsaved edit is discarded.' : ''}
               </span>
               <Button
                 size='sm'

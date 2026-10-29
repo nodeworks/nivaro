@@ -337,3 +337,16 @@ export function readProcError(e: unknown, fallback = 'Something went wrong'): Pr
   if (typeof data.config_dropped === 'boolean') out.configDropped = data.config_dropped
   return out
 }
+
+/** The confirm sentence: a version with the current text saves nothing new (unless dropped). */
+export function restoreCopy(
+  v: Pick<VersionSummary, 'version' | 'body_hash'>,
+  current: number,
+  currentHash: string,
+  dropped: boolean
+): string {
+  if (!dropped && v.body_hash === currentHash) {
+    return `Restore version ${v.version}? It has the same text as version ${current}, so no new version is saved; it is deployed to this database.`
+  }
+  return `Restore version ${v.version}? It is saved as version ${current + 1} and deployed to this database.`
+}

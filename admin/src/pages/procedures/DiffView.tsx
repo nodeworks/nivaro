@@ -110,7 +110,7 @@ export function DiffView({
           l.kind === 'fold' ? (
             <div
               key={i}
-              className='select-none py-0.5 text-[10.5px] text-slate-400 dark:text-slate-500'
+              className='select-none py-0.5 text-[10.5px] text-slate-500 dark:text-slate-400'
             >
               ⋯ {l.count} unchanged lines ⋯
             </div>

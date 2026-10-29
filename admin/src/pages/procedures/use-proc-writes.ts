@@ -167,7 +167,11 @@ export function useProcWrites(
         .then((r) => r.data.data),
     onMutate: () => setConflict(null),
     onSuccess: (r, v) => {
-      toast.success(`${name}: version ${v.version} restored as version ${r.version} and deployed`)
+      toast.success(
+        r.unchanged
+          ? `${name}: version ${v.version} matches the current version; deployed it`
+          : `${name}: version ${v.version} restored as version ${r.version} and deployed`
+      )
       refresh()
       hooks.onSaved?.()
     },
@@ -208,7 +212,6 @@ export function useProcWrites(
         refresh()
         return
       }
-      if (route(e, 'save')) return
       toast.error(e.message, { duration: 12_000 })
     }
   })

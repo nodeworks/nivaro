@@ -289,7 +289,7 @@ export function OwnerBanner({
               baseLabel={`saved version ${v}`}
               added='only in the database'
               removed={`only in version ${v}`}
-              className='mt-2 max-h-[min(360px,50vh)] text-slate-700 dark:text-slate-200'
+              className='-ml-[22px] mt-2 max-h-[min(360px,50vh)] sm:ml-0 text-slate-700 dark:text-slate-200'
             />
           )}
         </Banner>
@@ -453,7 +453,7 @@ export function ConflictPanel({
             baseLabel='the database now'
             added={conflict.op === 'restore' ? 'in the version' : 'yours'}
             removed='only in the database'
-            className='mt-2 max-h-[min(360px,50vh)] text-slate-700 dark:text-slate-200'
+            className='-ml-[22px] mt-2 max-h-[min(360px,50vh)] sm:ml-0 text-slate-700 dark:text-slate-200'
           />
         ) : null}
       </Banner>

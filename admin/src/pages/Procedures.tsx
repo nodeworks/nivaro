@@ -1,4 +1,4 @@
-import { useOverflowTip } from '@nivaro/shared'
+import { useOverflowTip, useUnsavedWork } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -13,7 +13,7 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -92,18 +92,31 @@ export function ProceduresPage() {
 
   const q = search.trim().toLowerCase()
   const filtered = q ? procs.filter((p) => p.name.toLowerCase().includes(q)) : procs
-  const open = (name: string) => {
-    setSelected(name)
-    setCreating(false)
+  // An unsaved edit (or a half-written new procedure) is never dropped silently: switching
+  // away asks inline first.
+  const [dirty, setDirty] = useState(false)
+  const [pending, setPending] = useState<NavTarget | null>(null)
+  const go = (t: NavTarget) => {
+    setPending(null)
+    setDirty(false)
+    setCreating(t.kind === 'new')
+    setSelected(t.kind === 'open' ? t.name : null)
   }
+  const request = (t: NavTarget) => {
+    if (t.kind === 'open' && t.name === selected && !creating) return
+    if (t.kind === 'new' && creating) return
+    if (dirty) setPending(t)
+    else go(t)
+  }
+  const open = (name: string) => request({ kind: 'open', name })
   const showingDetail = creating || selected !== null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <header className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-200 bg-white px-4 py-3 sm:px-6 sm:py-3.5 dark:border-border dark:bg-card'>
-        <Database aria-hidden className='h-4 w-4 shrink-0 text-nvr-cyan' />
+        <Database aria-hidden className='hidden h-4 w-4 shrink-0 text-nvr-cyan sm:block' />
         <div className='min-w-0 flex-1'>
-          <h1 className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+          <h1 className='truncate text-[15px] font-semibold text-slate-900 dark:text-foreground'>
             Procedures
           </h1>
           <p className='hidden text-[12px] text-slate-500 sm:block dark:text-muted-foreground'>
@@ -117,10 +130,7 @@ export function ProceduresPage() {
             variant='outline'
             className={cn('h-8 gap-1.5 text-[12px]', TOUCH)}
             aria-label='New procedure'
-            onClick={() => {
-              setCreating(true)
-              setSelected(null)
-            }}
+            onClick={() => request({ kind: 'new' })}
           >
             <Plus aria-hidden className='h-3.5 w-3.5' />
             {/* Phones keep the title readable: the label folds to "New". */}
@@ -214,30 +224,35 @@ export function ProceduresPage() {
                 size='sm'
                 variant='ghost'
                 className={cn('h-8 gap-1 text-[12px]', TOUCH)}
-                onClick={() => {
-                  setSelected(null)
-                  setCreating(false)
-                }}
+                onClick={() => request({ kind: 'back' })}
               >
                 <ArrowLeft aria-hidden className='h-3.5 w-3.5' /> All procedures
               </Button>
             </div>
+          )}
+          {pending && (
+            <LeaveConfirm
+              what={creating ? 'the new procedure' : (selected ?? '')}
+              target={pending}
+              onLeave={() => go(pending)}
+              onStay={() => setPending(null)}
+            />
           )}
           {creating ? (
             <NewProcedurePanel
               name={newName}
               onName={setNewName}
               onCreated={(n) => {
-                setCreating(false)
                 setNewName('')
-                setSelected(n)
+                go({ kind: 'open', name: n })
                 void qc.invalidateQueries({ queryKey: procKeys.list })
               }}
-              onOpen={open}
-              onCancel={() => setCreating(false)}
+              onOpen={(n) => go({ kind: 'open', name: n })}
+              onCancel={() => request({ kind: 'back' })}
+              onDirtyChange={setDirty}
             />
           ) : selected ? (
-            <ProcedureDetail key={selected} name={selected} />
+            <ProcedureDetail key={selected} name={selected} onDirtyChange={setDirty} />
           ) : (
             <div className='flex h-full items-center justify-center p-6'>
               <div className='max-w-sm text-center'>
@@ -316,18 +331,24 @@ function NewProcedurePanel({
   onName,
   onCreated,
   onOpen,
-  onCancel
+  onCancel,
+  onDirtyChange
 }: {
   name: string
   onName: (v: string) => void
   onCreated: (name: string) => void
   onOpen: (name: string) => void
   onCancel: () => void
+  onDirtyChange: (dirty: boolean) => void
 }) {
   const trimmed = name.trim()
   const valid = NAME_RE.test(trimmed)
   const [definition, setDefinition] = useState('')
   const [aiPrompt, setAiPrompt] = useState('')
+  // A typed or generated body is work a reload or a switch would lose (the name alone is not).
+  const unsaved = definition.trim() !== '' || aiPrompt.trim() !== ''
+  useUnsavedWork(unsaved, 'New procedure')
+  useReportDirty(unsaved, onDirtyChange)
   const [aiNote, setAiNote] = useState<string | null>(null)
   const [failure, setFailure] = useState<{ message: string; existing: boolean } | null>(null)
   const generate = useMutation({
@@ -507,7 +528,13 @@ interface AiReview {
   tables_analyzed?: string[]
 }
 
-function ProcedureDetail({ name }: { name: string }) {
+function ProcedureDetail({
+  name,
+  onDirtyChange
+}: {
+  name: string
+  onDirtyChange: (dirty: boolean) => void
+}) {
   const detailQ = useQuery<ProcDetail>({
     queryKey: procKeys.one(name),
     queryFn: () =>
@@ -571,6 +598,8 @@ function ProcedureDetail({ name }: { name: string }) {
   const base = state?.base ?? ''
   const definition = draft ?? base
   const dirty = draft !== null && draft !== base
+  useUnsavedWork(dirty, 'Procedure edit')
+  useReportDirty(dirty, onDirtyChange)
   const editable = !!state?.editable
 
   const review = useMutation({
@@ -1113,7 +1142,9 @@ function ProcedureDetail({ name }: { name: string }) {
           <div className='mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-900 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-100'>
             <p className='max-w-[80ch] text-[12.5px]'>{deployConfirmCopy}</p>
             {note.trim() && (
-              <p className='mt-0.5 break-words text-[12px] opacity-90'>Note: {note.trim()}</p>
+              <p className='mt-0.5 break-words text-[12px] text-amber-800 dark:text-amber-200'>
+                Note: {note.trim()}
+              </p>
             )}
             <div className='mt-2 flex flex-wrap items-center gap-2'>
               <Button
@@ -1174,22 +1205,29 @@ function ProcedureDetail({ name }: { name: string }) {
             baseLabel={config ? `saved version ${config.version}` : 'the live definition'}
             className='h-[min(480px,60vh)]'
           />
+        ) : !editable ? (
+          // Read-only text sizes to its content (a short proc is not a tall empty box).
+          <section
+            aria-label={`Definition of ${name} (read-only)`}
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll box must take focus to be scrolled from the keyboard
+            tabIndex={0}
+            className='max-h-[min(480px,60vh)] min-h-24 overflow-auto rounded-lg border border-slate-200 bg-slate-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-muted/40'
+          >
+            <pre className='m-0 min-w-max p-3 font-mono text-[12px] leading-relaxed text-slate-700 dark:text-slate-300'>
+              {definition || (
+                <span className='text-slate-500 dark:text-muted-foreground'>
+                  The text of this procedure cannot be read.
+                </span>
+              )}
+            </pre>
+          </section>
         ) : (
           <textarea
             value={definition}
-            onChange={(e) => editable && setDraft(e.target.value)}
-            readOnly={!editable}
+            onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
             aria-label={`Definition of ${name}`}
-            placeholder={
-              state.readable || config ? undefined : 'The text of this procedure cannot be read.'
-            }
-            className={cn(
-              'h-[min(480px,60vh)] w-full resize-y rounded-lg border border-slate-200 p-3 font-mono text-[12px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-500 focus:border-nvr-cyan/60 dark:border-border dark:text-slate-200 dark:placeholder:text-muted-foreground',
-              editable
-                ? 'bg-slate-50/50 dark:bg-background'
-                : 'cursor-default bg-slate-100/70 text-slate-700 dark:bg-muted/40 dark:text-slate-300'
-            )}
+            className='h-[min(480px,60vh)] w-full resize-y rounded-lg border border-slate-200 bg-slate-50/50 p-3 font-mono text-[12px] leading-relaxed text-slate-800 outline-none focus:border-nvr-cyan/60 dark:border-border dark:bg-background dark:text-slate-200'
           />
         )}
         {editable && (
@@ -1294,5 +1332,53 @@ function FixAllButton({
     >
       Fix all ({pending.length})
     </button>
+  )
+}
+
+type NavTarget = { kind: 'open'; name: string } | { kind: 'new' } | { kind: 'back' }
+
+/** Tell the page whether this panel holds unsaved work (and that it holds none once gone). */
+function useReportDirty(dirty: boolean, report: (dirty: boolean) => void) {
+  useEffect(() => {
+    report(dirty)
+  }, [dirty, report])
+  useEffect(() => () => report(false), [report])
+}
+
+/** Switching away from unsaved work: asked inline at the top of the detail, never a modal. */
+function LeaveConfirm({
+  what,
+  target,
+  onLeave,
+  onStay
+}: {
+  what: string
+  target: NavTarget
+  onLeave: () => void
+  onStay: () => void
+}) {
+  const leave =
+    target.kind === 'open'
+      ? `Discard and open ${target.name}`
+      : target.kind === 'new'
+        ? 'Discard and start a new one'
+        : 'Discard and go back'
+  return (
+    <div
+      role='alert'
+      className='sticky top-0 z-20 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-amber-900 sm:px-6 dark:border-amber-400/30 dark:bg-[#2a2210] dark:text-amber-100'
+    >
+      <p className='break-words text-[12.5px]'>
+        You have unsaved changes to <span className='font-mono'>{what}</span>. Leave them?
+      </p>
+      <div className='mt-2 flex flex-wrap items-center gap-2'>
+        <Button size='sm' variant='destructive' className={cn(BTN, 'max-w-full')} onClick={onLeave}>
+          <span className='truncate'>{leave}</span>
+        </Button>
+        <Button size='sm' variant='ghost' className={BTN} onClick={onStay}>
+          Keep editing
+        </Button>
+      </div>
+    </div>
   )
 }
