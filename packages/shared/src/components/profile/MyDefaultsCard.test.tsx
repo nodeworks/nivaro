@@ -324,7 +324,7 @@ describe('MyDefaultsCard', () => {
 
   it('own page: draws nothing until known, and nothing at all with none saved or offered', async () => {
     rows = []
-    anyAllowed = false
+    allowedNone = true
     const seen: string[] = []
     const obs = new MutationObserver(() => seen.push(host.innerHTML))
     obs.observe(host, { childList: true, subtree: true, characterData: true })
@@ -333,9 +333,8 @@ describe('MyDefaultsCard', () => {
     obs.disconnect()
     expect(seen.filter(Boolean)).toEqual([])
     expect(host.innerHTML).toBe('')
-    // The own page asks only "is there anything" — never the full list.
-    const allowedCalls = calls.filter((c) => c._path === '/field-defaults/mine/allowed')
-    expect(allowedCalls.map((c) => c._params)).toEqual([{ any: 1 }])
+    // The own page reads the full list of fields it may keep a default for.
+    expect(calls.some((c) => c._path === '/field-defaults/mine/allowed')).toBe(true)
   })
 
   it('own page: no skeleton while the reads are in flight', async () => {
@@ -434,21 +433,23 @@ describe('MyDefaultsCard', () => {
     expect(host.querySelector('[data-default-add]')).toBeNull()
   })
 
-  it('an admin with forms to add from is offered "add one here"', async () => {
+  it('lists every allowed field: saved ones, then the rest as Not set, with a count', async () => {
     rows = []
-    await mount({ userId: 'bob-1', isAdmin: true })
-    await settle(() => !!host.querySelector('[data-default-add]'))
-    expect(host.querySelector('[data-default-empty]')?.textContent).toMatch(/or add one here\./)
+    await mount()
+    await settle(() => !!host.querySelector('[data-default-unset]'))
+    expect(
+      [...host.querySelectorAll('[data-default-unset]')].map((e) =>
+        e.getAttribute('data-default-unset')
+      )
+    ).toEqual(['terms', 'notes', 'ship_to'])
+    expect(host.querySelector('[data-default-group="orders"] h4')?.textContent).toContain(
+      '0 of 2 set'
+    )
+    expect(host.querySelector('[data-default-empty]')?.textContent).toMatch(/Set a field below/)
   })
 
-  it('the Add form: Field waits for a collection', async () => {
-    await mount({ userId: 'bob-1', isAdmin: true })
-    await click(host.querySelector('[data-default-add]'))
-    const fieldPick = host.querySelector<HTMLButtonElement>('[data-default-pick="field"]')
-    expect(fieldPick?.disabled).toBe(true)
-  })
-
-  it('an admin reads and clears through /users/:id and can add a default', async () => {
+  it('an admin reads and clears through /users/:id and sees fields still to set', async () => {
+    rows = ROWS.filter((r) => r.field !== 'terms')
     await mount({ userId: 'bob-1', isAdmin: true })
     expect(calls.some((c) => c._path === '/field-defaults/users/bob-1')).toBe(true)
     expect(calls.some((c) => c._path === '/field-defaults/mine')).toBe(false)
@@ -457,32 +458,17 @@ describe('MyDefaultsCard', () => {
     await settle()
     expect(calls.find((c) => c._method === 'DELETE')?._path).toBe('/field-defaults/users/bob-1/2')
     expect(calls.some((c) => c._path === '/field-defaults/users/bob-1/allowed')).toBe(true)
-    expect(host.querySelector('[data-default-add]')).toBeTruthy()
+    await settle(() => !!host.querySelector('[data-default-unset="terms"]'))
+    expect(host.querySelector('[data-default-unset="terms"]')).toBeTruthy()
   })
 
-  it('an admin adds a default: collection, then an allowed field, then its value', async () => {
+  it('Set on a field with nothing saved saves its value with no context', async () => {
+    rows = []
     await mount({ userId: 'bob-1', isAdmin: true })
-    await click(host.querySelector('[data-default-add]'))
-    const option = (text: string) =>
-      [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
-        (o) => o.textContent === text
-      )
-    await click(host.querySelector('[data-default-pick="collection"]'))
-    await click(option('Purchase orders'))
-    await settle(() => !document.querySelector('[role="option"]'))
-    expect(host.querySelector('[data-default-pick="collection"]')?.textContent).toBe(
-      'Purchase orders'
-    )
-    await click(host.querySelector('[data-default-pick="field"]'))
-    await settle(() => document.querySelectorAll('[role="option"]').length > 0)
-    // Only the fields some form allows: Notes and Ship-to, never Zone.
-    expect([...document.querySelectorAll('[role="option"]')].map((o) => o.textContent)).toEqual([
-      'Notes',
-      'Ship-to'
-    ])
-    await click(option('Notes'))
-    await settle(() => !!host.querySelector('[data-default-add-form] input'))
-    const input = host.querySelector('[data-default-add-form] input') as HTMLInputElement
+    await settle(() => !!host.querySelector('[data-default-set="notes"]'))
+    await click(host.querySelector('[data-default-set="notes"]'))
+    await settle(() => !!host.querySelector('[data-default-unset="notes"] input'))
+    const input = host.querySelector('[data-default-unset="notes"] input') as HTMLInputElement
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, 'Hold')
       input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -491,11 +477,11 @@ describe('MyDefaultsCard', () => {
     holdPut = new Promise<void>((r) => {
       release = r
     })
-    await click(host.querySelector('[data-default-add-form] [data-default-save]'))
-    await settle(() => !!host.querySelector('[data-default-add-form] [data-default-save]:disabled'))
-    expect(host.querySelector('[data-default-add-form] [data-default-save]')?.textContent).toBe(
-      'Saving…'
-    )
+    const saveBtn = () =>
+      host.querySelector<HTMLButtonElement>('[data-default-unset="notes"] [data-default-save]')
+    await click(saveBtn())
+    await settle(() => !!saveBtn()?.disabled)
+    expect(saveBtn()?.textContent).toBe('Saving…')
     release()
     await settle()
     const putCall = calls.find((c) => c._method === 'PUT')

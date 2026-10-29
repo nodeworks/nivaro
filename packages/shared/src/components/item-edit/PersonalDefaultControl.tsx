@@ -59,6 +59,10 @@ export function personalDefaultSlotFor(
   editable: boolean
 ): PersonalDefaultSlotState | null {
   if (!api?.allowed(field)) return null
+  // Kept to the profile: the form only shows a default it filled in (with Undo), never the
+  // save / update / clear controls.
+  if (!api.manageable(field))
+    return api.applied(field) && api.defaultFor(field) !== null ? 'applied' : null
   return personalDefaultSlotState({
     allowed: true,
     editable,
@@ -344,7 +348,7 @@ export function PersonalDefaultSlot({
         <Undo2 className='h-3 w-3' aria-hidden />
         <span data-pd-label>Undo</span>
       </button>,
-      clearButton
+      ...(api?.manageable(field) === false ? [] : [clearButton])
     ]
 
   return (

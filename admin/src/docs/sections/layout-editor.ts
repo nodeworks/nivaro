@@ -1237,6 +1237,10 @@ export const layoutPersonalDefaults: DocSection = {
     },
     {
       type: 'p',
+      text: 'Under it, **Make default on the form** (on by default) decides where people manage that default. On: the form shows Make default / Update default / Clear default beside the field. Off: they set and clear it only on their profile (My defaults); the form still fills it in on new records and shows "Your default · Undo", without Clear.'
+    },
+    {
+      type: 'p',
       text: 'On the canvas, every field opted in carries a **Personal default** tag (a person icon), shown ahead of the plain rule tags. In Summary mode on a record, the field label carries a small person icon: grey when the field takes a personal default, accent when the value shown IS your own default; hover it for which.'
     },
     { type: 'h2', id: 'layout-personal-defaults-use', text: 'Saving and using a default' },
@@ -1260,7 +1264,7 @@ export const layoutPersonalDefaults: DocSection = {
     { type: 'h2', id: 'layout-personal-defaults-manage', text: 'My defaults and admin override' },
     {
       type: 'p',
-      text: "Profile → **My defaults** lists everything a person has saved, grouped by collection, with Change and Clear. Administrators see a similar card on a person's page (Personal defaults) that also has Add, and can set or clear values for them; each change is written to the activity log with who, for whom and which field. A set is logged with the value; a clear is logged without it. Admin routes judge every value as the target person, so an admin cannot save something that person could not."
+      text: "Profile → **My defaults** lists every field some form lets the person keep a default for — the saved ones with Change and Clear, the rest as Not set with Set (a value with no parent context). It also lists everything a person has saved, grouped by collection, with Change and Clear. Administrators see a similar card on a person's page (Personal defaults) that also has Add, and can set or clear values for them; each change is written to the activity log with who, for whom and which field. A set is logged with the value; a clear is logged without it. Admin routes judge every value as the target person, so an admin cannot save something that person could not."
     },
     { type: 'h2', id: 'layout-personal-defaults-api', text: 'API' },
     {

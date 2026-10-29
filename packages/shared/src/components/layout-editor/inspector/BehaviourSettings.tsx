@@ -409,6 +409,31 @@ export function PersonalDefaultToggle() {
   )
 }
 
+/** Under Personal default: whether people manage it right on the form, or only on their
+ *  profile (My defaults). On by default — the form's Make default control. */
+export function PersonalDefaultInlineToggle() {
+  const ctx = useFieldCtx()
+  const { ov, info } = ctx
+  if (ov.personal_default !== true) return null
+  return (
+    <Toggle
+      k='field.personal_default_inline'
+      label='Make default on the form'
+      effect='People can save, update and clear their default right beside this field. Off: they manage it only on their profile (My defaults); the form still fills it in.'
+      checked={ov.personal_default_inline !== false}
+      onChange={(v) =>
+        ctx.setOverride(
+          'personal_default_inline',
+          v ? undefined : false,
+          v
+            ? `Offer Make default on the form for ${info.label}`
+            : `Keep ${info.label}'s default to the profile`
+        )
+      }
+    />
+  )
+}
+
 // ── #2712 Display formula (its own inspector) ────────────────────────────────
 
 const FORMAT_OPTIONS: Array<{ value: DisplayFormat; label: string }> = [

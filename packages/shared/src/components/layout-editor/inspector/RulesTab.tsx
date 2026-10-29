@@ -12,6 +12,7 @@ import { useLayoutEditorHost } from '../host'
 import { tintCard } from '../panel-style'
 import {
   ConfirmChangeSetting,
+  PersonalDefaultInlineToggle,
   PersonalDefaultToggle,
   RecommendedToggle,
   RepeatLastToggle
@@ -138,6 +139,7 @@ export function RulesTab() {
         }
       />
       <PersonalDefaultToggle />
+      <PersonalDefaultInlineToggle />
       <ConfirmChangeSetting />
       <RepeatLastToggle />
       {(info.computedType === 'rollup' || info.computedType === 'write') && (

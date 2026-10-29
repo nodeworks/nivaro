@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookmarkCheck, Check, ChevronsUpDown, Pencil, Plus, UserRoundX, X } from 'lucide-react'
+import { BookmarkCheck, Check, Pencil, Plus, UserRoundX, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ParentDraftContext, useItemEditAuth, useNivaroClient } from '../../context'
@@ -14,15 +14,6 @@ import { PERSONAL_DEFAULT_GHOST_BUTTON } from '../item-edit/PersonalDefaultPill'
 import { pickedCollection } from '../item-edit/personal-default-checks'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { personalDefaultsKey } from '../item-edit/usePersonalDefaults'
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList
-} from '../ui/command'
-import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { describeValue, labelKey, loadDefaultLabels, type ValuePart } from './my-defaults-labels'
 import { ConfirmButton, EmptyLine, Pill, SectionCard } from './primitives'
@@ -174,34 +165,23 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
     enabled: allowedHere,
     staleTime: 30_000
   })
-  // The full list feeds an admin's Add default; the own page only asks whether any form
-  // offers one at all (the API stops at the first).
-  const { data: allowed } = useQuery({
+  // Every field a form lets this person keep a default for (judged as them): listed whether
+  // or not one is saved, so a default can be set and cleared right here.
+  const { data: allowed, isPending: allowedPending } = useQuery({
     queryKey: ['field-defaults-allowed', who],
     queryFn: () =>
       client
         .request<{ data: AllowedCollection[] }>(get(`${base}/allowed`))
         .then((r) => r.data ?? []),
-    enabled: allowedHere && forOther,
-    staleTime: 60_000
-  })
-  const { data: anyAllowed, isPending: anyPending } = useQuery({
-    queryKey: ['field-defaults-allowed-any', who],
-    queryFn: () =>
-      client
-        .request<{ data: { any?: boolean } }>(get(`${base}/allowed`, { any: 1 }))
-        .then((r) => r.data?.any === true),
-    enabled: allowedHere && !forOther,
+    enabled: allowedHere,
     staleTime: 60_000
   })
 
-  const [adding, setAdding] = useState(false)
-  const [addCollection, setAddCollection] = useState('')
   const collections = useMemo(() => {
     const set = new Set((rows ?? []).map((r) => r.collection))
-    if (addCollection) set.add(addCollection)
+    for (const a of allowed ?? []) set.add(a.collection)
     return [...set]
-  }, [rows, addCollection])
+  }, [rows, allowed])
   const metas = useCollectionMetas(collections)
   const metasReady = collections.every((c) => metas.get(c)?.ready)
 
@@ -287,12 +267,33 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
   // that offers one (today most people have neither; a skeleton that then vanished shifted the
   // whole profile on every open). An admin's tools tab keeps its skeleton.
   if (!forOther) {
-    if (isPending || (anyPending && !isError)) return null
-    if (!isError && (rows ?? []).length === 0 && anyAllowed !== true) return null
+    if (isPending || (allowedPending && !isError)) return null
+    if (!isError && (rows ?? []).length === 0 && (allowed?.length ?? 0) === 0) return null
   }
 
-  const groups = [...new Set((rows ?? []).map((r) => r.collection))]
-    .map((c) => ({ collection: c, label: metas.get(c)?.label || titleCase(c) }))
+  // Allowed fields with no saved default yet: a "Not set" row each, after the saved ones.
+  const unsetBy = new Map<string, string[]>()
+  for (const a of allowed ?? []) {
+    const saved = new Set(
+      (rows ?? []).filter((r) => r.collection === a.collection).map((r) => r.field)
+    )
+    const meta = metas.get(a.collection)
+    const unset = a.fields
+      .filter((f) => !saved.has(f))
+      .sort((x, y) =>
+        meta ? fieldLabel(meta, x).localeCompare(fieldLabel(meta, y)) : x.localeCompare(y)
+      )
+    if (unset.length) unsetBy.set(a.collection, unset)
+  }
+  const groups = collections
+    .filter((c) => (rows ?? []).some((r) => r.collection === c) || unsetBy.has(c))
+    .map((c) => ({
+      collection: c,
+      label:
+        metas.get(c)?.label ||
+        (allowed ?? []).find((a) => a.collection === c)?.label ||
+        titleCase(c)
+    }))
     .sort((a, b) => a.label.localeCompare(b.label))
 
   const firstName = name?.trim() || 'This person'
@@ -306,18 +307,6 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
           : 'New records you start are filled in with these'
       }
       testId='my-defaults'
-      actions={
-        forOther && !adding && (allowed?.length ?? 0) > 0 ? (
-          <button
-            type='button'
-            data-default-add
-            onClick={() => setAdding(true)}
-            className='inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
-          >
-            <Plus className='h-3.5 w-3.5' /> Add default
-          </button>
-        ) : null
-      }
     >
       {isPending ? (
         <div className='space-y-3' aria-busy='true'>
@@ -341,31 +330,37 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
             {isRefetching ? 'Trying…' : 'Retry'}
           </button>
         </div>
-      ) : (rows ?? []).length === 0 ? (
+      ) : groups.length === 0 ? (
         <p
           data-default-empty
           className='max-w-[65ch] text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'
         >
-          {forOther ? `${firstName} hasn’t saved any defaults yet.` : 'You have no defaults yet.'}{' '}
-          {forOther ? 'They can' : 'On a new record, fill in a field and'} choose{' '}
-          <span className='font-medium text-slate-800 dark:text-slate-100'>Make default</span>{' '}
-          beside its label
-          {forOther
-            ? (allowed?.length ?? 0) > 0
-              ? ', or add one here.'
-              : '.'
-            : ': your next new records start with that value.'}
+          {forOther ? `${firstName} hasn’t saved any defaults yet.` : 'You have no defaults yet.'}
         </p>
       ) : (
         <div className='space-y-5'>
+          {(rows ?? []).length === 0 && (
+            <p
+              data-default-empty
+              className='max-w-[65ch] text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'
+            >
+              {forOther
+                ? `${firstName} hasn’t saved any defaults yet. Set one below, or they can choose `
+                : 'Nothing set yet. Set a field below, or choose '}
+              <span className='font-medium text-slate-800 dark:text-slate-100'>Make default</span>{' '}
+              beside its label on a new record.
+            </p>
+          )}
           {groups.map((g) => {
             const count = (rows ?? []).filter((r) => r.collection === g.collection).length
+            const unset = unsetBy.get(g.collection) ?? []
+            const meta = metas.get(g.collection) ?? EMPTY_META
             return (
               <section key={g.collection} data-default-group={g.collection}>
                 <h4 className='flex items-baseline gap-1.5 border-b border-slate-200 pb-1.5 text-[12.5px] font-semibold text-slate-800 dark:border-border dark:text-slate-100'>
                   <span data-default-group-label>{g.label}</span>
                   <span className='text-[11.5px] font-normal tabular-nums text-slate-500 dark:text-slate-400'>
-                    {count}
+                    {count} of {count + unset.length} set
                   </span>
                 </h4>
                 <ul className='divide-y divide-slate-100 dark:divide-border/60'>
@@ -384,6 +379,17 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
                         clearing={clear.isPending && clear.variables?.id === r.id}
                       />
                     ))}
+                  {unset.map((f) => (
+                    <UnsetRowItem
+                      key={`unset:${f}`}
+                      collection={g.collection}
+                      field={f}
+                      meta={meta}
+                      base={base}
+                      forOther={forOther}
+                      onSaved={() => refresh(g.collection)}
+                    />
+                  ))}
                 </ul>
               </section>
             )
@@ -395,20 +401,6 @@ export function MyDefaultsCard({ userId, name }: { userId?: string; name?: strin
           No form gives {name?.trim() ? firstName : 'this person'} a personal default yet. Turn on
           Personal default for a field in the layout editor.
         </p>
-      )}
-      {forOther && adding && (
-        <AddDefault
-          allowed={allowed ?? []}
-          metas={metas}
-          collection={addCollection}
-          onCollection={setAddCollection}
-          base={base}
-          onDone={() => {
-            setAdding(false)
-            setAddCollection('')
-          }}
-          onSaved={(c) => refresh(c)}
-        />
       )}
     </SectionCard>
   )
@@ -792,168 +784,138 @@ function DefaultEditor({
   )
 }
 
-// ─── Admin: add a default for someone ────────────────────────────────────────
+// ─── An allowed field with nothing saved ─────────────────────────────────────
 
-function Pick({
-  value,
-  options,
-  placeholder,
-  label,
-  onChange,
-  testId,
-  disabled
-}: {
-  value: string
-  options: Array<{ value: string; label: string }>
-  placeholder: string
-  label: string
-  onChange: (v: string) => void
-  testId: string
-  disabled?: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const selected = options.find((o) => o.value === value)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          role='combobox'
-          aria-expanded={open}
-          aria-label={label}
-          data-default-pick={testId}
-          disabled={disabled}
-          className='flex h-8 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] text-slate-700 transition-colors hover:border-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:hover:border-slate-200 dark:border-border dark:bg-background dark:text-slate-200 dark:hover:border-slate-600 dark:disabled:bg-muted/40 dark:disabled:hover:border-border'
-        >
-          <span className={cn('truncate', !selected && 'text-slate-500 dark:text-slate-400')}>
-            {selected?.label ?? placeholder}
-          </span>
-          <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className='w-[260px] p-0' align='start'>
-        <Command>
-          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
-          <CommandList>
-            <CommandEmpty className='py-3 text-center text-[12px] text-slate-500 dark:text-slate-400'>
-              No matches
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map((o) => (
-                <CommandItem
-                  key={o.value}
-                  value={`${o.label} ${o.value}`}
-                  onSelect={() => {
-                    onChange(o.value)
-                    setOpen(false)
-                  }}
-                  className='text-[12px]'
-                >
-                  <Check
-                    className={cn('mr-2 h-3 w-3', o.value === value ? 'opacity-100' : 'opacity-0')}
-                  />
-                  {o.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function AddDefault({
-  allowed,
-  metas,
+/** A field a form lets this person keep a default for, with none saved yet: Set opens the
+ *  field's own control (no parent context: it applies whatever the parents are). */
+function UnsetRowItem({
   collection,
-  onCollection,
+  field,
+  meta,
   base,
-  onDone,
+  forOther,
   onSaved
 }: {
-  allowed: AllowedCollection[]
-  metas: Map<string, CollectionMeta>
   collection: string
-  onCollection: (c: string) => void
+  field: string
+  meta: CollectionMeta
   base: string
-  onDone: () => void
-  onSaved: (collection: string) => void
+  forOther: boolean
+  onSaved: () => void
 }) {
-  const [field, setField] = useState('')
+  const [editing, setEditing] = useState(false)
   const [value, setValue] = useState<unknown>(null)
   const { save, error } = useSaveDefault(base, () => {
-    onSaved(collection)
-    onDone()
+    setEditing(false)
+    setValue(null)
+    onSaved()
   })
-  const meta = collection ? metas.get(collection) : undefined
-  const entry = allowed.find((a) => a.collection === collection)
-  const fc = meta?.fields.find((f) => f.field === field)
+  const fc = meta.fields.find((f) => f.field === field)
+  const label = fieldLabel(meta, field)
+  const setRef = useRef<HTMLButtonElement | null>(null)
+  const boxRef = useRef<HTMLFieldSetElement | null>(null)
+  useEffect(() => {
+    if (!editing) return
+    const t = window.setTimeout(() => {
+      boxRef.current
+        ?.querySelector('[data-default-control]')
+        ?.querySelector<HTMLElement>(FOCUSABLE)
+        ?.focus()
+    }, 30)
+    return () => window.clearTimeout(t)
+  }, [editing])
+  const close = () => {
+    setEditing(false)
+    setValue(null)
+    requestAnimationFrame(() => setRef.current?.focus())
+  }
   return (
-    <div
-      data-default-add-form
-      className='mt-3 space-y-2 border-t border-slate-100 pt-3 dark:border-border/60'
-    >
-      <div className='grid gap-2 sm:grid-cols-2'>
-        <Pick
-          testId='collection'
-          label='Collection'
-          placeholder='Choose a collection'
-          value={collection}
-          options={allowed.map((a) => ({
-            value: a.collection,
-            label: a.label ?? metas.get(a.collection)?.label ?? titleCase(a.collection)
-          }))}
-          onChange={(c) => {
-            onCollection(c)
-            setField('')
-            setValue(null)
-          }}
-        />
-        <Pick
-          testId='field'
-          label='Field'
-          disabled={!collection}
-          placeholder={collection ? 'Choose a field' : 'Choose a collection first'}
-          value={field}
-          options={(entry?.fields ?? []).map((f) => ({
-            value: f,
-            label: meta ? fieldLabel(meta, f) : titleCase(f)
-          }))}
-          onChange={(f) => {
-            setField(f)
-            setValue(null)
-          }}
-        />
-      </div>
-      {fc && meta?.ready ? (
-        <DefaultValueControl
-          collection={collection}
-          field={fc}
-          relations={meta.relations}
-          context={{}}
-          value={value}
-          onChange={setValue}
-        />
-      ) : field && !meta?.ready ? (
-        <Skeleton className='h-8 w-full' />
-      ) : null}
-      {error && (
-        <p role='alert' className='text-[11.5px] text-red-600 dark:text-red-400'>
-          {error}
-        </p>
+    <li
+      data-default-unset={field}
+      data-editing={editing ? '' : undefined}
+      className={cn(
+        '-mx-2 flex flex-col gap-2 rounded-md px-2 py-2.5 sm:flex-row sm:items-start sm:gap-3',
+        editing && 'bg-slate-50 dark:bg-muted/40'
       )}
-      <div className='flex items-center justify-between gap-2'>
-        <p className='text-[11px] text-slate-500 dark:text-slate-400'>
-          Checked as them: they must be able to set the field and pick the value.
+    >
+      <div className='min-w-0 flex-1 gap-x-4 gap-y-1 sm:grid sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)]'>
+        <p
+          data-default-field
+          className={cn(
+            'truncate text-[12.5px] text-slate-600 dark:text-slate-300',
+            editing ? 'sm:pt-2' : 'sm:pt-px'
+          )}
+        >
+          {label}
         </p>
-        <SaveCancel
-          canSave={!!fc && !isEmptyValue(value)}
-          pending={save.isPending}
-          onCancel={onDone}
-          onSave={() => save.mutate({ collection, field, value, context: {} })}
-        />
+        <div className='min-w-0'>
+          {editing && fc ? (
+            <fieldset
+              ref={boxRef}
+              className='m-0 min-w-0 space-y-1.5 border-0 p-0'
+              data-default-editor
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape' || e.defaultPrevented) return
+                if (!boxRef.current?.contains(e.target as Node)) return
+                e.stopPropagation()
+                close()
+              }}
+            >
+              <legend className='sr-only'>Set the default for {label}</legend>
+              <div className='flex flex-wrap items-start gap-2'>
+                <div data-default-control className='min-w-[12rem] max-w-[28rem] flex-1'>
+                  <DefaultValueControl
+                    collection={collection}
+                    field={fc}
+                    relations={meta.relations}
+                    context={{}}
+                    value={value}
+                    onChange={setValue}
+                  />
+                </div>
+                <SaveCancel
+                  canSave={!isEmptyValue(value)}
+                  pending={save.isPending}
+                  onCancel={close}
+                  onSave={() => save.mutate({ collection, field, value, context: {} })}
+                />
+              </div>
+              {error && (
+                <p role='alert' className='text-[11.5px] text-red-600 dark:text-red-400'>
+                  {error}
+                </p>
+              )}
+              {forOther && (
+                <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+                  Checked as them: they must be able to set the field and pick the value.
+                </p>
+              )}
+            </fieldset>
+          ) : (
+            <p
+              data-default-value
+              className='pt-px text-[12.5px] italic text-slate-500 dark:text-slate-400'
+            >
+              Not set
+            </p>
+          )}
+        </div>
       </div>
-    </div>
+      {!editing && (
+        <div className='flex shrink-0 items-center gap-1 sm:pt-px'>
+          <button
+            ref={setRef}
+            type='button'
+            data-default-set={field}
+            aria-label={`Set a default for ${label}`}
+            disabled={!fc}
+            onClick={() => setEditing(true)}
+            className={cn(PERSONAL_DEFAULT_GHOST_BUTTON, 'disabled:opacity-50')}
+          >
+            <Plus className='h-3 w-3' /> Set
+          </button>
+        </div>
+      )}
+    </li>
   )
 }

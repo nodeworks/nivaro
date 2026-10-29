@@ -32,6 +32,10 @@ export type PersonalDefaultsApi = {
   /** The layout lets this field carry a personal default (and the form reads them: never on
    *  the design canvas). */
   allowed(field: string): boolean
+  /** The person may save, update or clear this field's default right on the form (Make
+   *  default). False when the form keeps that to their profile: an applied default still shows
+   *  with Undo. Only meaningful where `allowed`. */
+  manageable(field: string): boolean
   /** The person's saved defaults have been read, or the read failed (until then nobody can
    *  tell what is saved). */
   loaded: boolean
@@ -83,6 +87,9 @@ export type UsePersonalDefaultsOptions = {
   collection: string
   isNew: boolean
   layoutAllows: (field: string) => boolean
+  /** False = the placement keeps saving / clearing to the profile (no Make default on the
+   *  form). Default true. */
+  layoutManage?: (field: string) => boolean
   draftRef: MutableRefObject<Record<string, unknown>>
   /** An auto-fill write (never a person edit). `previous` = what to take back first —
    *  the staged links an M2M undo removes, or a layout default being replaced. */
@@ -778,6 +785,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const context = useMemo<PersonalDefaultsApi>(
     () => ({
       allowed: (f) => (optsRef.current.enabled ?? true) && optsRef.current.layoutAllows(f),
+      manageable: (f) => optsRef.current.layoutManage?.(f) ?? true,
       loaded: data !== undefined || isError,
       failed: data === undefined && isError,
       isNew,

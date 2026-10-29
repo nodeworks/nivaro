@@ -383,7 +383,9 @@ export function useFieldContextMenu({
     }
     return false
   }
-  const pdAllowed = !!personalDefaults?.allowed(field.field)
+  // The ⋯ menu's Save / Update / Clear follow the form's Make default switch.
+  const pdAllowed =
+    !!personalDefaults?.allowed(field.field) && personalDefaults.manageable(field.field)
   const pdHasValue = pdAllowed && editable && !!personalDefaults?.hasValue(field.field)
   const pdSaved = pdAllowed ? (personalDefaults?.defaultFor(field.field) ?? null) : null
   const pdOffer = pdHasValue && !pdSaved

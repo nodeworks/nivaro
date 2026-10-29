@@ -1836,6 +1836,15 @@
     "layout_types": ["grouped", "addendum", "detail", "summary"]
   },
   {
+    "key": "field.personal_default_inline",
+    "label": "Let people save, update and clear their default on the form (off: only on their profile)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
     "key": "field.readonly",
     "label": "Read-only on this form",
     "home": "inspector",

@@ -4702,6 +4702,16 @@ function ItemEditFormView({
     }
     return out
   }, [fieldConfig])
+  // Placements that keep saving / clearing to the profile (overrides.personal_default_inline
+  // === false): the form applies the default but offers no Make default.
+  const pdProfileOnly = useMemo(() => {
+    const out = new Set<string>()
+    for (const f of fieldConfig ?? []) {
+      const o = f._overrides as Record<string, unknown> | null | undefined
+      if (o?.personal_default === true && o.personal_default_inline === false) out.add(f.field)
+    }
+    return out
+  }, [fieldConfig])
   // M2M values the hook staged this tick, before the render that carries them.
   const pdAliasPendingRef = useRef<Map<string, string[]>>(new Map())
   useEffect(() => {
@@ -4786,6 +4796,7 @@ function ItemEditFormView({
     collection,
     isNew,
     layoutAllows: (f) => pdAllowed.has(f),
+    layoutManage: (f) => !pdProfileOnly.has(f),
     draftRef,
     setFieldValue: pdSetFieldValue,
     markAutoFilled,
