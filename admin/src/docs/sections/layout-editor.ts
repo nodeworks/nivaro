@@ -308,7 +308,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-saving', text: 'Saving, undo and conflicts' },
     {
       type: 'p',
-      text: 'Changes wait for Save. The form shows each change at once, but nobody else sees it until you press Save (or ⌘S / Ctrl+S); the top bar counts them ("3 unsaved changes") and Save turns blue while there is something to save. The arrow beside Save opens the Save menu: Review changes on canvas, What changes, AI review, Schedule… and Autosave. One Save sends every change together, and History names them.'
+      text: 'Changes wait for Save. The form shows each change at once, but nobody else sees it until you press Save (or ⌘S / Ctrl+S); the top bar counts them ("3 unsaved changes") and Save turns blue while there is something to save. The arrow beside Save opens the Save menu: Review changes on canvas, What changes, AI review, Schedule… and Autosave. One Save sends every change together, and History names them. **Discard** (beside Save while changes wait) throws them all away: click once to arm it ("Discard them?"), again to discard; it disarms on its own after a few seconds or on Escape. Discarded changes cannot be brought back.'
     },
     {
       type: 'p',

@@ -6,13 +6,14 @@ import {
   History,
   MoreHorizontal,
   Redo2,
+  RotateCcw,
   Save,
   Sparkles,
   Undo2,
   Wrench,
   X
 } from 'lucide-react'
-import { type ReactNode, useCallback, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useRelationOptions } from '../../hooks/useRelationOptions'
@@ -636,6 +637,7 @@ export function EditorTopBar({
       </BarMenu>
       <Sep />
       <StatusChip draft={draft} onOpen={onOpenUnsaved} pendingTip={pendingTip} />
+      {waiting && draft.discard && <DiscardButton count={unsaved} onDiscard={draft.discard} />}
       <div data-save-split='' className='flex shrink-0 items-center'>
         {manual && (
           <button
@@ -712,6 +714,63 @@ export function EditorTopBar({
         </BarMenu>
       </div>
     </header>
+  )
+}
+
+/**
+ * Throws away the changes waiting for Save, right here (before, the only way out was reloading
+ * and answering the "unsaved changes" prompt). Two clicks, no dialog: the first arms it
+ * ("Discard 3 changes?"), the second discards; it disarms on its own after a few seconds, on
+ * Escape and when focus leaves. Discarded changes cannot be brought back.
+ */
+export function DiscardButton({ count, onDiscard }: { count: number; onDiscard: () => void }) {
+  const [armed, setArmed] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const disarm = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    setArmed(false)
+  }, [])
+  useEffect(() => disarm, [disarm])
+  const label = `Discard ${unsavedText(count)}`
+  return (
+    <button
+      type='button'
+      data-editor-discard=''
+      data-armed={armed ? '' : undefined}
+      aria-label={armed ? `${label}? Click again to discard` : label}
+      data-tip={armed ? 'Click again to discard. This cannot be undone.' : label}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true)
+          if (timer.current) clearTimeout(timer.current)
+          timer.current = setTimeout(() => setArmed(false), 4000)
+          return
+        }
+        disarm()
+        onDiscard()
+      }}
+      onBlur={disarm}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && armed) {
+          e.stopPropagation()
+          disarm()
+        }
+      }}
+      className={cn(
+        'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[12.5px] font-medium transition-colors',
+        armed
+          ? 'bg-red-50 text-red-700 ring-1 ring-red-200 hover:bg-red-100 dark:bg-red-500/15 dark:text-red-300 dark:ring-red-500/30 dark:hover:bg-red-500/25'
+          : 'text-slate-600 hover:bg-muted hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+      )}
+    >
+      <RotateCcw aria-hidden className='h-3.5 w-3.5' />
+      {armed ? (
+        <span>Discard {count === 1 ? 'it' : 'them'}?</span>
+      ) : (
+        <span data-tb-wide=''>Discard</span>
+      )}
+    </button>
   )
 }
 
