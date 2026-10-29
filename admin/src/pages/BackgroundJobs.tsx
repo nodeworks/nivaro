@@ -9,6 +9,7 @@ import { ExplainButton } from '@/components/explain-button'
 import { HelpVideoRenderQueue } from '@/components/help-video-render-queue'
 import { HubToolbar } from '@/components/hub-page'
 import { JobRunLog } from '@/components/job-run-log'
+import { JobRunSkippedSheet } from '@/components/job-run-skipped-sheet'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { describeCron } from '@/lib/cron-text'
@@ -62,6 +63,11 @@ interface JobRun {
   error: string | null
   progress: string | null
   triggered_by_name: string | null
+  /** #21 — the run as one sentence (per-job formatter, else the generic reading). */
+  sentence?: string
+  /** Rows the run passed over; `skipped_ids` = it recorded which (the drawer opens them). */
+  skipped_count?: number
+  skipped_ids?: boolean
   /** The integration event chain the run started (#707); null on runs from
    *  before migration 385 and on kinds that do not start one. */
   chain_id?: string | null
@@ -126,6 +132,8 @@ export default function BackgroundJobs() {
   const [running, setRunning] = useState<string | null>(null)
   /** "Show what it wrote" (#707): the run whose chain the path sheet shows. */
   const [pathRun, setPathRun] = useState<{ chainId: string; label: string } | null>(null)
+  /** #21 — the run whose skipped rows the drawer lists. */
+  const [skippedRun, setSkippedRun] = useState<number | null>(null)
   const navigate = useNavigate()
 
   // #2025 / #1974 — the jobs watch room is live: the polls below are the safety net.
@@ -959,8 +967,25 @@ export default function BackgroundJobs() {
                       <td className='py-1.5 pr-3 text-slate-500 dark:text-muted-foreground'>
                         {r.triggered_by_name || 'schedule'}
                       </td>
-                      <td className='max-w-[380px] py-1.5'>
-                        {r.error ? (
+                      <td className='max-w-[420px] py-1.5'>
+                        {/* #21 — the run in one sentence; the stored outcome / error stays in
+                            the tip and the run's log. */}
+                        {r.sentence ? (
+                          <span
+                            className={cn(
+                              'break-words text-[11.5px]',
+                              r.error
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-slate-600 dark:text-muted-foreground'
+                            )}
+                            data-tip={
+                              (r.error ?? r.outcome ?? '').split('\n')[0].slice(0, 300) || undefined
+                            }
+                            data-job-run-sentence={r.id}
+                          >
+                            {r.sentence}
+                          </span>
+                        ) : r.error ? (
                           <span className='break-words text-[11.5px] text-red-600 dark:text-red-400'>
                             {r.error.split('\n')[0].slice(0, 300)}
                           </span>
@@ -968,6 +993,16 @@ export default function BackgroundJobs() {
                           <span className='break-words text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                             {r.outcome ?? '—'}
                           </span>
+                        )}
+                        {r.skipped_ids && (r.skipped_count ?? 0) > 0 && (
+                          <button
+                            type='button'
+                            onClick={() => setSkippedRun(r.id)}
+                            data-job-run-skipped={r.id}
+                            className='mt-0.5 block text-[11px] font-medium text-slate-600 underline decoration-nvr-cyan/60 underline-offset-2 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+                          >
+                            See the {(r.skipped_count ?? 0).toLocaleString()} skipped
+                          </button>
                         )}
                         {r.error && (
                           <div className='mt-1'>
@@ -1030,6 +1065,7 @@ export default function BackgroundJobs() {
           )}
         </div>
       </div>
+      <JobRunSkippedSheet runId={skippedRun} onClose={() => setSkippedRun(null)} />
       <NivaroProvider client={sharedClient}>
         <EventPathSheet
           target={pathRun ? { chainId: pathRun.chainId } : null}

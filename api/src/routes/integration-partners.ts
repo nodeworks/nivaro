@@ -15,6 +15,7 @@ import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
 import { apiUptime } from '../services/external-api-health.js'
 import { maskHeaders, mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
+import { explainCallDetail, explainCalls } from '../services/integration-error-context.js'
 import { isAuthFailure } from '../services/integration-signals-core.js'
 import { maskBodySecrets } from '../services/secret-mask.js'
 import {
@@ -323,6 +324,28 @@ function maskStoredHeaders(v: string | null | undefined): Record<string, string>
   return parsed ? maskHeaders(parsed) : null
 }
 
+/** The plain-words reading of one stored call (#18); the reply is masked before any rule reads it. */
+async function callExplanation(
+  apiId: number,
+  row: {
+    response_status: number | null
+    error: string | null
+    url: string | null
+    response_body?: string | null
+  }
+) {
+  const ok = row.response_status != null && row.response_status >= 200 && row.response_status < 300
+  if (ok && !row.error) return null
+  const api = (await db('nivaro_external_apis')
+    .where({ id: apiId })
+    .first('name')
+    .catch(() => null)) as { name?: string } | null | undefined
+  return explainCallDetail(row, maskBodySecrets(row.response_body ?? null), {
+    id: apiId,
+    name: api?.name ?? null
+  })
+}
+
 interface CallLogFullRow {
   id: number
   created_at: Date | string
@@ -592,7 +615,8 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
     }
     const [card] = await buildCards(id)
     if (!card) return reply.code(404).send({ error: 'Not found' })
-    const calls = await buildCallHistory(id)
+    // #18 — failed calls carry a plain sentence + Fix it target beside the raw error.
+    const calls = explainCalls(await buildCallHistory(id), { id, name: card.name })
     const contracts = await db('nivaro_external_api_endpoints')
       .where({ api_id: id })
       .whereNotNull('contract')
@@ -655,7 +679,8 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
           duration_ms: row.duration_ms,
           error: row.error,
           triggered_by: row.triggered_by,
-          user
+          user,
+          explanation: await callExplanation(id, row)
         }
       }
     }

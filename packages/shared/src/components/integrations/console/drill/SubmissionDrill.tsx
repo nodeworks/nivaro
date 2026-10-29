@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import { useNavigation } from '../../../../context'
 import { cn, titleCase } from '../../../../lib/utils'
 import { useRetrySubmission, useSubmissionDetail } from '../api'
+import { ErrorExplanation } from '../ErrorExplanation'
 import { agoText, exactTime, TONE_SOFT, TONE_TEXT } from '../tone'
 import type { Requester, SubmissionDetail } from '../types'
 import { AttemptHistory } from './attempts'
@@ -237,7 +238,11 @@ function SubmissionDrillBody({
       {/* 2. What went wrong — the whole message, never clamped. */}
       {(s.last_error || ob?.reason) && (
         <Section name='error' title='What went wrong'>
-          {s.last_error && (
+          {/* #18 — the plain sentence + Fix it first; the stored text is one click away. */}
+          {s.last_error && s.explanation && (
+            <ErrorExplanation explanation={s.explanation} raw={s.last_error} />
+          )}
+          {s.last_error && !s.explanation && (
             <p
               className={cn(
                 'whitespace-pre-wrap break-words rounded-md px-3 py-2 font-mono text-[11.5px] leading-relaxed',

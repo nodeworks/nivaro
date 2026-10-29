@@ -5,6 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getApp, getIo } from './io-holder.js'
+import { progressJson } from './job-run-sentences.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
@@ -274,15 +275,18 @@ export async function startJobRun(
       if (id == null) return
       db('nivaro_job_runs')
         .where('id', id)
-        .update({ progress: JSON.stringify(blob).slice(0, 4000) })
+        // Valid JSON always; a `skipped` list (#21) may run past the plain 4000-char cap.
+        .update({ progress: progressJson(blob) })
         .catch(() => {})
-      emitRun({ id, kind, job_id: jobId, status: 'running', progress: blob })
+      // The skipped list stays in the row (read on demand), never in every live event.
+      const live = Array.isArray(blob.skipped) ? { ...blob, skipped: undefined } : blob
+      emitRun({ id, kind, job_id: jobId, status: 'running', progress: live })
       if (Date.now() - lastProgressLine >= 2000) {
         lastProgressLine = Date.now()
         const text = progressLine(blob)
         if (text) appendJobLog(id, `Progress: ${text}`, 'info', tenant)
       }
-      tray({ status: 'running', progress: blob })
+      tray({ status: 'running', progress: live })
     },
     log(line, level = 'info') {
       appendJobLog(id, line, level, tenant)

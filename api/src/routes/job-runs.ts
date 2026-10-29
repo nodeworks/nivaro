@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { cronTicksEnabled } from '../plugins/cron.js'
+import { describeJobRunRow, parseProgress, skippedRows } from '../services/job-run-sentences.js'
 import { readJobLog } from '../services/job-runs.js'
 
 /** Kinds that hold real capacity: while one runs, admins see "System busy". */
@@ -189,7 +190,36 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
       query.offset((page - 1) * limit).limit(limit),
       countQ.count({ c: '*' }).first()
     ])
-    return { data: rows, total: Number((totalRow as { c?: number } | undefined)?.c ?? 0) }
+    // #21 — each run as one sentence (per-job formatter, else the generic reading) and how many
+    // rows it passed over; `skipped_ids` = the run recorded them (GET /:id/skipped opens them).
+    const described = (rows as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      ...describeJobRunRow(r)
+    }))
+    return { data: described, total: Number((totalRow as { c?: number } | undefined)?.c ?? 0) }
+  })
+
+  /** #21 — the rows one run passed over (progress `skipped`, ≤ 200), each with its reason. */
+  app.get<{ Params: { id: string } }>('/:id/skipped', async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id) || id < 1) return reply.code(400).send({ error: 'Invalid run id' })
+    const run = (await db('nivaro_job_runs')
+      .where('id', id)
+      .first('id', 'job_id', 'label', 'kind', 'status', 'progress', 'duration_ms', 'outcome')) as
+      | Record<string, unknown>
+      | undefined
+    if (!run) return reply.code(404).send({ error: 'Not found' })
+    const progress = parseProgress(run.progress)
+    const rows = skippedRows(progress)
+    const total = Number(progress?.skipped_total ?? rows.length) || rows.length
+    return {
+      data: {
+        run: { id: run.id, job_id: run.job_id, ...describeJobRunRow(run) },
+        rows,
+        total,
+        truncated: total > rows.length
+      }
+    }
   })
 
   /** The live cron roster merged with each job's latest recorded run, plus a

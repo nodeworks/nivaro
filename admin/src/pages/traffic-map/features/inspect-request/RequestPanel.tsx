@@ -3,6 +3,8 @@
  */
 import { createNivaro } from '@nivaro/sdk'
 import { type ApiLogRow, NivaroProvider, ReplayBlock } from '@nivaro/shared'
+import { Link } from 'react-router'
+import { requestStoryPath } from '@/lib/recent-requests'
 import { inspectErrorOf } from '../../inspect/api'
 import { fmtClock, shortId } from '../../inspect/format'
 import { InspectLink } from '../../inspect/InspectLink'
@@ -243,8 +245,16 @@ export function RequestPanel({ inspectRef, anchor, windowSec }: InspectPanelProp
           ],
           [
             'Request id',
-            <span key='rid' className='font-mono'>
-              {d.rid}
+            <span key='rid'>
+              <span className='font-mono'>{d.rid}</span>{' '}
+              {/* #19 — the same request as one plain-words timeline. */}
+              <Link
+                to={requestStoryPath(d.rid)}
+                className='font-sans underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                data-tm-inspect-request-story=''
+              >
+                Request story
+              </Link>
             </span>
           ]
         ]}

@@ -1,9 +1,10 @@
+import { ErrorExplanation, type IntegrationErrorExplanation } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, ChevronsUpDown, RotateCw, Search } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import type { ErpStatus, ErpSubmission } from '@/components/erp-status-badge'
+import type { ErpStatus, ErpSubmission as ErpSubmissionBase } from '@/components/erp-status-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,6 +23,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative, titleCase } from '@/lib/utils'
+
+/** #18 — the list routes add each failed push in plain words + its Fix it target. */
+type ErpSubmission = ErpSubmissionBase & { explanation?: IntegrationErrorExplanation | null }
 
 const ERP_STATUSES: ErpStatus[] = ['submitted', 'pending', 'accepted', 'rejected', 'failed']
 
@@ -228,8 +232,13 @@ function SubmissionRow({
         <td className='px-3 py-2 font-mono text-[12px] text-slate-500'>
           {sub.external_ref ?? '—'}
         </td>
-        <td className='px-3 py-2 font-mono text-[11px] text-slate-400'>
-          {sub.endpoint_path ?? '—'}
+        <td className='max-w-[420px] px-3 py-2'>
+          <span className='block font-mono text-[11px] text-slate-400'>
+            {sub.endpoint_path ?? '—'}
+          </span>
+          {sub.explanation && (
+            <ErrorExplanation explanation={sub.explanation} compact className='mt-0.5' />
+          )}
         </td>
         <td
           className='px-3 py-2 font-mono text-[11px] text-slate-400'
@@ -320,7 +329,10 @@ function SubmissionRow({
         <tr className='border-b border-slate-100 bg-slate-50/60 dark:border-border dark:bg-muted/30'>
           <td colSpan={8} className='px-4 py-3'>
             <div className='space-y-2'>
-              {sub.last_error && (
+              {sub.last_error && sub.explanation && (
+                <ErrorExplanation explanation={sub.explanation} raw={sub.last_error} />
+              )}
+              {sub.last_error && !sub.explanation && (
                 <div>
                   <p className='text-[10px] font-medium uppercase tracking-wide text-red-400'>
                     Last error

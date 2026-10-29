@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowUpRight, Gauge } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { ExplainButton } from '@/components/explain-button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { requestStoryPath } from '@/lib/recent-requests'
 import { cn, formatRelative } from '@/lib/utils'
 import { fmtMs, grafanaTraceUrl } from './links'
 import { PartError, TONE } from './ui'
@@ -158,6 +160,14 @@ export function SlowestRequests({ grafanaUrl }: { grafanaUrl: string | null }) {
                         >
                           {isOpen ? 'Hide' : 'Explain'}
                         </button>
+                        {/* #19 — the trace id is the request id without dashes. */}
+                        <Link
+                          to={requestStoryPath(t.trace_id)}
+                          aria-label={`Request story of ${t.route}`}
+                          className='rounded px-1.5 py-0.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/10 dark:text-nvr-cyan focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                        >
+                          Story
+                        </Link>
                         {href && (
                           <a
                             href={href}

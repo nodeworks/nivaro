@@ -88,6 +88,7 @@ import {
 } from '../services/realtime-board.js'
 import { emitToTenant } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
+import { noteRealtimeEmit } from '../services/request-trace.js'
 import {
   canJoinTicketTopic,
   canSeeRecordRoom,
@@ -197,6 +198,7 @@ declare module 'fastify' {
  * Producers (routes, hooks, extensions) call this with the Fastify `app.io` server.
  */
 export function emitNotification(io: SocketIOServer, userId: string, notification: object): void {
+  noteRealtimeEmit('notification:new')
   io.to(`user:${userId}`).emit('notification:new', notification)
 }
 

@@ -110,6 +110,11 @@ import {
   registerHelpVideoStarter
 } from '../services/help-video-starters.js'
 import {
+  type IntegrationErrorRule,
+  registerIntegrationErrorExplainers
+} from '../services/integration-error-explain.js'
+import { type JobRunFormatter, registerJobRunFormatter } from '../services/job-run-sentences.js'
+import {
   registerExtensionLens,
   unregisterExtensionLenses
 } from '../services/traffic-actions/ext-lenses.js'
@@ -586,6 +591,43 @@ function trafficNodeMembers(
   }
 }
 
+/**
+ * Readable ops (#18 / #21): partner error rules and job-run sentences. Spread into the context
+ * (like trafficNodeMembers) so the members are typed by the kit source, not a kit build. A bad
+ * registration is logged and skipped — never a throw out of register().
+ */
+function readableOpsMembers(
+  extId: string,
+  note: (capability: string) => void,
+  own: (kind: string, label: string) => void
+): { registerErrorExplainers: (rules: IntegrationErrorRule[]) => void } {
+  return {
+    registerErrorExplainers: (rules) => {
+      note('integrations')
+      try {
+        const n = registerIntegrationErrorExplainers(rules, extId)
+        for (const r of (rules ?? []).slice(0, n)) own('integration_error_rules', r.id)
+      } catch (err) {
+        console.warn(`[extensions] ${extId}: error explainers skipped —`, (err as Error).message)
+      }
+    }
+  }
+}
+
+function runFormatterMembers(
+  extId: string,
+  cronPrefix: string
+): {
+  describeRun: (id: string, fn: JobRunFormatter, opts?: { exact?: boolean }) => void
+} {
+  return {
+    describeRun: (id, fn, opts) => {
+      if (typeof id !== 'string' || !id || typeof fn !== 'function') return
+      registerJobRunFormatter(opts?.exact ? id : `${cronPrefix}${id}`, fn, extId)
+    }
+  }
+}
+
 export function registrationMembers(
   extId: string,
   ctx: Pick<ExtensionContext, 'app' | 'logger' | 'database'>,
@@ -728,7 +770,8 @@ export function registrationMembers(
         })
       },
       unschedule: (id) => ctx.app.cron.unschedule(`${cronPrefix}${id}`),
-      annotate: (id, meta) => ctx.app.cron.annotate(`${cronPrefix}${id}`, meta)
+      annotate: (id, meta) => ctx.app.cron.annotate(`${cronPrefix}${id}`, meta),
+      ...runFormatterMembers(extId, cronPrefix)
     },
     bulkActions: {
       register: (def) => {
@@ -1046,6 +1089,7 @@ export function registrationMembers(
     integrations: {
       // #1114 (spread: the member is typed in the kit source; a build of the kit is not needed)
       ...trafficNodeMembers(extId, note, own),
+      ...readableOpsMembers(extId, note, own),
       registerObligationKind: (def) => {
         void import('../services/integration-obligations.js').then(({ registerObligationKind }) =>
           registerObligationKind(def)

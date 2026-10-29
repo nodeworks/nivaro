@@ -18,6 +18,7 @@ import { requesterInsertFields } from '../services/erp-requester-columns.js'
 import { hasResendableBody, NO_BODY, NoBodyToResendError } from '../services/erp-resend-guard.js'
 import { propagateSubmissionStatus } from '../services/erp-submission-status.js'
 import { callExternalApi } from '../services/external-apis.js'
+import { explainSubmissions } from '../services/integration-error-context.js'
 import { maskBodySecrets, sameLoggedBody } from '../services/secret-mask.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../services/submission-detail.js'
 import {
@@ -423,7 +424,8 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         matched
       }
     })
-    return reply.send({ data, limit, days })
+    // #18 — each failed push as one plain sentence + a Fix it target (raw stays on the row).
+    return reply.send({ data: await explainSubmissions(data), limit, days })
   })
 
   // One push in full, for the Firefight drill-down (Task 15d): the stored
@@ -445,16 +447,19 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       requested_by?: string | null
       requested_via?: string | null
     }
+    const [submission] = await explainSubmissions([
+      {
+        ...serialize(row),
+        external_api_name: facts.api?.name ?? null,
+        record_label: facts.record_label ?? String(row.item),
+        error_class: row.error_class ?? null,
+        requested_by: row.requested_by ?? null,
+        requested_via: row.requested_via ?? null
+      }
+    ])
     return {
       data: {
-        submission: {
-          ...serialize(row),
-          external_api_name: facts.api?.name ?? null,
-          record_label: facts.record_label ?? String(row.item),
-          error_class: row.error_class ?? null,
-          requested_by: row.requested_by ?? null,
-          requested_via: row.requested_via ?? null
-        },
+        submission,
         ...buildSubmissionDetail(facts)
       }
     }
@@ -484,10 +489,14 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           )
         : new Map<number, string>()
       return {
-        data: rows.map((r) => ({
-          ...serialize(r),
-          external_api_name: r.external_api != null ? (names.get(r.external_api) ?? null) : null
-        }))
+        data: await explainSubmissions(
+          rows.map((r) => ({
+            ...serialize(r),
+            external_api_name: r.external_api != null ? (names.get(r.external_api) ?? null) : null
+          })),
+          undefined,
+          req.isAdmin === true
+        )
       }
     }
   )
