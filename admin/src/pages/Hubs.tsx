@@ -111,6 +111,7 @@ const SCREENS: Record<string, Screens> = {
     '': lazy(() => import('@/pages/SecurityCenter')),
     presence: page(() => import('@/pages/Presence'), 'PresencePage'),
     retention: page(() => import('@/pages/RetentionPolicies'), 'RetentionPoliciesPage'),
+    logs: lazy(() => import('@/pages/LogRetention')),
     holds: lazy(() => import('@/pages/LegalHolds'))
   },
   '/access': {

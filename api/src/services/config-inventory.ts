@@ -172,6 +172,8 @@ export const CONFIG_TABLES: string[] = [
 /** Derived from business data — differing between environments proves nothing. */
 export const DERIVED_TABLES: string[] = [
   'nivaro_activity',
+  'nivaro_activity_seals', // #16 trail checkpoints (migration 518) — per instance
+  'nivaro_activity_seal_bridges', // #16 hashes of purged trail entries (migration 518)
   'nivaro_revisions',
   'nivaro_workflow_instances',
   'nivaro_workflow_history',

@@ -2,12 +2,14 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { forgetHeldCollections, heldCollections } from '../services/legal-holds.js'
 
 /**
- * Legal holds: exemptions from retention, trash purge and (future) archival,
- * with reason + placer + release audit. A hold names EITHER a record
- * (collection + item_id) or a user. Admin-only to manage; the record-level
- * existence check is authenticated so record forms can show a hold badge.
+ * Legal holds: exemptions from retention (activity + revision purges, user retention
+ * policies), trash purge and expired-file cleanup — services/legal-holds.ts is what every
+ * purge reads — with reason + placer + release audit. A hold names EITHER a record
+ * (collection + item_id) or a user. Admin-only to manage; the record-level existence check
+ * is authenticated so record forms can show the "On legal hold" banner.
  */
 export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
   /** Is this record held? (badge check — for people who can open the record.) */
@@ -16,7 +18,9 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
     { preHandler: requireAuth },
     async (req, reply) => {
       // Only for a record the caller can open (readOne: row filter, User
-      // Scopes) — the hold's reason is about that record.
+      // Scopes) — the hold's reason is about that record. Judged first, so the answer
+      // never says anything (not even "this collection has holds") about a record the
+      // caller cannot open.
       if (!req.isAdmin) {
         const { readOne } = await import('../services/items.js')
         const row = await readOne(
@@ -28,6 +32,10 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
         ).catch(() => null)
         if (!row) return reply.code(404).send({ error: 'Not found' })
       }
+      // Every record form asks (the "On legal hold" banner): a collection with no active
+      // hold answers without the hold lookup.
+      if (!(await heldCollections().catch(() => null))?.has(req.params.collection))
+        return { data: null }
       const hold = await db('nivaro_legal_holds')
         .where({ collection: req.params.collection, item_id: req.params.id })
         .whereNull('released_at')
@@ -80,6 +88,7 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
+    forgetHeldCollections()
     await logActivity({
       action: 'legal-hold-place',
       user: req.user?.id,
@@ -103,6 +112,7 @@ export async function legalHoldRoutes(app: FastifyInstance): Promise<void> {
       await db('nivaro_legal_holds')
         .where('id', row.id)
         .update({ released_at: new Date(), released_by: req.user?.id ?? null })
+      forgetHeldCollections()
       await logActivity({
         action: 'legal-hold-release',
         user: req.user?.id,

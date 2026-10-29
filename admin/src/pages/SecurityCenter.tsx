@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ActivityTrailStrip } from '@/components/activity-trail-strip'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -335,6 +336,8 @@ export default function SecurityCenter() {
       <HubToolbar description='Who is signed in right now, with a kill switch; every sign-in, with new-location flags; and the instance maintenance switch.' />
 
       <div className='flex-1 space-y-4 overflow-y-auto p-4 sm:p-6'>
+        {/* #16 — tamper-evident activity trail; details + evidence export on Log retention. */}
+        <ActivityTrailStrip />
         <MaintenanceCard />
 
         <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>

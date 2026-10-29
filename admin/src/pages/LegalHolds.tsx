@@ -84,7 +84,7 @@ export default function LegalHolds() {
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <HubToolbar description='A held record survives trash purges; a held person is exempt from every retention policy. Every hold is audited: reason, who placed it, and its release.' />
+      <HubToolbar description='A held record keeps its activity, revisions, trash row and linked files through every purge; a held person is exempt from every retention policy. Every hold is audited: reason, who placed it, and its release.' />
 
       <div className='flex-1 space-y-4 overflow-y-auto p-4 sm:p-6'>
         <div className='max-w-[720px] rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>

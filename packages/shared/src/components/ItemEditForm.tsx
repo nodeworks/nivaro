@@ -269,6 +269,7 @@ import {
 } from './item-edit/usePersonalDefaults'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
+import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
@@ -13682,6 +13683,14 @@ function ItemEditFormView({
                                           itemId={String(pipelineItem)}
                                         />
                                       )}
+                                    {/* #17 — null unless the record is under legal hold (no wrapper:
+                                      an empty sibling still costs this stack a gap). */}
+                                    {!isNew && itemId && !designOn && (
+                                      <LegalHoldBanner
+                                        collection={collection}
+                                        itemId={String(itemId)}
+                                      />
+                                    )}
                                     {/* The partner-status lines live in the header's
                                       Integrations chip popup (ExternalRequestsChip) —
                                       no banner in the body (2026-09-24). */}
