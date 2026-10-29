@@ -40,7 +40,7 @@ import { legacyCompatRoutes } from './plugins/legacy-compat.js'
 import { metricsPlugin } from './plugins/metrics.js'
 import { callerRateLimitPlugin, rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
-import { requestTracePlugin } from './plugins/request-trace.js'
+import { REQUEST_ID_HEADER, requestTracePlugin } from './plugins/request-trace.js'
 import { socketioPlugin } from './plugins/socketio.js'
 import { trafficActionsPlugin } from './plugins/traffic-actions.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
@@ -190,9 +190,10 @@ export async function buildServer() {
     .filter(Boolean)
   await app.register(
     fastifyCors,
+    // Browser callers on another origin may read the request id (SDK NivaroError.requestId).
     corsOrigins.length > 0
-      ? { origin: corsOrigins, credentials: true }
-      : { origin: '*', credentials: false }
+      ? { origin: corsOrigins, credentials: true, exposedHeaders: [REQUEST_ID_HEADER] }
+      : { origin: '*', credentials: false, exposedHeaders: [REQUEST_ID_HEADER] }
   )
 
   // ─── Multipart (file uploads) ──────────────────────────────────────────────
