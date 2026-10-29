@@ -30,7 +30,7 @@ import {
 } from '../../lib/notification-target'
 import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { cn, formatRelative } from '../../lib/utils'
-import { hasSnapshotView } from '../NotificationBell'
+import { hasSnapshotView, offersChanges } from '../NotificationBell'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { AsItWasSheet } from './AsItWasSheet'
 import {
@@ -43,7 +43,7 @@ import {
 } from './bundles'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
-import { NotificationDetailBits } from './NotificationDetailBits'
+import { NotificationChangesList, NotificationDetailBits } from './NotificationDetailBits'
 
 /**
  * The full notifications inbox — lane tabs (Critical / Needs you / FYI),
@@ -154,6 +154,11 @@ export interface NotificationCenterViewProps {
   mailLogUrl?: (mailLogId: number) => string | null
   /** Host route of the subscriptions page (a watch's "Why me?" links there). */
   subscriptionsPath?: string | null
+  /** Host route of Profile → Notification rules — "Why?" offers a change link there (#3078). */
+  rulesPath?: string | null
+  /** #3079 — open on one notification's changes (the email's "See what changed" link lands
+   *  with ?changes=<id>). Undefined = read ?changes= from the address bar. */
+  changesId?: number | null
   /** Toast hooks — hosts wire their own toaster. */
   onNotice?: (message: string) => void
   onError?: (message: string) => void
@@ -166,12 +171,21 @@ export function NotificationCenterView({
   app,
   mailLogUrl,
   subscriptionsPath,
+  rulesPath,
+  changesId,
   onNotice,
   onError,
   className
 }: NotificationCenterViewProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const [landingChanges, setLandingChanges] = useState<number | null>(() => {
+    if (changesId !== undefined) return changesId
+    if (typeof window === 'undefined') return null
+    const raw = new URLSearchParams(window.location.search).get('changes')
+    const n = Number(raw)
+    return raw && Number.isInteger(n) && n > 0 ? n : null
+  })
   const [status, setStatus] = useState<StatusFilter>('all')
   const [lane, setLane] = useState<LaneFilter>('all')
   // #64 — the Sent tab: read receipts for what I sent (critical by default).
@@ -538,7 +552,10 @@ export function NotificationCenterView({
             detail={n.detail}
             why={n.why}
             delivery={n.delivery}
+            notificationId={n.id}
+            recordChanges={offersChanges(n)}
             subscriptionsPath={subscriptionsPath}
+            rulesPath={rulesPath}
             onNavigate={onNavigate}
             className='mt-1'
           />
@@ -981,6 +998,27 @@ export function NotificationCenterView({
           </label>
         </div>
       </header>
+
+      {landingChanges != null && (
+        <div
+          className='shrink-0 border-b border-slate-200 bg-white px-8 py-3 dark:border-border dark:bg-background'
+          data-notification-changes-landing={landingChanges}
+        >
+          <div className='flex items-center justify-between gap-2'>
+            <p className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
+              What changed
+            </p>
+            <button
+              type='button'
+              onClick={() => setLandingChanges(null)}
+              className='text-[11.5px] text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-600 dark:hover:text-slate-200'
+            >
+              Dismiss
+            </button>
+          </div>
+          <NotificationChangesList notificationId={landingChanges} className='max-w-3xl' />
+        </div>
+      )}
 
       {status !== 'sent' && selected.size > 0 && (
         <div

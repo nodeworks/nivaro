@@ -6,6 +6,7 @@ import {
   type NotifyCategory,
   type NotifyPrefs
 } from './notification-channels.js'
+import { sanitizeNotifyRules } from './notification-layers.js'
 
 /** #2406 — archive read notifications older than `days` for one person. */
 export async function archiveReadOlderThan(userId: string, days: number): Promise<number> {
@@ -81,32 +82,9 @@ export function noiseSuggestions(
 /** Keep only the shapes the delivery decision reads — mirrors the validator
  *  in routes/users.ts so a preview can never judge something a save would
  *  have dropped. */
+/** Proposed own rules for the preview — the same sanitizer the users route stores with. */
 export function sanitizePrefs(raw: unknown): NotifyPrefs {
-  const np = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-  const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
-  const out: NotifyPrefs = {}
-  if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start))
-    out.quiet_start = np.quiet_start
-  if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end)) out.quiet_end = np.quiet_end
-  if (typeof np.teams_muted_until === 'string' && !Number.isNaN(Date.parse(np.teams_muted_until)))
-    out.teams_muted_until = np.teams_muted_until
-  if (np.matrix && typeof np.matrix === 'object') {
-    const m: NonNullable<NotifyPrefs['matrix']> = {}
-    for (const cat of NOTIFY_CATEGORIES) {
-      const row = (np.matrix as Record<string, unknown>)[cat] as Record<string, unknown> | undefined
-      if (!row || typeof row !== 'object') continue
-      const email = row.email
-      m[cat] = {
-        inapp: row.inapp !== false,
-        push: row.push !== false,
-        ...(row.teams === true ? { teams: true } : {}),
-        ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {}),
-        ...(row.quiet_override === true ? { quiet_override: true } : {})
-      }
-    }
-    out.matrix = m
-  }
-  return out
+  return sanitizeNotifyRules(raw)
 }
 
 export interface PreviewTotals {

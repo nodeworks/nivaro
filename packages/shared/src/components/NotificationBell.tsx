@@ -74,6 +74,26 @@ export interface BellNotification {
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
 
+/** #3079 — a record-change row offers "What changed": the changed fields read as the reader
+ *  on open (GET /notifications/:id/changes). */
+export function offersChanges(n: {
+  kind?: string | null
+  target?: NotificationTargetSpec | null
+  collection?: string | null
+  item?: string | null
+  category?: string | null
+  revision_id?: number | null
+  detail?: NotificationDetailRecord | null
+}): boolean {
+  if (!hasSnapshotView(n)) return false
+  return (
+    n.revision_id != null ||
+    (n.detail?.changes?.length ?? 0) > 0 ||
+    n.category === 'watch' ||
+    n.category === 'workflow'
+  )
+}
+
 /** A record-kind row offers "as it was" — the snapshot from send time. */
 export function hasSnapshotView(n: {
   kind?: string | null
@@ -120,6 +140,8 @@ export interface NotificationBellProps {
   allPath?: string | null
   /** Path of the subscriptions page — a watch's "Why me?" offers a Manage link. */
   subscriptionsPath?: string | null
+  /** Path of Profile → Notification rules — "Why?" offers a change link there (#3078). */
+  rulesPath?: string | null
   /** Called with an error message when an inline action fails. */
   onActionError?: (message: string) => void
   /** Where the panel opens relative to the trigger. 'below' (default) keeps
@@ -153,6 +175,7 @@ export function NotificationBell({
   renderTrigger,
   allPath,
   subscriptionsPath,
+  rulesPath,
   onActionError,
   panelPlacement = 'below',
   tabBadge = true
@@ -440,7 +463,10 @@ export function NotificationBell({
         detail={n.detail}
         why={n.why}
         delivery={n.delivery}
+        notificationId={n.id}
+        recordChanges={offersChanges(n)}
         subscriptionsPath={subscriptionsPath}
+        rulesPath={rulesPath}
         onNavigate={navigateAndClose}
         className={`-mt-1 pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
       />

@@ -551,6 +551,68 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
       code: `PATCH /api/users/me/preferences
 { "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }`
     },
+    { type: 'h3', id: 'notification-role-defaults', text: 'Default notification rules by role' },
+    {
+      type: 'p',
+      text: 'Roles → a role → Notification defaults sets the starting notification rules for everyone in that role — categories, channels, quiet hours, daily summary or individual email, and the "if it stays unread" steps — with the same editor people use on their Profile. A person\'s own Profile → Notification rules win for every value they set; everything they never set follows their role. Nothing is copied onto people: the rules are merged when each notification is decided, so moving someone to another role brings that role\'s defaults at once for anything they never set.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'On Profile → Notification rules, a value that comes from the role carries a small "R" mark. Changing it makes it the person\'s own; the reset arrow on a row (or "Use the role defaults for everything") puts it back on the role.',
+        'Clearing quiet hours over a role\'s window stores "no quiet hours" for that person; "Use the role\'s" goes back to the role window. Setting an escalation step to never over a role step that escalates stores an explicit never.',
+        "A person's account-wide daily email choice beats a role's email mode; Individual email is the system default and never shadows the role.",
+        "Notification Bench → simulate shows, per channel, which layer decided it: their own rules, the role default (named), or the system default — and the person's own and role rows side by side.",
+        'Role defaults are configuration (promoted between instances with roles). Deleting a role deletes its defaults.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/notifications/role-defaults/:roleId   (admin) → { role, rules, updated_at, updated_by, members }
+PUT    /api/notifications/role-defaults/:roleId   (admin) { "rules": { "quiet_start": "22:00", "quiet_end": "07:00",
+         "matrix": { "workflow": { "push": false, "email": "daily" } },
+         "escalation": { "sla": { "push_after_min": 60 } } } }
+DELETE /api/notifications/role-defaults/:roleId   (admin) → 204, back to the system defaults
+GET    /api/notifications/my-rule-defaults        → { role, rules } for the signed-in person`
+    },
+    { type: 'h3', id: 'notification-why', text: 'Why did I get this?' },
+    {
+      type: 'p',
+      text: 'Every bell and inbox row has a "Why?" that names the path that sent it — a record watch, a subscription, owning the record\'s current state, an @mention, an alert subscription, a direct message, a task or flow, or your role\'s default rules — and, per channel, the rule that picked it (the category rule, quiet hours, a critical bypass, daily summary) with the layer it came from: your own rules, the role default (named), or the system default. Unread-escalation steps that fired later are listed too. Links go to your subscriptions (for watches, subscriptions and alerts) and to Profile → Notification rules.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The answer is what happened, not a re-simulation: it is stored on the row (`nivaro_notifications.delivery_reason`) when the delivery decision runs. Rows written before that say "Sent before reasons were recorded" and show what the row itself still knows.',
+        'Profile → Notification rules → "Test my rules" runs the Notification Bench simulate for the signed-in person only — pick a category and "right now" or "tonight at 11 PM" to see each channel\'s outcome and the deciding rule. Nothing is sent.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/notifications/:id/why        → { recorded, reason: { path, category, critical, role, layers, channels, rules, escalation? }, why, delivery }
+                                           own notifications only (404 otherwise)
+POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, "at": "<ISO, optional>" }
+                                         → { decision, layers, role, quiet_hours, push_subscriptions } for the caller`
+    },
+    { type: 'h3', id: 'notification-changes', text: 'What changed, in the notification' },
+    {
+      type: 'p',
+      text: 'A notification about a change to a record shows the changed fields old → new when you open it — "What changed" (or "N changes") under the row in the bell and the inbox, and "See what changed" in its email, which opens the inbox on that notification. The values are read when you open it, as you: from the record revision the notification points at and the one before it, through your own read of the record, so a field you may not see never shows and a record you can no longer open shows nothing. The live push and the stored row carry ids and field names only.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Long text shows a short diff — only the part that moved, with a little context either side; rich text is compared as text.',
+        "Links to other records show their labels, read as you (a record you cannot open shows its collection's name, never its id).",
+        'A record that was just created has nothing earlier to compare; a notification with no revision from its time says the changes were not kept.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/notifications/:id/changes   own notifications only (404 otherwise; 404 when you cannot open the record)
+→ { collection, item, revision_id, at, notified_at, first_revision,
+    changes: [{ field, label, type, old, new, old_label?, new_label?, diff?: { lead, removed, added, trail } }] }`
+    },
     { type: 'h3', text: 'Record bundles in the bell' },
     {
       type: 'p',

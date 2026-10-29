@@ -6,6 +6,7 @@ import { chainFields } from '../services/chain-columns.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
 import { detailColumn, notificationRowMeta } from '../services/notification-channels.js'
+import { rawWriterReason, reasonColumn } from '../services/notification-reason.js'
 import {
   renderChangesToken,
   renderNotificationTemplate
@@ -704,7 +705,23 @@ async function fireSubscriptionNotifications(
                   action: 'open'
                 }
               : {}),
-            ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' })
+            ...notificationRowMeta({ subject, category: 'watch', kind: 'record', action: 'open' }),
+            // #3078 — the watch / subscription is the path and its own channels are the rule.
+            ...(await reasonColumn(
+              rawWriterReason({
+                path: {
+                  kind: recordScoped ? 'watch' : 'subscription',
+                  text: recordScoped
+                    ? `You watch ${friendly ?? 'this record'}.`
+                    : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
+                  label: sub.label ?? null,
+                  id: sub.id
+                },
+                category: 'watch',
+                ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
+                email: wantEmail
+              })
+            ))
           })
           .returning('*')
 
@@ -1025,7 +1042,22 @@ export async function fireWorkflowStateSubscriptions(opts: {
               category: 'workflow',
               kind: 'record',
               action: 'open'
-            })
+            }),
+            ...(await reasonColumn(
+              rawWriterReason({
+                path: {
+                  kind: recordScoped ? 'watch' : 'subscription',
+                  text: recordScoped
+                    ? `You watch ${friendly ?? 'this record'}.`
+                    : `You subscribed to "${sub.label || `${opts.collection} workflow`}".`,
+                  label: sub.label ?? null,
+                  id: sub.id
+                },
+                category: 'workflow',
+                ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
+                email: wantEmail
+              })
+            ))
           })
           .returning('*')
 

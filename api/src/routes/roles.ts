@@ -219,6 +219,11 @@ export async function rolesRoutes(app: FastifyInstance) {
     // let go of this one first, or its requirement rows block the delete.
     const { forgetHelpVideoRole } = await import('../services/help-videos.js')
     await forgetHelpVideoRole(id)
+    // Its notification defaults (#3077) hold a NO ACTION FK on the role.
+    const { forgetRoleNotificationDefaults } = await import(
+      '../services/notification-role-defaults.js'
+    )
+    await forgetRoleNotificationDefaults(id)
     await db('nivaro_policies').where({ role: id }).delete()
     await db('nivaro_roles').where({ id }).delete()
     await logActivity({

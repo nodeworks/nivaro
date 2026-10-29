@@ -413,6 +413,15 @@ export { NotificationAnalyticsView } from './components/notifications/Notificati
 export type { NotificationCenterViewProps } from './components/notifications/NotificationCenterView'
 export { NotificationCenterView } from './components/notifications/NotificationCenterView'
 export { NotificationDetailBits } from './components/notifications/NotificationDetailBits'
+export type {
+  NotificationRulesEditorProps,
+  NotifyRulesValue
+} from './components/notifications/NotificationRulesEditor'
+export {
+  mergeNotifyRulesClient,
+  NOTIFY_RULE_CATS,
+  NotificationRulesEditor
+} from './components/notifications/NotificationRulesEditor'
 export { NotificationSubscriptionsView } from './components/notifications/NotificationSubscriptionsView'
 export type { NotificationTemplatesViewProps } from './components/notifications/NotificationTemplatesView'
 export { NotificationTemplatesView } from './components/notifications/NotificationTemplatesView'
