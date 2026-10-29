@@ -47,7 +47,7 @@ export const fieldRulesGuide: DocSection = {
     { type: 'h3', text: 'Configuring rules' },
     {
       type: 'p',
-      text: 'Open Data Model → select a registered collection → the "Field Rules" section in the right panel. Click Add Rule, then choose the trigger field, condition, target field, and action. Use the Active toggle to enable/disable a rule without deleting it, and the up/down arrows to reorder evaluation priority.'
+      text: 'Open Collections → ✏ Edit on the collection → the "Field Rules" section in the right panel. Click Add Rule, then choose the trigger field, condition, target field, and action. Use the Active toggle to enable/disable a rule without deleting it, and the up/down arrows to reorder evaluation priority.'
     },
     { type: 'h3', text: 'Example' },
     {

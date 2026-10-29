@@ -12,7 +12,7 @@ export const contentOpsDraftPublish: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Enable draft/publish from Data Model → select the table → Content tab → "Draft / Publish" toggle. Once enabled, the item editor header shows the current status badge plus status actions (Submit for review, Publish, Unpublish) — day-to-day publishing happens entirely from there. The API below is the programmatic equivalent.'
+      text: 'Enable draft/publish from Collections → ✏ Edit on the collection → Content tab → "Draft / Publish" toggle. Once enabled, the item editor header shows the current status badge plus status actions (Submit for review, Publish, Unpublish) — day-to-day publishing happens entirely from there. The API below is the programmatic equivalent.'
     },
     { type: 'h3', text: 'Enabling via API' },
     {
@@ -234,7 +234,7 @@ export const contentOpsFieldGroups: DocSection = {
     { type: 'h3', text: 'Managing groups' },
     {
       type: 'p',
-      text: "Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row."
+      text: "Open Collections → ✏ Edit on the collection → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row."
     },
     { type: 'h3', text: 'Field Groups API' },
     {
@@ -275,7 +275,7 @@ export const contentOpsFieldVisibility: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Visibility rules are edited in Data Model → select the table → Behavior tab. Pick a field, add conditions with the field/operator/value builder, and the rule is saved to the field config — no JSON editing required. The format and API below are for programmatic setups.'
+      text: 'Visibility rules are edited in Collections → ✏ Edit on the collection → Behavior tab. Pick a field, add conditions with the field/operator/value builder, and the rule is saved to the field config — no JSON editing required. The format and API below are for programmatic setups.'
     },
     { type: 'h3', text: 'Rule format' },
     {
@@ -332,7 +332,7 @@ export const contentOpsFieldLocking: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Lock conditions are configured in Data Model → select the table → Behavior tab, using the same condition builder as visibility rules. Choose the field to lock and the condition under which it becomes read-only.'
+      text: 'Lock conditions are configured in Collections → ✏ Edit on the collection → Behavior tab, using the same condition builder as visibility rules. Choose the field to lock and the condition under which it becomes read-only.'
     },
     { type: 'h3', text: 'Lock condition format' },
     {
@@ -378,7 +378,7 @@ export const contentOpsFieldDependencies: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Dependencies are configured in Data Model → select the table → Behavior tab: pick the dependent field, choose its trigger fields, and select the cascade behaviour (clear or recalculate). The JSON below is what the builder stores.'
+      text: 'Dependencies are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the dependent field, choose its trigger fields, and select the cascade behaviour (clear or recalculate). The JSON below is what the builder stores.'
     },
     { type: 'h3', text: 'Dependency config format' },
     {
@@ -509,7 +509,7 @@ export const contentOpsCascadeFilters: DocSection = {
     { type: 'h3', text: 'Configuring in the admin UI' },
     {
       type: 'p',
-      text: 'Open Data Model → select the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.'
+      text: 'Open Collections → ✏ Edit on the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.'
     },
     {
       type: 'note',
@@ -530,7 +530,7 @@ export const contentOpsValidationRules: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Validation rules are managed in Data Model → select the table → Behavior tab. Add rules per field by picking a rule type, filling in its parameters, and writing the error message shown to editors. The raw format and API below cover programmatic configuration.'
+      text: 'Validation rules are managed in Collections → ✏ Edit on the collection → Behavior tab. Add rules per field by picking a rule type, filling in its parameters, and writing the error message shown to editors. The raw format and API below cover programmatic configuration.'
     },
     { type: 'h3', text: 'Rule format' },
     {
@@ -607,7 +607,7 @@ export const contentOpsComputedDefaults: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Default formulas are set in Data Model → select the table → Behavior tab: choose a field and enter (or build with the formula builder) the expression that should populate it on create.'
+      text: 'Default formulas are set in Collections → ✏ Edit on the collection → Behavior tab: choose a field and enter (or build with the formula builder) the expression that should populate it on create.'
     },
     { type: 'h3', text: 'Formula examples' },
     {
@@ -657,7 +657,7 @@ export const contentOpsCrossRecordDefaults: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Cross-record defaults are configured in Data Model → select the table → Behavior tab: pick the target field, the FK field that identifies the source record, and map source fields to target fields with comboboxes.'
+      text: 'Cross-record defaults are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the target field, the FK field that identifies the source record, and map source fields to target fields with comboboxes.'
     },
     { type: 'h3', text: 'Config format' },
     {
@@ -707,7 +707,7 @@ export const contentOpsRemoteOptions: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Remote options are configured in Data Model → select the table → Behavior tab: pick the select field, choose one of your configured External APIs, set the endpoint and data path, and map the label/value fields. A test button previews the options the editor will show.'
+      text: 'Remote options are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the select field, choose one of your configured External APIs, set the endpoint and data path, and map the label/value fields. A test button previews the options the editor will show.'
     },
     { type: 'h3', text: 'Config format' },
     {
@@ -875,7 +875,7 @@ export const contentOpsDatetimeAuto: DocSection = {
     { type: 'h3', text: 'Configuring in the admin UI' },
     {
       type: 'p',
-      text: 'In Data Model → select a table → click a datetime field\'s config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field\'s options JSON.'
+      text: 'In Collections → ✏ Edit on the collection → click a datetime field\'s config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field\'s options JSON.'
     },
     { type: 'h3', text: 'Options format' },
     {
@@ -1032,7 +1032,7 @@ export const contentOpsTranslations: DocSection = {
       items: [
         'Translating values: in the item editor, every translatable field shows a globe button — click it to open the per-locale editor and enter values for each language side by side.',
         'Available locales: managed in Settings → Localization (stored in `nivaro_settings.available_locales`). Locales added there appear in every field translation editor.',
-        'Marking fields translatable: Data Model → select the table → Content tab → per-field "Translatable" toggle (string/text fields).'
+        'Marking fields translatable: Collections → ✏ Edit on the collection → Content tab → per-field "Translatable" toggle (string/text fields).'
       ]
     },
     { type: 'h3', text: 'Marking a field as translatable' },
@@ -1701,7 +1701,7 @@ export const pickerFilterGuide: DocSection = {
     { type: 'h3', text: 'Configuring in the admin UI' },
     {
       type: 'p',
-      text: 'Data Model → select the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.'
+      text: 'Collections → ✏ Edit on the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.'
     },
     { type: 'h3', text: 'Scope' },
     {

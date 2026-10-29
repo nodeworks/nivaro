@@ -12,7 +12,7 @@ export const aiContentValidation: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Open Data Model → select a table → Settings tab → "AI Features" card. Add validation rules as plain-text statements and choose Warn or Block per rule. Settings are stored per collection in `nivaro_ai_collection_settings`. In the item editor, violations of soft rules appear as inline warnings next to the affected fields — the save still goes through. Hard rules block the save.'
+      text: 'Open Collections → ✏ Edit on the collection → Settings tab → "AI Features" card. Add validation rules as plain-text statements and choose Warn or Block per rule. Settings are stored per collection in `nivaro_ai_collection_settings`. In the item editor, violations of soft rules appear as inline warnings next to the affected fields — the save still goes through. Hard rules block the save.'
     },
     { type: 'h3', text: 'Soft warn vs hard block' },
     {
@@ -125,7 +125,7 @@ export const aiDuplicateDetection: DocSection = {
     { type: 'h3', text: 'Managing in the admin UI' },
     {
       type: 'p',
-      text: 'Open Data Model → select a table → Settings tab → "AI Features" card. Toggle "Duplicate detection" on and set the similarity threshold (0–1; higher = stricter, fewer matches). When enabled, the create-item page shows a pre-create panel listing potential duplicates with similarity scores before the save — the user can open a match or proceed with the create.'
+      text: 'Open Collections → ✏ Edit on the collection → Settings tab → "AI Features" card. Toggle "Duplicate detection" on and set the similarity threshold (0–1; higher = stricter, fewer matches). When enabled, the create-item page shows a pre-create panel listing potential duplicates with similarity scores before the save — the user can open a match or proceed with the create.'
     },
     { type: 'h3', text: 'API' },
     {
@@ -708,7 +708,7 @@ export const collectionLayouts: DocSection = {
     { type: 'h3', text: 'Managing layouts' },
     {
       type: 'p',
-      text: 'Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record\'s form from the record page with Edit form. See Layout Editor for the overview, the editor, saving and history.'
+      text: 'Open Collections → ✏ Edit on the collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record\'s form from the record page with Edit form. See Layout Editor for the overview, the editor, saving and history.'
     },
     {
       type: 'table',

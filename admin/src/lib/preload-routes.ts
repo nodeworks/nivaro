@@ -20,7 +20,6 @@ const loaders: Record<string, () => Promise<unknown>> = {
   '/alerts': () => import('@/pages/Alerts'),
   '/imports': () => import('@/pages/Imports'),
   '/settings': () => import('@/pages/Settings'),
-  '/data-model': () => import('@/pages/DataModel'),
   '/activity': () => import('@/pages/Activity'),
   '/files': () => import('@/pages/Files'),
   '/background-jobs': () => import('@/pages/BackgroundJobs'),

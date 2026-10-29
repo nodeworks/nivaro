@@ -82,8 +82,11 @@ const PAGES: { label: string; path: string; keywords?: string }[] = [
   { label: 'Overview', path: '/', keywords: 'home dashboard' },
   { label: 'Search', path: '/search', keywords: 'find everything results saved searches' },
   { label: 'Dashboards', path: '/dashboards', keywords: 'kpi widgets' },
-  { label: 'Collections', path: '/collections', keywords: 'content data items' },
-  { label: 'Data Model', path: '/data-model', keywords: 'schema fields tables' },
+  {
+    label: 'Collections (data model)',
+    path: '/collections',
+    keywords: 'content data items data model schema fields tables'
+  },
   { label: 'Files', path: '/files', keywords: 'uploads media' },
   { label: 'Hierarchies', path: '/hierarchies', keywords: 'tree levels' },
   { label: 'Record Templates', path: '/record-templates' },

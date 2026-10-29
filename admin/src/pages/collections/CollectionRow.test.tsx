@@ -153,14 +153,27 @@ describe('CollectionRow', () => {
 
   it('navigates and records the open on click', () => {
     renderRow()
-    fireEvent.click(screen.getByRole('link'))
+    fireEvent.click(screen.getByRole('link', { name: /^Purchase order lines/ }))
     expect(where()).toBe('/collections/po_lines')
     expect(localStorage.getItem('nvr_collections_usage')).toContain('po_lines')
   })
 
+  it('offers admins an edit link to the collection editor', () => {
+    renderRow({ isAdmin: true })
+    expect(screen.getByRole('link', { name: 'Edit Purchase order lines' })).toHaveAttribute(
+      'href',
+      '/data-model/po_lines'
+    )
+  })
+
+  it('shows no edit link to non-admins', () => {
+    renderRow({ isAdmin: false })
+    expect(screen.queryByRole('link', { name: /^Edit / })).toBeNull()
+  })
+
   it('toggles selection instead of navigating while selecting', () => {
     const { props } = renderRow({ selecting: true })
-    fireEvent.click(screen.getByRole('link'))
+    fireEvent.click(screen.getByRole('link', { name: /^Purchase order lines/ }))
     expect(props.onSelect).toHaveBeenCalledTimes(1)
     expect(where()).toBe('/collections')
     expect(localStorage.getItem('nvr_collections_usage')).toBeNull()

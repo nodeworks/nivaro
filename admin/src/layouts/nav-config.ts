@@ -15,7 +15,6 @@ import {
   Code2,
   Container,
   Database,
-  DatabaseZap,
   FileBarChart,
   FileImage,
   FileText,
@@ -154,13 +153,6 @@ export const navCategories: NavCategory[] = [
         to: '/trash',
         section: 'Records',
         keywords: 'deleted restore'
-      },
-      {
-        icon: DatabaseZap,
-        label: 'Data Model',
-        to: '/data-model',
-        section: 'Structure',
-        keywords: 'schema fields tables layouts'
       },
       { icon: Network, label: 'Hierarchies', to: '/hierarchies', section: 'Structure' },
       {

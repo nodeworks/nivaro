@@ -66,9 +66,6 @@ const UserEditPage = lazy(() =>
   import('@/pages/UserEdit').then((m) => ({ default: m.UserEditPage }))
 )
 const UsersPage = lazy(() => import('@/pages/Users').then((m) => ({ default: m.UsersPage })))
-const DataModelPage = lazy(() =>
-  import('@/pages/DataModel').then((m) => ({ default: m.DataModelPage }))
-)
 const TableEditorPage = lazy(() =>
   import('@/pages/TableEditor').then((m) => ({ default: m.TableEditorPage }))
 )
@@ -439,7 +436,7 @@ export default function App() {
                   <Route path='flows/:id' element={<FlowEditPage />} />
                   <Route path='files' element={<FilesPage />} />
                   <Route path='activity/:id' element={<ActivityDetailPage />} />
-                  <Route path='data-model' element={<DataModelPage />} />
+                  <Route path='data-model' element={<HubRedirect to='/collections' />} />
                   <Route path='data-model/erd' element={<ErdViewPage />} />
                   <Route path='data-model/graph' element={<SchemaGraphPage />} />
                   <Route path='data-model/:table' element={<TableEditorPage />} />

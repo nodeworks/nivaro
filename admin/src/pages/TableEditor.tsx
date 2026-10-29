@@ -20,6 +20,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  Rows3,
   Settings2,
   Trash2,
   X
@@ -10483,7 +10484,7 @@ type Tab =
 export function TableEditorPage() {
   const { table } = useParams<{ table: string }>()
   const navigate = useNavigate()
-  const goBack = useGoBack('/data-model')
+  const goBack = useGoBack('/collections')
   const qc = useQueryClient()
   const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
   // Deep links (config review findings) open a named tab: ?tab=rules.
@@ -10553,7 +10554,7 @@ export function TableEditorPage() {
     onSuccess: () => {
       toast.success(`Table "${table}" dropped`)
       qc.invalidateQueries({ queryKey: ['data-model-tables'] })
-      navigate('/data-model')
+      navigate('/collections')
     },
     onError: (err: unknown) => {
       const msg =
@@ -10570,7 +10571,7 @@ export function TableEditorPage() {
         <div className='flex items-center justify-between'>
           <div className='flex items-center gap-2 text-[13px]'>
             <Link
-              to='/data-model'
+              to='/collections'
               onClick={(e) => {
                 e.preventDefault()
                 goBack()
@@ -10578,7 +10579,7 @@ export function TableEditorPage() {
               className='flex items-center gap-1 text-slate-400 transition-colors hover:text-slate-700'
             >
               <ArrowLeft className='h-3.5 w-3.5' />
-              Data Model
+              Collections
             </Link>
             <span className='text-slate-300'>/</span>
             <span className='font-mono font-medium text-slate-900'>{table}</span>
@@ -10594,6 +10595,14 @@ export function TableEditorPage() {
           <div className='flex items-center gap-2'>
             {tableData && (
               <>
+                {tableData.registered && (
+                  <Button size='sm' variant='outline' className='h-7 text-[12px]' asChild>
+                    <Link to={`/collections/${table}`}>
+                      <Rows3 className='mr-1.5 h-3 w-3' />
+                      Open records
+                    </Link>
+                  </Button>
+                )}
                 {!isSystem &&
                   (tableData.registered ? (
                     <Button

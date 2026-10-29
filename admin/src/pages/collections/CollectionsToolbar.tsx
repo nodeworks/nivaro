@@ -16,6 +16,8 @@ interface Props {
   selectedCount: number
   onMoveSelected: () => void
   onClearSelection: () => void
+  /** Admin tools shown before Arrange / Select (new table, schema views, proposals). */
+  adminActions?: React.ReactNode
 }
 
 const VIEWS: Array<{ key: ViewMode; label: string; adminOnly?: boolean }> = [
@@ -52,7 +54,8 @@ export function CollectionsToolbar({
   isAdmin,
   selectedCount,
   onMoveSelected,
-  onClearSelection
+  onClearSelection,
+  adminActions
 }: Props) {
   const innerRef = useRef<HTMLInputElement | null>(null)
 
@@ -188,6 +191,7 @@ export function CollectionsToolbar({
 
         {isAdmin && (
           <div className='ml-auto flex items-center gap-1'>
+            {adminActions}
             <button
               type='button'
               aria-pressed={state.arranging}

@@ -134,6 +134,7 @@ export const userCollections: DocSection = {
     {
       type: 'ul',
       items: [
+        'The Data Model is part of this page: the ✏ Edit icon on a row opens that collection\'s editor (Fields, Relations, Layout, Behavior, Rules, Imports, Settings — "Data Model → …" elsewhere in these docs means this editor). The Data model menu holds the entity diagram, relation graph, schema proposals, Design with AI and Describe the data model; New table creates a table; Unregistered tables and System tables sit, collapsed, at the bottom. `/data-model` redirects here.',
         'Each row shows its approximate record count and when the table last changed (since the database server last started), plus quiet badges: pipeline, forms, virtual, imports, link table.',
         "Hovering a collection's name opens a card with its first fields, what it points to and what uses it, its pipeline, forms and the last edit (90 days).",
         "The row's ⋯ menu opens records, a new tab, or the collection's Fields, Relations, Form layouts, Rules, Imports and Settings, pins it, moves it to a folder or copies its key.",

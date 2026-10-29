@@ -30,6 +30,8 @@ import {
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionDesigner } from '@/components/collection-designer'
+import { SchemaProposalsPanel } from '@/components/schema-proposals-panel'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -49,6 +51,13 @@ import {
   writeLocal
 } from './collections/overview-data'
 import { buildPageModel, label, nearSpellings } from './collections/page-model'
+import {
+  CreateTableInline,
+  DescribePanel,
+  OtherTablesSections,
+  type SchemaPanel,
+  SchemaToolsMenu
+} from './collections/SchemaTools'
 import type { CollectionStat, FolderOption, PageState } from './collections/types'
 
 /**
@@ -227,7 +236,8 @@ function EmptySearch({
   onShowHidden,
   onShowLinks,
   onClearChips,
-  isAdmin
+  isAdmin,
+  onCreate
 }: {
   filter: string
   near: Collection[]
@@ -238,6 +248,7 @@ function EmptySearch({
   onShowLinks: () => void
   onClearChips: () => void
   isAdmin: boolean
+  onCreate?: () => void
 }) {
   const btn =
     'rounded-md border border-slate-200 px-2.5 py-1 text-[12px] font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50 dark:border-white/[0.1] dark:text-slate-200 dark:hover:bg-white/[0.05]'
@@ -289,10 +300,10 @@ function EmptySearch({
             Clear filters
           </button>
         )}
-        {isAdmin && (
-          <Link to='/data-model' className={btn}>
-            Create a collection
-          </Link>
+        {isAdmin && onCreate && (
+          <button type='button' className={btn} onClick={onCreate}>
+            Create a table
+          </button>
         )}
       </div>
     </div>
@@ -344,10 +355,18 @@ export function CollectionsPage() {
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [moveOpen, setMoveOpen] = useState(false)
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() =>
-    readLocal<Record<string, boolean>>(COLLAPSED_KEY, { [LINKS_KEY]: true })
-  )
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => ({
+    [LINKS_KEY]: true,
+    __unregistered__: true,
+    __system__: true,
+    ...readLocal<Record<string, boolean>>(COLLAPSED_KEY, {})
+  }))
   const [dismissed, setDismissed] = useState<string[]>(() => readLocal<string[]>(DISMISSED_KEY, []))
+  // Data-model tools folded in from the old Data Model list page (?proposals=1 opens proposals).
+  const [panel, setPanel] = useState<SchemaPanel>(() =>
+    new URLSearchParams(window.location.search).get('proposals') === '1' ? 'proposals' : null
+  )
+  const [designerOpen, setDesignerOpen] = useState(false)
 
   const state: PageState = {
     ...prefs,
@@ -565,11 +584,23 @@ export function CollectionsPage() {
           selectedCount={selected.size}
           onMoveSelected={() => setMoveOpen(true)}
           onClearSelection={() => setSelected(new Set())}
+          adminActions={
+            isAdmin ? (
+              <SchemaToolsMenu onPanel={setPanel} onDesign={() => setDesignerOpen(true)} />
+            ) : null
+          }
         />
       </div>
 
       <div className='flex gap-6 px-4 py-6 sm:px-8'>
         <div className='min-w-0 flex-1 space-y-4'>
+          {isAdmin && panel === 'create' && <CreateTableInline onClose={() => setPanel(null)} />}
+          {isAdmin && panel === 'describe' && <DescribePanel onClose={() => setPanel(null)} />}
+          {isAdmin && panel === 'proposals' && (
+            <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]'>
+              <SchemaProposalsPanel onClose={() => setPanel(null)} />
+            </div>
+          )}
           {isLoading ? (
             <LoadingSkeleton />
           ) : model.real.length === 0 ? (
@@ -585,6 +616,7 @@ export function CollectionsPage() {
               onShowLinks={() => onChange({ ...state, showLinks: true })}
               onClearChips={() => setChips([])}
               isAdmin={isAdmin}
+              onCreate={() => setPanel('create')}
             />
           ) : (
             <>
@@ -710,6 +742,27 @@ export function CollectionsPage() {
                   )}
                 </Section>
               )}
+
+              {isAdmin && (
+                <OtherTablesSections
+                  filter={filter}
+                  collapsed={collapsed}
+                  onToggle={toggleCollapse}
+                  renderSection={(s) => (
+                    <Section key={s.key} id={sectionId(s.key)}>
+                      <FolderHeader
+                        folder={{ key: s.key, label: s.label, color: '#94a3b8' }}
+                        icon={s.icon}
+                        count={s.count}
+                        hiddenCount={0}
+                        collapsed={!s.open}
+                        onToggle={s.onToggle}
+                      />
+                      {s.open && s.body}
+                    </Section>
+                  )}
+                />
+              )}
             </>
           )}
         </div>
@@ -749,6 +802,7 @@ export function CollectionsPage() {
         )}
       </div>
 
+      {isAdmin && <CollectionDesigner open={designerOpen} onClose={() => setDesignerOpen(false)} />}
       <MoveToFolderDialog
         open={moveOpen}
         onOpenChange={setMoveOpen}

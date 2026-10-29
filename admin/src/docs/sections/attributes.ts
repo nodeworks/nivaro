@@ -38,7 +38,7 @@ export const attributesGuide: DocSection = {
     { type: 'h3', text: 'Defining attributes' },
     {
       type: 'p',
-      text: 'Open Data Model → select a collection → the "Attributes" tab. Click Add attribute, then set the key (slug, fixed after creation), label, type, and — for select types — a comma-separated list of options. Toggle Required and Active per definition, and delete a definition to remove it (which also cleans up its stored values).'
+      text: 'Open Collections → ✏ Edit on the collection → the "Attributes" tab. Click Add attribute, then set the key (slug, fixed after creation), label, type, and — for select types — a comma-separated list of options. Toggle Required and Active per definition, and delete a definition to remove it (which also cleans up its stored values).'
     },
     { type: 'h3', text: 'Editing values' },
     {

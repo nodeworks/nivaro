@@ -5,6 +5,7 @@ import {
   LayoutTemplate,
   Link2,
   type LucideIcon,
+  Pencil,
   Square,
   Star,
   Workflow
@@ -358,6 +359,21 @@ export function CollectionRow({
         {stat && <Stats stat={stat} />}
       </Link>
 
+      {isAdmin && (
+        <Link
+          to={`/data-model/${encodeURIComponent(col.collection)}`}
+          aria-label={`Edit ${displayName}`}
+          data-tip='Edit fields, forms and settings'
+          data-collection-edit
+          onClick={(e) => e.stopPropagation()}
+          className={cn(
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-300',
+            REVEAL
+          )}
+        >
+          <Pencil className='h-3.5 w-3.5' />
+        </Link>
+      )}
       <button
         type='button'
         aria-label={pinned ? `Unpin ${displayName}` : `Pin ${displayName}`}

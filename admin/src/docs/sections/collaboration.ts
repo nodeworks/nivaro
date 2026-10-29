@@ -400,7 +400,7 @@ POST /api/item-locks/:collection/:item/lock/release
     },
     {
       type: 'p',
-      text: 'Locking can be enabled/disabled per collection in Data Model → (collection) → Settings → "Item locking". Default is ON.'
+      text: 'Locking can be enabled/disabled per collection in Collections → ✏ Edit on the collection → Settings → "Item locking". Default is ON.'
     },
     {
       type: 'pre',

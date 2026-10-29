@@ -842,6 +842,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           </ul>
           <h3 class="doc-h3">Administrators</h3>
           <ul class="doc-ul">
+            <li>The Data Model is part of this page: the ✏ Edit icon on a row opens that collection's editor (Fields, Relations, Layout, Behavior, Rules, Imports, Settings — "Data Model → …" elsewhere in these docs means this editor). The Data model menu holds the entity diagram, relation graph, schema proposals, Design with AI and Describe the data model; New table creates a table; Unregistered tables and System tables sit, collapsed, at the bottom. <code class="doc-code">/data-model</code> redirects here.</li>
             <li>Each row shows its approximate record count and when the table last changed (since the database server last started), plus quiet badges: pipeline, forms, virtual, imports, link table.</li>
             <li>Hovering a collection's name opens a card with its first fields, what it points to and what uses it, its pipeline, forms and the last edit (90 days).</li>
             <li>The row's ⋯ menu opens records, a new tab, or the collection's Fields, Relations, Form layouts, Rules, Imports and Settings, pins it, moves it to a folder or copies its key.</li>
@@ -8811,7 +8812,7 @@ GET  /api/ai/extract-record/analytics?days=     → the scorecard (admin)</code>
           <h1 class="doc-h1" id="ai-content-validation">AI Content Validation</h1>
           <p class="doc-p">AI content validation checks items against natural-language rules before they are saved. Rules are written in plain English per collection ("the title must not contain pricing information", "the summary must be in a professional tone") and evaluated by Claude against the submitted values. Each rule is either soft (warn) or hard (block).</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Open Data Model → select a table → Settings tab → "AI Features" card. Add validation rules as plain-text statements and choose Warn or Block per rule. Settings are stored per collection in <code class="doc-code">nivaro_ai_collection_settings</code>. In the item editor, violations of soft rules appear as inline warnings next to the affected fields — the save still goes through. Hard rules block the save.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → Settings tab → "AI Features" card. Add validation rules as plain-text statements and choose Warn or Block per rule. Settings are stored per collection in <code class="doc-code">nivaro_ai_collection_settings</code>. In the item editor, violations of soft rules appear as inline warnings next to the affected fields — the save still goes through. Hard rules block the save.</p>
           <h3 class="doc-h3">Soft warn vs hard block</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Mode</th><th>Item editor</th><th>API behaviour</th></tr></thead>
@@ -8875,7 +8876,7 @@ Authorization: Bearer &lt;token&gt;
           <h1 class="doc-h1" id="ai-duplicate-detection">AI Duplicate Detection</h1>
           <p class="doc-p">Duplicate detection warns users before they create a record that looks like an existing one. The new record's text fields are embedded into a vector and compared against existing records by cosine similarity — semantically similar records ("Acme Corp." vs "ACME Corporation Inc.") are caught even when no keyword matches.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Open Data Model → select a table → Settings tab → "AI Features" card. Toggle "Duplicate detection" on and set the similarity threshold (0–1; higher = stricter, fewer matches). When enabled, the create-item page shows a pre-create panel listing potential duplicates with similarity scores before the save — the user can open a match or proceed with the create.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → Settings tab → "AI Features" card. Toggle "Duplicate detection" on and set the similarity threshold (0–1; higher = stricter, fewer matches). When enabled, the create-item page shows a pre-create panel listing potential duplicates with similarity scores before the save — the user can open a match or proceed with the create.</p>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>POST /api/ai/check-duplicates
 Authorization: Bearer &lt;token&gt;
@@ -9517,7 +9518,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }</code></
           <p class="doc-p">An Import Template is an admin-configured, declarative mapping from a spreadsheet (xlsx or csv) to a single record on a target collection, optionally with child rows. An end user uploads a file against a template; the server parses it, resolves sheet columns into field values (including relation lookups), and either pre-fills a create form for review or creates the record directly. Nothing is hardcoded per template — every rule (trim, remap, expression, lookup, rich-text wrap, constant) is data stored on the template row.</p>
           <div class="doc-note">This is distinct from the Data Import Queue (Monitoring → Imports) — that feature bulk-inserts many rows per record with duplicate-strategy upserts and background processing. Import Templates is an interactive, single-record, parent-plus-children file-to-form import, reviewed (or previewed) before anything is written.</div>
           <h3 class="doc-h3">Building a template</h3>
-          <p class="doc-p">Open Data Model → select a collection → Table Editor → the "Imports" tab. The left panel lists templates for the collection (name, mode, active toggle); the right panel is the editor: basics (name, mode, sheet match rule, header row, attach-file field, sharing), header rules, line mapping, and disperse.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → Table Editor → the "Imports" tab. The left panel lists templates for the collection (name, mode, active toggle); the right panel is the editor: basics (name, mode, sheet match rule, header row, attach-file field, sharing), header rules, line mapping, and disperse.</p>
           <h3 class="doc-h3">Header rules</h3>
           <p class="doc-p">One rule per target field on the collection: a source column name and an ordered list of steps. Steps run in array order, and every resolved value is added to a <code class="doc-code">$resolved.*</code> context so a later rule can reference an earlier one's result (e.g. a unit lookup scoped by an already-resolved region).</p>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -10443,7 +10444,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
         <div class="doc-section" id="s-field-display-settings" data-toc='[{"id":"field-display-settings","label":"Field Display Settings"}]'>
           <!-- SYNC:field-display-settings -->
           <h1 class="doc-h1" id="field-display-settings">Field Display Settings</h1>
-          <p class="doc-p">Every field in a registered collection has per-field display settings that control how it is labelled and rendered in the item editor — without changing the underlying database column. Open Data Model → select a collection → hover a field chip in the Table Editor and click the gear icon to open the Display Settings popover. A cyan gear indicates the field already has overrides.</p>
+          <p class="doc-p">Every field in a registered collection has per-field display settings that control how it is labelled and rendered in the item editor — without changing the underlying database column. Open Collections → ✏ Edit on the collection → hover a field chip in the Table Editor and click the gear icon to open the Display Settings popover. A cyan gear indicates the field already has overrides.</p>
           <h3 class="doc-h3">Available settings</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Setting</th><th>Applies to</th><th>Behavior</th></tr></thead>
@@ -10521,7 +10522,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
             <li>clear — set the target field to null.</li>
           </ul>
           <h3 class="doc-h3">Configuring rules</h3>
-          <p class="doc-p">Open Data Model → select a registered collection → the "Field Rules" section in the right panel. Click Add Rule, then choose the trigger field, condition, target field, and action. Use the Active toggle to enable/disable a rule without deleting it, and the up/down arrows to reorder evaluation priority.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → the "Field Rules" section in the right panel. Click Add Rule, then choose the trigger field, condition, target field, and action. Use the Active toggle to enable/disable a rule without deleting it, and the up/down arrows to reorder evaluation priority.</p>
           <h3 class="doc-h3">Example</h3>
           <p class="doc-p">On an "orders" collection: when status equals "cancelled", clear the assigned_to field; when priority is one of "high, urgent", set the queue field to "expedited".</p>
           <pre class="doc-pre"><code>// POST /api/field-rules
@@ -10614,7 +10615,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
               <tr><td>select</td><td>Combobox of options</td><td>one of the option strings</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Defining attributes</h3>
-          <p class="doc-p">Open Data Model → select a collection → the "Attributes" tab. Click Add attribute, then set the key (slug, fixed after creation), label, type, and — for select types — a comma-separated list of options. Toggle Required and Active per definition, and delete a definition to remove it (which also cleans up its stored values).</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → the "Attributes" tab. Click Add attribute, then set the key (slug, fixed after creation), label, type, and — for select types — a comma-separated list of options. Toggle Required and Active per definition, and delete a definition to remove it (which also cleans up its stored values).</p>
           <h3 class="doc-h3">Editing values</h3>
           <p class="doc-p">On any existing item, the Custom Attributes card lists every active attribute for the collection. Each field saves independently — on blur for text/number/date, immediately for boolean and select — via PATCH /api/attributes/:collection/:itemId.</p>
           <h3 class="doc-h3">API</h3>
@@ -10648,7 +10649,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
           <h1 class="doc-h1" id="collection-layouts">Collection Layouts</h1>
           <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One grouped layout is the default; others are picked by record rules or roles, opened by their link name (<code class="doc-code">?layout=&lt;slug&gt;</code>), or serve other views (summary, detail, PDF, addendum, grid columns).</p>
           <h3 class="doc-h3">Managing layouts</h3>
-          <p class="doc-p">Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record's form from the record page with Edit form. See Layout Editor for the overview, the editor, saving and history.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record's form from the record page with Edit form. See Layout Editor for the overview, the editor, saving and history.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Action</th><th>How</th></tr></thead>
             <tbody><tr><tr><td>Create layout</td><td>Overview → New form (pick the kind up front); Create first form when there is none</td></tr>
@@ -12007,11 +12008,11 @@ Authorization: Bearer &lt;token&gt;
           <h1 class="doc-h1" id="tree-setup">Enabling Tree View</h1>
           <p class="doc-p">Follow these steps to turn any collection into a hierarchical tree. The collection must already have a nullable integer (or uuid) field that references itself — this becomes the parent pointer.</p>
           <h3 class="doc-h3">Step 1 — Add a parent field to the collection</h3>
-          <p class="doc-p">In Data Model → select the collection → Fields → Add Field. Create a field such as <code class="doc-code">parent_id</code> with type <code class="doc-code">integer</code>, marked nullable. You do not need to create a formal relation for tree purposes, though you may.</p>
+          <p class="doc-p">In Collections → ✏ Edit on the collection → Fields → Add Field. Create a field such as <code class="doc-code">parent_id</code> with type <code class="doc-code">integer</code>, marked nullable. You do not need to create a formal relation for tree purposes, though you may.</p>
           <pre class="doc-pre"><code>-- The underlying column Nivaro needs:
 ALTER TABLE my_collection ADD parent_id INT NULL;</code></pre>
           <h3 class="doc-h3">Step 2 — Enable the tree config</h3>
-          <p class="doc-p">Navigate to Data Model → select the collection → scroll to the "Tree / Hierarchy" section → click "Enable Tree View". Configure the three fields:</p>
+          <p class="doc-p">Navigate to Collections → ✏ Edit on the collection → scroll to the "Tree / Hierarchy" section → click "Enable Tree View". Configure the three fields:</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Setting</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>parent_field</td><td>The field name that holds the parent record ID. Must already exist as a column. E.g. <code class="doc-code">parent_id</code>.</td></tr>
@@ -12852,7 +12853,7 @@ POST /api/merge  { collection, survivor_id, loser_ids, field_choices }</code></p
           <h1 class="doc-h1" id="content-ops-draft-publish">Draft / Publish Workflow</h1>
           <p class="doc-p">Collections can opt into a draft/publish model that adds a virtual <code class="doc-code">_status</code> column (draft, review, published) to every item. The status is enforced at the API layer — it is not stored as a separate database column but is tracked in the <code class="doc-code">nivaro_draft_publish_state</code> table keyed by collection + item ID.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Enable draft/publish from Data Model → select the table → Content tab → "Draft / Publish" toggle. Once enabled, the item editor header shows the current status badge plus status actions (Submit for review, Publish, Unpublish) — day-to-day publishing happens entirely from there. The API below is the programmatic equivalent.</p>
+          <p class="doc-p">Enable draft/publish from Collections → ✏ Edit on the collection → Content tab → "Draft / Publish" toggle. Once enabled, the item editor header shows the current status badge plus status actions (Submit for review, Publish, Unpublish) — day-to-day publishing happens entirely from there. The API below is the programmatic equivalent.</p>
           <h3 class="doc-h3">Enabling via API</h3>
           <pre class="doc-pre"><code>PATCH /api/draft-publish/:collection/config
 Authorization: Bearer &lt;admin-token&gt;
@@ -12974,7 +12975,7 @@ Content-Type: text/csv
           <p class="doc-p">When a collection has at least one group of <code class="doc-code">type: "tab"</code>, the item editor renders a tab strip at the top of the form. Fields without a group_key appear in an implicit "General" tab alongside any section-type groups. The active tab is persisted per collection in localStorage, so editors return to the same tab on revisit.</p>
           <p class="doc-p">Fields with validation errors cause a red dot indicator to appear on their tab, making it easy to spot which tab contains a problem without switching manually.</p>
           <h3 class="doc-h3">Managing groups</h3>
-          <p class="doc-p">Go to Data Model → select a table → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → click the Groups tab in the right panel. Create groups with a key (slug), label, type, optional icon, and sort order. Assign a field to a group by setting its group_key to the group's key. To toggle a group between section and tab types, click the type badge on the group row.</p>
           <h3 class="doc-h3">Field Groups API</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
@@ -12993,7 +12994,7 @@ Content-Type: text/csv
           <h1 class="doc-h1" id="content-ops-field-visibility">Conditional Field Visibility</h1>
           <p class="doc-p">Fields can be shown or hidden based on the value of another field in the same record. Visibility rules are evaluated in real time in the item editor as the user changes values — no save required.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Visibility rules are edited in Data Model → select the table → Behavior tab. Pick a field, add conditions with the field/operator/value builder, and the rule is saved to the field config — no JSON editing required. The format and API below are for programmatic setups.</p>
+          <p class="doc-p">Visibility rules are edited in Collections → ✏ Edit on the collection → Behavior tab. Pick a field, add conditions with the field/operator/value builder, and the rule is saved to the field config — no JSON editing required. The format and API below are for programmatic setups.</p>
           <h3 class="doc-h3">Rule format</h3>
           <p class="doc-p">The <code class="doc-code">visibility_rules</code> column on <code class="doc-code">nivaro_fields</code> holds a JSON object with a <code class="doc-code">conditions</code> array. All conditions must pass for the field to be visible (AND logic). Use an <code class="doc-code">_or</code> array inside conditions for OR logic.</p>
           <pre class="doc-pre"><code>// Show this field only when type = "external" AND priority is not null
@@ -13030,7 +13031,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <h1 class="doc-h1" id="content-ops-field-locking">Field Locking Rules</h1>
           <p class="doc-p">A field can be made read-only (locked) when a condition on the record is met. Locked fields render as disabled inputs in the item editor. The lock is also enforced server-side — PATCH requests that attempt to change a locked field are silently ignored.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Lock conditions are configured in Data Model → select the table → Behavior tab, using the same condition builder as visibility rules. Choose the field to lock and the condition under which it becomes read-only.</p>
+          <p class="doc-p">Lock conditions are configured in Collections → ✏ Edit on the collection → Behavior tab, using the same condition builder as visibility rules. Choose the field to lock and the condition under which it becomes read-only.</p>
           <h3 class="doc-h3">Lock condition format</h3>
           <p class="doc-p">The <code class="doc-code">lock_condition</code> column on <code class="doc-code">nivaro_fields</code> uses the same condition format as visibility rules.</p>
           <pre class="doc-pre"><code>// Lock the field when the record's status is "approved"
@@ -13055,7 +13056,7 @@ POST /api/field-config/:collection/:field/evaluate-lock
           <h1 class="doc-h1" id="content-ops-field-dependencies">Field Dependencies and Cascading Values</h1>
           <p class="doc-p">Field dependencies describe relationships between fields where changing one field should clear or recalculate dependent fields. When a trigger field changes, the item editor calls the cascade endpoint to get updated values for dependent fields.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Dependencies are configured in Data Model → select the table → Behavior tab: pick the dependent field, choose its trigger fields, and select the cascade behaviour (clear or recalculate). The JSON below is what the builder stores.</p>
+          <p class="doc-p">Dependencies are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the dependent field, choose its trigger fields, and select the cascade behaviour (clear or recalculate). The JSON below is what the builder stores.</p>
           <h3 class="doc-h3">Dependency config format</h3>
           <pre class="doc-pre"><code>// dependency_config on a dependent field:
 {
@@ -13131,7 +13132,7 @@ Authorization: Bearer &lt;token&gt;
 // Selecting a Region auto-filters Sites.
 // Changing Division clears Region (and Region clearing clears Site via its own rule).</code></pre>
           <h3 class="doc-h3">Configuring in the admin UI</h3>
-          <p class="doc-p">Open Data Model → select the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.</p>
+          <p class="doc-p">Open Collections → ✏ Edit on the collection → click the ⚙ icon on an M2O field → scroll to the Cascade Filters section. Add a rule by picking the parent field and the filter column on the related table. Save field settings to persist.</p>
           <div class="doc-note">Cascade filters are evaluated client-side only at edit time. They do not affect API list queries or server-side filtering — they are a UX convenience for narrowing picker options during data entry.</div>
           <!-- /SYNC:content-ops-cascade-filters -->
         </div>
@@ -13151,7 +13152,7 @@ Authorization: Bearer &lt;token&gt;
 // Supports any Nivaro filter expression
 {"_and": [{"active": {"_eq": true}}, {"region": {"_neq": "EU"}}]}</code></pre>
           <h3 class="doc-h3">Configuring in the admin UI</h3>
-          <p class="doc-p">Data Model → select the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.</p>
+          <p class="doc-p">Collections → ✏ Edit on the collection → Settings tab → "Relation Picker Filter". Enter a JSON filter expression, click Save. The filter applies immediately to all pickers in every form.</p>
           <h3 class="doc-h3">Scope</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Applies to</th><th>Does NOT apply to</th></tr></thead>
@@ -13219,7 +13220,7 @@ Authorization: Bearer &lt;token&gt;
           <h1 class="doc-h1" id="content-ops-validation">Field Validation Rules</h1>
           <p class="doc-p">Validation rules go beyond the basic required/type checks and let you define custom conditions that must pass before an item can be saved. Rules are stored in <code class="doc-code">nivaro_fields.validation_rules</code> as a JSON array and enforced server-side on every create and update.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Validation rules are managed in Data Model → select the table → Behavior tab. Add rules per field by picking a rule type, filling in its parameters, and writing the error message shown to editors. The raw format and API below cover programmatic configuration.</p>
+          <p class="doc-p">Validation rules are managed in Collections → ✏ Edit on the collection → Behavior tab. Add rules per field by picking a rule type, filling in its parameters, and writing the error message shown to editors. The raw format and API below cover programmatic configuration.</p>
           <h3 class="doc-h3">Rule format</h3>
           <pre class="doc-pre"><code>[
   {
@@ -13294,7 +13295,7 @@ Authorization: Bearer &lt;token&gt;
           <h1 class="doc-h1" id="content-ops-defaults">Computed Default Values</h1>
           <p class="doc-p">Fields can have a <code class="doc-code">default_formula</code> expression that is evaluated when a new item is created and the field has no value provided. Formulas are evaluated server-side using the same expr-eval engine as computed fields.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Default formulas are set in Data Model → select the table → Behavior tab: choose a field and enter (or build with the formula builder) the expression that should populate it on create.</p>
+          <p class="doc-p">Default formulas are set in Collections → ✏ Edit on the collection → Behavior tab: choose a field and enter (or build with the formula builder) the expression that should populate it on create.</p>
           <h3 class="doc-h3">Formula examples</h3>
           <pre class="doc-pre"><code>// Date functions
 TODAY()               // current date as ISO string
@@ -13327,7 +13328,7 @@ POST /api/field-config/:collection/:field/evaluate-defaults
           <h1 class="doc-h1" id="content-ops-cross-record-defaults">Cross-Record Defaults</h1>
           <p class="doc-p">Cross-record defaults copy field values from a related record when a new item is created. The config specifies which FK field identifies the related record, which collection it points to, and a mapping of source → target fields.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Cross-record defaults are configured in Data Model → select the table → Behavior tab: pick the target field, the FK field that identifies the source record, and map source fields to target fields with comboboxes.</p>
+          <p class="doc-p">Cross-record defaults are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the target field, the FK field that identifies the source record, and map source fields to target fields with comboboxes.</p>
           <h3 class="doc-h3">Config format</h3>
           <pre class="doc-pre"><code>// On the orders collection, when customer_id is set,
 // copy billing_address and payment_terms from the customer record:
@@ -13360,7 +13361,7 @@ POST /api/field-config/:collection/:field/evaluate-defaults
           <h1 class="doc-h1" id="content-ops-remote-options">Remote Option Sources</h1>
           <p class="doc-p">Dropdown and select fields can load their options from an External API instead of a static list. The <code class="doc-code">remote_options_config</code> on a field points to a configured External API, a JSON path into the response, and label/value field mappings.</p>
           <h3 class="doc-h3">Managing in the admin UI</h3>
-          <p class="doc-p">Remote options are configured in Data Model → select the table → Behavior tab: pick the select field, choose one of your configured External APIs, set the endpoint and data path, and map the label/value fields. A test button previews the options the editor will show.</p>
+          <p class="doc-p">Remote options are configured in Collections → ✏ Edit on the collection → Behavior tab: pick the select field, choose one of your configured External APIs, set the endpoint and data path, and map the label/value fields. A test button previews the options the editor will show.</p>
           <h3 class="doc-h3">Config format</h3>
           <pre class="doc-pre"><code>{
   "externalApiId": 5,           // ID from nivaro_external_apis
@@ -13467,7 +13468,7 @@ POST /api/collections/:collection/fields
           <h1 class="doc-h1" id="content-ops-datetime-auto">Datetime Auto-fields</h1>
           <p class="doc-p">Datetime and timestamp fields can be configured to automatically stamp the current server date/time on record create, update, or both. The value is always the server timestamp (ISO 8601 UTC) — not the client clock.</p>
           <h3 class="doc-h3">Configuring in the admin UI</h3>
-          <p class="doc-p">In Data Model → select a table → click a datetime field's config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field's options JSON.</p>
+          <p class="doc-p">In Collections → ✏ Edit on the collection → click a datetime field's config → set "On Create" and/or "On Update" to "Save Current Date/Time". The setting is stored in the field's options JSON.</p>
           <h3 class="doc-h3">Options format</h3>
           <pre class="doc-pre"><code>// On create only (e.g. created_at):
 { "on_create": "now" }
@@ -13554,7 +13555,7 @@ PATCH /api/collections/:collection/fields/updated_at
           <ul class="doc-ul">
             <li>Translating values: in the item editor, every translatable field shows a globe button — click it to open the per-locale editor and enter values for each language side by side.</li>
             <li>Available locales: managed in Settings → Localization (stored in <code class="doc-code">nivaro_settings.available_locales</code>). Locales added there appear in every field translation editor.</li>
-            <li>Marking fields translatable: Data Model → select the table → Content tab → per-field "Translatable" toggle (string/text fields).</li>
+            <li>Marking fields translatable: Collections → ✏ Edit on the collection → Content tab → per-field "Translatable" toggle (string/text fields).</li>
           </ul>
           <h3 class="doc-h3">Marking a field as translatable</h3>
           <pre class="doc-pre"><code>// Via the Data Model field editor — toggle "Translatable" on string/text fields.
@@ -16812,7 +16813,7 @@ POST /api/item-locks/:collection/:item/lock/release
   # Release your own lock — the same as DELETE, but safe for
   # navigator.sendBeacon when a tab is closing</code></pre>
           <h3 class="doc-h3" id="item-locking-configuration">Per-Collection Configuration</h3>
-          <p class="doc-p">Locking can be enabled/disabled per collection in Data Model → (collection) → Settings → "Item locking". Default is ON.</p>
+          <p class="doc-p">Locking can be enabled/disabled per collection in Collections → ✏ Edit on the collection → Settings → "Item locking". Default is ON.</p>
           <pre class="doc-pre"><code>GET /api/item-locks/config/:collection
   # { item_locking_enabled: boolean }
 

@@ -1,10 +1,10 @@
-import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Key, Link2, Maximize2, Search, Share2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { useGoBack } from '@/lib/nav'
+import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 
 /**
@@ -109,7 +109,7 @@ const CENTER_W = 260
 
 export function ErdViewPage() {
   const navigate = useNavigate()
-  const goBack = useGoBack('/data-model')
+  const goBack = useGoBack('/collections')
   const [search, setSearch] = useState('')
   const [focused, setFocused] = useState<string | null>(null)
   const [stack, setStack] = useState<string[]>([])
@@ -149,7 +149,8 @@ export function ErdViewPage() {
     },
     onError: (e: unknown) =>
       toast.error(
-        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to draw relation'
+        (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Failed to draw relation'
       )
   })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -260,8 +261,11 @@ export function ErdViewPage() {
       <header className='shrink-0 border-b border-slate-200 bg-white px-8 py-4 dark:border-border dark:bg-card'>
         <div className='flex items-center gap-2.5'>
           <Link
-            to='/data-model'
-            onClick={(e) => { e.preventDefault(); goBack() }}
+            to='/collections'
+            onClick={(e) => {
+              e.preventDefault()
+              goBack()
+            }}
             className='rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'
           >
             <ArrowLeft className='h-4 w-4' />
@@ -422,14 +426,20 @@ export function ErdViewPage() {
                   <span className='truncate text-[13px] font-semibold text-white'>{focused}</span>
                   <button
                     type='button'
-                    title={drawMode ? 'Cancel drawing' : 'Draw a relation (#355): click a neighbor card to link it'}
+                    title={
+                      drawMode
+                        ? 'Cancel drawing'
+                        : 'Draw a relation (#355): click a neighbor card to link it'
+                    }
                     onClick={() => {
                       setDrawMode((v) => !v)
                       setDrawTarget(null)
                     }}
                     className={cn(
                       'rounded p-0.5',
-                      drawMode ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'
+                      drawMode
+                        ? 'bg-white/20 text-white'
+                        : 'text-white/60 hover:bg-white/10 hover:text-white'
                     )}
                   >
                     <Link2 className='h-3.5 w-3.5' />

@@ -16,7 +16,7 @@ export const importTemplatesGuide: DocSection = {
     { type: 'h3', text: 'Building a template' },
     {
       type: 'p',
-      text: 'Open Data Model → select a collection → Table Editor → the "Imports" tab. The left panel lists templates for the collection (name, mode, active toggle); the right panel is the editor: basics (name, mode, sheet match rule, header row, attach-file field, sharing), header rules, line mapping, and disperse.'
+      text: 'Open Collections → ✏ Edit on the collection → Table Editor → the "Imports" tab. The left panel lists templates for the collection (name, mode, active toggle); the right panel is the editor: basics (name, mode, sheet match rule, header row, attach-file field, sharing), header rules, line mapping, and disperse.'
     },
     { type: 'h3', text: 'Header rules' },
     {
@@ -58,7 +58,7 @@ export const importTemplatesGuide: DocSection = {
     },
     {
       type: 'p',
-      text: 'A rule may also CHAIN up to three lookup steps: each later lookup matches on what the one before it returned. Set the first to take a field, e.g. `cifa_number` → cifa_items (take field `override_cifa`) → cifa_items by id (take field `cifa_number`) — the file names an item and the rule lands on its override. Each lookup is still one query across all rows, asking only for the values the previous lookup answered. A miss anywhere in the chain reports that lookup\'s `on_miss`; a chained rule cannot use `on_miss: \'create\'` (which of the chain\'s collections to create in would be ambiguous).'
+      text: "A rule may also CHAIN up to three lookup steps: each later lookup matches on what the one before it returned. Set the first to take a field, e.g. `cifa_number` → cifa_items (take field `override_cifa`) → cifa_items by id (take field `cifa_number`) — the file names an item and the rule lands on its override. Each lookup is still one query across all rows, asking only for the values the previous lookup answered. A miss anywhere in the chain reports that lookup's `on_miss`; a chained rule cannot use `on_miss: 'create'` (which of the chain's collections to create in would be ambiguous)."
     },
     {
       type: 'table',

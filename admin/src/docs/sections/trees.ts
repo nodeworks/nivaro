@@ -70,7 +70,7 @@ export const treeSetup: DocSection = {
     { type: 'h3', text: 'Step 1 — Add a parent field to the collection' },
     {
       type: 'p',
-      text: 'In Data Model → select the collection → Fields → Add Field. Create a field such as `parent_id` with type `integer`, marked nullable. You do not need to create a formal relation for tree purposes, though you may.'
+      text: 'In Collections → ✏ Edit on the collection → Fields → Add Field. Create a field such as `parent_id` with type `integer`, marked nullable. You do not need to create a formal relation for tree purposes, though you may.'
     },
     {
       type: 'pre',
@@ -80,7 +80,7 @@ ALTER TABLE my_collection ADD parent_id INT NULL;`
     { type: 'h3', text: 'Step 2 — Enable the tree config' },
     {
       type: 'p',
-      text: 'Navigate to Data Model → select the collection → scroll to the "Tree / Hierarchy" section → click "Enable Tree View". Configure the three fields:'
+      text: 'Navigate to Collections → ✏ Edit on the collection → scroll to the "Tree / Hierarchy" section → click "Enable Tree View". Configure the three fields:'
     },
     {
       type: 'table',

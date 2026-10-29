@@ -7,7 +7,7 @@ export const fieldDisplaySettingsGuide: DocSection = {
     { type: 'h1', id: 'field-display-settings', text: 'Field Display Settings' },
     {
       type: 'p',
-      text: 'Every field in a registered collection has per-field display settings that control how it is labelled and rendered in the item editor — without changing the underlying database column. Open Data Model → select a collection → hover a field chip in the Table Editor and click the gear icon to open the Display Settings popover. A cyan gear indicates the field already has overrides.'
+      text: 'Every field in a registered collection has per-field display settings that control how it is labelled and rendered in the item editor — without changing the underlying database column. Open Collections → ✏ Edit on the collection → hover a field chip in the Table Editor and click the gear icon to open the Display Settings popover. A cyan gear indicates the field already has overrides.'
     },
     { type: 'h3', text: 'Available settings' },
     {
