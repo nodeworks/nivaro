@@ -54,6 +54,8 @@ export interface LayoutDesign {
   ghost?(field: string): string | null
   /** #2701: the width handle on a selected field set its width (12, 6, 4 or 3 columns). */
   resizeWidth?(t: DesignTarget, span: number): void
+  /** #3194: nodes inside a linked library section never drag (they change in the library). */
+  locked?(t: DesignTarget): boolean
 }
 
 export interface DiffMark {
@@ -102,7 +104,7 @@ export interface DesignMark {
   tip?: string
   highlight?: boolean
   /** A small icon before the text (a pinned section's pin, #2628; a personal-default field's person). */
-  icon?: 'pin' | 'person'
+  icon?: 'pin' | 'person' | 'link'
   /**
    * Where the tag ranks when a node has more than fit (DesignNode shows two,
    * then "+n"): `preview` (a preview mode's own tag) ranks with the role

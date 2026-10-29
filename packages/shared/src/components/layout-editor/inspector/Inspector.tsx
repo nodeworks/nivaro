@@ -19,6 +19,7 @@ import { PlacementPresets } from '../entry/PlacementPresets'
 import { FIELD_HOLDERS } from '../field-zones'
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
+import { LinkedSectionNotice, useLinkedTarget } from '../reuse/linked-sections'
 import { slotName } from '../slot-names'
 import { type ApplyOptions, useLayoutBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
@@ -141,6 +142,8 @@ export function Inspector(props: InspectorProps) {
       ? (parent.groups.find((g) => g.key === target.key) ?? null)
       : null
   const inherited = missing && (!!parentRow || !!parentGroup || !!parentName)
+  // #3194: inside a linked library section — read-only here, changed in the library.
+  const linked = useLinkedTarget(missing ? null : target)
 
   if (!target) {
     return (
@@ -217,6 +220,30 @@ export function Inspector(props: InspectorProps) {
     )
   }
 
+  if (linked && !linked.editing) {
+    const notice = <LinkedSectionNotice link={linked.link} />
+    // Read-only view: inputs disabled and writes go nowhere.
+    const roEnv: InspectorEnv = { ...env, apply: () => {} }
+    return (
+      <Shell>
+        <InspectorEnvContext.Provider value={roEnv}>
+          {group ? (
+            <GroupPanel key={group.key} group={group} notice={notice} readOnly />
+          ) : (
+            <PlacementInspector
+              key={targetKey(target)}
+              target={target}
+              row={row}
+              notice={notice}
+              readOnly
+            />
+          )}
+        </InspectorEnvContext.Provider>
+      </Shell>
+    )
+  }
+
+  const linkedNotice = linked ? <LinkedSectionNotice link={linked.link} /> : null
   const overrideNotice = !missing ? (
     <OverrideNotice
       bundle={bundle}
@@ -230,7 +257,18 @@ export function Inspector(props: InspectorProps) {
     <Shell>
       <InspectorEnvContext.Provider value={env}>
         {target.kind === 'group' ? (
-          group && <GroupPanel key={group.key} group={group} notice={overrideNotice} />
+          group && (
+            <GroupPanel
+              key={group.key}
+              group={group}
+              notice={
+                <>
+                  {linkedNotice}
+                  {overrideNotice}
+                </>
+              }
+            />
+          )
         ) : missing ? (
           <>
             <PanelHeader title={titleOf(target)} />
@@ -245,7 +283,12 @@ export function Inspector(props: InspectorProps) {
             key={targetKey(target)}
             target={target}
             row={row}
-            notice={overrideNotice}
+            notice={
+              <>
+                {linkedNotice}
+                {overrideNotice}
+              </>
+            }
           />
         )}
       </InspectorEnvContext.Provider>

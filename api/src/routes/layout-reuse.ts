@@ -14,15 +14,25 @@ import {
   parseBlock,
   planBlock
 } from '../services/layout-blocks.js'
+import { type LayoutBundle, loadLayoutBundle, runLayoutOps } from '../services/layout-ops.js'
 import {
-  GROUP_PATCH_KEYS,
-  type GroupRow,
-  type LayoutBundle,
-  loadLayoutBundle,
-  PLACEMENT_PATCH_KEYS,
-  type PlacementRow,
-  runLayoutOps
-} from '../services/layout-ops.js'
+  deleteTemplateLinks,
+  linkCounts,
+  linkedRootKey,
+  withRootKey
+} from '../services/layout-section-links.js'
+import {
+  cleanMap,
+  collectionFieldNames,
+  type FieldMap,
+  fieldResolver,
+  type LoadedTemplate,
+  loadTemplate,
+  postedBundle,
+  TEMPLATES_TABLE,
+  type TemplateRow
+} from '../services/layout-templates.js'
+import { layoutSectionLinkRoutes } from './layout-section-links.js'
 
 /**
  * Reusing layout parts (registered under /collection-layouts, admin only):
@@ -34,122 +44,15 @@ import {
  * Every layout change goes through runLayoutOps, like any editor save.
  */
 
-const TABLE = 'nivaro_layout_templates'
+const TABLE = TEMPLATES_TABLE
 const KINDS: BlockKind[] = ['form', 'section']
 
-type FieldMap = Record<string, string | null>
-
-interface TemplateRow {
-  id: number
-  kind: BlockKind
-  name: string
-  description: string | null
-  source_collection: string | null
-  payload: string
-  created_by: string | null
-  created_at: unknown
-  updated_at: unknown
-}
-
-export interface LoadedTemplate {
-  id: number
-  kind: BlockKind
-  name: string
-  source_collection: string | null
-  layout_type: string
-  block: LayoutBlock
-}
-
-async function loadTemplate(id: unknown): Promise<LoadedTemplate | null> {
-  const n = Number(id)
-  if (!Number.isInteger(n) || n <= 0) return null
-  const row = (await db(TABLE).where({ id: n }).first()) as TemplateRow | undefined
-  const block = row ? parseBlock(row.payload) : null
-  if (!row || !block) return null
-  return {
-    id: row.id,
-    kind: row.kind,
-    name: row.name,
-    source_collection: row.source_collection,
-    layout_type: block.layout_type ?? 'grouped',
-    block
-  }
-}
+export { fieldResolver, type LoadedTemplate }
 
 /** A saved form template (null for a section or a missing id). */
 export async function loadFormTemplate(id: unknown): Promise<LoadedTemplate | null> {
   const t = await loadTemplate(id)
   return t?.kind === 'form' ? t : null
-}
-
-/** The target collection's field names (relation aliases included). */
-async function collectionFieldNames(collection: string): Promise<Set<string>> {
-  const rows = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
-    field: string
-  }>
-  return new Set(rows.map((r) => String(r.field)))
-}
-
-/**
- * How a source field lands on `target`: the admin's choice from `map` (null or
- * '' = leave it out; a name the target lacks is left out too), else the same
- * name when the target collection has it.
- */
-export function fieldResolver(map: FieldMap, targetFields: Set<string>) {
-  return (f: string): string | null => {
-    if (Object.hasOwn(map, f)) {
-      const to = map[f]
-      return typeof to === 'string' && to && targetFields.has(to) ? to : null
-    }
-    return targetFields.has(f) ? f : null
-  }
-}
-
-const cleanMap = (raw: unknown): FieldMap => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
-  const out: FieldMap = {}
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>))
-    out[k] = typeof v === 'string' ? v : null
-  return out
-}
-
-/**
- * The editor may post the bundle it shows (edits not saved yet); only known
- * group / placement settings are kept from it, the layout row is the stored one.
- */
-function bundleFrom(posted: unknown, stored: LayoutBundle): LayoutBundle {
-  const b = posted as { groups?: unknown; placements?: unknown } | null
-  if (!b || !Array.isArray(b.groups) || !Array.isArray(b.placements)) return stored
-  const keep = (row: Record<string, unknown>, keys: readonly string[]) => {
-    const out: Record<string, unknown> = {}
-    for (const k of keys) if (row[k] !== undefined) out[k] = row[k]
-    return out
-  }
-  const groups = (b.groups as Array<Record<string, unknown>>)
-    .filter((g) => g && typeof g.key === 'string')
-    .map(
-      (g) =>
-        ({
-          ...keep(g, GROUP_PATCH_KEYS),
-          key: g.key,
-          parent_key: typeof g.parent_key === 'string' ? g.parent_key : null,
-          sort: Number(g.sort ?? 0),
-          label: String(g.label ?? ''),
-          type: String(g.type ?? 'section')
-        }) as GroupRow
-    )
-  const placements = (b.placements as Array<Record<string, unknown>>)
-    .filter((p) => p && typeof p.field === 'string')
-    .map(
-      (p) =>
-        ({
-          ...keep(p, PLACEMENT_PATCH_KEYS),
-          field: p.field,
-          group_key: typeof p.group_key === 'string' ? p.group_key : null,
-          sort: Number(p.sort ?? 0)
-        }) as PlacementRow
-    )
-  return { ...stored, groups, placements }
 }
 
 /** The block a request names: a saved template, or a section of a layout. */
@@ -168,7 +71,7 @@ async function sourceBlock(src: {
   if (!Number.isInteger(id) || id <= 0) return { error: 'layout_id required', code: 400 }
   const stored = await loadLayoutBundle(db, id)
   if (!stored) return { error: 'No layout with that id', code: 404 }
-  const bundle = bundleFrom(src.bundle, stored)
+  const bundle = postedBundle(src.bundle, stored)
   try {
     const block =
       typeof src.group_key === 'string'
@@ -211,7 +114,7 @@ export async function applyTemplateToNewLayout(
   }
 }
 
-function templateOut(row: TemplateRow) {
+function templateOut(row: TemplateRow, linked?: Map<number, number>) {
   const block = parseBlock(row.payload)
   return {
     id: row.id,
@@ -222,6 +125,8 @@ function templateOut(row: TemplateRow) {
     layout_type: block?.layout_type ?? null,
     fields: block ? blockFields(block) : [],
     sections: block ? block.groups.filter((g) => g.parent_key === null).length : 0,
+    /** #3194: forms that place this section as linked. */
+    linked_forms: linked?.get(row.id) ?? 0,
     created_by: row.created_by,
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -229,6 +134,9 @@ function templateOut(row: TemplateRow) {
 }
 
 export async function layoutReuseRoutes(app: FastifyInstance) {
+  // #3194 linked sections: /:id/section-links… and PUT /templates/:tid/content.
+  await layoutSectionLinkRoutes(app)
+
   // GET /collection-layouts/templates?kind=form|section
   app.get('/templates', { preHandler: requireAdmin }, async (req, reply) => {
     const { kind } = req.query as { kind?: string }
@@ -236,8 +144,11 @@ export async function layoutReuseRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "kind must be 'form' or 'section'" })
     const q = db(TABLE).orderBy([{ column: 'name' }, { column: 'id' }])
     if (kind) q.where({ kind })
-    const rows = (await q) as TemplateRow[]
-    return reply.send({ data: rows.map(templateOut) })
+    const [rows, linked] = await Promise.all([
+      q as Promise<TemplateRow[]>,
+      kind === 'form' ? Promise.resolve(undefined) : linkCounts()
+    ])
+    return reply.send({ data: rows.map((r) => templateOut(r, linked)) })
   })
 
   app.get('/templates/:tid', { preHandler: requireAdmin }, async (req, reply) => {
@@ -334,6 +245,8 @@ export async function layoutReuseRoutes(app: FastifyInstance) {
     const id = Number(tid) || 0
     if (!(await db(TABLE).where({ id }).first()))
       return reply.code(404).send({ error: 'Not found' })
+    // #3194: forms that linked it keep the section as an ordinary copy.
+    await deleteTemplateLinks(id)
     await db(TABLE).where({ id }).delete()
     await logActivity({ action: 'delete', user: req.user?.id, collection: TABLE, item: tid, req })
     return reply.code(204).send()
@@ -351,6 +264,8 @@ export async function layoutReuseRoutes(app: FastifyInstance) {
       target_bundle?: unknown
       field_map?: unknown
       index?: unknown
+      /** #3194: plan a library section to place as LINKED (root key of its own). */
+      linked?: unknown
     }
     if (typeof body.target_collection !== 'string' || !body.target_collection)
       return reply.code(400).send({ error: 'target_collection required' })
@@ -371,11 +286,21 @@ export async function layoutReuseRoutes(app: FastifyInstance) {
       placements: tb.placements,
       rev: ''
     }
+    const templateId = Number(body.source?.template_id)
+    const linked = body.linked === true
+    if (linked && !(Number.isInteger(templateId) && src.block.kind === 'section'))
+      return reply.code(400).send({ error: 'Only a section from the library can be linked' })
+    const linkedKey = linked ? linkedRootKey(templateId) : null
     try {
-      const plan = planBlock(mapped.block, target, {
-        index: typeof body.index === 'number' ? body.index : undefined
-      })
+      const plan = planBlock(
+        linkedKey ? withRootKey(mapped.block, linkedKey) : mapped.block,
+        target,
+        {
+          index: typeof body.index === 'number' ? body.index : undefined
+        }
+      )
       return reply.send({
+        ...(linkedKey ? { linked_key: plan.keys[linkedKey] ?? linkedKey } : {}),
         ops: plan.ops,
         keys: plan.keys,
         already: plan.already,

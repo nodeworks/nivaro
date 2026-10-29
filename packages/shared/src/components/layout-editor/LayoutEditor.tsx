@@ -123,6 +123,11 @@ import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
+import {
+  LinkedSectionsProvider,
+  useLinkedSectionMarks,
+  useLinkedSections
+} from './reuse/linked-sections'
 import { useRailCopy } from './reuse/useRailCopy'
 import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
@@ -498,7 +503,8 @@ function Canvas({
   )
   // Fields people may save their own starting value for say so on the canvas.
   const pdMarked = usePersonalDefaultMarks(bundle, ruleMarked)
-  const allMarks = usePinMarks(bundle, pdMarked)
+  const linkedMarks = useLinkedSectionMarks(pdMarked)
+  const allMarks = usePinMarks(bundle, linkedMarks.marks)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -524,6 +530,7 @@ function Canvas({
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
         : undefined,
       ghost,
+      locked: linkedMarks.locked,
       resizeWidth: noDnd
         ? undefined
         : (t, span) => {
@@ -559,6 +566,7 @@ function Canvas({
       compare,
       lastChanges,
       ghost,
+      linkedMarks.locked,
       apply,
       noDnd
     ]
@@ -698,7 +706,9 @@ export function LayoutEditor({
   useEffect(() => setCurrentId(layoutId), [layoutId])
   const onSaved = useSavedRefresh(collection)
   // Record / Stop (#2663) sees every apply; the draft saves as before.
-  const { draft, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  // #3194: linked library sections change only in the library; the guard says so.
+  const { draft, value: linked } = useLinkedSections(currentId, recorded)
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
@@ -1387,271 +1397,273 @@ export function LayoutEditor({
       )}
       <RuleLoopsBanner explain={explain} onShow={showField} />
       {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
-      <LayoutDndProvider
-        bundle={bundle}
-        apply={draft.apply}
-        onDragActive={onDragActive}
-        onDropOnLayout={copyToLayout}
-      >
-        <div className='flex min-h-0 flex-1 overflow-hidden'>
-          {/* The outline takes the left panel's place while it is open: three side
+      <LinkedSectionsProvider value={linked}>
+        <LayoutDndProvider
+          bundle={bundle}
+          apply={draft.apply}
+          onDragActive={onDragActive}
+          onDropOnLayout={copyToLayout}
+        >
+          <div className='flex min-h-0 flex-1 overflow-hidden'>
+            {/* The outline takes the left panel's place while it is open: three side
             panels at once left the canvas ~330px wide at 1440. Hidden, not unmounted,
             so the Add / Usage tab and its scroll survive. */}
-          <aside
-            className={cn(
-              'flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
-              outlineShown && 'hidden'
-            )}
-          >
-            <div
-              role='tablist'
-              aria-label='Left panel'
-              className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
-            >
-              <button
-                type='button'
-                role='tab'
-                aria-selected={left === 'layouts'}
-                data-editor-tab='layouts'
-                className={leftTab(left === 'layouts')}
-                onClick={() => setLeft('layouts')}
-              >
-                Forms
-              </button>
-              <button
-                type='button'
-                role='tab'
-                aria-selected={left === 'add'}
-                data-editor-tab='add'
-                className={leftTab(left === 'add')}
-                onClick={() => setLeft('add')}
-                disabled={!bundle}
-                data-tip='Add a field, section, panel or widget after the selection'
-              >
-                <Plus className='h-3.5 w-3.5' />
-                Add
-              </button>
-              <button
-                type='button'
-                role='tab'
-                aria-selected={left === 'usage'}
-                data-editor-tab='usage'
-                className={leftTab(left === 'usage')}
-                onClick={() => setLeft('usage')}
-                disabled={!bundle}
-                data-tip='How this form is used and where it slows people down'
-              >
-                <BarChart3 className='h-3.5 w-3.5' />
-                Usage
-              </button>
-            </div>
-            <div className='min-h-0 flex-1 overflow-y-auto'>
-              {left === 'add' && bundle ? (
-                <AddPanel
-                  bundle={bundle}
-                  collection={collection}
-                  selected={selected}
-                  apply={draft.apply}
-                  onSelect={onSelect}
-                />
-              ) : left === 'usage' && bundle ? (
-                <UsagePanel
-                  bundle={bundle}
-                  collection={collection}
-                  fields={fields}
-                  apply={draft.apply}
-                  showFill={showFill}
-                  onShowFill={setShowFill}
-                  onOpenLayout={openLayout}
-                />
-              ) : (
-                <LayoutsRail
-                  collection={collection}
-                  currentId={currentId}
-                  onOpen={openLayout}
-                  settingsOpen={panel === 'settings'}
-                  onSettings={() => setPanel('settings')}
-                  dropTargets
-                />
-              )}
-            </div>
-          </aside>
-          {outlineShown && bundle && (
             <aside
-              data-editor-outline-panel=''
-              className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+              className={cn(
+                'flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card',
+                outlineShown && 'hidden'
+              )}
             >
-              <OutlinePanel
-                bundle={bundle}
-                nodes={nav.nodes}
-                selection={selection}
-                onPick={nav.selectAndReveal}
-                onMoved={onMoved}
-                apply={draft.apply}
-                onClose={() => nav.setOutlineOpen(false)}
-              />
+              <div
+                role='tablist'
+                aria-label='Left panel'
+                className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
+              >
+                <button
+                  type='button'
+                  role='tab'
+                  aria-selected={left === 'layouts'}
+                  data-editor-tab='layouts'
+                  className={leftTab(left === 'layouts')}
+                  onClick={() => setLeft('layouts')}
+                >
+                  Forms
+                </button>
+                <button
+                  type='button'
+                  role='tab'
+                  aria-selected={left === 'add'}
+                  data-editor-tab='add'
+                  className={leftTab(left === 'add')}
+                  onClick={() => setLeft('add')}
+                  disabled={!bundle}
+                  data-tip='Add a field, section, panel or widget after the selection'
+                >
+                  <Plus className='h-3.5 w-3.5' />
+                  Add
+                </button>
+                <button
+                  type='button'
+                  role='tab'
+                  aria-selected={left === 'usage'}
+                  data-editor-tab='usage'
+                  className={leftTab(left === 'usage')}
+                  onClick={() => setLeft('usage')}
+                  disabled={!bundle}
+                  data-tip='How this form is used and where it slows people down'
+                >
+                  <BarChart3 className='h-3.5 w-3.5' />
+                  Usage
+                </button>
+              </div>
+              <div className='min-h-0 flex-1 overflow-y-auto'>
+                {left === 'add' && bundle ? (
+                  <AddPanel
+                    bundle={bundle}
+                    collection={collection}
+                    selected={selected}
+                    apply={draft.apply}
+                    onSelect={onSelect}
+                  />
+                ) : left === 'usage' && bundle ? (
+                  <UsagePanel
+                    bundle={bundle}
+                    collection={collection}
+                    fields={fields}
+                    apply={draft.apply}
+                    showFill={showFill}
+                    onShowFill={setShowFill}
+                    onOpenLayout={openLayout}
+                  />
+                ) : (
+                  <LayoutsRail
+                    collection={collection}
+                    currentId={currentId}
+                    onOpen={openLayout}
+                    settingsOpen={panel === 'settings'}
+                    onSettings={() => setPanel('settings')}
+                    dropTargets
+                  />
+                )}
+              </div>
             </aside>
-          )}
-          {/* A flex column so the canvas below gets the pane's height exactly: a record form
+            {outlineShown && bundle && (
+              <aside
+                data-editor-outline-panel=''
+                className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'
+              >
+                <OutlinePanel
+                  bundle={bundle}
+                  nodes={nav.nodes}
+                  selection={selection}
+                  onPick={nav.selectAndReveal}
+                  onMoved={onMoved}
+                  apply={draft.apply}
+                  onClose={() => nav.setOutlineOpen(false)}
+                />
+              </aside>
+            )}
+            {/* A flex column so the canvas below gets the pane's height exactly: a record form
               scrolls inside its own body, and anything taller (tables, matrices, a summary)
               still scrolls the pane. A min-h-full chain here let the form's body take the
               whole pane height under its header, so the pane scrolled into blank space. */}
-          <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
-            {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
-            {compareState.compare && (view === 'canvas' || !arrangeable) && (
-              <CompareBanner compare={compareState.compare} onClose={compareState.close} />
-            )}
-            {bundle && arrangeable && view === 'states' ? (
-              <FieldStateMatrix
-                bundle={bundle}
-                parent={parent}
-                collection={collection}
-                apply={draft.apply}
-                onSelect={onSelect}
-              />
-            ) : bundle && arrangeable && view === 'roles' ? (
-              <RoleSectionMatrix
-                bundle={bundle}
-                parent={parent}
-                apply={draft.apply}
-                onSelect={onSelect}
-              />
-            ) : bundle && arrangeable && view === 'table' ? (
-              <PlacementsTable
-                bundle={bundle}
-                collection={collection}
-                apply={draft.apply}
-                flush={draft.flush}
-                selection={selection}
-                onSelect={onSelect}
-                onSelection={setSelection}
-              />
-            ) : bundle ? (
-              <div
-                data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
-                // Compact (#2627): editor-only zoom; the record page is unchanged.
-                style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
-                className={cn(
-                  'flex min-h-0 flex-1 flex-col',
-                  previewThemeClass(previewDark, appDark),
-                  previewDark && !appDark && 'bg-background text-foreground'
-                )}
-              >
-                <PreviewPanes
-                  collection={collection}
+            <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
+              {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
+              {compareState.compare && (view === 'canvas' || !arrangeable) && (
+                <CompareBanner compare={compareState.compare} onClose={compareState.close} />
+              )}
+              {bundle && arrangeable && view === 'states' ? (
+                <FieldStateMatrix
                   bundle={bundle}
                   parent={parent}
-                  preview={preview}
-                  onPreview={setPreview}
-                  record={record}
-                  fields={fields}
-                  renderPane={(pane) => (
-                    <Canvas
-                      collection={collection}
-                      bundle={bundle}
-                      parent={parent}
-                      roleId={pane.roleId}
-                      stateKey={pane.stateKey}
-                      marks={withAiMarks(pane.marks)}
-                      overlay={tabOrder.overlay(pane.overlay)}
-                      ruleMarks={ruleMarks}
-                      ghost={ghost}
-                      deps={explain.deps}
-                      noDnd={pane.noDnd}
-                      record={pane.record}
-                      selected={selected}
-                      selection={selection}
-                      onSelect={canvasSelect}
-                      showHidden={showHidden}
-                      fold={nav.fold}
-                      reveal={nav.reveal}
-                      apply={draft.apply}
-                      whenIdle={draft.whenIdle}
-                      fillRate={fillRate}
-                      unsaved={unsavedOf}
-                      peers={peersOf}
-                      compare={compareState.compare}
-                      lastChanges={compareState.compare ? undefined : lastChanges}
-                    />
-                  )}
-                />
-              </div>
-            ) : draft.error ? (
-              <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
-            ) : (
-              <div className='flex flex-col gap-3 p-6'>
-                <Skeleton className='h-10 w-full rounded-lg' />
-                <Skeleton className='h-48 w-full rounded-lg' />
-              </div>
-            )}
-          </main>
-          <aside
-            data-editor-inspector=''
-            className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
-          >
-            {bundle &&
-              (panel === 'ask' ? (
-                <AskPanel
-                  layoutId={currentId}
-                  layoutName={layoutName}
-                  kind={layoutKindOf(bundle.layout)}
-                  bundle={bundle}
-                  thread={askThread}
-                  setThread={setAskThread}
-                  pending={askPending}
-                  onPendingTaken={() => setAskPending(null)}
-                  jump={jumpSetting}
-                  onCite={onAskCite}
-                  recordId={preview.record?.id ?? null}
-                />
-              ) : panel === 'checks' ? (
-                <LintPanel
-                  findings={lint.findings}
-                  health={lint.health}
-                  ready={lint.ready}
-                  onSelect={(t) => setSelection([t])}
+                  collection={collection}
                   apply={draft.apply}
-                  onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                  onSelect={onSelect}
                 />
-              ) : panel === 'settings' ? (
-                <FormSettings
+              ) : bundle && arrangeable && view === 'roles' ? (
+                <RoleSectionMatrix
                   bundle={bundle}
+                  parent={parent}
+                  apply={draft.apply}
+                  onSelect={onSelect}
+                />
+              ) : bundle && arrangeable && view === 'table' ? (
+                <PlacementsTable
+                  bundle={bundle}
+                  collection={collection}
                   apply={draft.apply}
                   flush={draft.flush}
-                  collection={collection}
-                  previewRoleId={preview.roleId}
-                  onPreviewRoleChange={onPreviewRoleChange}
-                  onAskWhere={
-                    host.isAdmin
-                      ? (q) => {
-                          setAskPending(q)
-                          setPanel('ask')
-                        }
-                      : undefined
-                  }
-                />
-              ) : selection.length > 1 ? (
-                <BulkInspector
-                  bundle={bundle}
                   selection={selection}
-                  apply={draft.apply}
-                  collection={collection}
+                  onSelect={onSelect}
                   onSelection={setSelection}
                 />
+              ) : bundle ? (
+                <div
+                  data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
+                  // Compact (#2627): editor-only zoom; the record page is unchanged.
+                  style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
+                  className={cn(
+                    'flex min-h-0 flex-1 flex-col',
+                    previewThemeClass(previewDark, appDark),
+                    previewDark && !appDark && 'bg-background text-foreground'
+                  )}
+                >
+                  <PreviewPanes
+                    collection={collection}
+                    bundle={bundle}
+                    parent={parent}
+                    preview={preview}
+                    onPreview={setPreview}
+                    record={record}
+                    fields={fields}
+                    renderPane={(pane) => (
+                      <Canvas
+                        collection={collection}
+                        bundle={bundle}
+                        parent={parent}
+                        roleId={pane.roleId}
+                        stateKey={pane.stateKey}
+                        marks={withAiMarks(pane.marks)}
+                        overlay={tabOrder.overlay(pane.overlay)}
+                        ruleMarks={ruleMarks}
+                        ghost={ghost}
+                        deps={explain.deps}
+                        noDnd={pane.noDnd}
+                        record={pane.record}
+                        selected={selected}
+                        selection={selection}
+                        onSelect={canvasSelect}
+                        showHidden={showHidden}
+                        fold={nav.fold}
+                        reveal={nav.reveal}
+                        apply={draft.apply}
+                        whenIdle={draft.whenIdle}
+                        fillRate={fillRate}
+                        unsaved={unsavedOf}
+                        peers={peersOf}
+                        compare={compareState.compare}
+                        lastChanges={compareState.compare ? undefined : lastChanges}
+                      />
+                    )}
+                  />
+                </div>
+              ) : draft.error ? (
+                <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
               ) : (
-                <Inspector
-                  bundle={bundle}
-                  target={selected}
-                  apply={draft.apply}
-                  flush={draft.flush}
-                  collection={collection}
-                  openLayout={openLayout}
-                  onSelect={nav.selectAndReveal}
-                />
-              ))}
-          </aside>
-        </div>
-      </LayoutDndProvider>
+                <div className='flex flex-col gap-3 p-6'>
+                  <Skeleton className='h-10 w-full rounded-lg' />
+                  <Skeleton className='h-48 w-full rounded-lg' />
+                </div>
+              )}
+            </main>
+            <aside
+              data-editor-inspector=''
+              className='flex w-[344px] shrink-0 flex-col overflow-hidden border-l border-slate-200 bg-white dark:border-border dark:bg-card'
+            >
+              {bundle &&
+                (panel === 'ask' ? (
+                  <AskPanel
+                    layoutId={currentId}
+                    layoutName={layoutName}
+                    kind={layoutKindOf(bundle.layout)}
+                    bundle={bundle}
+                    thread={askThread}
+                    setThread={setAskThread}
+                    pending={askPending}
+                    onPendingTaken={() => setAskPending(null)}
+                    jump={jumpSetting}
+                    onCite={onAskCite}
+                    recordId={preview.record?.id ?? null}
+                  />
+                ) : panel === 'checks' ? (
+                  <LintPanel
+                    findings={lint.findings}
+                    health={lint.health}
+                    ready={lint.ready}
+                    onSelect={(t) => setSelection([t])}
+                    apply={draft.apply}
+                    onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                  />
+                ) : panel === 'settings' ? (
+                  <FormSettings
+                    bundle={bundle}
+                    apply={draft.apply}
+                    flush={draft.flush}
+                    collection={collection}
+                    previewRoleId={preview.roleId}
+                    onPreviewRoleChange={onPreviewRoleChange}
+                    onAskWhere={
+                      host.isAdmin
+                        ? (q) => {
+                            setAskPending(q)
+                            setPanel('ask')
+                          }
+                        : undefined
+                    }
+                  />
+                ) : selection.length > 1 ? (
+                  <BulkInspector
+                    bundle={bundle}
+                    selection={selection}
+                    apply={draft.apply}
+                    collection={collection}
+                    onSelection={setSelection}
+                  />
+                ) : (
+                  <Inspector
+                    bundle={bundle}
+                    target={selected}
+                    apply={draft.apply}
+                    flush={draft.flush}
+                    collection={collection}
+                    openLayout={openLayout}
+                    onSelect={nav.selectAndReveal}
+                  />
+                ))}
+            </aside>
+          </div>
+        </LayoutDndProvider>
+      </LinkedSectionsProvider>
       <StructureActions
         bundle={bundle}
         selection={selection}

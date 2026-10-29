@@ -712,6 +712,9 @@ export const layoutEditor: DocSection = {
       items: [
         'Copy a section to another layout: drag a section from the canvas onto a form in the Forms list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
         'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
+        'Linked sections: the link button beside a library section adds it LINKED instead of as a copy. A linked section is tagged Linked on the canvas and is read-only on the form: its fields do not drag and its settings cannot change there (the section itself still moves, and can be removed from the form). Select it for Edit the shared section, Unlink and, when the copy differs from the library, Update from the library.',
+        'Edit the shared section opens it for editing on this form. Publish saves the form and sends the section to the library and to every other form that links it: each form changes through its own save, with a History entry naming the library update. A form that is frozen, asks for a ticket link with every save or cannot take the section is skipped and listed; it shows Linked · differs until it is updated from its editor. Cancel puts the library version back.',
+        "Unlink keeps the section on the form as an ordinary copy; library changes stop reaching it. Removing a section from the library unlinks every form that uses it (they keep their copies). A linked section from another collection keeps the field mapping chosen when it was added; publishing from that form keeps the library's own step and lock conditions.",
         'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
         "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
         'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
@@ -975,6 +978,19 @@ POST   /api/collection-layouts/blocks/plan  { source: { template_id } | { layout
        → { ops, already, unmapped, dropped }   // read only; the editor applies the ops
 POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, field_map? }
        → { bundle, group_key, already, unmapped, dropped }   // applied through :id's ops
+
+# Linked sections (administrators)
+POST   /api/collection-layouts/blocks/plan  { source: { template_id }, …, linked: true }
+       → { linked_key, ops, … }                 // the dropped section's root key, unique to this placement
+GET    /api/collection-layouts/:id/section-links
+       → { data: [{ id, template_id, template_name, group_key, field_map, confirmed, in_sync, linked_forms }] }
+POST   /api/collection-layouts/:id/section-links  { template_id, group_key, field_map? }   // after the drop
+DELETE /api/collection-layouts/:id/section-links/:group_key        // Unlink: the copy stays
+POST   /api/collection-layouts/:id/section-links/:group_key/plan  { bundle? }
+       → { ops, in_sync, already, unmapped, dropped }   // read only: back to the library version
+PUT    /api/collection-layouts/templates/:id/content  { layout_id, group_key }
+       → { data: { updated: [{ layout_id, name }], unchanged, skipped: [{ layout_id, name, reason }] } }
+       // publishes the SAVED copy on layout_id, then updates every other linked form through its own ops
 
 # Usage
 POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] }

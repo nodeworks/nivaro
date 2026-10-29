@@ -38,6 +38,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_collection_layouts',
   'nivaro_layout_field_assignments',
   'nivaro_layout_templates', //        saved form templates + section library (migration 458)
+  'nivaro_layout_section_links', //    linked library sections per layout (migration 508)
   'nivaro_field_rules',
   'nivaro_attribute_definitions',
   // workflow / pipeline config
