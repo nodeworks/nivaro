@@ -571,7 +571,10 @@ export function CollectionsPage() {
     : []
 
   return (
-    <div ref={pageRef} className='flex min-h-0 flex-1 flex-col'>
+    // Grows with its content (shrink-0): the sticky toolbar only sticks inside this
+    // box, so a viewport-tall box let it scroll away and left the folder headers
+    // stuck below an empty gap.
+    <div ref={pageRef} className='flex min-h-full shrink-0 flex-col'>
       <div ref={toolbarRef} className='sticky top-0 z-10'>
         <CollectionsToolbar
           state={state}
