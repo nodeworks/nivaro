@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useNivaroClient } from '../../../context'
-import { get } from '../../../lib/commands'
+import { get, patch } from '../../../lib/commands'
 import {
   EMPTY_LINT_CONTEXT,
   type LayoutHealth,
@@ -22,7 +22,8 @@ import type { DesignTarget } from '../design-context'
 export const lintKeys = {
   context: (collection: string) => ['layout-editor', 'lint-context', collection] as const,
   health: (collection: string) => ['layout-editor', 'health', collection] as const,
-  coverage: (collection: string) => ['layout-editor', 'coverage', collection] as const
+  coverage: (collection: string) => ['layout-editor', 'coverage', collection] as const,
+  style: ['layout-editor', 'lint-style'] as const
 }
 
 function unwrap<T>(res: unknown): T | null {
@@ -42,7 +43,8 @@ export function useLintContext(collection: string, enabled = true) {
       return {
         fields: body?.fields ?? [],
         roles: body?.roles ?? [],
-        requirements: body?.requirements ?? []
+        requirements: body?.requirements ?? [],
+        style: body?.style ?? null
       }
     },
     enabled,
@@ -134,4 +136,54 @@ export function findingDesignTarget(f: LintFinding): DesignTarget | null {
   if (t.group_key === '__header__') return { kind: 'header', field: t.field }
   if (/^__.*__$/.test(t.field)) return { kind: 'slot', field: t.field, group_key: t.group_key }
   return { kind: 'field', field: t.field, group_key: t.group_key }
+}
+
+// ── Label house style (#3184) ────────────────────────────────────────────────
+
+export interface StoredLintStyle {
+  off: string[]
+  max_label_length: number | null
+  jargon: Array<{ term: string; say: string }>
+  allow_words: string[]
+}
+
+export const EMPTY_LINT_STYLE: StoredLintStyle = {
+  off: [],
+  max_label_length: null,
+  jargon: [],
+  allow_words: []
+}
+
+/** This instance's label style: GET /collection-layouts/lint-style (admin). */
+export function useLintStyle(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery<StoredLintStyle>({
+    queryKey: lintKeys.style,
+    queryFn: async () => ({
+      ...EMPTY_LINT_STYLE,
+      ...(unwrap<Partial<StoredLintStyle>>(
+        await client.request<unknown>(get('/collection-layouts/lint-style'))
+      ) ?? {})
+    }),
+    enabled,
+    staleTime: 60_000,
+    retry: false
+  })
+}
+
+/** PATCH the label style; every open lint (each collection's context) re-reads it. */
+export function useSaveLintStyle() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (next: Partial<StoredLintStyle>) =>
+      unwrap<StoredLintStyle>(
+        await client.request<unknown>(patch('/collection-layouts/lint-style', next))
+      ) ?? EMPTY_LINT_STYLE,
+    onSuccess: (saved) => {
+      qc.setQueryData(lintKeys.style, saved)
+      void qc.invalidateQueries({ queryKey: ['layout-editor', 'lint-context'] })
+      void qc.invalidateQueries({ queryKey: ['layout-editor', 'health'] })
+    }
+  })
 }

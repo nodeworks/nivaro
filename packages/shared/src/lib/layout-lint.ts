@@ -14,7 +14,10 @@
  * picker cascades whose parent field is not on the form, empty sections and
  * steps, sections and fields no record reaches, and accessibility (no label,
  * a required field without its marker, a tab order that doubles back, poor
- * contrast of a chosen colour). The health score reads the findings.
+ * contrast of a chosen colour), and label house style (#3184: sentence case,
+ * length, abbreviations, help text that only repeats the label, two fields
+ * with one label) — each style rule can be turned off (LintStyle.off). The
+ * health score reads the findings.
  */
 
 export type LintSeverity = 'error' | 'warn' | 'info'
@@ -31,6 +34,22 @@ export type LintRule =
   | 'a11y-required-no-marker'
   | 'a11y-tab-order'
   | 'a11y-contrast'
+  | 'label-sentence-case'
+  | 'label-too-long'
+  | 'label-jargon'
+  | 'help-repeats-label'
+  | 'label-duplicate'
+
+/** The house-style rules (#3184): the only ones an instance may turn off. */
+export const STYLE_RULES = [
+  'label-sentence-case',
+  'label-too-long',
+  'label-jargon',
+  'help-repeats-label',
+  'label-duplicate'
+] as const
+
+export type StyleRule = (typeof STYLE_RULES)[number]
 
 export type LintTarget =
   | { kind: 'field'; field: string; group_key: string | null }
@@ -118,6 +137,8 @@ export interface LintFieldMeta {
   col_span?: number | null
   /** Field type; 'alias' = a related-records list, which its section titles. */
   type?: string | null
+  /** The field's own help text (nivaro_fields.note). */
+  note?: string | null
 }
 
 export interface LintRole {
@@ -138,10 +159,29 @@ export interface LintRequirement {
   role_ids: string[]
 }
 
+/** One abbreviation or jargon word and the plain word house style says instead. */
+export interface JargonTerm {
+  term: string
+  say: string
+}
+
+/** Label house style (#3184), per instance. Absent = the defaults below. */
+export interface LintStyle {
+  /** Style rules turned off. */
+  off?: string[]
+  /** Longest label (characters) before label-too-long. */
+  max_label_length?: number
+  /** Extra abbreviations and jargon, on top of DEFAULT_JARGON. */
+  jargon?: JargonTerm[]
+  /** Words that keep their capital and are never jargon (names: Fusion, Oracle…). */
+  allow_words?: string[]
+}
+
 export interface LintContext {
   fields: LintFieldMeta[]
   roles: LintRole[]
   requirements: LintRequirement[]
+  style?: LintStyle | null
 }
 
 export const EMPTY_LINT_CONTEXT: LintContext = { fields: [], roles: [], requirements: [] }
@@ -364,6 +404,201 @@ export function colourContrast(colour: string): { ratio: number; mode: 'light' |
   const dark = contrastRatio(pair[1], DARK_BG)
   if (light == null || dark == null) return null
   return light <= dark ? { ratio: light, mode: 'light' } : { ratio: dark, mode: 'dark' }
+}
+
+// ── Label house style (#3184) ────────────────────────────────────────────────
+
+export const DEFAULT_MAX_LABEL_LENGTH = 40
+export const MAX_LABEL_LENGTH_RANGE = [10, 200] as const
+
+/** Abbreviations people trip over, and what to write instead. */
+export const DEFAULT_JARGON: JargonTerm[] = [
+  { term: 'qty', say: 'quantity' },
+  { term: 'amt', say: 'amount' },
+  { term: 'num', say: 'number' },
+  { term: 'no.', say: 'number' },
+  { term: 'desc', say: 'description' },
+  { term: 'addr', say: 'address' },
+  { term: 'dept', say: 'department' },
+  { term: 'mgr', say: 'manager' },
+  { term: 'acct', say: 'account' },
+  { term: 'cust', say: 'customer' },
+  { term: 'est.', say: 'estimated' },
+  { term: 'approx', say: 'approximate' },
+  { term: 'misc', say: 'other' },
+  { term: 'pct', say: 'percent' },
+  { term: 'yr', say: 'year' },
+  { term: 'ref', say: 'reference' },
+  { term: 'tel', say: 'phone' },
+  { term: 'w/o', say: 'without' },
+  { term: 'w/', say: 'with' },
+  { term: 'utilize', say: 'use' },
+  { term: 'utilise', say: 'use' }
+]
+
+/** Names that keep their capital mid-label. */
+const PROPER_WORDS = [
+  'i',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+  'january',
+  'february',
+  'march',
+  'april',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december'
+]
+
+/** Separators between words: a word after one of these is still mid-label. */
+const WORD_SPLIT = /([\s\-/()[\],&+]+)/
+const ORDINARY_CAPITALISED = /^[A-Z][a-z'’]+$/
+const ALL_LOWER = /^[a-z][a-z'’]*$/
+const SENTENCE_END = /[.:?!]\s*$/
+
+/**
+ * A label in sentence case: the first word capitalised, every later ordinary
+ * word in lower case. Acronyms (PO, ID), mixed case (iPhone, McNeil), words
+ * with digits and `allow` words keep their spelling; a word after a full stop
+ * or colon starts a new sentence.
+ */
+export function toSentenceCase(
+  label: string,
+  allow: ReadonlySet<string> = new Set(PROPER_WORDS)
+): string {
+  const parts = label.split(WORD_SPLIT)
+  let first = true
+  let before = ''
+  return parts
+    .map((part, i) => {
+      if (i % 2 === 1 || part === '') {
+        before += part
+        return part
+      }
+      const m = /^([^A-Za-z]*)([A-Za-z][A-Za-z'’]*)(.*)$/.exec(part)
+      if (!m) {
+        before += part
+        return part
+      }
+      const [, lead, word, tail] = m
+      const keep = allow.has(word.toLowerCase()) || /\d/.test(part)
+      const starts = first || SENTENCE_END.test(before)
+      first = false
+      before += part
+      if (keep) return part
+      if (starts)
+        return ALL_LOWER.test(word)
+          ? `${lead}${word[0].toUpperCase()}${word.slice(1)}${tail}`
+          : part
+      return ORDINARY_CAPITALISED.test(word) ? `${lead}${word.toLowerCase()}${tail}` : part
+    })
+    .join('')
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+}
+
+/** The jargon terms in a label, first one first; `fixed` = the label with each replaced. */
+export function findJargon(
+  label: string,
+  terms: JargonTerm[],
+  allow: ReadonlySet<string> = new Set()
+): { found: Array<{ text: string; say: string }>; fixed: string } {
+  const found: Array<{ text: string; say: string; at: number }> = []
+  const taken: Array<[number, number]> = []
+  let fixed = label
+  for (const t of terms) {
+    const term = t.term.trim()
+    if (!term || allow.has(term.toLowerCase())) continue
+    const re = new RegExp(`(?<![A-Za-z0-9])${escapeRe(term)}(?![A-Za-z0-9])`, 'gi')
+    for (const m of label.matchAll(re)) {
+      const at = m.index ?? 0
+      // A longer term already matched here ("w/o" before "w/").
+      if (taken.some(([a, b]) => at < b && at + m[0].length > a)) continue
+      taken.push([at, at + m[0].length])
+      found.push({ text: m[0], say: t.say, at })
+    }
+    fixed = fixed.replace(re, (hit) =>
+      /^[A-Z]/.test(hit) ? `${t.say.charAt(0).toUpperCase()}${t.say.slice(1)}` : t.say
+    )
+  }
+  found.sort((a, b) => a.at - b.at)
+  return { found: found.map(({ text, say }) => ({ text, say })), fixed }
+}
+
+const FILLER_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'enter',
+  'select',
+  'choose',
+  'pick',
+  'type',
+  'add',
+  'your',
+  'this',
+  'is',
+  'of',
+  'here',
+  'in',
+  'please'
+])
+
+function plainWords(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !FILLER_WORDS.has(w))
+}
+
+/** Help text that says nothing the label does not ("Enter the vendor name." under "Vendor name"). */
+export function helpRepeatsLabel(help: string, label: string): boolean {
+  const h = plainWords(help)
+  if (h.length === 0) return false
+  const l = new Set(plainWords(label))
+  return h.every((w) => l.has(w))
+}
+
+/** The style settings with every default filled in. */
+export function resolveStyle(style: LintStyle | null | undefined): {
+  off: Set<string>
+  max: number
+  jargon: JargonTerm[]
+  allow: Set<string>
+} {
+  const allow = new Set([
+    ...PROPER_WORDS,
+    ...(style?.allow_words ?? []).map((w) => String(w).trim().toLowerCase()).filter(Boolean)
+  ])
+  const own = (style?.jargon ?? []).filter(
+    (t) => t && typeof t.term === 'string' && typeof t.say === 'string' && t.term.trim()
+  )
+  const ownTerms = new Set(own.map((t) => t.term.trim().toLowerCase()))
+  const n = Number(style?.max_label_length)
+  return {
+    off: new Set((style?.off ?? []).map(String)),
+    max:
+      Number.isInteger(n) && n >= MAX_LABEL_LENGTH_RANGE[0] && n <= MAX_LABEL_LENGTH_RANGE[1]
+        ? n
+        : DEFAULT_MAX_LABEL_LENGTH,
+    // Longer terms first, so "w/o" wins over "w/".
+    jargon: [...own, ...DEFAULT_JARGON.filter((t) => !ownTerms.has(t.term))].sort(
+      (a, b) => b.term.length - a.term.length
+    ),
+    allow
+  }
 }
 
 // ── The lint ─────────────────────────────────────────────────────────────────
@@ -781,6 +1016,151 @@ export function lintLayout(raw: LintLayoutInput, ctx: LintContext): LintFinding[
         `summary/${g.key}`
       )
 
+  // Label house style (#3184): labels people see, as this form sets them.
+  const style = resolveStyle(ctx.style)
+  const styleOn = (r: StyleRule) => !style.off.has(r)
+  const styleLabel = (text: string) => text.trim() !== '' && !text.includes('{{')
+  type LabelAt = { text: string; ops: (next: string) => Array<Record<string, unknown>> }
+  const labelChecks = (
+    at: LabelAt,
+    target: LintTarget,
+    idPart: string,
+    what: string,
+    fixName: string
+  ) => {
+    const text = at.text.trim()
+    if (!styleLabel(text)) return
+    if (styleOn('label-sentence-case')) {
+      const fixed = toSentenceCase(text, style.allow)
+      if (fixed !== text)
+        out.push({
+          id: `label-sentence-case:${idPart}`,
+          rule: 'label-sentence-case',
+          severity: 'info',
+          target,
+          message: `${what} “${text}” is not in sentence case — house style is “${fixed}”.`,
+          fix: { label: `Change ${fixName} to “${fixed}”`, ops: at.ops(fixed) }
+        })
+    }
+    if (styleOn('label-too-long') && text.length > style.max)
+      out.push({
+        id: `label-too-long:${idPart}`,
+        rule: 'label-too-long',
+        severity: 'info',
+        target,
+        message: `${what} “${text}” is ${text.length} characters; house style keeps labels to ${style.max}. Move the detail into help text.`
+      })
+    if (styleOn('label-jargon')) {
+      const j = findJargon(text, style.jargon, style.allow)
+      if (j.found.length > 0) {
+        const said = j.found.map((x) => `“${x.text}” (say “${x.say}”)`)
+        out.push({
+          id: `label-jargon:${idPart}`,
+          rule: 'label-jargon',
+          severity: 'info',
+          target,
+          message: `${what} “${text}” uses ${names(said)}.`,
+          fix:
+            j.fixed !== text
+              ? { label: `Change ${fixName} to “${j.fixed}”`, ops: at.ops(j.fixed) }
+              : undefined
+        })
+      }
+    }
+  }
+
+  const seenLabels = new Map<string, string>()
+  for (const [field, ps] of byField) {
+    const visible = ps.filter((p) => shown(p) && reachable(p))
+    const p = visible[0]
+    if (!p) continue
+    const o = ov(p)
+    const target: LintTarget = { kind: 'field', field, group_key: p.group_key }
+    const at = { field, group_key: p.group_key }
+    const ownLabel = typeof o.label === 'string' && o.label !== '' ? o.label : null
+    const set: LabelAt | null =
+      o.label === ''
+        ? null
+        : ownLabel != null
+          ? {
+              text: ownLabel,
+              ops: (next) => [
+                { op: 'update_placement', at, patch: { overrides: { ...o, label: next } } }
+              ]
+            }
+          : p.label_override
+            ? {
+                text: p.label_override,
+                ops: (next) => [{ op: 'update_placement', at, patch: { label_override: next } }]
+              }
+            : meta.get(field)?.label
+              ? {
+                  text: String(meta.get(field)?.label),
+                  // The field's own label stays; this form shows the fixed one.
+                  ops: (next) => [
+                    { op: 'update_placement', at, patch: { overrides: { ...o, label: next } } }
+                  ]
+                }
+              : null
+    if (set) labelChecks(set, target, `${p.group_key ?? ''}/${field}`, 'The label', 'the label')
+
+    const shownLabel = o.label === '' ? null : (set?.text ?? label(field)).trim()
+    // Help text that only repeats the label.
+    const ownHelp = typeof o.note === 'string' && o.note.trim() !== '' ? o.note : null
+    const help = ownHelp ?? (meta.get(field)?.note || null)
+    if (styleOn('help-repeats-label') && shownLabel && help && helpRepeatsLabel(help, shownLabel)) {
+      const { note: _drop, ...rest } = o
+      out.push({
+        id: `help-repeats-label:${p.group_key ?? ''}/${field}`,
+        rule: 'help-repeats-label',
+        severity: 'info',
+        target,
+        message: `The help text of ${shownLabel} (“${help.trim()}”) only repeats the label. Say what to enter, or leave it out.`,
+        fix: ownHelp
+          ? {
+              label: `Remove the help text of ${shownLabel}`,
+              ops: [
+                {
+                  op: 'update_placement',
+                  at,
+                  patch: { overrides: Object.keys(rest).length ? rest : null }
+                }
+              ]
+            }
+          : undefined
+      })
+    }
+    // Two fields people cannot tell apart.
+    if (shownLabel && styleOn('label-duplicate')) {
+      const k = shownLabel.toLowerCase()
+      const other = seenLabels.get(k)
+      if (other && other !== field)
+        out.push({
+          id: `label-duplicate:${p.group_key ?? ''}/${field}`,
+          rule: 'label-duplicate',
+          severity: 'warn',
+          target,
+          message: `${field} and ${other} both show the label “${shownLabel}” on this form — people cannot tell them apart.`
+        })
+      else seenLabels.set(k, field)
+    }
+  }
+  for (const g of input.groups) {
+    if (g.type === 'content' || g.type === 'container' || SENTINEL_RE.test(g.key)) continue
+    if (unreachable.has(g.key)) continue
+    const kind = kindOf(g)
+    labelChecks(
+      {
+        text: g.label,
+        ops: (next) => [{ op: 'group_update', key: g.key, patch: { label: next } }]
+      },
+      { kind: 'group', key: g.key },
+      g.key,
+      `The ${kind} title`,
+      `the ${kind} title`
+    )
+  }
+
   // One finding per id (a field placed twice reports once). A finding on
   // something the parent layout supplies is fixed there, not here.
   const seen = new Set<string>()
@@ -811,6 +1191,8 @@ export interface LayoutHealth {
 
 export const HEALTH_FIELD_LIMIT = 30
 export const HEALTH_STEP_LIMIT = 7
+/** The most points label style tips take from a form, together. */
+export const STYLE_POINTS_MAX = 5
 
 /** Distinct real fields the form shows, and its steps or tabs. */
 export function layoutShape(input: LintLayoutInput): { fields: number; steps: number } {
@@ -853,7 +1235,21 @@ export function layoutHealth(input: LintLayoutInput, findings: LintFinding[]): L
       label: `${unused} ${unused === 1 ? 'field' : 'fields'} nobody sees`,
       points: Math.min(20, unused * 2)
     })
-  const rest = findings.filter((f) => f.rule !== 'unreachable-field')
+  // Label style tips (#3184) cost little together: a form with Title Case
+  // everywhere is not a broken form.
+  const styleTips = findings.filter(
+    (f) => f.rule !== 'label-duplicate' && (STYLE_RULES as readonly string[]).includes(f.rule)
+  ).length
+  if (styleTips > 0)
+    costs.push({
+      label: `${styleTips} label style ${styleTips === 1 ? 'tip' : 'tips'}`,
+      points: Math.min(STYLE_POINTS_MAX, styleTips)
+    })
+  const rest = findings.filter(
+    (f) =>
+      f.rule !== 'unreachable-field' &&
+      (f.rule === 'label-duplicate' || !(STYLE_RULES as readonly string[]).includes(f.rule))
+  )
   const count = (s: LintSeverity) => rest.filter((f) => f.severity === s).length
   const weights: Array<[LintSeverity, number, string, string]> = [
     ['error', 10, 'problem', 'problems'],

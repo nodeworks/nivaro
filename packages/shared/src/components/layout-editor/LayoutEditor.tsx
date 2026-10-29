@@ -97,6 +97,7 @@ import { FormSettings, Inspector } from './inspector-slot'
 import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
+import { useLabelStyleControls } from './lint/LabelStyle'
 import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
 import { FieldStateMatrix } from './matrix/FieldStateMatrix'
@@ -743,6 +744,8 @@ export function LayoutEditor({
   usePretendDownScope(LAYOUT_PRETEND_SCOPE)
   const pretendOptions = useMemo(() => layoutPretendDownOptions(canvasLayout), [canvasLayout])
   const lint = useLayoutLint(collection, bundle, parent)
+  // Label house style (#3184): turn a check off from a finding, or tune it.
+  const labelStyle = useLabelStyleControls(panel === 'checks')
   // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
   const { data: savedBundle } = useLayoutBundle(currentId)
   const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
@@ -1612,6 +1615,8 @@ export function LayoutEditor({
                   onSelect={(t) => setSelection([t])}
                   apply={draft.apply}
                   onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                  onTurnOff={labelStyle.onTurnOff}
+                  styleSettings={labelStyle.settings}
                 />
               ) : panel === 'settings' ? (
                 <FormSettings
