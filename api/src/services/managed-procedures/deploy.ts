@@ -372,7 +372,8 @@ export async function saveAndDeployManaged(
  * `execute: false` writes nothing and reports the actions it would take. `only` limits the run to
  * those names (case-insensitive). One failure never stops the rest. `failed` counts failures;
  * `problems` counts failures plus skips (a body that fails its header check, an empty body, an
- * import conflict, a managed row an import owns) — a chain step exits non-zero on either. Off SQL
+ * import conflict, a managed row an import owns) — only a failure makes a chain step exit non-zero;
+ * skips are reported and exit 0 (ruling R5). Off SQL
  * Server nothing runs and `unsupported` says why.
  */
 export async function deployAllAppManaged(opts: {

@@ -133,6 +133,16 @@ async function currentDefinition(f: FindingRecord): Promise<Current> {
       if (!row?.body) throw new FixError(404, 'The app-managed procedure has no stored body.')
       return { sql: row.body, kind: 'managed_procedure', procedure: row.name }
     }
+    // An import definition owns its procedure's body: a raw ALTER here would be replaced by the
+    // next app-managed deploy, so the fix belongs on the import definition's finding instead.
+    if ((f.object_schema ?? 'dbo').toLowerCase() === 'dbo') {
+      const owner = await procedureOwner(f.object_name)
+      if (owner?.kind === 'import')
+        throw new FixError(
+          409,
+          `${owner.name} is owned by import definition "${owner.key}" — fix its stored body there (Imports → Definitions), not the live procedure.`
+        )
+    }
     const sql = await liveProcedureDefinition(f.object_schema, f.object_name)
     if (!sql) throw new FixError(404, 'The procedure no longer exists.')
     return { sql, kind: 'module' }

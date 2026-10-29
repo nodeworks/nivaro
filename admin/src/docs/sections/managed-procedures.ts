@@ -135,6 +135,10 @@ export const managedProceduresDocs: DocSection = {
         ['not managed', 'Only in the database; nobody owns it yet.', 'Adopt it, or leave it alone.']
       ]
     },
+    {
+      type: 'note',
+      text: 'Where a nightly promotion replaces procedure config (staging), set `PROCEDURE_EDIT_WARNING` (for example "Procedures here are replaced every night from development. Make lasting changes on development.") to show a banner at the top of the Procedures page. Unset = no banner.'
+    },
     { type: 'h2', id: 'managed-procedures-api', text: 'API' },
     {
       type: 'p',
@@ -147,7 +151,7 @@ export const managedProceduresDocs: DocSection = {
         [
           'GET /',
           '—',
-          'Live procedures plus config-only managed rows (`live: false`), each with `managed`: `{ kind: "import", key }`, `{ kind: "managed", status, version, owner }` or null.'
+          'Live procedures plus config-only managed rows (`live: false`), each with `managed`: `{ kind: "import", key }`, `{ kind: "managed", status, version, owner }` or null. Also `warning`: the `PROCEDURE_EDIT_WARNING` text or null.'
         ],
         [
           'GET /:name',

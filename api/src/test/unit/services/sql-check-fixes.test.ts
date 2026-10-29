@@ -864,22 +864,17 @@ describe('a fix to an app-managed procedure', () => {
     expect(mp.save).not.toHaveBeenCalled()
   })
 
-  it('an import-owned procedure finding keeps the live deploy (and its import bodies)', async () => {
+  it('an import-owned procedure finding is refused (no raw ALTER over the import definition)', async () => {
     mp.owner = { kind: 'import', key: 'invoices', name: 'import_invoices' }
     live.defs = [BAD]
-    const p = await proposalFor(5)
-    expect(p.target.kind).toBe('module')
-    live.defs = [BAD]
-    lockedReads.defs = [BAD, FIXED]
+    await expect(proposalFor(5)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('invoices')
+    })
     await expect(
-      applyFix({
-        findingId: 5,
-        newDefinitionHash: p.new_definition_hash as string,
-        confirmRisky: false,
-        who
-      })
-    ).resolves.toMatchObject({ applied: true, deployed: true })
-    expect(deployed).toEqual([toCreateOrAlter(FIXED)])
+      applyFix({ findingId: 5, newDefinitionHash: 'x', confirmRisky: false, who })
+    ).rejects.toMatchObject({ status: 409 })
+    expect(deployed).toEqual([])
     expect(mp.save).not.toHaveBeenCalled()
   })
 

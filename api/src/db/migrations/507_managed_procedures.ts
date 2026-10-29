@@ -3,7 +3,7 @@ import { utcNow } from '../dialect.js'
 
 /**
  * App-managed stored procedures. A row in nivaro_managed_procedures holds the full body of one
- * dbo procedure Nivaro deploys (CREATE OR ALTER text) with ONE writer: the app's deploy, by
+ * dbo procedure Nivaro deploys (the full create-or-alter text) with ONE writer: the app's deploy, by
  * hash (body_hash = sha256 of the normalized body, services/managed-procedures/normalize.ts).
  * Every saved body also lands in nivaro_managed_procedure_versions, so undo is "deploy version
  * N". `dropped_at` marks a proc dropped in the app — the deploy step drops the live proc, and
@@ -22,7 +22,7 @@ export async function up(knex: Knex): Promise<void> {
       t.increments('id')
       /** The dbo procedure name (^[A-Za-z_][A-Za-z0-9_]*$). */
       t.string('name', 128).notNullable().unique()
-      /** The full CREATE OR ALTER PROCEDURE text. */
+      /** The full procedure text (create-or-alter form). */
       t.text('body').notNullable()
       /** sha256 hex of the normalized body. */
       t.string('body_hash', 64).notNullable()

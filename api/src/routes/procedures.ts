@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -455,7 +456,7 @@ export async function procedureRoutes(app: FastifyInstance) {
       })
     }
     data.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
-    return reply.send({ data })
+    return reply.send({ data, warning: config.PROCEDURE_EDIT_WARNING ?? null })
   })
 
   // ── Read one: live definition + catalog-parsed parameters + config ───────

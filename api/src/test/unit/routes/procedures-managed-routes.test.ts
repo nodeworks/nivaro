@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { config } from '../../../config.js'
 
 // The Procedures page through config: every write is a managed version, then a deploy.
 
@@ -679,6 +680,11 @@ describe('reads', () => {
 
     const res = await app.inject({ method: 'GET', url: '/procedures' })
     expect(res.statusCode).toBe(200)
+    expect(res.json().warning).toBeNull()
+    ;(config as { PROCEDURE_EDIT_WARNING?: string }).PROCEDURE_EDIT_WARNING = 'Replaced nightly'
+    const warned = await app.inject({ method: 'GET', url: '/procedures' })
+    expect(warned.json().warning).toBe('Replaced nightly')
+    ;(config as { PROCEDURE_EDIT_WARNING?: string }).PROCEDURE_EDIT_WARNING = undefined
     const rows = res.json().data as Array<Record<string, any>>
     expect(rows.map((r) => r.name)).toEqual([
       'drifty',

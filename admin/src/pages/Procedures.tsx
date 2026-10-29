@@ -1,6 +1,7 @@
 import { useOverflowTip, useUnsavedWork } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   Copy,
@@ -71,6 +72,8 @@ function paramInputType(sqlType: string): 'number' | 'date' | 'text' {
   return 'text'
 }
 
+const EMPTY_PROCS: ProcRow[] = []
+
 export function ProceduresPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
@@ -81,14 +84,19 @@ export function ProceduresPage() {
   const [newName, setNewName] = useState('')
 
   const {
-    data: procs = [],
+    data: listData,
     isLoading,
     isError,
     refetch
-  } = useQuery<ProcRow[]>({
+  } = useQuery<{ data: ProcRow[]; warning: string | null }>({
     queryKey: procKeys.list,
-    queryFn: () => api.get<{ data: ProcRow[] }>('/procedures').then((r) => r.data.data)
+    queryFn: () =>
+      api
+        .get<{ data: ProcRow[]; warning?: string | null }>('/procedures')
+        .then((r) => ({ data: r.data.data, warning: r.data.warning ?? null }))
   })
+  const procs = listData?.data ?? EMPTY_PROCS
+  const warning = listData?.warning ?? null
 
   const q = search.trim().toLowerCase()
   const filtered = q ? procs.filter((p) => p.name.toLowerCase().includes(q)) : procs
@@ -152,6 +160,15 @@ export function ProceduresPage() {
           </Button>
         </div>
       </header>
+      {warning && (
+        <div
+          role='status'
+          className='flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-900 sm:px-6 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
+        >
+          <AlertTriangle aria-hidden className='mt-0.5 h-3.5 w-3.5 shrink-0' />
+          <p>{warning}</p>
+        </div>
+      )}
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside
           aria-label='Procedures'
