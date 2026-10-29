@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-29T19:39:45.327Z",
+  "generated_at": "2026-10-29T20:49:49.166Z",
   "releases": [
+    {
+      "version": "0.3.55",
+      "tag": "v0.3.55",
+      "date": "2026-10-29T16:49:36-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "collections",
+              "text": "one page — Data Model folds into Collections",
+              "hash": "c55733ce9"
+            },
+            {
+              "section": "Added",
+              "scope": "collections",
+              "text": "findable Collections page",
+              "hash": "4f75dcfad"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "pickers",
+              "text": "one wording — Hide from pickers / Show in pickers",
+              "hash": "6d415c525"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.54",
       "tag": "v0.3.54",
-      "date": "2026-10-29T15:39:30-04:00",
+      "date": "2026-10-29T15:39:45-04:00",
       "sections": [
         {
           "label": "Added",
