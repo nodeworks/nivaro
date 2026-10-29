@@ -3,6 +3,7 @@ import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -525,9 +526,13 @@ export function CustomQueryEditPage() {
               {isNew ? 'New Query' : (data?.name ?? 'Query')}
             </span>
           </div>
-          <Button size='sm' onClick={handleSave} disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : 'Save'}
-          </Button>
+          <div className='flex items-center gap-2'>
+            {/* #12 — every recorded change to this query. */}
+            {!isNew && id && <ConfigHistoryButton collection='nivaro_custom_queries' item={id} />}
+            <Button size='sm' onClick={handleSave} disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
         </div>
       </div>
 

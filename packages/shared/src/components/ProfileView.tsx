@@ -37,6 +37,7 @@ import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { AgentsPanel } from './profile/AgentsPanel'
+import { PersonDidPanel } from './profile/PersonDidPanel'
 import { AiHistoryCard, AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
@@ -1640,7 +1641,7 @@ export function ProfileView({
   userId?: string | null
   className?: string
   /** Which tab an admin lands on for someone else's page. */
-  initialTab?: 'overview' | 'access' | 'activity' | 'tools'
+  initialTab?: 'overview' | 'access' | 'activity' | 'did' | 'tools'
   /** Host-only cards for the OWN profile (a browser-push card, say), rendered in the right column. */
   extra?: React.ReactNode
   /** Service worker the Browser notifications card registers (same origin); false hides the card. */
@@ -1903,6 +1904,9 @@ function OwnProfile({
       <OwnProfileTabs tab={tab} onChange={setTab} />
       {tab === 'agents' ? (
         <AgentsPanel />
+      ) : tab === 'did' && me ? (
+        // #13 — your own audit trail, by day and collection.
+        <PersonDidPanel userId={String(me.id)} name={null} />
       ) : isOwn && me ? (
         // One list in reading order — you, then notifications, then access
         // and security — flowing into two balanced columns. Two fixed stacks
@@ -2020,13 +2024,12 @@ function OwnProfile({
 }
 
 // ─── Own-profile tabs (#2498) ────────────────────────────────────────────────
-type OwnProfileTab = 'profile' | 'agents'
+type OwnProfileTab = 'profile' | 'agents' | 'did'
 
 function readOwnProfileTab(): OwnProfileTab {
   try {
-    return new URLSearchParams(window.location.search).get('tab') === 'agents'
-      ? 'agents'
-      : 'profile'
+    const t = new URLSearchParams(window.location.search).get('tab')
+    return t === 'agents' || t === 'did' ? t : 'profile'
   } catch {
     return 'profile'
   }
@@ -2044,7 +2047,7 @@ function OwnProfileTabs({
     // Keep the address shareable without a router dependency in the shared package.
     try {
       const url = new URL(window.location.href)
-      if (t === 'agents') url.searchParams.set('tab', 'agents')
+      if (t !== 'profile') url.searchParams.set('tab', t)
       else url.searchParams.delete('tab')
       window.history.replaceState(window.history.state, '', url)
     } catch {
@@ -2053,7 +2056,8 @@ function OwnProfileTabs({
   }
   const items: Array<[OwnProfileTab, string]> = [
     ['profile', 'Profile'],
-    ['agents', 'What my agents did']
+    ['agents', 'What my agents did'],
+    ['did', 'What I did']
   ]
   return (
     <div

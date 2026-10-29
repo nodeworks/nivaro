@@ -1,7 +1,16 @@
 import { AgentBadge } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
+import {
+  ActivityFilterChips,
+  type ActivityFilters,
+  ActivitySearchBox,
+  activityParams,
+  cleanFilters,
+  type PersonCandidate
+} from '@/components/activity/activity-search'
+import { SavedViewsMenu } from '@/components/activity/saved-views'
 import { HubToolbar } from '@/components/hub-page'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -24,7 +33,7 @@ import {
 } from '@/components/ui/table'
 import { api, type CMSField, type Collection } from '@/lib/api'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
-import { formatDateTime, formatNumber, titleCase } from '@/lib/utils'
+import { formatDate, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
 type ActivityRow = {
   id: number
@@ -128,11 +137,47 @@ function ItemLabel({
   )
 }
 
+function filtersFromUrl(p: URLSearchParams): ActivityFilters {
+  const list = (k: string) =>
+    p
+      .getAll(k)
+      .flatMap((v) => v.split(','))
+      .map((v) => v.trim())
+      .filter(Boolean)
+  return cleanFilters({
+    user: p.get('user'),
+    actions: list('action'),
+    collections: list('collection'),
+    item: p.get('item'),
+    range: p.get('range'),
+    from: p.get('from'),
+    to: p.get('to'),
+    q: p.get('q')
+  })
+}
+
 export function ActivityPage() {
   const navigate = useNavigate()
-  const [collection, setCollection] = useState('')
-  const [action, setAction] = useState('')
+  // #10/#11 — one filter set, from the controls, the search box or a saved view.
+  // Deep links (`/activity?collection=&item=` from a config screen's History) open filtered.
+  const [searchParams] = useSearchParams()
+  const [filters, setFiltersState] = useState<ActivityFilters>(() => filtersFromUrl(searchParams))
+  const [userLabel, setUserLabel] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<PersonCandidate[] | undefined>()
+  const [searchNote, setSearchNote] = useState<string | null>(null)
+  const [activeViewId, setActiveViewId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
+  const setFilters = (next: ActivityFilters, meta?: { userLabel?: string | null }) => {
+    const clean = cleanFilters(next)
+    if (clean.user !== filters.user || meta?.userLabel !== undefined) {
+      setUserLabel(meta?.userLabel ?? null)
+      if (clean.user !== filters.user) setCandidates(undefined)
+    }
+    setFiltersState(clean)
+    setPage(1)
+  }
+  const collection = filters.collections?.length === 1 ? filters.collections[0] : ''
+  const action = filters.actions?.length === 1 ? filters.actions[0] : ''
   const limit = 25
 
   const { data: collectionsData } = useQuery({
@@ -146,16 +191,11 @@ export function ActivityPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['activity', collection, action, page],
+    queryKey: ['activity', filters, page],
     queryFn: () =>
       api
         .get('/activity', {
-          params: {
-            collection: collection || undefined,
-            action: action || undefined,
-            limit,
-            offset: (page - 1) * limit
-          }
+          params: { ...activityParams(filters), limit, offset: (page - 1) * limit }
         })
         .then((r) => r.data)
   })
@@ -164,10 +204,9 @@ export function ActivityPage() {
   const total: number = data?.total ?? 0
   const totalPages = Math.ceil(total / limit)
 
-  const changeFilter = (setter: (v: string) => void) => (v: string) => {
-    setter(v === '__all__' ? '' : v)
-    setPage(1)
-  }
+  const changeFilter = (key: 'collections' | 'actions') => (v: string) =>
+    setFilters({ ...filters, [key]: v === '__all__' ? [] : [v] })
+  const windowFrom: string | null = data?.window_from ?? null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -175,7 +214,20 @@ export function ActivityPage() {
         description='Every create, update, delete and workflow move, newest first. Open a row for its full detail and what changed.'
         actions={
           <>
-            <Select value={collection || '__all__'} onValueChange={changeFilter(setCollection)}>
+            <ActivitySearchBox
+              onParsed={(r) => {
+                setActiveViewId(null)
+                setFilters(r.filters, { userLabel: r.user_label ?? null })
+                setCandidates(r.person_candidates)
+                setSearchNote(
+                  r.note ??
+                    (r.unmatched_person
+                      ? `No one named “${r.unmatched_person}” — searching the words.`
+                      : null)
+                )
+              }}
+            />
+            <Select value={collection || '__all__'} onValueChange={changeFilter('collections')}>
               <SelectTrigger className='h-8 w-52 text-[12px]' aria-label='Collection'>
                 <SelectValue placeholder='All Collections' />
               </SelectTrigger>
@@ -191,7 +243,7 @@ export function ActivityPage() {
               </SelectContent>
             </Select>
 
-            <Select value={action || '__all__'} onValueChange={changeFilter(setAction)}>
+            <Select value={action || '__all__'} onValueChange={changeFilter('actions')}>
               <SelectTrigger className='h-8 w-40 text-[12px]' aria-label='Action'>
                 <SelectValue placeholder='All Actions' />
               </SelectTrigger>
@@ -204,9 +256,35 @@ export function ActivityPage() {
                 ))}
               </SelectContent>
             </Select>
+            <SavedViewsMenu
+              filters={filters}
+              activeId={activeViewId}
+              onApply={(v) => {
+                setActiveViewId(v?.id ?? null)
+                setSearchNote(null)
+                setFilters(v ? v.filters : {})
+              }}
+            />
           </>
         }
-      />
+      >
+        <div className='mt-2 empty:hidden'>
+          <ActivityFilterChips
+            filters={filters}
+            onChange={(next, meta) => {
+              setSearchNote(null)
+              setFilters(next, meta)
+            }}
+            userLabel={userLabel}
+            candidates={candidates}
+            collectionLabel={(c) => collectionLabel(c, collectionsData ?? [])}
+            note={
+              searchNote ??
+              (windowFrom ? `Text search reads back to ${formatDate(windowFrom)}.` : null)
+            }
+          />
+        </div>
+      </HubToolbar>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <Card>
@@ -283,7 +361,9 @@ export function ActivityPage() {
                   {rows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className='text-center text-muted-foreground py-12'>
-                        No activity recorded yet.
+                        {Object.keys(filters).length
+                          ? 'Nothing matches these filters.'
+                          : 'No activity recorded yet.'}
                       </TableCell>
                     </TableRow>
                   )}

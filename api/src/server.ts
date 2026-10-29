@@ -998,6 +998,9 @@ export async function buildServer() {
       void import('./services/row-schedules.js').then(async (m) => {
         await m.resyncSchedules(app, 'retention')
         await m.resyncSchedules(app, 'scheduled-reports')
+        // #11 — saved audit views with a schedule (the module registers its resync on import).
+        await import('./services/activity-views.js')
+        await m.resyncSchedules(app, 'activity-views')
       })
 
       // ── Report Studio — hourly alert checks + daily/weekly subscription mail ──

@@ -3,6 +3,7 @@ import { ArrowLeft, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, Zap } from '
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { ExplainButton } from '@/components/explain-button'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -320,9 +321,13 @@ export function WebhookEditPage() {
               {isNew ? 'New Webhook' : (data?.name ?? 'Webhook')}
             </span>
           </div>
-          <Button size='sm' onClick={handleSave} disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : 'Save'}
-          </Button>
+          <div className='flex items-center gap-2'>
+            {/* #12 — every recorded change to this webhook. */}
+            {!isNew && id && <ConfigHistoryButton collection='nivaro_webhooks' item={id} />}
+            <Button size='sm' onClick={handleSave} disabled={save.isPending}>
+              {save.isPending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
         </div>
       </div>
 

@@ -43,6 +43,7 @@ import {
   YAxis
 } from 'recharts'
 import { toast } from 'sonner'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { DashboardLinkPopover } from '@/components/dashboard-link-popover'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1393,6 +1394,12 @@ export function DashboardEditPage() {
               <PretendDownButton scope={PRETEND_SCOPE} options={pretendOptions} user={user} />
             )}
             <DashboardLinkPopover dashboardId={data.id} />
+            {/* #12 — every recorded change to this dashboard. */}
+            <ConfigHistoryButton
+              collection='nivaro_dashboards'
+              item={data.id}
+              title={`History · ${data.name}`}
+            />
             <Button
               size='sm'
               variant='outline'

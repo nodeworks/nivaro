@@ -20,7 +20,7 @@ import { useGoBack } from '@/lib/nav'
 // adds the admin chrome — breadcrumb, back, revision history.
 const client = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
-const TABS = new Set(['overview', 'access', 'activity', 'tools'])
+const TABS = new Set(['overview', 'access', 'activity', 'did', 'tools'])
 
 function Crumb({ id }: { id: string }) {
   const { data } = usePersonProfile(id)

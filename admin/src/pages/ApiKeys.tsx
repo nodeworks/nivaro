@@ -3,6 +3,7 @@ import { BarChart3, Check, ChevronsUpDown, Copy, KeyRound, Plus, Trash2, X } fro
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { ApiKeyUsageSheet } from '@/components/api-key-usage-sheet'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -673,6 +674,13 @@ export function ApiKeysPage() {
                     <BarChart3 className='h-3.5 w-3.5' />
                     Usage
                   </Button>
+                  {/* #12 — every recorded change to this key. */}
+                  <ConfigHistoryButton
+                    collection='nivaro_api_keys'
+                    item={selected.id}
+                    title={`History · ${selected.name}`}
+                    className='h-7'
+                  />
                   {selected.is_active ? (
                     <Badge variant='success' className='h-5 px-2 text-[11px]'>
                       Active

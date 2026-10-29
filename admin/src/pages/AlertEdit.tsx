@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
 import { CollectionFieldPicker } from '@nivaro/shared'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -249,6 +250,14 @@ export function AlertEditPage() {
             Configure threshold conditions and notification settings
           </p>
         </div>
+        {/* #12 — every recorded change to this alert. */}
+        {!isNew && id && (
+          <ConfigHistoryButton
+            collection='nivaro_alert_definitions'
+            item={id}
+            className='ml-auto'
+          />
+        )}
       </div>
 
       {/* Form */}

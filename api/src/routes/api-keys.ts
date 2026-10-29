@@ -138,7 +138,15 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     })
 
     const row = await db('nivaro_api_keys').where({ key_hash: keyHash }).first()
-    await logActivity({ action: 'api_key_created', user: req.user?.id, req })
+    // #12 — named, so the key's History and the audit views find it.
+    await logActivity({
+      action: 'api_key_created',
+      user: req.user?.id,
+      collection: 'nivaro_api_keys',
+      item: row?.id != null ? String(row.id) : undefined,
+      comment: row?.name ? `${row.name} (${row.prefix ?? ''}…)` : undefined,
+      req
+    })
 
     return reply.code(201).send({ data: { ...sanitize(row), key } })
   })
@@ -263,7 +271,14 @@ export async function apiKeysRoutes(app: FastifyInstance) {
 
     await db('nivaro_api_keys').where({ id }).update({ is_active: false })
     bumpUserAccessVersion(existing.user)
-    await logActivity({ action: 'api_key_revoked', user: req.user?.id, req })
+    await logActivity({
+      action: 'api_key_revoked',
+      user: req.user?.id,
+      collection: 'nivaro_api_keys',
+      item: String(id),
+      comment: existing.name ? `${existing.name} (${existing.prefix ?? ''}…)` : undefined,
+      req
+    })
 
     const row = await db('nivaro_api_keys').where({ id }).first()
     return reply.send({ data: sanitize(row) })
@@ -287,6 +302,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'api_key_simulate',
       user: req.user?.id,
+      collection: 'nivaro_api_keys',
+      item: String(id),
       comment: `${key.name} (${key.prefix}…)`,
       req
     })
@@ -302,7 +319,13 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     const deleted = await db('nivaro_api_keys').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'API key not found' })
     bumpUserAccessVersion(owner?.user)
-    await logActivity({ action: 'api_key_deleted', user: req.user?.id, req })
+    await logActivity({
+      action: 'api_key_deleted',
+      user: req.user?.id,
+      collection: 'nivaro_api_keys',
+      item: String(id),
+      req
+    })
     return reply.send({ ok: true })
   })
 }
