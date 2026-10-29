@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Bot,
   Check,
   CheckSquare,
   ChevronsUpDown,
@@ -74,6 +75,9 @@ interface Task {
   description: string | null
   assignee: string | null
   assignee_name: string | null
+  /** #3223 — handed to an agent connection acting for the assignee. */
+  agent_assignee?: string | null
+  agent_name?: string | null
   team_id?: number | null
   team_name?: string | null
   due_date: string | null
@@ -723,7 +727,21 @@ export function TasksPage() {
                         )}
                       </TableCell>
                       <TableCell className='text-sm text-muted-foreground'>
-                        {task.assignee_name ??
+                        {task.agent_assignee ? (
+                          <span
+                            className='inline-flex items-center gap-1'
+                            data-tip={`${task.agent_name ?? 'An agent'} picks this up for ${task.assignee_name ?? 'its person'}`}
+                          >
+                            <Bot className='h-3.5 w-3.5 text-[#0e7490] dark:text-[#67e8f9]' />
+                            <span className='text-slate-800 dark:text-foreground'>
+                              {task.agent_name ?? 'Agent'}
+                            </span>
+                            {task.assignee_name && (
+                              <span className='text-xs'>for {task.assignee_name}</span>
+                            )}
+                          </span>
+                        ) : (
+                          (task.assignee_name ??
                           (task.team_name ? (
                             <span className='inline-flex items-center gap-1'>
                               <Users className='h-3.5 w-3.5' />
@@ -731,7 +749,8 @@ export function TasksPage() {
                             </span>
                           ) : (
                             '—'
-                          ))}
+                          )))
+                        )}
                       </TableCell>
                       <TableCell
                         className={cn(

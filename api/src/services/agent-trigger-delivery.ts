@@ -12,6 +12,7 @@ import {
   triggerStates,
   triggersFor
 } from './agent-triggers.js'
+import { tenantState } from './ai-tenant-state.js'
 import { signWebhookBody } from './webhook-signature.js'
 
 /**
@@ -556,6 +557,31 @@ export async function sendTestWakeUp(trigger: AgentTriggerRow): Promise<Delivery
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 /**
+ * Loop guard: a woken agent that writes the record back would wake itself again. One trigger
+ * wakes for one record at most BURST_MAX times in BURST_WINDOW_MS (per process, per tenant);
+ * past that the event is logged as skipped, with the reason.
+ */
+export const BURST_MAX = 5
+export const BURST_WINDOW_MS = 10 * 60_000
+const bursts = tenantState(() => new Map<string, number[]>())
+
+export function overBurst(triggerId: number, item: string, now = Date.now()): boolean {
+  const map = bursts()
+  const key = `${triggerId}\u0000${item}`
+  const recent = (map.get(key) ?? []).filter((t) => now - t < BURST_WINDOW_MS)
+  if (recent.length >= BURST_MAX) {
+    map.set(key, recent)
+    return true
+  }
+  recent.push(now)
+  map.set(key, recent)
+  if (map.size > 5000) {
+    for (const [k, times] of map) if (!times.some((t) => now - t < BURST_WINDOW_MS)) map.delete(k)
+  }
+  return false
+}
+
+/**
  * A record event: every enabled trigger it matches is woken. Never throws, never blocks the
  * write that caused it (callers fire-and-forget; the work runs on the background pool).
  */
@@ -568,6 +594,20 @@ export async function fireAgentTriggers(ev: AgentEvent): Promise<number> {
     for (const t of triggers) {
       try {
         if (!(await eventMatches(t, ev))) continue
+        if (overBurst(t.id, ev.item)) {
+          await insertDelivery({
+            trigger_id: t.id,
+            delivery_key: randomUUID(),
+            event: ev.event,
+            collection: ev.collection,
+            item: ev.item,
+            max_attempts: t.max_attempts || 1,
+            status: 'skipped',
+            attempts: 0,
+            last_error: `Woken ${BURST_MAX} times for this record in ${BURST_WINDOW_MS / 60_000} minutes; paused to stop a loop`
+          })
+          continue
+        }
         await queueWakeUp(t, ev)
         fired++
       } catch (err) {

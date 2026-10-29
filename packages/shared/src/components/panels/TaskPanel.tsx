@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Bot,
   Check,
   ChevronDown,
   ChevronsUpDown,
@@ -60,6 +61,17 @@ interface Task {
   completed_by?: string | null
   completed_by_name?: string | null
   done_when?: string | null
+  /** #3223 — the agent connection it is handed to; assignee = the person it acts for. */
+  agent_assignee?: string | null
+  agent_name?: string | null
+}
+
+interface TaskAgent {
+  conn: string
+  kind: 'oauth' | 'api_key'
+  name: string
+  user_id: string
+  user_name: string | null
 }
 
 interface Person {
@@ -297,6 +309,46 @@ function AssigneePicker({
   )
 }
 
+/** Agent connections the viewer may hand a task to (#3223): their own apps and API keys. */
+function useTaskAgents(enabled: boolean) {
+  const client = useNivaroClient()
+  return useQuery<TaskAgent[]>({
+    queryKey: ['task-agents'],
+    queryFn: () =>
+      client
+        .request<{ data: TaskAgent[] }>(get('/tasks/agents'))
+        .then((r) => r.data ?? [])
+        .catch(() => []),
+    enabled,
+    staleTime: 5 * 60_000
+  })
+}
+
+function AgentPicker({
+  agents,
+  value,
+  onChange
+}: {
+  agents: TaskAgent[]
+  value: string | null
+  onChange: (agent: TaskAgent | null) => void
+}) {
+  return (
+    <SimpleSelect
+      value={value ?? ''}
+      onChange={(v) => onChange(agents.find((a) => a.conn === v) ?? null)}
+      ariaLabel='Agent'
+      options={[
+        { value: '', label: agents.length ? 'Choose an agent…' : 'No agents connected' },
+        ...agents.map((a) => ({
+          value: a.conn,
+          label: `${a.name}${a.kind === 'api_key' ? ' · API key' : ''}`
+        }))
+      ]}
+    />
+  )
+}
+
 function TeamPicker({
   value,
   onChange
@@ -461,7 +513,9 @@ function DoneWhenEditor({
 interface Draft {
   title: string
   description: string
-  mode: 'person' | 'team'
+  mode: 'person' | 'team' | 'agent'
+  agent: string | null
+  agentName: string | null
   assignee: string | null
   assigneeName: string | null
   assigneePerson: Person | null
@@ -476,6 +530,8 @@ const emptyDraft = (): Draft => ({
   title: '',
   description: '',
   mode: 'person',
+  agent: null,
+  agentName: null,
   assignee: null,
   assigneeName: null,
   assigneePerson: null,
@@ -490,7 +546,9 @@ function draftFrom(t: Task): Draft {
   return {
     title: t.title,
     description: t.description ?? '',
-    mode: t.assignee || t.team_id == null ? 'person' : 'team',
+    mode: t.agent_assignee ? 'agent' : t.assignee || t.team_id == null ? 'person' : 'team',
+    agent: t.agent_assignee ?? null,
+    agentName: t.agent_name ?? null,
     assignee: t.assignee,
     assigneeName: t.assignee_name ?? null,
     assigneePerson: null,
@@ -509,6 +567,7 @@ function TaskForm({
   submitLabel,
   busy,
   allowTeam,
+  allowAgent = false,
   onSubmit,
   onCancel
 }: {
@@ -518,12 +577,16 @@ function TaskForm({
   submitLabel: string
   busy?: boolean
   allowTeam: boolean
+  /** #3223 — offer "Hand to an agent" (only for a saved record: a queued task has no agent). */
+  allowAgent?: boolean
   onSubmit: (d: Draft) => void
   onCancel: () => void
 }) {
   const [d, setD] = useState<Draft>(initial)
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((p) => ({ ...p, [k]: v }))
-  const who = d.mode === 'team' ? d.teamId != null : !!d.assignee
+  const agents = useTaskAgents(allowAgent).data ?? []
+  const canAgent = allowAgent && (agents.length > 0 || d.mode === 'agent')
+  const who = d.mode === 'team' ? d.teamId != null : d.mode === 'agent' ? !!d.agent : !!d.assignee
   const ooo = d.mode === 'person' && d.assigneePerson?.is_out_of_office ? d.assigneePerson : null
   return (
     <div
@@ -554,20 +617,37 @@ function TaskForm({
       </div>
       <div className='grid grid-cols-2 gap-3'>
         <div className='col-span-2 sm:col-span-1'>
-          <div className='mb-1 flex items-center justify-between'>
-            <Label className='text-[11px]'>{d.mode === 'team' ? 'Team' : 'Assignee'}</Label>
-            {allowTeam && (
-              <button
-                type='button'
-                data-task-mode={d.mode === 'team' ? 'person' : 'team'}
-                onClick={() => set('mode', d.mode === 'team' ? 'person' : 'team')}
-                className='text-[10.5px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              >
-                {d.mode === 'team' ? 'Assign to a person' : 'Assign to a team'}
-              </button>
-            )}
+          <div className='mb-1 flex items-center justify-between gap-2'>
+            <Label className='text-[11px]'>
+              {d.mode === 'team' ? 'Team' : d.mode === 'agent' ? 'Agent' : 'Assignee'}
+            </Label>
+            <span className='flex items-center gap-2'>
+              {(['person', 'team', 'agent'] as const)
+                .filter(
+                  (m) => m !== d.mode && (m !== 'team' || allowTeam) && (m !== 'agent' || canAgent)
+                )
+                .map((m) => (
+                  <button
+                    key={m}
+                    type='button'
+                    data-task-mode={m}
+                    onClick={() => set('mode', m)}
+                    className='text-[10.5px] text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                  >
+                    {m === 'person' ? 'A person' : m === 'team' ? 'A team' : 'An agent'}
+                  </button>
+                ))}
+            </span>
           </div>
-          {d.mode === 'team' ? (
+          {d.mode === 'agent' ? (
+            <AgentPicker
+              agents={agents}
+              value={d.agent}
+              onChange={(a) =>
+                setD((p) => ({ ...p, agent: a?.conn ?? null, agentName: a?.name ?? null }))
+              }
+            />
+          ) : d.mode === 'team' ? (
             <TeamPicker
               value={d.teamId}
               onChange={(id, t) => setD((p) => ({ ...p, teamId: id, teamName: t?.name ?? null }))}
@@ -598,6 +678,11 @@ function TaskForm({
           {d.mode === 'team' && (
             <p className='mt-1 text-[11px] text-muted-foreground'>
               Waits with the team until one of them picks it up.
+            </p>
+          )}
+          {d.mode === 'agent' && (
+            <p className='mt-1 text-[11px] text-muted-foreground'>
+              The assistant picks it up through My Work and acts as the person it is connected for.
             </p>
           )}
         </div>
@@ -748,6 +833,7 @@ export function TaskPanel({
     description: d.description.trim() || null,
     assignee: d.mode === 'person' ? d.assignee : null,
     team_id: d.mode === 'team' ? d.teamId : null,
+    ...(d.mode === 'agent' && d.agent ? { agent: d.agent } : {}),
     due_date: d.due || null,
     priority: d.priority,
     done_when: d.doneWhen.length ? d.doneWhen : null
@@ -834,7 +920,16 @@ export function TaskPanel({
     return (
       <div className='mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-400'>
         <PriorityPill priority={t.priority} />
-        {t.assignee ? (
+        {t.agent_assignee ? (
+          <span
+            className='inline-flex items-center gap-1 text-[#0e7490] dark:text-[#67e8f9]'
+            data-task-agent={t.agent_assignee}
+          >
+            <Bot className='h-3 w-3' aria-hidden />
+            {t.agent_name ?? 'An agent'}
+            {t.assignee_name && <span className='text-slate-400'>for {t.assignee_name}</span>}
+          </span>
+        ) : t.assignee ? (
           <span>{t.assignee_name ?? 'Someone'}</span>
         ) : t.team_id != null ? (
           <span className='inline-flex items-center gap-1'>
@@ -1051,6 +1146,7 @@ export function TaskPanel({
                             submitLabel='Save changes'
                             busy={updateMut.isPending}
                             allowTeam={false}
+                            allowAgent
                             onCancel={() => setEditing(null)}
                             onSubmit={(d) => {
                               const b = bodyOf(d)
@@ -1061,8 +1157,13 @@ export function TaskPanel({
                                 priority: b.priority,
                                 done_when: b.done_when
                               }
-                              if (d.mode === 'person' && !same(d.assignee, t.assignee))
-                                body.assignee = d.assignee
+                              if (d.mode === 'agent') {
+                                if (d.agent && d.agent !== t.agent_assignee) body.agent = d.agent
+                              } else if (d.mode === 'person') {
+                                if (!same(d.assignee, t.assignee)) body.assignee = d.assignee
+                                // Back from the agent to the person (or to someone else).
+                                else if (t.agent_assignee) body.agent = null
+                              }
                               updateMut.mutate({ id: t.id, body })
                             }}
                           />
@@ -1098,6 +1199,7 @@ export function TaskPanel({
                 submitLabel={isNew ? 'Queue task' : 'Create task'}
                 busy={createMut.isPending}
                 allowTeam
+                allowAgent={!isNew}
                 onCancel={() => setAdding(false)}
                 onSubmit={(d) => (isNew ? handleQueue(d) : createMut.mutate(d))}
               />

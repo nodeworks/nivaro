@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentEvent, DeliveryRow } from '../../../services/agent-trigger-delivery.js'
+import type { AgentTriggerRow } from '../../../services/agent-triggers.js'
 import type { FakeQuery } from '../../fake-sql.js'
 
 // Agent triggers (#3210): config validation + masking, the signed send, the retry ladder,
@@ -49,7 +51,7 @@ const delivery = await import('../../../services/agent-trigger-delivery.js')
 const { verifyWebhookSignature } = await import('../../../services/webhook-signature.js')
 const { MASK } = await import('../../../services/secret-mask.js')
 
-const row = (over: Partial<triggers.AgentTriggerRow> = {}): triggers.AgentTriggerRow => ({
+const row = (over: Partial<AgentTriggerRow> = {}): AgentTriggerRow => ({
   id: 3,
   name: 'Review new POs',
   description: null,
@@ -211,7 +213,7 @@ describe('retry ladder', () => {
     expect(delivery.retryable(401)).toBe(false)
   })
 
-  const claimed = (over: Partial<delivery.DeliveryRow> = {}): delivery.DeliveryRow => ({
+  const claimed = (over: Partial<DeliveryRow> = {}): DeliveryRow => ({
     id: 11,
     trigger_id: 3,
     delivery_key: 'K11',
@@ -262,7 +264,7 @@ describe('retry ladder', () => {
 })
 
 describe('matching and context', () => {
-  const ev = (over: Partial<delivery.AgentEvent> = {}): delivery.AgentEvent => ({
+  const ev = (over: Partial<AgentEvent> = {}): AgentEvent => ({
     collection: 'purchase_orders',
     item: '5',
     event: 'transition',
@@ -314,5 +316,17 @@ describe('matching and context', () => {
     const insert = sql.ran.find((q) => q.method === 'insert')!
     expect(insert.sql).toContain('nivaro_agent_trigger_deliveries')
     expect(insert.bindings).toContain('skipped')
+  })
+})
+
+describe('loop guard', () => {
+  it('pauses a trigger that keeps waking for the same record', () => {
+    const t0 = 1_000_000
+    for (let i = 0; i < delivery.BURST_MAX; i++)
+      expect(delivery.overBurst(99, 'r1', t0 + i)).toBe(false)
+    expect(delivery.overBurst(99, 'r1', t0 + 10)).toBe(true)
+    // Another record, and the same one after the window, are fine.
+    expect(delivery.overBurst(99, 'r2', t0 + 10)).toBe(false)
+    expect(delivery.overBurst(99, 'r1', t0 + delivery.BURST_WINDOW_MS + 20)).toBe(false)
   })
 })
