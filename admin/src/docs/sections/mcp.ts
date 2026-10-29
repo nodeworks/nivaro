@@ -58,7 +58,8 @@ export const mcpDocs: DocSection = {
       type: 'ul',
       items: [
         'Learn the data model (collections, fields, relations) and read, filter and total records.',
-        'Create, update and delete records — creates rehearse first unless told to store, deletes need an explicit confirm — and move records through their pipeline.',
+        'Create, update and delete records — creates rehearse first unless told to store, an update can be previewed (`dry_run: true`) before it is saved, deletes need an explicit confirm — and move records through their pipeline.',
+        'Check a filter before using it (`build_filter`), compare two records or a record with one of its revisions (`compare_records`), and follow what changed since the last look (`changes_since`). See below.',
         'Work with My Work, queues, comments and mentions, tasks, revision history, custom queries, notifications, files (details only, never contents) and search.',
         'Ask Nivaro’s own data assistant (Ask AI) a question.',
         'Work the support desk: list and read support requests, claim one, reply and change its status. You see your own requests; desk members and administrators see the desk, exactly as in Support. Claim, reply and status changes rehearse first unless told to go ahead.',
@@ -69,6 +70,29 @@ export const mcpDocs: DocSection = {
         'Chat, only when you allowed it: `list_chat_rooms`, `read_chat_messages` and `post_chat_message` reach only the rooms you can open. Posting rehearses first unless told to post, goes out as you, and every message shows **via app ·** and the app’s name beside it.',
         'Administrators also get read-only operations tools: health and readiness, runtime and database pool, Traffic Map summary, scheduled jobs and their runs, and a CPU profile of the API. Nothing restarts, pauses or reconfigures anything.',
         'Administrators also get layout tools: describe_layout (a form in plain terms, or every form of a collection), which_form (which form a record gets for a role, and why), explain_field (why a field shows, hides or is read-only for a role on a record) and propose_layout_ops. A proposal never changes a form: it waits under Proposals in the layout editor until an administrator tries it on the canvas and keeps it, or rejects it.'
+      ]
+    },
+    { type: 'h2', id: 'mcp-records', text: 'Checking, comparing and following records' },
+    {
+      type: 'table',
+      head: ['Tool', 'What it does'],
+      rows: [
+        [
+          '`update_item` with `dry_run: true`',
+          'Previews a change: every rule, hook, validation and database check of a real save runs, nothing is saved, and the answer lists each field that would change (from → to, as you read them), the fields rules would fill in, fields that would change but you cannot read (names only) and why a save would be refused. Same as REST `PATCH /api/items/:collection/:id?dry_run=1`. The npm server asks the instance first (`GET /api/mcp/capabilities` → `update_preview`) and refuses to preview on an older instance, which would save the request instead.'
+        ],
+        [
+          '`build_filter`',
+          'Checks a filter before an assistant runs a query with it: unknown fields, relation paths, operators, operators that do not suit the field (text search on a number, a range on yes/no), values a field can never hold and values outside its choices. Every problem is named with a plain reason, and a corrected filter comes back when every problem has a clear fix. The instance runs the same checks a real list read runs (`GET /api/items/:collection/filter-check`), so a filter it passes is one a read accepts. No records are read.'
+        ],
+        [
+          '`compare_records`',
+          'The fields that differ between two records of a collection (`other_id`), or between a record now and how it stood right after one of its changes (`revision`, an id from `list_revisions`). Both sides are read as you: only fields you can read are compared, and a field one side lacks is not counted as a change.'
+        ],
+        [
+          '`changes_since`',
+          'A change feed for an assistant without a live connection: call once to get a cursor, then pass it next time to get the records created, changed or deleted since — ids, the action and changed field names only, never values (read the record for those). Only records you can see now are listed. Same as REST `GET /api/changes`.'
+        ]
       ]
     },
     { type: 'h2', id: 'mcp-instance-tools', text: 'This instance’s own tools' },
@@ -116,7 +140,7 @@ export const mcpDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Tools that change data start in **dry run**. A tool that can rehearse (create_item) rehearses: rules and validation run and nothing is stored. Any other tool runs but its changes are held: the console does not send them and lists each one under API calls. Turn dry run off and confirm to run it for real.'
+      text: 'Tools that change data start in **dry run**. A tool that can rehearse (create_item, update_item) rehearses: rules and validation run and nothing is stored. Any other tool runs but its changes are held: the console does not send them and lists each one under API calls. Turn dry run off and confirm to run it for real.'
     },
     {
       type: 'p',
