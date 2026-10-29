@@ -207,6 +207,7 @@ import {
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
+import { managedProceduresDocs } from './sections/managed-procedures.js'
 import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
@@ -833,6 +834,7 @@ export const navSections: NavGroup[] = [
       devexFlowVersioning,
       devexEnvSync,
       devexSchemaMigrations,
+      managedProceduresDocs,
       devexMarketplace,
       devexPlayground,
       devexRevisionDiff,
