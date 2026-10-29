@@ -14,6 +14,8 @@ interface Comment {
   version_count?: number
   deleted?: boolean
   deleted_by_name?: string | null
+  /** #3213 — posted by an AI assistant through MCP: the badge text ("via Claude"). */
+  via_agent?: string | null
 }
 
 interface CommentVersion {
@@ -253,6 +255,14 @@ export function CommentsSlot({
                     <div data-nf-comment-body>
                       <div data-nf-comment-header>
                         <span data-nf-comment-author>{displayName(c.user)}</span>
+                        {c.via_agent && (
+                          <span
+                            data-nf-comment-agent
+                            title='Made by an AI assistant acting as this person'
+                          >
+                            {c.via_agent}
+                          </span>
+                        )}
                         <span data-nf-comment-time>{relativeTime(c.created_at)}</span>
                         {edited && (
                           <button

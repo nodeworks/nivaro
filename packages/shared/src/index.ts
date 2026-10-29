@@ -1,3 +1,4 @@
+export { AgentBadge } from './components/AgentBadge'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'

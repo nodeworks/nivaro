@@ -18,6 +18,7 @@ import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
 import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
+import { AgentBadge } from '../AgentBadge'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
@@ -48,6 +49,8 @@ interface Revision {
   first_name: string | null
   last_name: string | null
   comment?: string | null
+  /** #3213 — made by an AI assistant through MCP: the badge text ("via Claude"). */
+  via_agent?: string | null
   event?: {
     kind: 'transition' | 'start'
     history_id?: number
@@ -1059,6 +1062,7 @@ function RevisionRow({
             {revisionSentence(revision, humanDelta, systemDelta)}
           </span>
         </span>
+        <AgentBadge label={revision.via_agent} />
         <span
           className='shrink-0 text-[11px] tabular-nums text-slate-400'
           title={revision.timestamp ? new Date(revision.timestamp).toLocaleString() : undefined}

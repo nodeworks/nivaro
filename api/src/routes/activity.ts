@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { agentBadgesForActivity } from '../services/mcp-attribution.js'
 
 const countOf = (rows: unknown[]) => Number((rows[0] as { count?: string | number })?.count ?? 0)
 
@@ -50,7 +51,11 @@ async function pageRows(ids: number[]): Promise<unknown[]> {
       'u.email as user_email'
     )
     .whereIn('a.id', ids)) as Array<{ id: number }>
-  const byId = new Map(rows.map((r) => [Number(r.id), r]))
+  // #3213: rows an agent wrote through MCP carry its badge ("via Claude").
+  const badges = await agentBadgesForActivity(ids).catch(() => new Map<number, string>())
+  const byId = new Map(
+    rows.map((r) => [Number(r.id), { ...r, via_agent: badges.get(Number(r.id)) ?? null }])
+  )
   return ids.map((id) => byId.get(Number(id))).filter(Boolean)
 }
 
@@ -156,7 +161,8 @@ export async function activityRoutes(app: FastifyInstance) {
       .where('a.id', Number(id))
       .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    return reply.send({ data: row })
+    const badges = await agentBadgesForActivity([Number(id)]).catch(() => new Map<number, string>())
+    return reply.send({ data: { ...row, via_agent: badges.get(Number(id)) ?? null } })
   })
 
   /**

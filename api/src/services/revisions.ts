@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { agentBadgesForActivity } from './mcp-attribution.js'
 import { noteDerivedWrite } from './request-trace.js'
 
 export interface Revision {
@@ -18,6 +19,8 @@ export interface Revision {
   last_name?: string | null
   user_email?: string | null
   comment?: string | null
+  /** #3213 — the badge of a write an agent made through MCP ("via Claude"), else absent. */
+  via_agent?: string | null
   /** A pipeline event folded into the history (no snapshot): a transition
    *  from nivaro_workflow_history, or the instance start. */
   event?: {
@@ -328,7 +331,15 @@ export async function listRevisions(collection: string, item: string): Promise<R
     const tb = b.timestamp ? new Date(b.timestamp as string).getTime() : 0
     return tb - ta
   })
-  return all.map(hydrateRevision)
+  // #3213: writes an agent made through MCP carry its badge.
+  const badges = await agentBadgesForActivity(
+    all.map((r) => Number(r.activity)).filter((n) => Number.isInteger(n) && n > 0)
+  ).catch(() => new Map<number, string>())
+  return all.map((r) => {
+    const rev = hydrateRevision(r)
+    const badge = rev.activity != null ? badges.get(Number(rev.activity)) : undefined
+    return badge ? { ...rev, via_agent: badge } : rev
+  })
 }
 
 export async function getRevision(id: number): Promise<Revision | null> {

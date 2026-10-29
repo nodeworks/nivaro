@@ -446,6 +446,13 @@ export async function executeProposal(
       statusCode: 400
     })
   }
+  if (row.action_type === 'schema_change') {
+    // A schema proposal (#3209) is applied by an administrator on the Data Model page.
+    throw Object.assign(
+      new Error('This is a schema proposal — an administrator reviews it in the Data Model'),
+      { statusCode: 400 }
+    )
+  }
   if (row.action_type === 'plan') {
     // A plan runs step by step through its own routes (services/ai-plans.ts).
     throw Object.assign(new Error('This is a plan — run it from its plan card'), {

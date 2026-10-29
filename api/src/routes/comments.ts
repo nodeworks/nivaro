@@ -6,6 +6,7 @@ import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
 import { findRecordInstance } from '../services/branch-instances.js'
+import { agentBadgesForComments } from '../services/mcp-attribution.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { notifyUser } from '../services/notification-channels.js'
@@ -307,10 +308,14 @@ export async function commentsRoutes(app: FastifyInstance) {
           )
         : new Map<string, string>()
 
+    // #3213: comments an agent posted through MCP carry its badge ("via Claude").
+    const agentBadges = await agentBadgesForComments(ids).catch(() => new Map<string, string>())
+
     const data = comments.map((c) => ({
       id: c.id,
       collection: c.collection,
       item: c.item,
+      via_agent: agentBadges.get(String(c.id).toLowerCase()) ?? null,
       user: c.user
         ? {
             id: c.user,

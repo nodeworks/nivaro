@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, Loader2, Plug } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, patch } from '../lib/commands'
 import { cn, formatDate, formatNumber, formatRelative } from '../lib/utils'
+import { AgentBadge } from './AgentBadge'
 import {
   CallFigures,
   CallsSparkline,
@@ -12,6 +13,7 @@ import {
   type McpConnectionsAnswer,
   mcpConnectionsKey
 } from './profile/AgentsPanel'
+import { ConnectionRollback } from './profile/ConnectionRollback'
 import { ConfirmButton, Pill } from './profile/primitives'
 import { Skeleton } from './ui/skeleton'
 
@@ -120,6 +122,117 @@ function SettingsStrip({
   )
 }
 
+interface McpFullSettings {
+  agent_label_mode: 'app' | 'fixed'
+  agent_label: string
+}
+
+/**
+ * The badge records show beside an agent's edits and comments (#3213): "via <app>" (the
+ * connected app's own name) or one fixed label for every assistant.
+ */
+function BadgeSetting() {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const q = useQuery({
+    queryKey: ['nvr-mcp-connections', 'settings'],
+    queryFn: () =>
+      client
+        .request(get<{ data: McpFullSettings }>('/mcp-connections/settings'))
+        .then((r) => r.data)
+  })
+  const [mode, setMode] = useState<'app' | 'fixed'>('app')
+  const [label, setLabel] = useState('via assistant')
+  useEffect(() => {
+    if (!q.data) return
+    setMode(q.data.agent_label_mode ?? 'app')
+    setLabel(q.data.agent_label ?? 'via assistant')
+  }, [q.data])
+  const dirty =
+    !!q.data &&
+    (mode !== (q.data.agent_label_mode ?? 'app') ||
+      label.trim() !== (q.data.agent_label ?? 'via assistant'))
+  const save = useMutation({
+    mutationFn: () =>
+      client.request(
+        patch('/mcp-connections/settings', { agent_label_mode: mode, agent_label: label.trim() })
+      ),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-mcp-connections'] })
+  })
+  if (!q.data) return null
+  const example = mode === 'fixed' ? label.trim() || 'via assistant' : 'via Claude'
+  return (
+    <section
+      className='rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
+      data-nvr-mcp-badge-setting
+    >
+      <div className='flex flex-wrap items-center gap-x-5 gap-y-3'>
+        <span className='text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+          Badge on agents’ changes
+        </span>
+        <div className='flex gap-1 rounded-md bg-slate-100 p-0.5 dark:bg-muted'>
+          {(
+            [
+              ['app', 'Name the app'],
+              ['fixed', 'One label']
+            ] as const
+          ).map(([v, text]) => (
+            <button
+              key={v}
+              type='button'
+              aria-pressed={mode === v}
+              onClick={() => setMode(v)}
+              className={cn(
+                'h-7 rounded px-3 text-[12.5px] font-medium transition-colors',
+                mode === v
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-card dark:text-white'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+              )}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+        <label className='flex min-w-0 items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+          {mode === 'fixed' ? 'Label' : 'When the app has no name'}
+          <input
+            value={label}
+            maxLength={40}
+            onChange={(e) => setLabel(e.target.value)}
+            className={cn(inputCls, 'w-40')}
+            aria-label='Badge label'
+          />
+        </label>
+        <span className='inline-flex items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'>
+          Shows as <AgentBadge label={example} />
+        </span>
+        <button
+          type='button'
+          disabled={!dirty || !label.trim() || save.isPending}
+          onClick={() => save.mutate()}
+          className='ml-auto inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-medium text-white transition-colors hover:bg-nvr-cyan/90 disabled:opacity-40'
+        >
+          {save.isPending ? (
+            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+          ) : (
+            <Check className='h-3.5 w-3.5' />
+          )}
+          Save
+        </button>
+      </div>
+      <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
+        Edits and comments an assistant makes through MCP carry this badge in the record’s history,
+        comments and the activity log. Changing it relabels earlier changes too.
+        {save.isError && (
+          <span className='ml-1 text-red-600 dark:text-red-400'>
+            {(save.error as Error)?.message || 'Could not save'}
+          </span>
+        )}
+      </p>
+    </section>
+  )
+}
+
 function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
   const client = useNivaroClient()
   const [v, setV] = useState(c.rate_limit_custom ? String(c.rate_limit_per_minute) : '')
@@ -194,6 +307,7 @@ export function McpConnectionsAdminView({
     onSuccess: refresh
   })
   const [q, setQ] = useState('')
+  const [rollbackConn, setRollbackConn] = useState<string | null>(null)
   const rows = useMemo(() => {
     const src: McpConnection[] =
       tab === 'idle' ? (idle.data?.connections ?? []) : (all.data?.connections ?? [])
@@ -216,6 +330,7 @@ export function McpConnectionsAdminView({
   return (
     <div className='flex flex-col gap-4' data-nvr-mcp-admin>
       {all.data?.settings && <SettingsStrip settings={all.data.settings} onSaved={refresh} />}
+      <BadgeSetting />
       {all.data && !all.data.logged && (
         <p className='flex items-center gap-1.5 text-[12.5px] text-amber-700 dark:text-amber-400'>
           <AlertTriangle className='h-3.5 w-3.5' />
@@ -302,78 +417,104 @@ export function McpConnectionsAdminView({
               {rows.map((c) => {
                 const last = c.stats?.last_call_at ?? c.last_used_at
                 return (
-                  <tr
-                    key={c.conn}
-                    className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'
-                  >
-                    <td className='px-4 py-2.5'>
-                      <div className='flex items-center gap-2'>
-                        <span className='font-medium text-slate-800 dark:text-slate-100'>
-                          {c.name}
-                        </span>
-                        <KindPill kind={c.kind} />
-                      </div>
-                    </td>
-                    <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>
-                      {c.user_name ?? '—'}
-                    </td>
-                    <td className='whitespace-nowrap py-2.5 pr-3 text-slate-600 dark:text-slate-300'>
-                      {last ? formatRelative(last) : 'Never'}
-                    </td>
-                    <td className='py-2.5 pr-3'>
-                      {tab === 'idle' && c.idle ? (
-                        <span className='flex flex-wrap items-center gap-1.5'>
-                          <Pill tone={c.idle.status === 'notice' ? 'red' : 'amber'}>
-                            {c.idle.idle_days} days unused
-                          </Pill>
-                          <span className='text-slate-600 dark:text-slate-300'>
-                            {NEXT_STEP[(c as IdleRow).next_step]} · disconnects{' '}
-                            {formatDate(`${c.idle.revoke_on}T12:00:00Z`, {
-                              month: 'short',
-                              day: 'numeric'
-                            })}
+                  <Fragment key={c.conn}>
+                    <tr className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'>
+                      <td className='px-4 py-2.5'>
+                        <div className='flex items-center gap-2'>
+                          <span className='font-medium text-slate-800 dark:text-slate-100'>
+                            {c.name}
                           </span>
+                          <KindPill kind={c.kind} />
+                        </div>
+                      </td>
+                      <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>
+                        {c.user_name ?? '—'}
+                      </td>
+                      <td className='whitespace-nowrap py-2.5 pr-3 text-slate-600 dark:text-slate-300'>
+                        {last ? formatRelative(last) : 'Never'}
+                      </td>
+                      <td className='py-2.5 pr-3'>
+                        {tab === 'idle' && c.idle ? (
+                          <span className='flex flex-wrap items-center gap-1.5'>
+                            <Pill tone={c.idle.status === 'notice' ? 'red' : 'amber'}>
+                              {c.idle.idle_days} days unused
+                            </Pill>
+                            <span className='text-slate-600 dark:text-slate-300'>
+                              {NEXT_STEP[(c as IdleRow).next_step]} · disconnects{' '}
+                              {formatDate(`${c.idle.revoke_on}T12:00:00Z`, {
+                                month: 'short',
+                                day: 'numeric'
+                              })}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className='flex items-center gap-3'>
+                            {c.stats && <CallsSparkline days={c.stats.days} />}
+                            <CallFigures s={c.stats} />
+                          </span>
+                        )}
+                      </td>
+                      <td className='py-2.5 pr-3'>
+                        <span className='flex flex-wrap gap-1'>
+                          {(c.stats?.top_tools ?? []).slice(0, 3).map((t) => (
+                            <span
+                              key={t.tool}
+                              data-tip={`${formatNumber(t.calls)} calls`}
+                              className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
+                            >
+                              {t.tool}
+                            </span>
+                          ))}
                         </span>
-                      ) : (
-                        <span className='flex items-center gap-3'>
-                          {c.stats && <CallsSparkline days={c.stats.days} />}
-                          <CallFigures s={c.stats} />
-                        </span>
-                      )}
-                    </td>
-                    <td className='py-2.5 pr-3'>
-                      <span className='flex flex-wrap gap-1'>
-                        {(c.stats?.top_tools ?? []).slice(0, 3).map((t) => (
-                          <span
-                            key={t.tool}
-                            data-tip={`${formatNumber(t.calls)} calls`}
-                            className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
+                      </td>
+                      <td className='py-2.5 pr-3'>
+                        <LimitCell c={c} onSaved={refresh} />
+                      </td>
+                      <td className='py-2.5 pr-4 text-right'>
+                        <span className='inline-flex items-center justify-end gap-1.5'>
+                          <button
+                            type='button'
+                            onClick={() => setRollbackConn(rollbackConn === c.conn ? null : c.conn)}
+                            aria-expanded={rollbackConn === c.conn}
+                            data-tip='Undo what this app changed in a time window'
+                            className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
                           >
-                            {t.tool}
-                          </span>
-                        ))}
-                      </span>
-                    </td>
-                    <td className='py-2.5 pr-3'>
-                      <LimitCell c={c} onSaved={refresh} />
-                    </td>
-                    <td className='py-2.5 pr-4 text-right'>
-                      {c.kind !== 'token' && (c.kind !== 'oauth' || c.created_at) && (
-                        <ConfirmButton
-                          onConfirm={() => disconnect.mutate(c.conn)}
-                          disabled={disconnect.isPending}
-                          confirmLabel={c.kind === 'api_key' ? 'Switch key off?' : 'Disconnect?'}
-                          title={
-                            c.kind === 'api_key' ? `Switch off ${c.name}` : `Disconnect ${c.name}`
-                          }
-                          className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
-                          armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
-                        >
-                          {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}
-                        </ConfirmButton>
-                      )}
-                    </td>
-                  </tr>
+                            Roll back…
+                          </button>
+                          {c.kind !== 'token' && (c.kind !== 'oauth' || c.created_at) && (
+                            <ConfirmButton
+                              onConfirm={() => disconnect.mutate(c.conn)}
+                              disabled={disconnect.isPending}
+                              confirmLabel={
+                                c.kind === 'api_key' ? 'Switch key off?' : 'Disconnect?'
+                              }
+                              title={
+                                c.kind === 'api_key'
+                                  ? `Switch off ${c.name}`
+                                  : `Disconnect ${c.name}`
+                              }
+                              className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
+                              armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
+                            >
+                              {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}
+                            </ConfirmButton>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                    {rollbackConn === c.conn && (
+                      <tr className='border-b border-slate-100 dark:border-border/60'>
+                        <td colSpan={7} className='px-4 pb-3 pt-1'>
+                          <ConnectionRollback
+                            conn={c.conn}
+                            name={c.name}
+                            scope='admin'
+                            onClose={() => setRollbackConn(null)}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               })}
             </tbody>

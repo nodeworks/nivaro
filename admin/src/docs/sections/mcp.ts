@@ -68,6 +68,8 @@ export const mcpDocs: DocSection = {
         'Read dashboards and reports: `list_dashboards` lists the dashboards and Report Studio reports you can open, `read_dashboard` gives a dashboard’s widget figures and `run_report` a report’s. Every figure is computed as you, the same way the widget computes it for you in the app — a widget you cannot see says so instead of showing a number. The saved filter bar and date range apply unless the assistant asks for others.',
         'Chat, only when you allowed it: `list_chat_rooms`, `read_chat_messages` and `post_chat_message` reach only the rooms you can open. Posting rehearses first unless told to post, goes out as you, and every message shows **via app ·** and the app’s name beside it.',
         'Administrators also get read-only operations tools: health and readiness, runtime and database pool, Traffic Map summary, scheduled jobs and their runs, and a CPU profile of the API. Nothing restarts, pauses or reconfigures anything.',
+        'Attach a file to a record (`attach_file`): the file is sent base64-encoded (at most 10 MB, or the instance’s smaller upload limit), checked like any upload and linked through the record’s own file field as you — you must be able to change that record and that field, and the file then opens for whoever can open the record. A single-file field that already holds a file is kept unless the assistant says `replace` (the earlier file stays in the record’s history); a multi-file field gains the file. The same is `POST /api/files/attach` {collection, item, field?, filename, content_base64, type?, replace?}.',
+        'Propose a data model change (`propose_schema_change`): add a field (with its label, help note, dropdown choices, required), change a field’s label, note, choices or required flag, or add a collection with its fields. Nothing changes — see Schema proposals below.',
         'Administrators also get layout tools: describe_layout (a form in plain terms, or every form of a collection), which_form (which form a record gets for a role, and why), explain_field (why a field shows, hides or is read-only for a role on a record) and propose_layout_ops. A proposal never changes a form: it waits under Proposals in the layout editor until an administrator tries it on the canvas and keeps it, or rejects it.'
       ]
     },
@@ -121,6 +123,34 @@ export const mcpDocs: DocSection = {
     {
       type: 'p',
       text: 'Your profile has a **What my agents did** tab (`/profile?tab=agents`). It lists each connected app with its last 14 days of tool calls (calls a day, refused and failed calls, the tools it used most, how much it read back) and a Disconnect button, then every tool call newest first: the app, the tool, the record it touched and how it ended. Open a call to see the changes it made. Each change can be undone while nothing else has changed the record since: an edit puts back the values from before, a new record is deleted. Undo runs as you, so your permissions and the record’s rules apply, and it is logged (`mcp-undo`).'
+    },
+    { type: 'h2', id: 'mcp-badge', text: 'The “via assistant” badge' },
+    {
+      type: 'p',
+      text: 'Every edit and comment an assistant makes through the hosted endpoint carries a small badge beside the person’s name — in the record’s History, its comments and the Activity log, in the admin and in apps built on the shared components. By default it names the app (**via Claude**, **via Claude Code**: the name the app registered with, or the API key’s name); an administrator can switch it to one fixed label for every assistant (default **via assistant**) on **MCP → Connections**. The label is worked out when the record is read, so changing the setting relabels earlier changes too. The app’s name and the connection are stored on the Activity row (`nivaro_activity.via_app`, `mcp_conn`, migration 512) from server-known facts only — never from a header the app sends. Writes a person makes themselves, scripts using an API key directly, imports and scheduled jobs carry no badge.'
+    },
+    { type: 'h2', id: 'mcp-rollback', text: 'Roll back a connection’s changes' },
+    {
+      type: 'p',
+      text: '**Roll back…** on a connection (your **What my agents did** tab for your own, **MCP → Connections** for administrators) undoes everything that connection wrote in a time window — the last hour, day, week, two weeks, or between two times (at most 90 days). First comes a preview: per record, what would happen — delete a record it created, put back the fields it changed (their names, never values) to how they were before its first change in the window, bring back a record it deleted (from the trash, while it is there), or remove a comment it posted. Records someone else changed since, or the same app changed again after the window, are **left alone** and listed with who changed them and when. Configuration changes are counted but never rolled back here.'
+    },
+    {
+      type: 'p',
+      text: 'Applying runs every step through the items service **as the person the connection acts for** — their permissions, validation and rules apply, and every step gets its own history entry — newest change first, and logs one `mcp-rollback` Activity row with the counts. If anything changed between the preview and Apply, nothing runs and the new preview is shown (409). When the person can no longer sign in, an administrator’s rollback runs as the administrator and says so. Only a person signed in to Nivaro can apply a rollback: an API key or a connected app cannot roll back (or protect) its own writes. Routes: `POST /api/mcp-connections/mine/:conn/rollback/preview` and `…/rollback` (your own), `POST /api/mcp-connections/:conn/rollback/preview` and `…/rollback` (administrators), each with `{from, to?}` and, to apply, the preview’s `plan_hash`.'
+    },
+    { type: 'h2', id: 'mcp-schema-proposals', text: 'Schema proposals' },
+    {
+      type: 'p',
+      text: 'An assistant (or anyone signed in, through `POST /api/schema-proposals` {changes, note?}) can draft field and collection changes; it never changes the data model. Proposals wait on the **Data Model** page under **Proposals** (a count shows when some are waiting; `?proposals=1` opens them), each read in plain words with who proposed it, through which app and why. **Apply…** carries it out as you through the Data Model’s own steps — create the table or column, register it, set its label, choices and help note — so it is exactly what doing it by hand would do; a step that fails stops the run, the proposal stays open with what was done, and applying again skips what already exists. **Reject…** closes it with an optional note.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Kinds: `add_field` {collection, field, type, label?, note?, choices?, required?, max_length?}, `update_field` {collection, field, label?, note?, choices?, required?} (choices replace the whole list) and `add_collection` {collection, display_name?, singular?, plural?, icon?, note?, fields?}. Types: string, text, integer, bigInteger, boolean, decimal, float, date, datetime, uuid. New columns are always nullable; required is the form’s rule.',
+        'Renames, type changes, deletions, relations and system tables are never proposals — they stay a person’s job in the Data Model.',
+        'Checked when proposed: a field that already exists, an unknown collection or an unregistered field is refused with the change’s number. People who are not administrators may only name collections they can read. At most 50 changes per proposal and 20 open proposals per person; unresolved proposals expire after 30 days.',
+        'Apply and Reject need an administrator signed in to the admin — an API key, a connected app or the MCP endpoint is refused, so an assistant can never apply its own proposal. Stored in `nivaro_ai_proposals` (action type `schema_change`); proposing, applying and rejecting are logged (`schema-proposal`, `schema-proposal-apply`, `schema-proposal-reject`).'
+      ]
     },
     { type: 'h2', id: 'mcp-admin', text: 'For administrators' },
     {

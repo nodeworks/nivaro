@@ -128,7 +128,10 @@ describe('createNivaroMcpServer', () => {
       'support_set_status',
       'decide_approval',
       // an instance tool may write
-      'call_instance_tool'
+      'call_instance_tool',
+      // #3212 links a file to a record; #3209 stores a proposal (never the schema itself)
+      'attach_file',
+      'propose_schema_change'
     ])
     for (const tool of tools) {
       const a = tool.annotations
