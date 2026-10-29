@@ -7,14 +7,16 @@ import {
   NivaroProvider
 } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { CalendarDays, GanttChart, Grid3x3 } from 'lucide-react'
+import { ArrowLeft, CalendarDays, GanttChart, Grid3x3, Pencil } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { CollectionCalendar } from '@/components/collection-calendar'
 import { CollectionGantt } from '@/components/collection-gantt'
 import { SpreadsheetView } from '@/components/spreadsheet-view'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useGoBack } from '@/lib/nav'
+import { titleCase } from '@/lib/utils'
 
 // Admin /collections/:collection runs on the SAME shared browser that powers
 // headless frontends (CollectionBrowserView) — quick filters, column filters,
@@ -49,6 +51,7 @@ export function CollectionBrowserV2Page() {
       api
         .get<{
           data: {
+            display_name?: string | null
             display_template?: string | null
             fields?: Array<{ field: string; label?: string | null; type?: string | null }>
           }
@@ -57,6 +60,12 @@ export function CollectionBrowserV2Page() {
     enabled: !!collection,
     staleTime: 60_000
   })
+  // History-true back: wherever you came from (a record, a queue, search),
+  // else the Collections list on a cold load.
+  const goBack = useGoBack('/collections')
+  const title = meta?.display_name || titleCase(collection)
+  const isAdmin = !!user?.is_admin
+
   const extraViews = useMemo(() => {
     const dateFields = (meta?.fields ?? [])
       .filter((f) => ['date', 'datetime', 'timestamp'].includes(String(f.type)))
@@ -101,6 +110,36 @@ export function CollectionBrowserV2Page() {
 
   return (
     <div className='flex h-full min-h-0 flex-col'>
+      <div className='flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 text-[13px] dark:border-border dark:bg-card'>
+        <button
+          type='button'
+          onClick={goBack}
+          aria-label='Back'
+          data-tip='Back'
+          className='flex h-7 w-7 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+        >
+          <ArrowLeft className='h-4 w-4' />
+        </button>
+        <nav aria-label='Breadcrumb' className='flex min-w-0 items-center gap-1.5'>
+          <Link
+            to='/collections'
+            className='text-slate-500 transition-colors hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+          >
+            Collections
+          </Link>
+          <span className='text-slate-300 dark:text-slate-600'>/</span>
+          <h1 className='truncate font-semibold text-slate-900 dark:text-slate-100'>{title}</h1>
+        </nav>
+        {isAdmin && (
+          <Link
+            to={`/data-model/${encodeURIComponent(collection)}`}
+            className='ml-auto inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 dark:border-white/[0.1] dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-slate-100'
+          >
+            <Pencil className='h-3.5 w-3.5' />
+            Edit collection
+          </Link>
+        )}
+      </div>
       <NivaroProvider client={client}>
         <NavigationContext.Provider
           value={{
