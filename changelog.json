@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-29T12:45:52.028Z",
+  "generated_at": "2026-10-29T14:06:40.265Z",
   "releases": [
+    {
+      "version": "0.3.50",
+      "tag": "v0.3.50",
+      "date": "2026-10-29T10:06:24-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "drag to a trash zone to remove",
+              "hash": "67df38f9f"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "Discard button for unsaved changes",
+              "hash": "0a59be5fa"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "personal-default markers; fix editor scrolling past its bottom",
+              "hash": "6d4d49236"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.49",
       "tag": "v0.3.49",
-      "date": "2026-10-29T08:45:38-04:00",
+      "date": "2026-10-29T08:45:52-04:00",
       "sections": [
         {
           "label": "Added",
