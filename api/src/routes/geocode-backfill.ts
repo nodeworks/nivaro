@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { createSkipList } from '../services/job-run-sentences.js'
 import { startJobRun } from '../services/job-runs.js'
 import { geocodeAddress } from '../services/office-geocode.js'
 
@@ -86,6 +87,8 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
       })
       let resolved = 0
       let missed = 0
+      // #21 — the rows passed over, with why, so the Jobs hub can open them.
+      const skips = createSkipList(collection)
       try {
         for (let i = 0; i < pending.length; i++) {
           const row = pending[i]
@@ -97,12 +100,21 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
               .update({ [lat_field!]: hit.lat, [lng_field!]: hit.lng })
               .catch(() => {
                 missed++
+                skips.add(String(row.id), 'could not save the position')
               })
             resolved++
           } else {
             missed++
+            skips.add(String(row.id), 'address not found')
           }
-          if (i % 20 === 0) run.progress({ done: i + 1, total: pending.length, resolved, missed })
+          if (i % 20 === 0 || i === pending.length - 1)
+            run.progress({
+              done: i + 1,
+              total: pending.length,
+              resolved,
+              missed,
+              ...skips.progress()
+            })
           // Nominatim usage policy: max 1 req/s. Known-location matches don't
           // hit the network but the loop stays uniformly paced for simplicity.
           await new Promise((r) => setTimeout(r, 1100))

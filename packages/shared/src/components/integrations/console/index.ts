@@ -32,6 +32,11 @@ export {
   SubmissionDrill,
   type SubmissionDrillProps
 } from './drill'
+export {
+  ErrorExplanation,
+  type IntegrationErrorExplanation,
+  type IntegrationFixTarget
+} from './ErrorExplanation'
 export { dayHeading, EventsView, type EventsViewProps, Segment } from './EventsView'
 export {
   ancestorsOf as eventPathAncestorsOf,

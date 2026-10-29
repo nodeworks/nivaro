@@ -2,6 +2,7 @@
  * HTTP shapes served by GET /integration-signals and /integration-partners —
  * copied from the core routes so the shared package never imports api code.
  */
+import type { IntegrationErrorExplanation } from './ErrorExplanation'
 
 export interface SignalAction {
   kind: 'retry_submission' | 'resend' | 'open' | 'explain' | 'extension'
@@ -146,6 +147,8 @@ export interface PartnerCall {
   triggered_by: string | null
   has_body: boolean
   user: PartnerCallUser | null
+  /** #18 — a failed call in plain words + Fix it target (null when it did not fail). */
+  explanation?: IntegrationErrorExplanation | null
 }
 
 /** GET /integration-partners/:id/calls/:callId — one call's full request and
@@ -165,6 +168,7 @@ export interface PartnerCallDetail {
   error: string | null
   triggered_by: string | null
   user: PartnerCallUser | null
+  explanation?: IntegrationErrorExplanation | null
 }
 
 export interface PartnerContract {
@@ -370,6 +374,8 @@ export interface SubmissionDetail {
     status: string
     attempts: number
     last_error: string | null
+    /** #18 — the failure in plain words + Fix it target. */
+    explanation?: IntegrationErrorExplanation | null
     endpoint_path: string | null
     payload: unknown
     response: unknown

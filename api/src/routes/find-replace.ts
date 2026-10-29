@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { messageWithoutSql } from '../lib/db-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { createSkipList } from '../services/job-run-sentences.js'
 import { startJobRun } from '../services/job-runs.js'
 
 /**
@@ -109,6 +111,8 @@ export async function findReplaceRoutes(app: FastifyInstance): Promise<void> {
       const { isCancelled, clearCancel } = await import('../services/job-cancel.js')
       let done = 0
       let failed = 0
+      // #21 — the records not changed, with the refusal, so the Jobs hub can open them.
+      const skips = createSkipList(b.collection)
       for (const r of rows) {
         if (run.id != null && isCancelled(run.id)) {
           clearCancel(run.id as number)
@@ -120,10 +124,13 @@ export async function findReplaceRoutes(app: FastifyInstance): Promise<void> {
             [b.field!]: newValue(String(r[b.field!] ?? ''), b.find!, String(b.replace ?? ''), mode)
           })
           done++
-        } catch {
+        } catch (err) {
           failed++
+          // The refusal's own words (a validation / permission message), never the value.
+          skips.add(String(r.id), messageWithoutSql(err).split('\n')[0] || 'refused')
         }
-        if ((done + failed) % 25 === 0) run.progress({ done, failed, total: rows.length })
+        if ((done + failed) % 25 === 0 || done + failed === rows.length)
+          run.progress({ done, failed, total: rows.length, ...skips.progress() })
       }
       const summary = `${done}/${rows.length} replaced${failed ? `, ${failed} failed` : ''}`
       if (failed > 0 && done === 0) await run.fail(summary)

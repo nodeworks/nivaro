@@ -70,6 +70,8 @@ export interface TraceRecord {
   top_sql: TraceStatement[]
   /** `select *` reads of nvarchar(max)-bearing tables, per table (#483). */
   wide: Array<{ table: string; n: number }>
+  /** Realtime events the request sent, by event name (#19 request story). Names only. */
+  emits?: Array<{ event: string; n: number }>
 }
 
 interface RanStatement {
@@ -98,6 +100,8 @@ interface TraceContext {
   queries: number
   /** Measurement every request keeps (Traffic Map taps read it at onResponse). */
   m: Measure
+  /** Realtime events this request sent (event name → count); null until the first (#19). */
+  emits?: Map<string, number> | null
 }
 
 /**
@@ -549,6 +553,22 @@ export function markSpan(phase: string, ms: number, detail?: string): void {
   ctx.spans.push({ seq: 0, phase, ms, at: performance.now() - ctx.start - ms, detail })
 }
 
+const EMIT_NAMES_MAX = 40
+
+/**
+ * #19 — the current request sent a realtime event (socket emit / record event). A counter by
+ * event NAME only (never a room or payload); a no-op outside a traced request. Kept on the trace
+ * when the ring keeps the request, so its story can say "3 live updates sent".
+ */
+export function noteRealtimeEmit(event: string, n = 1): void {
+  const ctx = als.getStore()
+  if (!ctx || !event) return
+  if (!ctx.emits) ctx.emits = new Map()
+  const name = String(event).slice(0, 60)
+  if (!ctx.emits.has(name) && ctx.emits.size >= EMIT_NAMES_MAX) return
+  ctx.emits.set(name, (ctx.emits.get(name) ?? 0) + n)
+}
+
 /** True when the current request is being traced — lets callers skip building detail strings. */
 export function isTracing(): boolean {
   return als.getStore() !== undefined
@@ -853,7 +873,10 @@ export function finishTrace(meta: {
     queries: ctx.queries,
     sql_ms: Math.round(ctx.statements.reduce((n, r) => n + r.ms, 0)),
     top_sql: topStatements(ctx.statements, Math.max(1, Number(process.env.TRACE_TOP_SQL) || 8)),
-    wide: wideByTable(ctx.statements)
+    wide: wideByTable(ctx.statements),
+    ...(ctx.emits && ctx.emits.size > 0
+      ? { emits: [...ctx.emits].map(([event, n]) => ({ event, n })) }
+      : {})
   })
   while (buffer.length > CAPACITY) buffer.shift()
   if (keptListeners.size > 0) {

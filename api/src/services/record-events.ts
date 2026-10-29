@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
 import { getIo } from './io-holder.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { noteRealtimeEmit } from './request-trace.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -53,6 +54,7 @@ export function emitRecordEvent(
   extra: Record<string, unknown> = {}
 ): void {
   if (!collection || item == null || item === '') return
+  noteRealtimeEmit(event)
   try {
     // Cloud: record rooms are per tenant (sockets join `t:<tenant>:record:…`).
     getIo()

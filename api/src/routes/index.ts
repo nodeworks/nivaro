@@ -195,6 +195,7 @@ import { opsAssistantRoutes } from './ops-assistant.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { opsDbRoutes } from './ops-db.js'
 import { opsLogsRoutes } from './ops-logs.js'
+import { opsReadableRoutes } from './ops-readable.js'
 import { opsRedisRoutes } from './ops-redis.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
@@ -719,6 +720,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // Cache switches as configuration (Database → Caches); also starts their 15 s re-read.
   await app.register(cacheConfigRoutes, { prefix: '/cache-config' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
+  // #19 / #20 — request stories + error clusters (admin).
+  await app.register(opsReadableRoutes, { prefix: '/ops' })
   await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(featureFlagRoutes)

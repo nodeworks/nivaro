@@ -17,6 +17,7 @@ import type {
   ObligationTrigger,
   ObligationTriggerContext
 } from './obligations.js'
+import type { IntegrationErrorRule, JobRunFormatter } from './readable-ops.js'
 import type {
   BotToolDef,
   BriefLineProvider,
@@ -273,6 +274,10 @@ export interface ExtensionContext {
     unschedule(id: string): void
     /** Attach a description / heavy / idempotent flag / gate after scheduling. */
     annotate(id: string, meta: ExtensionCronMeta): void
+    /** How a run of this job reads on the Jobs hub ("Nightly forecast: 4,210 rows in 3m12s").
+     *  `id` is scoped like `schedule`; pass `{ exact: true }` for a job id started another way.
+     *  Optional: an older core has no such member. */
+    describeRun?(id: string, fn: JobRunFormatter, opts?: { exact?: boolean }): void
   }
   /** Bulk actions in the collection browser / queue selection bar. */
   bulkActions: { register(def: BulkActionDef): void }
@@ -468,6 +473,9 @@ export interface ExtensionContext {
     registerEventSource(def: EventSourceDef): void
     /** A downstream node on the Traffic Map for the partner calls it matches (#1114). */
     registerTrafficNode(def: TrafficNodeDef): void
+    /** Partner rules that turn a failed call into one plain sentence + a Fix it target; they run
+     *  before the core rules. Optional: an older core has no such member. */
+    registerErrorExplainers?(rules: IntegrationErrorRule[]): void
   }
   traffic: {
     /** A Traffic Map lens: node badges + an inspector panel from data `read` returns (#2229). */

@@ -12,6 +12,7 @@ import {
 import { type EmitResult, journaledEmit } from './event-journal.js'
 import { publishCollectionTouched, publishItemEvent } from './item-events.js'
 import { noteCollectionWrite, readCachesActive } from './read-caches.js'
+import { noteRealtimeEmit } from './request-trace.js'
 import { publishSseEvent } from './sse-hub.js'
 import { noteCollectionChanged, tempCacheActive } from './traffic-actions/temp-cache.js'
 import { noteWrite } from './traffic-map.js'
@@ -50,6 +51,8 @@ export function broadcastCollectionUpdate(
   }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
+  // #19 — the request story counts the live updates a request sent (event name only).
+  noteRealtimeEmit('collection:update')
   // #2273 — a Traffic Map temporary cache on this collection (or one related to it) drops its
   // answers now, before anyone can read the old ones (other replicas hear the record event).
   noteCollectionChanged(collection)

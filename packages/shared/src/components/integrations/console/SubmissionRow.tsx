@@ -5,6 +5,7 @@ import { Button } from '../../ui/button'
 import { AttemptHistory } from './drill/attempts'
 import { CodeBlock, pretty } from './drill/json'
 import { StatusPill } from './drill/status'
+import { ErrorExplanation, type IntegrationErrorExplanation } from './ErrorExplanation'
 
 // The attempt history and body viewer live in drill/ — shared with the
 // Firefight drill-down so the two never render a push differently.
@@ -35,6 +36,8 @@ export interface ErpSubmission {
    *  A record page hosting its OWN External requests dialog already IS that
    *  record, so it never needs this badge and doesn't send it. */
   record_label?: string
+  /** #18 — a failed push in plain words + Fix it target (null when it did not fail). */
+  explanation?: IntegrationErrorExplanation | null
 }
 
 /** "Workflows · CR26-80361" — never the raw "workflows/371425" pair. */
@@ -123,6 +126,11 @@ export function SubmissionRow({
           </button>
         )}
       </div>
+      {!open && sub.explanation && (
+        <div className='-mt-1 px-3 pb-2'>
+          <ErrorExplanation explanation={sub.explanation} compact />
+        </div>
+      )}
       {open && (
         <div className='space-y-2 border-t border-slate-100 px-3 py-2.5 dark:border-border'>
           <div className='grid grid-cols-2 gap-x-4 gap-y-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
@@ -134,10 +142,9 @@ export function SubmissionRow({
               {sub.external_api_name ?? (sub.external_api != null ? `#${sub.external_api}` : '—')}
             </span>
           </div>
+          {/* #18 — the plain sentence + Fix it; the stored error text stays behind Show raw. */}
           {sub.last_error && (
-            <p className='rounded bg-red-50 px-2 py-1.5 text-[11.5px] text-red-700 dark:bg-red-500/10 dark:text-red-400'>
-              {sub.last_error}
-            </p>
+            <ErrorExplanation explanation={sub.explanation} raw={sub.last_error} />
           )}
           <CodeBlock
             label={sub.attempts > 1 ? 'Latest request' : 'Request payload'}

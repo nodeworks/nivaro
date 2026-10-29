@@ -3,6 +3,7 @@ import axios, { AxiosError } from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 import { readMasquerade } from './masquerade'
 import { pageContextHeaders } from './page-context'
+import { noteFailedRequest } from './recent-requests'
 
 export const WORKSPACE_KEY = 'nivaro_workspace'
 
@@ -49,6 +50,15 @@ api.interceptors.response.use(
   (err) => {
     if ((err.config?.method ?? 'get').toLowerCase() !== 'get') forgetSettledReads()
     const status = err.response?.status
+    // #19 — a failed call's request id, kept for the Request story page ("your recent failures").
+    if (status != null && status >= 400 && status !== 401) {
+      noteFailedRequest({
+        id: err.response?.headers?.['x-nivaro-request-id'],
+        method: err.config?.method,
+        url: err.config?.url,
+        status
+      })
+    }
 
     // DB outage posture (#329): the server answers fast 503s while the
     // database is down — surface ONE banner instead of scattered failures.

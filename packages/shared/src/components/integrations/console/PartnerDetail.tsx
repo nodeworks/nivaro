@@ -16,6 +16,7 @@ import {
   pretty,
   TriggerChip
 } from './drill'
+import { ErrorExplanation } from './ErrorExplanation'
 import { fmtMs, fmtPct, HealthPill, HourlyBars, PartnerFlags } from './PartnerBits'
 import { type ErpSubmission, SubmissionRow } from './SubmissionRow'
 import { agoText, exactTime, TONE_SOFT, TONE_TEXT } from './tone'
@@ -254,15 +255,22 @@ function CallRow({
         <span className='w-14 shrink-0 text-right text-[11.5px] tabular-nums text-muted-foreground'>
           {fmtMs(call.duration_ms)}
         </span>
-        {call.error && (
+        {/* #18 — the plain sentence first; the raw error stays in the tip and the open detail. */}
+        {(call.explanation?.sentence ?? call.error) && (
           <span
             className={cn(
-              'min-w-0 max-w-[200px] shrink truncate text-[11.5px]',
+              'min-w-0 max-w-[260px] shrink truncate text-[11.5px]',
               TONE_TEXT.negative
             )}
-            data-tip={call.error.length > 50 ? call.error.slice(0, 900) : undefined}
+            data-tip={
+              call.explanation
+                ? call.explanation.sentence
+                : call.error && call.error.length > 50
+                  ? call.error.slice(0, 900)
+                  : undefined
+            }
           >
-            {call.error}
+            {call.explanation?.sentence ?? call.error}
           </span>
         )}
         <span
@@ -359,16 +367,20 @@ function CallDetailBody({ apiId, callId }: { apiId: number; callId: number }) {
               {fmtMs(data.duration_ms)}
             </span>
           </div>
-          {data.error && (
-            <p
-              className={cn(
-                'rounded px-2 py-1.5 text-[11.5px]',
-                TONE_SOFT.negative,
-                TONE_TEXT.negative
-              )}
-            >
-              {data.error}
-            </p>
+          {data.explanation ? (
+            <ErrorExplanation explanation={data.explanation} raw={data.error} />
+          ) : (
+            data.error && (
+              <p
+                className={cn(
+                  'rounded px-2 py-1.5 text-[11.5px]',
+                  TONE_SOFT.negative,
+                  TONE_TEXT.negative
+                )}
+              >
+                {data.error}
+              </p>
+            )
           )}
           <HeaderTable headers={data.response_headers} />
           <CodeBlock

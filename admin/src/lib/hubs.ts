@@ -91,7 +91,9 @@ export const HEALTH_HUB: HubDef = {
   tabs: [
     { path: '', label: 'Status' },
     { path: 'monitors', label: 'Monitors', legacy: '/monitors' },
-    { path: 'telemetry', label: 'Telemetry', legacy: '/telemetry' }
+    { path: 'telemetry', label: 'Telemetry', legacy: '/telemetry' },
+    { path: 'errors', label: 'Error clusters' },
+    { path: 'request-story', label: 'Request story' }
   ]
 }
 
