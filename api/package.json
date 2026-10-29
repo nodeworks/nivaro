@@ -27,6 +27,7 @@
     "sync:legacy-users": "tsx extensions/efp-ops/scripts/sync-legacy-users.ts",
     "sync:legacy-notification-prefs": "tsx extensions/efp-ops/scripts/sync-legacy-notification-prefs.ts",
     "sync:legacy-cifa-favorites": "tsx extensions/efp-ops/scripts/sync-legacy-cifa-favorites.ts",
+    "sync:picker-active-exclusions": "tsx extensions/efp-ops/scripts/sync-picker-active-exclusions.ts",
     "fix:file-fks": "tsx extensions/efp-ops/scripts/repoint-file-fks.ts",
     "fix:user-fks": "tsx extensions/efp-ops/scripts/repoint-user-fks.ts",
     "fix:junction-fields": "tsx extensions/efp-ops/scripts/fix-junction-fields.ts",
