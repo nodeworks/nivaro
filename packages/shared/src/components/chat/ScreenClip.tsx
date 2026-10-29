@@ -1,5 +1,6 @@
 import { Clapperboard, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { registerReloadHold } from '../../lib/reload-holds'
 import { cn } from '../../lib/utils'
 import { useScreenCapture } from '../help-videos/recorder/useScreenCapture'
 
@@ -153,6 +154,12 @@ export function ScreenClipButton({
     stopping.current = false
   }
   stopRef.current = () => void stop()
+
+  // #2937 — an automatic idle reload waits while a clip is being made (lib/reload-holds.ts).
+  useEffect(() => {
+    if (phase === 'idle') return
+    return registerReloadHold('A screen clip')
+  }, [phase])
 
   // The 60 s cap: the recorder's own limit is 30 min, so the clock is ours.
   const elapsed = cap.elapsed

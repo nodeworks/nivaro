@@ -12,6 +12,7 @@ import {
   subscribeUnsavedWork,
   unsavedWorkLabels
 } from '../lib/unsaved-work'
+import { IdleReloadWatcher } from './IdleReloadWatcher'
 
 export type { ForceReloadDetail }
 
@@ -48,8 +49,21 @@ export const FORCE_RELOAD_EVENT = 'nvr:force-refresh'
  * Unsaved work (lib/unsaved-work.ts) holds the reload: past the deadline the
  * banner says a reload is waiting and reloads the moment the edits are saved
  * or discarded — or when the person clicks Reload now.
+ *
+ * Reload old tabs when idle (#2937): the banner also mounts IdleReloadWatcher, so a tab left on an
+ * older build after a release reloads by itself once idle (no countdown, no banner). Pass
+ * `idleReload={false}` to leave that out.
  */
-export function ForceReloadBanner() {
+export function ForceReloadBanner({ idleReload = true }: { idleReload?: boolean } = {}) {
+  return (
+    <>
+      {idleReload && <IdleReloadWatcher />}
+      <PushedReloadBanner />
+    </>
+  )
+}
+
+function PushedReloadBanner() {
   const [refresh, setRefresh] = useState<{
     deadline: number
     message: string

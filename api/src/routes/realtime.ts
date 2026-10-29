@@ -5,6 +5,7 @@ import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import { checkApiKeyScope, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitForceRefresh,
+  getClusterBuildJudge,
   getClusterClientVersionGroups,
   getRealtimeStats,
   getRecordViewerSnapshot,
@@ -12,7 +13,21 @@ import {
   socketPollingAllowed
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
+import {
+  CLIENT_HEADER,
+  type ClientVersion,
+  clientVersionFromHello,
+  parseClientHeader
+} from '../services/client-version.js'
 import { currentSeq } from '../services/event-journal.js'
+import {
+  effectiveIdleReload,
+  getIdleReloadSettings,
+  idleReloadVerdict,
+  MAX_IDLE_SECONDS,
+  MIN_IDLE_SECONDS,
+  saveIdleReloadSettings
+} from '../services/idle-reload.js'
 import { boardMergeOn, boardStats } from '../services/realtime-board.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
@@ -42,6 +57,7 @@ import {
   rememberRefresh,
   setMinBuild
 } from '../services/sticky-refresh.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -101,6 +117,42 @@ export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
       return { data: out }
     }
   )
+}
+
+/**
+ * Reload old tabs when idle (#2937) — sign-in only. A tab that has been idle for a while asks
+ * whether it runs an old build; the answer comes from the same cluster BuildJudge the Realtime
+ * console and "Old versions" use (roster + settle window), never the tab's own guess. The tab
+ * names its build in the query (the same fields as client:hello) or the x-nivaro-client header,
+ * and its app in `app` / x-nivaro-app; without an app, its own socket (same tab id) says it.
+ */
+export async function realtimeBuildRoutes(app: FastifyInstance): Promise<void> {
+  app.addHook('preHandler', requireAuth)
+  app.get<{
+    Querystring: { app?: string; build?: string; api?: string; tab?: string; loaded?: string }
+  }>('/build-status', async (req) => {
+    const settings = effectiveIdleReload(await getIdleReloadSettings())
+    const auto_reload = {
+      enabled: settings.auto_reload_idle,
+      idle_seconds: settings.idle_seconds
+    }
+    if (!settings.auto_reload_idle)
+      return { data: { older: null, target: null, id: null, reason: 'off', auto_reload } }
+    const q = req.query ?? {}
+    const fromQuery = clientVersionFromHello(q)
+    const version: ClientVersion | null = fromQuery.build
+      ? fromQuery
+      : parseClientHeader(req.headers[CLIENT_HEADER])
+    const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+    const cluster = await getClusterBuildJudge(tenant)
+    const headerApp = req.headers['x-nivaro-app']
+    let appName =
+      cleanBuild(q.app, 50) ?? cleanBuild(Array.isArray(headerApp) ? headerApp[0] : headerApp, 50)
+    if (!appName && version?.tab)
+      appName = cluster.clients.find((c) => c.version?.tab === version.tab)?.app ?? null
+    const verdict = idleReloadVerdict(cluster.judge, { app: appName, version }, cluster.partial)
+    return { data: { ...verdict, auto_reload } }
+  })
 }
 
 export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
@@ -462,6 +514,43 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
       })
     return { data: { removed } }
   })
+
+  // ── Reload old tabs when idle (#2937): per instance, default on ──────────────────────────
+
+  const autoReloadAnswer = (s: ReturnType<typeof effectiveIdleReload>) => ({
+    data: {
+      auto_reload_idle: s.auto_reload_idle,
+      idle_seconds: s.idle_seconds,
+      env: s.env,
+      min_seconds: MIN_IDLE_SECONDS,
+      max_seconds: MAX_IDLE_SECONDS
+    }
+  })
+
+  app.get('/auto-reload', async () =>
+    autoReloadAnswer(effectiveIdleReload(await getIdleReloadSettings()))
+  )
+
+  app.patch<{ Body: { auto_reload_idle?: boolean; idle_seconds?: number } }>(
+    '/auto-reload',
+    async (req) => {
+      const prev = await getIdleReloadSettings()
+      const next = await saveIdleReloadSettings(req.body ?? {})
+      if (
+        prev.auto_reload_idle !== next.auto_reload_idle ||
+        prev.idle_seconds !== next.idle_seconds
+      )
+        await logActivity({
+          action: 'client-auto-reload',
+          user: req.user?.id,
+          comment: next.auto_reload_idle
+            ? `old tabs reload by themselves after ${next.idle_seconds}s idle`
+            : 'turned off reloading old tabs when idle',
+          req
+        })
+      return autoReloadAnswer(effectiveIdleReload(next))
+    }
+  )
 
   // ── Minimum client build (sticky refresh): off until set, per app ─────────────────────────
 

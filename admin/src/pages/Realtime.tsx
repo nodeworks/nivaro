@@ -6,7 +6,7 @@ import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
-import { MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
+import { AutoReloadControl, MinBuildControl, RememberedRefreshes } from './realtime/StickyRefresh'
 import { VerifyTab } from './realtime/VerifyTab'
 
 /**
@@ -138,6 +138,7 @@ export default function Realtime() {
             </div>
           </div>
           <div className='flex shrink-0 items-center gap-2'>
+            <AutoReloadControl />
             <MinBuildControl />
             <ForceRefreshControl />
           </div>

@@ -198,6 +198,7 @@ export {
 } from './components/FulfilmentPill'
 export { HScrollProxy } from './components/HScrollProxy'
 export * from './components/help-videos'
+export { IdleReloadWatcher } from './components/IdleReloadWatcher'
 export type {
   HeaderWidgetInfo,
   ItemEditFormProps,
@@ -666,6 +667,12 @@ export {
   useGlossary
 } from './lib/glossary'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
+export {
+  type BuildStatus,
+  decideIdleReload,
+  type IdleReloadDecision,
+  type IdleReloadInput
+} from './lib/idle-reload'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
@@ -804,6 +811,7 @@ export {
   recordPopoutHref
 } from './lib/record-popout'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
+export { registerReloadHold, reloadHoldLabels } from './lib/reload-holds'
 export {
   captureReplayClip,
   clipEndOffset,

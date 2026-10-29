@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ShieldCheck } from 'lucide-react'
+import { ShieldCheck, TimerReset } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -10,7 +11,8 @@ import { cn, formatRelative } from '@/lib/utils'
  * Sticky force refresh (api/src/services/sticky-refresh.ts), on the Realtime console header:
  *  - RememberedRefreshes: the pushes still being delivered to tabs that reconnect (Stop each);
  *  - MinBuildControl: an optional minimum client build per app. Off until set; any tab of that
- *    app on an older build reloads (after a countdown, held while it has unsaved edits).
+ *    app on an older build reloads (after a countdown, held while it has unsaved edits);
+ *  - AutoReloadControl: reload old tabs when idle (#2937), on by default per instance.
  */
 
 const INPUT =
@@ -335,6 +337,133 @@ export function MinBuildControl() {
             className='rounded-md bg-amber-500 px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-amber-600 disabled:opacity-50'
           >
             {save.isPending ? 'Saving…' : rule ? 'Update minimum' : 'Set minimum'}
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+interface AutoReloadData {
+  auto_reload_idle: boolean
+  idle_seconds: number
+  /** AUTO_RELOAD_IDLE on this server (wins over the switch); null = unset. */
+  env: boolean | null
+  min_seconds: number
+  max_seconds: number
+}
+
+/**
+ * Header button + popover: reload old tabs when idle (#2937, api/src/services/idle-reload.ts).
+ * Per instance, on by default: after a release a tab on an older build reloads by itself once
+ * nobody has typed or clicked in it for the idle time — never with unsaved changes, never in a
+ * huddle or a screen clip.
+ */
+export function AutoReloadControl() {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [seconds, setSeconds] = useState('60')
+  const { data } = useQuery<AutoReloadData>({
+    queryKey: ['realtime-auto-reload'],
+    queryFn: () => api.get('/realtime/auto-reload').then((r) => r.data.data),
+    staleTime: 30_000
+  })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load the stored value on open only
+  useEffect(() => {
+    if (open && data) setSeconds(String(data.idle_seconds))
+  }, [open, data?.idle_seconds])
+  const save = useMutation({
+    mutationFn: (patch: Partial<Pick<AutoReloadData, 'auto_reload_idle' | 'idle_seconds'>>) =>
+      api.patch('/realtime/auto-reload', patch).then((r) => r.data.data as AutoReloadData),
+    onSuccess: (next) => {
+      qc.setQueryData(['realtime-auto-reload'], next)
+      toast.success(
+        next.auto_reload_idle
+          ? `Old tabs reload by themselves after ${next.idle_seconds}s idle`
+          : 'Old tabs are no longer reloaded by themselves'
+      )
+    },
+    onError: () => toast.error('Could not save the setting')
+  })
+  const on = data?.auto_reload_idle ?? true
+  const envLocked = data?.env != null
+  const typed = Number(seconds)
+  const validSeconds =
+    Number.isInteger(typed) &&
+    typed >= (data?.min_seconds ?? 30) &&
+    typed <= (data?.max_seconds ?? 3600)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-auto-reload={on ? 'on' : 'off'}
+          className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-medium text-slate-700 hover:bg-muted dark:border-border dark:bg-card dark:text-foreground'
+        >
+          <TimerReset className='h-3.5 w-3.5' />
+          Idle reload
+          <span
+            className={cn(
+              'rounded-full px-1.5 text-[11px]',
+              on
+                ? 'bg-nvr-cyan/10 text-slate-800 dark:bg-nvr-cyan/20 dark:text-foreground'
+                : 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
+            )}
+          >
+            {on ? 'on' : 'off'}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align='end' className='w-[340px] p-3'>
+        <div className='flex items-start gap-3'>
+          <p className={cn('flex-1 text-[12px]', MUTED)}>
+            After a release, a tab still on an older build reloads by itself once nobody has typed
+            or clicked in it for the idle time. Tabs with unsaved changes, a huddle or a screen clip
+            are left alone; the scroll position comes back after the reload.
+          </p>
+          <Switch
+            checked={on}
+            disabled={!data || envLocked || save.isPending}
+            onCheckedChange={(v) => save.mutate({ auto_reload_idle: v })}
+            aria-label='Reload old tabs when idle'
+          />
+        </div>
+        {envLocked && (
+          <p className='mt-2 rounded-md bg-slate-50 px-2 py-1.5 text-[11.5px] dark:bg-muted/40'>
+            Set by <span className='font-mono'>AUTO_RELOAD_IDLE</span> on this server — the switch
+            is ignored while it is set.
+          </p>
+        )}
+        <label className='mt-3 flex items-center gap-2 text-[12px]'>
+          Idle for
+          <input
+            value={seconds}
+            onChange={(e) => setSeconds(e.target.value)}
+            inputMode='numeric'
+            className='h-7 w-16 rounded-md border border-slate-200 bg-background px-2 text-right text-[12px] dark:border-border'
+          />
+          seconds ({data?.min_seconds ?? 30}–{data?.max_seconds ?? 3600})
+        </label>
+        <p className={cn('mt-1 text-[11px]', MUTED)}>
+          A hidden tab counts as idle only once this long has passed without input too. Whether a
+          tab is old is judged like "Old versions": never while a deploy is still rolling.
+        </p>
+        <div className='mt-2 flex justify-end gap-2'>
+          <button
+            type='button'
+            onClick={() => setOpen(false)}
+            className='rounded-md px-2.5 py-1 text-[12px] text-slate-500 hover:bg-muted'
+          >
+            Close
+          </button>
+          <button
+            type='button'
+            disabled={!data || !validSeconds || typed === data.idle_seconds || save.isPending}
+            onClick={() => save.mutate({ idle_seconds: typed })}
+            className='rounded-md bg-nvr-cyan px-2.5 py-1 text-[12px] font-semibold text-white disabled:opacity-50'
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
       </PopoverContent>

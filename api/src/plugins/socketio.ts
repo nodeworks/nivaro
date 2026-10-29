@@ -462,6 +462,23 @@ export async function getClusterStaleBuilds(
   )
 }
 
+/**
+ * #2937 — the cluster's build judgement for "reload old tabs when idle" (cached a few seconds per
+ * tenant, shared with the presence badge). `clients` lets the caller find its own socket by tab id.
+ */
+export async function getClusterBuildJudge(tenant: string | null): Promise<{
+  judge: ReturnType<typeof makeBuildJudge>
+  partial: boolean
+  clients: Array<{ app: string | null; version: ClientVersion | null }>
+}> {
+  const cluster = await listClusterClientsCached(_ioRef, tenant)
+  return {
+    judge: makeBuildJudge(cluster.clients, { roster: cluster.roster }),
+    partial: cluster.partial,
+    clients: cluster.clients
+  }
+}
+
 /** The tenant key a socket on this node resolved to (cloud), or null. */
 function socketTenantKey(socketId: string): string | null {
   const key = _ioRef?.sockets.sockets.get(socketId)?.data?.nvrTenantKey
