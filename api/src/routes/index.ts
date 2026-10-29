@@ -44,6 +44,7 @@ import { apiKeysRoutes } from './api-keys.js'
 import { approvalsRoutes } from './approvals.js'
 import { atRiskRoutes } from './at-risk.js'
 import { attributesRoutes } from './attributes.js'
+import { audiencePreviewRoutes } from './audience-preview.js'
 import { authRoutes } from './auth.js'
 import { automationTestRoutes } from './automation-tests.js'
 import { backgroundRunsRoutes } from './background-runs.js'
@@ -465,6 +466,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
+  await app.register(audiencePreviewRoutes, { prefix: '/audience-preview' })
   await app.register(myJobsRoutes, { prefix: '/my-jobs' })
   await app.register(backgroundRunsRoutes, { prefix: '/background-runs' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })

@@ -6,6 +6,8 @@ import { hooks } from '../hooks/registry.js'
 import { registerRawCapturingParser } from '../lib/json-body.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
+import { type AudiencePreview, isSendingFlowOperation } from '../services/audience-preview.js'
 import { executeFlow } from '../services/flow-executor.js'
 import { flowHealth } from '../services/flow-health.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -553,7 +555,7 @@ export async function flowsRoutes(app: FastifyInstance) {
   // Other processes on this database follow a change to a scheduled flow.
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
-    if (/\/(test|run|replay|webhook)(\/|$|\?)/.test(req.url)) return
+    if (/\/(test|test-send|run|replay|webhook)(\/|$|\?)/.test(req.url)) return
     announceScheduleChange()
   })
   if (!flowHealthCheckRegistered) {
@@ -661,7 +663,20 @@ export async function flowsRoutes(app: FastifyInstance) {
 
   app.patch('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const body = req.body as Partial<Flow>
+    const body = { ...(req.body as Partial<Flow> & { confirm_audience?: unknown }) }
+    delete body.confirm_audience
+    // #3080 — turning on a flow whose mail / notification steps reach more than the threshold
+    // (or a whole role) asks first.
+    const before = await db<Flow>('nivaro_flows').where({ id }).first()
+    if (!before) return reply.code(404).send({ error: 'Not found' })
+    const gate = await checkAudienceConfirm(
+      req,
+      reply,
+      'flow',
+      { ...before, ...body, id },
+      before as unknown as Record<string, unknown>
+    )
+    if (gate.blocked) return reply
     // Version the previous definition when the trigger configuration changes
     if ('trigger' in body || 'trigger_options' in body) {
       await snapshotFlowVersion(app.log, id, req.user?.id)
@@ -680,6 +695,7 @@ export async function flowsRoutes(app: FastifyInstance) {
     unregisterEventFlowHook(id)
     if (flow.trigger === 'event' && flow.status === 'active') registerEventFlowHook(app, flow)
 
+    if (gate.confirmed) await logAudienceConfirm(req, 'flow', id, gate.confirmed)
     await logActivity({
       action: 'update',
       collection: 'nivaro_flows',
@@ -720,6 +736,18 @@ export async function flowsRoutes(app: FastifyInstance) {
       FlowOperation,
       'name' | 'key' | 'type' | 'position_x' | 'position_y' | 'options' | 'resolve' | 'reject'
     >
+    // #3080 — a mail / notification step on an active flow that reaches more than the
+    // threshold (or a whole role) asks first.
+    const gate = isSendingFlowOperation(body)
+      ? await checkAudienceConfirm(
+          req,
+          reply,
+          'flow_operation',
+          { ...body, flow: id, flow_status: flow.status },
+          null
+        )
+      : { blocked: false, confirmed: null }
+    if (gate.blocked) return reply
     await snapshotFlowVersion(app.log, id, req.user?.id)
     const opId = randomUUID()
     await db('nivaro_flow_operations').insert({
@@ -736,6 +764,7 @@ export async function flowsRoutes(app: FastifyInstance) {
       created_at: new Date()
     })
     const op = await db<FlowOperation>('nivaro_flow_operations').where({ id: opId }).first()
+    if (gate.confirmed) await logAudienceConfirm(req, 'flow_operation', opId, gate.confirmed)
     await logActivity({
       action: 'create',
       collection: 'nivaro_flow_operations',
@@ -753,7 +782,28 @@ export async function flowsRoutes(app: FastifyInstance) {
       .where({ id: opId, flow: id })
       .first()
     if (!op) return reply.code(404).send({ error: 'Not found' })
-    const opBody = req.body as Partial<FlowOperation>
+    const opBody = { ...(req.body as Partial<FlowOperation> & { confirm_audience?: unknown }) }
+    delete opBody.confirm_audience
+    // #3080 — same ask as creating a step (a position-only drag never reaches anyone new).
+    let gate: { blocked: boolean; confirmed: AudiencePreview | null } = {
+      blocked: false,
+      confirmed: null
+    }
+    if (
+      (isSendingFlowOperation(op) || isSendingFlowOperation(opBody)) &&
+      ('options' in opBody || 'type' in opBody)
+    ) {
+      const flowRow = await db<Flow>('nivaro_flows').where({ id }).first('status')
+      const flow_status = flowRow?.status ?? 'inactive'
+      gate = await checkAudienceConfirm(
+        req,
+        reply,
+        'flow_operation',
+        { ...op, ...opBody, flow_status },
+        { ...op, flow_status }
+      )
+      if (gate.blocked) return reply
+    }
     if (opPatchIsStructural(opBody)) {
       await snapshotFlowVersion(app.log, id, req.user?.id)
     }
@@ -763,6 +813,7 @@ export async function flowsRoutes(app: FastifyInstance) {
     if ('options' in opBody) opPatch.options = toJsonString(opBody.options)
     await db('nivaro_flow_operations').where({ id: opId, flow: id }).update(opPatch)
     const updated = await db<FlowOperation>('nivaro_flow_operations').where({ id: opId }).first()
+    if (gate.confirmed) await logAudienceConfirm(req, 'flow_operation', opId, gate.confirmed)
     await logActivity({
       action: 'update',
       collection: 'nivaro_flow_operations',
@@ -818,6 +869,73 @@ export async function flowsRoutes(app: FastifyInstance) {
       error = err instanceof Error ? err.message : String(err)
     }
     return reply.send({ data: { steps: trace, output, error, dry_run: body.dry_run !== false } })
+  })
+
+  /**
+   * #3080 — Test send for one mail / notification step: the step's subject and body, rendered
+   * over the caller's sample payload, go to the person asking and NOBODY else — the step's own
+   * recipients are never read. Works on an unsaved step (the editor sends its draft options).
+   */
+  app.post('/:id/operations/test-send', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const flow = await db<Flow>('nivaro_flows').where({ id }).first('id', 'name')
+    if (!flow) return reply.code(404).send({ error: 'Not found' })
+    const b = (req.body ?? {}) as {
+      type?: string
+      name?: string
+      options?: Record<string, unknown> | string | null
+      payload?: Record<string, unknown>
+    }
+    if (b.type !== 'mail' && b.type !== 'notification')
+      return reply.code(400).send({ error: 'Only mail and notification steps have a test send' })
+    const opts = (typeof b.options === 'string' ? parseJsonField(b.options) : b.options) as Record<
+      string,
+      unknown
+    > | null
+    const me = (await db('nivaro_users').where({ id: req.user!.id }).first('id', 'email')) as
+      | { id: string; email: string | null }
+      | undefined
+    if (!me) return reply.code(404).send({ error: 'Your account was not found' })
+    const { resolveHtmlTemplate, resolveTemplate } = await import(
+      '../services/flow-template-render.js'
+    )
+    const data = (b.payload && typeof b.payload === 'object' ? b.payload : {}) as never
+    const subject =
+      `[TEST] ${resolveTemplate(String(opts?.subject ?? b.name ?? flow.name), data)}`.slice(0, 255)
+    let sent: string
+    if (b.type === 'mail') {
+      if (!me.email) return reply.code(400).send({ error: 'Your account has no email address' })
+      const { sendRawMail } = await import('../services/mail.js')
+      sent = await sendRawMail({
+        to: me.email,
+        subject,
+        html: resolveHtmlTemplate(String(opts?.body ?? ''), data),
+        skipDigest: true
+      })
+        .then(() => 'sent')
+        .catch(() => 'failed')
+    } else {
+      const { notifyUser } = await import('../services/notification-channels.js')
+      sent = await notifyUser(app, me.id, {
+        subject,
+        message: resolveTemplate(String(opts?.message ?? ''), data).slice(0, 500),
+        channels: { inapp: true },
+        why: 'you sent yourself a test of this flow step'
+      })
+        .then((r) => (r.id != null ? 'sent' : 'dropped by your notification rules'))
+        .catch(() => 'failed')
+    }
+    await logActivity({
+      action: 'flow-step-test-send',
+      collection: 'nivaro_flows',
+      item: id,
+      user: me.id,
+      comment: b.type,
+      req
+    })
+    return reply.send({
+      data: { to: 'you', channel: b.type === 'mail' ? 'email' : 'inapp', result: sent }
+    })
   })
 
   /**

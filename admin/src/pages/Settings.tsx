@@ -27,6 +27,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
+import { AudienceConfirmSettingsCard } from '@/components/audience-confirm-settings'
 import { ChannelTestModeCard } from '@/components/channel-test-mode-card'
 import { DirectorySyncCard } from '@/components/directory-sync-card'
 import { HuddleSettingsSection } from '@/components/huddle-settings'
@@ -3792,9 +3793,9 @@ export function SettingsPage() {
                         This instance has a catch inbox (
                         <code className='font-mono'>MAIL_CATCH_HOST</code> is{' '}
                         <code className='font-mono'>{mailTestEnv.catchHost}</code>). Mail for anyone
-                        outside the allowlist goes there, addressed as it was, and never reaches them.
-                        Allowlisted addresses get the real mail, and a copy lands in the catch inbox
-                        too. The test recipient is not used.
+                        outside the allowlist goes there, addressed as it was, and never reaches
+                        them. Allowlisted addresses get the real mail, and a copy lands in the catch
+                        inbox too. The test recipient is not used.
                       </p>
                     )}
                     {(mailTestMode || mailTestEnv.mode) && (
@@ -4074,7 +4075,12 @@ export function SettingsPage() {
 
               {activeSection === 'backups' && <BackupsSection />}
 
-              {activeSection === 'instance' && <InstanceOverridesSection />}
+              {activeSection === 'instance' && (
+                <>
+                  <InstanceOverridesSection />
+                  <AudienceConfirmSettingsCard />
+                </>
+              )}
             </>
           )}
         </div>

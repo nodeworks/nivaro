@@ -1,3 +1,8 @@
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Pencil, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -128,6 +133,39 @@ export function FieldWatchesPage() {
     onError: () => toast.error('Failed to create watch')
   })
 
+  // #3080 — turning a watch on (or editing it) for many subscribers asks first: the save comes
+  // back 409 with the audience, shown inline above the list, and Confirm saves it again.
+  const [audienceAsk, setAudienceAsk] = useState<{
+    id: number
+    name: string
+    body: Record<string, unknown>
+    preview: AudiencePreview
+  } | null>(null)
+  const askOr = (
+    err: unknown,
+    id: number,
+    body: Record<string, unknown>,
+    fallback: string
+  ): void => {
+    const preview = audienceConfirmFromError(err)
+    if (preview) {
+      setEditing(null)
+      setAudienceAsk({ id, name: watches.find((w) => w.id === id)?.name ?? '', body, preview })
+      return
+    }
+    toast.error(fallback)
+  }
+  const confirmMut = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: Record<string, unknown> }) =>
+      api.patch(`/field-watches/${id}`, { ...body, confirm_audience: true }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['field-watches'] })
+      setAudienceAsk(null)
+      toast.success('Watch updated')
+    },
+    onError: () => toast.error('Failed to update watch')
+  })
+
   // ── Update ────────────────────────────────────────────────────────────────
   const updateMut = useMutation({
     mutationFn: ({
@@ -142,7 +180,7 @@ export function FieldWatchesPage() {
       setEditing(null)
       toast.success('Watch updated')
     },
-    onError: () => toast.error('Failed to update watch')
+    onError: (err, vars) => askOr(err, vars.id, vars.body, 'Failed to update watch')
   })
 
   // ── Toggle active inline ──────────────────────────────────────────────────
@@ -152,7 +190,8 @@ export function FieldWatchesPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['field-watches'] })
     },
-    onError: () => toast.error('Failed to update watch')
+    onError: (err, vars) =>
+      askOr(err, vars.id, { is_active: vars.is_active }, 'Failed to update watch')
   })
 
   // ── Delete ────────────────────────────────────────────────────────────────
@@ -195,6 +234,16 @@ export function FieldWatchesPage() {
 
       {/* Body */}
       <div className='flex-1 overflow-auto p-4 sm:p-6'>
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            className='mb-4'
+            preview={audienceAsk.preview}
+            busy={confirmMut.isPending}
+            confirmLabel={`Confirm and save${audienceAsk.name ? ` "${audienceAsk.name}"` : ''}`}
+            onConfirm={() => confirmMut.mutate({ id: audienceAsk.id, body: audienceAsk.body })}
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
         {isLoading ? (
           <div className='space-y-3'>
             {[1, 2, 3].map((i) => (

@@ -1,10 +1,14 @@
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError,
+  CollectionFieldPicker
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
-import { CollectionFieldPicker } from '@nivaro/shared'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -26,6 +30,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type Collection } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { cn, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -154,9 +159,14 @@ export function AlertEditPage() {
     }
   }, [existing, initialized])
 
+  // #3080 — a save that turns this alert on for many subscribers asks first (inline panel).
+  const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
+  const lastBody = useRef<Omit<AlertDefinition, 'id'> | null>(null)
+  const [testBusy, setTestBusy] = useState(false)
+
   // Save mutation
   const saveMutation = useMutation({
-    mutationFn: (body: Omit<AlertDefinition, 'id'>) => {
+    mutationFn: (body: Omit<AlertDefinition, 'id'> & { confirm_audience?: boolean }) => {
       if (isNew) {
         return api
           .post<{ data: AlertDefinition }>('/alerts/definitions', body)
@@ -171,7 +181,14 @@ export function AlertEditPage() {
       toast.success(isNew ? 'Alert created' : 'Alert saved')
       navigate('/alerts')
     },
-    onError: () => toast.error('Failed to save alert')
+    onError: (err) => {
+      const ask = audienceConfirmFromError(err)
+      if (ask) {
+        setAudienceAsk(ask)
+        return
+      }
+      toast.error('Failed to save alert')
+    }
   })
 
   function handleSubmit(e: React.FormEvent) {
@@ -197,7 +214,7 @@ export function AlertEditPage() {
         ? Object.fromEntries(validRows.map((r) => [r.field.trim(), r.value]))
         : null
 
-    saveMutation.mutate({
+    const body = {
       name: name.trim(),
       category,
       collection: collection.trim(),
@@ -210,7 +227,36 @@ export function AlertEditPage() {
       filters,
       detection_type: detectionType,
       sensitivity: detectionType === 'anomaly' ? Number(sensitivity) || 2.0 : null
-    })
+    }
+    lastBody.current = body
+    setAudienceAsk(null)
+    saveMutation.mutate(body)
+  }
+
+  function testSend() {
+    if (!name.trim() || !collection.trim() || !field.trim()) {
+      toast.error('Name, collection and field are needed for a test')
+      return
+    }
+    setTestBusy(true)
+    void api
+      .post<{ data: { results: Record<string, string> } }>('/alerts/definitions/test-send', {
+        name: name.trim(),
+        collection: collection.trim(),
+        field: field.trim(),
+        operator,
+        threshold: Number(threshold),
+        email: true
+      })
+      .then((r) =>
+        toast.success(
+          `Test sent to you only — ${Object.entries(r.data.data.results)
+            .map(([c, v]) => `${c}: ${v}`)
+            .join(', ')}`
+        )
+      )
+      .catch((e) => toast.error(e?.response?.data?.error ?? 'Test send failed'))
+      .finally(() => setTestBusy(false))
   }
 
   function addFilterRow() {
@@ -565,6 +611,17 @@ export function AlertEditPage() {
             )}
           </div>
         )}
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            preview={audienceAsk}
+            busy={saveMutation.isPending}
+            onConfirm={() => {
+              if (lastBody.current)
+                saveMutation.mutate({ ...lastBody.current, confirm_audience: true })
+            }}
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
         {/* Actions */}
         <div className='flex items-center gap-2 pt-2 border-t'>
           {detectionType === 'threshold' && (
@@ -584,6 +641,15 @@ export function AlertEditPage() {
               {whatIfBusy ? 'Checking…' : 'Would it fire now?'}
             </Button>
           )}
+          <Button
+            type='button'
+            variant='outline'
+            disabled={testBusy}
+            onClick={testSend}
+            data-tip='Sends a sample of this alert to you only — in-app and to your own email'
+          >
+            {testBusy ? 'Sending…' : 'Test send to me'}
+          </Button>
           <Button type='submit' disabled={saveMutation.isPending}>
             {saveMutation.isPending ? 'Saving…' : isNew ? 'Create Alert' : 'Save Changes'}
           </Button>

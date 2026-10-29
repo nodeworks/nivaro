@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 
 interface FieldWatch {
@@ -344,9 +345,20 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))
 
+    // #3080 — turning a watch on for more than the threshold of subscribers asks first.
+    const gate = await checkAudienceConfirm(
+      req,
+      reply,
+      'field_watch',
+      { ...existing, ...patch, id: Number(id) },
+      existing as unknown as Record<string, unknown>
+    )
+    if (gate.blocked) return reply
+
     await db('nivaro_field_watches')
       .where({ id: Number(id) })
       .update({ ...patch, updated_at: new Date() })
+    if (gate.confirmed) await logAudienceConfirm(req, 'field_watch', id, gate.confirmed)
 
     const updated = (await db<FieldWatch>('nivaro_field_watches')
       .where({ id: Number(id) })

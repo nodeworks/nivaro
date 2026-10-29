@@ -6,6 +6,11 @@ import { del, get, patch, post } from '../lib/commands'
 import { useLiveOps } from '../lib/live-ops'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { cn } from '../lib/utils'
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError
+} from './AudienceConfirmPanel'
 import { BroadcastDraftPanel } from './BroadcastDraft'
 import { useHelpVideoLibrary } from './help-videos/api'
 import { formatDuration } from './help-videos/viewer/format'
@@ -166,10 +171,13 @@ export function BroadcastView({ className }: { className?: string }) {
     [cleanGroups, roleIds]
   )
 
+  // #3080 — a broadcast to more than the threshold, a whole role or everyone asks first.
+  const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
   const send = useMutation({
-    mutationFn: () =>
+    mutationFn: (opts?: { confirm?: boolean }) =>
       client.request<{ data: { id: number; delivered: number } }>(
         post('/announcements', {
+          ...(opts?.confirm ? { confirm_audience: true } : {}),
           subject: subject.trim() || undefined,
           message: message.trim(),
           severity,
@@ -183,6 +191,7 @@ export function BroadcastView({ className }: { className?: string }) {
         })
       ),
     onSuccess: (r) => {
+      setAudienceAsk(null)
       const scheduledFor = (r.data as { scheduled_for?: string | null }).scheduled_for
       setResult(
         scheduledFor
@@ -199,7 +208,14 @@ export function BroadcastView({ className }: { className?: string }) {
       void qc.invalidateQueries({ queryKey: ['broadcasts'] })
       void qc.invalidateQueries({ queryKey: ['announcements-active'] })
     },
-    onError: (err: Error) => setResult(err.message)
+    onError: (err: Error) => {
+      const ask = audienceConfirmFromError(err)
+      if (ask) {
+        setAudienceAsk(ask)
+        return
+      }
+      setResult(err.message)
+    }
   })
 
   const canSend = message.trim().length > 0 && channels.length > 0 && !send.isPending
@@ -607,7 +623,8 @@ export function BroadcastView({ className }: { className?: string }) {
             disabled={!canSend}
             onClick={() => {
               setResult(null)
-              send.mutate()
+              setAudienceAsk(null)
+              send.mutate(undefined)
             }}
             className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white disabled:opacity-50'
           >
@@ -656,6 +673,16 @@ export function BroadcastView({ className }: { className?: string }) {
             </span>
           )}
         </div>
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            className='mt-3'
+            preview={audienceAsk}
+            busy={send.isPending}
+            confirmLabel='Confirm and send'
+            onConfirm={() => send.mutate({ confirm: true })}
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
         {outOfHours && canSend && (
           <p className='mt-2 rounded-md bg-amber-50 px-3 py-1.5 text-[12px] text-amber-700 dark:bg-amber-400/10 dark:text-amber-400'>
             It's {localHour >= 21 ? 'late' : 'early'} for most recipients — consider the schedule

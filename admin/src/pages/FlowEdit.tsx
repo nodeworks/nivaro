@@ -1,4 +1,9 @@
-import { CronBuilder } from '@nivaro/shared'
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError,
+  CronBuilder
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -979,19 +984,48 @@ function EditOperationDialog({
       .catch(() => setExtApiEndpoints([]))
   }, [selectedExtApiId, op.type])
 
+  // #3080 — a mail / notification step on an active flow that reaches many people asks first.
+  const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
   const updateOp = useMutation({
-    mutationFn: (body: { options: Record<string, unknown>; name?: string }) =>
-      api.patch(`/flows/${flowId}/operations/${op.id}`, body).then((r) => r.data),
+    mutationFn: (body: {
+      options: Record<string, unknown>
+      name?: string
+      confirm_audience?: boolean
+    }) => api.patch(`/flows/${flowId}/operations/${op.id}`, body).then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['flows', flowId] })
+      setAudienceAsk(null)
       onOpenChange(false)
       toast.success('Operation updated')
     },
-    onError: () => toast.error('Failed to update operation')
+    onError: (err) => {
+      const ask = audienceConfirmFromError(err)
+      if (ask) {
+        setAudienceAsk(ask)
+        return
+      }
+      toast.error('Failed to update operation')
+    }
+  })
+
+  // #3080 — Test send: this step's subject and body, to you only (never its recipients).
+  const sendsToPeople = op.type === 'mail' || op.type === 'notification'
+  const testSend = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { channel: string; result: string } }>(
+          `/flows/${flowId}/operations/test-send`,
+          { type: op.type, name: opName || op.name, options: optsState }
+        )
+        .then((r) => r.data.data),
+    onSuccess: (d) => toast.success(`Test sent to you only (${d.channel}: ${d.result})`),
+    onError: (e: { response?: { data?: { error?: string } } }) =>
+      toast.error(e?.response?.data?.error ?? 'Test send failed')
   })
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    setAudienceAsk(null)
     updateOp.mutate({ options: optsState, name: opName || op.name })
   }
 
@@ -2325,8 +2359,35 @@ function EditOperationDialog({
                 </>
               )}
             </div>
+            {audienceAsk && (
+              <AudienceConfirmPanel
+                className='mt-4'
+                preview={audienceAsk}
+                busy={updateOp.isPending}
+                onConfirm={() =>
+                  updateOp.mutate({
+                    options: optsState,
+                    name: opName || op.name,
+                    confirm_audience: true
+                  })
+                }
+                onCancel={() => setAudienceAsk(null)}
+              />
+            )}
           </DialogBody>
           <DialogFooter>
+            {sendsToPeople && (
+              <Button
+                type='button'
+                variant='outline'
+                className='mr-auto'
+                disabled={testSend.isPending}
+                onClick={() => testSend.mutate()}
+                data-tip='Sends this step to you only, with {{placeholders}} left empty'
+              >
+                {testSend.isPending ? 'Sending…' : 'Test send to me'}
+              </Button>
+            )}
             <Button type='button' variant='outline' onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
@@ -4386,14 +4447,26 @@ export function FlowEditPage() {
     setForm((p) => ({ ...p, trigger: v, trigger_options: null }))
   }
 
+  // #3080 — turning on a flow whose mail / notification steps reach many people asks first.
+  const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
+  const lastFlowBody = useRef<Partial<Flow> | null>(null)
   const updateFlow = useMutation({
-    mutationFn: (body: Partial<Flow>) => api.patch(`/flows/${id}`, body).then((r) => r.data),
+    mutationFn: (body: Partial<Flow> & { confirm_audience?: boolean }) =>
+      api.patch(`/flows/${id}`, body).then((r) => r.data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['flows', id] })
       queryClient.invalidateQueries({ queryKey: ['flows'] })
+      setAudienceAsk(null)
       toast.success('Flow saved')
     },
-    onError: () => toast.error('Failed to save flow')
+    onError: (err) => {
+      const ask = audienceConfirmFromError(err)
+      if (ask) {
+        setAudienceAsk(ask)
+        return
+      }
+      toast.error('Failed to save flow')
+    }
   })
 
   const triggerManually = useMutation({
@@ -4403,14 +4476,17 @@ export function FlowEditPage() {
   })
 
   function handleSave() {
-    updateFlow.mutate({
+    const body: Partial<Flow> = {
       name,
       description: description || null,
       trigger,
       status,
       accountability,
       trigger_options: form.trigger_options ?? flow?.trigger_options ?? null
-    })
+    }
+    lastFlowBody.current = body
+    setAudienceAsk(null)
+    updateFlow.mutate(body)
   }
 
   return (
@@ -4522,6 +4598,18 @@ export function FlowEditPage() {
             </Button>
           </div>
         </div>
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            className='mt-3'
+            preview={audienceAsk}
+            busy={updateFlow.isPending}
+            onConfirm={() => {
+              if (lastFlowBody.current)
+                updateFlow.mutate({ ...lastFlowBody.current, confirm_audience: true })
+            }}
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
       </div>
 
       {isLoading ? (
