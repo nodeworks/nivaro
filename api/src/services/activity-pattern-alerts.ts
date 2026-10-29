@@ -177,6 +177,40 @@ async function personName(id: string | null): Promise<string> {
   return name || u?.email || 'Someone'
 }
 
+/**
+ * May this recipient hear about this record? Admins always; system tables only
+ * admins; otherwise the record must be readable AS THE RECIPIENT (readItems with
+ * an id filter — User Scopes, row filters and policies apply). A deleted record
+ * can no longer be read, so a delete needs collection read access. `fields` is the
+ * recipient's readable field list (null = all) used to drop changed-field names.
+ */
+export async function recipientSees(
+  u: User,
+  collection: string | null | undefined,
+  item: string | null | undefined,
+  action: string
+): Promise<{ ok: boolean; fields: string[] | null }> {
+  const { isAdminRole, can, getAllowedFields } = await import('./permissions.js')
+  if (await isAdminRole(u).catch(() => false)) return { ok: true, fields: null }
+  if (!collection || isSystemCollection(collection)) return { ok: false, fields: [] }
+  try {
+    if (!(await can(u, 'read', collection))) return { ok: false, fields: [] }
+    const fields = await getAllowedFields(u, 'read', collection)
+    const list = fields && fields.includes('*') ? null : fields
+    if (action === 'delete' || !item) return { ok: true, fields: list }
+    const { readItems } = await import('./items.js')
+    const res = (await readItems(u, collection, {
+      filter: { id: { _eq: item } },
+      fields: ['id'],
+      limit: 1,
+      count: false
+    })) as { data?: unknown[] }
+    return { ok: (res.data?.length ?? 0) > 0, fields: list }
+  } catch {
+    return { ok: false, fields: [] }
+  }
+}
+
 export function realPatternDeps(): PatternDeps {
   const userCache = new Map<string, User | null>()
   const loadUser = async (id: string): Promise<User | null> => {
@@ -276,7 +310,6 @@ export function realPatternDeps(): PatternDeps {
       const app = pulseApp()
       if (!app) return 0
       const { notifyUser } = await import('./notification-channels.js')
-      const { can } = await import('./permissions.js')
       const subs = (await db('nivaro_alert_subscriptions')
         .where({ alert_definition: rule.id })
         .select('user', 'notify_inapp', 'notify_email')) as Array<{
@@ -286,34 +319,47 @@ export function realPatternDeps(): PatternDeps {
       }>
       if (subs.length === 0) return 0
       const ev = 'event' in what ? what.event : null
-      let subject: string
-      let message: string
-      if (ev) {
-        const who = await personName(ev.user)
-        const verb = VERBS[ev.action] ?? ev.action
-        const fields = ev.changed_fields?.length
-          ? ` — changed ${ev.changed_fields.slice(0, 8).join(', ')}`
-          : ''
-        subject = `Alert: ${rule.name}`
-        message = `${who} ${verb} ${ev.collection ?? 'a record'}${ev.item ? ` #${ev.item}` : ''}${fields}`
-      } else {
-        const d = (what as { digest: { count: number; examples: HeldMatch[] } }).digest
-        subject = `Alert digest: ${rule.name}`
-        const examples = d.examples
-          .map((x) => `${VERBS[x.action] ?? x.action} ${x.collection} #${x.item}`)
-          .join('; ')
-        message = `${d.count} more ${d.count === 1 ? 'match' : 'matches'} after the hourly limit of ${rule.config.max_per_hour} — e.g. ${examples}`
-      }
-      const collection = ev?.collection ?? null
+      const digest = ev
+        ? null
+        : (what as { digest: { count: number; examples: HeldMatch[] } }).digest
       let sent = 0
       for (const s of subs) {
         if (ev && sameId(s.user, ev.user)) continue
         const inapp = s.notify_inapp === true || s.notify_inapp === 1
         const email = s.notify_email === true || s.notify_email === 1
         if (!inapp && !email) continue
-        if (collection && !isSystemCollection(collection)) {
-          const u = await loadUser(s.user)
-          if (!u || !(await can(u, 'read', collection).catch(() => false))) continue
+        // Every recipient is judged on the RECORD, not only its collection: a subscriber
+        // who cannot read this record (User Scope, row filter, system table) hears
+        // nothing about it, and field names they cannot read never reach them.
+        const u = await loadUser(s.user)
+        if (!u || u.status !== 'active') continue
+        let subject: string
+        let message: string
+        if (ev) {
+          const seen = await recipientSees(u, ev.collection, ev.item, ev.action)
+          if (!seen.ok) continue
+          const who = await personName(ev.user)
+          const verb = VERBS[ev.action] ?? ev.action
+          const changed = (ev.changed_fields ?? []).filter(
+            (f) => seen.fields === null || seen.fields.includes(f)
+          )
+          const fields = changed.length ? ` — changed ${changed.slice(0, 8).join(', ')}` : ''
+          subject = `Alert: ${rule.name}`
+          message = `${who} ${verb} ${ev.collection ?? 'a record'}${ev.item ? ` #${ev.item}` : ''}${fields}`
+        } else {
+          const d = digest as { count: number; examples: HeldMatch[] }
+          const visible: HeldMatch[] = []
+          for (const x of d.examples) {
+            if ((await recipientSees(u, x.collection, x.item, x.action)).ok) visible.push(x)
+          }
+          if (visible.length === 0) continue
+          subject = `Alert digest: ${rule.name}`
+          const examples = visible
+            .slice(0, 10)
+            .map((x) => `${VERBS[x.action] ?? x.action} ${x.collection} #${x.item}`)
+            .join('; ')
+          const n = visible.length
+          message = `${n} more ${n === 1 ? 'match' : 'matches'} you can see after the hourly limit of ${rule.config.max_per_hour} — e.g. ${examples}`
         }
         try {
           await notifyUser(app, s.user, {
