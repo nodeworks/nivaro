@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useItemEditAuth } from '../../context'
 import { cn } from '../../lib/utils'
+import { PermissionSummaryCard } from '../access/PermissionSummary'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { DayTimelineCard } from './DayTimeline'
 import { DelegationCard } from './DelegationCard'
@@ -161,6 +162,7 @@ export function PersonProfile({
               <div className='space-y-4'>
                 <AccessCard profile={profile} />
                 <AccessSummaryCard userId={profile.id} />
+                <PermissionSummaryCard userId={profile.id} />
                 <UserScopesCard userId={profile.id} />
                 <WhyCard profile={profile} />
                 <CompareAccessCard profile={profile} />

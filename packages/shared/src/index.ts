@@ -2,6 +2,12 @@ export { AgentBadge } from './components/AgentBadge'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
+export {
+  PermissionSummaryBody,
+  PermissionSummaryCard,
+  type PermissionSummaryData,
+  usePermissionSummary
+} from './components/access/PermissionSummary'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
@@ -543,6 +549,7 @@ export type {
   SupportTicket,
   SupportTicketDetail
 } from './components/support/types'
+export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
 export { UserAvatar } from './components/UserAvatar'
@@ -621,6 +628,12 @@ export {
 } from './lib/client-version'
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
+export {
+  CORE_GLOSSARY,
+  findGlossaryTerm,
+  mergeGlossary,
+  uiHint
+} from './lib/core-glossary'
 export { useAfterIdle } from './lib/defer'
 export { deliveryAckFor } from './lib/delivery-ack'
 export {
@@ -663,7 +676,8 @@ export {
   type GlossaryTerm,
   glossarySegments,
   invalidateGlossary,
-  useGlossary
+  useGlossary,
+  withCoreGlossary
 } from './lib/glossary'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'

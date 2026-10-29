@@ -2,6 +2,7 @@ import type { NivaroClient } from '@nivaro/sdk'
 import { useEffect, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
 import { get } from './commands'
+import { CORE_GLOSSARY, mergeGlossary } from './core-glossary'
 
 // The shared glossary (#1899): business terms an admin defined once
 // (GET /api/ai-knowledge/glossary). Labels and Ask AI answers mark a term
@@ -19,6 +20,12 @@ export interface GlossaryTerm {
   query_note: string | null
   collection: string | null
   updated_at: string | null
+  /** One-line tooltip text; instance rows derive it from the definition (uiHint). */
+  ui_hint?: string
+  /** A built-in Nivaro term (lib/core-glossary.ts), not an instance row. */
+  builtin?: boolean
+  /** The built-in slug this instance entry replaces (mergeGlossary). */
+  overrides?: string
 }
 
 export type GlossarySegment = { text: string; term?: GlossaryTerm }
@@ -105,8 +112,26 @@ export function invalidateGlossary(client: NivaroClient): void {
   cache.delete(client)
 }
 
-/** The glossary for the current NivaroProvider; empty without one. */
-export function useGlossary(): GlossaryTerm[] {
+const merged = new WeakMap<GlossaryTerm[], GlossaryTerm[]>()
+
+/** Built-in terms with the instance's laid over them — memoized per fetched list. */
+export function withCoreGlossary(instance: GlossaryTerm[]): GlossaryTerm[] {
+  let m = merged.get(instance)
+  if (!m) {
+    m = mergeGlossary(CORE_GLOSSARY, instance)
+    merged.set(instance, m)
+  }
+  return m
+}
+
+/**
+ * The glossary for the current NivaroProvider (one cached read per client).
+ * Default: the instance's own terms only (empty without a provider) — what
+ * labels and Ask AI answers auto-mark. `{ withCore: true }`: the built-in
+ * Nivaro terms too, the instance's entries replacing them (what <Term> uses);
+ * works without a provider, an API glossary route or AI configured.
+ */
+export function useGlossary(opts: { withCore?: boolean } = {}): GlossaryTerm[] {
   const client = useOptionalNivaroClient()
   const [terms, setTerms] = useState<GlossaryTerm[]>(EMPTY)
   useEffect(() => {
@@ -119,5 +144,5 @@ export function useGlossary(): GlossaryTerm[] {
       live = false
     }
   }, [client])
-  return terms
+  return opts.withCore ? withCoreGlossary(terms) : terms
 }

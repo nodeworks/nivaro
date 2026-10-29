@@ -13,6 +13,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { CollectionFieldPicker, type PickedField, Term } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -30,7 +31,6 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
-import { CollectionFieldPicker, type PickedField } from '@nivaro/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -2460,7 +2460,7 @@ export function QueuesPage() {
       <div className='sticky top-0 z-10 shrink-0 border-b border-slate-200 bg-white px-6 py-4 dark:border-border dark:bg-card'>
         <div className='flex items-center justify-between'>
           <h1 className='text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-foreground'>
-            Queues
+            <Term id='queue'>Queues</Term>
           </h1>
           <Button size='sm' onClick={() => createMut.mutate()}>
             <Plus className='mr-1.5 h-3.5 w-3.5' /> New Queue

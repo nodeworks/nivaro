@@ -26,6 +26,7 @@ import {
   getUserScopes,
   listScopeDimensions,
   resolveRecordDimensionIds,
+  type ScopeDimension,
   type ScopeHop,
   scopeHopsFor
 } from './user-scopes.js'
@@ -44,7 +45,7 @@ export interface AccessReason {
   trash_id?: number
 }
 
-interface ScopeGate {
+export interface ScopeGate {
   dimension: string
   label: string
   values: Array<string | number>
@@ -88,7 +89,25 @@ export async function compileAccessGates(
     (s) => s.mode === 'restrict' && s.values.length > 0
   )
   if (restricts.length === 0) return base
-  const dims = await listScopeDimensions()
+  const routed = await routeScopeGates(restricts, await listScopeDimensions(), collection)
+  base.scopes = routed.scopes
+  base.strict = routed.strict
+  return base
+}
+
+/**
+ * Which restrict-mode scopes reach one collection, and whether a strict one
+ * that cannot reach it hides the collection outright. The ONE routing rule
+ * (reference-table skip, strict deny): compileAccessGates runs it over a
+ * person's real scopes, the access summary (#12) over a role's members'.
+ */
+export async function routeScopeGates(
+  restricts: Array<{ dimension: string; values: Array<string | number> }>,
+  dims: ScopeDimension[],
+  collection: string
+): Promise<{ scopes: ScopeGate[]; strict: { dimension: string; label: string } | null }> {
+  const scopes: ScopeGate[] = []
+  let strict: { dimension: string; label: string } | null = null
   const isReferenceTable = new Set(dims.map((d) => d.target_collection)).has(collection)
   for (const s of restricts) {
     const dim = dims.find((d) => d.name === s.dimension)
@@ -96,10 +115,10 @@ export async function compileAccessGates(
     if (isReferenceTable && dim.target_collection !== collection) continue
     const hops = await scopeHopsFor(dim, collection)
     if (!hops) {
-      if (dim.strict && !base.strict) base.strict = { dimension: dim.name, label: dim.label }
+      if (dim.strict && !strict) strict = { dimension: dim.name, label: dim.label }
       continue
     }
-    base.scopes.push({
+    scopes.push({
       dimension: dim.name,
       label: dim.label,
       values: s.values,
@@ -108,7 +127,7 @@ export async function compileAccessGates(
       displayField: dim.display_field || 'name'
     })
   }
-  return base
+  return { scopes, strict }
 }
 
 function applyScope(q: Knex.QueryBuilder, collection: string, g: ScopeGate): void {

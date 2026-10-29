@@ -16,6 +16,7 @@ import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
 import { accessInsightRoutes } from './access-insights.js'
 import { accessRequestRoutes } from './access-requests.js'
+import { accessSummaryRoutes } from './access-summary.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { agentQuestionRoutes } from './agent-questions.js'
@@ -575,6 +576,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(itemsRoutes, { prefix: '/items' })
   await app.register(accessExplainRoutes)
   await app.register(accessInsightRoutes)
+  await app.register(accessSummaryRoutes)
   await app.register(pickerNarrowingRoutes)
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })

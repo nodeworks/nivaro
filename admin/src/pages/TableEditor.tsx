@@ -4,6 +4,7 @@ import {
   IconPicker,
   LayoutEditor,
   LayoutOverview,
+  Term,
   TipLayer
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10678,17 +10679,19 @@ export function TableEditorPage() {
                   : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
               )}
             >
-              {t === 'groups'
-                ? 'Layout'
-                : t === 'behavior'
-                  ? 'Behavior'
-                  : t === 'rules'
-                    ? 'Field Rules'
-                    : t === 'imports'
-                      ? 'Imports'
-                      : t === 'content'
-                        ? 'Content'
-                        : t}
+              {t === 'groups' ? (
+                <Term id='layout'>Layout</Term>
+              ) : t === 'behavior' ? (
+                'Behavior'
+              ) : t === 'rules' ? (
+                <Term id='field-rule'>Field Rules</Term>
+              ) : t === 'imports' ? (
+                'Imports'
+              ) : t === 'content' ? (
+                'Content'
+              ) : (
+                t
+              )}
             </button>
           ))}
         </div>

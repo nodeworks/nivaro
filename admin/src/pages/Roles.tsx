@@ -1,4 +1,4 @@
-import { UserAvatar } from '@nivaro/shared'
+import { PermissionSummaryBody, Term, UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -42,8 +42,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
-import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { api } from '@/lib/api'
+import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
 
 type User = {
@@ -70,7 +70,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
+type ActiveTab = 'permissions' | 'words' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
 
 // A hub entry is listed tab by tab, keyed by each tab's permission key (its
 // old standalone path), so a role can still hide one tab of a hub.
@@ -85,6 +85,7 @@ const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
     }))
   })
 )
+const navLabelFor = (path: string) => ALL_NAV_ITEMS.find((i) => i.to === path)?.label ?? null
 
 const ACTIONS = ['create', 'read', 'update', 'delete'] as const
 type Action = (typeof ACTIONS)[number]
@@ -404,7 +405,7 @@ function RowFilterSection({ roleId, policies }: { roleId: string; policies: Poli
         )}
         <Filter className='h-3.5 w-3.5 text-slate-400' />
         <span className='text-[13px] font-medium text-slate-700 dark:text-foreground'>
-          Row-level security
+          <Term id='row-filter'>Row-level security</Term>
         </span>
         <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>optional</span>
         {filteredCount > 0 && (
@@ -1119,21 +1120,24 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]).map(
-          (tab) => (
-            <button
-              key={tab}
-              type='button'
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
-                activeTab === tab
-                  ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
-              )}
-            >
-              {tab === 'ui'
-                ? 'UI Access'
+        {(
+          ['permissions', 'words', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]
+        ).map((tab) => (
+          <button
+            key={tab}
+            type='button'
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
+              activeTab === tab
+                ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
+            )}
+          >
+            {tab === 'ui'
+              ? 'UI Access'
+              : tab === 'words'
+                ? 'In words'
                 : tab === 'simulate'
                   ? 'Simulator'
                   : tab === 'compare'
@@ -1141,9 +1145,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                     : tab === 'views'
                       ? 'Suggested views'
                       : tab}
-            </button>
-          )
-        )}
+          </button>
+        ))}
       </div>
 
       {/* Tab content */}
@@ -1167,6 +1170,15 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               />
             </>
           )
+        ) : activeTab === 'words' ? (
+          <div className='space-y-3' data-role-words>
+            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+              What this role can do, from its <Term id='policy'>policies</Term>, field lists,{' '}
+              <Term id='row-filter'>row filters</Term> and the <Term id='scope'>User Scopes</Term>{' '}
+              its people hold — the same checks the API runs.
+            </p>
+            <PermissionSummaryBody roleId={role.id} pageLabel={navLabelFor} />
+          </div>
         ) : activeTab === 'compare' ? (
           <CompareTab roleId={role.id} policies={policies} />
         ) : activeTab === 'ui' ? (

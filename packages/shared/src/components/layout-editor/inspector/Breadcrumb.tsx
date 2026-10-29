@@ -1,4 +1,5 @@
 import { Fragment, useMemo } from 'react'
+import { Term } from '../../Term'
 import type { DesignTarget } from '../design-context'
 import { crumbsOf, KIND_WORDS } from '../nav/tree'
 import { useInspectorEnv } from './kit'
@@ -22,10 +23,18 @@ export function Breadcrumb({
 }) {
   const env = useInspectorEnv()
   const crumbs = useMemo(() => crumbsOf(env.bundle, target), [env.bundle, target])
-  if (crumbs.length === 0) return <>{where ? `${kind} · ${where}` : kind}</>
+  // "Section" carries its glossary meaning on hover (#2); other kinds stay plain.
+  const kindWord = kind === 'Section' ? <Term id='section'>{kind}</Term> : kind
+  if (crumbs.length === 0)
+    return (
+      <>
+        {kindWord}
+        {where ? ` · ${where}` : ''}
+      </>
+    )
   return (
     <span data-breadcrumb=''>
-      {kind} ·{' '}
+      {kindWord} ·{' '}
       {crumbs.map((c, i) => (
         <Fragment key={c.target.kind === 'group' ? c.target.key : i}>
           {i > 0 && <span aria-hidden='true'> › </span>}

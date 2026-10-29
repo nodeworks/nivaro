@@ -52,6 +52,7 @@ import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
 import { QueryErrorState } from '../QueryErrorState'
+import { Term } from '../Term'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -4158,10 +4159,10 @@ export function PipelineEditorView({
                               ? 'bg-nvr-cyan/10 text-nvr-cyan'
                               : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
                           )}
-                          title='Configure matrix dimensions'
+                          aria-label='Configure matrix dimensions'
                         >
                           <LayoutGrid className='h-3.5 w-3.5' />
-                          Dimensions
+                          <Term id='dimension'>Dimensions</Term>
                           {(b.dimensions ?? []).length > 0 && (
                             <span className='font-mono text-[10px] opacity-70'>
                               ({b.dimensions?.length})
@@ -4242,7 +4243,7 @@ export function PipelineEditorView({
           <div className='rounded-xl border border-slate-200 bg-white p-6 space-y-4'>
             <div className='flex items-start justify-between gap-4'>
               <h2 className='text-[13px] font-semibold text-slate-800'>
-                Owner Matrix
+                <Term id='owner-matrix'>Owner Matrix</Term>
                 <span className='mt-0.5 block max-w-[72ch] text-[12px] font-normal text-slate-500'>
                   Who is responsible in each state, per dimension value. Records resolve their
                   owners from this grid automatically — notifications, queues, and SLAs follow it.
