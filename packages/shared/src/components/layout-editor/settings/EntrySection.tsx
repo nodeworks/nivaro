@@ -117,6 +117,26 @@ export function EntrySection(props: SectionProps) {
           />
         }
       />
+      <Setting
+        k='layout.tour'
+        control={
+          <Toggle
+            label='First-use tour'
+            checked={config.tour === true}
+            onChange={(on) =>
+              save(
+                { tour: on || undefined },
+                on ? 'Turn on the first-use tour' : 'Turn off the first-use tour'
+              )
+            }
+          />
+        }
+        note={
+          config.tour
+            ? 'Each section is a step: its name, its help text, or the fields it holds. Section help text reads best here.'
+            : undefined
+        }
+      />
       <Setting k='layout.badge'>
         <BadgeEditor
           config={config}

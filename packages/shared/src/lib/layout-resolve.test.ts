@@ -1,13 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { deferredSections } from '../components/item-edit/lazy-sections'
 import type { ActiveLayoutData } from '../components/item-edit/types'
 import {
   activeFreeze,
   activeWindowPatch,
+  currentViewport,
   freezePatch,
   lazySectionPatch,
   lazySectionsOf,
   phoneOfPatch,
+  screenVersionOf,
+  tabletOf,
+  tabletOfPatch,
   windowState
 } from './layout-resolve'
 
@@ -70,5 +74,39 @@ describe('deferredSections (#2713)', () => {
     expect(deferredSections(layout(lazy, false), new Set()).groups.size).toBe(0)
     expect(deferredSections(layout(null), new Set()).groups.size).toBe(0)
     expect(deferredSections(layout(lazy), new Set(), { design: true }).groups.size).toBe(0)
+  })
+})
+
+describe('tablet version (#3183)', () => {
+  const real = globalThis.window
+  afterEach(() => {
+    ;(globalThis as { window?: unknown }).window = real
+  })
+  const screen = (matches: (q: string) => boolean) => {
+    ;(globalThis as { window?: unknown }).window = {
+      matchMedia: (q: string) => ({ matches: matches(q) })
+    }
+  }
+
+  it('reads and writes tablet_of beside every other key', () => {
+    expect(tabletOf({ tablet_of: '6' })).toBe(6)
+    expect(tabletOf({ tablet_of: 0 })).toBeNull()
+    expect(tabletOfPatch({ role_ids: ['r'] }, 6).conditions).toEqual({
+      role_ids: ['r'],
+      tablet_of: 6
+    })
+    expect(tabletOfPatch({ tablet_of: 6 }, null).conditions).toBeNull()
+    expect(screenVersionOf({ phone_of: 2 })).toBe(2)
+    expect(screenVersionOf({ tablet_of: 3 })).toBe(3)
+    expect(screenVersionOf(null)).toBeNull()
+  })
+
+  it('names the screen the record page reports', () => {
+    screen((q) => q.includes('max-width: 639px'))
+    expect(currentViewport()).toBe('phone')
+    screen((q) => q.includes('max-width: 1023px'))
+    expect(currentViewport()).toBe('tablet')
+    screen(() => false)
+    expect(currentViewport()).toBeNull()
   })
 })

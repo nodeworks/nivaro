@@ -209,6 +209,11 @@ export function describeReason(
         { text: 'on small screens, instead of ' },
         { text: reason.phone_of_name ?? 'its form', strong: true }
       ]
+    case 'tablet':
+      return [
+        { text: 'on tablet-width screens, instead of ' },
+        { text: reason.tablet_of_name ?? 'its form', strong: true }
+      ]
     default:
       return []
   }

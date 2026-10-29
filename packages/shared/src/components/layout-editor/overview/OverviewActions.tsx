@@ -231,8 +231,8 @@ export function TestRecordButton({
   const debounced = useDebounced(search, 250)
   const [record, setRecord] = useState<{ id: string | number; label: string } | null>(null)
   const [roleId, setRoleId] = useState(AS_MYSELF)
-  // #2715 / #2714: on a phone, and on another day (active dates).
-  const [screen, setScreen] = useState<'desktop' | 'phone'>('desktop')
+  // #2715 / #3183 / #2714: on a phone or tablet, and on another day (active dates).
+  const [screen, setScreen] = useState<'desktop' | 'tablet' | 'phone'>('desktop')
   const [day, setDay] = useState('')
   const [busy, setBusy] = useState(false)
   const { data: template } = useDisplayTemplate(collection, open)
@@ -252,7 +252,7 @@ export function TestRecordButton({
         collection,
         item: record.id,
         role_id: roleId || null,
-        viewport: screen === 'phone' ? 'phone' : null,
+        viewport: screen === 'desktop' ? null : screen,
         at: day || null
       })
       onResult({
@@ -335,8 +335,8 @@ export function TestRecordButton({
         <div className='mt-3 flex flex-wrap items-end gap-3'>
           <fieldset className='m-0 min-w-0 border-0 p-0'>
             <legend className={labelCls}>Screen</legend>
-            <div className={cn(segTrack(2), 'w-[160px]')}>
-              {(['desktop', 'phone'] as const).map((v) => (
+            <div className={cn(segTrack(3), 'w-[220px]')}>
+              {(['desktop', 'tablet', 'phone'] as const).map((v) => (
                 <button
                   key={v}
                   type='button'
@@ -345,7 +345,7 @@ export function TestRecordButton({
                   onClick={() => setScreen(v)}
                   className={segOption(screen === v)}
                 >
-                  {v === 'desktop' ? 'Desktop' : 'Phone'}
+                  {v === 'desktop' ? 'Desktop' : v === 'tablet' ? 'Tablet' : 'Phone'}
                 </button>
               ))}
             </div>

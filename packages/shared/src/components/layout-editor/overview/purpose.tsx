@@ -1,4 +1,4 @@
-import { CalendarRange, Lock, Smartphone } from 'lucide-react'
+import { CalendarRange, Lock, Smartphone, Tablet } from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
 import { dayWords, windowWords } from '../../../lib/layout-resolve'
 import { cn } from '../../../lib/utils'
@@ -109,6 +109,25 @@ export function ResolvePills({ row }: { row: OverviewRow }) {
           </Pill>
         </span>
       )}
+      {row.tablet_of != null && (
+        <span data-row-tablet-of={row.tablet_of}>
+          <Pill tone='view'>
+            <Tablet className='mr-1 h-3 w-3' />
+            tablet
+          </Pill>
+        </span>
+      )}
+      {row.tablet_version && (
+        <span
+          data-row-tablet-version={row.tablet_version.layout_id}
+          data-tip={`On tablet-width screens “${row.tablet_version.name}” opens instead`}
+        >
+          <Pill tone='view'>
+            <Tablet className='mr-1 h-3 w-3' />
+            has tablet version
+          </Pill>
+        </span>
+      )}
       {row.frozen && (
         <span
           data-row-frozen={row.frozen.until}
@@ -132,6 +151,7 @@ export function rowPill(row: OverviewRow): { tone: PillTone; text: string } | nu
     if (row.reason.kind === 'role') return { tone: 'role', text: 'role' }
     if (row.reason.kind === 'ab') return { tone: 'role', text: 'A/B' }
     if (row.reason.kind === 'phone') return { tone: 'view', text: 'phone' }
+    if (row.reason.kind === 'tablet') return { tone: 'view', text: 'tablet' }
     return null
   }
   if (row.section === 'link_only') return { tone: 'link', text: 'link only' }

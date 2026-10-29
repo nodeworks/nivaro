@@ -497,7 +497,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           <Setting
             k='group.summary_fields'
             label='Show these values in the heading'
-            effect='A short summary while the section is closed.'
+            effect='A short summary while the section is closed, in edit and summary view. Two or three values read best; the summary heading shows the first three.'
           >
             {placed.length === 0 ? (
               <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
@@ -603,6 +603,14 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
                   )
                 })}
               </div>
+            )}
+            {summary.length > 3 && (
+              <p
+                data-summary-crowded=''
+                className='mt-1.5 text-[12px] leading-snug text-amber-700 dark:text-amber-300'
+              >
+                {summary.length} values crowd the heading; the summary view shows the first three.
+              </p>
             )}
           </Setting>
           <Toggle

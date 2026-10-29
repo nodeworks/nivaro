@@ -58,7 +58,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'Pick Phone under Screen to see which form the record opens with on a small screen, and a day under On day to test active dates on another day.'
+      text: 'Pick Tablet or Phone under Screen to see which form the record opens with on a tablet-width or small screen, and a day under On day to test active dates on another day.'
     },
     { type: 'h3', id: 'layout-editor-active-dates', text: 'Active dates' },
     {
@@ -69,6 +69,11 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (`viewport=phone` on `/collection-layouts/active`): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.'
+    },
+    { type: 'h3', id: 'layout-editor-tablet-version', text: 'Tablet version' },
+    {
+      type: 'p',
+      text: "Form settings → Who gets this form → Tablet version → Make a tablet version copies the form for tablet-width screens (for example two columns where the desktop form has three). Record pages ask for it (`viewport=tablet` on `/collection-layouts/active`) on a screen 640–1023 px wide, or on a touch screen (no hover, coarse pointer) up to 1366 px — an iPad in landscape. After the usual rules pick a form, its tablet version opens in its place. On a phone, a form with no phone version opens its tablet version when it has one. Like a phone version, a tablet version never opens on its own, needs no rules of its own, keeps its own roles and active dates, and sits under its form on the overview. A form is a phone version or a tablet version, never both, and a version cannot have versions of its own. The screen is read once when the record opens, so turning the device never swaps the form under someone's edits."
     },
     { type: 'h3', id: 'layout-editor-coverage', text: 'Check coverage and health' },
     {
@@ -178,9 +183,19 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: "Theme preview: Tools → Preview in dark shows the canvas in the dark theme without changing the app's theme. When the app is already dark the tool is off, because a dark app cannot show a light canvas."
     },
+    { type: 'h3', id: 'layout-editor-density', text: 'Form density' },
+    {
+      type: 'p',
+      text: "Form settings → How it's laid out → Density sets how tightly the record form is spaced for the people filling it in, in the admin app and in efp-new. Comfortable is the usual spacing. Compact tightens section headings and bodies, the gaps between fields and between a label and its control, and, with a mouse, makes inputs a little shorter; touch screens keep full-size controls. It changes the record form and its summary view (and the canvas while you edit), not the editor's zoom."
+    },
+    { type: 'h3', id: 'layout-editor-tour', text: 'First-use tour' },
+    {
+      type: 'p',
+      text: "Form settings → Entering data → First-use tour turns on a short guided tour for people opening the form for the first time. Each section on screen is one step, in page order: its name, then its help text, or, without help text, the fields it holds and how many are required. Sections in another tab, steps not reached yet and sections hidden by their rules are left out. Next, Back and Skip tour (Esc closes; the arrow keys move while the tour has focus); on a phone the tour sits at the bottom of the screen. Finishing or skipping it is remembered per person and form in the person's preferences (`form_tours_done`, on every device), so it starts by itself only once; a Tour button above the record header replays it. Write section help text for the best tour."
+    },
     {
       type: 'note',
-      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets }`. It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
+      text: 'These settings live in one JSON column, `nivaro_collection_layouts.entry_config` (migration 491): `{ focus_first, enter_next, tab_order, adaptive, adaptive_threshold, badge: { tag, color }, glossary, presets, density, tour }` (`density` is only ever `compact`; `tour` only `true`). It is a layout setting like the others (`layout_update` ops, `PATCH /collection-layouts/:id`) and is returned by `GET /collection-layouts/active`.'
     },
     { type: 'h3', id: 'layout-editor-drag', text: 'Drag and drop' },
     {
@@ -395,6 +410,15 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Form settings → Tools → Freeze edits stops changes to a layout until a date (a go-live or an audit), with a reason people read. Until that day the server refuses every save, restore, settings change and delete of the layout with the reason (400 `LAYOUT_FROZEN`). An administrator can still save by giving an override note: the editor asks for it at Save, the note becomes the version note in History and an activity entry (`layout-freeze-override`). Lifting the freeze early is a save too, so it asks for a note. The freeze lifts by itself on its date; copies of a frozen layout are not frozen.'
+    },
+    {
+      type: 'h3',
+      id: 'layout-editor-collapsed-summary',
+      text: 'Collapsed sections show key values'
+    },
+    {
+      type: 'p',
+      text: 'Select a section and, under When collapsed → Show these values in the heading, tick the fields whose values should show while it is closed — two or three read best. The record form shows them in a line under the closed heading; the summary view shows the first three in the heading itself (a grid or link list shows its row or item count). Leave out empty values drops blank ones. Only fields placed in the section can be picked.'
     },
     { type: 'h3', id: 'layout-editor-sections-on-open', text: 'Sections that load when opened' },
     {

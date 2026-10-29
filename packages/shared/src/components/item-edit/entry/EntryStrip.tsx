@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { badgeClasses } from '../../../lib/entry-badge-style'
 import type { EntryConfig, EntryMode } from '../../../lib/entry-config'
 import { cn } from '../../../lib/utils'
@@ -5,20 +6,23 @@ import { cn } from '../../../lib/utils'
 /**
  * The line above the record's header tiles: the form's identity badge (#2728, so
  * people can tell which form they are in) and, on an adaptive form, the switch
- * between guided steps and tabs (#2710).
+ * between guided steps and tabs (#2710), and the first-use tour's Tour button (#3192).
  */
 export function EntryStrip({
   badge,
   mode,
   auto,
-  onMode
+  onMode,
+  tour
 }: {
   badge: EntryConfig['badge']
   mode: EntryMode | null
   auto: EntryMode | null
   onMode: (m: EntryMode | null) => void
+  /** The Tour button, when the form has a first-use tour. */
+  tour?: ReactNode
 }) {
-  if (!badge && !mode) return null
+  if (!badge && !mode && !tour) return null
   const opt = (m: EntryMode, label: string, tip: string) => (
     <button
       type='button'
@@ -52,15 +56,18 @@ export function EntryStrip({
       ) : (
         <span />
       )}
-      {mode && (
-        <fieldset
-          aria-label='How to show this form'
-          className='m-0 inline-flex min-w-0 items-center gap-0.5 rounded-md border-0 bg-slate-100 p-0.5 dark:bg-muted'
-        >
-          {opt('beginner', 'Guided steps', 'One step at a time, with Next and Back')}
-          {opt('expert', 'Tabs', 'Every tab open, in any order')}
-        </fieldset>
-      )}
+      <span className='flex min-w-0 flex-wrap items-center gap-2'>
+        {tour}
+        {mode && (
+          <fieldset
+            aria-label='How to show this form'
+            className='m-0 inline-flex min-w-0 items-center gap-0.5 rounded-md border-0 bg-slate-100 p-0.5 dark:bg-muted'
+          >
+            {opt('beginner', 'Guided steps', 'One step at a time, with Next and Back')}
+            {opt('expert', 'Tabs', 'Every tab open, in any order')}
+          </fieldset>
+        )}
+      </span>
     </div>
   )
 }

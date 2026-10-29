@@ -774,3 +774,51 @@ describe('FormSettings: Entering data (#2707 #2708 #2710 #2728)', () => {
     expect(entryOp(apply).patch).toEqual({ entry_config: null })
   })
 })
+
+describe('FormSettings: density, tour, tablet version (#3182 #3192 #3183)', () => {
+  const lastOp = (apply: { mock: { calls: unknown[][] } }) =>
+    (apply.mock.calls.at(-1)?.[0] as LayoutOp[])[0] as Extract<LayoutOp, { op: 'layout_update' }>
+
+  it('compact density is stored in entry_config; comfortable clears it', async () => {
+    const { apply } = await mount(bundleOf('grouped', { entry_config: { enter_next: true } }))
+    const opt = (label: string) =>
+      Array.from(setting('layout.density')?.querySelectorAll('[aria-pressed]') ?? []).find(
+        (b) => b.textContent === label
+      ) ?? null
+    await click(opt('Compact'))
+    expect(lastOp(apply).patch).toEqual({
+      entry_config: { enter_next: true, density: 'compact' }
+    })
+    expect((apply.mock.calls.at(-1)?.[1] as ApplyOptions).label).toBe('Make the form compact')
+  })
+
+  it('a compact form shows Compact picked and goes back to comfortable', async () => {
+    const { apply } = await mount(bundleOf('grouped', { entry_config: { density: 'compact' } }))
+    const picked = setting('layout.density')?.querySelector('[aria-pressed="true"]')
+    expect(picked?.textContent).toBe('Compact')
+    const comfy = Array.from(
+      setting('layout.density')?.querySelectorAll('[aria-pressed]') ?? []
+    ).find((b) => b.textContent === 'Comfortable')
+    await click(comfy ?? null)
+    expect(lastOp(apply).patch).toEqual({ entry_config: null })
+  })
+
+  it('turns the first-use tour on in entry_config', async () => {
+    const { apply } = await mount(bundleOf('grouped'))
+    await click(setting('layout.tour')?.querySelector('[role="switch"]') ?? null)
+    expect(lastOp(apply).patch).toEqual({ entry_config: { tour: true } })
+  })
+
+  it('offers a tablet version beside the phone version', async () => {
+    await mount(bundleOf('grouped'))
+    expect(setting('layout.conditions.tablet_of')).not.toBeNull()
+    expect(q('[data-action="make-tablet-version"]')).not.toBeNull()
+    expect(q('[data-action="make-phone-version"]')).not.toBeNull()
+  })
+
+  it('a phone version cannot also have a tablet version', async () => {
+    await mount(bundleOf('grouped', { conditions: { phone_of: 9 } }))
+    expect(q('[data-screen-version-blocked="tablet"]')).not.toBeNull()
+    expect(q('[data-action="make-tablet-version"]')).toBeNull()
+  })
+})

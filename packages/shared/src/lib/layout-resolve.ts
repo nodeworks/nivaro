@@ -6,6 +6,7 @@
  *
  *  - `active_window` {from?, until?} (#2714): the form resolves only on those days.
  *  - `phone_of` (#2715): this form is the phone version of that form.
+ *  - `tablet_of` (#3183): this form is the tablet version of that form.
  *  - `freeze` {until, reason, by?, by_name?, at?} (#2717): edits refused before `until`.
  *  - `lazy_sections` (#2713): sections whose pickers, grids and widgets wait until opened.
  */
@@ -115,6 +116,20 @@ export function phoneOfPatch(conditions: unknown, desktopId: number | null) {
   return { conditions: conditionsWithKey(conditions, 'phone_of', desktopId) }
 }
 
+export function tabletOf(conditions: unknown): number | null {
+  const v = Number(conditionsObject(conditions)?.tablet_of)
+  return Number.isInteger(v) && v > 0 ? v : null
+}
+
+export function tabletOfPatch(conditions: unknown, desktopId: number | null) {
+  return { conditions: conditionsWithKey(conditions, 'tablet_of', desktopId) }
+}
+
+/** The form this one stands in for on a smaller screen (phone or tablet version), or null. */
+export function screenVersionOf(conditions: unknown): number | null {
+  return phoneOf(conditions) ?? tabletOf(conditions)
+}
+
 export function freezeOf(conditions: unknown): LayoutFreeze | null {
   const f = conditionsObject(conditionsObject(conditions)?.freeze)
   if (!f || !isDay(f.until)) return null
@@ -154,12 +169,20 @@ export function lazySectionPatch(conditions: unknown, key: string, on: boolean) 
 
 /** The screen class the record page reports to /active: phones get a form's phone version. */
 export const PHONE_QUERY = '(max-width: 639px)'
+/**
+ * Tablets (#3183) get a form's tablet version: 640–1023 px wide, or a touch-first
+ * screen (no hover, coarse pointer) up to 1366 px — an iPad in landscape.
+ */
+export const TABLET_QUERY =
+  '(min-width: 640px) and (max-width: 1023px), (min-width: 640px) and (max-width: 1366px) and (hover: none) and (pointer: coarse)'
 
-export function currentViewport(): 'phone' | null {
+export type ScreenViewport = 'phone' | 'tablet' | null
+
+export function currentViewport(): ScreenViewport {
   try {
-    return typeof window !== 'undefined' && window.matchMedia?.(PHONE_QUERY).matches
-      ? 'phone'
-      : null
+    if (typeof window === 'undefined' || !window.matchMedia) return null
+    if (window.matchMedia(PHONE_QUERY).matches) return 'phone'
+    return window.matchMedia(TABLET_QUERY).matches ? 'tablet' : null
   } catch {
     return null
   }

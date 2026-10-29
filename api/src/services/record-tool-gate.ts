@@ -50,18 +50,21 @@ export async function recordToolRefusal(
     userId: user.id ? String(user.id) : null
   })
   let granted = !!row?.[grant]
-  // On a small screen the record opens with its form's phone version (#2715).
-  if (!granted) {
-    const phone = await resolveLayout({
+  // On a smaller screen the record opens with its form's phone (#2715) or tablet
+  // (#3183) version.
+  for (const viewport of ['phone', 'tablet'] as const) {
+    if (granted) break
+    const small = await resolveLayout({
       collection,
       slug: null,
       item: itemId,
       role,
       isAdmin: false,
       userId: user.id ? String(user.id) : null,
-      viewport: 'phone'
+      viewport
     })
-    if (phone.reason?.kind === 'phone') granted = !!phone.row?.[grant]
+    const kind = small.reason?.kind
+    if (kind === 'phone' || kind === 'tablet') granted = !!small.row?.[grant]
   }
   if (!granted && opts.layout) {
     const pin = await legitimatePinForRecord({ collection, slug: opts.layout, item: itemId, role })

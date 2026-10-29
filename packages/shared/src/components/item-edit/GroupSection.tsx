@@ -1044,7 +1044,10 @@ function SummaryStrip({
   }
 
   return (
-    <div className='flex flex-wrap items-baseline gap-x-5 gap-y-1.5 border-t border-slate-100 dark:border-border/60 bg-slate-50/50 dark:bg-white/[0.015] px-5 py-2.5'>
+    <div
+      data-summary-strip=''
+      className='flex flex-wrap items-baseline gap-x-5 gap-y-1.5 border-t border-slate-100 dark:border-border/60 bg-slate-50/50 dark:bg-white/[0.015] px-5 py-2.5'
+    >
       {visibleFields.map((key) => (
         <React.Fragment key={key}>{renderItem(key)}</React.Fragment>
       ))}
@@ -1363,7 +1366,10 @@ export const GroupSection = memo(function GroupSection({
         </div>
       )}
       {!collapsed && (
-        <div className='nvr-expand-in border-t border-slate-100 px-5 py-4'>
+        <div
+          data-section-body=''
+          className='nvr-expand-in border-t border-slate-100 px-5 py-4 dark:border-border/60'
+        >
           {!displayOnly && <SectionIntro group={group} className='mb-3' />}
           {(() => {
             // Merge fields + optional inline owners/pdf/widgets into a sorted render list
@@ -1420,6 +1426,7 @@ export const GroupSection = memo(function GroupSection({
             return displayOnly ? (
               <div
                 ref={gridRef}
+                data-section-grid=''
                 className={cn(design && 'relative', 'grid grid-cols-12 gap-x-6 gap-y-3')}
               >
                 <GridGuides gapClass='gap-x-6' />
@@ -1734,6 +1741,7 @@ export const GroupSection = memo(function GroupSection({
                   <>
                     <div
                       ref={gridRef}
+                      data-section-grid=''
                       className={cn(design && 'relative', 'grid grid-cols-12 gap-4 items-start')}
                     >
                       <GridGuides />
@@ -1747,6 +1755,7 @@ export const GroupSection = memo(function GroupSection({
                       onToggle={() => setFoldOpen((v) => !v)}
                     >
                       <div
+                        data-section-grid=''
                         className={cn(design && 'relative', 'grid grid-cols-12 gap-4 items-start')}
                       >
                         <GridGuides />

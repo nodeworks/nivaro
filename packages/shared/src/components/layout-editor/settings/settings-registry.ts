@@ -126,6 +126,15 @@ export const SETTINGS: SettingDef[] = [
     types: ['grouped'],
     keywords: 'mobile small screen variant device lighter'
   },
+  {
+    key: 'layout.conditions.tablet_of',
+    section: 'who',
+    label: 'Tablet version',
+    effect:
+      'A copy of a form arranged for tablet-width screens that opens instead of it there (and on a phone without a phone version); it never opens on its own.',
+    types: ['grouped'],
+    keywords: 'ipad tablet medium screen variant device touch'
+  },
 
   // ── How it's laid out ─────────────────────────────────────────────────────
   {
@@ -149,6 +158,15 @@ export const SETTINGS: SettingDef[] = [
     label: 'One section open at a time',
     effect: 'Opening a section closes the others.',
     types: ON_SCREEN
+  },
+  {
+    key: 'layout.density',
+    section: 'layout',
+    label: 'Density',
+    effect:
+      'How tightly the form is spaced for the people filling it in: comfortable, or compact to fit more on the screen.',
+    types: ['grouped'],
+    keywords: 'compact comfortable spacing tight dense padding row gap height'
   },
   {
     key: 'layout.row_order_field',
@@ -473,6 +491,15 @@ export const SETTINGS: SettingDef[] = [
     label: 'Records before tabs',
     effect: 'How many records of their own a person makes before the form switches to tabs.',
     types: NEW_MENU
+  },
+  {
+    key: 'layout.tour',
+    section: 'entry',
+    label: 'First-use tour',
+    effect:
+      'The first time someone opens this form, a short tour walks them through its sections; a Tour button brings it back.',
+    types: NEW_MENU,
+    keywords: 'onboarding guide walkthrough introduction help first time new people'
   },
   {
     key: 'layout.badge',

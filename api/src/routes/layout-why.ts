@@ -10,7 +10,7 @@ import {
   type WhyPlacement
 } from '../services/layout-why.js'
 import { can, getAllowedFields } from '../services/permissions.js'
-import { type PickReason, resolveLayout } from './collection-layouts.js'
+import { type PickReason, parseViewport, resolveLayout } from './collection-layouts.js'
 
 const str = (v: unknown): string | null => (v == null || v === '' ? null : String(v))
 const up = (v: unknown) => String(v ?? '').toUpperCase()
@@ -32,6 +32,13 @@ function reasonText(reason: PickReason | null, isAdmin: boolean): string | null 
       return 'a link opened it'
     case 'ab':
       return 'your role is trying out a new version of this form'
+    case 'phone':
+    case 'tablet': {
+      // A screen version (#2715 #3183): why its desktop form won, then the screen.
+      const base = reasonText({ ...reason, kind: reason.desktop_kind ?? 'default' }, isAdmin)
+      const screen = reason.kind === 'phone' ? 'a small screen' : 'a tablet-width screen'
+      return base ? `${base}, in its version for ${screen}` : `it is the version for ${screen}`
+    }
     default:
       return null
   }
@@ -68,8 +75,8 @@ export async function layoutWhyRoutes(app: FastifyInstance) {
       role: user.role ?? null,
       isAdmin,
       userId: user.id ? String(user.id) : null,
-      // The form a small screen opens (#2715).
-      viewport: q.viewport === 'phone' ? 'phone' : null
+      // The form a phone (#2715) or tablet (#3183) opens.
+      viewport: parseViewport(q.viewport)
     })
     const layout = res.row
     if (!layout) return reply.send({ data: null })

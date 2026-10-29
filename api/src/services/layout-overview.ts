@@ -7,6 +7,8 @@ import {
   activeFreeze,
   activeWindowOf,
   phoneOf,
+  screenVersionOf,
+  tabletOf,
   todayInInstance,
   windowState,
   windowWords
@@ -56,6 +58,9 @@ export interface OverviewRow {
   /** #2715: this form's phone version (desktop rows) / the form it is the phone version of. */
   phone_version?: { layout_id: number; name: string } | null
   phone_of?: number | null
+  /** #3183: this form's tablet version (desktop rows) / the form it is the tablet version of. */
+  tablet_version?: { layout_id: number; name: string } | null
+  tablet_of?: number | null
   /** #2717: edits refused until this day (today inside the freeze). */
   frozen?: { until: string; reason: string } | null
 }
@@ -207,8 +212,9 @@ export function buildLayoutOverview(
   ) as unknown as Map<OverviewLayoutInput, { control_id: number; role_id: string }>
   const grouped = ordered.filter((l) => isGrouped(l) && !variants.has(l))
 
-  // Phone versions (#2715) never win on their own: listed after their desktop form.
-  const phoneRows = grouped.filter((l) => phoneOf(l.conditions) != null)
+  // Phone (#2715) and tablet (#3183) versions never win on their own: listed
+  // after their desktop form. `phoneRows` holds both kinds.
+  const phoneRows = grouped.filter((l) => screenVersionOf(l.conditions) != null)
   const today = todayInInstance()
   const rulesOf = new Map<number, RecordConditionRule[]>()
   for (const l of grouped) {
@@ -277,10 +283,14 @@ export function buildLayoutOverview(
     if (win && state) out.active_window = { ...win, state }
     if (isGrouped(l)) {
       const of = phoneOf(l.conditions)
+      const tOf = tabletOf(l.conditions)
       if (of != null) out.phone_of = of
+      else if (tOf != null) out.tablet_of = tOf
       else {
         const v = phoneRows.find((p) => phoneOf(p.conditions) === Number(l.id))
         if (v) out.phone_version = { layout_id: Number(v.id), name: v.name }
+        const t = phoneRows.find((p) => tabletOf(p.conditions) === Number(l.id))
+        if (t) out.tablet_version = { layout_id: Number(t.id), name: t.name }
       }
     }
     const f = activeFreeze(l.conditions, today)
@@ -349,16 +359,22 @@ export function buildLayoutOverview(
   if (fallbackRow)
     rows.push({ ...base(fallbackRow), section: 'forms', reason: { kind: 'fallback' } })
 
-  // Phone versions sit right after the form they stand in for.
-  for (const p of phoneRows) {
-    const of = phoneOf(p.conditions) as number
+  // Tablet, then phone versions sit right after the form they stand in for.
+  const screenOrder = [...phoneRows].sort(
+    (a, b) => Number(phoneOf(b.conditions) != null) - Number(phoneOf(a.conditions) != null)
+  )
+  for (const p of screenOrder) {
+    const of = screenVersionOf(p.conditions) as number
     const at = rows.findIndex((r) => r.layout_id === of)
     const desktop = grouped.find((l) => Number(l.id) === of)
     if (at < 0 || !desktop) continue
     rows.splice(at + 1, 0, {
       ...base(p),
       section: 'forms',
-      reason: { kind: 'phone', phone_of: of, phone_of_name: desktop.name }
+      reason:
+        phoneOf(p.conditions) != null
+          ? { kind: 'phone', phone_of: of, phone_of_name: desktop.name }
+          : { kind: 'tablet', tablet_of: of, tablet_of_name: desktop.name }
     })
   }
   for (const r of rows) windowWarning(r)

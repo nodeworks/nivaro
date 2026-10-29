@@ -12,6 +12,9 @@
   { "name": "badge needs a tag", "in": { "badge": { "tag": " ", "color": "blue" } }, "out": null },
   { "name": "glossary off is kept, on is the default", "in": { "glossary": false }, "out": { "glossary": false } },
   { "name": "glossary on drops", "in": { "glossary": true }, "out": null },
+  { "name": "density compact is kept, anything else is comfortable", "in": { "density": "compact" }, "out": { "density": "compact" } },
+  { "name": "density other values drop", "in": { "density": "huge", "tour": "yes" }, "out": null },
+  { "name": "tour on is kept", "in": { "tour": true, "density": "comfortable" }, "out": { "tour": true } },
   {
     "name": "presets",
     "in": {
