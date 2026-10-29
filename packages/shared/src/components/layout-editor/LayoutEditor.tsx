@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   ListOrdered,
   Lock,
+  OctagonAlert,
   Percent,
   Plus,
   Table2,
@@ -98,6 +99,7 @@ import { FormSettings, Inspector } from './inspector-slot'
 import { isTyping } from './is-typing'
 import { ARROW_DIRS, altArrowMove } from './keyboard-move'
 import { LayoutsRail } from './LayoutsRail'
+import { useLabelStyleControls } from './lint/LabelStyle'
 import { LintButton, LintPanel } from './lint/LintPanel'
 import { useLayoutLint } from './lint/lint-api'
 import { FieldStateMatrix } from './matrix/FieldStateMatrix'
@@ -139,6 +141,7 @@ import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
+import { useRefusalLens } from './usage/refusal-lens'
 import { UsagePanel } from './usage/UsagePanel'
 import {
   usageTodayText,
@@ -730,6 +733,8 @@ export function LayoutEditor({
         : undefined,
     [showFill, fill]
   )
+  // Where saves fail (#3185), the error-rate lens: off unless turned on (Tools or the Usage tab).
+  const refusalLens = useRefusalLens(currentId)
   const [preview, setPreview] = useState<PreviewAs>({
     record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
     roleId: null
@@ -751,6 +756,8 @@ export function LayoutEditor({
   usePretendDownScope(LAYOUT_PRETEND_SCOPE)
   const pretendOptions = useMemo(() => layoutPretendDownOptions(canvasLayout), [canvasLayout])
   const lint = useLayoutLint(collection, bundle, parent)
+  // Label house style (#3184): turn a check off from a finding, or tune it.
+  const labelStyle = useLabelStyleControls(panel === 'checks')
   // History compare / Review changes on the canvas (#2591); who changed each section (#2611).
   const { data: savedBundle } = useLayoutBundle(currentId)
   const compareState = useCanvasCompare(bundle, savedBundle ?? null, draft.unsavedCount, currentId)
@@ -1259,6 +1266,16 @@ export function LayoutEditor({
             )}
             {bundle && arrangeable && (
               <ToolButton
+                label='Show where saves fail'
+                icon={<OctagonAlert className='h-3.5 w-3.5' />}
+                hint='Tint each field by how often a save is refused on it'
+                checked={refusalLens.on}
+                onClick={() => refusalLens.setOn(!refusalLens.on)}
+                data={{ 'data-editor-refusal-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ToolButton
                 label='Set the tab order'
                 icon={<ListOrdered className='h-3.5 w-3.5' />}
                 hint='Click fields in the order Tab should visit them'
@@ -1616,7 +1633,7 @@ export function LayoutEditor({
                       roleId={pane.roleId}
                       stateKey={pane.stateKey}
                       marks={withAiMarks(pane.marks)}
-                      overlay={tabOrder.overlay(pane.overlay)}
+                      overlay={tabOrder.overlay(refusalLens.wrap(pane.overlay))}
                       ruleMarks={ruleMarks}
                       ghost={ghost}
                       deps={explain.deps}
@@ -1676,6 +1693,8 @@ export function LayoutEditor({
                   onSelect={(t) => setSelection([t])}
                   apply={draft.apply}
                   onOpenAiReview={host.aiReviewSlot ? () => setPanel('settings') : undefined}
+                  onTurnOff={labelStyle.onTurnOff}
+                  styleSettings={labelStyle.settings}
                 />
               ) : panel === 'settings' ? (
                 <FormSettings

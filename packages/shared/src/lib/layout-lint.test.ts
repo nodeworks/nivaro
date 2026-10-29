@@ -3,13 +3,17 @@ import {
   colourContrast,
   conditionsContradict,
   contrastRatio,
+  findJargon,
+  helpRepeatsLabel,
   type LintContext,
   type LintGroupInput,
   type LintLayoutInput,
   type LintPlacementInput,
   layoutHealth,
   lintLayout,
-  mergeInherited
+  mergeInherited,
+  STYLE_POINTS_MAX,
+  toSentenceCase
 } from './layout-lint'
 
 const g = (key: string, extra: Partial<LintGroupInput> = {}): LintGroupInput => ({
@@ -397,5 +401,142 @@ describe('layoutHealth', () => {
       message: ''
     }))
     expect(layoutHealth(l, errs).score).toBe(50)
+  })
+})
+
+describe('label house style (#3184)', () => {
+  const styleCtx = (extra: Partial<LintContext> = {}) =>
+    ctx({
+      fields: [
+        { field: 'title', label: 'Title' },
+        { field: 'po', label: 'PO Number' },
+        { field: 'qty', label: 'Qty' },
+        { field: 'vendor', label: 'Vendor', note: 'Enter the vendor.' },
+        { field: 'vendor_name', label: 'Vendor' }
+      ],
+      ...extra
+    })
+  const styleRules = (l: LintLayoutInput, c = styleCtx()) =>
+    lintLayout(l, c).filter((f) => f.rule.startsWith('label-') || f.rule === 'help-repeats-label')
+
+  it('sentence case keeps acronyms, digits, allowed names and new sentences', () => {
+    expect(toSentenceCase('Purchase Order Number')).toBe('Purchase order number')
+    expect(toSentenceCase('PO Number')).toBe('PO number')
+    expect(toSentenceCase('vendor name')).toBe('Vendor name')
+    expect(toSentenceCase('Follow-Up Date (Optional)')).toBe('Follow-up date (optional)')
+    expect(toSentenceCase('Due Monday')).toBe('Due Monday')
+    expect(toSentenceCase('Phase 2B Budget')).toBe('Phase 2B budget')
+    expect(toSentenceCase('Ship to: Main Site')).toBe('Ship to: Main site')
+    expect(toSentenceCase('Fusion Project', new Set(['fusion']))).toBe('Fusion project')
+    expect(toSentenceCase('iPhone Model')).toBe('iPhone model')
+  })
+
+  it('finds jargon and offers the plain word', () => {
+    expect(findJargon('Qty on hand', [{ term: 'qty', say: 'quantity' }])).toEqual({
+      found: [{ text: 'Qty', say: 'quantity' }],
+      fixed: 'Quantity on hand'
+    })
+    expect(findJargon('Quantity', [{ term: 'qty', say: 'quantity' }]).found).toEqual([])
+  })
+
+  it('help text that only repeats the label', () => {
+    expect(helpRepeatsLabel('Enter the vendor name.', 'Vendor name')).toBe(true)
+    expect(helpRepeatsLabel('The company that ships the goods', 'Vendor')).toBe(false)
+  })
+
+  it('flags field and section labels, with fixes on this form', () => {
+    const l = layout(
+      [g('main', { label: 'Order Details' })],
+      [p('po', 'main', 0), p('qty', 'main', 1), p('title', 'main', 2)]
+    )
+    const found = styleRules(l)
+    const sc = found.find((f) => f.rule === 'label-sentence-case' && f.target.kind === 'field')
+    expect(sc?.message).toContain('“PO number”')
+    expect(sc?.fix?.ops).toEqual([
+      {
+        op: 'update_placement',
+        at: { field: 'po', group_key: 'main' },
+        patch: { overrides: { label: 'PO number' } }
+      }
+    ])
+    const group = found.find((f) => f.rule === 'label-sentence-case' && f.target.kind === 'group')
+    expect(group?.fix?.ops).toEqual([
+      { op: 'group_update', key: 'main', patch: { label: 'Order details' } }
+    ])
+    expect(found.find((f) => f.rule === 'label-jargon')?.fix?.label).toBe(
+      'Change the label to “Quantity”'
+    )
+  })
+
+  it('fixes the label where this form sets it', () => {
+    const l = layout([g('main')], [p('title', 'main', 0, { label_override: 'Request Title' })])
+    expect(styleRules(l)[0].fix?.ops).toEqual([
+      {
+        op: 'update_placement',
+        at: { field: 'title', group_key: 'main' },
+        patch: { label_override: 'Request title' }
+      }
+    ])
+  })
+
+  it('flags a too-long label against the configured limit', () => {
+    const l = layout(
+      [g('main')],
+      [p('title', 'main', 0, { overrides: { label: 'A rather long title' } })]
+    )
+    expect(styleRules(l).map((f) => f.rule)).toEqual([])
+    expect(styleRules(l, styleCtx({ style: { max_label_length: 10 } })).map((f) => f.rule)).toEqual(
+      ['label-too-long']
+    )
+  })
+
+  it('flags help that repeats the label; removes it only when this form set it', () => {
+    const fieldNote = layout([g('main')], [p('vendor', 'main', 0), p('title', 'main', 1)])
+    const f1 = styleRules(fieldNote).find((f) => f.rule === 'help-repeats-label')
+    expect(f1).toBeTruthy()
+    expect(f1?.fix).toBeUndefined()
+    const own = layout(
+      [g('main')],
+      [
+        p('title', 'main', 0, { overrides: { note: 'The title', placeholder: 'x' } }),
+        p('po', 'main', 1)
+      ]
+    )
+    expect(styleRules(own).find((f) => f.rule === 'help-repeats-label')?.fix?.ops).toEqual([
+      {
+        op: 'update_placement',
+        at: { field: 'title', group_key: 'main' },
+        patch: { overrides: { placeholder: 'x' } }
+      }
+    ])
+  })
+
+  it('flags two fields with one label', () => {
+    const l = layout([g('main')], [p('vendor', 'main', 0), p('vendor_name', 'main', 1)])
+    const dup = styleRules(l).filter((f) => f.rule === 'label-duplicate')
+    expect(dup).toHaveLength(1)
+    expect(dup[0].severity).toBe('warn')
+  })
+
+  it('a rule turned off reports nothing', () => {
+    const l = layout([g('main', { label: 'Order Details' })], [p('po', 'main', 0)])
+    expect(
+      styleRules(l, styleCtx({ style: { off: ['label-sentence-case'] } })).map((f) => f.rule)
+    ).toEqual([])
+  })
+
+  it('style tips cost a few points together', () => {
+    const l = layout([g('main')], [p('title', 'main', 0)])
+    const tips = Array.from({ length: 30 }, (_, i) => ({
+      id: `s${i}`,
+      rule: 'label-sentence-case' as const,
+      severity: 'info' as const,
+      target: { kind: 'layout' as const },
+      message: ''
+    }))
+    expect(layoutHealth(l, tips)).toEqual({
+      score: 100 - STYLE_POINTS_MAX,
+      costs: [{ label: '30 label style tips', points: STYLE_POINTS_MAX }]
+    })
   })
 })

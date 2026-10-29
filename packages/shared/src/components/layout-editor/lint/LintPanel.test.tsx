@@ -186,4 +186,55 @@ describe('overview analysis', () => {
       )
     ).toEqual([2, 1, 3])
   })
+
+  it('label style: turn a check off from a finding, and fix every sentence case at once', () => {
+    const apply = vi.fn()
+    const onTurnOff = vi.fn()
+    const style = (field: string, label: string): LintFinding => ({
+      id: `label-sentence-case:main/${field}`,
+      rule: 'label-sentence-case',
+      severity: 'info',
+      target: { kind: 'field', field, group_key: 'main' },
+      message: `${label} is not in sentence case.`,
+      fix: {
+        label: `Change the label to “${label}”`,
+        ops: [
+          {
+            op: 'update_placement',
+            at: { field, group_key: 'main' },
+            patch: { label_override: label }
+          }
+        ]
+      }
+    })
+    act(() =>
+      root.render(
+        <LintPanel
+          findings={[style('po', 'PO number'), style('ship_to', 'Ship to'), FINDINGS[1]]}
+          health={null}
+          ready
+          onSelect={vi.fn()}
+          apply={apply}
+          onTurnOff={onTurnOff}
+          styleSettings={<p data-style-settings=''>settings</p>}
+        />
+      )
+    )
+    // Only style findings can be turned off.
+    const offs = host.querySelectorAll<HTMLButtonElement>('[data-lint-turn-off]')
+    expect(offs).toHaveLength(2)
+    act(() => offs[0].click())
+    expect(onTurnOff).toHaveBeenCalledWith('label-sentence-case')
+    const all = host.querySelector<HTMLButtonElement>('[data-lint-fix-all]')
+    expect(all?.textContent).toBe('Change all 2 labels to sentence case')
+    act(() => all?.click())
+    expect(apply).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ at: { field: 'po', group_key: 'main' } }),
+        expect.objectContaining({ at: { field: 'ship_to', group_key: 'main' } })
+      ],
+      { label: 'Change 2 labels to sentence case' }
+    )
+    expect(host.querySelector('[data-style-settings]')).not.toBeNull()
+  })
 })

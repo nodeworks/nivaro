@@ -7603,6 +7603,8 @@ function ItemEditFormView({
       }
     }
     if (Object.keys(errs).length > 0) {
+      // Where saves fail (#3185): the fields this refusal names, for the layout editor.
+      formUsage.markRefused(errs)
       setValidationErrors(errs)
       setShowValidationSummary(true)
       // One problem: say exactly what it is. Several: the count — the summary
@@ -8221,6 +8223,7 @@ function ItemEditFormView({
         // is the lines grid, on whichever step holds it.
         const bad = refusedFieldOf(err, new Set(allFields.map((f) => f.field)))
         if (bad) {
+          formUsage.markRefused({ [bad.field]: bad.message })
           setValidationErrors({ [bad.field]: bad.message })
           setTimeout(() => jumpToField(bad.field), 150)
         }

@@ -1,4 +1,5 @@
 import { AlertCircle, AlertTriangle, CheckCircle2, CircleAlert, Info, Sparkles } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { LayoutHealth, LintFinding, LintSeverity } from '../../../lib/layout-lint'
 import type { LayoutOp } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
@@ -6,6 +7,7 @@ import type { DesignTarget } from '../design-context'
 import { PanelBody, PanelHeader } from '../panel-frame'
 import { effectText, groupTitle } from '../panel-style'
 import { barBtn, barBtnOn } from '../toolbar-kit'
+import { isStyleRule } from './LabelStyle'
 import { findingDesignTarget } from './lint-api'
 
 /**
@@ -65,7 +67,7 @@ export function LintButton({
       aria-pressed={active}
       aria-label={`Problems: ${c.error} errors, ${c.warn} warnings`}
       data-editor-checks=''
-      data-tip='Problems this form has: hidden required fields, missing cascade parents, empty steps, unreachable fields and accessibility'
+      data-tip='Problems this form has: hidden required fields, missing cascade parents, empty steps, unreachable fields, accessibility and label style'
       className={cn(barBtn, 'gap-1 px-2', active && barBtnOn)}
     >
       <CircleAlert
@@ -89,17 +91,35 @@ export function LintButton({
   )
 }
 
+const quietBtn =
+  'inline-flex h-6 items-center rounded px-1.5 text-[12px] font-medium text-slate-700 transition-colors hover:bg-muted hover:text-slate-900 dark:text-foreground'
+
+/** Every sentence-case fix at once (#3184): one undo step. */
+export function sentenceCaseBatch(
+  findings: LintFinding[]
+): { ops: LayoutOp[]; count: number } | null {
+  const fixes = findings.filter((f) => f.rule === 'label-sentence-case' && f.fix)
+  if (fixes.length < 2) return null
+  return {
+    ops: fixes.flatMap((f) => (f.fix?.ops ?? []) as unknown as LayoutOp[]),
+    count: fixes.length
+  }
+}
+
 function FindingRow({
   finding,
   onSelect,
   apply,
-  readOnly
+  readOnly,
+  onTurnOff
 }: {
   finding: LintFinding
   onSelect: (t: DesignTarget) => void
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   readOnly: boolean
+  onTurnOff?: (rule: string) => void
 }) {
+  const canTurnOff = !!onTurnOff && isStyleRule(finding.rule)
   const Icon = ICON[finding.severity]
   const target = findingDesignTarget(finding)
   return (
@@ -119,19 +139,35 @@ function FindingRow({
           {finding.message}
         </span>
       </button>
-      {finding.fix && !readOnly && (
-        <div className='border-t border-slate-100 px-2.5 py-1.5 dark:border-border'>
-          <button
-            type='button'
-            data-lint-fix=''
-            onClick={() =>
-              finding.fix &&
-              apply(finding.fix.ops as unknown as LayoutOp[], { label: finding.fix.label })
-            }
-            className='inline-flex h-6 items-center rounded px-1.5 text-[12px] font-medium text-slate-700 transition-colors hover:bg-muted hover:text-slate-900 dark:text-foreground'
-          >
-            {finding.fix.label}
-          </button>
+      {((finding.fix && !readOnly) || canTurnOff) && (
+        <div className='flex flex-wrap items-center gap-x-1 border-t border-slate-100 px-2.5 py-1.5 dark:border-border'>
+          {finding.fix && !readOnly && (
+            <button
+              type='button'
+              data-lint-fix=''
+              onClick={() =>
+                finding.fix &&
+                apply(finding.fix.ops as unknown as LayoutOp[], { label: finding.fix.label })
+              }
+              className={quietBtn}
+            >
+              {finding.fix.label}
+            </button>
+          )}
+          {canTurnOff && (
+            <button
+              type='button'
+              data-lint-turn-off={finding.rule}
+              data-tip='House style for every form on this instance'
+              onClick={() => onTurnOff?.(finding.rule)}
+              className={cn(
+                quietBtn,
+                'ml-auto font-normal text-slate-500 dark:text-muted-foreground'
+              )}
+            >
+              Turn off this check
+            </button>
+          )}
         </div>
       )}
     </li>
@@ -145,7 +181,9 @@ export function LintPanel({
   onSelect,
   apply,
   onOpenAiReview,
-  readOnly = false
+  readOnly = false,
+  onTurnOff,
+  styleSettings
 }: {
   findings: LintFinding[]
   health: LayoutHealth | null
@@ -155,8 +193,13 @@ export function LintPanel({
   /** Opens Form settings, where the AI review lives (hosts without it pass nothing). */
   onOpenAiReview?: () => void
   readOnly?: boolean
+  /** Turns a label style check off for the instance (#3184); absent = no such button. */
+  onTurnOff?: (rule: string) => void
+  /** The label style settings block, under the findings. */
+  styleSettings?: ReactNode
 }) {
   const c = lintCounts(findings)
+  const batch = readOnly ? null : sentenceCaseBatch(findings)
   const sub =
     findings.length === 0
       ? ready
@@ -218,6 +261,18 @@ export function LintPanel({
                   {list.length}
                 </span>
               </h3>
+              {severity === 'info' && batch && (
+                <button
+                  type='button'
+                  data-lint-fix-all='label-sentence-case'
+                  onClick={() =>
+                    apply(batch.ops, { label: `Change ${batch.count} labels to sentence case` })
+                  }
+                  className={cn(quietBtn, 'h-7 border border-slate-200 dark:border-border')}
+                >
+                  Change all {batch.count} labels to sentence case
+                </button>
+              )}
               <ul className='space-y-1.5'>
                 {list.map((f) => (
                   <FindingRow
@@ -226,12 +281,14 @@ export function LintPanel({
                     onSelect={onSelect}
                     apply={apply}
                     readOnly={readOnly}
+                    onTurnOff={onTurnOff}
                   />
                 ))}
               </ul>
             </section>
           )
         })}
+        {styleSettings}
         {onOpenAiReview && (
           <div className='space-y-1'>
             <p className={effectText}>

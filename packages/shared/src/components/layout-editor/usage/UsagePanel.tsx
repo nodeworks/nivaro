@@ -6,6 +6,14 @@ import { Skeleton } from '../../ui/skeleton'
 import type { DescribeField } from '../overview/describe-conditions'
 import { Toggle } from '../settings/controls'
 import { AbTestSection } from './AbTestSection'
+import {
+  REFUSAL_MIN_ATTEMPTS,
+  refusalPct,
+  refusalTip,
+  refusalTone,
+  useRefusalLens,
+  useSaveRefusals
+} from './refusal-lens'
 import { rateText, suggestCollapse } from './suggest-collapse'
 import { suggestSections } from './suggest-sections'
 import { formatDuration, useCoChanges, useLayoutFriction, useLayoutUsageToday } from './usage-api'
@@ -62,6 +70,9 @@ export function UsagePanel({
   const { data: today, isLoading: todayLoading } = useLayoutUsageToday(layoutId)
   const { data: friction, isLoading: frictionLoading } = useLayoutFriction(layoutId)
   const { data: co, isLoading: coLoading } = useCoChanges(collection)
+  // Where saves fail (#3185): read whenever the Usage tab is open, the canvas tint only when on.
+  const lens = useRefusalLens(layoutId)
+  const { data: refusals, isLoading: refusalsLoading } = useSaveRefusals(layoutId)
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set())
   const [collapseDismissed, setCollapseDismissed] = useState(false)
 
@@ -200,6 +211,66 @@ export function UsagePanel({
             {friction?.changed_after_save.scope === 'collection'
               ? ', across every form of this collection.'
               : ', on records opened with this form.'}
+          </p>
+        </>
+      )}
+
+      <p className={head}>Where saves fail</p>
+      <div className='flex items-center justify-between gap-2 px-3'>
+        <span className='text-[12.5px] text-slate-700 dark:text-foreground'>
+          Show where saves fail
+        </span>
+        <Toggle label='Show where saves fail' checked={lens.on} onChange={lens.setOn} />
+      </div>
+      {refusalsLoading ? (
+        <p className={`${quiet} pt-1`}>Loading…</p>
+      ) : !refusals || refusals.fields.length === 0 ? (
+        <p className={`${quiet} pt-1`}>
+          {refusals?.attempts
+            ? `No save was refused in the last ${refusals.days} days.`
+            : 'No saves recorded yet.'}
+        </p>
+      ) : (
+        <>
+          <ul data-usage-refusals='' className='flex flex-col px-3 pt-1'>
+            {refusals.fields.slice(0, 8).map((f) => {
+              const tone = refusalTone(f.rate)
+              return (
+                <li
+                  key={f.field}
+                  data-usage-refusal={f.field}
+                  data-tip={refusalTip(f, refusals.attempts, refusals.days)}
+                  className='flex items-baseline justify-between gap-2 border-b border-slate-100 py-1 text-[12px] last:border-0 dark:border-border'
+                >
+                  <span className='min-w-0 truncate text-slate-800 dark:text-foreground'>
+                    {fieldLabel(f.field)}
+                    {!onForm.has(f.field) && (
+                      <span className='text-slate-400 dark:text-muted-foreground'>
+                        {' '}
+                        · not on this form
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className={
+                      tone === 'high'
+                        ? 'shrink-0 tabular-nums text-red-700 dark:text-red-300'
+                        : tone === 'some'
+                          ? 'shrink-0 tabular-nums text-amber-700 dark:text-amber-300'
+                          : 'shrink-0 tabular-nums text-slate-500 dark:text-muted-foreground'
+                    }
+                  >
+                    {refusalPct(f.rate)} of saves
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+          <p className={`${quiet} pt-1`}>
+            {refusals.refused.toLocaleString()} of {refusals.attempts.toLocaleString()} saves were
+            refused in the last {refusals.days} days — a required field left empty, or a value a
+            rule turned down.
+            {refusals.attempts < REFUSAL_MIN_ATTEMPTS && ' Too few saves yet to tint the form.'}
           </p>
         </>
       )}

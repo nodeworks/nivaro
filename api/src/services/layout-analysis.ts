@@ -13,6 +13,7 @@ import {
   mergeInherited
 } from './layout-lint.js'
 import { loadLayoutBundle } from './layout-ops.js'
+import { getLayoutStyle, lintStyleOf } from './layout-style.js'
 import { can, getAllowedFields } from './permissions.js'
 import { sharedGatedRead } from './read-gate.js'
 
@@ -92,7 +93,8 @@ export function fieldMetaFromRows(rows: Row[]): LintFieldMeta[] {
       readonly: truthy(r.readonly),
       cascade_parents: cascadeParents(r.dependency_config),
       col_span: typeof options?.col_span === 'number' ? options.col_span : null,
-      type: typeof r.type === 'string' ? r.type : null
+      type: typeof r.type === 'string' ? r.type : null,
+      note: typeof r.note === 'string' && r.note.trim() ? r.note : null
     }
   })
 }
@@ -165,11 +167,14 @@ export async function loadLintContext(collection: string): Promise<LintContext> 
 
 export async function cachedLintContext(collection: string): Promise<LintContext> {
   const key = await memoKey('lint-context', collection)
+  // The label house style (#3184) is read fresh (its own 30 s cache): a
+  // change to it is not a config write, so the epoch would not move.
+  const style = lintStyleOf(await getLayoutStyle())
   const hit = memoGet<LintContext>(key, HEALTH_TTL_MS)
-  if (hit) return hit
+  if (hit) return { ...hit, style }
   const value = await loadLintContext(collection)
   memoSet(key, value)
-  return value
+  return { ...value, style }
 }
 
 // ── Health per form ──────────────────────────────────────────────────────────
@@ -183,7 +188,8 @@ export interface LayoutHealthRow {
 }
 
 export async function computeLayoutHealth(collection: string): Promise<LayoutHealthRow[]> {
-  const key = await memoKey('health', collection)
+  const style = JSON.stringify(lintStyleOf(await getLayoutStyle()))
+  const key = `${await memoKey('health', collection)}|${style}`
   const hit = memoGet<LayoutHealthRow[]>(key, HEALTH_TTL_MS)
   if (hit) return hit
   const ids = (

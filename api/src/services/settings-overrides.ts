@@ -56,6 +56,8 @@ export const INSTANCE_RESERVED_KEYS = [
   'huddle',
   'chaos',
   'recovery',
+  // Label house style for the layout lint (services/layout-style.ts, #3184).
+  'layout_style',
   // Cache switches (services/cache-config.ts): per-instance, never a settings column.
   'cache',
   // Providers that may link an existing account by email (auth/account-link-policy.ts).

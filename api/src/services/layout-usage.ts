@@ -19,6 +19,11 @@ import { sharedGatedRead } from './read-gate.js'
  * "Changed after save" and the co-change pairs are mined from revisions, the
  * way the Table Editor's edit-frequency card does: read-gated and cached.
  *
+ * Refused saves (#3185) ride the same event: how many saves the form refused
+ * and, per field, how often a refusal named it (required and empty, or another
+ * rule) — counted in step_stats meta entries, so the editor can tint fields
+ * by how often saves fail on them. No new table.
+ *
  * Migration 461 creates the tables. Without them every writer is a no-op and
  * every reader answers empty (`ready: false`).
  */
@@ -47,6 +52,13 @@ export interface UsageEvent {
   sections?: { shown: string[]; opened: string[] }
   /** A save in this chunk: milliseconds from opening the form to saving (#2614). */
   save_ms?: number | null
+  /** Saves refused in this chunk (#3185): how many, and per field how often each was named. */
+  refused?: RefusedSaves | null
+}
+
+export interface RefusedSaves {
+  tries: number
+  fields: Record<string, { required: number; invalid: number }>
 }
 
 export interface StepStat {
@@ -72,6 +84,35 @@ const MAX_SECTIONS = 60
 const META = '~'
 const SECTION_META = '~s:'
 const AB_META = '~ab:'
+/** `~r:<field>` = { q: refusals for a required field left empty, v: for any other rule } (#3185). */
+const REFUSAL_META = '~r:'
+/** `~rt` = { n: refused saves } (#3185). */
+const REFUSAL_TRIES = '~rt'
+const MAX_REFUSAL_TRIES = 50
+const MAX_REFUSAL_FIELDS = 60
+
+/** A beacon's refused saves, validated and clamped (a field is named at most once per try). */
+export function sanitizeRefusals(raw: unknown): RefusedSaves | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const tries = Math.min(MAX_REFUSAL_TRIES, Math.floor(Number(r.tries)))
+  if (!Number.isFinite(tries) || tries <= 0) return null
+  const fields: RefusedSaves['fields'] = {}
+  const src = r.fields && typeof r.fields === 'object' && !Array.isArray(r.fields) ? r.fields : {}
+  for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+    if (Object.keys(fields).length >= MAX_REFUSAL_FIELDS) break
+    if (!IDENT.test(k) || k.length > 64 || !v || typeof v !== 'object') continue
+    const c = v as Record<string, unknown>
+    const count = (x: unknown) => {
+      const n = Math.floor(Number(x))
+      return Number.isFinite(n) && n > 0 ? Math.min(tries, n) : 0
+    }
+    const required = count(c.required)
+    const invalid = Math.min(tries - required, count(c.invalid))
+    if (required + invalid > 0) fields[k] = { required, invalid }
+  }
+  return { tries, fields }
+}
 
 function sectionKeys(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
@@ -143,6 +184,7 @@ export function sanitizeUsageEvent(raw: unknown): UsageEvent | null {
     unknown
   >
   const saveMs = Number(r.save_ms)
+  const refused = sanitizeRefusals(r.refused)
   return {
     layout_id: layoutId,
     collection,
@@ -155,7 +197,8 @@ export function sanitizeUsageEvent(raw: unknown): UsageEvent | null {
     save_ms:
       saved && Number.isFinite(saveMs) && saveMs > 0
         ? Math.min(MAX_STEP_MS, Math.round(saveMs))
-        : null
+        : null,
+    ...(refused ? { refused } : {})
   }
 }
 
@@ -228,6 +271,15 @@ export function mergeStepStats(prev: unknown, ev: UsageEvent, arm: string | null
   }
   for (const k of ev.sections?.shown ?? []) section(k).n += 1
   for (const k of ev.sections?.opened ?? []) section(k).o += 1
+  if (ev.refused) {
+    const t = out[REFUSAL_TRIES] as { n?: unknown } | undefined
+    out[REFUSAL_TRIES] = { n: (Number(t?.n) || 0) + ev.refused.tries }
+    for (const [f, c] of Object.entries(ev.refused.fields)) {
+      const key = `${REFUSAL_META}${f}`
+      const cur = out[key] as { q?: unknown; v?: unknown } | undefined
+      out[key] = { q: (Number(cur?.q) || 0) + c.required, v: (Number(cur?.v) || 0) + c.invalid }
+    }
+  }
   if (arm) {
     const key = `${AB_META}${arm}`
     const add = emptyArm()
@@ -263,6 +315,64 @@ export function rollUpSections(rows: Array<{ step_stats?: unknown }>): SectionUs
   return [...sum.entries()]
     .map(([key, s]) => ({ key, shown: s.n, opened: Math.min(s.o, s.n) }))
     .sort((a, b) => b.shown - a.shown || a.key.localeCompare(b.key))
+}
+
+export interface FieldRefusals {
+  field: string
+  /** Refusals naming the field because it was required and empty. */
+  required: number
+  /** Refusals naming it for any other rule (a format, a range, a server rule). */
+  invalid: number
+  refusals: number
+  /** refusals / save attempts (0–1). */
+  rate: number
+}
+
+export interface RefusalRollup {
+  saves: number
+  refused: number
+  /** Saves plus refused saves. */
+  attempts: number
+  fields: FieldRefusals[]
+}
+
+/** Several days of rows → per-field refusals and their rate over save attempts (worst first). */
+export function rollUpRefusals(
+  rows: Array<{ saves?: unknown; step_stats?: unknown }>
+): RefusalRollup {
+  let saves = 0
+  let refused = 0
+  const sum = new Map<string, { q: number; v: number }>()
+  for (const r of rows) {
+    saves += Number(r.saves) || 0
+    for (const [k, raw] of Object.entries(parseStatsObject(r.step_stats))) {
+      if (!raw || typeof raw !== 'object') continue
+      const v = raw as Record<string, unknown>
+      if (k === REFUSAL_TRIES) refused += Number(v.n) || 0
+      else if (k.startsWith(REFUSAL_META)) {
+        const f = k.slice(REFUSAL_META.length)
+        const t = sum.get(f) ?? { q: 0, v: 0 }
+        t.q += Number(v.q) || 0
+        t.v += Number(v.v) || 0
+        sum.set(f, t)
+      }
+    }
+  }
+  const attempts = saves + refused
+  const fields = [...sum.entries()]
+    .map(([field, c]) => {
+      const refusals = c.q + c.v
+      return {
+        field,
+        required: c.q,
+        invalid: c.v,
+        refusals,
+        rate: attempts > 0 ? Math.min(1, Math.round((refusals / attempts) * 1000) / 1000) : 0
+      }
+    })
+    .filter((f) => f.refusals > 0)
+    .sort((a, b) => b.refusals - a.refusals || a.field.localeCompare(b.field))
+  return { saves, refused, attempts, fields }
 }
 
 export interface FrictionStep {
@@ -646,6 +756,28 @@ export async function layoutFriction(
         fields: countDeltaFields(deltas).slice(0, 25)
       }
     }
+  })
+}
+
+export interface LayoutRefusals extends RefusalRollup {
+  ready: boolean
+  days: number
+}
+
+/** Where saves fail on a form (#3185): refused saves per field over `days`. */
+export async function layoutRefusals(
+  layoutId: number,
+  who: string | null | undefined,
+  days = 30
+): Promise<LayoutRefusals> {
+  return cached(`layout-refusals|${layoutId}|${days}`, who, async () => {
+    const ready = await usageTablesReady()
+    if (!ready) return { ready, days, saves: 0, refused: 0, attempts: 0, fields: [] }
+    const rows = (await db(DAILY)
+      .where({ layout_id: layoutId })
+      .where('day', '>=', utcDay(daysAgo(days)))
+      .select('saves', 'step_stats')) as Array<Record<string, unknown>>
+    return { ready, days, ...rollUpRefusals(rows) }
   })
 }
 

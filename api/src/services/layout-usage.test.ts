@@ -6,6 +6,8 @@ import {
   mergeStepStats,
   parseStepStats,
   rollUpFriction,
+  rollUpRefusals,
+  sanitizeRefusals,
   sanitizeUsageEvent,
   type UsageEvent
 } from './layout-usage.js'
@@ -112,6 +114,71 @@ describe('step stats', () => {
       { key: 'b', avg_ms: 9000, sessions: 1, abandons: 0 },
       { key: 'a', avg_ms: 2000, sessions: 3, abandons: 1 }
     ])
+  })
+})
+
+describe('refused saves (#3185)', () => {
+  it('sanitizes: field names, a field named at most once per try, caps', () => {
+    expect(sanitizeRefusals(null)).toBeNull()
+    expect(sanitizeRefusals({ tries: 0, fields: {} })).toBeNull()
+    expect(
+      sanitizeRefusals({
+        tries: 2,
+        fields: {
+          title: { required: 5, invalid: 0 },
+          amount: { required: 1, invalid: 4 },
+          'bad.key': { required: 1 },
+          empty: { required: 0, invalid: 0 }
+        }
+      })
+    ).toEqual({
+      tries: 2,
+      fields: { title: { required: 2, invalid: 0 }, amount: { required: 1, invalid: 1 } }
+    })
+    expect(sanitizeRefusals({ tries: 999, fields: {} })?.tries).toBe(50)
+    expect(
+      sanitizeUsageEvent({
+        layout_id: 7,
+        collection: 'orders',
+        refused: { tries: 1, fields: { title: { required: 1 } } }
+      })?.refused
+    ).toEqual({ tries: 1, fields: { title: { required: 1, invalid: 0 } } })
+  })
+
+  it('adds up in step stats without touching steps, and rolls up per field', () => {
+    const one = mergeStepStats(
+      null,
+      ev({
+        steps: { main: 1000 },
+        refused: { tries: 2, fields: { title: { required: 2, invalid: 0 } } }
+      })
+    )
+    const two = mergeStepStats(
+      one,
+      ev({
+        refused: {
+          tries: 1,
+          fields: { title: { required: 0, invalid: 1 }, amount: { required: 0, invalid: 1 } }
+        }
+      })
+    )
+    expect(parseStepStats(two)).toEqual({ main: { ms: 1000, n: 1, a: 0 } })
+    const r = rollUpRefusals([{ saves: 7, step_stats: two }])
+    expect(r).toEqual({
+      saves: 7,
+      refused: 3,
+      attempts: 10,
+      fields: [
+        { field: 'title', required: 2, invalid: 1, refusals: 3, rate: 0.3 },
+        { field: 'amount', required: 0, invalid: 1, refusals: 1, rate: 0.1 }
+      ]
+    })
+    expect(rollUpRefusals([{ saves: 0, step_stats: null }])).toEqual({
+      saves: 0,
+      refused: 0,
+      attempts: 0,
+      fields: []
+    })
   })
 })
 
