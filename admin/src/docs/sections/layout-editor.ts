@@ -1138,8 +1138,12 @@ export const layoutPersonalDefaults: DocSection = {
     {
       type: 'ul',
       items: [
-        "Open the field menu (the ⋯ beside the field's label, or right-click the field) and choose **Save as my default**. A short confirmation lists exactly what will be stored; **Clear my default** removes it, and its toast offers Undo.",
-        'On a **new** record the saved value is filled in automatically and the field shows a small pill. **Undo** on the pill clears it again.',
+        'Fill the field, then click **Make default** at the right end of its label row (on new and existing records, wherever the person can edit the field). A short confirmation lists exactly what will be stored, parents included ("Save Zone 2 · Boston · Cambridge as your defaults?"); Esc or Cancel saves nothing.',
+        'When the value already is the saved default for the current parent values, the same spot reads **✓ Your default · Clear default**. When the person has changed the value it reads **Update default · Clear default**: Update replaces that saved default in place (same parent values, after a confirmation such as "Update your default for Zone 2 · Boston to Cambridge?"). With the field empty it reads **Your default · Clear default**.',
+        '**Clear default** always means *forget the saved default*: the field keeps whatever it holds, and the toast offers Undo. **Undo** (only on a new record the default just filled) means *empty this field*: the saved default stays.',
+        'On a **new** record the saved value is filled in automatically and the spot shows one control: **Your default · Undo · Clear default**.',
+        "The control follows the field's width, not the screen's: in a narrow column (under 320px, e.g. one column of four, or a phone) Your default, Undo and Clear default fold to icons, and under 192px Make / Update default do too; every icon keeps its tooltip and spoken name. On touch screens each control's tap area is 44px tall, and the confirmation never runs off a phone screen.",
+        'The field menu (the ⋯ beside the control, or right-click the field, or Shift+F10) offers the same actions in words: **Save as my default**, **Update my default** or **Clear my default**, matching what the control shows. It is the keyboard way in: Make default, Update default and Clear default are for pointer and touch and are not tab stops (Undo on a just-filled field is).',
         'If the person changes a parent field (for example the zone), children that still hold a default are re-picked for the new context. Anything the person typed or picked themselves is never touched.',
         'A default is saved together with the parent values it was chosen under (its context), so one person can keep a different default per zone. Up to 20 contexts per field.'
       ]

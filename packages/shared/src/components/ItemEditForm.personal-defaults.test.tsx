@@ -206,7 +206,7 @@ describe('ItemEditForm personal defaults', () => {
     expect(titleInput()?.value).toBe('Rush order')
     const pill = host.querySelector('[data-personal-default="title"]')
     expect(pill?.textContent).toContain('Your default')
-    expect(pill?.getAttribute('data-tip')).toBe('Prefilled from your saved default · Undo')
+    expect(pill?.getAttribute('data-tip')).toBe('Filled in from your saved default')
     expect(host.querySelector('[data-personal-default="notes"]')).toBeNull()
     // Prefill: never dirty, never a stored draft.
     expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(false)
@@ -227,6 +227,68 @@ describe('ItemEditForm personal defaults', () => {
     expect(host.querySelector('[data-personal-default="title"]')).toBeNull()
     // The pill took its button with it: focus moved to the field, not to <body>.
     expect(document.activeElement).toBe(titleInput())
+  })
+
+  it('one control per field: prefilled, then Update / Your default / saved-empty', async () => {
+    await mountNew()
+    await settle(() => !!host.querySelector('[data-personal-default="title"]'))
+    const inTitle = (sel: string) => host.querySelector(`[data-field="title"] ${sel}`)
+    // Prefilled: ONE control — the marker, Undo (empties the field) and Clear default (forgets
+    // it); never also the plain "Your default" state or Make / Update default.
+    expect(inTitle('[data-personal-default-slot] [data-personal-default="title"]')).not.toBeNull()
+    const words = [
+      ...host.querySelectorAll(
+        '[data-field="title"] [data-pd-label], [data-field="title"] [data-pd-primary]'
+      )
+    ].map((e) => e.textContent?.trim())
+    expect(words).toEqual(['Your default', 'Undo', 'Clear default'])
+    expect(inTitle('[data-personal-default-undo]')?.getAttribute('aria-label')).toBe(
+      'Undo: empty Title (your saved default stays)'
+    )
+    expect(inTitle('[data-personal-default-clear]')?.getAttribute('aria-label')).toBe(
+      'Clear your saved default for Title (the field keeps its value)'
+    )
+    expect(inTitle('[data-personal-default-saved]')).toBeNull()
+    expect(inTitle('[data-personal-default-make]')).toBeNull()
+    expect(inTitle('[data-personal-default-update]')).toBeNull()
+    // A field the layout does not open to defaults gets no slot at all.
+    expect(host.querySelector('[data-field="notes"] [data-personal-default-slot]')).toBeNull()
+
+    const type = async (v: string) => {
+      const el = titleInput()
+      if (!el) return
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      await act(async () => {
+        set?.call(el, v)
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    // Waits for the change only (the full settle's 1 s tail would crowd the test timeout).
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 80 && !ok(); i++)
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 10))
+        })
+    }
+    await type('Something else')
+    await until(() => !!inTitle('[data-personal-default-update]'))
+    // A saved default for this field exists: Update default + Clear default, not Make default.
+    expect(inTitle('[data-personal-default-update]')?.textContent).toBe('Update default')
+    expect(inTitle('[data-personal-default-clear]')).not.toBeNull()
+    expect(inTitle('[data-personal-default-make]')).toBeNull()
+    expect(inTitle('[data-personal-default="title"]')).toBeNull()
+    await type('Rush order')
+    await until(() => !!inTitle('[data-personal-default-saved]'))
+    expect(inTitle('[data-personal-default-saved]')?.textContent).toContain('Your default')
+    expect(inTitle('[data-personal-default-make]')).toBeNull()
+    await type('')
+    await until(
+      () => inTitle('[data-personal-default-slot]')?.getAttribute('data-state') === 'saved-empty'
+    )
+    // Empty with a saved default: the info and Clear default, no Update.
+    expect(inTitle('[data-personal-default-saved]')?.textContent).toContain('Your default')
+    expect(inTitle('[data-personal-default-clear]')).not.toBeNull()
+    expect(inTitle('[data-personal-default-update]')).toBeNull()
   })
 
   it('a restored draft wins outright: no default is applied after it', async () => {

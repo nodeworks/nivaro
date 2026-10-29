@@ -29,12 +29,29 @@ import type { CascadeRule } from './helpers'
 
 /** What a field's ⋯ menu (Save / Clear my default) and FieldRow (pill, hint) read. */
 export type PersonalDefaultsApi = {
-  /** The layout lets this field carry a personal default. */
+  /** The layout lets this field carry a personal default (and the form reads them: never on
+   *  the design canvas). */
   allowed(field: string): boolean
+  /** The person's saved defaults have been read, or the read failed (until then nobody can
+   *  tell what is saved). */
+  loaded: boolean
+  /** The read failed: nothing is known to be saved (Make default still works). */
+  failed: boolean
+  /** The form shows a new record (the prefilled state can appear on it). */
+  isNew: boolean
   /** The caller's saved default that fits the record's current parent values. */
   defaultFor(field: string): SavedDefault | null
+  /** The field holds a value and it IS the saved default for the current parent values
+   *  (the visible control then says "Your default" instead of offering Make default). */
+  isDefault(field: string): boolean
   /** Saves the field's current value (with its context) and every allowed parent that has one. */
   save(field: string): Promise<void>
+  /** Replaces the value of the default `defaultFor(field)` answers with the field's current
+   *  value, keeping that default's context (the same slot: no new row, parents untouched). */
+  update(field: string): Promise<void>
+  /** The confirm line for `update(field)`: the new value's label and the saved default's
+   *  context labels, top-down ("Zone 2", "Boston"). */
+  describeUpdate(field: string): Promise<{ value: string; context: string[] }>
   /** Deletes the default `defaultFor(field)` answers; resolves with what it removed (for Undo). */
   clear(field: string): Promise<SavedDefault | null>
   /** Saves a removed default back exactly as it was (value + context): the Clear toast's Undo. */
@@ -89,6 +106,8 @@ export type UsePersonalDefaultsOptions = {
   fieldLabel?: (field: string) => string
   /** The label the picker would show; null = none (hints then say "Your saved default"). */
   valueLabel?: (field: string, value: unknown) => string | null | Promise<string | null>
+  /** The field's data type (decimal, date, timestamp…): equal values compare by type. */
+  fieldType?: (field: string) => string | null | undefined
   /** Runs once a pass has applied its values (field rules, cross-record defaults, cascades). */
   afterApply?: (field: string, value: unknown) => void
   /** The record the form shows (e.g. `orders:new`): a change starts the ledger over — a
@@ -115,9 +134,33 @@ function plain(v: unknown): unknown {
   return v
 }
 
-/** Same value for the ledger: ids as strings, id lists in any order. */
-export function sameDefaultValue(a: unknown, b: unknown): boolean {
+const NUMERIC_TYPES = new Set(['integer', 'bigInteger', 'float', 'decimal', 'number', 'double'])
+const DATE_TYPES = new Set(['date'])
+const DATETIME_TYPES = new Set(['dateTime', 'datetime', 'timestamp', 'time'])
+
+/** Same value for the ledger: ids as strings, id lists in any order. With the field's type,
+ *  numbers compare as numbers ("1.50" = 1.5), dates by their day ("2026-10-28" =
+ *  "2026-10-28T00:00:00") and date-times by their instant. */
+export function sameDefaultValue(a: unknown, b: unknown, type?: string | null): boolean {
   if (isEmptyValue(a) && isEmptyValue(b)) return true
+  if (type && !Array.isArray(a) && !Array.isArray(b) && !isEmptyValue(a) && !isEmptyValue(b)) {
+    const pa = plain(a)
+    const pb = plain(b)
+    if (NUMERIC_TYPES.has(type)) {
+      const na = Number(pa)
+      const nb = Number(pb)
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb
+    } else if (DATE_TYPES.has(type)) {
+      const day = (v: unknown) => /^(\d{4}-\d{2}-\d{2})/.exec(String(v))?.[1]
+      const da = day(pa)
+      const db = day(pb)
+      if (da && db) return da === db
+    } else if (DATETIME_TYPES.has(type)) {
+      const ta = Date.parse(String(pa))
+      const tb = Date.parse(String(pb))
+      if (Number.isFinite(ta) && Number.isFinite(tb)) return ta === tb
+    }
+  }
   const norm = (v: unknown) => {
     const p = plain(v)
     return Array.isArray(p) ? p.map((x) => String(x)).sort() : String(p)
@@ -151,7 +194,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const optsRef = useRef(opts)
   optsRef.current = opts
 
-  const { data } = useQuery<SavedDefault[]>({
+  const { data, isError } = useQuery<SavedDefault[]>({
     queryKey: personalDefaultsKey(collection),
     queryFn: () =>
       client
@@ -561,6 +604,15 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     (field: string) => !isEmptyValue(currentValue(field)),
     [currentValue]
   )
+  const isDefault = useCallback(
+    (field: string) => {
+      const cur = currentValue(field)
+      if (isEmptyValue(cur)) return false
+      const d = defaultFor(field)
+      return !!d && sameDefaultValue(d.value, cur, optsRef.current.fieldType?.(field))
+    },
+    [currentValue, defaultFor]
+  )
   const describeSave = useCallback(
     async (field: string): Promise<string[]> => {
       const o = optsRef.current
@@ -609,15 +661,62 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     [client, qc, collection, currentValue, viewOf]
   )
 
+  const update = useCallback(
+    async (field: string) => {
+      const d = defaultFor(field)
+      if (!d) throw new Error('You have no default here to update')
+      const value = currentValue(field)
+      if (isEmptyValue(value)) throw new Error('Pick a value first')
+      try {
+        await client.request(
+          put('/field-defaults/mine', {
+            collection,
+            field,
+            value: plain(value),
+            context: d.context ?? {}
+          })
+        )
+      } finally {
+        await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+      }
+    },
+    [client, qc, collection, currentValue, defaultFor]
+  )
+  const describeUpdate = useCallback(
+    async (field: string) => {
+      const o = optsRef.current
+      const d = defaultFor(field)
+      const ctx = d?.context ?? {}
+      const order = [...cascadeParents(field, o.rulesFor)].reverse()
+      const keys = [
+        ...order.filter((p) => p in ctx),
+        ...Object.keys(ctx).filter((k) => !order.includes(k))
+      ]
+      const name = (f: string) => o.fieldLabel?.(f) ?? titleCase(f)
+      const [value, ...context] = await Promise.all([
+        label(field, currentValue(field)).then((l) => l ?? name(field)),
+        ...keys.map((k) => label(k, ctx[k]).then((l) => l ?? name(k)))
+      ])
+      return { value, context }
+    },
+    [currentValue, defaultFor, label]
+  )
+
   const clear = useCallback(
     async (field: string) => {
       const d = defaultFor(field)
       if (!d) return null
       await client.request(del(`/field-defaults/mine/${d.id}`))
+      // A prefilled value whose default is forgotten is the person's to keep ("this field keeps
+      // its value"): out of the ledger, so no parent change empties or re-picks it.
+      if (ledgerRef.current.delete(field)) {
+        undoneRef.current.add(field)
+        publish()
+      }
       await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
       return d
     },
-    [client, qc, collection, defaultFor]
+    [client, qc, collection, defaultFor, publish]
   )
 
   const restore = useCallback(
@@ -637,9 +736,15 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
 
   const context = useMemo<PersonalDefaultsApi>(
     () => ({
-      allowed: (f) => optsRef.current.layoutAllows(f),
+      allowed: (f) => (optsRef.current.enabled ?? true) && optsRef.current.layoutAllows(f),
+      loaded: data !== undefined || isError,
+      failed: data === undefined && isError,
+      isNew,
       defaultFor,
+      isDefault,
       save,
+      update,
+      describeUpdate,
       clear,
       restore,
       refresh,
@@ -649,7 +754,24 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       hintFor,
       undo
     }),
-    [defaultFor, save, clear, restore, refresh, hasValue, describeSave, ledger, hintFor, undo]
+    [
+      data,
+      isError,
+      isNew,
+      defaultFor,
+      isDefault,
+      save,
+      update,
+      describeUpdate,
+      clear,
+      restore,
+      refresh,
+      hasValue,
+      describeSave,
+      ledger,
+      hintFor,
+      undo
+    ]
   )
 
   return { ledger, hintFor, undo, onPersonChange, release, appliedNow, context }

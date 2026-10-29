@@ -20,9 +20,10 @@ const fieldEls = (collection: string): HTMLElement[] =>
       el.getClientRects().length > 0
   )
 
-// Field chrome (the ⋯ menu, a default's undo, Repeat last, AI fill) is never where entry starts.
+// Field chrome (the ⋯ menu, Make / Update default, a default's undo / clear, Repeat last, AI fill) is
+// never where entry starts.
 const CHROME =
-  '[data-field-menu-trigger], [data-personal-default-undo], [data-repeat-last], [data-ai-fill]'
+  '[data-field-menu-trigger], [data-personal-default-make], [data-personal-default-update], [data-personal-default-undo], [data-personal-default-clear], [data-repeat-last], [data-ai-fill]'
 
 const focusablesIn = (el: HTMLElement): HTMLElement[] =>
   Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
