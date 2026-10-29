@@ -278,11 +278,15 @@ export async function runDailyActionDigest(
     .where('status', 'active')
     .where('is_redacted', 0)
     .whereNotNull('preferences')
-    .select('id', 'email', 'preferences')) as Array<{
+    .select('id', 'email', 'preferences', 'role')) as Array<{
     id: string
     email: string
     preferences: unknown
+    role?: string | null
   }>
+  // #3077 — a role whose defaults send a category to the daily summary opts its people in.
+  const { rolesWithDailyEmail } = await import('./notification-role-defaults.js')
+  const dailyRoles = await rolesWithDailyEmail().catch(() => new Set<string>())
   const digestUsers = new Map<string, string>() // id -> email
   const prefHour = new Map<string, number>()
   const prefTz = new Map<string, string>()
@@ -297,7 +301,9 @@ export async function runDailyActionDigest(
     const matrix = ((
       p?.['notification_prefs'] as { matrix?: Record<string, { email?: string }> } | undefined
     )?.matrix ?? {}) as Record<string, { email?: string }>
-    const anyDaily = Object.values(matrix).some((r) => r?.email === 'daily')
+    const anyDaily =
+      Object.values(matrix).some((r) => r?.email === 'daily') ||
+      (u.role != null && dailyRoles.has(String(u.role).toUpperCase()))
     if (p && (p['email_digest'] === 'daily' || anyDaily) && u.email) digestUsers.set(u.id, u.email)
   }
   // Subscription cadence: anyone with an active Daily subscription gets the

@@ -1,4 +1,4 @@
-import { UserAvatar } from '@nivaro/shared'
+import { NotificationRulesEditor, type NotifyRulesValue, UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -42,8 +42,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
-import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { api } from '@/lib/api'
+import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
 
 type User = {
@@ -70,7 +70,14 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
+type ActiveTab =
+  | 'permissions'
+  | 'members'
+  | 'ui'
+  | 'simulate'
+  | 'compare'
+  | 'views'
+  | 'notifications'
 
 // A hub entry is listed tab by tab, keyed by each tab's permission key (its
 // old standalone path), so a role can still hide one tab of a hub.
@@ -1119,31 +1126,41 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]).map(
-          (tab) => (
-            <button
-              key={tab}
-              type='button'
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
-                activeTab === tab
-                  ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
-              )}
-            >
-              {tab === 'ui'
-                ? 'UI Access'
-                : tab === 'simulate'
-                  ? 'Simulator'
-                  : tab === 'compare'
-                    ? 'Compare'
-                    : tab === 'views'
-                      ? 'Suggested views'
+        {(
+          [
+            'permissions',
+            'members',
+            'ui',
+            'simulate',
+            'compare',
+            'views',
+            'notifications'
+          ] as ActiveTab[]
+        ).map((tab) => (
+          <button
+            key={tab}
+            type='button'
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
+              activeTab === tab
+                ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
+            )}
+          >
+            {tab === 'ui'
+              ? 'UI Access'
+              : tab === 'simulate'
+                ? 'Simulator'
+                : tab === 'compare'
+                  ? 'Compare'
+                  : tab === 'views'
+                    ? 'Suggested views'
+                    : tab === 'notifications'
+                      ? 'Notification defaults'
                       : tab}
-            </button>
-          )
-        )}
+          </button>
+        ))}
       </div>
 
       {/* Tab content */}
@@ -1182,6 +1199,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           <SimulatorTab roleId={role.id} collections={collections} />
         ) : activeTab === 'views' ? (
           <RoleViewSuggestions roleId={role.id} />
+        ) : activeTab === 'notifications' ? (
+          <RoleNotificationDefaultsTab roleId={role.id} roleName={role.name} />
         ) : (
           <MembersTab roleId={role.id} />
         )}
@@ -1246,6 +1265,117 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
             <Trash2 className='h-3.5 w-3.5 mr-1' /> Delete Role
           </Button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Notification defaults (#3077) ───────────────────────────────────────────
+
+type RoleDefaults = {
+  role: { id: string; name: string }
+  rules: NotifyRulesValue
+  updated_at: string | null
+  updated_by: string | null
+  members?: number
+}
+
+/** The role's starting notification rules — the same editor people use on their Profile.
+ *  Members follow every value they never set themselves; nothing is copied onto them. */
+function RoleNotificationDefaultsTab({ roleId, roleName }: { roleId: string; roleName: string }) {
+  const qc = useQueryClient()
+  const key = ['role-notification-defaults', roleId]
+  const { data, isLoading } = useQuery({
+    queryKey: key,
+    queryFn: () =>
+      api
+        .get<{ data: RoleDefaults }>(`/notifications/role-defaults/${roleId}`)
+        .then((r) => r.data.data)
+  })
+  const [confirmClear, setConfirmClear] = useState(false)
+  const save = useMutation({
+    mutationFn: (rules: NotifyRulesValue) =>
+      api
+        .put<{ data: RoleDefaults }>(`/notifications/role-defaults/${roleId}`, { rules })
+        .then((r) => r.data.data),
+    onMutate: (rules) => {
+      qc.setQueryData<RoleDefaults | undefined>(key, (cur) => (cur ? { ...cur, rules } : cur))
+    },
+    onSuccess: (saved) =>
+      qc.setQueryData<RoleDefaults | undefined>(key, (cur) =>
+        cur ? { ...cur, ...saved, members: cur.members } : saved
+      ),
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      toast.error(msg ?? 'Could not save the notification defaults')
+      void qc.invalidateQueries({ queryKey: key })
+    }
+  })
+  const clear = useMutation({
+    mutationFn: () => api.delete(`/notifications/role-defaults/${roleId}`),
+    onSuccess: () => {
+      setConfirmClear(false)
+      toast.success('Notification defaults cleared')
+      void qc.invalidateQueries({ queryKey: key })
+    }
+  })
+  if (isLoading || !data) return <Skeleton className='h-64 w-full' />
+  const hasAny =
+    data.rules.quiet_start !== undefined ||
+    data.rules.quiet_end !== undefined ||
+    Object.keys(data.rules.matrix ?? {}).length > 0 ||
+    Object.keys(data.rules.escalation ?? {}).length > 0
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-role-notification-defaults
+    >
+      <header className='flex flex-wrap items-start gap-3 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
+        <div className='min-w-0 flex-1'>
+          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
+            Notification defaults
+          </h3>
+          <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            Starting notification rules for the {data.members ?? 0}{' '}
+            {data.members === 1 ? 'person' : 'people'} in "{roleName}". Anyone's own Profile →
+            Notification rules win for the values they set; everything else follows these, and
+            someone who moves to another role follows that role's defaults instead.
+          </p>
+          {data.updated_at && (
+            <p className='mt-0.5 text-[11px] text-slate-400'>
+              Last changed {new Date(data.updated_at).toLocaleString()}
+            </p>
+          )}
+        </div>
+        {hasAny &&
+          (confirmClear ? (
+            <div className='flex items-center gap-2 text-[12px]'>
+              <span className='text-slate-600 dark:text-slate-400'>Clear all defaults?</span>
+              <Button
+                size='sm'
+                variant='destructive'
+                disabled={clear.isPending}
+                onClick={() => clear.mutate()}
+              >
+                Clear
+              </Button>
+              <Button size='sm' variant='outline' onClick={() => setConfirmClear(false)}>
+                Cancel
+              </Button>
+            </div>
+          ) : (
+            <Button size='sm' variant='outline' onClick={() => setConfirmClear(true)}>
+              Clear defaults
+            </Button>
+          ))}
+      </header>
+      <div className='p-4'>
+        <NotificationRulesEditor
+          subject='role'
+          value={data.rules}
+          saving={save.isPending}
+          onCommit={(next) => save.mutate(next)}
+        />
       </div>
     </div>
   )

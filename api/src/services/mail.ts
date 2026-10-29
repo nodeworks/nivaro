@@ -470,8 +470,14 @@ async function applyDigestDeferral(
     if (users.length === 0) return recipients
     const daily = new Map<string, string>()
     const off = new Set<string>()
-    const { inQuietHours, classifyNotification, emailModeFor, isCriticalSubject, quietOverridden } =
-      await import('./notification-channels.js')
+    const {
+      inQuietHours,
+      classifyNotification,
+      emailModeFor,
+      getNotifyPrefs,
+      isCriticalSubject,
+      quietOverridden
+    } = await import('./notification-channels.js')
     const category = explicitCategory ?? classifyNotification(subject)
     const critical = isCriticalSubject(subject)
     for (const u of users) {
@@ -482,7 +488,10 @@ async function applyDigestDeferral(
       } catch {
         prefs = null
       }
-      const np = (prefs?.notification_prefs ?? null) as Parameters<typeof emailModeFor>[0]
+      // #3077 — the person's own rules over their role's defaults (cached per person).
+      const np = ((await getNotifyPrefs(u.id).catch(() => null)) ??
+        prefs?.notification_prefs ??
+        null) as Parameters<typeof emailModeFor>[0]
       // Per-category email mode (the profile's notification rules), falling
       // back to the account-wide instant/daily default. Critical subjects
       // (SLA escalations, maintenance, monitor failures) always send now.

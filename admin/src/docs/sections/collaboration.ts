@@ -551,6 +551,30 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
       code: `PATCH /api/users/me/preferences
 { "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }`
     },
+    { type: 'h3', id: 'notification-role-defaults', text: 'Default notification rules by role' },
+    {
+      type: 'p',
+      text: 'Roles → a role → Notification defaults sets the starting notification rules for everyone in that role — categories, channels, quiet hours, daily summary or individual email, and the "if it stays unread" steps — with the same editor people use on their Profile. A person\'s own Profile → Notification rules win for every value they set; everything they never set follows their role. Nothing is copied onto people: the rules are merged when each notification is decided, so moving someone to another role brings that role\'s defaults at once for anything they never set.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'On Profile → Notification rules, a value that comes from the role carries a small "R" mark. Changing it makes it the person\'s own; the reset arrow on a row (or "Use the role defaults for everything") puts it back on the role.',
+        'Clearing quiet hours over a role\'s window stores "no quiet hours" for that person; "Use the role\'s" goes back to the role window. Setting an escalation step to never over a role step that escalates stores an explicit never.',
+        "A person's account-wide daily email choice beats a role's email mode; Individual email is the system default and never shadows the role.",
+        "Notification Bench → simulate shows, per channel, which layer decided it: their own rules, the role default (named), or the system default — and the person's own and role rows side by side.",
+        'Role defaults are configuration (promoted between instances with roles). Deleting a role deletes its defaults.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/notifications/role-defaults/:roleId   (admin) → { role, rules, updated_at, updated_by, members }
+PUT    /api/notifications/role-defaults/:roleId   (admin) { "rules": { "quiet_start": "22:00", "quiet_end": "07:00",
+         "matrix": { "workflow": { "push": false, "email": "daily" } },
+         "escalation": { "sla": { "push_after_min": 60 } } } }
+DELETE /api/notifications/role-defaults/:roleId   (admin) → 204, back to the system defaults
+GET    /api/notifications/my-rule-defaults        → { role, rules } for the signed-in person`
+    },
     { type: 'h3', text: 'Record bundles in the bell' },
     {
       type: 'p',

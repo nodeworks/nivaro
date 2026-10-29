@@ -46,8 +46,14 @@ function escalationOf(prefs: NotifyPrefs | null): EscalationPrefs | null {
 /** Users whose preferences mention an escalation rule — a LIKE on the JSON
  *  text is the cheap pre-filter; the parsed prefs are the truth. */
 async function usersWithEscalation(): Promise<string[]> {
+  // #3077 — people whose ROLE's defaults carry a step escalate too, unless they set their own.
+  const { rolesWithEscalation } = await import('./notification-role-defaults.js')
+  const roles = await rolesWithEscalation().catch(() => [] as string[])
   const rows = (await db('nivaro_users')
-    .where('preferences', 'like', '%"escalation"%')
+    .where((qb) => {
+      qb.where('preferences', 'like', '%"escalation"%')
+      if (roles.length) qb.orWhereIn('role', roles)
+    })
     .where((qb) => qb.whereNull('status').orWhereNot('status', 'suspended'))
     .where('is_redacted', 0)
     .select('id')) as Array<{ id: string }>

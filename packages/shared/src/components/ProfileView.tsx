@@ -36,6 +36,13 @@ import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/t
 import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
+import {
+  type EmailMode,
+  mergeNotifyRulesClient,
+  NOTIFY_RULE_CATS,
+  NotificationRulesEditor,
+  type NotifyRulesValue
+} from './notifications/NotificationRulesEditor'
 import { AgentsPanel } from './profile/AgentsPanel'
 import { AiHistoryCard, AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
@@ -104,68 +111,7 @@ const initials = (u: { first_name?: string | null; last_name?: string | null; em
 
 // ── Notification rules (quiet hours + per-category channel matrix) ──────────
 
-const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
-  {
-    key: 'mentions',
-    label: 'Mentions',
-    help: 'Someone @-mentions you in a comment, note, or chat room.'
-  },
-  {
-    key: 'workflow',
-    label: 'Workflow & approvals',
-    help: 'A record you own or follow moves state, needs your approval, is sent back, or an approval chain reaches your step. Also support requests you work on the desk (new, assigned, replied).'
-  },
-  {
-    key: 'sla',
-    label: 'SLA & escalations',
-    help: 'A record you own is nearing or past its SLA, and escalation-ladder notices as they climb. SLA escalations always email immediately.'
-  },
-  {
-    key: 'watch',
-    label: 'Watches',
-    help: 'Something you explicitly watch fired: field watches, per-record subscriptions, and watched stock parts (Stock Planning).'
-  },
-  {
-    key: 'alerts',
-    label: 'Alerts',
-    help: 'Threshold alerts you subscribe to: metric alert rules, per-record alert definitions, report alerts, and the alert digest.'
-  },
-  {
-    key: 'anomaly',
-    label: 'Anomaly detections',
-    help: 'Anomaly rules you created flag an outlier, spike, or duplicate pattern.'
-  },
-  {
-    key: 'reports',
-    label: 'Reports',
-    help: 'Scheduled report emails, Report Studio subscription digests, and saved-view change digests.'
-  },
-  {
-    key: 'integrations',
-    label: 'Integrations',
-    help: 'A partner system was not told something about your record, a send is still unanswered, or an integration alert you turned on in the Integrations console fired.'
-  },
-  {
-    key: 'huddle',
-    label: 'Huddles & calls',
-    help: 'Someone calls you in a huddle or adds you to one, and reminders for huddles you were invited to. Push is what rings a closed tab.'
-  },
-  {
-    key: 'chaos',
-    label: 'Chaos drills',
-    help: 'Chaos Monkey drills starting and ending, and pushes about drills you started or take part in (with a Stop button). Only administrators and chaos operators get these.'
-  },
-  {
-    key: 'system',
-    label: 'System & digests',
-    help: 'Maintenance windows, failing monitors, import results, updates on support requests you raised, and the daily action summary itself. Maintenance and monitor failures always email immediately.'
-  },
-  {
-    key: 'other',
-    label: 'Everything else',
-    help: 'Any notification that does not fit a category above — direct messages from other users, access requests, task assignments.'
-  }
-]
+const NOTIFY_CATS = NOTIFY_RULE_CATS
 
 /** Custom profile fields (#683) — admin-defined extras (cost center, skills…),
  *  self-served here. Renders nothing when no definitions exist. */
@@ -308,32 +254,26 @@ export function NotificationRulesCard() {
   })
   const teamsAvailable = teamsFacts?.available === true
   const teamsLinked = teamsFacts?.link?.status === 'active'
-  type EmailMode = 'instant' | 'daily' | 'off'
-  type EscalationRule = { push_after_min?: number; email_after_min?: number }
-  const np = (prefs?.notification_prefs ?? {}) as {
-    quiet_start?: string
-    quiet_end?: string
-    teams_muted_until?: string
-    matrix?: Record<
-      string,
-      {
-        inapp?: boolean
-        push?: boolean
-        email?: EmailMode
-        quiet_override?: boolean
-        teams?: boolean
-      }
-    >
-    escalation?: Record<string, EscalationRule>
-  }
+  const np = (prefs?.notification_prefs ?? {}) as NotifyRulesValue
+  // #3077 — the person's role defaults: every value they never set follows these.
+  const { data: roleDefaults } = useQuery({
+    queryKey: ['nvr-my-rule-defaults'],
+    queryFn: () =>
+      client
+        .request<{
+          data: { role: { id: string; name: string | null } | null; rules: NotifyRulesValue }
+        }>(get('/notifications/my-rule-defaults'))
+        .then((r) => r.data)
+        .catch(() => null),
+    staleTime: 60_000
+  })
   // Legacy account-wide default (instant vs daily) — categories without an
   // explicit email mode inherit it; the server applies the same fallback.
   const legacyEmail: EmailMode = prefs?.email_digest === 'daily' ? 'daily' : 'instant'
-  const emailModeOf = (cat: string): EmailMode => np.matrix?.[cat]?.email ?? legacyEmail
-  const [quietStart, setQuietStart] = useState<string | null>(null)
-  const [quietEnd, setQuietEnd] = useState<string | null>(null)
-  const effStart = quietStart ?? np.quiet_start ?? ''
-  const effEnd = quietEnd ?? np.quiet_end ?? ''
+  const effRules = mergeNotifyRulesClient(np, roleDefaults?.role ? roleDefaults.rules : null)
+  const emailModeOf = (cat: string): EmailMode =>
+    np.matrix?.[cat]?.email ??
+    (legacyEmail === 'daily' ? 'daily' : (effRules.matrix?.[cat]?.email ?? legacyEmail))
 
   const save = useMutation({
     mutationFn: (next: Record<string, unknown>) =>
@@ -378,18 +318,16 @@ export function NotificationRulesCard() {
         proposed: r.data.proposed
       })
   })
-  const commit = (overrides: Partial<typeof np>) => {
+  const commitRules = (rules: NotifyRulesValue) => {
     const next = {
-      quiet_start: overrides.quiet_start ?? (effStart || undefined),
-      quiet_end: overrides.quiet_end ?? (effEnd || undefined),
-      matrix: overrides.matrix ?? np.matrix ?? {},
-      escalation: overrides.escalation ?? np.escalation ?? {},
+      ...rules,
       // Kept as-is: "mute 1h" said to the bot lives here, and a save must not wipe it.
       ...(np.teams_muted_until ? { teams_muted_until: np.teams_muted_until } : {})
     }
-    previewMut.mutate(next)
-    save.mutate(next)
+    previewMut.mutate(next as Record<string, unknown>)
+    save.mutate(next as Record<string, unknown>)
   }
+  const commit = (overrides: Partial<NotifyRulesValue>) => commitRules({ ...np, ...overrides })
   // #2385 — per-category sound on top of the global one.
   const catSounds = (prefs?.notification_sounds ?? {}) as Record<string, string>
   const setCatSound = (cat: string, v: string) => {
@@ -426,57 +364,6 @@ export function NotificationRulesCard() {
       localStorage.setItem('nvr-noise-dismissed', JSON.stringify({ at: Date.now(), cats }))
     } catch {}
   }
-  // Channel fallback chain: per category, how long a row may stay unread
-  // before it climbs to push, then to email. '' = never.
-  const setEscalation = (cat: string, step: keyof EscalationRule, minutes: number | null) => {
-    const cur = { ...(np.escalation?.[cat] ?? {}) }
-    if (minutes) cur[step] = minutes
-    else delete cur[step]
-    const next = { ...(np.escalation ?? {}) }
-    if (Object.keys(cur).length) next[cat] = cur
-    else delete next[cat]
-    commit({ escalation: next })
-  }
-  const ESCALATION_OPTIONS = [
-    { value: '', label: 'never' },
-    { value: '15', label: '15 min' },
-    { value: '60', label: '1 hour' },
-    { value: '240', label: '4 hours' },
-    { value: '480', label: '8 hours' },
-    { value: '1440', label: '1 day' }
-  ]
-  const toggle = (cat: string, channel: 'inapp' | 'push') => {
-    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
-    commit({
-      matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, [channel]: cur[channel] === false } }
-    })
-  }
-  // Teams is opt-in: absent = off, so the first tick turns it on.
-  const toggleTeams = (cat: string) => {
-    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
-    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, teams: cur.teams !== true } } })
-  }
-  const setEmail = (cat: string, email: EmailMode) => {
-    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
-    commit({ matrix: { ...(np.matrix ?? {}), [cat]: { ...cur, email } } })
-  }
-  // #78 — let one category through quiet hours (push + instant email).
-  const toggleQuietOverride = (cat: string) => {
-    const cur = np.matrix?.[cat] ?? { inapp: true, push: true }
-    const next = { ...cur }
-    if (cur.quiet_override) delete next.quiet_override
-    else next.quiet_override = true
-    commit({ matrix: { ...(np.matrix ?? {}), [cat]: next } })
-  }
-  const hasQuietHours = !!(effStart && effEnd)
-  const setAllEmail = (email: EmailMode) => {
-    const matrix: Record<string, { inapp?: boolean; push?: boolean; email?: EmailMode }> = {}
-    for (const c of NOTIFY_CATS)
-      matrix[c.key] = { ...(np.matrix?.[c.key] ?? { inapp: true, push: true }), email }
-    commit({ matrix })
-    // Keep the legacy default in step so older clients read the same answer.
-    if (email !== 'off') saveRaw.mutate({ email_digest: email })
-  }
   const digestHour = Number.isInteger(Number(prefs?.digest_hour)) ? Number(prefs?.digest_hour) : 7
   const fmtHour = (h: number) => `${h % 12 === 0 ? 12 : h % 12}:45 ${h < 12 ? 'AM' : 'PM'}`
   const [testNote, setTestNote] = useState<string | null>(null)
@@ -487,11 +374,6 @@ export function NotificationRulesCard() {
     onError: () => setTestNote('Test send failed — try again.')
   })
   const anyDaily = NOTIFY_CATS.some((c) => emailModeOf(c.key) === 'daily')
-  const EMAIL_OPTIONS = [
-    { value: 'instant', label: 'Individual email' },
-    { value: 'daily', label: 'Daily summary' },
-    { value: 'off', label: 'No email' }
-  ]
   const HeaderHelp = ({ text }: { text: string }) => (
     <span
       className='ml-1 inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full border border-slate-300 text-[9px] font-semibold normal-case tracking-normal text-slate-400 dark:border-border'
@@ -506,6 +388,7 @@ export function NotificationRulesCard() {
 
   return (
     <div
+      id='notification-rules'
       data-profile-card='notifications'
       className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
     >
@@ -589,37 +472,6 @@ export function NotificationRulesCard() {
           </div>
         )}
         <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-          Quiet hours (ET):
-          <input
-            type='time'
-            value={effStart}
-            onChange={(e) => setQuietStart(e.target.value)}
-            onBlur={() => commit({ quiet_start: effStart || undefined })}
-            className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
-          />
-          <span>to</span>
-          <input
-            type='time'
-            value={effEnd}
-            onChange={(e) => setQuietEnd(e.target.value)}
-            onBlur={() => commit({ quiet_end: effEnd || undefined })}
-            className='h-7 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
-          />
-          {(effStart || effEnd) && (
-            <button
-              type='button'
-              onClick={() => {
-                setQuietStart('')
-                setQuietEnd('')
-                save.mutate({ matrix: np.matrix ?? {} })
-              }}
-              className='text-[11.5px] text-slate-400 underline decoration-dotted underline-offset-2'
-            >
-              Clear
-            </button>
-          )}
-        </div>
-        <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           Sound:
           <SimpleSelectXs
             value={String(prefs?.notification_sound ?? 'off')}
@@ -652,181 +504,52 @@ export function NotificationRulesCard() {
             toasts and sounds wait while you talk; you get one summary when you leave
           </span>
         </div>
-        <table className='w-full text-[12px]'>
-          <thead>
-            <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
-              <th className='py-1 font-semibold'>Category</th>
-              <th className='py-1 text-center font-semibold'>
-                In-app
-                <HeaderHelp text='The notification itself: the bell badge and your Notifications inbox in the app. Off = no row is written for this category, so nothing shows anywhere in the app.' />
-              </th>
-              <th className='py-1 text-center font-semibold'>
-                Push
-                <HeaderHelp text='A browser / device alert (the popup you get even with the tab closed) on devices where you allowed notifications. Off keeps the in-app row but stops the device alert. Quiet hours pause pushes too.' />
-              </th>
-              <th className='py-1 text-center font-semibold'>
-                Email
-                <HeaderHelp text='Individual email = one message as each event happens. Daily summary = held and delivered once a day in your action summary (deliver-at time below). No email = never emailed for this category (in-app and push are unaffected).' />
-              </th>
-              {teamsAvailable && (
-                <th className='py-1 text-center font-semibold' data-teams-column=''>
-                  Teams
-                  <HeaderHelp text='A message from the Nivaro bot in Microsoft Teams. Off by default: connect Teams, then turn on the categories you want there. Say "mute 1h" to the bot to pause them for a while.' />
-                  <div className='mt-0.5'>
-                    <TeamsConnect linked={teamsLinked} linkedAt={teamsFacts?.link?.linked_at} />
-                  </div>
-                </th>
-              )}
-              <th className='py-1 text-center font-semibold'>
+        <NotificationRulesEditor
+          subject='person'
+          value={np}
+          inherited={roleDefaults?.role ? roleDefaults.rules : null}
+          inheritedName={roleDefaults?.role?.name ?? null}
+          legacyEmail={legacyEmail}
+          saving={save.isPending}
+          onCommit={(next) => commitRules(next)}
+          onLegacyEmail={(mode) => saveRaw.mutate({ email_digest: mode })}
+          teams={
+            teamsAvailable
+              ? {
+                  available: true,
+                  linked: teamsLinked,
+                  header: (
+                    <div className='mt-0.5'>
+                      <TeamsConnect linked={teamsLinked} linkedAt={teamsFacts?.link?.linked_at} />
+                    </div>
+                  )
+                }
+              : null
+          }
+          extraColumn={{
+            header: (
+              <>
                 Sound
                 <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above.' />
-              </th>
-              <th className='py-1 text-center font-semibold'>
-                Quiet hours
-                <HeaderHelp text='Ticked = this category still pushes and emails during your quiet hours (the in-app row always lands either way). Leave it off to have quiet hours hold this category until morning. Critical alerts always get through.' />
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {NOTIFY_CATS.map((c) => {
-              const row = np.matrix?.[c.key] ?? {}
-              return (
-                <tr key={c.key} className='border-t border-slate-100 dark:border-border'>
-                  <td className='py-1.5 text-slate-700 dark:text-foreground'>
-                    {c.label}
-                    <HeaderHelp text={c.help} />
-                  </td>
-                  {(['inapp', 'push'] as const).map((ch) => (
-                    <td key={ch} className='py-1.5 text-center'>
-                      <input
-                        type='checkbox'
-                        checked={row[ch] !== false}
-                        onChange={() => toggle(c.key, ch)}
-                        disabled={save.isPending}
-                        aria-label={`${ch === 'inapp' ? 'In-app' : 'Push'} for ${c.label}`}
-                        data-notify-channel={`${c.key}:${ch}`}
-                        className='h-3.5 w-3.5'
-                      />
-                    </td>
-                  ))}
-                  <td className='py-1 text-center'>
-                    <div className='inline-block'>
-                      <SimpleSelectXs
-                        ariaLabel={`Email for ${c.label}`}
-                        value={emailModeOf(c.key)}
-                        options={EMAIL_OPTIONS}
-                        onChange={(v: string) => setEmail(c.key, v as EmailMode)}
-                      />
-                    </div>
-                  </td>
-                  {teamsAvailable && (
-                    <td className='py-1.5 text-center'>
-                      <input
-                        type='checkbox'
-                        checked={row.teams === true}
-                        onChange={() => toggleTeams(c.key)}
-                        disabled={save.isPending || !teamsLinked}
-                        aria-label={`Teams for ${c.label}`}
-                        title={teamsLinked ? undefined : 'Connect Teams first'}
-                        data-notify-channel={`${c.key}:teams`}
-                        className='h-3.5 w-3.5'
-                      />
-                    </td>
-                  )}
-                  <td className='py-1 text-center'>
-                    <div className='inline-block'>
-                      <SimpleSelectXs
-                        ariaLabel={`Sound for ${c.label}`}
-                        value={catSounds[c.key] ?? 'default'}
-                        options={[
-                          { value: 'default', label: 'Default' },
-                          { value: 'off', label: 'None' },
-                          { value: 'subtle', label: 'Subtle blip' },
-                          { value: 'chime', label: 'Chime' }
-                        ]}
-                        onChange={(v: string) => setCatSound(c.key, v)}
-                      />
-                    </div>
-                  </td>
-                  <td className='py-1.5 text-center'>
-                    <input
-                      type='checkbox'
-                      checked={row.quiet_override === true}
-                      onChange={() => toggleQuietOverride(c.key)}
-                      disabled={save.isPending}
-                      aria-label={`Let ${c.label} through quiet hours`}
-                      title={
-                        hasQuietHours
-                          ? undefined
-                          : 'Set quiet hours above for this to matter — it is remembered either way'
-                      }
-                      data-quiet-override={c.key}
-                      className='h-3.5 w-3.5'
-                    />
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-        <div className='flex flex-wrap items-center gap-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          <span>All email:</span>
-          {EMAIL_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type='button'
-              disabled={save.isPending}
-              onClick={() => setAllEmail(o.value as EmailMode)}
-              className='rounded border border-slate-200 px-2 py-0.5 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:hover:text-foreground'
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-        <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border/60 dark:bg-background/40'>
-          <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
-            If it stays unread
-            <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
-              one notification climbs channels on your schedule — push, then email — and stops the
-              moment you read it. A channel that already delivered it is not repeated.
-            </span>
-          </p>
-          <table className='w-full text-[12px]'>
-            <thead>
-              <tr className='text-left text-[10.5px] uppercase tracking-wide text-slate-400'>
-                <th className='py-1 font-semibold'>Category</th>
-                <th className='py-1 font-semibold'>
-                  Push after
-                  <HeaderHelp text='Still unread after this long → a browser / device push (needs a registered device; quiet hours do not apply to escalations you asked for).' />
-                </th>
-                <th className='py-1 font-semibold'>
-                  Email after
-                  <HeaderHelp text='Still unread after this long → one email with the notification, regardless of the Email column above (No email still means no email at delivery time; this is the fallback).' />
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {NOTIFY_CATS.map((c) => {
-                const rule = np.escalation?.[c.key] ?? {}
-                return (
-                  <tr key={c.key} className='border-t border-slate-100 dark:border-border'>
-                    <td className='py-1 text-slate-700 dark:text-foreground'>{c.label}</td>
-                    {(['push_after_min', 'email_after_min'] as const).map((step) => (
-                      <td key={step} className='py-1'>
-                        <SimpleSelectXs
-                          ariaLabel={`${step === 'push_after_min' ? 'Push' : 'Email'} after for ${c.label}`}
-                          value={rule[step] ? String(rule[step]) : ''}
-                          options={ESCALATION_OPTIONS}
-                          onChange={(v: string) => setEscalation(c.key, step, v ? Number(v) : null)}
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+              </>
+            ),
+            cell: (cat, label) => (
+              <div className='inline-block'>
+                <SimpleSelectXs
+                  ariaLabel={`Sound for ${label}`}
+                  value={catSounds[cat] ?? 'default'}
+                  options={[
+                    { value: 'default', label: 'Default' },
+                    { value: 'off', label: 'None' },
+                    { value: 'subtle', label: 'Subtle blip' },
+                    { value: 'chime', label: 'Chime' }
+                  ]}
+                  onChange={(v: string) => setCatSound(cat, v)}
+                />
+              </div>
+            )
+          }}
+        />
         <div className='space-y-2 rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2 dark:border-border/60 dark:bg-background/40'>
           <p className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
             Daily action summary

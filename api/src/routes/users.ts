@@ -952,71 +952,11 @@ export async function usersRoutes(app: FastifyInstance) {
       if (raw === null) {
         patch.notification_prefs = null
       } else {
-        const np = raw as Record<string, unknown>
-        const TIME = /^([01]\d|2[0-3]):[0-5]\d$/
-        const clean: Record<string, unknown> = {}
-        if (typeof np.quiet_start === 'string' && TIME.test(np.quiet_start))
-          clean.quiet_start = np.quiet_start
-        if (typeof np.quiet_end === 'string' && TIME.test(np.quiet_end))
-          clean.quiet_end = np.quiet_end
-        if (
-          typeof np.teams_muted_until === 'string' &&
-          !Number.isNaN(Date.parse(np.teams_muted_until))
-        )
-          clean.teams_muted_until = np.teams_muted_until
-        const CATS = NOTIFY_CATEGORIES
-        if (np.matrix && typeof np.matrix === 'object') {
-          const m: Record<
-            string,
-            {
-              inapp?: boolean
-              push?: boolean
-              teams?: boolean
-              email?: string
-              quiet_override?: boolean
-            }
-          > = {}
-          for (const cat of CATS) {
-            const row = (np.matrix as Record<string, unknown>)[cat]
-            if (row && typeof row === 'object') {
-              const email = (row as { email?: unknown }).email
-              m[cat] = {
-                inapp: (row as { inapp?: unknown }).inapp !== false,
-                push: (row as { push?: unknown }).push !== false,
-                // Teams is opt-in: only an explicit true turns it on.
-                ...((row as { teams?: unknown }).teams === true ? { teams: true } : {}),
-                ...(email === 'instant' || email === 'daily' || email === 'off' ? { email } : {}),
-                // #78 — this category's push + instant email ignore quiet hours.
-                ...((row as { quiet_override?: unknown }).quiet_override === true
-                  ? { quiet_override: true }
-                  : {})
-              }
-            }
-          }
-          clean.matrix = m
-        }
-        // Channel fallback chain: per category, minutes-unread before the
-        // push step and before the email step (5 min .. 7 days).
-        if (np.escalation && typeof np.escalation === 'object') {
-          const esc: Record<string, { push_after_min?: number; email_after_min?: number }> = {}
-          const minutes = (v: unknown) => {
-            const n = Number(v)
-            return Number.isFinite(n) && n >= 5 && n <= 10_080 ? Math.round(n) : undefined
-          }
-          for (const cat of CATS) {
-            const row = (np.escalation as Record<string, unknown>)[cat]
-            if (!row || typeof row !== 'object') continue
-            const push = minutes((row as { push_after_min?: unknown }).push_after_min)
-            const email = minutes((row as { email_after_min?: unknown }).email_after_min)
-            if (push || email)
-              esc[cat] = {
-                ...(push ? { push_after_min: push } : {}),
-                ...(email ? { email_after_min: email } : {})
-              }
-          }
-          clean.escalation = esc
-        }
-        patch.notification_prefs = clean
+        // Quiet hours + per-category channel matrix + unread escalation. The one sanitizer
+        // keeps ABSENCE (#3077): a value the person never set keeps following their role's
+        // defaults; '' quiet hours / 0 minutes are explicit "none" over a role default.
+        const { sanitizeNotifyRules } = await import('../services/notification-layers.js')
+        patch.notification_prefs = sanitizeNotifyRules(raw)
       }
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)

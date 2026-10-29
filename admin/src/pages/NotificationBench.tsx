@@ -32,7 +32,9 @@ interface Reason {
   code: string
   channel: 'all' | 'inapp' | 'push' | 'teams' | 'email' | 'sms'
   text: string
+  layer?: Layer
 }
+type Layer = 'person' | 'role' | 'system'
 interface SimResult {
   user: {
     id: string
@@ -46,6 +48,9 @@ interface SimResult {
     push_subscriptions: number
     quiet_hours: string | null
     matrix_row: { inapp?: boolean; push?: boolean; email?: string } | null
+    own_matrix_row?: Record<string, unknown> | null
+    role_matrix_row?: Record<string, unknown> | null
+    role_defaults?: { id: string; name: string | null } | null
     digest_hour: number | null
     timezone: string | null
   }
@@ -60,6 +65,8 @@ interface SimResult {
     reasons: Reason[]
     dropped: boolean
   }
+  /** #3077 — which layer decided each channel. */
+  layers?: Record<'inapp' | 'push' | 'teams' | 'email' | 'quiet', Layer> | null
   target: Record<string, unknown> | null
   actions: Array<{ key: string; label: string; endpoint: string }>
   urls: { portal: string | null; admin: string | null; preferred: 'portal' | 'admin' }
@@ -80,14 +87,43 @@ const CHANNEL_LABEL: Record<string, string> = {
   sms: 'SMS'
 }
 
+const LAYER_LABEL: Record<Layer, string> = {
+  person: 'Their own rules',
+  role: 'Role default',
+  system: 'System default'
+}
+
+function LayerChip({ layer, role }: { layer?: Layer; role?: string | null }) {
+  if (!layer) return null
+  return (
+    <span
+      data-bench-layer={layer}
+      className={cn(
+        'rounded px-1.5 py-px text-[10px] font-semibold',
+        layer === 'person' && 'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+        layer === 'role' &&
+          'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
+        layer === 'system' && 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
+      )}
+    >
+      {LAYER_LABEL[layer]}
+      {layer === 'role' && role ? ` · ${role}` : ''}
+    </span>
+  )
+}
+
 function Outcome({
   label,
   state,
-  detail
+  detail,
+  layer,
+  role
 }: {
   label: string
   state: 'yes' | 'no' | 'deferred' | 'na'
   detail?: string
+  layer?: Layer
+  role?: string | null
 }) {
   return (
     <div className='bg-white px-4 py-3 dark:bg-card'>
@@ -112,6 +148,11 @@ function Outcome({
               : 'Not requested'}
       </p>
       {detail && <p className='text-[11px] text-slate-400'>{detail}</p>}
+      {state !== 'na' && layer && (
+        <p className='mt-1 flex items-center gap-1 text-[10.5px] text-slate-400'>
+          Decided by <LayerChip layer={layer} role={role} />
+        </p>
+      )}
     </div>
   )
 }
@@ -416,6 +457,14 @@ export default function NotificationBench() {
                       matrix[{r.decision.category}] = {JSON.stringify(r.user.matrix_row)}
                     </p>
                   )}
+                  {(r.user.own_matrix_row || r.user.role_matrix_row) && (
+                    <p className='mt-0.5 font-mono text-[11px] text-slate-400' data-bench-layers>
+                      own = {JSON.stringify(r.user.own_matrix_row ?? {})}
+                      {r.user.role_defaults
+                        ? ` · role "${r.user.role_defaults.name ?? r.user.role_defaults.id}" = ${JSON.stringify(r.user.role_matrix_row ?? {})}`
+                        : ''}
+                    </p>
+                  )}
                 </div>
 
                 {r.decision.dropped ? (
@@ -429,6 +478,8 @@ export default function NotificationBench() {
                       label='In-app'
                       state={r.decision.inapp ? 'yes' : 'no'}
                       detail='inbox row + toast'
+                      layer={r.layers?.inapp}
+                      role={r.user.role_defaults?.name}
                     />
                     <Outcome
                       label='Push'
@@ -440,6 +491,8 @@ export default function NotificationBench() {
                           ? 'allowed, but no device registered'
                           : undefined
                       }
+                      layer={r.layers?.push}
+                      role={r.user.role_defaults?.name}
                     />
                     <Outcome
                       label='Email'
@@ -453,6 +506,8 @@ export default function NotificationBench() {
                               : 'no'
                       }
                       detail={r.decision.email === 'no_address' ? 'no address on file' : undefined}
+                      layer={r.layers?.email}
+                      role={r.user.role_defaults?.name}
                     />
                     <Outcome label='SMS' state={sms ? (r.decision.sms ? 'yes' : 'no') : 'na'} />
                   </div>
@@ -479,7 +534,10 @@ export default function NotificationBench() {
                           {CHANNEL_LABEL[x.channel]}
                         </span>
                         <span className='text-slate-700 dark:text-foreground'>{x.text}</span>
-                        <span className='ml-auto shrink-0 font-mono text-[10.5px] text-slate-300'>
+                        <span className='ml-auto shrink-0'>
+                          <LayerChip layer={x.layer} role={r.user.role_defaults?.name} />
+                        </span>
+                        <span className='shrink-0 font-mono text-[10.5px] text-slate-300'>
                           {x.code}
                         </span>
                       </li>

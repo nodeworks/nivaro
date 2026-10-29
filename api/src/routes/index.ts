@@ -186,6 +186,8 @@ import { monitorRoutes } from './monitors.js'
 import { myJobsRoutes } from './my-jobs.js'
 import { myWorkRoutes } from './my-work.js'
 import { notificationBenchRoutes } from './notification-bench.js'
+import { notificationRoleDefaultsRoutes } from './notification-role-defaults.js'
+import { notificationSelfRoutes } from './notification-self.js'
 import { notificationSubscriptionsRoutes } from './notification-subscriptions.js'
 import { notificationTemplateRoutes } from './notification-templates.js'
 import { notificationsRoutes } from './notifications.js'
@@ -601,6 +603,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(flowRegistryRoutes)
   await app.register(mailRoutes, { prefix: '/mail' })
   await app.register(notificationsRoutes, { prefix: '/notifications' })
+  // #3077 role defaults (admin) + the caller's own extras (#3077/#3078/#3079).
+  await app.register(notificationRoleDefaultsRoutes, { prefix: '/notifications/role-defaults' })
+  await app.register(notificationSelfRoutes, { prefix: '/notifications' })
   await app.register(pipelinesRoutes, { prefix: '/pipelines' })
   app.get('/presence.js', async (_req, reply) => {
     const row = await db('nivaro_settings')

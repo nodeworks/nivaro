@@ -6,6 +6,16 @@ import { emitNotification } from '../plugins/socketio.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
+import {
+  effectiveRules,
+  emailLayerOf,
+  type LayeredRules,
+  layerOf,
+  NOTIFY_CATEGORIES,
+  type NotifyRules,
+  type RuleLayer,
+  sanitizeNotifyRules
+} from './notification-layers.js'
 import { snapshotRevisionFor } from './notification-snapshot.js'
 import {
   actionsFor,
@@ -14,6 +24,7 @@ import {
   normalizeTarget,
   resolveTargetUrl
 } from './notification-target.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { sendWebPush } from './web-push.js'
 
 export type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
@@ -165,20 +176,7 @@ export function parseDetail(raw: unknown): NotificationDetail | null {
 // Quiet hours suppress PUSH only (the inbox row still lands — it IS the
 // inbox); truly critical subjects bypass. All America/New_York (the default wall clock).
 
-export const NOTIFY_CATEGORIES: NotifyCategory[] = [
-  'mentions',
-  'workflow',
-  'sla',
-  'watch',
-  'alerts',
-  'anomaly',
-  'reports',
-  'integrations',
-  'system',
-  'huddle',
-  'chaos',
-  'other'
-]
+export { NOTIFY_CATEGORIES }
 
 /** Human labels for the matrix rows — the why-me footer's fallback names one. */
 export const NOTIFY_CATEGORY_LABELS: Record<NotifyCategory, string> = {
@@ -233,31 +231,15 @@ const CRITICAL_SUBJECTS = /^critical:|sla escalation|maintenance|monitor failing
 
 export type EmailMode = 'instant' | 'daily' | 'off'
 
-export interface NotifyPrefs {
-  quiet_start?: string
-  quiet_end?: string
-  /** Teams only: set by the bot's `mute 1h`. ISO UTC; a future time holds Teams messages. */
-  teams_muted_until?: string
-  /** Per category: in-app row on/off, browser push on/off, and how EMAIL
-   *  reaches the person — each message as it happens, folded into the daily
-   *  action summary, or not at all. `email` absent = the legacy
-   *  preferences.email_digest default ('instant' unless 'daily').
-   *  `quiet_override` (#78): this category's push and instant email go out
-   *  even inside quiet hours. */
-  matrix?: Partial<
-    Record<
-      NotifyCategory,
-      {
-        inapp?: boolean
-        push?: boolean
-        /** Teams 1:1 message. Opt-in: absent = off (unlike push). */
-        teams?: boolean
-        email?: EmailMode
-        quiet_override?: boolean
-      }
-    >
-  >
-}
+/**
+ * A person's notification rules (preferences.notification_prefs) — and, since #3077, a role's
+ * defaults, in the same shape (services/notification-layers.ts). Per category: in-app row
+ * on/off, browser push on/off, Teams (opt-in), how EMAIL reaches the person (instant / daily
+ * summary / off; absent = the legacy preferences.email_digest default) and `quiet_override`
+ * (#78: push + instant email go out even inside quiet hours). Plus quiet hours, the bot's
+ * `teams_muted_until` and the unread-escalation steps.
+ */
+export type NotifyPrefs = NotifyRules
 
 /** Does this category ignore the person's quiet hours (#78)? */
 export function quietOverridden(prefs: NotifyPrefs | null | undefined, category: NotifyCategory) {
@@ -278,33 +260,98 @@ export function emailModeFor(
 
 export const isCriticalSubject = (subject: string) => CRITICAL_SUBJECTS.test(subject)
 
-const prefsCache = new Map<string, { at: number; prefs: NotifyPrefs | null }>()
+interface PersonPrefsEntry {
+  at: number
+  own: NotifyPrefs | null
+  roleId: string | null
+  roleName: string | null
+  legacyEmailDigest: unknown
+}
+// Tenant-keyed: two cloud tenants never share an entry.
+const prefsCache = new Map<string, PersonPrefsEntry>()
+const prefsKey = (userId: string) => `${currentTenantKey()}:${userId.toUpperCase()}`
 
-export async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
-  const key = userId.toUpperCase()
+async function personPrefs(userId: string): Promise<PersonPrefsEntry> {
+  const key = prefsKey(userId)
   const hit = prefsCache.get(key)
-  if (hit && Date.now() - hit.at < 60_000) return hit.prefs
-  let prefs: NotifyPrefs | null = null
+  if (hit && Date.now() - hit.at < 60_000) return hit
+  const entry: PersonPrefsEntry = {
+    at: Date.now(),
+    own: null,
+    roleId: null,
+    roleName: null,
+    legacyEmailDigest: undefined
+  }
   try {
-    const row = (await db('nivaro_users').where({ id: userId }).first('preferences')) as
-      | { preferences?: string | Record<string, unknown> | null }
+    const row = (await db('nivaro_users').where({ id: userId }).first('preferences', 'role')) as
+      | { preferences?: string | Record<string, unknown> | null; role?: string | null }
       | undefined
     const parsed =
       typeof row?.preferences === 'string'
         ? JSON.parse(row.preferences)
         : (row?.preferences ?? null)
-    prefs = (parsed?.notification_prefs as NotifyPrefs) ?? null
+    entry.own = (parsed?.notification_prefs as NotifyPrefs) ?? null
+    entry.legacyEmailDigest = parsed?.email_digest
+    entry.roleId = row?.role != null ? String(row.role) : null
   } catch {
-    prefs = null
+    // unreadable prefs = system defaults, never a failed delivery
   }
-  prefsCache.set(key, { at: Date.now(), prefs })
-  return prefs
+  prefsCache.set(key, entry)
+  return entry
+}
+
+export interface LayeredNotifyPrefs extends LayeredRules {
+  legacyEmailDigest: unknown
+}
+
+/**
+ * The person's rules in layers (#3077): their own, their CURRENT role's defaults, and the
+ * merged result every reader judges by. `ownOverride` judges proposed own rules instead of the
+ * stored ones (the rules preview) — still over the role's defaults.
+ */
+export async function getNotifyPrefsLayered(
+  userId: string,
+  ownOverride?: NotifyPrefs | null
+): Promise<LayeredNotifyPrefs> {
+  const p = await personPrefs(userId)
+  const own = ownOverride !== undefined ? ownOverride : p.own
+  let role: LayeredRules['role'] = null
+  if (p.roleId) {
+    const { getRoleDefaults } = await import('./notification-role-defaults.js')
+    const row = await getRoleDefaults(p.roleId).catch(() => null)
+    if (row) {
+      // The name only matters when the role has defaults (it labels "from your role").
+      if (p.roleName == null) {
+        const r = (await db('nivaro_roles')
+          .where({ id: p.roleId })
+          .first('name')
+          .catch(() => undefined)) as { name?: string | null } | undefined
+        p.roleName = r?.name ?? ''
+      }
+      role = { id: p.roleId, name: p.roleName || null, rules: row.rules }
+    }
+  }
+  return {
+    own,
+    role,
+    merged: effectiveRules(own, role?.rules, p.legacyEmailDigest),
+    legacyEmailDigest: p.legacyEmailDigest
+  }
+}
+
+/** The rules every reader judges by: the person's own over their role's defaults. Null = none. */
+export async function getNotifyPrefs(userId: string): Promise<NotifyPrefs | null> {
+  const l = await getNotifyPrefsLayered(userId)
+  return l.own || l.role ? l.merged : null
 }
 
 export function bustNotifyPrefsCache(userId?: string): void {
-  if (userId) prefsCache.delete(userId.toUpperCase())
+  if (userId) prefsCache.delete(prefsKey(userId))
   else prefsCache.clear()
 }
+
+/** Sanitize a person's own rules (the users route and the rules preview use this). */
+export const sanitizePersonRules = (raw: unknown) => sanitizeNotifyRules(raw)
 
 /** The end of an active `mute 1h` on Teams, or null when none is running. */
 export function teamsMutedUntil(prefs: NotifyPrefs | null | undefined, now = new Date()) {
@@ -359,6 +406,17 @@ export interface DeliveryReason {
     | 'sender_cadence'
   channel: 'all' | 'inapp' | 'push' | 'teams' | 'email' | 'sms'
   text: string
+  /** #3077 — which rules layer this reason came from (rules-driven reasons only). */
+  layer?: RuleLayer
+}
+
+/** Per channel, the rules layer that decided its outcome (#3077). */
+export interface DecisionLayers {
+  inapp: RuleLayer
+  push: RuleLayer
+  teams: RuleLayer
+  email: RuleLayer
+  quiet: RuleLayer
 }
 
 export interface DeliveryDecision {
@@ -374,6 +432,10 @@ export interface DeliveryDecision {
   reasons: DeliveryReason[]
   /** Fully dropped before any channel (suspended / redacted / muted). */
   dropped: boolean
+  /** #3077 — which layer (person / role default / system default) decided each channel. */
+  layers?: DecisionLayers
+  /** The role whose defaults were in play (null = none set for the person's role). */
+  role?: { id: string; name: string | null } | null
 }
 
 /**
@@ -409,8 +471,10 @@ export async function decideDelivery(
     teams: false,
     email: 'off',
     sms: false,
-    reasons: [{ code, channel: 'all', text }],
-    dropped: true
+    reasons: [{ code, channel: 'all', text, layer: 'system' }],
+    dropped: true,
+    layers: { inapp: 'system', push: 'system', teams: 'system', email: 'system', quiet: 'system' },
+    role: null
   })
 
   // Nobody who has left gets told. A suspended account cannot act on the
@@ -468,8 +532,19 @@ export async function decideDelivery(
     }
   }
 
-  const prefs = opts.prefsOverride !== undefined ? opts.prefsOverride : await getNotifyPrefs(userId)
+  const layered = await getNotifyPrefsLayered(userId, opts.prefsOverride)
+  const prefs: NotifyPrefs | null = layered.own || layered.role ? layered.merged : null
   const matrixRow = prefs?.matrix?.[category]
+  // #3077 — which layer supplies each value this decision reads.
+  const L = (path: Parameters<typeof layerOf>[2]) => layerOf(layered.own, layered.role?.rules, path)
+  const quietLayer = L('quiet')
+  const layers: DecisionLayers = {
+    inapp: L(`matrix.${category}.inapp`),
+    push: L(`matrix.${category}.push`),
+    teams: L(`matrix.${category}.teams`),
+    email: emailLayerOf(layered.own, layered.role?.rules, category, layered.legacyEmailDigest),
+    quiet: quietLayer
+  }
   let inapp = channels.inapp
   // Presence-aware suppression (#269): the recipient is LOOKING at the record
   // this notification is about — they watched it happen; the inbox doesn't
@@ -628,7 +703,53 @@ export async function decideDelivery(
     reasons.push({ code: 'no_phone', channel: 'sms', text: 'The account has no phone number.' })
   }
 
-  return { category, critical, inapp, push, teams, email, sms, reasons, dropped: false }
+  // Stamp each rules-driven reason with its layer, and let the reason that actually decided a
+  // channel name that channel's layer (quiet hours holding a push = the quiet-hours layer).
+  const overrideLayer = L(`matrix.${category}.quiet_override`)
+  const CODE_LAYER: Partial<Record<DeliveryReason['code'], RuleLayer>> = {
+    matrix_inapp_off: layers.inapp,
+    matrix_push_off: layers.push,
+    quiet_hours_push: quietLayer,
+    teams_quiet_hours: quietLayer,
+    email_quiet_hours: quietLayer,
+    quiet_override: overrideLayer,
+    teams_off: layers.teams,
+    teams_sent: layers.teams,
+    email_off: layers.email,
+    email_daily: layers.email,
+    muted: 'person',
+    teams_muted: 'person'
+  }
+  for (const r of reasons) {
+    const byCode = CODE_LAYER[r.code]
+    r.layer =
+      r.code === 'email_instant' ? (critical ? 'system' : layers.email) : (byCode ?? 'system')
+  }
+  const decidedBy = (channel: DeliveryReason['channel'], fallback: RuleLayer) =>
+    reasons.find((r) => r.channel === channel && r.layer)?.layer ?? fallback
+  const finalLayers: DecisionLayers = critical
+    ? { inapp: 'system', push: 'system', teams: 'system', email: 'system', quiet: quietLayer }
+    : {
+        inapp: decidedBy('inapp', layers.inapp),
+        push: inapp ? decidedBy('push', layers.push) : decidedBy('inapp', layers.inapp),
+        teams: decidedBy('teams', layers.teams),
+        email: decidedBy('email', layers.email),
+        quiet: quietLayer
+      }
+
+  return {
+    category,
+    critical,
+    inapp,
+    push,
+    teams,
+    email,
+    sms,
+    reasons,
+    dropped: false,
+    layers: finalLayers,
+    role: layered.role ? { id: layered.role.id, name: layered.role.name } : null
+  }
 }
 
 async function teamsTestMode(): Promise<boolean> {
