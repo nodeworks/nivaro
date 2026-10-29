@@ -386,9 +386,11 @@ export async function pushTemplateToLinks(
       raced = null
       const bundle = await loadLayoutBundle(db, layoutId)
       const [kept] = await reconcileLinks([link], bundle)
-      if (!bundle || !kept) {
-        if (bundle && link.confirmed_at == null)
-          outcome = skipped(bundle, 'not saved on the form yet')
+      // Gone from the form (or the form is gone): the link was dropped, nothing to do.
+      if (!bundle || !kept) break
+      // Dropped in an editor but not saved there yet: that save carries the old copy.
+      if (!bundle.groups.some((g) => g.key === link.group_key)) {
+        outcome = skipped(bundle, 'not saved on the form yet')
         break
       }
       const collection = String(bundle.layout.collection)
