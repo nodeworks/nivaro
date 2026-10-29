@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
 import * as svc from '../services/collections.js'
+import { getCollectionSummary, getOverviewStats } from '../services/collections-overview.js'
 import { forgetEditLockPlan } from '../services/edit-lock.js'
 import { parseSummaryModeRules, validateSummaryModeRules } from '../services/summary-mode.js'
 import type { CMSCollection, CMSField } from '../types.js'
@@ -267,6 +268,11 @@ export async function collectionsRoutes(app: FastifyInstance) {
     return reply.send({ data })
   })
 
+  app.get('/overview-stats', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    return reply.send({ data: await getOverviewStats() })
+  })
+
   app.get('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const data = await collectionMetaPayload(collection)
@@ -488,6 +494,13 @@ export async function collectionsRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(204).send()
+  })
+
+  app.get('/:collection/summary', async (req, reply) => {
+    if (!req.isAdmin) return reply.code(403).send({ error: 'Admin only' })
+    const { collection } = req.params as { collection: string }
+    if (!(await svc.getCollection(collection))) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: await getCollectionSummary(collection) })
   })
 
   app.get('/:collection/fields', async (req, reply) => {

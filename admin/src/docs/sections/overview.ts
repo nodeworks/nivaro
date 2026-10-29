@@ -117,6 +117,31 @@ export const userCollections: DocSection = {
       type: 'p',
       text: 'The Collections page lists every table registered in the `nivaro_collections` metadata registry. Clicking a collection opens a paginated data browser for that table.'
     },
+    { type: 'h3', text: 'Finding a collection' },
+    {
+      type: 'ul',
+      items: [
+        '**Filter** narrows by name or key and keeps the folders; matching folders open, empty ones drop out. A search with no match suggests near spellings, matches among hidden collections and link tables, and (admins) a link to create a collection.',
+        '**Pinned and Recent** sit at the top. Pinning (the star on a row) adds the collection to your sidebar Favorites; Recent is what you opened from this page in this browser.',
+        '**Views:** Folders · A–Z · Most used by you, plus Recently changed and Most records for administrators.',
+        '**Filter chips:** Has records · Empty · Hidden · Link tables · Virtual · Singleton · Has pipeline · Has form (each with its count; they combine).',
+        '**Folded away by default:** hidden collections (Show hidden) and link tables — tables that only connect two collections — which collect in their own collapsed "Link tables" section until you turn on Show link tables.',
+        'Collections in no folder are listed together under **Not in a folder**, A–Z. Folder headers stay in view while you scroll, and wide screens get a **Jump to** list of folders.',
+        "**Density:** compact or comfortable (shows each collection's note on a second line). Your view, density and show-toggles are remembered in this browser."
+      ]
+    },
+    { type: 'h3', text: 'Administrators' },
+    {
+      type: 'ul',
+      items: [
+        'Each row shows its approximate record count and when the table last changed (since the database server last started), plus quiet badges: pipeline, forms, virtual, imports, link table.',
+        "Hovering a collection's name opens a card with its first fields, what it points to and what uses it, its pipeline, forms and the last edit (90 days).",
+        "The row's ⋯ menu opens records, a new tab, or the collection's Fields, Relations, Form layouts, Rules, Imports and Settings, pins it, moves it to a folder or copies its key.",
+        '**Select** lets you tick several collections and move them to a folder at once; **Arrange** turns on drag-and-drop ordering of folders and collections (off otherwise, so a stray drag never reorders).',
+        '**Suggested folders** proposes a folder for collections in no folder when their names share a prefix with a folder or a collection already in one; Move or Dismiss.',
+        "API: `GET /api/collections/overview-stats` (every collection's facts, cached 60 s) and `GET /api/collections/:collection/summary` (the hover card) — both admin only."
+      ]
+    },
     { type: 'h3', text: 'Browsing data' },
     {
       type: 'p',

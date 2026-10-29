@@ -830,6 +830,25 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- SYNC:ug-collections -->
           <h1 class="doc-h1" id="collections">Collections</h1>
           <p class="doc-p">The Collections page lists every table registered in the <code class="doc-code">nivaro_collections</code> metadata registry. Clicking a collection opens a paginated data browser for that table.</p>
+          <h3 class="doc-h3">Finding a collection</h3>
+          <ul class="doc-ul">
+            <li>**Filter** narrows by name or key and keeps the folders; matching folders open, empty ones drop out. A search with no match suggests near spellings, matches among hidden collections and link tables, and (admins) a link to create a collection.</li>
+            <li>**Pinned and Recent** sit at the top. Pinning (the star on a row) adds the collection to your sidebar Favorites; Recent is what you opened from this page in this browser.</li>
+            <li>**Views:** Folders · A–Z · Most used by you, plus Recently changed and Most records for administrators.</li>
+            <li>**Filter chips:** Has records · Empty · Hidden · Link tables · Virtual · Singleton · Has pipeline · Has form (each with its count; they combine).</li>
+            <li>**Folded away by default:** hidden collections (Show hidden) and link tables — tables that only connect two collections — which collect in their own collapsed "Link tables" section until you turn on Show link tables.</li>
+            <li>Collections in no folder are listed together under **Not in a folder**, A–Z. Folder headers stay in view while you scroll, and wide screens get a **Jump to** list of folders.</li>
+            <li>**Density:** compact or comfortable (shows each collection's note on a second line). Your view, density and show-toggles are remembered in this browser.</li>
+          </ul>
+          <h3 class="doc-h3">Administrators</h3>
+          <ul class="doc-ul">
+            <li>Each row shows its approximate record count and when the table last changed (since the database server last started), plus quiet badges: pipeline, forms, virtual, imports, link table.</li>
+            <li>Hovering a collection's name opens a card with its first fields, what it points to and what uses it, its pipeline, forms and the last edit (90 days).</li>
+            <li>The row's ⋯ menu opens records, a new tab, or the collection's Fields, Relations, Form layouts, Rules, Imports and Settings, pins it, moves it to a folder or copies its key.</li>
+            <li>**Select** lets you tick several collections and move them to a folder at once; **Arrange** turns on drag-and-drop ordering of folders and collections (off otherwise, so a stray drag never reorders).</li>
+            <li>**Suggested folders** proposes a folder for collections in no folder when their names share a prefix with a folder or a collection already in one; Move or Dismiss.</li>
+            <li>API: <code class="doc-code">GET /api/collections/overview-stats</code> (every collection's facts, cached 60 s) and <code class="doc-code">GET /api/collections/:collection/summary</code> (the hover card) — both admin only.</li>
+          </ul>
           <h3 class="doc-h3">Browsing data</h3>
           <p class="doc-p">The collection browser displays up to 25 rows per page by default. Use the search box at the top to filter rows across all string and text fields. Clicking a row opens the item editor.</p>
           <h3 class="doc-h3">Field metadata</h3>
