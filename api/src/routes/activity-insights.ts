@@ -108,7 +108,13 @@ async function findPeople(text: string): Promise<PersonCandidate[]> {
 /** An administrator (not a collection-limited key), or the person themself. */
 function selfOrAdmin(req: FastifyRequest, userId: string): 'admin' | 'self' | null {
   const user = req.user as { id?: string; api_key_scopes?: unknown } | undefined
-  if (req.isAdmin && !user?.api_key_scopes) return 'admin'
+  // A scoped API key or a connected app (MCP / OAuth) reads only what its scopes
+  // allow — a whole-person activity trail crosses every collection, so neither
+  // the admin nor the self path is open to them.
+  const delegated =
+    !!user?.api_key_scopes || !!(req as FastifyRequest & { mcpInner?: unknown }).mcpInner
+  if (delegated) return null
+  if (req.isAdmin) return 'admin'
   if (user?.id && String(user.id).toLowerCase() === userId.toLowerCase()) return 'self'
   return null
 }
