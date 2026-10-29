@@ -672,3 +672,61 @@ describe('ItemEditForm config push while the host edits its layout', () => {
     expect(banner()).toBeNull()
   })
 })
+
+describe('ItemEditForm form density (#3182)', () => {
+  it('a compact form marks its root and puts the density rules in the document once', async () => {
+    const layout = {
+      ...LAYOUT,
+      layout: { ...LAYOUT.layout, entry_config: { density: 'compact' } }
+    } as ActiveLayoutData
+    await mount({ design: { layout, record: { ...RECORD }, context: makeDesign() } })
+    expect(host.querySelector('[data-form-density="compact"]')).not.toBeNull()
+    expect(host.querySelector('[data-form-body]')).not.toBeNull()
+    expect(document.querySelectorAll('#nvr-form-density-css').length).toBe(1)
+  }, 15_000)
+
+  it('a comfortable form carries no density attribute', async () => {
+    await mount({ design: { layout: LAYOUT, record: { ...RECORD }, context: makeDesign() } })
+    expect(host.querySelector('[data-form-density]')).toBeNull()
+  })
+})
+
+describe('ItemEditForm first-use tour (#3192)', () => {
+  it('starts once on a form that turns it on, and the Tour button replays it', async () => {
+    Element.prototype.scrollIntoView ??= () => {}
+    localStorage.clear()
+    activeLayout = {
+      ...LAYOUT,
+      layout: { ...LAYOUT.layout, entry_config: { tour: true } }
+    } as ActiveLayoutData
+    const { calls } = await mount(
+      { itemId: '1' },
+      () => !!document.querySelector('[data-form-tour]')
+    )
+    const card = document.querySelector('[data-form-tour]')
+    expect(card?.getAttribute('data-form-tour-step')).toBe('main')
+    expect(host.querySelector('[data-form-tour-button]')).not.toBeNull()
+    await act(async () => {
+      ;(document.querySelector('[data-form-tour-skip]') as HTMLElement).click()
+    })
+    expect(document.querySelector('[data-form-tour]')).toBeNull()
+    expect(
+      calls.some(
+        (c) =>
+          c._path === '/users/me/preferences' &&
+          (c._body as { form_tour_done?: number } | undefined)?.form_tour_done === 7
+      )
+    ).toBe(true)
+    await act(async () => {
+      ;(host.querySelector('[data-form-tour-button]') as HTMLElement).click()
+    })
+    await settle(() => !!document.querySelector('[data-form-tour]'))
+    expect(document.querySelector('[data-form-tour]')).not.toBeNull()
+  }, 20_000)
+
+  it('a form without the tour shows no Tour button', async () => {
+    await mount({ itemId: '1' })
+    expect(host.querySelector('[data-form-tour-button]')).toBeNull()
+    expect(document.querySelector('[data-form-tour]')).toBeNull()
+  })
+})

@@ -15,7 +15,11 @@ import {
   checkFreeze,
   LAYOUT_FROZEN,
   lazySectionsOf,
+  parseViewport,
   phoneOf,
+  screenKeysFor,
+  screenVersionOf,
+  tabletOf,
   validateResolveConditions,
   windowOpen,
   windowState
@@ -238,5 +242,106 @@ describe('overview rows (#2714 #2715 #2717)', () => {
     expect(close?.active_window?.state).toBe('after')
     expect(close?.warnings.join(' ')).toMatch(/no longer in use/)
     expect(phoneOf(cond({ phone_of: '3' }))).toBe(3)
+  })
+})
+
+describe('tablet versions (#3183)', () => {
+  const desk = { id: 1, name: 'Main', is_active: 1, sort: 0, conditions: null }
+  const phone = {
+    id: 3,
+    name: 'Main (phone)',
+    is_active: 0,
+    sort: 2,
+    conditions: cond({ phone_of: 1 })
+  }
+  const tablet = {
+    id: 4,
+    name: 'Main (tablet)',
+    is_active: 0,
+    sort: 3,
+    conditions: cond({ tablet_of: 1 })
+  }
+  const ctx = (viewport: 'phone' | 'tablet' | null) => ({ today: '2026-11-01', viewport })
+
+  it('reads the viewport from a query string', () => {
+    expect(parseViewport('tablet')).toBe('tablet')
+    expect(parseViewport('phone')).toBe('phone')
+    expect(parseViewport('watch')).toBeNull()
+    expect(screenKeysFor('phone')).toEqual(['phone_of', 'tablet_of'])
+    expect(screenKeysFor('tablet')).toEqual(['tablet_of'])
+    expect(screenKeysFor(null)).toEqual([])
+    expect(tabletOf(cond({ tablet_of: '4' }))).toBe(4)
+    expect(screenVersionOf(cond({ tablet_of: 4 }))).toBe(4)
+  })
+
+  it('never wins on its own, and stands in on a tablet', () => {
+    const all = [tablet, desk, phone]
+    expect(pickBestLayoutTraced(all, null, null, true, ctx(null)).row?.id).toBe(1)
+    const r = pickBestLayoutTraced(all, null, null, true, ctx('tablet'))
+    expect(r.row?.id).toBe(4)
+    expect(r.reason).toMatchObject({ kind: 'tablet', tablet_of: 1, desktop_kind: 'default' })
+    expect(r.checked.find((c) => c.layout_id === 4)?.why).toMatch(/tablet version of “Main”/)
+    expect(r.checked.find((c) => c.layout_id === 3)?.why).toMatch(/Phone version/)
+  })
+
+  it('a phone prefers the phone version, else the tablet version', () => {
+    const both = pickBestLayoutTraced([desk, phone, tablet], null, null, true, ctx('phone'))
+    expect(both.row?.id).toBe(3)
+    const r = pickBestLayoutTraced([desk, tablet], null, null, true, ctx('phone'))
+    expect(r.row?.id).toBe(4)
+    expect(r.reason?.kind).toBe('tablet')
+  })
+
+  it('a tablet never gets the phone version', () => {
+    expect(pickBestLayoutTraced([desk, phone], null, null, true, ctx('tablet')).row?.id).toBe(1)
+  })
+
+  it('a role-restricted tablet version is skipped for other roles', () => {
+    const locked = { ...tablet, conditions: cond({ tablet_of: 1, role_ids: ['R'] }) }
+    expect(pickBestLayoutTraced([desk, locked], 'S', null, false, ctx('tablet')).row?.id).toBe(1)
+    expect(pickBestLayoutTraced([desk, locked], 'R', null, false, ctx('tablet')).row?.id).toBe(4)
+  })
+
+  it('validates like a phone version, and never both at once', async () => {
+    expect(await validateResolveConditions(stubQ({}), 4, 'c', { tablet_of: 4 })).toMatch(
+      /own tablet/
+    )
+    expect(
+      await validateResolveConditions(stubQ({}), 4, 'c', { tablet_of: 1, phone_of: 2 })
+    ).toMatch(/not both/)
+    const chained = stubQ({
+      nivaro_collection_layouts: [
+        { id: 2, collection: 'c', layout_type: 'grouped', conditions: cond({ tablet_of: 9 }) }
+      ]
+    })
+    expect(await validateResolveConditions(chained, 4, 'c', { phone_of: 2 })).toMatch(
+      /itself a tablet version/
+    )
+  })
+
+  it('the copy of a form drops its tablet link', () => {
+    expect(conditionsForCopy(cond({ tablet_of: 1, role_ids: ['R'] }))).toBe(
+      JSON.stringify({ role_ids: ['R'] })
+    )
+  })
+
+  it('the overview lists tablet then phone versions after their form', () => {
+    const rows = buildLayoutOverview(
+      [
+        { id: 1, name: 'Main', layout_type: 'grouped', is_active: 1, sort: 0, conditions: null },
+        { ...phone, layout_type: 'grouped' },
+        { ...tablet, layout_type: 'grouped' }
+      ],
+      new Map(),
+      []
+    )
+    const forms = rows.filter((r) => r.section === 'forms').map((r) => r.layout_id)
+    expect(forms).toEqual([1, 4, 3])
+    const main = rows.find((r) => r.layout_id === 1)
+    expect(main?.tablet_version).toEqual({ layout_id: 4, name: 'Main (tablet)' })
+    expect(main?.phone_version).toEqual({ layout_id: 3, name: 'Main (phone)' })
+    const t = rows.find((r) => r.layout_id === 4)
+    expect(t?.reason).toMatchObject({ kind: 'tablet', tablet_of: 1 })
+    expect(t?.tablet_of).toBe(1)
   })
 })

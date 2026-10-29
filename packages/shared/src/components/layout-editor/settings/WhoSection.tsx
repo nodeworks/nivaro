@@ -7,7 +7,7 @@ import { LAYOUT_TYPES } from '../overview/OverviewActions'
 import { useRoleNames } from '../overview/overview-api'
 import { roleIdsPatch } from '../testing/testing-model'
 import { quietText, Segmented, Setting, smallBtn } from './controls'
-import { ActiveDatesSetting, PhoneVersionSetting } from './ResolveSettings'
+import { ActiveDatesSetting, PhoneVersionSetting, TabletVersionSetting } from './ResolveSettings'
 import { changeLabel, flag, type SectionProps } from './section-props'
 import { useCollectionLayoutList, useFieldSources } from './settings-api'
 import { type LayoutKind, layoutKindOf } from './settings-registry'
@@ -123,6 +123,7 @@ export function WhoSection(props: SectionProps) {
       <ToggleSetting k='layout.create_hidden' props={props} />
       <ActiveDatesSetting {...props} />
       <PhoneVersionSetting {...props} />
+      <TabletVersionSetting {...props} />
     </>
   )
 }

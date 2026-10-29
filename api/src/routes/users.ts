@@ -1021,6 +1021,28 @@ export async function usersRoutes(app: FastifyInstance) {
       const { bustNotifyPrefsCache } = await import('../services/notification-channels.js')
       bustNotifyPrefsCache(req.user!.id)
     }
+    if ('form_tour_done' in body || 'form_tours_reset' in body) {
+      // #3192 — first-use form tours: the layout id of a form whose tour the person has
+      // finished or dismissed joins preferences.form_tours_done (read from the stored row
+      // so two tabs never drop each other's ids). form_tours_reset: true clears the list.
+      const { appendFormTourDone } = await import('../services/form-tours.js')
+      if (body.form_tours_reset === true) patch.form_tours_done = null
+      else {
+        const row = await db('nivaro_users').where({ id: req.user!.id }).first('preferences')
+        let prefs: Record<string, unknown> = {}
+        try {
+          prefs =
+            typeof row?.preferences === 'string'
+              ? JSON.parse(row.preferences)
+              : ((row?.preferences as Record<string, unknown>) ?? {})
+        } catch {
+          prefs = {}
+        }
+        const next = appendFormTourDone(prefs.form_tours_done, body.form_tour_done)
+        if (!next) return reply.code(400).send({ error: 'form_tour_done must be a layout id' })
+        patch.form_tours_done = next
+      }
+    }
     if ('onboarding_done' in body) {
       // First-login checklist (#134): the personal setup card dismisses once.
       patch.onboarding_done = body.onboarding_done === true

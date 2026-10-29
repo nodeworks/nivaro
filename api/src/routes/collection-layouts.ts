@@ -41,7 +41,12 @@ import {
   checkFreeze,
   type FreezeCheck,
   lazySectionsOf,
+  parseViewport as parseViewportRule,
   phoneOf,
+  type ScreenKey,
+  screenKeysFor,
+  screenVersionOf,
+  tabletOf,
   todayInInstance,
   type Viewport,
   windowOpen,
@@ -389,7 +394,16 @@ export function collectRecordConditionFields(layouts: Record<string, unknown>[])
 // or null when no layout exists.
 /** Why a layout won resolution — the overview's reason vocabulary. */
 export type PickReason = {
-  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use' | 'ab' | 'phone'
+  kind:
+    | 'record_rule'
+    | 'role'
+    | 'default'
+    | 'fallback'
+    | 'slug'
+    | 'type_use'
+    | 'ab'
+    | 'phone'
+    | 'tablet'
   rules?: RecordConditionRule[]
   role_ids?: string[]
   role_names?: string[]
@@ -399,6 +413,9 @@ export type PickReason = {
   /** kind 'phone' (#2715): the desktop form this phone version stands in for, and why that won. */
   phone_of?: number
   phone_of_name?: string
+  /** kind 'tablet' (#3183): the desktop form this tablet version stands in for. */
+  tablet_of?: number
+  tablet_of_name?: string
   desktop_kind?: PickReason['kind']
 }
 export type PickCheck = { layout_id: number; matched: boolean; why: string }
@@ -415,8 +432,35 @@ export type PickResult = {
  */
 export type ResolveContext = { today?: string; viewport?: Viewport; userId?: string | null }
 
-/** `viewport` from a query string: only 'phone' means anything. */
-export const parseViewport = (v: unknown): Viewport => (v === 'phone' ? 'phone' : null)
+/** `viewport` from a query string: 'phone' or 'tablet' (#3183); anything else = desktop. */
+export const parseViewport = parseViewportRule
+
+/** The screen version (#2715 phone, #3183 tablet) `ctx.viewport` swaps in for `desktop`. */
+function screenVersionFor(
+  rows: Record<string, unknown>[],
+  desktopId: number,
+  viewport: Viewport
+): { row: Record<string, unknown>; key: ScreenKey } | null {
+  for (const key of screenKeysFor(viewport)) {
+    const read = key === 'phone_of' ? phoneOf : tabletOf
+    const row = rows.find((r) => read(r.conditions) === desktopId)
+    if (row) return { row, key }
+  }
+  return null
+}
+
+/** The PickReason fields for a screen version standing in for `desktop`. */
+function screenReason(
+  key: ScreenKey,
+  desktop: Record<string, unknown>,
+  desktopKind: PickReason['kind']
+): PickReason {
+  const id = Number(desktop.id)
+  const name = String(desktop.name ?? desktop.id)
+  return key === 'phone_of'
+    ? { kind: 'phone', phone_of: id, phone_of_name: name, desktop_kind: desktopKind }
+    : { kind: 'tablet', tablet_of: id, tablet_of_name: name, desktop_kind: desktopKind }
+}
 
 export function pickBestLayout(
   allCandidates: Record<string, unknown>[],
@@ -449,9 +493,11 @@ export function pickBestLayoutTraced(
   const allowed = allCandidates.filter(
     (row) => roleAllows(row, userRoleId, isAdmin) && windowOpen(row.conditions, today)
   )
-  // A phone version (#2715) never wins on its own either: it stands in for its
-  // desktop form after that one won, on a small screen.
-  const layouts = allowed.filter((row) => !variants.has(row) && phoneOf(row.conditions) == null)
+  // A phone (#2715) or tablet (#3183) version never wins on its own either: it
+  // stands in for its desktop form after that one won, on a smaller screen.
+  const layouts = allowed.filter(
+    (row) => !variants.has(row) && screenVersionOf(row.conditions) == null
+  )
 
   const fallbackPool: typeof layouts = []
   const recordMatched = new Set<Record<string, unknown>>()
@@ -521,19 +567,19 @@ export function pickBestLayoutTraced(
     reason = { kind: 'ab', role_ids: [ab.role_id], ab }
   }
 
-  // On a phone the winner's phone version (role-allowed, inside its dates) opens instead.
+  // On a phone or tablet the winner's screen version (role-allowed, inside its
+  // dates) opens instead: a phone takes its phone version, else the tablet one.
   const desktop = picked
-  const variant =
-    desktop && ctx.viewport === 'phone'
-      ? (allowed.find((row) => phoneOf(row.conditions) === Number(desktop.id)) ?? null)
-      : null
-  if (desktop && variant && reason) {
-    picked = variant
+  const screen = desktop
+    ? screenVersionFor(allowed, Number(desktop.id), ctx.viewport ?? null)
+    : null
+  const variant = screen?.row ?? null
+  const screenWord = screen?.key === 'tablet_of' ? 'tablet' : 'phone'
+  const screenWhere = screen?.key === 'tablet_of' ? 'tablet-width screens' : 'small screens'
+  if (desktop && screen && reason) {
+    picked = screen.row
     reason = {
-      kind: 'phone',
-      phone_of: Number(desktop.id),
-      phone_of_name: String(desktop.name ?? desktop.id),
-      desktop_kind: reason.kind,
+      ...screenReason(screen.key, desktop, reason.kind),
       ...(reason.rules ? { rules: reason.rules } : {}),
       ...(reason.role_ids ? { role_ids: reason.role_ids } : {}),
       ...(reason.ab ? { ab: reason.ab } : {})
@@ -549,7 +595,9 @@ export function pickBestLayoutTraced(
     return win ? ` (active ${windowWords(win)})` : ''
   }
   const phoneNote = (row: Record<string, unknown>) =>
-    variant && row === desktop ? `; on a phone its phone version ${nameOf(variant)} opens` : ''
+    variant && row === desktop
+      ? `; on a ${ctx.viewport === 'tablet' ? 'tablet' : 'phone'} its ${screenWord} version ${nameOf(variant)} opens`
+      : ''
   const winWhy = (kind: PickReason['kind'] | undefined) =>
     kind === 'record_rule'
       ? 'Its record rules match'
@@ -566,7 +614,7 @@ export function pickBestLayoutTraced(
       return {
         layout_id,
         matched: true,
-        why: `The phone version of ${winnerName}, used on small screens${datesNote(row)}`
+        why: `The ${screenWord} version of ${winnerName}, used on ${screenWhere}${datesNote(row)}`
       }
     if (variants.has(row)) {
       if (ab && test?.variant === row) {
@@ -612,17 +660,19 @@ export function pickBestLayoutTraced(
     const win = activeWindowOf(row.conditions)
     if (win && !windowOpen(row.conditions, today))
       return { layout_id, matched: false, why: `Outside its active dates (${windowWords(win)})` }
-    const of = phoneOf(row.conditions)
+    const of = screenVersionOf(row.conditions)
     if (of != null) {
       const target = allCandidates.find((c) => Number(c.id) === of)
       const targetName = target ? nameOf(target) : `form ${of}`
+      const tablet = phoneOf(row.conditions) == null
+      const kind = tablet ? 'Tablet' : 'Phone'
       return {
         layout_id,
         matched: false,
         why:
           desktop && Number(desktop.id) === of
-            ? `Phone version of ${targetName}; used on small screens only`
-            : `Phone version of ${targetName}, which this record does not get`
+            ? `${kind} version of ${targetName}; used on ${tablet ? 'tablet-width' : 'small'} screens only`
+            : `${kind} version of ${targetName}, which this record does not get`
       }
     }
     if (parseRecordConditions(row.record_conditions)) {
@@ -655,7 +705,7 @@ export async function resolveLayout(opts: {
   isAdmin: boolean
   /** The person asking: decides their half of an A/B test (#2614). */
   userId?: string | null
-  /** The client's screen class (#2715): 'phone' swaps in a form's phone version. */
+  /** The client's screen class: 'phone' / 'tablet' swap in a form's phone (#2715) or tablet (#3183) version. */
   viewport?: Viewport
   /** The day to resolve on (#2714 active dates); default today in the instance zone. */
   today?: string
@@ -694,33 +744,33 @@ export async function resolveLayout(opts: {
     }
   }
   if (pinned) {
-    // A pinned record form still opens as its phone version on a phone (#2715).
+    // A pinned record form still opens as its phone (#2715) or tablet (#3183)
+    // version on a smaller screen.
     const grouped = !pinned.layout_type || pinned.layout_type === 'grouped'
-    if (ctx.viewport === 'phone' && grouped && phoneOf(pinned.conditions) == null) {
+    if (ctx.viewport && grouped && screenVersionOf(pinned.conditions) == null) {
       const pinnedId = Number(pinned.id)
-      const variant = (
+      const openable = (
         (await fetchLayoutsForCollection(collection)) as Record<string, unknown>[]
-      ).find(
-        (l) =>
-          phoneOf(l.conditions) === pinnedId &&
-          roleAllows(l, role, isAdmin) &&
-          windowOpen(l.conditions, ctx.today as string)
-      )
-      if (variant) {
+      ).filter((l) => roleAllows(l, role, isAdmin) && windowOpen(l.conditions, ctx.today as string))
+      const screen = screenVersionFor(openable, pinnedId, ctx.viewport)
+      if (screen) {
+        const variant = screen.row
         const name = String(pinned.name ?? pinned.id)
+        const word = screen.key === 'tablet_of' ? 'tablet' : 'phone'
+        const where = screen.key === 'tablet_of' ? 'tablet-width screens' : 'small screens'
         return {
           row: variant,
-          reason: { kind: 'phone', phone_of: pinnedId, phone_of_name: name, desktop_kind: 'slug' },
+          reason: screenReason(screen.key, pinned, 'slug'),
           checked: [
             {
               layout_id: pinnedId,
               matched: true,
-              why: `Opened by its link name; on a phone its phone version “${String(variant.name ?? variant.id)}” opens`
+              why: `Opened by its link name; on a ${ctx.viewport} its ${word} version “${String(variant.name ?? variant.id)}” opens`
             },
             {
               layout_id: Number(variant.id),
               matched: true,
-              why: `The phone version of “${name}”, used on small screens`
+              why: `The ${word} version of “${name}”, used on ${where}`
             }
           ]
         }
@@ -858,11 +908,11 @@ export async function seedLayoutFields(
   }
 }
 
-/** A layout's conditions for its copy: without the freeze and the phone-version link. */
+/** A layout's conditions for its copy: without the freeze and the phone / tablet version link. */
 export function conditionsForCopy(raw: unknown): string | null {
   const c = parseConditions(raw) as Record<string, unknown> | null
   if (!c || typeof c !== 'object') return raw == null ? null : String(raw)
-  const { freeze: _freeze, phone_of: _phoneOf, ...rest } = c
+  const { freeze: _freeze, phone_of: _phoneOf, tablet_of: _tabletOf, ...rest } = c
   return Object.keys(rest).length > 0 ? JSON.stringify(rest) : null
 }
 
@@ -1084,7 +1134,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       role_id?: string
       slug?: string
       user_id?: string
-      /** 'phone' = as on a small screen (#2715). */
+      /** 'phone' / 'tablet' = as on a small (#2715) or tablet-width (#3183) screen. */
       viewport?: string
       /** yyyy-mm-dd = as on that day (#2714 active dates); default today. */
       at?: string
@@ -1162,7 +1212,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       collection?: string
       slug?: string
       item?: string
-      /** 'phone' from a small screen: a form's phone version opens instead (#2715). */
+      /** 'phone' / 'tablet' from a smaller screen: a form's phone (#2715) or tablet (#3183) version opens instead. */
       viewport?: string
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })

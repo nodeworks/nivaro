@@ -1,3 +1,4 @@
+import { entryConfigOf, sanitizeEntryConfig } from '../../../lib/entry-config'
 import { PickList, quietText, Segmented, Setting, Toggle } from './controls'
 import { changeLabel, type SectionProps, toggleLabel } from './section-props'
 import { fieldOptions, numericFieldNames, useFieldSources } from './settings-api'
@@ -24,8 +25,41 @@ export function LayoutSection(props: SectionProps) {
       />
       <ToggleSetting k='layout.validate_before_next' props={props} />
       <ToggleSetting k='layout.accordion_mode' props={props} />
+      <DensitySetting {...props} />
       <RowOrderSetting {...props} />
     </>
+  )
+}
+
+/** #3182 — how tightly the record form is spaced for the people filling it in (entry_config.density). */
+function DensitySetting(props: SectionProps) {
+  const config = entryConfigOf(props.layout)
+  const density = config.density === 'compact' ? 'compact' : 'comfortable'
+  return (
+    <Setting
+      k='layout.density'
+      control={
+        <Segmented<'comfortable' | 'compact'>
+          ariaLabel='Density'
+          value={density}
+          options={[
+            { value: 'comfortable', label: 'Comfortable' },
+            { value: 'compact', label: 'Compact' }
+          ]}
+          onChange={(v) =>
+            props.set(
+              {
+                entry_config: sanitizeEntryConfig({
+                  ...config,
+                  density: v === 'compact' ? 'compact' : undefined
+                })
+              },
+              v === 'compact' ? 'Make the form compact' : 'Make the form comfortable'
+            )
+          }
+        />
+      }
+    />
   )
 }
 

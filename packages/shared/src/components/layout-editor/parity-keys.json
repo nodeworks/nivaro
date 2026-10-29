@@ -207,6 +207,33 @@
     "layout_types": ["grouped"]
   },
   {
+    "key": "layout.conditions.tablet_of",
+    "label": "Tablet version of a form, opened on tablet-width screens (#3183)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.density",
+    "label": "Form density for the people using it: comfortable or compact (#3182)",
+    "home": "form_settings",
+    "tab_or_section": "How it's laid out",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.tour",
+    "label": "First-use tour of the form's sections (#3192)",
+    "home": "form_settings",
+    "tab_or_section": "Entering data",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
     "key": "layout.layout_type",
     "label": "Kind of layout (6 types)",
     "home": "form_settings",

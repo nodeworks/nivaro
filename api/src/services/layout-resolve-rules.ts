@@ -11,6 +11,9 @@ import { currentTimezone, dayInZone } from './liquid-dates.js'
  *  - `phone_of` (#2715) — this form is the lighter phone version of that
  *    form: it never wins on its own, and replaces its desktop form when the
  *    client says the screen is small (`viewport=phone` on /active).
+ *  - `tablet_of` (#3183) — the same for a tablet-width screen
+ *    (`viewport=tablet`). A phone without a phone version gets the tablet
+ *    version when there is one: it is closer to a phone than the desktop form.
  *  - `freeze` {until, reason, by?, by_name?, at?} (#2717) — edits to the
  *    form are refused before `until` (that day it opens again) unless the
  *    save carries an administrator's override note.
@@ -31,7 +34,10 @@ export interface LayoutFreeze {
   at?: string | null
 }
 
-export type Viewport = 'phone' | null
+export type Viewport = 'phone' | 'tablet' | null
+
+/** The two screen-version keys a form's `conditions` may carry. */
+export type ScreenKey = 'phone_of' | 'tablet_of'
 
 export const LAYOUT_FROZEN = 'LAYOUT_FROZEN'
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -105,6 +111,33 @@ export function phoneOf(conditions: unknown): number | null {
   const v = Number(obj(conditions)?.phone_of)
   return Number.isInteger(v) && v > 0 ? v : null
 }
+
+/** The desktop form this layout is the tablet version of (#3183), or null. */
+export function tabletOf(conditions: unknown): number | null {
+  const v = Number(obj(conditions)?.tablet_of)
+  return Number.isInteger(v) && v > 0 ? v : null
+}
+
+/** The form this layout stands in for on a smaller screen (phone or tablet), or null. */
+export function screenVersionOf(conditions: unknown): number | null {
+  return phoneOf(conditions) ?? tabletOf(conditions)
+}
+
+/**
+ * The screen versions to try for a viewport, best first: a phone takes its
+ * phone version, else the tablet version; a tablet takes only its tablet one.
+ */
+export function screenKeysFor(viewport: Viewport): ScreenKey[] {
+  return viewport === 'phone'
+    ? ['phone_of', 'tablet_of']
+    : viewport === 'tablet'
+      ? ['tablet_of']
+      : []
+}
+
+/** `viewport` from a query string: 'phone' or 'tablet'; anything else = desktop. */
+export const parseViewport = (v: unknown): Viewport =>
+  v === 'phone' ? 'phone' : v === 'tablet' ? 'tablet' : null
 
 export function freezeOf(conditions: unknown): LayoutFreeze | null {
   const f = obj(conditions)?.freeze as Record<string, unknown> | undefined
@@ -210,32 +243,53 @@ export async function validateResolveConditions(
     )
       return 'conditions.lazy_sections must be a list of section keys'
   }
-  if (c.phone_of != null) {
-    const target = Number(c.phone_of)
-    if (!Number.isInteger(target) || target <= 0) return 'conditions.phone_of must be a layout id'
-    if (target === Number(id)) return 'A form cannot be its own phone version'
-    const row = (await q('nivaro_collection_layouts')
-      .where({ id: target })
-      .first('id', 'collection', 'layout_type', 'conditions')) as
-      | { id: number; collection: string; layout_type: string | null; conditions: unknown }
-      | undefined
-    if (!row || row.collection !== collection) return 'The desktop form is not in this collection'
-    if (row.layout_type && row.layout_type !== 'grouped')
-      return 'Only a record form can have a phone version'
-    if (phoneOf(row.conditions) != null) return 'That form is itself a phone version'
-    const others = (await q('nivaro_collection_layouts')
-      .where({ collection })
-      .whereNot({ id: Number(id) })
-      .whereNotNull('conditions')
-      .select('id', 'name', 'conditions')) as Array<{
-      id: number
-      name: string
-      conditions: unknown
-    }>
-    const taken = others.find((o) => phoneOf(o.conditions) === target)
-    if (taken) return `“${taken.name}” is already the phone version of that form`
-    if (others.some((o) => phoneOf(o.conditions) === Number(id)))
-      return 'This form has a phone version of its own, so it cannot be one'
+  for (const key of ['phone_of', 'tablet_of'] as const) {
+    if (c[key] == null) continue
+    const refusal = await validateScreenVersion(q, id, collection, c, key)
+    if (refusal) return refusal
   }
+  return null
+}
+
+const SCREEN_WORDS: Record<ScreenKey, string> = { phone_of: 'phone', tablet_of: 'tablet' }
+
+/** One screen-version key (#2715 phone, #3183 tablet): the same rules for both. */
+async function validateScreenVersion(
+  q: Knex | Knex.Transaction,
+  id: number,
+  collection: string,
+  c: Record<string, unknown>,
+  key: ScreenKey
+): Promise<string | null> {
+  const word = SCREEN_WORDS[key]
+  const other: ScreenKey = key === 'phone_of' ? 'tablet_of' : 'phone_of'
+  const read = (raw: unknown, k: ScreenKey) => (k === 'phone_of' ? phoneOf(raw) : tabletOf(raw))
+  const target = Number(c[key])
+  if (!Number.isInteger(target) || target <= 0) return `conditions.${key} must be a layout id`
+  if (target === Number(id)) return `A form cannot be its own ${word} version`
+  if (c[other] != null) return 'A form can be a phone version or a tablet version, not both'
+  const row = (await q('nivaro_collection_layouts')
+    .where({ id: target })
+    .first('id', 'collection', 'layout_type', 'conditions')) as
+    | { id: number; collection: string; layout_type: string | null; conditions: unknown }
+    | undefined
+  if (!row || row.collection !== collection) return 'The desktop form is not in this collection'
+  if (row.layout_type && row.layout_type !== 'grouped')
+    return `Only a record form can have a ${word} version`
+  if (phoneOf(row.conditions) != null) return 'That form is itself a phone version'
+  if (tabletOf(row.conditions) != null) return 'That form is itself a tablet version'
+  const others = (await q('nivaro_collection_layouts')
+    .where({ collection })
+    .whereNot({ id: Number(id) })
+    .whereNotNull('conditions')
+    .select('id', 'name', 'conditions')) as Array<{
+    id: number
+    name: string
+    conditions: unknown
+  }>
+  const taken = others.find((o) => read(o.conditions, key) === target)
+  if (taken) return `“${taken.name}” is already the ${word} version of that form`
+  if (others.some((o) => screenVersionOf(o.conditions) === Number(id)))
+    return 'This form has a phone or tablet version of its own, so it cannot be one'
   return null
 }
