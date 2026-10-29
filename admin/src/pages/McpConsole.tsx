@@ -22,12 +22,14 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { ContractTestsPanel, SaveTestButton, useContractTests } from './McpContractTests'
 
 /**
  * MCP console (#2468) — the tools a connected AI app signed in as this administrator would
  * get (GET /mcp-console/tools applies the /api/mcp rule), a form built from each tool's input
  * schema, and a run that goes through the real MCP server in-process. Writes default to dry
  * run: a tool that can rehearse rehearses; any other change is held and listed, never sent.
+ * #3215: a run can be saved as a contract test (McpContractTests.tsx); ?view=tests lists them all.
  */
 
 interface JsonSchema {
@@ -398,6 +400,14 @@ function ResultPanel({ run }: { run: RunResult }) {
         {note && (
           <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>{note}</span>
         )}
+        <span className='ml-auto'>
+          <SaveTestButton
+            tool={run.tool}
+            args={run.arguments}
+            output={run.compact}
+            isError={run.is_error}
+          />
+        </span>
       </div>
       <div className='flex items-center justify-between gap-2 px-4 pt-3'>
         <div role='tablist' aria-label='Result views' className='flex gap-1'>
@@ -764,6 +774,8 @@ function ToolDetail({ tool }: { tool: ToolRow }) {
       ) : run.data ? (
         <ResultPanel run={run.data} />
       ) : null}
+
+      <ContractTestsPanel tool={tool.name} />
     </div>
   )
 }
@@ -773,6 +785,8 @@ function ToolDetail({ tool }: { tool: ToolRow }) {
 export function McpConsolePage() {
   const [params, setParams] = useSearchParams()
   const selected = params.get('tool')
+  const showTests = params.get('view') === 'tests'
+  const tests = useContractTests()
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['mcp-console', 'tools'],
     queryFn: async () =>
@@ -785,8 +799,18 @@ export function McpConsolePage() {
   const select = (name: string) => {
     const next = new URLSearchParams(params)
     next.set('tool', name)
+    next.delete('view')
     setParams(next, { replace: true })
   }
+  const toggleTests = () => {
+    const next = new URLSearchParams(params)
+    if (showTests) next.delete('view')
+    else next.set('view', 'tests')
+    setParams(next, { replace: true })
+  }
+  const failing = (tests.data ?? []).filter(
+    (t) => t.enabled && (t.last_status === 'fail' || t.last_status === 'error')
+  ).length
 
   // Open on the first tool so the page never starts on an empty panel.
   useEffect(() => {
@@ -803,8 +827,25 @@ export function McpConsolePage() {
         description='The tools an AI app connected as you would get. Try one here, with writes as a dry run if you like, before an assistant does.'
         actions={
           data && (
-            <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
-              {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
+            <span className='flex items-center gap-2'>
+              <span className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-muted dark:text-muted-foreground'>
+                {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
+              </span>
+              <Button
+                size='sm'
+                variant={showTests ? 'secondary' : 'outline'}
+                className='h-8 text-[12px]'
+                aria-pressed={showTests}
+                onClick={toggleTests}
+              >
+                <FlaskConical className='mr-1 h-3.5 w-3.5' />
+                Contract tests
+                {failing > 0 && (
+                  <span className='ml-1.5 rounded-full bg-red-50 px-1.5 text-[10.5px] font-semibold text-red-700 dark:bg-red-500/15 dark:text-red-300'>
+                    {failing}
+                  </span>
+                )}
+              </Button>
             </span>
           )
         }
@@ -837,6 +878,10 @@ export function McpConsolePage() {
               <Skeleton className='h-5 w-48' />
               <Skeleton className='h-4 w-2/3' />
               <Skeleton className='h-40 w-full' />
+            </div>
+          ) : showTests ? (
+            <div className='px-6 py-5'>
+              <ContractTestsPanel />
             </div>
           ) : tool ? (
             <ToolDetail key={tool.name} tool={tool} />
