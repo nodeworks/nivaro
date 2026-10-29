@@ -73,6 +73,7 @@
     "seed:sla-zones": "tsx extensions/efp-ops/scripts/seed-sla-zone-map.ts",
     "proc:dump": "tsx extensions/efp-ops/scripts/dump-procedures.ts",
     "proc:deploy": "tsx extensions/efp-ops/scripts/deploy-procedures.ts",
+    "proc:adopt": "tsx extensions/efp-ops/scripts/adopt-procedures.ts",
     "invoice:due-dates": "tsx extensions/efp-ops/scripts/invoice-due-dates.ts",
     "fix:other-spend-duplicates": "tsx extensions/efp-ops/scripts/fix-other-spend-duplicates.ts",
     "fix:po-line-duplicates": "tsx extensions/efp-ops/scripts/fix-po-line-duplicates.ts",
