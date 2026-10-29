@@ -32,6 +32,8 @@ import { registerChaosTools } from './tools/chaos.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerDashboardTools } from './tools/dashboards.js'
+import { registerDrillTools } from './tools/drill.js'
+import { registerFormTools } from './tools/forms.js'
 import { registerInfrastructureTools } from './tools/infrastructure.js'
 import { registerInstanceTools, registerNamedInstanceTools } from './tools/instance.js'
 import { registerItemTools } from './tools/items.js'
@@ -133,6 +135,9 @@ export const TOOL_NAMES = [
   'list_dashboards',
   'read_dashboard',
   'run_report',
+  'drill_widget',
+  'form_state',
+  'render_form',
   'list_instance_tools',
   'call_instance_tool'
 ] as const
@@ -168,6 +173,7 @@ export const LAYOUT_TOOL_NAMES = [
   'describe_layout',
   'which_form',
   'explain_field',
+  'lint_layout',
   'propose_layout_ops'
 ] as const
 
@@ -230,7 +236,8 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'Start with list_collections / describe_collection to learn names and fields,',
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
         'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
-        'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them.',
+        'list_dashboards, read_dashboard and run_report give dashboard and report figures exactly as the user sees them; drill_widget shows the rows behind one.',
+        'form_state says which fields a form shows, requires and locks for some values; render_form draws it.',
         'create_item rehearses by default; pass dry_run: false to store. delete_item rehearses first and returns a confirm_token; delete only after the person agrees, with dry_run: false and that token.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
@@ -253,6 +260,8 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerApprovalTools(server, client)
   registerStatusTools(server, client)
   registerDashboardTools(server, client)
+  registerDrillTools(server, client)
+  registerFormTools(server, client)
   registerInstanceTools(server, client)
   registerChatTools(server, client, chatAccess)
   if (options.adminTools === true) {
