@@ -242,6 +242,7 @@ import {
   invalidateRecordNotes,
   RecordInsightsButton
 } from './item-edit/RecordInsights'
+import { liveRecordWrite } from './item-edit/live-record-marks'
 import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
@@ -1172,6 +1173,24 @@ export function serverErrorCode(err: unknown): string | null {
   const r = (err as { response?: { code?: unknown; data?: { code?: unknown } } } | null)?.response
   const code = r?.code ?? r?.data?.code
   return typeof code === 'string' ? code : null
+}
+
+/** Fields another write moved between two loads of the same record. A field
+ *  the previous load did not carry at all (Summary view reads fewer fields, so
+ *  Reload → Summary → Edit loads the rest) was not changed — it was simply not
+ *  loaded before, and must not show a "was empty · someone" note. Exported for
+ *  tests. */
+export function remoteChangedFields(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>
+): string[] {
+  return Object.keys(next).filter(
+    (k) =>
+      !k.startsWith('__') &&
+      Object.prototype.hasOwnProperty.call(prev, k) &&
+      prev[k] !== undefined &&
+      !valuesEqual(prev[k], next[k])
+  )
 }
 
 /** Who a live change on the open record is credited to in its notice: the
@@ -3222,9 +3241,7 @@ function ItemEditFormView({
     // edits — merge only the fields they have NOT touched, keeping their
     // draft dirty instead of silently replacing it.
     if (!firstLoad && !ownSave) {
-      const changed = Object.keys(itemData).filter(
-        (k) => !k.startsWith('__') && !valuesEqual(prev[k], itemData[k])
-      )
+      const changed = remoteChangedFields(prev, itemData)
       // A touched field holds an edit only while its draft differs from the
       // baseline it was made on. Touched-then-saved, reverted or "Take
       // theirs" fields equal that baseline and follow the server — keeping
@@ -3232,6 +3249,12 @@ function ItemEditFormView({
       // "2 changes" and resend the old values against an old revision.
       const ownEdits = ownEditFields(changed, userTouchedRef.current, draftRef.current, prev)
       const isOwnEdit = (k: string) => ownEdits.has(k)
+      // Notes only for a refetch that follows someone else's live write, and
+      // only for the fields it named (live-record-marks.ts) — any other refetch
+      // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
+      // remote change.
+      const live = liveRecordWrite(collection, String(itemId))
+      const noted = !live ? [] : live.fields ? changed.filter((k) => live.fields?.includes(k)) : changed
       if (changed.length > 0) {
         const lt = lastTouchRef.current
         const by = remoteChangeAuthor(lt, authUserId)
@@ -3241,7 +3264,10 @@ function ItemEditFormView({
           for (const k of changed) {
             // A field the user ALSO edited is a conflict: their draft stays,
             // the remote value waits behind "Take theirs / Keep mine" (#6).
+            // Conflicts always show (they protect the person's edit, socket
+            // or not); plain notes only for a live write that named the field.
             const conflict = isOwnEdit(k) && !valuesEqual(draftRef.current[k], itemData[k])
+            if (!conflict && !noted.includes(k)) continue
             next[k] = conflict
               ? { was: prev[k], by, at, theirs: itemData[k], conflict: true }
               : { was: prev[k], by, at }

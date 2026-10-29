@@ -21,6 +21,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative } from '../../lib/utils'
+import { markLiveRecordWrite } from './live-record-marks'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
 export interface RecordGone {
@@ -366,6 +367,13 @@ export function RecordLiveSync({
       ])
       return
     }
+    // The form's field notes ("was X · who") follow this mark, and only for
+    // the fields this write named (live-record-marks.ts).
+    markLiveRecordWrite(
+      collection,
+      itemId,
+      batch.changedFields?.filter((f) => !f.startsWith('$')) ?? null
+    )
     void refreshRecord(true)
   }
   const refreshRecord = async (flashIt: boolean) => {
