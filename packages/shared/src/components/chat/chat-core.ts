@@ -1,5 +1,5 @@
 import { type NivaroClient, readItems } from '@nivaro/sdk'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -683,11 +683,93 @@ export function useChannelMembers(channelId: number | null) {
   return { members: data ?? [], loading: isLoading }
 }
 
+export const MEMBER_PAGE_SIZE = 50
+
+export interface PagedMember {
+  id: string
+  name: string
+  title: string | null
+  online: boolean
+  first_name?: string | null
+  last_name?: string | null
+  email?: string | null
+}
+
+interface PagedMembersResponse {
+  data: Array<Record<string, unknown>>
+  total?: number
+  has_more?: boolean
+}
+
+/** Debounce so a member search does not fire per keystroke (#3082). */
+export function useDebouncedMemberQuery<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return v
+}
+
+/** Normalises both paged member endpoints (channel members + room members) to one row shape. */
+export function toPagedMember(r: Record<string, unknown>): PagedMember {
+  const id = String(r.id ?? r.user ?? '')
+  const first = (r.first_name as string | null | undefined) ?? null
+  const last = (r.last_name as string | null | undefined) ?? null
+  const email = (r.email as string | null | undefined) ?? null
+  return {
+    id,
+    name: String(r.name ?? ([first, last].filter(Boolean).join(' ') || email || id)),
+    title: (r.title as string | null | undefined) ?? null,
+    online: r.online === true,
+    first_name: first,
+    last_name: last,
+    email
+  }
+}
+
+/**
+ * Pages a room's members from the server (online first, searchable, with a
+ * true total) — for rooms with hundreds or thousands of people (#3082).
+ * `path` is the endpoint without a query string; `q` should already be debounced.
+ */
+export function usePagedMembers(keyBase: string, path: string | null, q: string, enabled: boolean) {
+  const client = useNivaroClient()
+  const query = useInfiniteQuery({
+    queryKey: ['nvr-chat-members-page', keyBase, path, q],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const qs = new URLSearchParams({ limit: String(MEMBER_PAGE_SIZE), offset: String(pageParam) })
+      if (q.trim()) qs.set('q', q.trim())
+      return (await client.request(
+        get<PagedMembersResponse>(`${path}?${qs.toString()}`)
+      )) as PagedMembersResponse
+    },
+    getNextPageParam: (last, all) =>
+      last.has_more ? all.reduce((n, p) => n + (p.data?.length ?? 0), 0) : undefined,
+    enabled: enabled && !!path,
+    staleTime: 10_000
+  })
+  const members = (query.data?.pages ?? []).flatMap((p) => (p.data ?? []).map(toPagedMember))
+  const total = query.data?.pages[0]?.total ?? members.length
+  return {
+    members,
+    total,
+    loading: query.isLoading,
+    hasMore: !!query.hasNextPage,
+    loadingMore: query.isFetchingNextPage,
+    loadMore: () => {
+      if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage()
+    }
+  }
+}
+
 export function useChannelAdmin(channelId: number | null) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['nvr-chat-members', channelId] })
+    void qc.invalidateQueries({ queryKey: ['nvr-chat-members-page'] })
     void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] })
     void qc.invalidateQueries({ queryKey: ['nvr-chat-directory'] })
   }

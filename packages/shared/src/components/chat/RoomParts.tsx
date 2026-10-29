@@ -19,9 +19,12 @@ import {
   canOpenDm,
   openDmWith,
   type PinnedMessage,
-  useChatThread
+  useChatThread,
+  useDebouncedMemberQuery,
+  usePagedMembers
 } from './chat-core'
 import { useRoomInfo, useRoomShared, useRoomSummary } from './chat-hooks'
+import { MemberLoadMore, MemberOnlineDot, MemberSearchBox, memberCountLabel } from './MemberPaging'
 
 /**
  * Pieces of a chat room that are not the message list itself: the thread
@@ -375,6 +378,24 @@ export function RoomInfoDrawer({
   const sharedLinks = sq
     ? shared.links.filter((l) => `${l.url} ${l.sender_name ?? ''}`.toLowerCase().includes(sq))
     : shared.links
+  // #3082: a big room's info carries only the first page; the rest (and any search)
+  // pages from the server. A small room is complete already and filters in place.
+  const [memberQ, setMemberQ] = useState('')
+  const debouncedMemberQ = useDebouncedMemberQuery(memberQ, 250)
+  const mq = memberQ.trim().toLowerCase()
+  const complete = !!info && info.members.length >= info.member_count
+  const paged = usePagedMembers(
+    room,
+    `/chat/rooms/${encodeURIComponent(room)}/members`,
+    debouncedMemberQ,
+    tab === 'members' && !!info && !complete
+  )
+  const shownMembers = complete
+    ? mq
+      ? info.members.filter((m) => m.name.toLowerCase().includes(mq.replace(/^@/, '')))
+      : info.members
+    : paged.members
+  const memberTotal = complete ? shownMembers.length : paged.total
   const summary = useRoomSummary()
   const [since, setSince] = useState('')
   const [summaryText, setSummaryText] = useState<string | null>(null)
@@ -536,35 +557,61 @@ export function RoomInfoDrawer({
           ))}
         </div>
         <div className='px-3 py-2'>
-          {tab === 'members' &&
-            (info?.members.length ? (
-              <ul className='space-y-1'>
-                {info.members.map((m) => (
-                  <li key={m.id} className='flex items-center gap-2 py-0.5'>
-                    {renderAvatar(m.id, m.name)}
-                    <span className='min-w-0 flex-1'>
-                      <span className='block truncate text-[12px] text-slate-800 dark:text-slate-100'>
-                        {m.name}
+          {tab === 'members' && (
+            <>
+              {info && info.member_count > 10 && (
+                <div className='mb-2 space-y-1'>
+                  <MemberSearchBox value={memberQ} onChange={setMemberQ} />
+                  <p
+                    className='text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'
+                    data-chat-member-count
+                  >
+                    {memberCountLabel(memberTotal, !!mq)}
+                  </p>
+                </div>
+              )}
+              {shownMembers.length ? (
+                <ul className='space-y-1'>
+                  {shownMembers.map((m) => (
+                    <li key={m.id} className='flex items-center gap-2 py-0.5'>
+                      {renderAvatar(m.id, m.name)}
+                      <span className='min-w-0 flex-1'>
+                        <span className='block truncate text-[12px] text-slate-800 dark:text-slate-100'>
+                          {m.name}
+                        </span>
+                        {m.title && (
+                          <span className='block truncate text-[10.5px] text-slate-500'>
+                            {m.title}
+                          </span>
+                        )}
                       </span>
-                      {m.title && (
-                        <span className='block truncate text-[10.5px] text-slate-500'>
-                          {m.title}
+                      {m.online && (
+                        <span className='flex items-center gap-1 text-[10.5px] text-emerald-700 dark:text-emerald-400'>
+                          <MemberOnlineDot online />
+                          Online
                         </span>
                       )}
-                    </span>
-                    {m.online && (
-                      <span className='text-[10.5px] text-emerald-700 dark:text-emerald-400'>
-                        Online
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className='py-4 text-center text-[11.5px] text-slate-500'>
-                {info ? 'Anyone who can open this room can read it.' : 'Loading…'}
-              </p>
-            ))}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className='py-4 text-center text-[11.5px] text-slate-500'>
+                  {!info || (!complete && paged.loading)
+                    ? 'Loading…'
+                    : mq
+                      ? 'No one matches.'
+                      : 'Anyone who can open this room can read it.'}
+                </p>
+              )}
+              {!complete && (
+                <MemberLoadMore
+                  hasMore={paged.hasMore}
+                  loading={paged.loadingMore}
+                  onLoad={paged.loadMore}
+                />
+              )}
+            </>
+          )}
           {tab === 'pinned' &&
             (pins.length ? (
               <ul className='space-y-1.5'>
