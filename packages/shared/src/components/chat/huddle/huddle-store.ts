@@ -19,6 +19,8 @@
  * hidden audio elements; the mesh links stay open for MESH_OVERLAP_MS so
  * nobody hears a gap, then close. A huddle never goes back to mesh mid-call.
  */
+
+import { registerReloadHold } from '../../../lib/reload-holds'
 import { loadDevicePrefs, micConstraints } from './huddle-device-prefs'
 import { huddleLive } from './huddle-live'
 import { aggregateQuality, type LinkSummary } from './huddle-quality'
@@ -995,6 +997,12 @@ interface SignalIn {
 }
 
 export const huddleStore = new HuddleStore()
+
+// #2937 — an automatic idle reload never cuts a huddle off (lib/reload-holds.ts).
+registerReloadHold('A huddle', () => {
+  const st = huddleStore.getSnapshot().status
+  return st === 'live' || st === 'joining'
+})
 
 /** The latest connection-quality snapshot of the huddle I am in (null = none / not measured). */
 export function getHuddleQuality(): HuddleQualitySnapshot | null {

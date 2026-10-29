@@ -66,6 +66,10 @@ export class PageContext {
   private path: string | null = null
   private load = ''
   constructor(private readonly app: string) {}
+  /** The app name this tab reports (x-nivaro-app). */
+  get appName(): string {
+    return this.app
+  }
   headers(pathname: string): Record<string, string> {
     const p = String(pathname || '/').split(/[?#]/)[0]
     if (p !== this.path) {
@@ -90,6 +94,11 @@ let shared: PageContext | null = null
 export function pageContext(app = 'app'): PageContext {
   if (!shared) shared = new PageContext(app)
   return shared
+}
+
+/** The app this tab named when its page context was created (null = none yet). */
+export function currentPageApp(): string | null {
+  return shared ? shared.appName : null
 }
 
 /** Headers for the current `window.location` (empty outside a browser). */

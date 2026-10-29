@@ -61,7 +61,9 @@ export const INSTANCE_RESERVED_KEYS = [
   // Cache switches (services/cache-config.ts): per-instance, never a settings column.
   'cache',
   // Providers that may link an existing account by email (auth/account-link-policy.ts).
-  'sso_link_by_email'
+  'sso_link_by_email',
+  // Reload old tabs when idle (services/idle-reload.ts, #2937).
+  'idle_reload'
 ] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {

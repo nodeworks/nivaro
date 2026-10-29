@@ -466,7 +466,7 @@ GET /api/environments/env-presence         → every registered API, compared`
     },
     {
       type: 'p',
-      text: 'One person at a time: an administrator opens anyone else\'s user card (their photo in chat, the Online list, a record or a list) or People → the person → Admin tools. Reload tabs pushes the same countdown banner to every tab they have open; Sign out (a second click confirms) ends every session they have on every app — the tabs go back to sign-in and their live connections close on every server. They can sign in again at once: suspend the account to keep them out. API keys and static tokens are not sessions and keep working. Each sign-out is in the activity log as `sessions-revoke-user` on that person.'
+      text: "One person at a time: an administrator opens anyone else's user card (their photo in chat, the Online list, a record or a list) or People → the person → Admin tools. Reload tabs pushes the same countdown banner to every tab they have open; Sign out (a second click confirms) ends every session they have on every app — the tabs go back to sign-in and their live connections close on every server. They can sign in again at once: suspend the account to keep them out. API keys and static tokens are not sessions and keep working. Each sign-out is in the activity log as `sessions-revoke-user` on that person."
     },
     {
       type: 'p',
@@ -482,6 +482,25 @@ GET    /api/realtime/min-build                       → rules, open tabs below 
 GET    /api/realtime/min-build/preview?app=&build=   → open tabs a value would reload now
 PUT    /api/realtime/min-build/:app {build, seconds?, message?}
 DELETE /api/realtime/min-build/:app                  → turn off`
+    },
+    { type: 'h3', id: 'deploys-idle-reload', text: 'Old tabs reload by themselves when idle' },
+    {
+      type: 'p',
+      text: 'After a release, a tab still on an older build reloads by itself once nobody has typed or clicked in it for a minute — no banner, no countdown. It is left alone while it has unsaved changes (the same list as above), during a huddle and while a screen clip is being recorded. A hidden tab counts as idle only once the same time has passed without input. The scroll position comes back after the reload, and stored drafts stay where they are.'
+    },
+    {
+      type: 'p',
+      text: 'Whether a tab is old is judged exactly like Force refresh → Old versions: on every API replica, never while a deploy is still rolling (two builds loaded in the last 10 minutes, or two API versions serving), and never when another replica did not answer. Dev builds are never judged. A tab reloads at most once for one new build, so a cached old bundle never loops. An idle tab asks every 3 minutes (every 15 after an hour idle); a tab someone is using never asks.'
+    },
+    {
+      type: 'p',
+      text: 'Idle reload on /realtime (next to Minimum build) switches it per instance — on by default — and sets the idle time (30–3600 seconds, default 60). `AUTO_RELOAD_IDLE=on|off` on the server wins over the switch. Changes are in the activity log as `client-auto-reload`. The setting lives under `idle_reload` in this instance’s settings overrides. A custom front end gets it by mounting `ForceReloadBanner` (pass `idleReload={false}` to leave it out) or `IdleReloadWatcher`, and reports anything live a reload must not cut off with `registerReloadHold(label, () => active)`.'
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/realtime/build-status?app=&build=&api=&tab=&loaded=   → {older, target, id, reason, auto_reload} (signed in)
+GET    /api/realtime/auto-reload                     → {auto_reload_idle, idle_seconds, env}
+PATCH  /api/realtime/auto-reload {auto_reload_idle?, idle_seconds?}`
     },
     { type: 'h2', id: 'deploys-readiness-cache', text: 'How fresh the readiness scorecard is' },
     {
