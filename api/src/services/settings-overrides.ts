@@ -61,7 +61,9 @@ export const INSTANCE_RESERVED_KEYS = [
   // Cache switches (services/cache-config.ts): per-instance, never a settings column.
   'cache',
   // Providers that may link an existing account by email (auth/account-link-policy.ts).
-  'sso_link_by_email'
+  'sso_link_by_email',
+  // Audience confirm threshold for configs that send to people (services/audience-gate.ts, #3080).
+  'audience_confirm'
 ] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {

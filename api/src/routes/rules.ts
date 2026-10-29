@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -83,12 +84,22 @@ export async function rulesRoutes(app: FastifyInstance) {
       actions?: unknown
       enabled?: boolean
       sort?: number
+      confirm_audience?: boolean
     }
   }>('/', async (req, reply) => {
     const body = req.body
     if (!body?.name || !body?.collection || !body?.trigger) {
       return reply.code(400).send({ error: 'name, collection and trigger are required' })
     }
+    // #3080 — a rule whose actions reach more than the threshold, or a whole role, asks first.
+    const gate = await checkAudienceConfirm(
+      req,
+      reply,
+      'rule',
+      { enabled: body.enabled ?? true, actions: body.actions ?? null },
+      null
+    )
+    if (gate.blocked) return reply
     const now = new Date()
     const [inserted] = await db('nivaro_rules')
       .insert({
@@ -111,6 +122,7 @@ export async function rulesRoutes(app: FastifyInstance) {
             .where({ id: inserted as number })
             .first()) as RuleRow)
 
+    if (gate.confirmed) await logAudienceConfirm(req, 'rule', row.id, gate.confirmed)
     await logActivity({
       action: 'create',
       collection: 'nivaro_rules',
@@ -149,7 +161,17 @@ export async function rulesRoutes(app: FastifyInstance) {
     if (body.enabled !== undefined) patch.enabled = body.enabled
     if (body.sort !== undefined) patch.sort = body.sort
 
+    const gate = await checkAudienceConfirm(
+      req,
+      reply,
+      'rule',
+      { ...existing, ...patch, id },
+      existing as unknown as Record<string, unknown>
+    )
+    if (gate.blocked) return reply
+
     await db('nivaro_rules').where({ id }).update(patch)
+    if (gate.confirmed) await logAudienceConfirm(req, 'rule', id, gate.confirmed)
     const row = (await db('nivaro_rules').where({ id }).first()) as RuleRow
     await logActivity({
       action: 'update',

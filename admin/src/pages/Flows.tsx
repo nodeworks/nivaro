@@ -1,3 +1,8 @@
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Clock,
@@ -444,14 +449,33 @@ export function FlowsPage() {
   // Enable/disable from the list — the same status PATCH the editor uses;
   // the trigger simply stops firing while inactive (nothing is deleted, and
   // the Versions panel in the editor still reverts config).
+  // #3080 — enabling a flow whose steps reach many people asks first (inline, above the list).
+  const [audienceAsk, setAudienceAsk] = useState<{ id: string; preview: AudiencePreview } | null>(
+    null
+  )
   const toggleStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: 'active' | 'inactive' }) =>
-      api.patch(`/flows/${id}`, { status }),
+    mutationFn: ({
+      id,
+      status,
+      confirm
+    }: {
+      id: string
+      status: 'active' | 'inactive'
+      confirm?: boolean
+    }) => api.patch(`/flows/${id}`, { status, ...(confirm ? { confirm_audience: true } : {}) }),
     onSuccess: (_r, v) => {
       queryClient.invalidateQueries({ queryKey: ['flows'] })
+      setAudienceAsk(null)
       toast.success(v.status === 'active' ? 'Flow enabled' : 'Flow disabled')
     },
-    onError: () => toast.error('Could not update the flow')
+    onError: (err, v) => {
+      const preview = audienceConfirmFromError(err)
+      if (preview) {
+        setAudienceAsk({ id: v.id, preview })
+        return
+      }
+      toast.error('Could not update the flow')
+    }
   })
   const deleteFlow = useMutation({
     mutationFn: (id: string) => api.delete(`/flows/${id}`),
@@ -547,6 +571,18 @@ export function FlowsPage() {
           </div>
         </div>
 
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            className='mx-6 mt-3 shrink-0'
+            preview={audienceAsk.preview}
+            busy={toggleStatus.isPending}
+            confirmLabel='Confirm and enable'
+            onConfirm={() =>
+              toggleStatus.mutate({ id: audienceAsk.id, status: 'active', confirm: true })
+            }
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
         <div className='flex-1 overflow-y-auto'>
           {isLoading ? (
             <div className='space-y-px p-6'>

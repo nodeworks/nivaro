@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { evaluateAlerts } from '../hooks/alerts.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import { can } from '../services/permissions.js'
 
 function parseJson<T>(v: string | null | undefined): T | null {
@@ -220,7 +221,18 @@ export async function alertsRoutes(app: FastifyInstance) {
         patch.sensitivity = body.sensitivity != null ? Number(body.sensitivity) : null
       }
 
+      // #3080 — turning an alert on for more than the threshold of subscribers asks first.
+      const gate = await checkAudienceConfirm(
+        req,
+        reply,
+        'alert',
+        { ...existing, ...patch, id },
+        existing as unknown as Record<string, unknown>
+      )
+      if (gate.blocked) return reply
+
       await db('nivaro_alert_definitions').where({ id }).update(patch)
+      if (gate.confirmed) await logAudienceConfirm(req, 'alert', id, gate.confirmed)
       const updated = await db('nivaro_alert_definitions').where({ id }).first<AlertDefinitionRow>()
       await logActivity({
         action: 'update',
@@ -429,6 +441,79 @@ export async function alertsRoutes(app: FastifyInstance) {
         .code(422)
         .send({ error: err instanceof Error ? err.message : 'evaluation failed' })
     }
+  })
+
+  // #3080 — Test send: a sample of this alert's notification goes to the person saving it and
+  // nobody else (in-app, plus email to their own address when asked). Nothing is stored.
+  app.post('/definitions/test-send', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      name?: string
+      collection?: string
+      field?: string
+      operator?: string
+      threshold?: number
+      email?: boolean
+    }
+    const name = String(body.name ?? '').trim()
+    const collection = String(body.collection ?? '').trim()
+    const field = String(body.field ?? '').trim()
+    if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection) || !/^[A-Za-z0-9_]+$/.test(field))
+      return reply.code(400).send({ error: 'name, collection and field are required' })
+    const me = (await db('nivaro_users').where({ id: req.user!.id }).first('id', 'email')) as
+      | { id: string; email: string | null }
+      | undefined
+    if (!me) return reply.code(404).send({ error: 'Your account was not found' })
+    const def = {
+      name,
+      collection,
+      field,
+      operator: String(body.operator ?? 'gt'),
+      threshold: Number(body.threshold ?? 0)
+    }
+    const subject = `[TEST] Alert: ${name}`
+    const message = `${field} ${def.operator} ${def.threshold} in ${collection} — this is a test; only you got it.`
+    const results: Record<string, string> = {}
+    const { notifyUser } = await import('../services/notification-channels.js')
+    await notifyUser(app, me.id, {
+      subject,
+      message,
+      category: 'alerts',
+      channels: { inapp: true },
+      why: 'you sent yourself a test of this alert'
+    })
+      .then((r) => {
+        results.inapp = r.id != null ? 'sent' : 'dropped by your notification rules'
+      })
+      .catch(() => {
+        results.inapp = 'failed'
+      })
+    if (body.email === true) {
+      if (!me.email) results.email = 'no address'
+      else {
+        const { sendRawMail } = await import('../services/mail.js')
+        await sendRawMail({
+          to: me.email,
+          subject,
+          html: `<p style="margin:0 0 12px;">${message.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`,
+          category: 'alerts',
+          skipDigest: true
+        })
+          .then(() => {
+            results.email = 'sent'
+          })
+          .catch(() => {
+            results.email = 'failed'
+          })
+      }
+    }
+    await logActivity({
+      action: 'alert-test-send',
+      user: me.id,
+      collection: 'nivaro_alert_definitions',
+      comment: name.slice(0, 100),
+      req
+    })
+    return reply.send({ data: { to: 'you', results } })
   })
 
   app.post('/evaluate', { preHandler: requireAdmin }, async (_req, reply) => {

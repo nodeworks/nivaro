@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { checkAudienceConfirm, logAudienceConfirm } from '../services/audience-gate.js'
 import {
   type MomentCard,
   momentCard,
@@ -138,7 +139,7 @@ function broadcastCardFor(
   return momentCard(video, parseMomentMs(tMs))
 }
 
-async function resolveAudienceUsers(aud: Audience): Promise<
+export async function resolveAudienceUsers(aud: Audience): Promise<
   Array<{
     id: string
     email: string | null
@@ -851,6 +852,9 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       values: Array.isArray(b.audience?.values) ? b.audience?.values : undefined,
       user_ids: Array.isArray(b.audience?.user_ids) ? b.audience?.user_ids : undefined
     }
+    // #3080 — a broadcast to more than the threshold, a whole role or everyone asks first.
+    const gate = await checkAudienceConfirm(req, reply, 'broadcast', { audience: aud }, null)
+    if (gate.blocked) return reply
 
     const [inserted] = await db('nivaro_announcements')
       .insert({
@@ -891,6 +895,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       delivered = await deliverAnnouncement(app, Number(id))
     }
 
+    if (gate.confirmed) await logAudienceConfirm(req, 'broadcast', id, gate.confirmed)
     await logActivity({
       action: 'announcement-create',
       user: req.user?.id,

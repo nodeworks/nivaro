@@ -1,6 +1,7 @@
 export { AgentBadge } from './components/AgentBadge'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
+export * from './components/AudienceConfirmPanel'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'

@@ -1,6 +1,11 @@
+import {
+  AudienceConfirmPanel,
+  type AudiencePreview,
+  audienceConfirmFromError
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Search, Trash2, X } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { FieldCombobox, type FieldOption } from '@/components/rule-condition-row'
@@ -1119,6 +1124,9 @@ export function RuleEditPage() {
     }
   }
 
+  // #3080 — a rule whose actions reach many people or a whole role asks first (inline panel).
+  const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
+  const lastBody = useRef<Record<string, unknown> | null>(null)
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       isNew
@@ -1129,7 +1137,14 @@ export function RuleEditPage() {
       toast.success(isNew ? 'Rule created' : 'Rule saved')
       navigate('/flows/rules')
     },
-    onError: () => toast.error('Failed to save rule')
+    onError: (err) => {
+      const ask = audienceConfirmFromError(err)
+      if (ask) {
+        setAudienceAsk(ask)
+        return
+      }
+      toast.error('Failed to save rule')
+    }
   })
 
   function handleCollectionChange(collection: string) {
@@ -1148,7 +1163,7 @@ export function RuleEditPage() {
       toast.error('Fix the JSON before saving')
       return
     }
-    save.mutate({
+    const body = {
       name: form.name,
       collection: form.collection,
       trigger: form.trigger,
@@ -1156,7 +1171,10 @@ export function RuleEditPage() {
       sort: form.sort,
       conditions: serializeConditions(conditionGroup),
       actions
-    })
+    }
+    lastBody.current = body
+    setAudienceAsk(null)
+    save.mutate(body)
   }
 
   return (
@@ -1210,6 +1228,17 @@ export function RuleEditPage() {
             </Button>
           </div>
         </div>
+        {audienceAsk && (
+          <AudienceConfirmPanel
+            className='mt-3'
+            preview={audienceAsk}
+            busy={save.isPending}
+            onConfirm={() => {
+              if (lastBody.current) save.mutate({ ...lastBody.current, confirm_audience: true })
+            }}
+            onCancel={() => setAudienceAsk(null)}
+          />
+        )}
       </div>
 
       <div className='p-8'>
