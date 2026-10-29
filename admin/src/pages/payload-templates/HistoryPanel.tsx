@@ -1,6 +1,7 @@
 import { ArrowLeft, ChevronRight, RotateCcw } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { personName, usePeople } from '@/lib/people'
 import {
   type DraftBody,
   errorMessage,
@@ -13,9 +14,7 @@ import { usePayloadEditor } from './editor-context'
 import {
   draftLookupsOf,
   liveLookupsOf,
-  personName,
   sameLookups,
-  usePeople,
   useRestoreVersion,
   useVersion,
   useVersions,

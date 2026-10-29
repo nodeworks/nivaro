@@ -25,6 +25,10 @@ vi.mock('../../../../services/db-tuning/param-sets.js', () => ({
 }))
 vi.mock('../../../../services/custom-query-plans.js', () => ({ capturedPlanFor: () => null }))
 vi.mock('../../../../services/replication.js', () => ({ isReplicatedProcedure: async () => false }))
+const owners = vi.hoisted(() => ({ map: new Map<string, Record<string, unknown>>() }))
+vi.mock('../../../../services/managed-procedures/owners.js', () => ({
+  appManagedProcedures: async () => owners.map
+}))
 
 import { loadProcEvidence } from '../../../../services/db-tuning/observers/proc-rewrite.js'
 
@@ -34,6 +38,7 @@ describe('loadProcEvidence — parameter sets through a wrapping query', () => {
     m.own = []
     m.viaQuery = new Map()
     m.params = new Set(['fiscalyear', 'mode'])
+    owners.map = new Map()
   })
 
   it("inherits a query's set only when every key names one of the procedure's parameters", async () => {
@@ -56,5 +61,27 @@ describe('loadProcEvidence — parameter sets through a wrapping query', () => {
     m.viaQuery.set('spend', [{ fy: 1 }])
     const ev = await loadProcEvidence()
     expect(ev.paramSets.get('rpt')).toEqual([{ FiscalYear: 2024, Mode: 'a' }])
+  })
+})
+
+describe('loadProcEvidence — procedures config will not let tuning rewrite', () => {
+  beforeEach(() => {
+    m.queries = []
+    m.own = [{ FiscalYear: 2024 }]
+    m.viaQuery = new Map()
+    m.params = new Set(['fiscalyear', 'mode'])
+  })
+
+  it('leaves out an import-owned or config-dropped procedure; a managed one stays', async () => {
+    owners.map = new Map([['rpt', { kind: 'import', key: 'spend', name: 'rpt' }]])
+    let ev = await loadProcEvidence()
+    expect(ev.stats).toEqual([])
+    expect(ev.unwritable?.has('rpt')).toBe(true)
+    owners.map = new Map([['rpt', { kind: 'managed', id: 1, name: 'rpt', dropped: true }]])
+    ev = await loadProcEvidence()
+    expect(ev.stats).toEqual([])
+    owners.map = new Map([['rpt', { kind: 'managed', id: 1, name: 'rpt', dropped: false }]])
+    ev = await loadProcEvidence()
+    expect(ev.stats.map((s) => s.name)).toEqual(['rpt'])
   })
 })

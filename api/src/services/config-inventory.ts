@@ -72,6 +72,8 @@ export const CONFIG_TABLES: string[] = [
   // imports
   'nivaro_import_definitions',
   'nivaro_import_templates',
+  'nivaro_managed_procedures', //      app-managed procedure bodies (migration 507)
+  'nivaro_managed_procedure_versions',
   // reporting
   'nivaro_custom_queries',
   'nivaro_report_defs',
@@ -419,7 +421,10 @@ const REDACTED: Record<string, string[]> = {
   nivaro_users: ['external_id', 'preferences'],
   nivaro_submission_forms: ['password_hash'],
   nivaro_widget_feeds: ['token'],
-  nivaro_persisted_queries: []
+  nivaro_persisted_queries: [],
+  // Not secrets: per-database facts (what THIS database last got from config). A snapshot of
+  // another instance must not claim them, and a restore keeps the live value.
+  nivaro_managed_procedures: ['deployed_hash', 'deployed_at', 'deployed_by']
 }
 
 /**

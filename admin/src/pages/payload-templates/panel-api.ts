@@ -57,7 +57,6 @@ export const panelKeys = {
   version: (key: string, v: number) => ['payload-templates', 'version', key, v] as const,
   check: (key: string, which: 'draft' | 'published', run: string) =>
     ['payload-templates', 'check', key, which, run] as const,
-  people: (ids: string[]) => ['payload-templates', 'people', ids] as const,
   pipeline: (id: string) => ['payload-templates', 'pipeline', id] as const
 }
 
@@ -251,44 +250,6 @@ export function convertDiffs(e: unknown): ConvertDiff[] | null {
   if (httpStatus(e) !== 422) return null
   const d = (e as { response?: { data?: { diffs?: unknown } } }).response?.data?.diffs
   return Array.isArray(d) ? (d as ConvertDiff[]) : []
-}
-
-/** Display names for user ids (the shared people-card batch route). */
-export function usePeople(ids: Array<string | null | undefined>) {
-  const list = [...new Set(ids.filter((x): x is string => !!x))].sort()
-  return useQuery({
-    queryKey: panelKeys.people(list),
-    queryFn: () =>
-      api
-        .post<{
-          data: Array<{
-            id: string
-            first_name: string | null
-            last_name: string | null
-            email: string
-          }>
-        }>('/users/cards', { ids: list })
-        .then((r) => {
-          const out: Record<string, string> = {}
-          for (const u of r.data.data ?? []) {
-            const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
-            out[String(u.id).toUpperCase()] = name || u.email
-          }
-          return out
-        }),
-    enabled: list.length > 0,
-    staleTime: 5 * 60_000
-  })
-}
-
-export function personName(
-  names: Record<string, string> | undefined,
-  id: string | null | undefined,
-  given?: string | null
-): string | null {
-  if (given) return given
-  if (!id) return null
-  return names?.[id.toUpperCase()] ?? null
 }
 
 /** The pipeline a transition belongs to, with its transitions' actions (Data tab). */

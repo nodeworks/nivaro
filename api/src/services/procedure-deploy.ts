@@ -132,6 +132,75 @@ export async function deployProcedure(
   })
 }
 
+/** dbo procedure names only (the drop puts the name in brackets, never binds it). */
+const PROC_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * DROP PROCEDURE IF EXISTS on its own pinned connection, holding the procedure's application
+ * lock — the same path as a deploy. dbo only; the name is re-checked here because it goes into
+ * the statement text. Throws with SQL Server's message.
+ */
+export async function dropProcedure(target: {
+  schema: string | null
+  name: string
+}): Promise<void> {
+  const schema = target.schema ?? 'dbo'
+  if (schema.toLowerCase() !== 'dbo' || !PROC_NAME_RE.test(target.name)) {
+    throw new Error(`Refusing to drop ${schema}.${target.name}: dbo procedure names only`)
+  }
+  await withLongConnection(
+    (c) =>
+      withProcLock(c, target, async () => {
+        try {
+          await c.run(`SET LOCK_TIMEOUT ${DEPLOY_LOCK_TIMEOUT_MS}`)
+          try {
+            await c.run(`DROP PROCEDURE IF EXISTS [dbo].[${target.name}]`, DEPLOY_TIMEOUT_MS)
+          } finally {
+            await c.run('SET LOCK_TIMEOUT -1').catch(() => c.discard())
+          }
+        } catch (e) {
+          throw new Error(sqlErrorText(e, 'Drop failed'))
+        }
+      }),
+    { timeoutMs: DEPLOY_TIMEOUT_MS }
+  )
+}
+
+/** Names per IN (…) read — well under SQL Server's ~2100 bound-parameter cap. */
+const LIVE_READ_CHUNK = 500
+
+/**
+ * User dbo procedures' text as SQL Server keeps it, keyed by lowercased name — one read for a
+ * whole deploy run or drift report. `names` limits the read to those procedures (in chunks);
+ * omitted, every user dbo procedure. A proc whose text is not readable (WITH ENCRYPTION: its
+ * sys.sql_modules definition is NULL) maps to '' — it is live (a drop must see it) and never
+ * matches a config body. Unlike liveProcedureDefinition(), which answers null for it.
+ */
+export async function liveProcedureDefinitions(names?: string[]): Promise<Map<string, string>> {
+  const base = `SELECT p.name, m.definition FROM sys.procedures p
+       JOIN sys.schemas s ON s.schema_id = p.schema_id
+       LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
+      WHERE p.is_ms_shipped = 0 AND s.name = 'dbo'`
+  const reads: Array<Promise<unknown>> = []
+  if (names === undefined) reads.push(db.raw(base))
+  else {
+    const wanted = [...new Set(names.filter((n) => PROC_NAME_RE.test(n)))]
+    for (let i = 0; i < wanted.length; i += LIVE_READ_CHUNK) {
+      const chunk = wanted.slice(i, i + LIVE_READ_CHUNK)
+      reads.push(db.raw(`${base} AND p.name IN (${chunk.map(() => '?').join(', ')})`, chunk))
+    }
+  }
+  const out = new Map<string, string>()
+  for (const rows of (await Promise.all(reads)) as Array<
+    Array<{ name: string; definition: string | null }>
+  >) {
+    for (const r of rows ?? []) {
+      if (r?.name) out.set(String(r.name).toLowerCase(), r.definition ?? '')
+    }
+  }
+  return out
+}
+
 /** The procedure's text as SQL Server keeps it, or null. */
 export async function liveProcedureDefinition(
   schema: string | null,

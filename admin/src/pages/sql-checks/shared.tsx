@@ -169,10 +169,14 @@ export interface Proposal {
   unified: string
   current_hash: string
   new_definition_hash: string | null
-  target: { type: ObjectType; label: string; kind: 'module' | 'import_definition' }
+  target: { type: ObjectType; label: string; kind: FixTargetKind }
   deploys: boolean
   note: string
 }
+
+/** What a fix changes: the live procedure, an import definition's stored body, or the body an
+ *  app-managed procedure keeps in config (saved as a new version, deployed from there). */
+export type FixTargetKind = 'module' | 'import_definition' | 'managed_procedure'
 
 export interface CompileResult {
   ok: boolean
@@ -201,7 +205,9 @@ export interface PageFixDetail {
   reverted_by?: string
   applied_definition_hash?: string
   deployed?: boolean
-  kind?: 'module' | 'import_definition'
+  kind?: FixTargetKind
+  /** managed_procedure: the config version the fix (or its revert) saved. */
+  managed_version?: number
   diff?: DiffHunk[]
   import_definitions_synced?: string[]
 }

@@ -1,19 +1,52 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { definitionNameMatches, deployProcedure } from '../services/procedure-deploy.js'
+import {
+  type DeployResult,
+  type DriftStatus,
+  deployManagedProcedure,
+  managedStatusOf,
+  registerManagedProcReadiness,
+  saveAndDeployManaged
+} from '../services/managed-procedures/deploy.js'
+import { procDeployHash } from '../services/managed-procedures/normalize.js'
+import { appManagedProcedures, procedureOwner } from '../services/managed-procedures/owners.js'
+import {
+  adoptLiveProcedure,
+  getManagedProcedure,
+  getManagedVersion,
+  listManagedProcedures,
+  listManagedVersions,
+  ManagedProcError,
+  type ManagedProcedure,
+  markManagedDropped,
+  putBackManaged,
+  unmarkManagedDropped
+} from '../services/managed-procedures/store.js'
+import { definitionNameMatches, liveProcedureDefinitions } from '../services/procedure-deploy.js'
 
 /**
  * Stored-procedure management (admin) — the Developer → Procedures page.
  *
- * The database is the runtime source of truth; deployments that vendor their
- * procs (an extension's procedures dir) get drift visibility via that extension's
- * registry route, which the page merges in when present.
+ * Two sources of truth, by owner (services/managed-procedures/owners.ts, the one answer):
+ *   - an app-managed procedure's body lives in CONFIG (nivaro_managed_procedures, one row per
+ *     proc, one version row per saved body). Every write here goes through config — save a
+ *     version, then deploy it (services/managed-procedures/deploy.ts) — so the change travels with
+ *     promote and Undo is "restore version N". A procedure created here is born managed; editing
+ *     or dropping an unmanaged live proc adopts it first (its live text becomes version 1). There
+ *     is no unmanaged write path left. A drop marks the row dropped (versions kept) and drops the
+ *     live proc.
+ *   - an import-owned procedure's body lives on its import definition: every write route here
+ *     refuses it with 409 APP_MANAGED (change it in Imports → Definitions).
+ *   - any other procedure (never adopted) — the database is the truth; it is listed and readable
+ *     and executable, and the first edit or drop adopts it.
  *
  * Trust model: requireAdmin end to end, same tier as custom queries (an
  * admin there already authors arbitrary SQL that executes on demand). Every
- * save/exec/drop is activity-logged.
+ * save/adopt/drop/restore/deploy/exec is activity-logged (collection
+ * `sys.procedures`, item = name, comment `v<version> · <note>`).
  *
  * Parameter "auto-parsing" reads sys.parameters — the engine's own catalog —
  * so the execute form always matches the deployed signature, never a regex's
@@ -154,130 +187,646 @@ async function gatherProcContext(
   return { tables, schemaCtx, usage }
 }
 
-/** The import definition that owns this procedure's body, or null. An
- *  app-managed procedure (nivaro_import_definitions.procedure_body set) has ONE
- *  writer — the import's own deploy — so the procedure manager never deploys
- *  over it or drops it (deploy-procedures and sync-business-schema skip the
- *  same set). */
-async function owningImport(name: string): Promise<string | null> {
-  const row = (await db('nivaro_import_definitions')
-    .whereNotNull('procedure_body')
-    .whereRaw('LOWER([procedure]) = ?', [name.toLowerCase()])
-    .first('key')
-    .catch(() => null)) as { key?: string } | null | undefined
-  return row?.key ? String(row.key) : null
+/** How the page shows a proc's owner: an import definition, or a managed row with its drift. */
+type ManagedInfo =
+  | { kind: 'import'; key: string }
+  | { kind: 'managed'; status: DriftStatus; version: number; owner: string | null }
+
+const NOTE_EDIT = 'Edited in the Procedures page'
+const NOTE_CREATE = 'Created in the Procedures page'
+const NOTE_ADOPT = 'Adopted from the live database'
+const NOTE_ADOPT_EDIT = 'Adopted from the live database before an edit'
+const NOTE_ADOPT_DROP = 'Adopted from the live database before a drop'
+const NOTE_KEEP_LIVE = "Kept the database's version"
+const NOTE_MAX = 500
+
+/** The import-owned refusal (message unchanged from before config): 409 APP_MANAGED. */
+const importOwned = (name: string, key: string) =>
+  new ManagedProcError(
+    409,
+    'APP_MANAGED',
+    `${name} is managed by the import definition "${key}". Change it there (Imports → Definitions); a deploy here would be overwritten by the import and fight it.`,
+    { definition: key }
+  )
+
+/** Answer a ManagedProcError with its status and `{ error, code, ...extra }`; rethrow others. */
+function sendManagedError(reply: FastifyReply, e: unknown) {
+  if (e instanceof ManagedProcError) {
+    return reply.code(e.status).send({ error: e.message, code: e.code, ...(e.extra ?? {}) })
+  }
+  throw e
 }
 
-function appManagedRefusal(name: string, key: string) {
-  return {
-    error: `${name} is managed by the import definition "${key}". Change it there (Imports → Definitions); a deploy here would be overwritten by the import and fight it.`,
-    code: 'APP_MANAGED',
-    definition: key
+/** 400 for a bad name, 409 for an import-owned one; null when the route may go on. */
+async function refuseName(name: string, reply: FastifyReply) {
+  if (!NAME_RE.test(name)) {
+    return reply.code(400).send({ error: 'Invalid procedure name', code: 'PROC_NAME_INVALID' })
   }
+  const owner = await procedureOwner(name)
+  if (owner?.kind === 'import') return sendManagedError(reply, importOwned(name, owner.key))
+  return null
+}
+
+/** One dbo proc as SQL Server keeps it — its spelling and text ('' = encrypted, unreadable) —
+ *  or null when it is not there. */
+async function liveProc(name: string): Promise<{ name: string; text: string } | null> {
+  const rows = (await db.raw(
+    `SELECT p.name, m.definition FROM sys.procedures p
+       JOIN sys.schemas s ON s.schema_id = p.schema_id
+       LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
+      WHERE p.name = ? AND s.name = 'dbo' AND p.is_ms_shipped = 0`,
+    [name]
+  )) as Array<{ name: string; definition: string | null }>
+  const r = rows?.[0]
+  return r ? { name: String(r.name), text: r.definition ?? '' } : null
+}
+
+const unreadable = (name: string) =>
+  new ManagedProcError(
+    409,
+    'PROC_UNREADABLE',
+    `dbo.${name} is encrypted — its text cannot be read, so it cannot be adopted into config`
+  )
+
+const staleNoConfig = () =>
+  new ManagedProcError(
+    409,
+    'PROC_STALE',
+    'This procedure was changed since you opened it — reload to see the current version',
+    { current: null }
+  )
+
+const actor = (req: FastifyRequest) => `user:${req.user?.id ?? 'unknown'}`
+const noteOf = (v: unknown, fallback: string) => {
+  const s = typeof v === 'string' ? v.trim() : ''
+  return (s || fallback).slice(0, NOTE_MAX)
+}
+
+const fieldError = (field: string, what: string) =>
+  new ManagedProcError(400, 'PROC_FIELD_INVALID', `${field} must be ${what}`, { field })
+
+/** An optional string field: absent = undefined, null kept, anything else not a string → 400. */
+function optText(body: Record<string, unknown>, field: string): string | null | undefined {
+  const v = body[field]
+  if (v === undefined || v === null) return v as undefined | null
+  if (typeof v !== 'string') throw fieldError(field, 'a string or null')
+  return v
+}
+
+/**
+ * The bases a write was opened on: `base_hash` / `base_version` (the config row; null =
+ * "there was none") and `base_live_hash` (the live text's procDeployHash as GET /:name gave it;
+ * null = "it was not live"). Absent = no check. A wrong type → 400 PROC_FIELD_INVALID.
+ */
+function readBase(body: Record<string, unknown> | undefined) {
+  const b = body ?? {}
+  const out: {
+    baseHash?: string | null
+    baseVersion?: number | null
+    baseLiveHash?: string | null
+  } = {}
+  const hash = optText(b, 'base_hash')
+  if (hash !== undefined) out.baseHash = hash
+  const live = optText(b, 'base_live_hash')
+  if (live !== undefined) out.baseLiveHash = live
+  const v = b.base_version
+  if (v === null) out.baseVersion = null
+  else if (v !== undefined) {
+    const n = typeof v === 'string' && /^\d{1,9}$/.test(v) ? Number(v) : v
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      throw fieldError('base_version', 'a positive whole number or null')
+    }
+    out.baseVersion = n
+  }
+  return out
+}
+
+/** 409 PROC_DRIFTED (`live_hash` = the live text now) when live changed since it was opened. */
+function assertLiveUnchanged(
+  baseLiveHash: string | null | undefined,
+  live: { text: string } | null
+): void {
+  if (baseLiveHash === undefined) return
+  const now = live == null ? null : procDeployHash(live.text)
+  if (now === baseLiveHash) return
+  throw new ManagedProcError(
+    409,
+    'PROC_DRIFTED',
+    "The procedure was changed in the database since you opened it — keep the database's version, or overwrite it",
+    { live_hash: now }
+  )
+}
+
+const isStampFailure = (e: unknown) =>
+  e instanceof ManagedProcError && e.code === 'DEPLOY_STAMP_FAILED'
+
+function parseVersion(v: string): number | null {
+  if (!/^\d{1,9}$/.test(v)) return null
+  const n = Number(v)
+  return n >= 1 ? n : null
+}
+
+/** The managed row's answer for the page. */
+function managedInfo(row: ManagedProcedure, live: string | null): ManagedInfo {
+  return {
+    kind: 'managed',
+    status: managedStatusOf(row, live),
+    version: row.version,
+    owner: row.owner
+  }
+}
+
+async function log(
+  req: FastifyRequest,
+  action: string,
+  name: string,
+  version: number | null,
+  note: string
+) {
+  await logActivity({
+    action,
+    user: req.user?.id,
+    collection: 'sys.procedures',
+    item: name,
+    comment: `${version != null ? `v${version} · ` : ''}${note}`.slice(0, 255),
+    req
+  })
+}
+
+/** Adopt an unmanaged live proc (its text becomes version 1) and log it. `null` base: a writer
+ *  that adopted it meanwhile makes this 409 PROC_STALE. */
+async function adoptForWrite(req: FastifyRequest, name: string, note: string) {
+  const adopted = await adoptLiveProcedure(name, {
+    userId: req.user?.id ?? null,
+    note,
+    by: actor(req),
+    baseHash: null
+  })
+  await log(req, 'procedure-adopt', name, adopted.version, note)
+  return adopted
+}
+
+/**
+ * Undo an adoption made for a write that then failed with live unchanged — otherwise the proc
+ * stays managed and promote carries this database's body to the next environment. Guarded (a
+ * writer that moved the row on keeps it). Resolves whether config no longer has the row.
+ */
+async function undoAdoption(
+  req: FastifyRequest,
+  name: string,
+  adopted: { procedure: ManagedProcedure; version: number },
+  what: 'edit' | 'drop'
+): Promise<boolean> {
+  try {
+    await putBackManaged(null, adopted.procedure.id, adopted.version)
+    if (await getManagedProcedure(name)) return false
+  } catch (err) {
+    req.log.error({ err, procedure: name }, 'could not undo the adoption made for a failed write')
+    return false
+  }
+  await log(req, 'procedure-adopt', name, adopted.version, `undone: ${what} failed`)
+  return true
+}
+
+/** A DDL that ran but was not recorded still changed live: log it before answering. */
+async function logIfStampFailed(
+  req: FastifyRequest,
+  e: unknown,
+  action: string,
+  name: string,
+  note: string
+) {
+  if (!isStampFailure(e)) return
+  const v = Number((e as ManagedProcError).extra?.version)
+  await log(req, action, name, Number.isFinite(v) && v > 0 ? v : null, `${note} (not stamped)`)
 }
 
 export async function procedureRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+  registerManagedProcReadiness()
 
-  // ── List ──────────────────────────────────────────────────────────────────
+  // ── List: live procs plus config-only ones (not deployed / dropped) ──────
   app.get('/', async (_req, reply) => {
-    const rows = (await db.raw(`
+    const [rows, owners, managed] = await Promise.all([
+      db.raw(`
       SELECT p.name, p.create_date, p.modify_date, LEN(m.definition) AS bytes,
              (SELECT COUNT(*) FROM sys.parameters pa
                WHERE pa.object_id = p.object_id AND pa.parameter_id > 0) AS param_count
       FROM sys.procedures p
       JOIN sys.sql_modules m ON m.object_id = p.object_id
       WHERE p.is_ms_shipped = 0
-      ORDER BY p.name`)) as Array<Record<string, unknown>>
-    return reply.send({
-      data: rows.map((r) => ({
-        name: r.name,
-        created: r.create_date,
-        modified: r.modify_date,
+      ORDER BY p.name`) as Promise<Array<Record<string, unknown>>>,
+      appManagedProcedures(),
+      listManagedProcedures()
+    ])
+    const liveDefs = managed.length
+      ? await liveProcedureDefinitions(managed.map((m) => m.name))
+      : new Map<string, string>()
+    const byName = new Map(managed.map((m) => [m.name.toLowerCase(), m]))
+    const info = (name: string): ManagedInfo | null => {
+      const owner = owners.get(name.toLowerCase())
+      if (owner?.kind === 'import') return { kind: 'import', key: owner.key }
+      const row = byName.get(name.toLowerCase())
+      return row ? managedInfo(row, liveDefs.get(name.toLowerCase()) ?? null) : null
+    }
+    const seen = new Set<string>()
+    const data = rows.map((r) => {
+      const name = String(r.name)
+      seen.add(name.toLowerCase())
+      return {
+        name,
+        created: r.create_date as string | null,
+        modified: r.modify_date as string | null,
         bytes: Number(r.bytes ?? 0),
-        param_count: Number(r.param_count ?? 0)
-      }))
+        param_count: Number(r.param_count ?? 0),
+        live: true,
+        managed: info(name)
+      }
     })
+    for (const m of managed) {
+      if (seen.has(m.name.toLowerCase())) continue
+      data.push({
+        name: m.name,
+        created: null,
+        modified: null,
+        bytes: 0,
+        param_count: 0,
+        live: false,
+        managed: info(m.name)
+      })
+    }
+    data.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+    return reply.send({ data, warning: config.PROCEDURE_EDIT_WARNING ?? null })
   })
 
-  // ── Read one: definition + catalog-parsed parameters ─────────────────────
+  // ── Read one: live definition + catalog-parsed parameters + config ───────
   app.get<{ Params: { name: string } }>('/:name', async (req, reply) => {
     const { name } = req.params
     if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
-    const row = (await db.raw(
-      `SELECT p.name, p.create_date, p.modify_date, m.definition
+    const [row, owner] = await Promise.all([
+      db.raw(
+        `SELECT p.name, p.create_date, p.modify_date, m.definition
        FROM sys.procedures p JOIN sys.sql_modules m ON m.object_id = p.object_id
        WHERE p.name = ? AND p.is_ms_shipped = 0`,
-      [name]
-    )) as Array<{ name: string; create_date: Date; modify_date: Date; definition: string }>
-    if (!row.length) return reply.code(404).send({ error: 'Procedure not found' })
+        [name]
+      ) as Promise<
+        Array<{ name: string; create_date: Date; modify_date: Date; definition: string | null }>
+      >,
+      procedureOwner(name)
+    ])
+    const liveRow = row[0] ?? null
+    if (!liveRow && !owner) return reply.code(404).send({ error: 'Procedure not found' })
+    const config = owner?.kind === 'managed' ? await getManagedProcedure(name) : null
+    const definition = liveRow?.definition ?? null
+    const managed: ManagedInfo | null =
+      owner?.kind === 'import'
+        ? { kind: 'import', key: owner.key }
+        : config
+          ? managedInfo(config, liveRow ? (definition ?? '') : null)
+          : null
     return reply.send({
       data: {
-        name: row[0].name,
-        created: row[0].create_date,
-        modified: row[0].modify_date,
-        definition: row[0].definition,
-        params: await procParams(name)
+        name: liveRow?.name ?? config?.name ?? owner?.name ?? name,
+        created: liveRow?.create_date ?? null,
+        modified: liveRow?.modify_date ?? null,
+        definition,
+        // What a write sends back as base_live_hash (case kept: a case-only change counts).
+        live_hash: liveRow ? procDeployHash(definition ?? '') : null,
+        params: liveRow ? await procParams(name) : [],
+        managed,
+        config: config
+          ? {
+              body: config.body,
+              body_hash: config.body_hash,
+              version: config.version,
+              deployed_hash: config.deployed_hash,
+              deployed_at: config.deployed_at,
+              deployed_by: config.deployed_by,
+              dropped_at: config.dropped_at,
+              owner: config.owner,
+              description: config.description,
+              updated_at: config.updated_at,
+              updated_by: config.updated_by
+            }
+          : null
       }
     })
   })
 
-  // ── Deploy (create or update) ────────────────────────────────────────────
-  app.put<{ Params: { name: string }; Body: { definition?: string } }>(
-    '/:name',
-    async (req, reply) => {
-      const { name } = req.params
-      const definition = String(req.body?.definition ?? '')
-      if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
-      if (!definition.trim()) return reply.code(400).send({ error: 'definition is required' })
-      const owner = await owningImport(name)
-      if (owner) return reply.code(409).send(appManagedRefusal(name, owner))
-      if (!definitionNameMatches(definition, name)) {
-        return reply.code(400).send({
-          error: `The definition must be a CREATE [OR ALTER] PROCEDURE for "${name}" — the statement's name doesn't match.`
+  // ── Save + deploy (create, edit, revive) — always through config ─────────
+  app.put<{
+    Params: { name: string }
+    Body: {
+      definition?: string
+      note?: string
+      base_hash?: string | null
+      base_version?: number | null
+      base_live_hash?: string | null
+      create?: boolean
+      owner?: string | null
+      description?: string | null
+    }
+  }>('/:name', async (req, reply) => {
+    const { name } = req.params
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const definition = typeof body.definition === 'string' ? body.definition : ''
+    if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
+    if (!definition.trim()) return reply.code(400).send({ error: 'definition is required' })
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    if (!definitionNameMatches(definition, name)) {
+      return reply.code(400).send({
+        error: `The definition must be a CREATE [OR ALTER] PROCEDURE for "${name}" — the statement's name doesn't match.`,
+        code: 'PROC_HEADER_MISMATCH'
+      })
+    }
+    try {
+      const fields = readBase(body)
+      const owner = optText(body, 'owner')
+      const description = optText(body, 'description')
+      const [current, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
+      const create = body.create === true
+      if (create && (current || live)) {
+        return reply.code(409).send({
+          error: current?.dropped_at
+            ? `${name} was dropped — restore one of its versions instead of creating it again`
+            : `A procedure named ${name} already exists`,
+          code: 'PROC_EXISTS',
+          live: !!live,
+          managed: !!current,
+          dropped: !!current?.dropped_at
         })
       }
-      const existing = (await db.raw(
-        'SELECT 1 AS x FROM sys.procedures WHERE name = ? AND is_ms_shipped = 0',
-        [name]
-      )) as unknown[]
-      try {
-        await deployProcedure(definition, { schema: 'dbo', name })
-      } catch (e) {
-        return reply.code(400).send({ error: (e as Error).message })
+      assertLiveUnchanged(fields.baseLiveHash, live)
+      let base: { baseHash?: string | null; baseVersion?: number | null } = create
+        ? { baseHash: null }
+        : { baseHash: fields.baseHash, baseVersion: fields.baseVersion }
+      let adopted: Awaited<ReturnType<typeof adoptForWrite>> | null = null
+      if (!current && live) {
+        // An edit makes a proc managed: its live text becomes version 1 first. A caller that saw
+        // a config row (any base_hash / base_version) is stale — there is none.
+        if (live.text === '') throw unreadable(name)
+        if (base.baseHash !== undefined || base.baseVersion !== undefined) throw staleNoConfig()
+        adopted = await adoptForWrite(req, live.name, NOTE_ADOPT_EDIT)
+        base = { baseHash: adopted.procedure.body_hash, baseVersion: adopted.version }
       }
-      await logActivity({
-        action: existing.length ? 'procedure-update' : 'procedure-create',
-        user: req.user?.id,
-        collection: 'sys.procedures',
-        item: name,
-        comment: `${definition.length} chars`,
-        req
+      const isNew = !current && !live
+      const action = isNew ? 'procedure-create' : 'procedure-update'
+      const note = noteOf(body.note, isNew ? NOTE_CREATE : NOTE_EDIT)
+      let saved: Awaited<ReturnType<typeof saveAndDeployManaged>>
+      try {
+        saved = await saveAndDeployManaged({
+          name,
+          body: definition,
+          note,
+          userId: req.user?.id ?? null,
+          ...(base.baseHash !== undefined ? { baseHash: base.baseHash } : {}),
+          ...(base.baseVersion !== undefined ? { baseVersion: base.baseVersion } : {}),
+          ...(owner !== undefined ? { owner } : {}),
+          ...(description !== undefined ? { description } : {}),
+          by: actor(req)
+        })
+      } catch (e) {
+        await logIfStampFailed(req, e, action, name, note)
+        // Live is unchanged unless only the stamp failed: the adoption goes too.
+        if (adopted && !isStampFailure(e)) await undoAdoption(req, name, adopted, 'edit')
+        throw e
+      }
+      await log(req, action, name, saved.version, saved.unchanged ? `${note} (unchanged)` : note)
+      return reply.send({
+        ok: true,
+        created: isNew,
+        version: saved.version,
+        unchanged: saved.unchanged,
+        deployed: saved.deployed
       })
-      return reply.send({ ok: true, created: !existing.length })
+    } catch (e) {
+      return sendManagedError(reply, e)
+    }
+  })
+
+  // ── Adopt: store the live text as a version ─────────────────────────────
+  // A managed proc is refused (409 PROC_ALREADY_MANAGED) unless `?keep_live=1` — the explicit
+  // "keep the database's version" answer to drift: the live text becomes the next version.
+  app.post<{
+    Params: { name: string }
+    Querystring: { keep_live?: string }
+    Body: { note?: string; keep_live?: boolean } | undefined
+  }>('/:name/adopt', async (req, reply) => {
+    const { name } = req.params
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    const keepLive =
+      req.query?.keep_live === '1' ||
+      req.query?.keep_live === 'true' ||
+      req.body?.keep_live === true
+    try {
+      const [current, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
+      if (current && !keepLive) {
+        return reply.code(409).send({
+          error: `${name} is already app-managed — deploy its config, or keep the database's version (keep_live=1)`,
+          code: 'PROC_ALREADY_MANAGED',
+          version: current.version
+        })
+      }
+      if (live?.text === '') throw unreadable(name)
+      const note = noteOf(req.body?.note, current ? NOTE_KEEP_LIVE : NOTE_ADOPT)
+      // Stored under the spelling SQL Server keeps; guarded on the row we read (or its absence).
+      const adopted = await adoptLiveProcedure(live?.name ?? name, {
+        userId: req.user?.id ?? null,
+        note,
+        by: actor(req),
+        baseHash: current ? current.body_hash : null
+      })
+      await log(req, 'procedure-adopt', name, adopted.version, note)
+      return reply.send({ data: { version: adopted.version, unchanged: adopted.unchanged } })
+    } catch (e) {
+      return sendManagedError(reply, e)
+    }
+  })
+
+  // ── Drop: mark dropped in config, then drop live (versions kept) ─────────
+  app.delete<{
+    Params: { name: string }
+    Querystring: { base_version?: string }
+    Body: { base_version?: number | null } | undefined
+  }>('/:name', async (req, reply) => {
+    const { name } = req.params
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    try {
+      const { baseVersion } = readBase({
+        base_version: req.body?.base_version ?? req.query?.base_version
+      })
+      const [found, live] = await Promise.all([getManagedProcedure(name), liveProc(name)])
+      if (!found && !live) return reply.code(404).send({ error: 'Procedure not found' })
+      if (baseVersion !== undefined && (found?.version ?? null) !== baseVersion) {
+        throw new ManagedProcError(
+          409,
+          'PROC_STALE',
+          'This procedure was changed since you opened it — reload to see the current version',
+          { current: found ? { body_hash: found.body_hash, version: found.version } : null }
+        )
+      }
+      let current = found
+      let adopted: Awaited<ReturnType<typeof adoptForWrite>> | null = null
+      if (!current && live) {
+        // So the drop travels with config and Undo (restore a version) works.
+        if (live.text === '') throw unreadable(name)
+        adopted = await adoptForWrite(req, live.name, NOTE_ADOPT_DROP)
+        current = adopted.procedure
+      }
+      const before = current as ManagedProcedure
+      await markManagedDropped(name, req.user?.id ?? null)
+      const result = await deployManagedProcedure(name, { by: actor(req) })
+      if (result.action === 'failed') {
+        if (result.phase === 'stamp') {
+          await log(req, 'procedure-drop', name, before.version, 'dropped (not stamped)')
+          throw new ManagedProcError(
+            500,
+            'DEPLOY_STAMP_FAILED',
+            result.reason ?? 'Dropped, but recording the drop failed',
+            { version: before.version }
+          )
+        }
+        // The database refused the drop: config must not claim it (nor keep an adoption).
+        if (adopted) await undoAdoption(req, name, adopted, 'drop')
+        else if (!before.dropped_at) {
+          try {
+            await unmarkManagedDropped(before)
+          } catch (err) {
+            req.log.error({ err, procedure: name }, 'could not put back the dropped mark')
+          }
+        }
+        const left = await getManagedProcedure(name).catch(() => before)
+        const configDropped = !!left?.dropped_at
+        throw new ManagedProcError(
+          400,
+          'DROP_FAILED',
+          `${result.reason ?? 'Drop failed'}${configDropped ? ' — config still marks it dropped, so the next deploy will drop it' : ''}`,
+          { config_dropped: configDropped }
+        )
+      }
+      await log(req, 'procedure-drop', name, before.version, result.action)
+      return reply.code(204).send()
+    } catch (e) {
+      return sendManagedError(reply, e)
+    }
+  })
+
+  // ── Versions ────────────────────────────────────────────────────────────
+  app.get<{ Params: { name: string } }>('/:name/versions', async (req, reply) => {
+    const { name } = req.params
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    return reply.send({ data: await listManagedVersions(name) })
+  })
+
+  app.get<{ Params: { name: string; version: string } }>(
+    '/:name/versions/:version',
+    async (req, reply) => {
+      const { name } = req.params
+      const refused = await refuseName(name, reply)
+      if (refused) return refused
+      const n = parseVersion(req.params.version)
+      if (n == null) return reply.code(400).send({ error: 'Invalid version' })
+      const v = await getManagedVersion(name, n)
+      if (!v)
+        return reply.code(404).send({ error: 'Version not found', code: 'PROC_VERSION_NOT_FOUND' })
+      return reply.send({
+        data: {
+          version: v.version,
+          body: v.body,
+          body_hash: v.body_hash,
+          note: v.note,
+          created_at: v.created_at,
+          created_by: v.created_by
+        }
+      })
     }
   )
 
-  // ── Drop ─────────────────────────────────────────────────────────────────
-  app.delete<{ Params: { name: string } }>('/:name', async (req, reply) => {
+  // ── Restore (Undo): save version N's body as the next version, deploy ───
+  app.post<{
+    Params: { name: string; version: string }
+    Body:
+      | {
+          base_hash?: string | null
+          base_version?: number | null
+          base_live_hash?: string | null
+          note?: string
+        }
+      | undefined
+  }>('/:name/versions/:version/restore', async (req, reply) => {
     const { name } = req.params
-    if (!NAME_RE.test(name)) return reply.code(400).send({ error: 'Invalid procedure name' })
-    const existing = (await db.raw(
-      'SELECT 1 AS x FROM sys.procedures WHERE name = ? AND is_ms_shipped = 0',
-      [name]
-    )) as unknown[]
-    if (!existing.length) return reply.code(404).send({ error: 'Procedure not found' })
-    const owner = await owningImport(name)
-    if (owner) return reply.code(409).send(appManagedRefusal(name, owner))
-    await db.raw(`DROP PROCEDURE [${name}]`)
-    await logActivity({
-      action: 'procedure-drop',
-      user: req.user?.id,
-      collection: 'sys.procedures',
-      item: name,
-      req
-    })
-    return reply.code(204).send()
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    const n = parseVersion(req.params.version)
+    if (n == null) return reply.code(400).send({ error: 'Invalid version' })
+    try {
+      const v = await getManagedVersion(name, n)
+      if (!v) {
+        return reply.code(404).send({ error: 'Version not found', code: 'PROC_VERSION_NOT_FOUND' })
+      }
+      const { baseLiveHash, ...base } = readBase(req.body as Record<string, unknown> | undefined)
+      assertLiveUnchanged(baseLiveHash, await liveProc(name))
+      const note = noteOf(req.body?.note, `Restored version ${n}`)
+      let saved: Awaited<ReturnType<typeof saveAndDeployManaged>>
+      try {
+        saved = await saveAndDeployManaged({
+          name,
+          body: v.body,
+          note,
+          userId: req.user?.id ?? null,
+          ...base,
+          by: actor(req)
+        })
+      } catch (e) {
+        await logIfStampFailed(req, e, 'procedure-restore', name, note)
+        throw e
+      }
+      await log(req, 'procedure-restore', name, saved.version, note)
+      return reply.send({
+        data: { version: saved.version, unchanged: saved.unchanged, deployed: saved.deployed }
+      })
+    } catch (e) {
+      return sendManagedError(reply, e)
+    }
+  })
+
+  // ── Deploy the config as it stands (the drift fix) ──────────────────────
+  app.post<{ Params: { name: string } }>('/:name/deploy', async (req, reply) => {
+    const { name } = req.params
+    const refused = await refuseName(name, reply)
+    if (refused) return refused
+    try {
+      const result: DeployResult = await deployManagedProcedure(name, { by: actor(req) })
+      if (result.action === 'failed') {
+        const stamp = result.phase === 'stamp'
+        if (stamp) {
+          // The DDL ran: live changed. reason = "<action>, but recording … failed".
+          const did = /^(created|altered|dropped|unchanged|absent)\b/.exec(result.reason ?? '')
+          const row = await getManagedProcedure(name).catch(() => null)
+          await log(
+            req,
+            'procedure-deploy-config',
+            name,
+            row?.version ?? null,
+            `${did?.[1] ?? 'deployed'} (not stamped)`
+          )
+        }
+        return reply.code(stamp ? 500 : 400).send({
+          error: result.reason ?? 'Deploy failed',
+          code: stamp ? 'DEPLOY_STAMP_FAILED' : 'DEPLOY_FAILED',
+          data: result
+        })
+      }
+      const row = await getManagedProcedure(name)
+      await log(req, 'procedure-deploy-config', name, row?.version ?? null, result.action)
+      return reply.send({ data: result })
+    } catch (e) {
+      return sendManagedError(reply, e)
+    }
   })
 
   // ── AI review ────────────────────────────────────────────────────────────

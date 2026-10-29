@@ -449,6 +449,7 @@
           <a class="docs-nav-item" data-section="flow-versioning" href="#flow-versioning">Flow Versioning</a>
           <a class="docs-nav-item" data-section="environment-sync" href="#environment-sync">Environment Sync</a>
           <a class="docs-nav-item" data-section="live-schema-migrations" href="#live-schema-migrations">Live Schema Migrations</a>
+          <a class="docs-nav-item" data-section="managed-procedures" href="#managed-procedures">App-managed procedures</a>
           <a class="docs-nav-item" data-section="extension-marketplace" href="#extension-marketplace">Extension Marketplace</a>
           <a class="docs-nav-item" data-section="playground" href="#playground">Playground</a>
           <a class="docs-nav-item" data-section="revision-diff" href="#revision-diff">Side-by-Side Revision Diff</a>
@@ -15127,6 +15128,81 @@ POST /api/data-model/collections/products/fields/price/change-type
           <!-- /SYNC:live-schema-migrations -->
         </div>
 
+        <!-- APP-MANAGED PROCEDURES -->
+        <div class="doc-section" id="s-managed-procedures" data-toc='[{"id":"managed-procedures","label":"App-managed procedures"},{"id":"managed-procedures-kinds","label":"Two kinds, one writer"},{"id":"managed-procedures-page","label":"What you can do on the Procedures page"},{"id":"managed-procedures-deploy","label":"How the database is brought in line"},{"id":"managed-procedures-writers","label":"Other writers respect the owner"},{"id":"managed-procedures-chips","label":"Status chips"},{"id":"managed-procedures-api","label":"API"}]'>
+          <!-- SYNC:managed-procedures -->
+          <h1 class="doc-h1" id="managed-procedures">App-managed procedures</h1>
+          <p class="doc-p">The stored procedures Nivaro deploys have exactly one writer each, and that writer is the app. A procedure that belongs to an import definition is written by that definition (its stored procedure body). Every other procedure is written through config: its full text and every earlier version live in two configuration tables, and the Procedures page (Developer → Procedures, admins only, SQL Server only) saves there before it changes the database. Because the text is configuration, it travels with the rest of config when environments are promoted, instead of living in a folder of files that has to be deployed separately.</p>
+          <h2 class="doc-h2" id="managed-procedures-kinds">Two kinds, one writer</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Kind</th><th>Where the text lives</th><th>Written by</th></tr></thead>
+            <tbody><tr><tr><td>Import-owned</td><td>The import definition’s stored procedure body (<code class="doc-code">nivaro_import_definitions.procedure_body</code>).</td><td>The import definition (its editor and Deploy). The Procedures page shows it read-only with a link to the definition.</td></tr>
+              <tr><td>Managed</td><td><code class="doc-code">nivaro_managed_procedures</code> (current body, version number, owner, description, dropped mark) and <code class="doc-code">nivaro_managed_procedure_versions</code> (every saved body with its note, author and time).</td><td>The Procedures page, SQL checks fixes and database tuning, all through one save-and-deploy path. A save stores the version first, deploys it second, and puts config back when the database refuses it.</td></tr>
+              <tr><td>Not managed</td><td>Only in the database.</td><td>Nobody yet. A procedure becomes managed the first time you adopt, edit or drop it on the Procedures page. Procedures you never touch stay as they are.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">If an import definition and a managed row both name the same procedure, the import wins and the managed row is flagged as a conflict. Two import definitions naming one procedure are also a conflict: nothing is deployed for that name until one of them lets go.</p>
+          <h2 class="doc-h2" id="managed-procedures-page">What you can do on the Procedures page</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Action</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>New procedure</td><td>Saves the text as version 1 in config, then deploys it. A name that already exists (live or in config, dropped ones included) is refused and offers to open the existing one.</td></tr>
+              <tr><td>Edit and Deploy</td><td>Saves the text as the next version with an optional note, then deploys it. An unchanged body saves nothing; changing only the owner or description updates them in place without a new version. Editing an unmanaged procedure adopts it first, and the page says so before it does.</td></tr>
+              <tr><td>Adopt</td><td>Stores the procedure as it is in the database as a version, without deploying anything. From then on the procedure is managed.</td></tr>
+              <tr><td>Keep the database’s version</td><td>For a managed procedure whose database text has drifted from config: stores the live text as the next version and marks it deployed. Use it when someone fixed the procedure directly in the database and that change is the right one.</td></tr>
+              <tr><td>Deploy version</td><td>Deploys config as it stands. This is the fix for “drifted”, “not deployed” and “drop pending”.</td></tr>
+              <tr><td>History and Restore</td><td>Lists every version with its note, author and time, shows a diff against the current one, and Restore saves an older body as the next version and deploys it. A dropped procedure comes back the same way.</td></tr>
+              <tr><td>Drop</td><td>Marks the procedure dropped in config (the row and its versions are kept) and drops it in the database. The drop travels to other environments like any other change.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Two guards stop you overwriting someone else’s work. A save carries the version you started from, so when someone saved a newer one the page says so and keeps your edit for you to compare (409 <code class="doc-code">PROC_STALE</code>). It also carries a fingerprint of the live definition, so when the database was changed behind config’s back you choose between keeping the database’s version and overwriting it with yours (409 <code class="doc-code">PROC_DRIFTED</code>).</p>
+          <h2 class="doc-h2" id="managed-procedures-deploy">How the database is brought in line</h2>
+          <p class="doc-p">A deploy never trusts its own bookkeeping. It compares config’s body with the live definition (header folded, whitespace collapsed, letter case kept) and only runs CREATE OR ALTER when they differ. The deployed hash, time and author on the row are written after a deploy as a record of what this database got, and are corrected when the live text already matches. A dropped row drops the live procedure if it exists and leaves it alone if it does not.</p>
+          <ul class="doc-ul">
+            <li>Changes made on the Procedures page deploy at once on that instance.</li>
+            <li>Other environments get the text with the rest of config: promote copies both tables, and the target keeps its own deployed hash, time and author, because those describe that database. A nightly promote to staging therefore brings procedure changes and drops along with it.</li>
+            <li>The deploy step on the target (the app-managed deploy script, <code class="doc-code">pnpm --filter @nivaro/api run proc:deploy-app-managed</code>) deploys every managed row and every import body by comparing with the live definition, drops included. It is a dry run until <code class="doc-code">--execute</code>, <code class="doc-code">--only a,b</code> limits it, and it reports deployed, already current, skipped and failed procedures.</li>
+            <li>The readiness check <code class="doc-code">managed-proc-drift</code> warns when a managed or import-owned procedure differs from its config, is not deployed, or is in conflict. It skips on a database with no managed rows.</li>
+            <li>Rolling out to staging needs the release that carries migration 507 first, then the nightly promote.</li>
+          </ul>
+          <h2 class="doc-h2" id="managed-procedures-writers">Other writers respect the owner</h2>
+          <ul class="doc-ul">
+            <li>SQL checks: a fix on a managed procedure is built from the config body and saved as a version, then deployed (see Applying a fix under SQL checks). Reverting it saves the previous body as the next version. A dropped or conflicting procedure is refused.</li>
+            <li>Database tuning: a procedure rewrite on a managed procedure saves a version and deploys through config. An import-owned procedure is refused (change it in the import definition), and so is a managed one whose config no longer matches the database. Observers no longer propose rewrites they cannot apply.</li>
+            <li>Import definitions: saving, restoring or deploying a definition whose body defines a procedure that is app-managed is refused (409 <code class="doc-code">MANAGED_PROCEDURE</code>). Give the import its own procedure, or drop the managed one first.</li>
+            <li>Collection Designer: when it would generate an import procedure whose name is already owned, it skips the procedure step and says so.</li>
+            <li>Scripts: the deploy, adoption, export and sync scripts of a deployment’s extension ask the same owner answer and skip, or reroute to config, any name they do not own. <code class="doc-code">proc:adopt --from files</code> reads a folder of procedure files once and stores each one that matches the live database as version 1 (dry run by default; dev only). <code class="doc-code">proc:dump</code> now exports FROM config for review and diffs; it never deploys, and writes files only with <code class="doc-code">--execute</code>.</li>
+          </ul>
+          <h2 class="doc-h2" id="managed-procedures-chips">Status chips</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Chip</th><th>Meaning</th><th>What to do</th></tr></thead>
+            <tbody><tr><tr><td>(none)</td><td>Managed, and the database matches config.</td><td>Nothing.</td></tr>
+              <tr><td>drifted</td><td>The database differs from the saved version.</td><td>Deploy version, or Keep the database’s version.</td></tr>
+              <tr><td>not deployed</td><td>Config has the procedure and the database does not.</td><td>Deploy version.</td></tr>
+              <tr><td>drop pending</td><td>Config marks it dropped, but it still exists in the database.</td><td>Drop it here now (deploy), or Restore a version.</td></tr>
+              <tr><td>dropped</td><td>Dropped in config and gone from the database.</td><td>Nothing, or Restore a version to bring it back.</td></tr>
+              <tr><td>conflict</td><td>An import definition (or two) also owns this name.</td><td>Give the import its own procedure, or drop the managed row.</td></tr>
+              <tr><td>import</td><td>Owned by an import definition.</td><td>Edit it in the import definition.</td></tr>
+              <tr><td>not managed</td><td>Only in the database; nobody owns it yet.</td><td>Adopt it, or leave it alone.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Where a nightly promotion replaces procedure config (staging), set <code class="doc-code">PROCEDURE_EDIT_WARNING</code> (for example "Procedures here are replaced every night from development. Make lasting changes on development.") to show a banner at the top of the Procedures page. Unset = no banner.</div>
+          <h2 class="doc-h2" id="managed-procedures-api">API</h2>
+          <p class="doc-p">All routes are under <code class="doc-code">/api/procedures</code>, admin only. Errors come back as <code class="doc-code">{ error, code }</code>.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Method and path</th><th>Body / query</th><th>Answer and errors</th></tr></thead>
+            <tbody><tr><tr><td>GET /</td><td>—</td><td>Live procedures plus config-only managed rows (<code class="doc-code">live: false</code>), each with <code class="doc-code">managed</code>: <code class="doc-code">{ kind: "import", key }</code>, <code class="doc-code">{ kind: "managed", status, version, owner }</code> or null. Also <code class="doc-code">warning</code>: the <code class="doc-code">PROCEDURE_EDIT_WARNING</code> text or null.</td></tr>
+              <tr><td>GET /:name</td><td>—</td><td>The live definition, <code class="doc-code">live_hash</code>, parameters, <code class="doc-code">managed</code> and <code class="doc-code">config</code> (body, body_hash, version, deployed_*, dropped_at, owner, description). 404 only when neither the database nor config has it.</td></tr>
+              <tr><td>PUT /:name</td><td><code class="doc-code">definition</code>, <code class="doc-code">note?</code>, <code class="doc-code">create?</code>, <code class="doc-code">owner?</code>, <code class="doc-code">description?</code>, <code class="doc-code">base_hash?</code>, <code class="doc-code">base_version?</code>, <code class="doc-code">base_live_hash?</code></td><td><code class="doc-code">{ ok, created, version, unchanged, deployed }</code>. 400 <code class="doc-code">DEPLOY_FAILED</code> (config put back); 409 <code class="doc-code">APP_MANAGED</code>, <code class="doc-code">PROC_EXISTS</code>, <code class="doc-code">PROC_STALE</code>, <code class="doc-code">PROC_DRIFTED</code>, <code class="doc-code">PROC_UNREADABLE</code>; 500 <code class="doc-code">DEPLOY_STAMP_FAILED</code> (deployed, config kept).</td></tr>
+              <tr><td>POST /:name/adopt</td><td><code class="doc-code">note?</code>, <code class="doc-code">keep_live?</code> (or <code class="doc-code">?keep_live=1</code>)</td><td><code class="doc-code">{ data: { version, unchanged } }</code>. 409 <code class="doc-code">APP_MANAGED</code>, <code class="doc-code">PROC_ALREADY_MANAGED</code> (without keep_live), <code class="doc-code">PROC_UNREADABLE</code>; 404 <code class="doc-code">PROC_NOT_FOUND</code>.</td></tr>
+              <tr><td>DELETE /:name</td><td><code class="doc-code">base_version?</code> (body or query)</td><td>204. Adopts an unmanaged procedure first, marks it dropped, drops it. 400 <code class="doc-code">DROP_FAILED</code> (with <code class="doc-code">config_dropped</code>); 409 <code class="doc-code">APP_MANAGED</code>, <code class="doc-code">PROC_STALE</code>.</td></tr>
+              <tr><td>GET /:name/versions</td><td>—</td><td><code class="doc-code">{ data: [{ version, body_hash, note, created_at, created_by }] }</code>, newest first.</td></tr>
+              <tr><td>GET /:name/versions/:version</td><td>—</td><td>One version with its <code class="doc-code">body</code>. 404 <code class="doc-code">PROC_VERSION_NOT_FOUND</code>.</td></tr>
+              <tr><td>POST /:name/versions/:version/restore</td><td><code class="doc-code">note?</code>, <code class="doc-code">base_hash?</code>, <code class="doc-code">base_version?</code>, <code class="doc-code">base_live_hash?</code></td><td><code class="doc-code">{ data: { version, unchanged, deployed } }</code>. Saves that body as the next version, then deploys it; revives a dropped procedure.</td></tr>
+              <tr><td>POST /:name/deploy</td><td>—</td><td><code class="doc-code">{ data: DeployResult }</code>. Deploys config as it stands. 404 <code class="doc-code">PROC_NOT_FOUND</code> with no config row.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">The AI review, AI fix, AI generate and execute routes under the same prefix are unchanged.</p>
+          <div class="doc-note doc-warn">Do not change a managed procedure directly in the database or from a deploy script. The next deploy puts config’s version back, and until then the page shows it as drifted. Make the change on the Procedures page, or choose Keep the database’s version to accept it.</div>
+          <div class="doc-note">Migration 507 adds the two tables (empty) to every database. Both are configuration: they are included in config snapshots and promote, while the per-database deployed hash, time and author are not restored from one.</div>
+          <!-- /SYNC:managed-procedures -->
+        </div>
+
         <!-- EXTENSION MARKETPLACE -->
         <div class="doc-section" id="s-extension-marketplace" data-toc='[{"id":"extension-marketplace","label":"Extension Marketplace"},{"id":"extension-marketplace-configuration","label":"Configuration"},{"id":"extension-marketplace-registry-format","label":"Registry Format"},{"id":"extension-marketplace-installing","label":"Installing Extensions"},{"id":"extension-marketplace-security","label":"Security"},{"id":"extension-marketplace-management","label":"Management"}]'>
           <!-- SYNC:extension-marketplace -->
@@ -18958,6 +19034,7 @@ node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry
             <li>A drop is never proposed for a unique, primary-key or foreign-key-backing index, anything that is not nonclustered, an index named anywhere in a module definition (an index hint fails with error 308 once the index is gone), or an index this ledger created in the last 60 days.</li>
             <li>The temp-table guard transformer is never applied to a stored-procedure body: a guard inside a callee would drop the caller’s same-named #temp table.</li>
           </ul>
+          <div class="doc-note">Procedure rewrites and app-managed procedures: a managed procedure (see App-managed procedures) is rewritten through config, so Apply and Roll back each save a version (labelled Database tuning #id) and deploy it; the change is refused as stale when config no longer matches the database. A procedure owned by an import definition is never rewritten here (change its body in the import definition), and the nightly observer stops proposing rewrites for those and for procedures dropped in config.</div>
           <h2 class="doc-h2" id="db-tuning-proofs">How each proposal is proven</h2>
           <p class="doc-p">Every candidate is proven by the method its kind allows before it is listed. A passed proof lists it as Proposed; a failed one lists it under Rejected by proof with the proof kept, so the reason is visible. Proofs never change a real object; the twin and hypothetical index are temporary.</p>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -19106,6 +19183,7 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
             <li>An import definition whose stored body was identical to the procedure gets the new body too (with a version snapshot). A finding on a stored body that differs from the deployed procedure only changes the stored body; deploy it from the import definition.</li>
             <li>Every apply, automatic put-back and revert is a “Procedure changed” row on the Fixes tab with the diff; Revert (two clicks) restores the previous definition, and is refused when the procedure changed again after the fix. When an automatic put-back itself failed, the row offers Restore previous version. Import definition bodies that were synced are put back only if nobody edited them since, with their deployed hash and time.</li>
           </ul>
+          <div class="doc-note">App-managed procedures: when the procedure is app-managed (see App-managed procedures), the fix is built from the saved config body, not the live text, and Apply saves it as the next version and deploys it through config. Revert saves the previous body as another version. A procedure that was dropped in config, or that an import definition owns, is refused for a managed fix; an import-owned procedure keeps the import path described above. Procedures nobody has adopted are changed as before and are not adopted by a fix.</div>
           <div class="doc-note doc-warn">If your deployment keeps a procedure’s source elsewhere (a repository or deploy script), update it there too — otherwise the next deploy puts the old version back.</div>
           <h2 class="doc-h2" id="sql-checks-fixes">Logging a fix from a script</h2>
           <p class="doc-p">A script that repairs data (removes copies, adds a guard index) logs what it did so the page can show it next to the findings: insert into nivaro_sql_check_fixes directly, or POST /api/sql-checks/fixes as an administrator (an admin’s API key works).</p>

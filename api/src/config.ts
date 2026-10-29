@@ -155,7 +155,12 @@ const schema = z.object({
   // panel where promote:config replaces payload templates nightly (staging:
   // "Payload templates here are replaced every night from Development. Make
   // lasting changes on Development.").
-  PAYLOAD_EDIT_WARNING: z.string().optional()
+  PAYLOAD_EDIT_WARNING: z.string().optional(),
+
+  // Shown as a banner on the Procedures page where promote:config replaces app-managed
+  // procedures nightly (staging: "Procedures here are replaced every night from development.
+  // Make lasting changes on development.").
+  PROCEDURE_EDIT_WARNING: z.string().optional()
 })
 
 const parsed = schema.safeParse(process.env)

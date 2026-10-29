@@ -55,6 +55,10 @@ export const dbTuning: DocSection = {
         'The temp-table guard transformer is never applied to a stored-procedure body: a guard inside a callee would drop the caller’s same-named #temp table.'
       ]
     },
+    {
+      type: 'note',
+      text: 'Procedure rewrites and app-managed procedures: a managed procedure (see App-managed procedures) is rewritten through config, so Apply and Roll back each save a version (labelled Database tuning #id) and deploy it; the change is refused as stale when config no longer matches the database. A procedure owned by an import definition is never rewritten here (change its body in the import definition), and the nightly observer stops proposing rewrites for those and for procedures dropped in config.'
+    },
     { type: 'h2', id: 'db-tuning-proofs', text: 'How each proposal is proven' },
     {
       type: 'p',

@@ -67,6 +67,23 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 vi.mock('../../../db/dialect.js', () => ({ isMssql: () => true }))
+/** The owner answer and the managed config store (app-managed procedures). */
+const mp: {
+  owner: Record<string, unknown> | null
+  row: Record<string, unknown> | null
+  save: ReturnType<typeof vi.fn>
+} = { owner: null, row: null, save: vi.fn() }
+vi.mock('../../../services/managed-procedures/owners.js', () => ({
+  procedureOwner: vi.fn(async () => mp.owner)
+}))
+vi.mock('../../../services/managed-procedures/store.js', async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  getManagedProcedure: vi.fn(async () => mp.row)
+}))
+vi.mock('../../../services/managed-procedures/deploy.js', () => ({
+  saveAndDeployManaged: (...a: unknown[]) => mp.save(...a)
+}))
+
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../services/run-long.js', () => ({
   withLongConnection: async (fn: (c: unknown) => Promise<unknown>) => {
@@ -119,6 +136,8 @@ vi.mock('../../../services/sql-checks/run.js', async (orig) => {
   }
 })
 
+import { procBodyHash } from '../../../services/managed-procedures/normalize.js'
+import { ManagedProcError } from '../../../services/managed-procedures/store.js'
 import {
   definitionNameMatches,
   deployProcedure,
@@ -421,6 +440,9 @@ function reset() {
   updateCount.n = 1
   dupesRow.value = undefined
   importRows.byKey = {}
+  mp.owner = null
+  mp.row = null
+  mp.save = vi.fn()
   findingRow.value = {
     id: 5,
     check_key: 'merge-null-key',
@@ -731,5 +753,203 @@ describe('reverting a fix', () => {
     expect(imp[0].row).toMatchObject({ procedure_body: 'OLD-A', procedure_hash: 'h-a' })
     expect(imp[0].row.procedure_deployed_at).toEqual(new Date('2026-10-01T00:00:00.000Z'))
     expect(imp[0].where).toContainEqual(['procedure_body', synced])
+  })
+})
+
+// ─── app-managed procedures: the fix goes through config ────────────────────
+
+describe('a fix to an app-managed procedure', () => {
+  beforeEach(reset)
+  const MANAGED_NOTE =
+    'This procedure is app-managed: the fix is saved as a new version in config and deployed from there.'
+  // config holds the body (CREATE OR ALTER form); the live text differs (never read)
+  const CONFIG = `${toCreateOrAlter(BAD)}\n-- config copy`
+  const managed = () => {
+    mp.owner = { kind: 'managed', id: 4, name: 'import_invoices', dropped: false }
+    mp.row = {
+      id: 4,
+      name: 'import_invoices',
+      body: CONFIG,
+      body_hash: procBodyHash(CONFIG),
+      version: 3,
+      dropped_at: null
+    }
+  }
+
+  it('is proposed from the config body and applied through config, never by a raw ALTER', async () => {
+    managed()
+    live.defs = [`${BAD} -- live differs`]
+    const p = await proposalFor(5)
+    expect(p.target.kind).toBe('managed_procedure')
+    expect(p.deploys).toBe(true)
+    expect(p.note).toBe(MANAGED_NOTE)
+    expect(p.current_hash).toBe(sha256(CONFIG))
+    mp.save.mockResolvedValue({ version: 4, unchanged: false, deployed: { action: 'altered' } })
+    const out = await applyFix({
+      findingId: 5,
+      newDefinitionHash: p.new_definition_hash as string,
+      confirmRisky: false,
+      who
+    })
+    expect(out).toMatchObject({ applied: true, rolled_back: false, deployed: true })
+    expect(mp.save).toHaveBeenCalledTimes(1)
+    const arg = mp.save.mock.calls[0][0] as Record<string, unknown>
+    expect(arg).toMatchObject({
+      name: 'import_invoices',
+      note: 'SQL checks fix (finding #5)',
+      baseHash: procBodyHash(CONFIG),
+      userId: 'u-1',
+      by: 'user:u-1'
+    })
+    expect(String(arg.body)).toContain('(s.po = t.po OR (s.po IS NULL AND t.po IS NULL))')
+    expect(sha256(String(arg.body))).toBe(p.new_definition_hash)
+    // no lock, no raw deploy: only the rolled-back compile ran
+    expect(deployed).toHaveLength(0)
+    expect(batches.some((b) => /sp_getapplock/.test(b))).toBe(false)
+    const detail = JSON.parse(
+      String(inserted.find((i) => i.table === 'nivaro_sql_check_fixes')?.row.detail)
+    )
+    expect(detail).toMatchObject({
+      kind: 'managed_procedure',
+      applied: true,
+      deployed: true,
+      previous_definition: CONFIG,
+      managed_version: 4,
+      applied_definition_hash: procBodyHash(String(arg.body))
+    })
+    expect(updated.find((u) => u.table === 'nivaro_sql_check_findings')?.row).toMatchObject({
+      status: 'resolved'
+    })
+  })
+
+  it('a stale config body on apply is 409 SQL_CHECK_FIX_STALE and nothing is recorded', async () => {
+    managed()
+    const p = await proposalFor(5)
+    mp.save.mockRejectedValue(new ManagedProcError(409, 'PROC_STALE', 'changed', { current: null }))
+    await expect(
+      applyFix({
+        findingId: 5,
+        newDefinitionHash: p.new_definition_hash as string,
+        confirmRisky: false,
+        who
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'SQL_CHECK_FIX_STALE' })
+    expect(inserted.filter((i) => i.table === 'nivaro_sql_check_fixes')).toHaveLength(0)
+    expect(deployed).toHaveLength(0)
+  })
+
+  it('a deploy the database refuses is recorded as failed and answered 422', async () => {
+    managed()
+    const p = await proposalFor(5)
+    mp.save.mockRejectedValue(new ManagedProcError(400, 'DEPLOY_FAILED', 'Invalid column name'))
+    await expect(
+      applyFix({
+        findingId: 5,
+        newDefinitionHash: p.new_definition_hash as string,
+        confirmRisky: false,
+        who
+      })
+    ).rejects.toMatchObject({ status: 422 })
+    const detail = JSON.parse(
+      String(inserted.find((i) => i.table === 'nivaro_sql_check_fixes')?.row.detail)
+    )
+    expect(detail).toMatchObject({ applied: false, error: 'Invalid column name' })
+    expect(updated.find((u) => u.table === 'nivaro_sql_check_findings')).toBeUndefined()
+  })
+
+  it('a procedure marked dropped in config is refused (the deploy drops it)', async () => {
+    managed()
+    mp.owner = { kind: 'managed', id: 4, name: 'import_invoices', dropped: true }
+    await expect(proposalFor(5)).rejects.toMatchObject({ status: 409 })
+    expect(mp.save).not.toHaveBeenCalled()
+  })
+
+  it('an import-owned procedure finding is refused (no raw ALTER over the import definition)', async () => {
+    mp.owner = { kind: 'import', key: 'invoices', name: 'import_invoices' }
+    live.defs = [BAD]
+    await expect(proposalFor(5)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('invoices')
+    })
+    await expect(
+      applyFix({ findingId: 5, newDefinitionHash: 'x', confirmRisky: false, who })
+    ).rejects.toMatchObject({ status: 409 })
+    expect(deployed).toEqual([])
+    expect(mp.save).not.toHaveBeenCalled()
+  })
+
+  const appliedBody = 'CREATE OR ALTER PROCEDURE p AS SELECT 2'
+  const managedDetail = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      source: 'sql-checks-page',
+      applied: true,
+      deployed: true,
+      kind: 'managed_procedure',
+      finding_id: 5,
+      object: { type: 'procedure', schema: 'dbo', name: 'p', ref: null },
+      managed_procedure: 'p',
+      previous_definition: 'CREATE OR ALTER PROCEDURE p AS SELECT 1',
+      applied_definition_hash: procBodyHash(appliedBody),
+      ...extra
+    })
+
+  it('revert of a managed fix saves the previous body as a new version and deploys it', async () => {
+    findingRow.value = { id: 8, target_object: 'dbo.p', detail: managedDetail() }
+    mp.save.mockResolvedValue({ version: 5, unchanged: false, deployed: { action: 'altered' } })
+    await expect(revertFix(8, who)).resolves.toMatchObject({ reverted: true })
+    expect(mp.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'p',
+        body: 'CREATE OR ALTER PROCEDURE p AS SELECT 1',
+        baseHash: procBodyHash(appliedBody),
+        note: 'Reverted SQL checks fix #8',
+        userId: 'u-1'
+      })
+    )
+    expect(deployed).toHaveLength(0)
+    expect(batches).toHaveLength(0)
+    const fixRow = updated.find((u) => u.table === 'nivaro_sql_check_fixes')
+    expect(JSON.parse(String(fixRow?.row.detail))).toMatchObject({ reverted: true })
+  })
+
+  it('a live fix to a procedure adopted into config since is not reverted by a raw ALTER', async () => {
+    mp.owner = { kind: 'managed', id: 4, name: 'p', dropped: false }
+    findingRow.value = {
+      id: 9,
+      target_object: 'dbo.p',
+      detail: managedDetail({
+        kind: 'module',
+        managed_procedure: undefined,
+        applied_definition_hash: sha256(appliedBody)
+      })
+    }
+    lockedReads.defs = [appliedBody, 'x']
+    await expect(revertFix(9, who)).rejects.toMatchObject({
+      status: 409,
+      code: 'MANAGED_PROCEDURE'
+    })
+    expect(deployed).toHaveLength(0)
+    expect(mp.save).not.toHaveBeenCalled()
+  })
+
+  it('revert of a managed fix never revives a procedure dropped in config', async () => {
+    mp.owner = { kind: 'managed', id: 4, name: 'p', dropped: true }
+    findingRow.value = { id: 8, target_object: 'dbo.p', detail: managedDetail() }
+    mp.save.mockResolvedValue({ version: 5, unchanged: false, deployed: { action: 'created' } })
+    await expect(revertFix(8, who)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining(
+        'marked dropped in app config — restore it on the Procedures page'
+      )
+    })
+    expect(mp.save).not.toHaveBeenCalled()
+    expect(updated.find((u) => u.table === 'nivaro_sql_check_fixes')).toBeUndefined()
+  })
+
+  it('revert of a managed fix whose config moved on is 409 and changes nothing', async () => {
+    findingRow.value = { id: 8, target_object: 'dbo.p', detail: managedDetail() }
+    mp.save.mockRejectedValue(new ManagedProcError(409, 'PROC_STALE', 'changed', { current: null }))
+    await expect(revertFix(8, who)).rejects.toMatchObject({ status: 409 })
+    expect(updated.find((u) => u.table === 'nivaro_sql_check_fixes')).toBeUndefined()
   })
 })

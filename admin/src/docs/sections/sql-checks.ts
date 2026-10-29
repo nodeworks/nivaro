@@ -105,6 +105,10 @@ export const sqlChecksDocs: DocSection = {
       ]
     },
     {
+      type: 'note',
+      text: 'App-managed procedures: when the procedure is app-managed (see App-managed procedures), the fix is built from the saved config body, not the live text, and Apply saves it as the next version and deploys it through config. Revert saves the previous body as another version. A procedure that was dropped in config, or that an import definition owns, is refused for a managed fix; an import-owned procedure keeps the import path described above. Procedures nobody has adopted are changed as before and are not adopted by a fix.'
+    },
+    {
       type: 'warn',
       text: 'If your deployment keeps a procedure’s source elsewhere (a repository or deploy script), update it there too — otherwise the next deploy puts the old version back.'
     },

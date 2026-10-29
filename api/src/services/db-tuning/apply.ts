@@ -5,6 +5,11 @@ import { logActivity } from '../activity.js'
 import { clearMetadataCache } from '../collections.js'
 import { bustDefinitionCache } from '../definition-cache.js'
 import { startJobRun } from '../job-runs.js'
+import { logManagedProcWrite } from '../managed-procedures/activity.js'
+import { saveAndDeployManaged } from '../managed-procedures/deploy.js'
+import { sameDeployedBody } from '../managed-procedures/normalize.js'
+import { type ProcOwner, procedureOwner } from '../managed-procedures/owners.js'
+import { getManagedProcedure, ManagedProcError } from '../managed-procedures/store.js'
 import { bustFreshnessInference } from '../query-freshness.js'
 import { isReplicatedArticle, isReplicatedProcedure } from '../replication.js'
 import {
@@ -32,6 +37,10 @@ import { captureBaseline } from './watch.js'
  * proposal row carries apply/undo (built from catalog names by its observer), and every name in
  * them is parsed into a fixed shape and re-checked against sys.* before it runs. SQL is never
  * executed as stored: an index statement runs as the canonical rendering of what was parsed.
+ *
+ * A procedure app config owns has one writer, its config: a rewrite of an app-managed procedure
+ * (a `nivaro_managed_procedures` row) is saved as a new version and deployed from config; a
+ * procedure an import definition owns is never rewritten here (change it on the definition).
  */
 
 export class TuningRefusal extends Error {
@@ -666,6 +675,31 @@ function addRollupColumn(t: Knex.AlterTableBuilder, field: string, type: string)
 }
 
 /**
+ * The config owner a procedure rewrite must go through, or null for a procedure config does not
+ * own. Refuses (before any write) one an import definition owns — its body lives on the
+ * definition, and a rewrite here would be a second writer — and one marked dropped in config.
+ */
+export async function procWriteOwner(
+  proc: string
+): Promise<Extract<ProcOwner, { kind: 'managed' }> | null> {
+  const owner = await procedureOwner(proc)
+  if (!owner) return null
+  if (owner.kind === 'import')
+    throw new TuningRefusal(
+      'TUNING_NOT_APPLICABLE',
+      `${owner.name} is owned by import definition "${owner.key}" — change it there`
+    )
+  if (owner.dropped)
+    throw new TuningRefusal(
+      'TUNING_NOT_APPLICABLE',
+      `${owner.name} is marked dropped in app config — the next deploy drops it`
+    )
+  return owner
+}
+
+const tuningActor = (userId: string | null) => (userId ? `user:${userId}` : 'db-tuning')
+
+/**
  * Runs one spec; returns a one-line outcome. Every refusal (TuningRefusal) comes before the
  * first write; `ctx.began` fires immediately before that first write, so a caller knows
  * whether anything may need undoing.
@@ -676,6 +710,8 @@ export async function executeSpec(
     userId: string | null
     progress?: (blob: Record<string, unknown>) => void
     began?: () => void
+    /** The version note an app-managed procedure is saved with (`Database tuning #<id> apply`). */
+    label?: string
   }
 ): Promise<string> {
   switch (spec.type) {
@@ -704,8 +740,10 @@ export async function executeSpec(
       // the header must name this procedure; it becomes CREATE OR ALTER PROCEDURE [dbo].[proc]
       const sql = renameProcHeader(spec.body, spec.proc, spec.proc)
       if (!sql) throw invalid(`the body is not a CREATE/ALTER PROCEDURE of ${spec.proc}`)
-      if ((await procedureBody(spec.proc)) == null)
-        throw invalid(`procedure ${spec.proc} does not exist`)
+      const owner = await procWriteOwner(spec.proc)
+      const liveBody = await procedureBody(spec.proc)
+      if (liveBody == null) throw invalid(`procedure ${spec.proc} does not exist`)
+      if (owner) return saveManagedRewrite(owner.name, sql, liveBody, spec.hash, ctx)
       ctx.began?.()
       await runLongSql(sql)
       return `CREATE OR ALTER PROCEDURE [dbo].[${spec.proc}] (body ${spec.hash.slice(0, 8)})`
@@ -769,6 +807,69 @@ export async function executeSpec(
   }
 }
 
+/** The managed row when its config body is what the database runs; else TUNING_STALE. */
+async function managedRowInStep(name: string, liveBody: string) {
+  const row = await getManagedProcedure(name)
+  if (!row || row.dropped_at != null || !sameDeployedBody(row.body, liveBody))
+    throw new TuningRefusal(
+      'TUNING_STALE',
+      `${name} is app-managed and its config body is not what the database runs — deploy or adopt it on the Procedures page first`
+    )
+  return row
+}
+
+/**
+ * A rewrite of an app-managed procedure: saved as the next version and deployed from config. The
+ * config body must be what the database runs (the proof and the live checks were made against
+ * live) — otherwise config holds a change of its own and this is stale. `began` fires only once
+ * the DDL may have run: every refusal saveAndDeployManaged answers leaves config and live as they
+ * were (a refused DDL puts the save back), so no undo is due for them — an undo would save the
+ * old body over another writer's version.
+ */
+async function saveManagedRewrite(
+  name: string,
+  sql: string,
+  liveBody: string,
+  hash: string,
+  ctx: { userId: string | null; began?: () => void; label?: string }
+): Promise<string> {
+  const row = await managedRowInStep(name, liveBody)
+  const note = ctx.label ?? 'Database tuning'
+  let version: number | null
+  let stamped = true
+  try {
+    const saved = await saveAndDeployManaged({
+      name: row.name,
+      body: sql,
+      note,
+      baseHash: row.body_hash,
+      baseVersion: row.version,
+      userId: ctx.userId,
+      by: tuningActor(ctx.userId)
+    })
+    version = saved.version
+  } catch (e) {
+    if (!(e instanceof ManagedProcError)) {
+      ctx.began?.() // unknown state: let the caller's undo judge it against live and config
+      throw e
+    }
+    if (e.code !== 'DEPLOY_STAMP_FAILED') throw e
+    // The DDL ran and config kept the body; only recording the deploy failed.
+    const v = Number(e.extra?.version)
+    version = Number.isFinite(v) && v > 0 ? v : null
+    stamped = false
+  }
+  ctx.began?.()
+  await logManagedProcWrite({
+    action: 'procedure-update',
+    name: row.name,
+    version,
+    note: stamped ? note : `${note} (not stamped)`,
+    userId: ctx.userId
+  })
+  return `saved ${row.name} v${version ?? '?'} to app config and deployed it (body ${hash.slice(0, 8)})${stamped ? '' : ' — recording the deploy failed'}`
+}
+
 // ─── Apply / roll back / dismiss ────────────────────────────────────────────────────────
 
 /**
@@ -822,7 +923,7 @@ async function claim(
 }
 
 const undoOutcome = (row: ProposalRow, userId: string | null): Promise<string> =>
-  executeSpec(row.undo, { userId }).then(
+  executeSpec(row.undo, { userId, label: `Database tuning #${row.id} rollback` }).then(
     (o) => `undo ran: ${o}`,
     (e: unknown) =>
       e instanceof TuningRefusal ? `undo not run: ${e.message}` : `undo failed: ${errText(e)}`
@@ -865,6 +966,14 @@ export async function applyProposal(
     const notOurs = await dropApplyProblem(row)
     if (notOurs) throw new TuningRefusal('TUNING_NOT_APPLICABLE', notOurs)
   }
+  // A procedure config owns is judged before the claim, so a refusal writes nothing: an
+  // import-owned or config-dropped one is refused; a managed one whose config is not what the
+  // database runs is stale until that is settled on the Procedures page (the row stays proposed).
+  if (row.apply.type === 'proc_body') {
+    const owner = await procWriteOwner(row.apply.proc)
+    const liveBody = owner ? await procedureBody(row.apply.proc) : null
+    if (owner && liveBody != null) await managedRowInStep(owner.name, liveBody)
+  }
   const settings = await readTuningSettings()
   const run = await claim(row, APPLY_FROM, 'apply', opts.userId)
 
@@ -877,6 +986,7 @@ export async function applyProposal(
     const baseline = await captureBaseline(row).catch(() => ({ metric: null }))
     outcome = await executeSpec(row.apply, {
       userId: opts.userId,
+      label: `Database tuning #${id} apply`,
       progress: (blob) => run.progress(blob),
       began: () => {
         executed = true
@@ -961,6 +1071,7 @@ export async function rollbackProposal(
     if (problem) throw new TuningRefusal('TUNING_STALE', problem)
     outcome = await executeSpec(row.undo, {
       userId: opts.userId,
+      label: `Database tuning #${id} rollback`,
       progress: (blob) => run.progress(blob),
       began: () => {
         executed = true

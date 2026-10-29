@@ -14,11 +14,14 @@ import {
 import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
 import { executeRevert, planRevert } from '../services/import-run-revert.js'
+import { MANAGED_TABLE, procedureOwner } from '../services/managed-procedures/owners.js'
+import { getManagedProcedure } from '../services/managed-procedures/store.js'
 import {
   deployProcedure,
   importBodyTargetsOwn,
   snapshotImportDefinition
 } from '../services/procedure-deploy.js'
+import { procHeaderName } from '../services/sql-checks/propose.js'
 import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
 import { rehearseProcedureImport } from '../services/staged-import-rehearsal.js'
 import {
@@ -52,6 +55,34 @@ import type { User } from '../types.js'
 const snapshotDefinition = snapshotImportDefinition
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * One procedure has one writer. A stored body makes an import definition the owner of its
+ * procedure, so a definition may not take one an app-managed row (Developer → Procedures) owns:
+ * the name the definition points at, or the name the body's real header defines (read outside
+ * comments and literals). A row marked dropped no longer stands in the way. Null = free; else the
+ * managed row's name, for the 409.
+ */
+async function managedProcClaim(procedure: unknown, body: unknown): Promise<string | null> {
+  if (body == null || String(body).trim() === '') return null
+  if (!(await db.schema.hasTable(MANAGED_TABLE))) return null
+  const header = procHeaderName(String(body))
+  const names = [
+    procedure == null ? null : String(procedure),
+    header && (header.schema == null || header.schema.toLowerCase() === 'dbo') ? header.name : null
+  ]
+  for (const n of names) {
+    if (!n || !IDENT_RE.test(n)) continue
+    const row = await getManagedProcedure(n)
+    if (row && row.dropped_at == null) return row.name
+  }
+  return null
+}
+
+const managedProcRefusal = (name: string) => ({
+  code: 'MANAGED_PROCEDURE',
+  error: `${name} is an app-managed procedure (Developer → Procedures). Give this import its own procedure, or drop it there first.`
+})
 
 /** `{enabled: boolean}` (object or JSON string); anything else = off. */
 function parseReceipt(v: unknown): { enabled: boolean } | null {
@@ -132,6 +163,16 @@ export async function stagedImportRoutes(app: FastifyInstance) {
           error: `The body must start with CREATE OR ALTER PROCEDURE ${proc} — deploys are scoped to this definition's own procedure.`
         })
       }
+      // Two definitions naming one procedure are two writers: deploying one by hand would undo
+      // the other. The app-managed deploy refuses them too, until one lets go of it.
+      const owner = await procedureOwner(proc)
+      if (owner?.kind === 'import' && owner.conflictingKeys) {
+        return reply.code(409).send({
+          code: 'IMPORT_PROC_CONFLICT',
+          error: `${proc} is named by import definitions ${owner.conflictingKeys.join(', ')} — a procedure has one writer. Point the others at their own procedure first.`,
+          definitions: owner.conflictingKeys
+        })
+      }
       try {
         await deployProcedure(body, { schema: 'dbo', name: proc })
       } catch (err) {
@@ -206,6 +247,11 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       ]) {
         if (f in snap) patch[f] = snap[f]
       }
+      const claimed = await managedProcClaim(
+        'procedure' in patch ? patch.procedure : row.procedure,
+        'procedure_body' in patch ? patch.procedure_body : row.procedure_body
+      )
+      if (claimed) return reply.code(409).send(managedProcRefusal(claimed))
       await db('nivaro_import_definitions').where('id', row.id).update(patch)
       await logActivity({
         action: 'import-definition-restore',
@@ -356,12 +402,15 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       sort?: number
       post_run_flows?: unknown
       receipt?: unknown
+      procedure_body?: string | null
     }
     const key = String(b.key ?? '').trim()
     if (!key) return reply.code(400).send({ error: 'key is required' })
     if (await getImportDefinition(key)) {
       return reply.code(409).send({ error: `An import named "${key}" already exists` })
     }
+    const claimed = await managedProcClaim(b.procedure, b.procedure_body)
+    if (claimed) return reply.code(409).send(managedProcRefusal(claimed))
     await db('nivaro_import_definitions').insert({
       key,
       label: b.label ?? null,
@@ -521,6 +570,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         })
       }
       if (b.is_active !== undefined) patch.is_active = !!b.is_active
+      if (patch.procedure_body !== undefined || patch.procedure !== undefined) {
+        const claimed = await managedProcClaim(
+          patch.procedure !== undefined ? patch.procedure : row.procedure,
+          patch.procedure_body !== undefined ? patch.procedure_body : row.procedure_body
+        )
+        if (claimed) return reply.code(409).send(managedProcRefusal(claimed))
+      }
       if (Object.keys(patch).length > 0) {
         await snapshotDefinition(String(row.key), 'before update', req.user?.id ?? null)
         await db('nivaro_import_definitions').where('id', row.id).update(patch)

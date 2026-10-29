@@ -19,6 +19,8 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { procedureOwner } from '../services/managed-procedures/owners.js'
+import { deployProcedure } from '../services/procedure-deploy.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const COLUMN_TYPES = new Set([
@@ -859,6 +861,12 @@ ${sample
               staging_columns: JSON.stringify(svc.stagingColumns)
             }
           } else {
+            // A procedure app config owns (app-managed, or an import definition's) has one
+            // writer — the pipeline never generates over it.
+            if (await procedureOwner(procName)) {
+              errors.push(`Procedure ${procName} is app-managed — import pipeline skipped`)
+              continue
+            }
             const procExists = (await db.raw(`SELECT 1 FROM sys.procedures WHERE name = ?`, [
               procName
             ])) as unknown[]
@@ -874,7 +882,7 @@ ${sample
                 for (const col of gen.stagingColumns) t.text(col)
               })
             }
-            await db.raw(gen.sql)
+            await deployProcedure(gen.sql, { schema: 'dbo', name: procName })
             defRow = {
               key: c.collection,
               label: c.display_name || c.collection,

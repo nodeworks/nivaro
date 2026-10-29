@@ -1,5 +1,6 @@
 import { db } from '../../../db/index.js'
 import { capturedPlanFor } from '../../custom-query-plans.js'
+import { appManagedProcedures } from '../../managed-procedures/owners.js'
 import { isReplicatedProcedure } from '../../replication.js'
 import { type ProcStat, procedureBody, procedureParameters, procedureStats } from '../dmv.js'
 import { paramSetsFor } from '../param-sets.js'
@@ -21,6 +22,9 @@ export interface ProcEvidence {
   planOps: Map<string, string[]>
   /** Lower-cased names of procedures published by replication. */
   replicated: Set<string>
+  /** Lower-cased names config will not let tuning rewrite (import-owned, dropped in config):
+   *  Apply refuses them, so they are never proposed or twin-proved. */
+  unwritable?: Set<string>
 }
 
 export interface ProcSelection {
@@ -44,6 +48,7 @@ export function selectProcCandidates(ev: ProcEvidence): ProcSelection[] {
   const out: ProcSelection[] = []
   for (const s of ev.stats) {
     if (isTwinName(s.name)) continue
+    if (ev.unwritable?.has(s.name.toLowerCase())) continue
     const perWeek = (s.execution_count / s.cached_days) * 7
     if (s.avg_elapsed_ms < MIN_AVG_MS || perWeek < MIN_RUNS_PER_WEEK) continue
     const body = ev.bodies.get(s.name)
@@ -127,10 +132,31 @@ async function inheritable(
     .map((set) => Object.fromEntries(Object.entries(set).map(([k, v]) => [bare(k), v])))
 }
 
+/**
+ * Names config will not let tuning rewrite. A failed owner read proposes as before (Apply asks
+ * the owner again and refuses) — the cost is a wasted proposal, never a second writer.
+ */
+async function unwritableProcs(): Promise<Set<string>> {
+  const out = new Set<string>()
+  try {
+    for (const [lower, o] of await appManagedProcedures()) {
+      if (o.kind === 'import' || o.dropped) out.add(lower)
+    }
+  } catch {
+    /* see above */
+  }
+  return out
+}
+
 export async function loadProcEvidence(): Promise<ProcEvidence> {
+  const unwritable = await unwritableProcs()
   // catalog names only: anything outside IDENT is never read, matched or proposed
   const stats = (await procedureStats()).filter(
-    (s) => s.avg_elapsed_ms >= MIN_AVG_MS && IDENT.test(s.name) && !isTwinName(s.name)
+    (s) =>
+      s.avg_elapsed_ms >= MIN_AVG_MS &&
+      IDENT.test(s.name) &&
+      !isTwinName(s.name) &&
+      !unwritable.has(s.name.toLowerCase())
   )
   const bodies = new Map<string, string>()
   const paramSets = new Map<string, Array<Record<string, unknown>>>()
@@ -157,5 +183,5 @@ export async function loadProcEvidence(): Promise<ProcEvidence> {
     if (ops.length) planOps.set(s.name, ops)
     if (await isReplicatedProcedure(s.name)) replicated.add(s.name.toLowerCase())
   }
-  return { stats, bodies, paramSets, planOps, replicated }
+  return { stats, bodies, paramSets, planOps, replicated, unwritable }
 }

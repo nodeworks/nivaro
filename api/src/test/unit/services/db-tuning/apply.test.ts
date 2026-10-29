@@ -14,6 +14,8 @@ import {
 import { bodyHash } from '../../../../services/db-tuning/twin.js'
 import type { ProposalRow } from '../../../../services/db-tuning/types.js'
 import { createIndexSql, indexName } from '../../../../services/index-advisor.js'
+import { procBodyHash } from '../../../../services/managed-procedures/normalize.js'
+import { ManagedProcError } from '../../../../services/managed-procedures/store.js'
 
 type IndexInfo = {
   type_desc: string
@@ -58,6 +60,16 @@ const m = vi.hoisted(() => ({
     })
   ),
   recalc: vi.fn(async (_e: unknown, _id: unknown) => {}),
+  /** the owner answer and the managed config row (app-managed procedures) */
+  owner: vi.fn(async (_n: string): Promise<Record<string, unknown> | null> => null),
+  managedRow: vi.fn(async (_n: string): Promise<Record<string, unknown> | null> => null),
+  saveManaged: vi.fn(
+    async (_i: Record<string, unknown>): Promise<Record<string, unknown>> => ({
+      version: 3,
+      unchanged: false,
+      deployed: { action: 'altered' }
+    })
+  ),
   bustDef: vi.fn(),
   clearMeta: vi.fn(),
   bustRollup: vi.fn(),
@@ -165,6 +177,16 @@ vi.mock('../../../../services/activity.js', () => ({ logActivity: m.logActivity 
 vi.mock('../../../../services/replication.js', () => ({
   isReplicatedArticle: m.replicatedArticle,
   isReplicatedProcedure: m.replicatedProc
+}))
+vi.mock('../../../../services/managed-procedures/owners.js', () => ({
+  procedureOwner: m.owner
+}))
+vi.mock('../../../../services/managed-procedures/store.js', async (orig) => ({
+  ...((await orig()) as Record<string, unknown>),
+  getManagedProcedure: m.managedRow
+}))
+vi.mock('../../../../services/managed-procedures/deploy.js', () => ({
+  saveAndDeployManaged: m.saveManaged
 }))
 vi.mock('../../../../services/collections.js', () => ({ clearMetadataCache: m.clearMeta }))
 vi.mock('../../../../services/definition-cache.js', () => ({ bustDefinitionCache: m.bustDef }))
@@ -478,6 +500,13 @@ beforeEach(() => {
   m.hasColumn.mockImplementation(async () => true)
   m.captureBaseline.mockImplementation(async () => ({ metric: 42 }))
   m.startJobRun.mockImplementation(async () => m.run)
+  m.owner.mockImplementation(async () => null)
+  m.managedRow.mockImplementation(async () => null)
+  m.saveManaged.mockImplementation(async () => ({
+    version: 3,
+    unchanged: false,
+    deployed: { action: 'altered' }
+  }))
 })
 
 const refusal = async (p: Promise<unknown>): Promise<TuningRefusal> => {
@@ -1170,5 +1199,134 @@ describe('dismissProposal', () => {
         'TUNING_NOT_APPLICABLE'
       )
     }
+  })
+})
+
+// ─── app-managed procedures: one writer ─────────────────────────────────────
+
+describe('proc_body on an app-managed procedure', () => {
+  const app = {} as never
+  const LIVE_AS_APPLIED = 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 1'
+  const managedP = (over: Record<string, unknown> = {}) => {
+    m.owner.mockImplementation(async () => ({ kind: 'managed', id: 9, name: 'p', dropped: false }))
+    m.managedRow.mockImplementation(async () => ({
+      id: 9,
+      name: 'p',
+      body: LIVE_AS_APPLIED,
+      body_hash: procBodyHash(LIVE_AS_APPLIED),
+      version: 2,
+      dropped_at: null,
+      ...over
+    }))
+  }
+
+  it('proc_body on a managed proc saves a version labelled with the proposal and deploys through config', async () => {
+    managedP()
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.rows.set('x', { ...procRow() })
+    const out = await applyProposal('x', { userId: 'u', dbaOk: false, app })
+    expect(out.status).toBe('watching')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+    expect(m.saveManaged).toHaveBeenCalledTimes(1)
+    expect(m.saveManaged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'p',
+        body: 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 2',
+        note: 'Database tuning #x apply',
+        baseHash: procBodyHash(LIVE_AS_APPLIED),
+        baseVersion: 2,
+        userId: 'u',
+        by: 'user:u'
+      })
+    )
+    expect(m.logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'procedure-update',
+        collection: 'sys.procedures',
+        item: 'p',
+        comment: 'v3 · Database tuning #x apply'
+      })
+    )
+  })
+
+  it('rolling back a managed rewrite saves the old body as a version labelled rollback', async () => {
+    const applied = 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 2'
+    managedP({ body: applied, body_hash: procBodyHash(applied) })
+    m.procBody.mockImplementation(async () => 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 2')
+    m.rows.set('x', { ...procRow({ status: 'watching' }) })
+    const out = await rollbackProposal('x', { userId: null, reason: 'regressed', app: null })
+    expect(out.status).toBe('rolled_back')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+    expect(m.saveManaged).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'p',
+        body: 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 1',
+        note: 'Database tuning #x rollback',
+        userId: null,
+        by: 'db-tuning'
+      })
+    )
+  })
+
+  it('a managed proc whose config differs from the live body is stale before any write', async () => {
+    const other = 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 99'
+    managedP({ body: other, body_hash: procBodyHash(other) })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    const err = await refusal(executeSpec(procRow().apply, { userId: 'u' }))
+    expect(err.code).toBe('TUNING_STALE')
+    expect(m.saveManaged).not.toHaveBeenCalled()
+    expect(m.runLongSql).not.toHaveBeenCalled()
+  })
+
+  it('Apply on a managed proc whose config drifted is refused before the claim (row stays proposed)', async () => {
+    const other = 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 99'
+    managedP({ body: other, body_hash: procBodyHash(other) })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.rows.set('x', { ...procRow() })
+    const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(err.code).toBe('TUNING_STALE')
+    expect(m.startJobRun).not.toHaveBeenCalled()
+    expect(m.rows.get('x')?.status).toBe('proposed')
+    expect(m.saveManaged).not.toHaveBeenCalled()
+  })
+
+  it('a managed proc marked dropped in config is refused', async () => {
+    m.owner.mockImplementation(async () => ({ kind: 'managed', id: 9, name: 'p', dropped: true }))
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    const err = await refusal(executeSpec(procRow().apply, { userId: 'u' }))
+    expect(err.code).toBe('TUNING_NOT_APPLICABLE')
+    expect(m.saveManaged).not.toHaveBeenCalled()
+    expect(m.runLongSql).not.toHaveBeenCalled()
+  })
+
+  it('a deploy the database refuses fails the apply; the save was put back by the config writer', async () => {
+    managedP()
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.saveManaged.mockRejectedValueOnce(
+      new ManagedProcError(400, 'DEPLOY_FAILED', 'Invalid object')
+    )
+    m.rows.set('x', { ...procRow() })
+    await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(
+      /Invalid object/
+    )
+    expect(m.rows.get('x')?.status).toBe('failed')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+  })
+
+  it('proc_body on an import-owned proc is refused TUNING_NOT_APPLICABLE before any write', async () => {
+    m.owner.mockImplementation(async () => ({ kind: 'import', key: 'invoices', name: 'p' }))
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.rows.set('x', { ...procRow() })
+    const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(err.code).toBe('TUNING_NOT_APPLICABLE')
+    expect(err.message).toBe('p is owned by import definition "invoices" — change it there')
+    expect(m.startJobRun).not.toHaveBeenCalled()
+    expect(m.rows.get('x')?.status).toBe('proposed')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+    expect(m.saveManaged).not.toHaveBeenCalled()
+    // the spec itself refuses too (rollback, undo)
+    expect((await refusal(executeSpec(procRow().apply, { userId: 'u' }))).code).toBe(
+      'TUNING_NOT_APPLICABLE'
+    )
   })
 })

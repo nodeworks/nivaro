@@ -15,12 +15,21 @@
  *    application lock per procedure (`sp_getapplock`, so it holds across replicas): nothing can
  *    change the procedure between the check and the deploy, and a put-back / revert only runs
  *    while the procedure is still exactly what this page deployed;
- *  - stored import bodies are only rewritten (conditionally on being unchanged), never deployed.
+ *  - stored import bodies are only rewritten (conditionally on being unchanged), never deployed;
+ *  - an app-managed procedure (a `nivaro_managed_procedures` row) has ONE writer, its config: the
+ *    fix is proposed from the config body, checked statically (as a stored import body is), then
+ *    saved as a new version and deployed from config (saveAndDeployManaged) — never a raw ALTER.
+ *    A procedure an import definition owns keeps the live path below (its stored bodies follow).
  */
 import type { FastifyRequest } from 'fastify'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
+import { logManagedProcWrite } from '../managed-procedures/activity.js'
+import { saveAndDeployManaged } from '../managed-procedures/deploy.js'
+import { procBodyHash } from '../managed-procedures/normalize.js'
+import { procedureOwner } from '../managed-procedures/owners.js'
+import { getManagedProcedure, ManagedProcError } from '../managed-procedures/store.js'
 import {
   deployOn,
   liveProcedureDefinition,
@@ -94,13 +103,46 @@ async function loadFinding(id: number): Promise<FindingRecord> {
 
 interface Current {
   sql: string
-  kind: 'module' | 'import_definition'
+  kind: 'module' | 'import_definition' | 'managed_procedure'
   importKey?: string
+  /** import_definition: the definition's procedure; managed_procedure: the config row's name. */
   procedure?: string | null
+}
+
+export const MANAGED_NOTE =
+  'This procedure is app-managed: the fix is saved as a new version in config and deployed from there.'
+
+/** The config owner of a dbo procedure finding when it is app-managed (not an import's). */
+async function managedOwner(f: FindingRecord) {
+  if ((f.object_schema ?? 'dbo').toLowerCase() !== 'dbo') return null
+  const owner = await procedureOwner(f.object_name)
+  return owner?.kind === 'managed' ? owner : null
 }
 
 async function currentDefinition(f: FindingRecord): Promise<Current> {
   if (f.object_type === 'procedure') {
+    const owner = await managedOwner(f)
+    if (owner) {
+      // Config is the procedure's one writer: the fix is made to the body config deploys.
+      if (owner.dropped)
+        throw new FixError(
+          409,
+          `${owner.name} is marked dropped in app config (Developer → Procedures) — the next deploy drops it, so it is not fixed here.`
+        )
+      const row = await getManagedProcedure(owner.name)
+      if (!row?.body) throw new FixError(404, 'The app-managed procedure has no stored body.')
+      return { sql: row.body, kind: 'managed_procedure', procedure: row.name }
+    }
+    // An import definition owns its procedure's body: a raw ALTER here would be replaced by the
+    // next app-managed deploy, so the fix belongs on the import definition's finding instead.
+    if ((f.object_schema ?? 'dbo').toLowerCase() === 'dbo') {
+      const owner = await procedureOwner(f.object_name)
+      if (owner?.kind === 'import')
+        throw new FixError(
+          409,
+          `${owner.name} is owned by import definition "${owner.key}" — fix its stored body there (Imports → Definitions), not the live procedure.`
+        )
+    }
     const sql = await liveProcedureDefinition(f.object_schema, f.object_name)
     if (!sql) throw new FixError(404, 'The procedure no longer exists.')
     return { sql, kind: 'module' }
@@ -277,11 +319,13 @@ async function build(f: FindingRecord): Promise<{
       current_hash: sha256(current.sql),
       new_definition_hash: proposal.newDefinition ? sha256(proposal.newDefinition) : null,
       target: { type: f.object_type, label: objectLabel(f), kind: current.kind },
-      deploys: current.kind === 'module',
+      deploys: current.kind !== 'import_definition',
       note:
         current.kind === 'module'
           ? SOURCE_ELSEWHERE_NOTE
-          : 'Only the stored body changes here; deploy it from the import definition when you are ready.'
+          : current.kind === 'managed_procedure'
+            ? MANAGED_NOTE
+            : 'Only the stored body changes here; deploy it from the import definition when you are ready.'
     }
   }
 }
@@ -336,6 +380,49 @@ interface Who {
   userId: string | null
   label: string
   req?: FastifyRequest
+}
+
+/** The deploy actor stamped on an app-managed procedure. */
+const deployActor = (who: Who) => (who.userId ? `user:${who.userId}` : 'script:sql-checks')
+
+/** The database refused the DDL: config was put back, live is unchanged. */
+class ManagedDeployRefused extends Error {}
+
+/**
+ * Save `body` as the next version of an app-managed procedure and deploy it from config,
+ * guarded on config still holding `baseHash` (the body this page read). Answers the version and,
+ * when the DDL ran but recording it did not, `stampError` (config and live both hold the body).
+ * A stale config is 409 SQL_CHECK_FIX_STALE (`staleMessage`); a deploy the database refused is
+ * ManagedDeployRefused; any other config refusal is a FixError with its status and code.
+ */
+async function writeManaged(o: {
+  name: string
+  body: string
+  note: string
+  baseHash: string
+  who: Who
+  staleMessage: string
+}): Promise<{ version: number; stampError?: string }> {
+  try {
+    const saved = await saveAndDeployManaged({
+      name: o.name,
+      body: o.body,
+      note: o.note,
+      baseHash: o.baseHash,
+      userId: o.who.userId,
+      by: deployActor(o.who)
+    })
+    return { version: saved.version }
+  } catch (e) {
+    if (!(e instanceof ManagedProcError)) throw e
+    if (e.code === 'PROC_STALE') throw new FixError(409, o.staleMessage, 'SQL_CHECK_FIX_STALE')
+    if (e.code === 'DEPLOY_FAILED') throw new ManagedDeployRefused(e.message)
+    if (e.code === 'DEPLOY_STAMP_FAILED') {
+      const v = Number(e.extra?.version)
+      return { version: Number.isFinite(v) && v > 0 ? v : 0, stampError: e.message }
+    }
+    throw new FixError(e.status, e.message, e.code)
+  }
 }
 
 async function recordFix(row: {
@@ -537,6 +624,92 @@ export async function applyFix(opts: {
       return { fix_id: fixId, applied: true, rolled_back: false, deployed: false }
     }
 
+    if (current.kind === 'managed_procedure') {
+      // Checked statically, as a stored import body is: the deploy is config's (one writer).
+      const name = current.procedure ?? f.object_name
+      const after = checkObject(obj(proposal.newDefinition), catalog)
+      const verdict = recheckVerdict(before, after, f.check_key)
+      if (!verdict.ok) {
+        const fixId = await recordFix({
+          check_key: f.check_key,
+          target,
+          detail: { ...base, applied: false, rolled_back: true, rollback_reason: verdict.reason },
+          who: opts.who
+        })
+        return {
+          fix_id: fixId,
+          applied: false,
+          rolled_back: true,
+          reason: verdict.reason,
+          deployed: false
+        }
+      }
+      const note = `SQL checks fix (finding #${f.id})`
+      let written: { version: number; stampError?: string }
+      try {
+        written = await writeManaged({
+          name,
+          body: proposal.newDefinition,
+          note,
+          baseHash: procBodyHash(current.sql),
+          who: opts.who,
+          staleMessage:
+            'The app-managed procedure changed in config since it was read. Look at the proposed fix again.'
+        })
+      } catch (e) {
+        if (!(e instanceof ManagedDeployRefused)) throw e
+        const fixId = await recordFix({
+          check_key: f.check_key,
+          target,
+          detail: { ...base, applied: false, rolled_back: false, error: e.message },
+          who: opts.who
+        })
+        await audit('sql-check-proc-fix-failed', f, e.message, opts.who)
+        throw new FixError(422, `Deploy failed: ${e.message} (fix #${fixId})`)
+      }
+      const fixId = await recordFix({
+        check_key: f.check_key,
+        target,
+        detail: {
+          ...base,
+          applied: true,
+          rolled_back: false,
+          deployed: true,
+          managed_procedure: name,
+          managed_version: written.version,
+          // body_hash form (what config compares a revert against)
+          applied_definition_hash: procBodyHash(proposal.newDefinition),
+          stamp_error: written.stampError,
+          recheck: { before: before.length, after: after.length }
+        },
+        who: opts.who
+      })
+      await logManagedProcWrite({
+        action: 'procedure-update',
+        name,
+        version: written.version || null,
+        note: written.stampError ? `${note} (not stamped)` : note,
+        userId: opts.who.userId,
+        req: opts.who.req
+      })
+      await markFixed(f, fixId, opts.who, 'Fixed from the SQL checks page (saved to app config)')
+      await audit(
+        'sql-check-proc-fix',
+        f,
+        `${proposal.class} on ${target} (v${written.version})`,
+        opts.who
+      )
+      return {
+        fix_id: fixId,
+        applied: true,
+        rolled_back: false,
+        deployed: true,
+        ...(written.stampError
+          ? { reason: `deployed, but recording the deploy failed: ${written.stampError}` }
+          : {})
+      }
+    }
+
     // a procedure: deploy under the lock, re-check what SQL Server now holds, put back when worse
     const targetObj = { schema: f.object_schema, name: f.object_name }
     let applied: string
@@ -667,8 +840,10 @@ interface FixDetail {
   finding_id?: number
   object?: { type: ObjectType; schema: string | null; name: string; ref: string | null }
   previous_definition?: string
+  /** module: sha256 of the live text; managed_procedure: procBodyHash (config's body_hash). */
   applied_definition_hash?: string
   import_previous_bodies?: SyncedBody[]
+  managed_procedure?: string
 }
 
 /** Whether a fixes row can be reverted from the page (pure). */
@@ -707,8 +882,56 @@ export async function revertFix(
   if (inFlight.has(key)) throw new FixError(409, 'Already reverting.')
   inFlight.add(key)
   const skipped: string[] = []
+  let managedVersion: number | null = null
   try {
-    if (d.kind === 'module') {
+    if (d.kind === 'managed_procedure') {
+      // Config is the writer: the previous body becomes the next version, deployed from config.
+      const name = d.managed_procedure ?? obj.name
+      // A dropped row keeps its body_hash, so the base guard alone would pass — and the save
+      // would revive (and redeploy, and promote) a procedure someone dropped on purpose.
+      const owner = await procedureOwner(name)
+      if (owner?.kind === 'managed' && owner.dropped)
+        throw new FixError(
+          409,
+          `${owner.name} is marked dropped in app config — restore it on the Procedures page (Developer → Procedures) if you want it back.`,
+          'MANAGED_PROCEDURE'
+        )
+      const note = `Reverted SQL checks fix #${fixId}`
+      let written: { version: number; stampError?: string }
+      try {
+        written = await writeManaged({
+          name,
+          body: previous,
+          note,
+          baseHash: d.applied_definition_hash as string,
+          who,
+          staleMessage:
+            'The procedure changed in app config after this fix, so putting the old version back would undo someone else’s change. Compare it on the Procedures page instead.'
+        })
+      } catch (e) {
+        if (e instanceof ManagedDeployRefused)
+          throw new FixError(422, `Deploy failed: ${e.message}`)
+        throw e
+      }
+      managedVersion = written.version || null
+      await logManagedProcWrite({
+        action: 'procedure-update',
+        name,
+        version: managedVersion,
+        note: written.stampError ? `${note} (not stamped)` : note,
+        userId: who.userId,
+        req: who.req
+      })
+    } else if (d.kind === 'module') {
+      // A procedure adopted into app config since the fix has one writer now: config.
+      const owner =
+        (obj.schema ?? 'dbo').toLowerCase() === 'dbo' ? await procedureOwner(obj.name) : null
+      if (owner?.kind === 'managed')
+        throw new FixError(
+          409,
+          `${owner.name} is app-managed now — restore the version you want on the Procedures page (Developer → Procedures).`,
+          'MANAGED_PROCEDURE'
+        )
       const text = deployText(previous, obj.schema, obj.name)
       if (!text) throw new FixError(409, 'The previous definition has no procedure header.')
       try {
@@ -768,7 +991,8 @@ export async function revertFix(
           reverted: true,
           reverted_at: new Date().toISOString(),
           reverted_by: who.label,
-          revert_skipped_import_bodies: skipped.length ? skipped : undefined
+          revert_skipped_import_bodies: skipped.length ? skipped : undefined,
+          reverted_managed_version: managedVersion ?? undefined
         })
       })
     if (d.finding_id) {
