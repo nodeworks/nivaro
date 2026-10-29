@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   ListOrdered,
   Lock,
+  OctagonAlert,
   Percent,
   Plus,
   Table2,
@@ -134,6 +135,7 @@ import { ImpactButton, TestingButton } from './testing/TestingPanels'
 import { MenuSeparator, ToolButton } from './toolbar-kit'
 import { type LeaveRequest, UnsavedConfirm, unsavedText } from './UnsavedConfirm'
 import { describeTarget, targetFromKey, unsavedKeys } from './unsaved-marks'
+import { useRefusalLens } from './usage/refusal-lens'
 import { UsagePanel } from './usage/UsagePanel'
 import {
   usageTodayText,
@@ -723,6 +725,8 @@ export function LayoutEditor({
         : undefined,
     [showFill, fill]
   )
+  // Where saves fail (#3185), the error-rate lens: off unless turned on (Tools or the Usage tab).
+  const refusalLens = useRefusalLens(currentId)
   const [preview, setPreview] = useState<PreviewAs>({
     record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
     roleId: null
@@ -1206,6 +1210,16 @@ export function LayoutEditor({
             )}
             {bundle && arrangeable && (
               <ToolButton
+                label='Show where saves fail'
+                icon={<OctagonAlert className='h-3.5 w-3.5' />}
+                hint='Tint each field by how often a save is refused on it'
+                checked={refusalLens.on}
+                onClick={() => refusalLens.setOn(!refusalLens.on)}
+                data={{ 'data-editor-refusal-toggle': '' }}
+              />
+            )}
+            {bundle && arrangeable && (
+              <ToolButton
                 label='Set the tab order'
                 icon={<ListOrdered className='h-3.5 w-3.5' />}
                 hint='Click fields in the order Tab should visit them'
@@ -1556,7 +1570,7 @@ export function LayoutEditor({
                       roleId={pane.roleId}
                       stateKey={pane.stateKey}
                       marks={withAiMarks(pane.marks)}
-                      overlay={tabOrder.overlay(pane.overlay)}
+                      overlay={tabOrder.overlay(refusalLens.wrap(pane.overlay))}
                       ruleMarks={ruleMarks}
                       ghost={ghost}
                       deps={explain.deps}

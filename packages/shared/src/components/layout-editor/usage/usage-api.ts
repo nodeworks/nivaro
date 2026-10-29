@@ -10,7 +10,8 @@ export const usageKeys = {
   fill: (collection: string) => ['layout-editor', 'usage', 'fill', collection] as const,
   today: (layoutId: number) => ['layout-editor', 'usage', 'today', layoutId] as const,
   friction: (layoutId: number) => ['layout-editor', 'usage', 'friction', layoutId] as const,
-  coChanges: (collection: string) => ['layout-editor', 'usage', 'co-changes', collection] as const
+  coChanges: (collection: string) => ['layout-editor', 'usage', 'co-changes', collection] as const,
+  refusals: (layoutId: number) => ['layout-editor', 'usage', 'refusals', layoutId] as const
 }
 
 export interface FillRates {

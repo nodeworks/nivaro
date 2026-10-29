@@ -8,6 +8,7 @@ import {
   KEEP_DAYS,
   layoutCollection,
   layoutFriction,
+  layoutRefusals,
   layoutUsageInfo,
   recordUsage,
   sanitizeUsageEvent,
@@ -158,6 +159,19 @@ export async function layoutUsageRoutes(app: FastifyInstance) {
       if (!collection) return reply.code(404).send({ error: 'Layout not found' })
       const days = Math.max(1, Math.min(KEEP_DAYS, Number(req.query.days) || 30))
       return { data: await layoutFriction(id, collection, req.user?.id, days) }
+    }
+  )
+
+  // Where saves fail (#3185): refused saves per field — the editor's error-rate lens.
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/:id/refusals',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id) || id <= 0) return reply.code(400).send({ error: 'Invalid id' })
+      if (!(await layoutCollection(id))) return reply.code(404).send({ error: 'Layout not found' })
+      const days = Math.max(1, Math.min(KEEP_DAYS, Number(req.query.days) || 30))
+      return { data: await layoutRefusals(id, req.user?.id, days) }
     }
   )
 
