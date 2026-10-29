@@ -402,6 +402,8 @@ export async function deployAllAppManaged(opts: {
   for (const r of managed) {
     if (!wanted(r.name)) continue
     const owners = imports.get(r.name.toLowerCase())
+    // A dropped row whose name an import took is inert: the import's deploy covers the name.
+    if (owners && r.dropped_at) continue
     if (owners) {
       results.push({
         name: r.name,
@@ -421,8 +423,8 @@ export async function deployAllAppManaged(opts: {
 /**
  * Config against the live database, per app-managed procedure: in-sync, drifted (live text
  * differs, case included), not-deployed (not live), dropped (dropped in config and gone),
- * dropped-but-live, conflict (a managed row whose name an import owns, or two import definitions
- * naming one proc). Procs config never knew are not listed. Empty off SQL Server.
+ * dropped-but-live, conflict (a live managed row whose name an import owns, or two import
+ * definitions naming one proc; a dropped row an import took is `dropped`, inert). Procs config never knew are not listed. Empty off SQL Server.
  */
 export async function managedDrift(): Promise<DriftEntry[]> {
   if (!isMssql(db)) return []
@@ -465,7 +467,9 @@ export function managedStatusOf(
   live: string | null,
   importOwned = false
 ): DriftStatus {
-  if (importOwned) return 'conflict'
+  // A dropped row is inert: when an import has since taken the name, the import owns it (its
+  // own entry reports the live state) and the row claims nothing — not a conflict.
+  if (importOwned) return row.dropped_at ? 'dropped' : 'conflict'
   if (row.dropped_at) return live == null ? 'dropped' : 'dropped-but-live'
   if (live == null) return 'not-deployed'
   return sameDeployedBody(row.body, live) ? 'in-sync' : 'drifted'

@@ -877,6 +877,15 @@ export async function revertFix(
     if (d.kind === 'managed_procedure') {
       // Config is the writer: the previous body becomes the next version, deployed from config.
       const name = d.managed_procedure ?? obj.name
+      // A dropped row keeps its body_hash, so the base guard alone would pass — and the save
+      // would revive (and redeploy, and promote) a procedure someone dropped on purpose.
+      const owner = await procedureOwner(name)
+      if (owner?.kind === 'managed' && owner.dropped)
+        throw new FixError(
+          409,
+          `${owner.name} is marked dropped in app config — restore it on the Procedures page (Developer → Procedures) if you want it back.`,
+          'MANAGED_PROCEDURE'
+        )
       const note = `Reverted SQL checks fix #${fixId}`
       let written: { version: number; stampError?: string }
       try {

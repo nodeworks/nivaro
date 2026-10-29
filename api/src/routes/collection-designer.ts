@@ -20,6 +20,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import { procedureOwner } from '../services/managed-procedures/owners.js'
+import { deployProcedure } from '../services/procedure-deploy.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const COLUMN_TYPES = new Set([
@@ -881,7 +882,7 @@ ${sample
                 for (const col of gen.stagingColumns) t.text(col)
               })
             }
-            await db.raw(gen.sql)
+            await deployProcedure(gen.sql, { schema: 'dbo', name: procName })
             defRow = {
               key: c.collection,
               label: c.display_name || c.collection,

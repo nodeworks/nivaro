@@ -38,6 +38,17 @@ describe('selectProcCandidates', () => {
   it('picks a slow, frequent, provable proc with parameter sets', () => {
     expect(selectProcCandidates({ ...base, stats: [stat('rpt', 2500, 40)] })).toHaveLength(1)
   })
+  it('never proposes a procedure config will not let it rewrite (import-owned, dropped)', () => {
+    expect(
+      selectProcCandidates({
+        ...base,
+        bodies: new Map([['Rpt', READ]]),
+        paramSets: new Map([['Rpt', [{}]]]),
+        unwritable: new Set(['rpt']),
+        stats: [stat('Rpt', 2500, 40)]
+      })
+    ).toEqual([])
+  })
   it('skips fast, rare, unprovable or set-less procs with a reason', () => {
     expect(selectProcCandidates({ ...base, stats: [stat('rpt', 500, 40)] })).toEqual([])
     expect(selectProcCandidates({ ...base, stats: [stat('rpt', 2500, 5)] })).toEqual([])

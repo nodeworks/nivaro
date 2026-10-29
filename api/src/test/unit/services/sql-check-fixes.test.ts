@@ -937,6 +937,20 @@ describe('a fix to an app-managed procedure', () => {
     expect(mp.save).not.toHaveBeenCalled()
   })
 
+  it('revert of a managed fix never revives a procedure dropped in config', async () => {
+    mp.owner = { kind: 'managed', id: 4, name: 'p', dropped: true }
+    findingRow.value = { id: 8, target_object: 'dbo.p', detail: managedDetail() }
+    mp.save.mockResolvedValue({ version: 5, unchanged: false, deployed: { action: 'created' } })
+    await expect(revertFix(8, who)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining(
+        'marked dropped in app config — restore it on the Procedures page'
+      )
+    })
+    expect(mp.save).not.toHaveBeenCalled()
+    expect(updated.find((u) => u.table === 'nivaro_sql_check_fixes')).toBeUndefined()
+  })
+
   it('revert of a managed fix whose config moved on is 409 and changes nothing', async () => {
     findingRow.value = { id: 8, target_object: 'dbo.p', detail: managedDetail() }
     mp.save.mockRejectedValue(new ManagedProcError(409, 'PROC_STALE', 'changed', { current: null }))

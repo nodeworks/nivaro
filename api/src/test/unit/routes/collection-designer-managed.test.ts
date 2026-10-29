@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   owner: vi.fn(async (_n: string): Promise<Record<string, unknown> | null> => null),
   raw: [] as string[],
-  inserts: [] as Array<{ table: string; row: Record<string, unknown> }>
+  inserts: [] as Array<{ table: string; row: Record<string, unknown> }>,
+  deploy: vi.fn(async (_sql: string, _t: { schema: string | null; name: string }) => {})
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -21,6 +22,7 @@ vi.mock('../../../services/ai-client.js', () => ({
   getAiModelSettings: vi.fn()
 }))
 vi.mock('../../../services/managed-procedures/owners.js', () => ({ procedureOwner: m.owner }))
+vi.mock('../../../services/procedure-deploy.js', () => ({ deployProcedure: m.deploy }))
 vi.mock('../../../db/index.js', () => {
   const builder = (table: string) => {
     const q: Record<string, unknown> = {}
@@ -78,6 +80,7 @@ beforeEach(() => {
   m.owner.mockImplementation(async () => null)
   m.raw.length = 0
   m.inserts.length = 0
+  m.deploy.mockClear()
 })
 
 describe('Collection Designer import pipeline and app-managed procedures', () => {
@@ -93,6 +96,7 @@ describe('Collection Designer import pipeline and app-managed procedures', () =>
     expect(body).toContain('Procedure import_spend is app-managed — import pipeline skipped')
     expect(m.owner).toHaveBeenCalledWith('import_spend')
     expect(m.raw.some((s) => /CREATE\s+(OR\s+ALTER\s+)?PROC/i.test(s))).toBe(false)
+    expect(m.deploy).not.toHaveBeenCalled()
     expect(m.inserts.some((i) => i.table === 'nivaro_import_definitions')).toBe(false)
   })
 
@@ -105,10 +109,14 @@ describe('Collection Designer import pipeline and app-managed procedures', () =>
     expect(m.raw.some((s) => /CREATE\s+(OR\s+ALTER\s+)?PROC/i.test(s))).toBe(false)
   })
 
-  it('an unowned, absent procedure is generated as before', async () => {
+  it('an unowned, absent procedure is generated and deployed through the one deploy path', async () => {
     const res = await apply()
     expect(JSON.stringify(res.json())).not.toContain('app-managed')
-    expect(m.raw.some((s) => /CREATE\s+(OR\s+ALTER\s+)?PROC/i.test(s))).toBe(true)
+    // never a raw db.raw(CREATE PROC): procedure-deploy (pinned connection, proc lock)
+    expect(m.raw.some((s) => /CREATE\s+(OR\s+ALTER\s+)?PROC/i.test(s))).toBe(false)
+    expect(m.deploy).toHaveBeenCalledTimes(1)
+    expect(m.deploy.mock.calls[0][0]).toMatch(/^CREATE OR ALTER PROCEDURE \[import_spend\]/)
+    expect(m.deploy.mock.calls[0][1]).toEqual({ schema: 'dbo', name: 'import_spend' })
     expect(m.inserts.some((i) => i.table === 'nivaro_import_definitions')).toBe(true)
   })
 })

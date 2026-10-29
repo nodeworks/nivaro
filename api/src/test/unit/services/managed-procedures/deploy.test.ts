@@ -295,15 +295,14 @@ describe('deployAllAppManaged', () => {
   it('a managed row colliding with an import body is skipped, the import is deployed', async () => {
     const importBody = 'CREATE OR ALTER PROCEDURE import_po AS SELECT 2'
     seedImport('po', 'import_po', importBody)
-    seedManaged('IMPORT_PO', 'CREATE OR ALTER PROCEDURE IMPORT_PO AS SELECT 1', {
-      dropped_at: new Date()
-    })
+    seedManaged('IMPORT_PO', 'CREATE OR ALTER PROCEDURE IMPORT_PO AS SELECT 1')
     live.defs.set('import_po', 'CREATE PROCEDURE import_po AS SELECT 0')
-    const { results } = await deployAllAppManaged({ execute: true, by: 'script:test' })
+    const { results, problems } = await deployAllAppManaged({ execute: true, by: 'script:test' })
     expect(results.find((r) => r.kind === 'managed')).toMatchObject({
       action: 'skipped',
       reason: 'import definition po owns it'
     })
+    expect(problems).toBe(1)
     expect(results.find((r) => r.kind === 'import')).toMatchObject({ action: 'altered' })
     expect(deployProcedure).toHaveBeenCalledTimes(1)
     expect(deployProcedure).toHaveBeenCalledWith(importBody, { schema: 'dbo', name: 'import_po' })
@@ -740,5 +739,23 @@ describe('fix round 1', () => {
     expect(r).toMatchObject({ version: 2, unchanged: false })
     expect(r.deployed.action).toBe('altered')
     expect((await getManagedProcedure('status_list'))?.body).toContain("'OPEN'")
+  })
+})
+
+describe('a dropped managed row whose name an import took', () => {
+  it('is inert: the import wins, drift and the deploy do not report a conflict', async () => {
+    seedManaged('import_po', 'CREATE OR ALTER PROCEDURE import_po AS SELECT 1', {
+      dropped_at: new Date()
+    })
+    seedImport('po', 'import_po', 'CREATE OR ALTER PROCEDURE import_po AS SELECT 2')
+    live.defs.set('import_po', 'CREATE PROCEDURE import_po AS SELECT 2')
+    const drift = await managedDrift()
+    const managed = drift.find((d) => d.name === 'import_po' && d.kind === 'managed')
+    expect(managed?.status).toBe('dropped')
+    expect(drift.find((d) => d.kind === 'import')?.status).toBe('in-sync')
+    const run = await deployAllAppManaged({ execute: true, by: 'script:test' })
+    expect(run.problems).toBe(0)
+    expect(run.results.filter((r) => r.kind === 'managed')).toEqual([])
+    expect(dropProcedure).not.toHaveBeenCalled()
   })
 })
