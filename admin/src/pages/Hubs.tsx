@@ -120,6 +120,7 @@ const SCREENS: Record<string, Screens> = {
   '/mcp': {
     '': page(() => import('@/pages/McpConnections'), 'McpConnectionsPage'),
     tools: page(() => import('@/pages/McpTools'), 'McpToolsPage'),
+    triggers: page(() => import('@/pages/AgentTriggers'), 'AgentTriggersPage'),
     console: page(() => import('@/pages/McpConsole'), 'McpConsolePage')
   },
   '/custom-queries': {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bot } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import { useLiveEvent } from '../lib/live'
@@ -12,6 +13,7 @@ import { useOptionalRealtime } from '../lib/realtime'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { cn } from '../lib/utils'
+import { type AgentQuestionRow, AgentQuestionsCard } from './AgentQuestionsCard'
 import { FirstWeekCard } from './ai/FirstWeekCard'
 import { TaskDoButton } from './ai/TaskDo'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
@@ -63,6 +65,9 @@ interface TaskRow {
   team_id?: number | null
   team_name?: string | null
   nudged_at?: string | null
+  /** #3223 — handed to one of the person's agents (an OAuth app or API key). */
+  agent_assignee?: string | null
+  agent_name?: string | null
 }
 
 interface NotificationRow {
@@ -86,6 +91,8 @@ interface MyWorkData {
   on_a_team?: boolean
   approvals: Array<Record<string, unknown>>
   notifications: NotificationRow[]
+  /** #3220 — questions assistants asked this person, still open. */
+  questions?: AgentQuestionRow[]
   counts: {
     owned: number
     owned_breached: number
@@ -493,6 +500,9 @@ export function MyWorkView({
         </p>
       )}
 
+      {/* #3220 — an assistant is blocked until these are answered: always first. */}
+      <AgentQuestionsCard questions={data.questions ?? []} />
+
       <RequiredVideosCard className='mb-4' />
       {/* Learning paths (#1508) sit beside the required list; empty = nothing shown. */}
       <LearningPathCard className='mb-4' />
@@ -617,6 +627,16 @@ export function MyWorkView({
                       {t.kind === 'support' && (
                         <span className='shrink-0 rounded bg-slate-100 px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-white/10 dark:text-slate-300'>
                           support
+                        </span>
+                      )}
+                      {t.agent_assignee && (
+                        <span
+                          className='inline-flex shrink-0 items-center gap-1 rounded bg-nvr-cyan/10 px-1 py-px text-[10px] font-medium text-[#0e7490] dark:text-[#67e8f9]'
+                          data-tip={`Handed to ${t.agent_name ?? 'your agent'} — it picks this up through My Work`}
+                          data-my-work-agent-task={t.id}
+                        >
+                          <Bot className='h-3 w-3' aria-hidden />
+                          {t.agent_name ?? 'Agent'}
                         </span>
                       )}
                       <button

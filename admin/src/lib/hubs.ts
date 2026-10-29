@@ -277,11 +277,12 @@ export const ACCESS_HUB: HubDef = {
 export const MCP_HUB: HubDef = {
   base: '/mcp',
   title: 'MCP',
-  hint: 'AI assistants connected to this instance, the tools they get, and a console to try them.',
+  hint: 'AI assistants connected to this instance, the tools they get, the record events that wake them, and a console to try them.',
   icon: Plug,
   tabs: [
     { path: '', label: 'Connections', legacy: '/mcp-connections' },
     { path: 'tools', label: 'Assistant tools', legacy: '/mcp-tools' },
+    { path: 'triggers', label: 'Agent triggers', legacy: '/agent-triggers' },
     { path: 'console', label: 'Console', legacy: '/mcp-console' }
   ]
 }

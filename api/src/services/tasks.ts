@@ -46,6 +46,9 @@ export interface TaskRow {
   auto_closed?: string | null
   created_at: Date | string | null
   updated_at: Date | string | null
+  /** #3223 — the agent connection (o<grant> | k<api key>) the task is handed to. */
+  agent_assignee?: string | null
+  agent_name?: string | null
 }
 
 const same = (a: unknown, b: unknown) =>
@@ -58,15 +61,18 @@ export async function taskColumns(): Promise<{
   autoClosed: boolean
   reminders: boolean
   nudged: boolean
+  /** Migration 511: agent_assignee + agent_name (#3223). */
+  agent: boolean
 }> {
-  const [completedBy, doneWhen, autoClosed, reminders, nudged] = await Promise.all([
+  const [completedBy, doneWhen, autoClosed, reminders, nudged, agent] = await Promise.all([
     hasColumn('nivaro_tasks', 'completed_by'),
     hasColumn('nivaro_tasks', 'done_when'),
     hasColumn('nivaro_tasks', 'auto_closed'),
     hasColumn('nivaro_tasks', 'reminded_at'),
-    hasColumn('nivaro_tasks', 'nudged_at')
+    hasColumn('nivaro_tasks', 'nudged_at'),
+    hasColumn('nivaro_tasks', 'agent_assignee')
   ])
-  return { completedBy, doneWhen, autoClosed, reminders, nudged }
+  return { completedBy, doneWhen, autoClosed, reminders, nudged, agent }
 }
 
 // ─── Names, dates, sentences ────────────────────────────────────────────────
@@ -144,6 +150,13 @@ export async function describeTaskChange(
       after.assignee
         ? `Reassigned to ${names.get(String(after.assignee).toUpperCase()) ?? 'someone'}`
         : 'Unassigned'
+    )
+  }
+  if (after.agent_assignee !== undefined && after.agent_assignee !== before.agent_assignee) {
+    out.push(
+      after.agent_assignee
+        ? `Handed to ${after.agent_name ?? 'an agent'}`
+        : `Taken back from ${before.agent_name ?? 'the agent'}`
     )
   }
   if (after.due_date !== undefined) {
@@ -233,6 +246,8 @@ async function eventPayload(task: TaskRow, extra: Record<string, unknown>) {
     creator_email: by(task.created_by)?.email ?? null,
     completed_by: task.completed_by ?? null,
     completed_by_name: personName(by(task.completed_by)),
+    agent_assignee: task.agent_assignee ?? null,
+    agent_name: task.agent_name ?? null,
     ...extra
   }
 }
@@ -290,14 +305,19 @@ export async function notifyAssignee(
     record: task.item,
     due: task.due_date ?? ''
   }).catch(() => null)
+  // #3223 — handed to the person's agent: they hear what their agent was given.
+  const agentName = task.agent_assignee ? (task.agent_name ?? 'your agent') : null
   await notifyUser(app, task.assignee, {
-    subject: templated?.subject ?? `Task assigned: ${task.title}`,
+    subject: agentName
+      ? `Task for ${agentName}: ${task.title}`
+      : (templated?.subject ?? `Task assigned: ${task.title}`),
     category: 'workflow',
-    message:
-      templated?.message ||
-      (task.description
-        ? task.description.slice(0, 400)
-        : `You have been assigned a task on ${task.collection}/${task.item}.`),
+    message: agentName
+      ? `${agentName}, an assistant connected to your account, will pick this up through My Work.${task.description ? ` ${task.description.slice(0, 300)}` : ''}`
+      : templated?.message ||
+        (task.description
+          ? task.description.slice(0, 400)
+          : `You have been assigned a task on ${task.collection}/${task.item}.`),
     collection: task.collection,
     item: task.item,
     sender: actorId,
@@ -309,8 +329,8 @@ export async function notifyAssignee(
       action: 'complete'
     },
     source: { kind: 'task', label: 'Task', id: task.id },
-    why: 'the task is assigned to you',
-    ...(built ? { template: built.template, template_data: built.data } : {})
+    why: agentName ? 'the task is handed to your agent' : 'the task is assigned to you',
+    ...(built && !agentName ? { template: built.template, template_data: built.data } : {})
   }).catch(() => undefined)
 }
 
@@ -357,6 +377,8 @@ export interface CreateTaskInput {
   priority?: string | null
   /** [{field, op, value}] — the task closes itself when the record meets it. */
   done_when?: unknown
+  /** #3223 — hand the task to an agent connection (o<grant> | k<api key>) instead. */
+  agent?: string | null
 }
 
 export class TaskInputError extends Error {
@@ -422,7 +444,14 @@ export async function createTask(
   app: FastifyInstance | null,
   actorId: string | null,
   input: CreateTaskInput,
-  opts: { req?: FastifyRequest; via?: string; notify?: boolean; createdBy?: string } = {}
+  opts: {
+    req?: FastifyRequest
+    via?: string
+    notify?: boolean
+    createdBy?: string
+    /** #3223 — an agent connection already checked by resolveTaskAgent (services/task-agents.ts). */
+    agent?: { conn: string; name: string; user_id: string; user_name: string | null } | null
+  } = {}
 ): Promise<{ task: TaskRow; delegated_from: string | null }> {
   const collection = input.collection ? String(input.collection) : null
   const item = input.item != null && input.item !== '' ? String(input.item) : null
@@ -443,12 +472,16 @@ export async function createTask(
       .catch(() => null)
     if (!team) throw new TaskInputError('Unknown team')
   }
-  if (!input.assignee && teamId == null)
+  const agent = opts.agent ?? null
+  if (!input.assignee && teamId == null && !agent)
     throw new TaskInputError('assign the task to a person or a team')
 
   let assignee: string | null = null
   let delegatedFrom: string | null = null
-  if (input.assignee) {
+  if (agent) {
+    // The agent acts as its person: they are the assignee, the connection picks it up.
+    assignee = agent.user_id
+  } else if (input.assignee) {
     const eff = await effectiveAssignee(String(input.assignee))
     assignee = eff.id
     delegatedFrom = eff.from
@@ -466,7 +499,7 @@ export async function createTask(
     title: title.slice(0, 500),
     description: input.description ?? null,
     assignee,
-    team_id: teamId,
+    team_id: agent ? null : teamId,
     due_date: input.due_date ? new Date(input.due_date) : null,
     priority:
       input.priority && TASK_PRIORITIES.includes(String(input.priority))
@@ -479,13 +512,22 @@ export async function createTask(
     updated_at: now
   }
   if (cols.doneWhen && doneWhen) row.done_when = doneWhen
+  if (agent) {
+    if (!cols.agent)
+      throw new TaskInputError('Handing tasks to agents needs database migration 511')
+    row.agent_assignee = agent.conn
+    row.agent_name = agent.name.slice(0, 200)
+  }
   const [task] = (await db('nivaro_tasks').insert(row).returning('*')) as unknown as [TaskRow]
   // #1874: list/queue rows showing an open-task count refresh it.
   announceRecordAspect(task?.collection, task?.item, '$tasks')
 
   const names = await namesOf([assignee, delegatedFrom])
   const parts: string[] = []
-  if (assignee) {
+  if (agent) {
+    const owner = names.get(agent.user_id.toUpperCase()) ?? agent.user_name
+    parts.push(`handed to ${agent.name}${owner ? ` (${owner}'s agent)` : ''}`)
+  } else if (assignee) {
     parts.push(`assigned to ${names.get(assignee.toUpperCase()) ?? 'someone'}`)
     if (delegatedFrom)
       parts.push(`covering for ${names.get(delegatedFrom.toUpperCase()) ?? 'someone'}, who is out`)

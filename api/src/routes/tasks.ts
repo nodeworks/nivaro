@@ -3,10 +3,12 @@ import { db } from '../db/index.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { mcpConnOf } from '../services/mcp-calls.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceRecordAspect } from '../services/record-events.js'
+import { listAssignableAgents, resolveTaskAgent, TaskAgentError } from '../services/task-agents.js'
 import {
   ACTIVE_STATUSES,
   bustDoneWhenCache,
@@ -147,7 +149,8 @@ function canWorkTask(req: FastifyRequest, t: TaskRow): boolean {
 }
 
 function inputError(reply: import('fastify').FastifyReply, err: unknown) {
-  if (err instanceof TaskInputError) return reply.code(400).send({ error: err.message })
+  if (err instanceof TaskInputError || err instanceof TaskAgentError)
+    return reply.code(400).send({ error: err.message })
   throw err
 }
 
@@ -169,6 +172,8 @@ export async function tasksRoutes(app: FastifyInstance) {
       due?: string
       search?: string
       limit?: string
+      /** #3223 — 'mine': tasks handed to the calling agent connection; or a connection key. */
+      agent?: string
     }
   }>('/', async (req, reply) => {
     const { collection, item, assignee, status, priority, due, search } = req.query
@@ -196,6 +201,12 @@ export async function tasksRoutes(app: FastifyInstance) {
     }
     const createdBy = req.query.created_by
     if (createdBy) q.where('t.created_by', createdBy === 'me' ? me : createdBy)
+    if (req.query.agent) {
+      if (!(await taskColumns()).agent) return reply.send({ data: [] })
+      const conn = req.query.agent === 'mine' ? mcpConnOf(req) : req.query.agent
+      if (!conn) return reply.send({ data: [] })
+      q.where('t.agent_assignee', conn)
+    }
 
     if (!req.isAdmin) {
       const recordVisible =
@@ -225,6 +236,19 @@ export async function tasksRoutes(app: FastifyInstance) {
       .orderByRaw(PRIORITY_RANK_SQL)
       .orderBy('t.due_date', 'asc')) as Array<TaskRow & Record<string, unknown>>
     return reply.send({ data: await withItemLabels(withNames(rows)) })
+  })
+
+  // GET /agents — agent connections the caller may hand a task to (#3223): their own OAuth
+  // connections and API keys; ?all=1 for an administrator lists everyone's.
+  app.get<{ Querystring: { all?: string } }>('/agents', async (req, reply) => {
+    const cols = await taskColumns()
+    if (!cols.agent) return reply.send({ data: [], ready: false })
+    const data = await listAssignableAgents(
+      app.redis,
+      { id: String(req.user!.id), isAdmin: !!req.isAdmin },
+      { all: req.query.all === '1' || req.query.all === 'true' }
+    )
+    return reply.send({ data, ready: true, me: mcpConnOf(req) })
   })
 
   // GET /team — open, unclaimed tasks waiting with one of my teams (#1014).
@@ -472,6 +496,8 @@ export async function tasksRoutes(app: FastifyInstance) {
       due_date?: string | null
       priority?: string
       done_when?: unknown
+      /** #3223 — an agent connection key (o<grant> | k<api key>) instead of a person. */
+      agent?: string | null
     }
   }>('/', async (req, reply) => {
     const body = req.body ?? {}
@@ -492,7 +518,19 @@ export async function tasksRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: 'Record not found' })
     }
     try {
-      const { task, delegated_from } = await createTask(app, req.user!.id, body, { req })
+      // 'self' = the agent connection making this call (an MCP tool call, an API key).
+      const selfConn = body.agent === 'self' ? mcpConnOf(req) : null
+      if (body.agent === 'self' && !selfConn?.match(/^[ok]/))
+        return reply
+          .code(400)
+          .send({ error: 'agent "self" works only from an agent connection (an app or API key)' })
+      const agent = body.agent
+        ? await resolveTaskAgent(app.redis, selfConn ?? body.agent, {
+            id: String(req.user!.id),
+            isAdmin: !!req.isAdmin
+          })
+        : null
+      const { task, delegated_from } = await createTask(app, req.user!.id, body, { req, agent })
       if (task.done_when) bustDoneWhenCache()
       // Tell the caller the redirect happened so the UI can say so.
       return reply.code(201).send({ data: { ...task, delegated_from } })
@@ -512,6 +550,8 @@ export async function tasksRoutes(app: FastifyInstance) {
       status?: string
       priority?: string
       done_when?: unknown
+      /** #3223 — hand to an agent connection; null takes it back (the person keeps it). */
+      agent?: string | null
     }
   }>('/:id', async (req, reply) => {
     const id = Number(req.params.id)
@@ -543,6 +583,34 @@ export async function tasksRoutes(app: FastifyInstance) {
       }
       patch.assignee = body.assignee || null
       if (cols.reminders) patch.reminded_at = null
+      // A task handed to a different person leaves the old person's agent.
+      if (cols.agent && existing.agent_assignee && body.agent === undefined) {
+        patch.agent_assignee = null
+        patch.agent_name = null
+      }
+    }
+    if (body.agent !== undefined && (body.agent ?? null) !== (existing.agent_assignee ?? null)) {
+      if (!cols.agent)
+        return reply
+          .code(400)
+          .send({ error: 'Handing tasks to agents needs database migration 511' })
+      if (body.agent) {
+        try {
+          const a = await resolveTaskAgent(app.redis, body.agent, {
+            id: me,
+            isAdmin: !!req.isAdmin
+          })
+          patch.agent_assignee = a.conn
+          patch.agent_name = a.name.slice(0, 200)
+          patch.assignee = a.user_id
+          if (cols.reminders) patch.reminded_at = null
+        } catch (err) {
+          return inputError(reply, err)
+        }
+      } else {
+        patch.agent_assignee = null
+        patch.agent_name = null
+      }
     }
     if (body.due_date !== undefined) {
       const due = body.due_date ? new Date(body.due_date) : null
@@ -599,8 +667,11 @@ export async function tasksRoutes(app: FastifyInstance) {
     }
     if (patch.done_when !== undefined) bustDoneWhenCache()
 
-    // Re-assignment notifies the new assignee
-    if (patch.assignee && !same(patch.assignee, existing.assignee)) {
+    // Re-assignment notifies the new assignee (a hand-off to their agent too)
+    if (
+      (patch.assignee && !same(patch.assignee, existing.assignee)) ||
+      (patch.agent_assignee && patch.agent_assignee !== existing.agent_assignee)
+    ) {
       await notifyAssignee(app, updated, me)
       emitTaskEvent(app, 'task-reassigned', updated, {
         actor: me,

@@ -196,18 +196,28 @@ export async function removeSubscription(
 // ─── Event streams ────────────────────────────────────────────────────────────
 
 const RECORD_URI = /^nivaro:\/\/record\/([^/?#]+)\/([^/?#]+)$/
+/** #3220 — an agent's ask_human question: notified when it is answered, expires or is withdrawn. */
+const QUESTION_URI = /^nivaro:\/\/question\/([0-9a-f-]{36})$/i
+export const QUESTION_COLLECTION = 'nivaro_agent_questions'
 
-/** The match key a record URI listens on, or null for anything else. */
-export function recordKeyOf(uri: string): { collection: string; key: string } | null {
+/** What a subscribed URI follows: a record, or an agent question (as its table + id). */
+export function subscribedTargetOf(uri: string): { collection: string; id: string } | null {
+  const q = QUESTION_URI.exec(uri)
+  if (q) return { collection: QUESTION_COLLECTION, id: q[1].toLowerCase() }
   const m = RECORD_URI.exec(uri)
   if (!m) return null
   try {
-    const collection = decodeURIComponent(m[1])
-    const id = decodeURIComponent(m[2])
-    return { collection, key: `${collection}\u0000${id.toLowerCase()}` }
+    return { collection: decodeURIComponent(m[1]), id: decodeURIComponent(m[2]) }
   } catch {
     return null
   }
+}
+
+/** The match key a record (or question) URI listens on, or null for anything else. */
+export function recordKeyOf(uri: string): { collection: string; key: string } | null {
+  const t = subscribedTargetOf(uri)
+  if (!t) return null
+  return { collection: t.collection, key: `${t.collection}\u0000${t.id.toLowerCase()}` }
 }
 
 const MAX_FIELDS = 50
@@ -376,11 +386,9 @@ export class McpLiveStream {
       const s = this.deps.session
       for (const uri of await listSubscriptions(this.deps.redis, s)) {
         if (this.closed) return
-        const m = RECORD_URI.exec(uri)
-        if (!m) continue
-        const ok = await this.deps
-          .canRead(decodeURIComponent(m[1]), decodeURIComponent(m[2]))
-          .catch(() => null)
+        const t = subscribedTargetOf(uri)
+        if (!t) continue
+        const ok = await this.deps.canRead(t.collection, t.id).catch(() => null)
         if (ok !== false) continue
         await removeSubscription(this.deps.redis, s, uri)
         this.notify(uri, { 'nivaro.dev/subscription': 'ended', 'nivaro.dev/reason': 'no_access' })

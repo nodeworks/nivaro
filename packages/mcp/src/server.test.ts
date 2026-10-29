@@ -116,6 +116,9 @@ describe('createNivaroMcpServer', () => {
       'create_task',
       'complete_task',
       'mark_notifications_read',
+      'ask_human',
+      'cancel_question',
+      'update_task',
       'add_comment',
       'cpu_profile',
       // a saved query may call a procedure that writes

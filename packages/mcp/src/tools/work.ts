@@ -5,6 +5,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import {
+  type AgentQuestion,
   completeTask,
   createTask,
   listMyTasks,
@@ -23,6 +24,7 @@ import { READ, WRITE, WRITE_IDEMPOTENT } from '../annotations.js'
 import { clip, clipRow, pageOf, personName } from '../compact.js'
 import { fail, ok, refuse } from '../result.js'
 import { clampTo, collectionName, numericId, recordId, uuid } from '../schema.js'
+import { summarizeQuestion } from './agents.js'
 
 type Row = Record<string, unknown>
 
@@ -40,6 +42,7 @@ export function summarizeTask(t: Row): Row {
     'item_label',
     'assignee',
     'assignee_name',
+    'agent_name',
     'team_name',
     'created_by_name',
     'completed_at'
@@ -93,7 +96,7 @@ export function registerWorkTools(
     {
       title: 'My Work',
       description:
-        "The key's user's inbox: records they own (most urgent SLA first), their tasks, team tasks waiting to be picked up, tasks they asked others to do, approval steps and unread notifications. Start here when asked what needs doing.",
+        "The key's user's inbox: records they own (most urgent SLA first), their tasks, team tasks waiting to be picked up, tasks they asked others to do, approval steps and unread notifications. For an agent connection also agent_tasks (tasks handed to this connection: pick them up with update_task status in_progress, finish with complete_task) and answers (replies to your ask_human questions, shown once). Start here when asked what needs doing.",
       inputSchema: {
         limit: z.number().int().optional().describe('Entries per section (1–50, default 10).')
       },
@@ -128,6 +131,16 @@ export function registerWorkTools(
           requested: take('requested').map(summarizeTask),
           approvals: take('approvals'),
           notifications: take('notifications').map(note)
+        }
+        // #3220 — questions assistants asked this person; #3223 / #3220 — for an agent
+        // connection, the tasks handed to it and answers to its questions (now collected).
+        const questions = take('questions').map((q) =>
+          summarizeQuestion(q as unknown as AgentQuestion)
+        )
+        if (questions.length) out.questions_for_you = questions
+        if (data.agent) {
+          out.agent_tasks = take('agent_tasks').map(summarizeTask)
+          out.answers = list('answers').map((q) => summarizeQuestion(q as unknown as AgentQuestion))
         }
         if (truncated.length > 0) {
           out.truncated = truncated
@@ -282,7 +295,7 @@ export function registerWorkTools(
     {
       title: 'Create a task',
       description:
-        'Ask a person (assignee, a user id from find_people) or a team (team_id) to do something on one record. A person out of office with a delegate hands it on; delegated_from says so.',
+        'Ask a person (assignee, a user id from find_people) or a team (team_id) to do something on one record. A person out of office with a delegate hands it on; delegated_from says so. agent: "self" hands it to this connection (it then shows in my_work agent_tasks).',
       inputSchema: {
         collection: collectionName,
         id: recordId,
@@ -295,11 +308,26 @@ export function registerWorkTools(
           .regex(/^\d{4}-\d{2}-\d{2}/, 'A date is YYYY-MM-DD')
           .optional()
           .describe('YYYY-MM-DD.'),
-        priority: z.enum(['low', 'normal', 'urgent']).optional()
+        priority: z.enum(['low', 'normal', 'urgent']).optional(),
+        agent: z
+          .string()
+          .regex(/^(self|o[0-9a-f-]{36}|k\d{1,12})$/i)
+          .optional()
+          .describe('"self" = this connection; or another agent connection key.')
       },
       annotations: WRITE
     },
-    async ({ collection, id, title, assignee, team_id, description, due_date, priority }) => {
+    async ({
+      collection,
+      id,
+      title,
+      assignee,
+      team_id,
+      description,
+      due_date,
+      priority,
+      agent
+    }) => {
       try {
         const res = await client.request(
           createTask({
@@ -310,7 +338,8 @@ export function registerWorkTools(
             team_id,
             description,
             due_date,
-            priority
+            priority,
+            agent
           })
         )
         return ok({

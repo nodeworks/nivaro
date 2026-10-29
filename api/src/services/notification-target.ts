@@ -207,8 +207,13 @@ export async function resolveTargetUrl(
         return linkTo('imports', {}, opts)
       case 'dashboard':
         return spec.id != null ? linkTo('dashboard', { id: spec.id }, opts) : null
-      case 'my_work':
-        return linkTo('my_work', {}, opts)
+      case 'my_work': {
+        // #3220 — `focus` opens My Work on one thing (an agent's question: question:<id>).
+        const url = await linkTo('my_work', {}, opts)
+        return spec.focus && url
+          ? `${url}${url.includes('?') ? '&' : '?'}focus=${encodeURIComponent(spec.focus)}`
+          : url
+      }
       case 'home':
         // ?focus=<widget key> lands on that dashboard card (#866).
         return withFocus(await linkTo('home', {}, opts))
@@ -268,6 +273,20 @@ export function actionsFor(
       body: { collection: spec.collection, item: String(spec.id) },
       input: { field: 'text', placeholder: 'Add a note to the record…', submit_label: 'Post' },
       mark_read: false
+    })
+  }
+  // #3220 — an agent's question: answer it right from the notification (free text; choices
+  // are offered on My Work). The answer route takes a signed-in session only.
+  const question =
+    spec.kind === 'my_work' ? /^question:([0-9a-f-]{36})$/i.exec(spec.focus ?? '') : null
+  if (question) {
+    out.push({
+      key: 'reply',
+      label: 'Answer',
+      method: 'POST',
+      endpoint: `/agent-questions/${question[1]}/answer`,
+      input: { field: 'answer', placeholder: 'Your answer…', submit_label: 'Send answer' },
+      mark_read: true
     })
   }
   if (spec.kind === 'task' && spec.id != null) {

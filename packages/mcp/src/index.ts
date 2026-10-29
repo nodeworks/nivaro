@@ -28,6 +28,7 @@ import { registerResources } from './resources.js'
 import { registerAccessTools } from './tools/access.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerAdminTools } from './tools/admin.js'
+import { registerAgentTools } from './tools/agents.js'
 import { registerApprovalTools } from './tools/approvals.js'
 import { registerChaosTools } from './tools/chaos.js'
 import { type ChatAccess, registerChatTools } from './tools/chat.js'
@@ -123,6 +124,10 @@ export const TOOL_NAMES = [
   'complete_task',
   'list_notifications',
   'mark_notifications_read',
+  'ask_human',
+  'get_human_answer',
+  'cancel_question',
+  'update_task',
   'list_comments',
   'add_comment',
   'list_revisions',
@@ -267,6 +272,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   const chatAccess: ChatAccess =
     options.chatAccess === 'read' || options.chatAccess === 'post' ? options.chatAccess : 'none'
   registerWorkTools(server, client, { chat: chatAccess !== 'none' })
+  registerAgentTools(server, client)
   registerRecordTools(server, client)
   registerDataTools(server, client)
   registerLookupTools(server, client)
