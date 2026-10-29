@@ -1,5 +1,5 @@
 /**
- * Layout tools (#2694) — read how a collection's forms are built and why a
+ * Layout tools (#2694, lint_layout #3217) — read how a collection's forms are built and why a
  * record or a role sees what it sees, and PROPOSE layout changes. Registered
  * with the admin tools (`adminTools: true`); the API answers 403 to anyone
  * who is not an administrator either way.
@@ -14,6 +14,7 @@ import {
   explainLayoutField,
   type NivaroClient,
   proposeLayoutOps,
+  readLayoutLint,
   readLayoutOverview,
   whichLayoutForm
 } from '@nivaro/sdk'
@@ -141,6 +142,50 @@ export function registerLayoutTools(server: McpServer, client: NivaroClient) {
           })
         )
         return ok(res.data)
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'lint_layout',
+    {
+      title: 'Check a form for problems',
+      description:
+        "A form's (layout's) lint findings exactly as the layout editor's Check panel shows them for the saved layout: required fields hidden from a role that must fill them, picker cascades whose parent is missing, empty sections and steps, fields and sections no record reaches, accessibility (missing labels, required without its marker, tab order, colour contrast) — each with where it is and, where one is safe, a fix as layout ops you can pass to propose_layout_ops. Also the health score and what costs it points. Admin only.",
+      inputSchema: {
+        layout_id: layoutId,
+        severity: z
+          .enum(['error', 'warn', 'info'])
+          .optional()
+          .describe('Only findings this severe or worse (default: all).')
+      },
+      annotations: READ
+    },
+    async ({ layout_id, severity }) => {
+      try {
+        const d = (await client.request(readLayoutLint(layout_id))).data
+        const rank = { error: 0, warn: 1, info: 2 } as const
+        const max = severity ? rank[severity] : 2
+        const findings = d.findings.filter((f) => rank[f.severity] <= max)
+        return ok({
+          layout: d.layout,
+          score: d.score,
+          costs: d.costs,
+          counts: d.counts,
+          findings: findings.map((f) => ({
+            severity: f.severity,
+            rule: f.rule,
+            where: f.where,
+            message: f.message,
+            ...(f.fix ? { fix: f.fix } : {})
+          })),
+          ...(d.truncated ? { truncated: true, total: d.total } : {}),
+          ...(findings.some((f) => f.fix)
+            ? { next: 'A fix is layout ops: pass them to propose_layout_ops for review.' }
+            : {})
+        })
       } catch (err) {
         return fail(err)
       }

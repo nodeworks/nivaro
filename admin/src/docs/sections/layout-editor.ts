@@ -895,6 +895,20 @@ GET  /api/collection-layouts/field-access?collection=orders
                            hidden_fields, readonly_fields }] } }   // every role's field permissions
 GET  /api/collection-layouts/:id/dependencies
      → { layout, groups, nodes, extensions }   // what relies on the layout
+GET  /api/collection-layouts/:id/lint
+     → { data: { layout, score, costs, counts, findings: [{ id, rule, severity, where, target,
+                 message, fix? }] } }   // the Problems panel's checks on the SAVED form (MCP lint_layout)
+
+# Form state and form image (anyone signed in, as themselves; role: administrators only)
+POST /api/collection-layouts/form-state  { collection, item?, layout_id?, values?, role?, viewport? }
+     → { data: { layout, as, can_update, derived, groups, fields: [{ field, label, section, visible,
+                 required, locked, missing?, hidden_by?, locked_by?, why? }], summary } }
+     // the form the record opens with (record rules read the values too), and what it
+     // shows, requires and locks; derived = what its field rules would fill in (MCP form_state)
+POST /api/collection-layouts/render-form  { …same, theme?: 'light'|'dark', show_hidden? }
+     → { data: { mime: 'image/png', base64, bytes, width, layout, as, summary } }
+     // a PNG of that form; values only where the caller (and the role) may read them.
+     // Chromium runs locally or on the render server (RENDER_URL); 503 RENDER_UNAVAILABLE otherwise
 
 # Create, read and change a layout (administrators)
 POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true | string[],

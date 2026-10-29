@@ -659,6 +659,13 @@ export async function resolveLayout(opts: {
   viewport?: Viewport
   /** The day to resolve on (#2714 active dates); default today in the instance zone. */
   today?: string
+  /**
+   * Unsaved values laid over the stored record before record rules are judged
+   * (#3218 form state: "which form would this record get with these values").
+   * Only the keys the candidate layouts' rules name are read; without `item`
+   * they are the whole record (a new one).
+   */
+  recordOverride?: Record<string, unknown> | null
 }): Promise<PickResult> {
   const { collection, slug, item, role, isAdmin } = opts
   const ctx: ResolveContext = {
@@ -756,6 +763,12 @@ export async function resolveLayout(opts: {
           .first()
           .catch(() => null)) ?? null
     }
+  }
+  if (opts.recordOverride && typeof opts.recordOverride === 'object') {
+    const ruleFields = collectRecordConditionFields(layouts)
+    const over: Record<string, unknown> = {}
+    for (const f of ruleFields) if (f in opts.recordOverride) over[f] = opts.recordOverride[f]
+    if (Object.keys(over).length > 0) record = { ...(record ?? {}), ...over }
   }
   const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin, ctx)
   return { ...res, checked: [...slugChecks, ...res.checked] }

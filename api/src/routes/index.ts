@@ -121,6 +121,7 @@ import { filesRoutes } from './files.js'
 import { findReplaceRoutes } from './find-replace.js'
 import { flowRegistryRoutes } from './flow-registry.js'
 import { flowsRoutes, webhookFlowRoute } from './flows.js'
+import { formToolsRoutes } from './form-tools.js'
 import { geocodeRoutes } from './geocode.js'
 import { geocodeBackfillRoutes } from './geocode-backfill.js'
 import { geocodeSuggestRoutes } from './geocode-suggest.js'
@@ -687,6 +688,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(layoutDependencyRoutes, { prefix: '/collection-layouts' })
   // #2596: GET /collection-layouts/why (static path beside the layouts routes' /:id).
   await app.register(layoutWhyRoutes, { prefix: '/collection-layouts' })
+  // #3216–#3218: form state, form image and stored-layout lint (the MCP form tools).
+  await app.register(formToolsRoutes, { prefix: '/collection-layouts' })
   await app.register(layoutCollabRoutes, { prefix: '/layout-collab' })
   await app.register(formPreviewPublicRoutes, { prefix: '/form-preview' })
   await app.register(layoutInspectRoutes, { prefix: '/layout-inspect' })
