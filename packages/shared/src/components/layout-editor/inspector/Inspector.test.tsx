@@ -575,6 +575,11 @@ describe('Inspector', () => {
       inheritedFrom: 'Base order'
     })
     for (const k of settingsIn()) seen.add(k)
+    // Make default on the form shows once Personal default is on
+    await mount(field('title'), {
+      bundle: withPlacement(makeBundle(), 'title', { overrides: { personal_default: true } })
+    })
+    for (const k of await collectAll()) seen.add(k)
     // The every-form confirm opens on a global change
     await mount(field('amount'))
     await click(
