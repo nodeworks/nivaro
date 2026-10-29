@@ -151,6 +151,8 @@ export function DesignNode({
   const cls = cn(
     !positioned && 'relative',
     'cursor-pointer rounded-md outline-offset-2',
+    // #3193: on touch a press-and-hold picks the node up — no callout, no text selection.
+    'touch-manipulation [-webkit-touch-callout:none] [@media(pointer:coarse)]:select-none',
     !child && (inline ? 'inline-block' : 'block'),
     selected
       ? 'outline outline-2 outline-nvr-cyan'
@@ -409,7 +411,16 @@ export function DesignNode({
       data-design-drop-indicator={slot}
       className='pointer-events-none absolute z-30 rounded-full bg-nvr-cyan shadow-[0_0_0_2px_#fff] dark:shadow-[0_0_0_2px_#0f172a]'
       style={nd.indicator ?? FALLBACK_INDICATOR[slot]}
-    />
+    >
+      {nd.merge && (
+        <span
+          data-design-merge-label=''
+          className='absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-nvr-cyan px-1.5 text-[11px] font-medium leading-5 text-white'
+        >
+          Join into {nd.merge}
+        </span>
+      )}
+    </span>
   ) : null
 
   // #2701: a selected field or in-section panel drags its width from its right edge.

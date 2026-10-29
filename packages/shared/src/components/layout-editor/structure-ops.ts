@@ -1,3 +1,4 @@
+import { withGroupStructure } from '../../lib/form-structure'
 import {
   applyLayoutOps,
   GROUP_PATCH_KEYS,
@@ -10,7 +11,6 @@ import {
   type PlacementRow,
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
-import { withGroupStructure } from '../../lib/form-structure'
 import { titleCase } from '../../lib/utils'
 import { newGroupKey } from './add-target'
 import type { DesignTarget } from './design-context'
@@ -24,7 +24,14 @@ import {
   zoneItems
 } from './field-zones'
 import { asArray, placementPatchOf, readOverrides, withKey } from './inspector/model'
-import { isPinned, withPin } from './pin'
+import {
+  isPinned,
+  isPlacementPinned,
+  placementOf,
+  unpinnedPatch,
+  withPin,
+  withPlacementPin
+} from './pin'
 import { humanizeOpError } from './useLayoutDraft'
 
 // Structure actions on the canvas (#2623 #2624 #2625 #2628 #2643 #2630):
@@ -85,7 +92,15 @@ export function kindWord(b: LayoutBundle, g: GroupRow): string {
 
 // ── Pin (#2628) ─────────────────────────────────────────────────────────────
 
-export { isPinned, PIN_KEY, pinLocked, pinnedZone, withPin } from './pin'
+export {
+  isPinned,
+  isPlacementPinned,
+  PIN_KEY,
+  pinLocked,
+  pinnedZone,
+  withPin,
+  withPlacementPin
+} from './pin'
 
 export function pinPlan(bundle: LayoutBundle, key: string, on: boolean): StructurePlan {
   const g = findGroup(bundle, key)
@@ -95,6 +110,38 @@ export function pinPlan(bundle: LayoutBundle, key: string, on: boolean): Structu
     ok: true,
     ops: [{ op: 'group_update', key, patch: { swap_config: withPin(g.swap_config, on) } }],
     label: `${on ? 'Pin' : 'Unpin'} ${groupName(g)}`,
+    notes: []
+  })
+}
+
+/** Why this field, panel or header tile cannot be pinned or unpinned (null: it can). */
+export function fieldPinBlocked(bundle: LayoutBundle, t: DesignTarget | null): string | null {
+  if (!t || t.kind === 'group') return 'Select a field first'
+  if (!placementOf(bundle, t)) return 'This comes from the parent form: override it here first'
+  return null
+}
+
+/** Pin one field's spot in the editor (#3203), or unpin it: its placement's overrides only. */
+export function fieldPinPlan(
+  bundle: LayoutBundle,
+  t: DesignTarget | null,
+  on: boolean
+): StructurePlan {
+  const blocked = fieldPinBlocked(bundle, t)
+  if (blocked || !t || t.kind === 'group') return refuse(blocked ?? 'Select a field first')
+  const row = placementOf(bundle, t) as PlacementRow
+  if (isPlacementPinned(row) === on) return refuse(on ? 'Already pinned' : 'Not pinned')
+  const name = row.label_override || titleCase(t.field.replace(/^__|__$/g, ''))
+  return checked(bundle, {
+    ok: true,
+    ops: [
+      {
+        op: 'update_placement',
+        at: { field: row.field, group_key: row.group_key },
+        patch: { overrides: withPlacementPin(row.overrides, on) }
+      }
+    ],
+    label: `${on ? 'Pin' : 'Unpin'} ${name}`,
     notes: []
   })
 }
@@ -158,7 +205,7 @@ export function duplicatePlan(bundle: LayoutBundle, t: DesignTarget | null): Str
         field: p.field,
         group_key: key,
         index: i,
-        patch: placementPatchOf(p)
+        patch: unpinnedPatch(placementPatchOf(p))
       })
     })
     childrenOf(b, src.key).forEach((c, i) => {
