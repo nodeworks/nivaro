@@ -1,8 +1,11 @@
-import { ItemEditAuthContext, NivaroProvider, PipelineEditorView } from '@nivaro/shared'
 import { createNivaro } from '@nivaro/sdk'
+import { ItemEditAuthContext, NivaroProvider, PipelineEditorView } from '@nivaro/shared'
+import { useState } from 'react'
 import { useParams } from 'react-router'
-import { exportPipeline } from '@/lib/api'
+import { PipelineDiagram } from '@/components/diagram/DiagramPanels'
+import { DiagramTabs, type EditorView } from '@/components/diagram/DiagramTabs'
 import { PagePresence } from '@/components/page-presence'
+import { exportPipeline } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 
@@ -15,6 +18,7 @@ export function PipelineEditPage() {
   const { id } = useParams<{ id: string }>()
   const goBack = useGoBack('/pipelines')
   const { user } = useAuth()
+  const [view, setView] = useState<EditorView>('editor')
 
   if (!id) return null
   return (
@@ -25,7 +29,16 @@ export function PipelineEditPage() {
           <div className='pointer-events-none absolute right-6 top-3 z-20'>
             <PagePresence />
           </div>
-          <PipelineEditorView templateId={id} onBack={goBack} onExport={() => exportPipeline(id)} />
+          <DiagramTabs value={view} onChange={setView} />
+          {view === 'diagram' ? (
+            <PipelineDiagram templateId={id} />
+          ) : (
+            <PipelineEditorView
+              templateId={id}
+              onBack={goBack}
+              onExport={() => exportPipeline(id)}
+            />
+          )}
         </div>
       </ItemEditAuthContext.Provider>
     </NivaroProvider>
