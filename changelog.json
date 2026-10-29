@@ -1,10 +1,242 @@
 {
-  "generated_at": "2026-10-29T14:06:40.265Z",
+  "generated_at": "2026-10-29T17:26:30.991Z",
   "releases": [
+    {
+      "version": "0.3.51",
+      "tag": "v0.3.51",
+      "date": "2026-10-29T13:26:16-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "imports",
+              "text": "Download sample CSV for any import",
+              "hash": "da2d3e111"
+            },
+            {
+              "section": "Added",
+              "scope": "personal defaults",
+              "text": "profile-only switch and every allowed field on My defaults",
+              "hash": "55d017a7e"
+            },
+            {
+              "section": "Added",
+              "scope": "agents",
+              "text": "admin + My Work UI for agent triggers, questions, agent tasks",
+              "hash": "01723c227"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "tablet versions in the record-tool gate and the why text",
+              "hash": "93ebf5b30"
+            },
+            {
+              "section": "Added",
+              "scope": "profile",
+              "text": "clearer My defaults wording and layout",
+              "hash": "556a83c37"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "layout as a YAML file (#3189)",
+              "hash": "c27b7ec1d"
+            },
+            {
+              "section": "Added",
+              "scope": "ai-forms",
+              "text": "form from a paper form (#3186)",
+              "hash": "41f8958b7"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "agent write attribution, attach_file, schema proposals, connection rollback",
+              "hash": "bce27a8bc"
+            },
+            {
+              "section": "Added",
+              "scope": "record-form",
+              "text": "tablet version, density, first-use tour, collapsed key values",
+              "hash": "90f8d2fc7"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "limits, kits, suggestions and contract tests in the admin UI",
+              "hash": "8ec0b45b9"
+            },
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "online list says \"Tab in background\" when no page is known",
+              "hash": "32d14e553"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "drill_widget, form_state, render_form and lint_layout tools",
+              "hash": "f515b0b90"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "form state, form image, layout lint and widget drill rows",
+              "hash": "cbac1ab82"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "compare_records, build_filter, changes_since, update preview",
+              "hash": "f0d34dcae"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "update preview, filter check and change feed",
+              "hash": "53f6afb7d"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "canvas drag modes, trash links and undo chip",
+              "hash": "fb4b896a3"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "pin a single field; join any two sections",
+              "hash": "839fdd597"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "even out a row, all devices, zoom, sample record, pinned settings",
+              "hash": "4c31ac639"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "error-rate lens, where saves fail (#3185)",
+              "hash": "f8c11fdd5"
+            },
+            {
+              "section": "Added",
+              "scope": "agents",
+              "text": "agent triggers, ask_human, agents as task assignees (API + MCP)",
+              "hash": "0fddea3ee"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "copy, paste, put back and paint on the canvas",
+              "hash": "92071d227"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "linked library sections (#3194)",
+              "hash": "d353ed5b6"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "connection scopes, tool kits, tool suggestions, contract tests (API)",
+              "hash": "3b1b5242a"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-lint",
+              "text": "label house style checks (#3184)",
+              "hash": "381e713b9"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "personal defaults",
+              "text": "undo also takes back what the default's pick filled",
+              "hash": "310381da6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "personal defaults",
+              "text": "undo takes back the parents a default filled",
+              "hash": "897b83c06"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "say a linked drop is not saved yet when publishing",
+              "hash": "c3b5ca48c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "page no longer scrolls past its end",
+              "hash": "7be19a682"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync layout + MCP program sections to www and the docs index",
+              "hash": "89eb5887f"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "MCP form and widget drill tools",
+              "hash": "9ca656cd9"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "MCP data tools and the REST routes behind them",
+              "hash": "8d4972abd"
+            },
+            {
+              "section": "Documentation",
+              "scope": "layout-editor",
+              "text": "selection drag, Alt copy, join by drop, trash, touch, field pins",
+              "hash": "8207b81e6"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "layout-editor",
+              "text": "parity map covers Make default on the form",
+              "hash": "15cbd3d2a"
+            },
+            {
+              "section": "Other",
+              "scope": "layout-editor",
+              "text": "wait for the linked-drop button to be enabled",
+              "hash": "ed8fdaa7d"
+            }
+          ]
+        }
+      ],
+      "count": 34
+    },
     {
       "version": "0.3.50",
       "tag": "v0.3.50",
-      "date": "2026-10-29T10:06:24-04:00",
+      "date": "2026-10-29T10:06:40-04:00",
       "sections": [
         {
           "label": "Added",
