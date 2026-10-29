@@ -36,6 +36,8 @@ vi.mock('../../../services/teams-bot/jwt.js', () => ({
   verifyConnectorToken: async () => st.verdict
 }))
 vi.mock('../../../services/teams-bot/connector.js', () => ({ sendActivity: st.send }))
+const audit = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => null))
+vi.mock('../../../services/activity.js', () => ({ logActivity: audit }))
 vi.mock('../../../services/teams-bot/ask.js', () => ({ answerInTeams: st.ask }))
 vi.mock('../../../services/teams-bot/actions.js', () => ({
   handleInvoke: (...a: unknown[]) => st.invoke(...a)
@@ -107,6 +109,7 @@ beforeEach(() => {
   st.enabled = true
   st.invoke.mockReset().mockResolvedValue({ type: 'AdaptiveCard' })
   logErr.mockReset()
+  audit.mockClear()
   inbound.mockReset()
   inbound.mockResolvedValue(undefined)
   for (const f of [st.ask, st.upsert, st.send, st.mark]) f.mockReset()
@@ -228,6 +231,9 @@ describe('POST /api/teams/messages', () => {
       })
     )
     expect(JSON.stringify(st.send.mock.calls[0])).toContain('Hi Rob.')
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'teams-link', user: 'U1', comment: 'entra_oid' })
+    )
   })
 
   it('install by an unmatched user gets the Connect card', async () => {
@@ -298,6 +304,14 @@ describe('GET /api/teams/connect', () => {
     expect(r.statusCode).toBe(200)
     expect(r.body).toContain('Teams connected. You can close this tab.')
     expect(st.upsert).toHaveBeenCalledWith('U1', expect.objectContaining({ linkedBy: 'sign_in' }))
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'teams-link',
+        user: 'U1',
+        collection: 'nivaro_users',
+        comment: 'sign_in'
+      })
+    )
   })
 
   it('refuses a different Microsoft account', async () => {
@@ -306,6 +320,7 @@ describe('GET /api/teams/connect', () => {
     const r = await get(await build())
     expect(r.statusCode).toBe(403)
     expect(st.upsert).not.toHaveBeenCalled()
+    expect(audit).not.toHaveBeenCalled()
   })
 
   it('an oid held by another user is a 403 page', async () => {

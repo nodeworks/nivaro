@@ -100,7 +100,9 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
     '/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const row = await db('nivaro_custom_actions').where('id', req.params.id).first('id')
+      const row = await db('nivaro_custom_actions')
+        .where('id', req.params.id)
+        .first('id', 'label', 'collection')
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const b = req.body as Record<string, unknown>
       const patch: Record<string, unknown> = {}
@@ -114,6 +116,15 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
       if (b.sort !== undefined) patch.sort = Number(b.sort) || 0
       if (Object.keys(patch).length > 0) {
         await db('nivaro_custom_actions').where('id', row.id).update(patch)
+        // The config and guard decide what the button does and who may press it.
+        await logActivity({
+          action: 'custom-action-update',
+          user: req.user?.id,
+          collection: String(row.collection),
+          item: String(row.id),
+          comment: `${String(patch.label ?? row.label)}: ${Object.keys(patch).sort().join(', ')}`,
+          req
+        })
       }
       return { data: { id: row.id } }
     }

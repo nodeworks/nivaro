@@ -196,7 +196,9 @@ const spentKey = (hash: string) => `${P}rt-spent:${hash}`
 
 export type ConsumeRefreshResult =
   | { ok: true; rec: TokenRecord }
-  | { ok: false; reason: 'unknown' | 'reused' | 'revoked' }
+  | { ok: false; reason: 'unknown' | 'revoked' }
+  /** A replayed refresh token: the grant it belonged to has been ended (who + which, for the log). */
+  | { ok: false; reason: 'reused'; user_id: string; grant_id: string }
 
 /**
  * Rotate: the refresh token is spent; the caller issues a new pair. A spent token stays
@@ -218,7 +220,7 @@ export async function consumeRefreshChecked(
     if (!spent || !sameTenant(spent)) return { ok: false, reason: 'unknown' }
     if (Date.now() - spent.at > REFRESH_REUSE_GRACE_S * 1000) {
       await revokeGrant(redis, spent.user_id, spent.grant_id).catch(() => false)
-      return { ok: false, reason: 'reused' }
+      return { ok: false, reason: 'reused', user_id: spent.user_id, grant_id: spent.grant_id }
     }
     return { ok: false, reason: 'unknown' }
   }

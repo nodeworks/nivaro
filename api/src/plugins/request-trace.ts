@@ -90,7 +90,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
       clearTrace()
       return
     }
-    beginTrace(path, req)
+    beginTrace(path, req, req.id)
     // The trace id IS the request id: the API log row, the Traffic Map events, the trace ring
     // and the response header all carry it, so one id joins them.
     req.requestId = currentTraceMeta()?.id

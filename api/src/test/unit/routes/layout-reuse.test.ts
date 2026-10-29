@@ -85,7 +85,11 @@ import {
 } from '../../../routes/layout-reuse.js'
 import { newGroup, newPlacement, ungroupedGroup } from '../../../services/layout-ops-apply.js'
 
-async function call(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: Row) {
+async function call(
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  url: string,
+  payload?: Row
+) {
   const app = Fastify({ logger: false })
   app.register(layoutReuseRoutes, { prefix: '/collection-layouts' })
   await app.ready()
@@ -190,6 +194,15 @@ describe('section library + templates', () => {
     const id = saved.body.data.id
     const renamed = await call('PATCH', `/templates/${id}`, { name: 'Starter form' })
     expect(renamed.body.data.name).toBe('Starter form')
+    const { logActivity } = await import('../../../services/activity.js')
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'update',
+        collection: 'nivaro_layout_templates',
+        item: String(id),
+        comment: 'name'
+      })
+    )
     expect((await call('DELETE', `/templates/${id}`)).status).toBe(204)
     expect(fake.tables.nivaro_layout_templates).toEqual([])
   })

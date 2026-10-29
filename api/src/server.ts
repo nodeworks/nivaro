@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { STATUS_CODES } from 'node:http'
 import { join } from 'node:path'
@@ -86,6 +87,10 @@ export async function buildServer() {
     bodyLimit: largeBodyLimit(_fileSizeMb),
     // TRUST_PROXY: true | false | hop count | IP/CIDR list (M14) — lib/trust-proxy.ts.
     trustProxy: fastifyTrustProxy(trustProxy.value),
+    // A uuid request id (never a client-supplied one: requestIdHeader stays off). The request
+    // trace adopts it, so the reqId on every req.log line is the same id as the api_logs row,
+    // the x-nivaro-request-id header and the trace — one id joins a server error to its request.
+    genReqId: () => randomUUID(),
     logger: {
       level: config.LOG_LEVEL,
       // Request lines never carry the query string: tokens and tickets ride some URLs

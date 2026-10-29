@@ -37,6 +37,28 @@ const SECRET_KEYS = [
   'teams_bot_app_secret'
 ] as const
 
+/**
+ * The activity comment for a settings save: the NAMES of the columns whose value changed
+ * (credentials included, never their values), so "who changed the SMTP password / AI key" has
+ * an answer. The Settings form sends whole cards, so unchanged columns are left out.
+ */
+export function changedSettingsComment(
+  before: Record<string, unknown> | undefined,
+  patch: Record<string, unknown>
+): string {
+  const norm = (v: unknown): string => {
+    if (v == null || v === '') return ''
+    if (v === true) return '1'
+    if (v === false) return '0'
+    if (v instanceof Date) return v.toISOString()
+    return typeof v === 'object' ? JSON.stringify(v) : String(v)
+  }
+  const keys = Object.keys(patch)
+    .filter((k) => norm(before?.[k]) !== norm(patch[k]))
+    .sort()
+  return keys.length ? `changed: ${keys.join(', ')}`.slice(0, 1000) : 'no changes'
+}
+
 function maskSettings(settings: Record<string, unknown>) {
   const out: Record<string, unknown> = { ...settings }
   for (const k of SECRET_KEYS) if (k in out) out[k] = out[k] ? MASK : null
@@ -610,6 +632,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       user: req.user?.id,
       collection: 'nivaro_settings',
       item: String(settings.id),
+      comment: changedSettingsComment(settings, patch),
       req
     })
     return reply.send({ data: maskSettings(updated) })

@@ -184,6 +184,32 @@ describe('PATCH /settings', () => {
     await app.close()
   })
 
+  it('names the changed columns in the activity row, never a credential value', async () => {
+    const { logActivity } = await import('../../../services/activity.js')
+    vi.mocked(logActivity).mockClear()
+    const app = await buildApp()
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/settings',
+      headers: { 'x-test-user': 'admin' },
+      // project_name unchanged, smtp_pass new, the AI key's mask sent back (kept, not a change)
+      payload: { project_name: 'EFP', smtp_pass: 'NEW-SMTP-SECRET', anthropic_api_key: '••••••' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'update',
+        collection: 'nivaro_settings',
+        comment: 'changed: smtp_pass'
+      })
+    )
+    const comments = vi
+      .mocked(logActivity)
+      .mock.calls.map((c) => (c[0] as { comment?: string }).comment)
+    expect(JSON.stringify(comments)).not.toContain('NEW-SMTP-SECRET')
+    await app.close()
+  })
+
   it('refuses a non-admin', async () => {
     const app = await buildApp()
     const res = await app.inject({

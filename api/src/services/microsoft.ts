@@ -34,12 +34,17 @@ export async function sendTeamsNotification(opts: {
         body: JSON.stringify(body)
       })
       noteChannel('teams', res.ok ? 'sent' : 'failed', { ms: Date.now() - started })
+      // The webhook URL is a credential: the log names the status only.
+      // biome-ignore lint/suspicious/noConsole: a refused delivery must reach the server log
+      if (!res.ok) console.warn('[teams] webhook refused the message, status', res.status)
     } catch (err) {
       noteChannel('teams', 'failed', { ms: Date.now() - started })
       throw err
     }
-  } catch {
-    // Teams notifications are non-critical — never throw
+  } catch (err) {
+    // Teams notifications are non-critical — never throw, but say why it did not go.
+    // biome-ignore lint/suspicious/noConsole: a failed delivery must reach the server log
+    console.warn('[teams] webhook send failed:', err instanceof Error ? err.name : String(err))
   }
 }
 

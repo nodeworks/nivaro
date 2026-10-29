@@ -1543,10 +1543,20 @@ export async function itemsRoutes(app: FastifyInstance) {
         for (const id of [...created].reverse()) {
           try {
             await deleteOne(user, collection, String(id), opts.req, opts.workspaceId)
-          } catch {
+          } catch (err) {
+            // The raw delete below writes no activity row: the record's create row stays alone
+            // in its history, so the server log says why it went this way.
+            ;(opts.req?.log ?? app.log).warn(
+              { collection, id: String(id), error: (err as Error)?.name },
+              'atomic bulk rollback: delete refused, removing the row directly'
+            )
             try {
               await db(collection).where({ id }).del()
-            } catch {
+            } catch (rawErr) {
+              ;(opts.req?.log ?? app.log).error(
+                { collection, id: String(id), error: (rawErr as Error)?.name },
+                'atomic bulk rollback: row could not be removed'
+              )
               leftover.push(id)
             }
           }

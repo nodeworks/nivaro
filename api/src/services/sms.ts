@@ -114,16 +114,22 @@ export function applySmsTestMode(
   return { to: cfg.testRecipient, body: `[TEST — was: ${to}] ${body}` }
 }
 
+/** A phone number as the server log may show it: the last four digits only. */
+export function maskPhone(v: string): string {
+  const d = normalizePhone(v)
+  return d.length > 4 ? `***${d.slice(-4)}` : '***'
+}
+
 export async function sendSms(to: string, body: string): Promise<void> {
   const cfg = await getSmsConfig()
   if (!cfg.provider || !cfg.accountSid || !cfg.authToken) {
-    console.warn('[sms] Provider not configured, skipping SMS to', to)
+    console.warn('[sms] Provider not configured, skipping SMS to', maskPhone(to))
     return
   }
 
   const routed = applySmsTestMode(cfg, to, body)
   if (!routed) {
-    console.warn('[sms] test mode: dropped SMS to', to, '(no test recipient configured)')
+    console.warn('[sms] test mode: dropped SMS to', maskPhone(to), '(no test recipient configured)')
     noteChannel('sms', 'dropped')
     return
   }
@@ -137,6 +143,14 @@ export async function sendSms(to: string, body: string): Promise<void> {
     noteChannel('sms', 'sent', { ms: Date.now() - started })
   } catch (err) {
     noteChannel('sms', 'failed', { ms: Date.now() - started })
+    // The caller decides what a failure means; the log keeps which provider refused (no body,
+    // no full number — a provider's message can quote the number, so the error's name only).
+    // biome-ignore lint/suspicious/noConsole: a refused send must reach the server log
+    console.warn(
+      `[sms] send via ${cfg.provider} failed for`,
+      maskPhone(to),
+      err instanceof Error ? err.name : 'error'
+    )
     throw err
   }
 }

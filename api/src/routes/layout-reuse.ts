@@ -232,10 +232,19 @@ export async function layoutReuseRoutes(app: FastifyInstance) {
     const id = Number(tid) || 0
     if (!(await db(TABLE).where({ id }).first()))
       return reply.code(404).send({ error: 'Not found' })
-    if (Object.keys(patch).length)
+    if (Object.keys(patch).length) {
       await db(TABLE)
         .where({ id })
         .update({ ...patch, updated_at: new Date() })
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: TABLE,
+        item: String(id),
+        comment: Object.keys(patch).sort().join(', '),
+        req
+      })
+    }
     const row = (await db(TABLE).where({ id }).first()) as TemplateRow
     return reply.send({ data: templateOut(row) })
   })
