@@ -12,7 +12,7 @@ import { isTyping } from '../is-typing'
 import type { DescribeField } from '../overview/describe-conditions'
 import type { FindHit } from './find'
 import { buildOutline } from './tree'
-import { useViewPref } from './view-prefs'
+import { useCanvasZoom, useViewPref } from './view-prefs'
 
 // The editor's way-finding state (#2620 find, #2621 outline, #2622
 // breadcrumb, #2626 shortcut sheet, #2627 compact + expand / collapse all)
@@ -65,6 +65,8 @@ export function useEditorNav({
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [outlineOpen, setOutlineOpen] = useViewPref('outline')
   const [compact, setCompact] = useViewPref('compact')
+  // #3188: the canvas zoom slider, kept per person beside compact.
+  const [zoom, setZoom] = useCanvasZoom()
   const seq = useRef(0)
   const showHiddenRef = useRef(showHidden)
   showHiddenRef.current = showHidden
@@ -185,6 +187,8 @@ export function useEditorNav({
     outlineOpen,
     setOutlineOpen,
     compact,
-    setCompact
+    setCompact,
+    zoom,
+    setZoom
   }
 }

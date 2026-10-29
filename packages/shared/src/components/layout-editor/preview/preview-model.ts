@@ -9,14 +9,56 @@ import type { DesignMark, DesignTarget } from '../design-context'
 
 // ─── Device width (#2600) ───────────────────────────────────────────────────
 
-export type PreviewDevice = 'desktop' | 'tablet' | 'phone'
+/** `all` = desktop, tablet and phone side by side (#3187). */
+export type PreviewDevice = 'desktop' | 'tablet' | 'phone' | 'all'
+
+/** One real screen size (everything but `all`). */
+export type FrameDevice = Exclude<PreviewDevice, 'all'>
 
 /** Canvas width per device; null = the full canvas. The form measures its own
  *  width (resolveColSpan), so a narrower frame wraps columns as a device does. */
-export const DEVICE_WIDTH: Record<PreviewDevice, number | null> = {
+export const DEVICE_WIDTH: Record<FrameDevice, number | null> = {
   desktop: null,
   tablet: 768,
   phone: 390
+}
+
+/** Widths when every device shows at once: desktop needs a width of its own there. */
+export const ALL_DEVICE_WIDTH: Record<FrameDevice, number> = {
+  desktop: 1024,
+  tablet: 768,
+  phone: 390
+}
+
+export const DEVICE_ORDER: FrameDevice[] = ['desktop', 'tablet', 'phone']
+
+export const DEVICE_LABEL: Record<FrameDevice, string> = {
+  desktop: 'Desktop',
+  tablet: 'Tablet',
+  phone: 'Phone'
+}
+
+/** Gap between side-by-side device panes and the row's padding (px). */
+export const ALL_DEVICE_GAP = 16
+
+/**
+ * How wide the preview canvas is at 100% when that is fixed (a device frame,
+ * every device side by side, two roles at a device width); null when it
+ * takes the pane's width — it then already fits. Fit to screen (#3188)
+ * divides the pane by this.
+ */
+export function previewNaturalWidth(
+  device: PreviewDevice | undefined,
+  panes: 1 | 2 = 1
+): number | null {
+  if (device === 'all') {
+    if (panes === 2) return null
+    const sum = DEVICE_ORDER.reduce((s, d) => s + ALL_DEVICE_WIDTH[d], 0)
+    // Gaps between the three, padding either side, and each frame's 1 px borders.
+    return sum + ALL_DEVICE_GAP * 4 + DEVICE_ORDER.length * 2
+  }
+  const w = DEVICE_WIDTH[device ?? 'desktop']
+  return w == null ? null : (w + 2) * panes
 }
 
 // ─── Role access (#2579, #2580) ─────────────────────────────────────────────

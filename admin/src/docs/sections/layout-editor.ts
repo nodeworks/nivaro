@@ -83,7 +83,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-editor', text: 'The editor' },
     {
       type: 'p',
-      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Compact / Expand all / Collapse all, Show how full each field is, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
+      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Zoom and Fit to screen, Compact / Expand all / Collapse all, Show how full each field is, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
     },
     { type: 'h3', id: 'layout-editor-canvas', text: 'Canvas' },
     {
@@ -117,6 +117,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: 'Sections, tabs and steps, slot cards (pipeline, comments, tasks, owners, PDF, extension panels), header strip items, the subtitle and widgets each get an inspector of their own.'
+    },
+    {
+      type: 'p',
+      text: 'Pin settings you use: hover a setting and click the star at its left to pin it. Pinned settings show under Pinned at the top of their tab, for every field or section that has them, in the order you pinned them; click the star again to unpin. Pins are yours and kept in this browser. A read-only view of a parent layout’s part shows its settings in place.'
     },
     { type: 'h3', id: 'layout-editor-scope', text: 'This form only vs every form' },
     {
@@ -213,6 +217,7 @@ export const layoutEditor: DocSection = {
         'Outline (Tools → Outline) lists the header strip, steps, tabs, sections and their fields beside the canvas. Clicking a row selects it on the canvas, and selecting on the canvas marks its row. Drag rows to reorder: the same moves as dragging on the canvas, one Undo step each. Parts that come from a parent layout show but do not move. The outline stays open for you until you close it.',
         "The inspector's header shows where the selection sits, for example Field · Flow › Billing. Click a part to select that step, tab or section.",
         'Tools has Compact canvas (smaller spacing and inputs in the editor only, kept for you in this browser; the record page is unchanged), Expand all (every section open and every step and tab laid out one under another) and Collapse all (every section folded; steps and tabs back to one at a time).',
+        'Zoom (Tools → Zoom): a slider from 30% to 150% in 5% steps, with − and +, Fit to screen and 100%. It zooms the canvas only, is kept for you in this browser and stacks with Compact canvas. Fit to screen fits the form’s width into the canvas: a tablet or phone frame, two roles side by side at a device width, or every device at once; never above 100%. While the canvas is zoomed, a small chip at its bottom right shows the zoom with the same controls.',
         'Press ? (when not typing) or the keyboard button for every shortcut, grouped by area: undo and redo, duplicate, moving with Alt+arrows or Space, find, the command palette and save.'
       ]
     },
@@ -251,7 +256,8 @@ export const layoutEditor: DocSection = {
         'Stick to the top (a section’s inspector) keeps that section, such as totals or status, at the top of the form while people scroll the rest. A form has one sticky section: turning it on for one turns it off for the other. It does not stick on phone widths, nor on the canvas, where it is tagged “Sticks to the top”.',
         'When nothing is filled (a section’s inspector) is the text the read view and the PDF show for a section none of whose fields has a value, such as “No shipping details yet”, instead of a list of dashes.',
         'Rows of fields side by side print the same way everywhere: one label on the record page, and on the read view and the PDF their values on one line, joined by a dot.',
-        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.'
+        'Select a field to get a width handle on its right edge: drag it to make the field full, half, a third or a quarter wide (or focus it and press ← →). While you drag a field or a width, faint guides show the form’s 12 columns, so widths line up across sections.',
+        'Even out a row: when the selected field shares a row with fields of other widths, Even out this row (under Width in its inspector, or in the Arrange menu) gives every field in the row the same width, filling it: two fields ½ each, three ⅓, four ¼. With several fields selected, every row they touch evens out. Hidden and folded fields take no room; a row of fields side by side under one label evens out its members. It is one Undo step, and no other row moves.'
       ]
     },
     { type: 'h3', id: 'layout-editor-find-replace', text: 'Find and replace in labels' },
@@ -420,6 +426,8 @@ export const layoutEditor: DocSection = {
         'Workflow state: pick a state of a pipeline bound to the collection and the form shows it as if the record were there — the fields that state locks, and what each move out of it needs (tagged Needed to move on) — without finding a record in that state.',
         'What if: pick a field a step’s "Only when" condition reads, then one of the values the condition tests, Empty, or any value. The canvas lays it over the record and tags the steps that appear (Appears) or disappear (Hides, seen with Show hidden).',
         'Device: Desktop, Tablet (768 px) or Phone (390 px). The form measures its own width, so columns wrap exactly as on that screen.',
+        'Device → All: desktop (1024 px), tablet and phone side by side, each a working canvas: select on any of them; drag on the desktop one and the others follow. Use Tools → Fit to screen to see all three at once. With two roles side by side, each role shows at full width instead.',
+        'Sample record: under the record search, Use a sample record fills the form with made-up values built from each field’s type, its choices and its name (an email field gets an address, a date field a date near today); a picker gets one of the related records you can read. It is offered first when the collection has no records yet. New sample makes another; × goes back. Nothing is saved or sent: the values live in the preview only. Ids, system and computed columns, lists and files are left empty.',
         'Who sees each field: every field is tinted by how many roles see it (every role, most, some, few, none — legend in the strip) with a chip such as 3/5 roles; click the chip for the roles that can edit it, only read it, or never see it. It combines each role’s permissions with this form’s section and lock rules; administrators see everything and are not counted.'
       ]
     },

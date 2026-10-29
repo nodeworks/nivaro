@@ -1,10 +1,13 @@
+import { useMemo } from 'react'
 import { isFolded, readGroupStructure, rowOf } from '../../../lib/form-structure'
+import type { DesignTarget } from '../design-context'
 import { InlineDisplaySection } from '../editors/inline-display'
 import { foldPlan, rowUpdatePlan } from '../section-structure'
 import { AiFillSetting } from './AiFillSetting'
 import { showsDateMode, showsInputMask, showsNumbers } from './applies'
 import { CounterSetting, TextRulesSetting } from './BehaviourSettings'
 import { ColumnFit } from './ColumnFit'
+import { EvenRowAction } from './EvenRowAction'
 import { useFieldCtx } from './field-context'
 import { currentInterface, interfaceLabel, interfaceOptions } from './interfaces'
 import {
@@ -62,6 +65,11 @@ export function LookTab() {
   // An older stored id shows as the input it is today.
   const ovIface = str(ov.interface)
   const shownIface = currentInterface(info.abstractType, ovIface) ?? ovIface
+  // #3180: the row this field sits in, for Even out this row.
+  const rowTargets = useMemo<DesignTarget[]>(
+    () => [{ kind: 'field', field: row.field, group_key: row.group_key }],
+    [row.field, row.group_key]
+  )
 
   const format = useGlobalValue('field.format', str(globalOptions.format))
   const currency = useGlobalValue('field.currency', str(globalOptions.currency))
@@ -166,6 +174,7 @@ export function LookTab() {
               )
             }
           />
+          <EvenRowAction bundle={env.bundle} targets={rowTargets} apply={env.apply} />
         </Setting>
       )}
       <ColumnFit />

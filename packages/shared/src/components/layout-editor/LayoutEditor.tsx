@@ -104,7 +104,8 @@ import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
 import { FindTool, OutlineTool, ShortcutsTool, ViewTools } from './nav/NavTools'
 import { OutlinePanel } from './nav/OutlinePanel'
 import { useEditorNav } from './nav/useEditorNav'
-import { COMPACT_ZOOM } from './nav/view-prefs'
+import { effectiveZoom, fitZoom } from './nav/view-prefs'
+import { ZoomChip } from './nav/ZoomControls'
 import { OutputsButton } from './outputs/OutputsButton'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
@@ -122,6 +123,7 @@ import { usePersonalDefaultMarks } from './personal-default-marks'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
+import { previewNaturalWidth } from './preview/preview-model'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
 import { StagedByOthers } from './StagedChip'
@@ -766,7 +768,11 @@ export function LayoutEditor({
   // The Rules view (#2632 #2640 #2633): rule tags and default ghosts on the canvas.
   const [rulesOn, setRulesOn] = useRulesView()
   const explain = useCanvasExplain(collection, canvasLayout, rulesOn)
-  const ghosts = useDefaultGhosts(collection, canvasLayout, rulesOn && !preview.record)
+  const ghosts = useDefaultGhosts(
+    collection,
+    canvasLayout,
+    rulesOn && !preview.record && !preview.sample
+  )
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
@@ -1043,7 +1049,7 @@ export function LayoutEditor({
   const onAskCite = useCallback(
     (c: AskCite) => {
       if (c.kind === 'record')
-        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` } }))
+        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` }, sample: null }))
       else if (c.kind === 'layout') openLayoutRef.current(c.id)
       else {
         const p = bundle?.placements.find((x) => x.field === c.field)
@@ -1077,6 +1083,24 @@ export function LayoutEditor({
     canvasShown: !(arrangeable && view === 'table')
   })
   const outlineShown = nav.outlineOpen && !!bundle && arrangeable
+  // #3188 canvas zoom: the slider times compact's own shrink; Fit divides the
+  // pane by the preview's natural width (a device frame, every device at once).
+  const canvasPaneRef = useRef<HTMLElement | null>(null)
+  const canvasZoom = effectiveZoom(nav.zoom, nav.compact)
+  const { zoom: navZoom, setZoom: setNavZoom, compact: navCompact } = nav
+  const naturalWidth = previewNaturalWidth(
+    preview.device,
+    preview.roleId && preview.compareRoleId ? 2 : 1
+  )
+  const zoomControl = useMemo(
+    () => ({
+      value: navZoom,
+      onChange: setNavZoom,
+      onFit: () =>
+        setNavZoom(fitZoom(canvasPaneRef.current?.clientWidth ?? 0, naturalWidth, navCompact))
+    }),
+    [navZoom, setNavZoom, navCompact, naturalWidth]
+  )
   const warning = host.warning ?? overview?.warning ?? null
 
   // Overlay mode is a modal dialog over the record page.
@@ -1185,7 +1209,8 @@ export function LayoutEditor({
                         compact: nav.compact,
                         onCompact: nav.setCompact,
                         onExpandAll: nav.expandAll,
-                        onCollapseAll: nav.collapseAll
+                        onCollapseAll: nav.collapseAll,
+                        zoom: zoomControl
                       }
                     : null
                 }
@@ -1496,7 +1521,7 @@ export function LayoutEditor({
               scrolls inside its own body, and anything taller (tables, matrices, a summary)
               still scrolls the pane. A min-h-full chain here let the form's body take the
               whole pane height under its header, so the pane scrolled into blank space. */}
-          <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
+          <main ref={canvasPaneRef} className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
             {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
             {compareState.compare && (view === 'canvas' || !arrangeable) && (
               <CompareBanner compare={compareState.compare} onClose={compareState.close} />
@@ -1529,8 +1554,10 @@ export function LayoutEditor({
             ) : bundle ? (
               <div
                 data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
-                // Compact (#2627): editor-only zoom; the record page is unchanged.
-                style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
+                data-canvas-zoom={arrangeable ? canvasZoom : undefined}
+                // Compact (#2627) and the zoom slider (#3188): editor-only zoom; the record
+                // page is unchanged.
+                style={arrangeable && canvasZoom !== 1 ? { zoom: canvasZoom } : undefined}
                 className={cn(
                   'flex min-h-0 flex-1 flex-col',
                   previewThemeClass(previewDark, appDark),
@@ -1543,7 +1570,8 @@ export function LayoutEditor({
                   parent={parent}
                   preview={preview}
                   onPreview={setPreview}
-                  record={record}
+                  // #3196: a sample record's made-up values stand in for a real one.
+                  record={preview.sample ?? record}
                   fields={fields}
                   renderPane={(pane) => (
                     <Canvas
@@ -1584,6 +1612,7 @@ export function LayoutEditor({
                 <Skeleton className='h-48 w-full rounded-lg' />
               </div>
             )}
+            {bundle && arrangeable && view === 'canvas' && <ZoomChip zoom={zoomControl} />}
           </main>
           <aside
             data-editor-inspector=''

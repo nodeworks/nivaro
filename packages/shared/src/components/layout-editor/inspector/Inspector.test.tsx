@@ -13,6 +13,7 @@ import {
 } from '../../../lib/layout-ops'
 import type { DesignTarget } from '../design-context'
 import { LayoutEditorHostContext } from '../host'
+import { resetPinnedSettingsCache } from '../nav/view-prefs'
 import parityRows from '../parity-keys.json'
 import { layoutDraftKeys } from '../useLayoutDraft'
 import { Inspector } from './Inspector'
@@ -439,8 +440,9 @@ async function mount(
   return { apply, flush, calls, qc, redraw }
 }
 
+// The pin star (#3200) sits on every row: it is not the row's control.
 const CONTROL =
-  'input, textarea, button, select, [role="switch"], [role="combobox"], [role="button"]'
+  'input, textarea, button:not([data-setting-pin]), select, [role="switch"], [role="combobox"], [role="button"]'
 const hasControl = (el: Element) => el.matches(CONTROL) || !!el.querySelector(CONTROL)
 /** Parity rows that show something rather than change it. */
 const READOUTS = new Set([
@@ -635,6 +637,63 @@ describe('Inspector', () => {
     await click(host.querySelector('[data-global-cancel]'))
     expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
     expect(host.querySelector('[data-global-confirm]')).toBeNull()
+  })
+
+  it('Even out this row sits under Width when the row is uneven (#3180)', async () => {
+    let b = withPlacement(makeBundle(), 'title', { col_span: 6 })
+    b = withPlacement(b, 'amount', { col_span: 3 })
+    const { apply } = await mount(field('amount'), { bundle: b })
+    const btn = host.querySelector('[data-setting="field.col_span"] [data-even-row]')
+    expect(btn?.textContent).toBe('Even out this row (2 at ½)')
+    await click(btn)
+    const [ops, opts] = apply.mock.calls.at(-1) ?? []
+    expect(ops).toEqual([
+      { op: 'update_placement', at: { field: 'amount', group_key: 'main' }, patch: { col_span: 6 } }
+    ])
+    expect(opts.label).toBe('Even out a row: 2 fields at ½')
+    // A full-width field shares no row: nothing is offered.
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(field('due'), { bundle: b })
+    expect(host.querySelector('[data-even-row]')).toBeNull()
+  })
+
+  it('a starred setting shows at the top of its tab, for this viewer (#3200)', async () => {
+    localStorage.clear()
+    resetPinnedSettingsCache()
+    await mount(field('title'))
+    expect(host.querySelector('[data-pinned-settings]')?.hasAttribute('hidden')).toBe(true)
+    await click(host.querySelector('[data-setting="field.col_span"] [data-setting-pin]'))
+    const zone = host.querySelector('[data-pinned-settings]') as HTMLElement
+    expect(zone.hasAttribute('hidden')).toBe(false)
+    expect(zone.querySelector('[data-setting="field.col_span"]')).not.toBeNull()
+    // It moved: still one row, still working.
+    expect(host.querySelectorAll('[data-setting="field.col_span"]').length).toBe(1)
+    expect(JSON.parse(localStorage.getItem('nvr_layout_editor_pinned_settings') ?? '[]')).toEqual([
+      'field.col_span'
+    ])
+    // Another tab: the zone is empty there.
+    await click(host.querySelector('[data-inspector-tab="rules"]'))
+    expect(host.querySelector('[data-pinned-settings]')?.hasAttribute('hidden')).toBe(true)
+    await click(host.querySelector('[data-inspector-tab="look"]'))
+    await click(host.querySelector('[data-pinned-settings] [data-setting-pin="field.col_span"]'))
+    expect(host.querySelector('[data-pinned-settings] [data-setting]')).toBeNull()
+    expect(localStorage.getItem('nvr_layout_editor_pinned_settings')).toBeNull()
+  })
+
+  it('an inherited (read-only) view never pins: rows stay in their disabled fieldset', async () => {
+    localStorage.setItem('nvr_layout_editor_pinned_settings', JSON.stringify(['field.col_span']))
+    resetPinnedSettingsCache()
+    await mount(field('region', 'shipping'), {
+      bundle: makeBundle({ parent_layout_id: 3 }),
+      inheritedFrom: 'Base order'
+    })
+    await settle()
+    expect(host.querySelector('[data-inherited-view] fieldset[disabled]')).not.toBeNull()
+    expect(host.querySelector('[data-pinned-settings]')).toBeNull()
+    expect(host.querySelector('[data-setting-pin]')).toBeNull()
+    localStorage.clear()
+    resetPinnedSettingsCache()
   })
 
   it('layout-local key emits one op', async () => {
