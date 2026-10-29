@@ -42,7 +42,9 @@ const fake = vi.hoisted(() => {
       Promise.resolve(rows()).then(ok, fail)
     return q
   }
-  const db = (table: string) => chain(table)
+  const db = Object.assign((table: string) => chain(table), {
+    schema: { hasTable: async (t: string) => Object.hasOwn(tables, t) }
+  })
   const reset = (seed: Record<string, Row[]>) => {
     for (const k of Object.keys(tables)) delete tables[k]
     Object.assign(tables, JSON.parse(JSON.stringify(seed)))
@@ -83,7 +85,7 @@ import {
 } from '../../../routes/layout-reuse.js'
 import { newGroup, newPlacement, ungroupedGroup } from '../../../services/layout-ops-apply.js'
 
-async function call(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: Row) {
+async function call(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: Row) {
   const app = Fastify({ logger: false })
   app.register(layoutReuseRoutes, { prefix: '/collection-layouts' })
   await app.ready()
@@ -287,5 +289,171 @@ describe('a new layout from a form template', () => {
       group_key: 'address'
     })
     expect(await loadFormTemplate(saved.body.data.id)).toBeNull()
+  })
+})
+
+describe('linked sections (#3194)', () => {
+  const ROOT = 'lib70_00aa11bb'
+  /** Layout `id` with the Address section placed as linked (`fields` in it). */
+  const linkedForm = (id: number, fields: string[], key = ROOT) => ({
+    layout: { id, collection: 'orders', layout_type: 'grouped', name: `Form ${id}` },
+    groups: [
+      { ...newGroup(key, 'Address', 'section', null), sort: 0, icon: 'home' },
+      ungroupedGroup(1)
+    ],
+    placements: fields.map((f, i) => ({ ...newPlacement(f, key), sort: i })),
+    rev: `rev-${id}`
+  })
+
+  async function librarySection() {
+    fake.tables.nivaro_layout_section_links = []
+    const saved = await call('POST', '/templates', {
+      kind: 'section',
+      name: 'Address',
+      layout_id: 22,
+      group_key: 'address'
+    })
+    return saved.body.data.id as number
+  }
+
+  it('plans a linked drop with a root key of its own', async () => {
+    const tid = await librarySection()
+    const plan = await call('POST', '/blocks/plan', {
+      source: { template_id: tid },
+      target_collection: 'orders',
+      target_bundle: sparing,
+      linked: true
+    })
+    expect(plan.status).toBe(200)
+    expect(plan.body.linked_key).toMatch(new RegExp(`^lib${tid}_[a-f0-9]{8}$`))
+    expect(plan.body.ops[0]).toMatchObject({ op: 'group_create', key: plan.body.linked_key })
+    // Only a library section can be linked.
+    const bad = await call('POST', '/blocks/plan', {
+      source: { layout_id: 22, group_key: 'address' },
+      target_collection: 'orders',
+      target_bundle: sparing,
+      linked: true
+    })
+    expect(bad.status).toBe(400)
+  })
+
+  it('links a drop, confirms it once saved, and reads it as in sync', async () => {
+    const tid = await librarySection()
+    const key = `lib${tid}_00aa11bb`
+    const made = await call('POST', '/24/section-links', { template_id: tid, group_key: key })
+    expect(made.status).toBe(201)
+    expect(
+      (await call('POST', '/24/section-links', { template_id: tid, group_key: key })).status
+    ).toBe(409)
+    expect(
+      (await call('POST', '/24/section-links', { template_id: tid, group_key: 'address' })).status
+    ).toBe(400)
+
+    // Still only in the editor's draft: pending.
+    let list = await call('GET', '/24/section-links')
+    expect(list.body.data).toEqual([
+      expect.objectContaining({ group_key: key, confirmed: false, in_sync: null, linked_forms: 1 })
+    ])
+
+    // Saved: confirmed, and the copy matches the library.
+    const saved = linkedForm(24, ['street', 'city'], key)
+    ops.bundles.set(24, saved)
+    list = await call('GET', '/24/section-links')
+    expect(list.body.data[0]).toMatchObject({ confirmed: true, in_sync: true })
+
+    // Edited on the form some other way: it differs.
+    ops.bundles.set(24, { ...saved, placements: saved.placements.slice(0, 1) })
+    list = await call('GET', '/24/section-links')
+    expect(list.body.data[0].in_sync).toBe(false)
+
+    // The plan puts the library version back.
+    const plan = await call('POST', `/24/section-links/${key}/plan`, {})
+    expect(plan.status).toBe(200)
+    expect(plan.body.ops.map((o: Row) => o.op)).toEqual([
+      'group_remove',
+      'group_create',
+      'place',
+      'place'
+    ])
+  })
+
+  it('a confirmed link whose section left the form is dropped', async () => {
+    const tid = await librarySection()
+    fake.tables.nivaro_layout_section_links.push({
+      id: 900,
+      template_id: tid,
+      layout_id: 24,
+      group_key: ROOT,
+      field_map: null,
+      created_at: new Date().toISOString(),
+      confirmed_at: new Date().toISOString()
+    })
+    const list = await call('GET', '/24/section-links')
+    expect(list.body.data).toEqual([])
+    expect(fake.tables.nivaro_layout_section_links).toEqual([])
+  })
+
+  it('publishes the saved copy to the library and every other linked form', async () => {
+    const tid = await librarySection()
+    const at = (id: number) => ({
+      id: id * 10,
+      template_id: tid,
+      layout_id: id,
+      group_key: ROOT,
+      field_map: null,
+      created_at: new Date().toISOString(),
+      confirmed_at: new Date().toISOString()
+    })
+    fake.tables.nivaro_fields.push({ collection: 'orders', field: 'zip' })
+    ops.bundles.set(24, linkedForm(24, ['street', 'city', 'zip']))
+    ops.bundles.set(25, linkedForm(25, ['street', 'city']))
+    ops.bundles.set(26, linkedForm(26, ['street', 'city']))
+    fake.tables.nivaro_layout_section_links.push(at(24), at(25), at(26))
+    ops.run.mockImplementation(async (id: number) =>
+      id === 26
+        ? { status: 400, error: 'Frozen', freeze: { until: 'x', reason: 'y' } }
+        : { status: 200, bundle: ops.bundles.get(id), changed: true }
+    )
+
+    const res = await call('PUT', `/templates/${tid}/content`, { layout_id: 24, group_key: ROOT })
+    expect(res.status).toBe(200)
+    expect(res.body.data.updated.map((o: Row) => o.layout_id)).toEqual([25])
+    expect(res.body.data.skipped).toEqual([
+      expect.objectContaining({ layout_id: 26, reason: 'the form is frozen' })
+    ])
+    // The library now holds the edited copy, under its own root key.
+    const stored = JSON.parse(String(fake.tables.nivaro_layout_templates[0].payload))
+    expect(stored.top).toEqual([{ group: 'address' }])
+    expect(stored.placements.map((p: Row) => p.field)).toEqual(['street', 'city', 'zip'])
+    // Form 25 got the change through the ops service, with a reason for its History.
+    const call25 = ops.run.mock.calls.find(([id]) => id === 25)
+    const input = call25?.[1] as { base_rev: string; reason: string; ops: Row[] }
+    expect(input.base_rev).toBe('rev-25')
+    expect(input.reason).toMatch(/Linked section "Address" updated in the library/)
+    expect(input.ops.filter((o) => o.op === 'place').map((o) => o.field)).toEqual([
+      'street',
+      'city',
+      'zip'
+    ])
+    // Publishing needs the section linked to that library section.
+    expect(
+      (await call('PUT', `/templates/${tid}/content`, { layout_id: 22, group_key: 'address' }))
+        .status
+    ).toBe(400)
+  })
+
+  it('unlinks, and deleting the library section unlinks every form', async () => {
+    const tid = await librarySection()
+    fake.tables.nivaro_layout_section_links.push(
+      { id: 1, template_id: tid, layout_id: 24, group_key: ROOT },
+      { id: 2, template_id: tid, layout_id: 25, group_key: ROOT }
+    )
+    expect((await call('DELETE', `/24/section-links/${ROOT}`)).status).toBe(204)
+    expect(fake.tables.nivaro_layout_section_links.map((r) => r.id)).toEqual([2])
+    expect((await call('DELETE', `/24/section-links/${ROOT}`)).status).toBe(404)
+    const list = await call('GET', '/templates?kind=section')
+    expect(list.body.data[0].linked_forms).toBe(1)
+    expect((await call('DELETE', `/templates/${tid}`)).status).toBe(204)
+    expect(fake.tables.nivaro_layout_section_links).toEqual([])
   })
 })

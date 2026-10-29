@@ -62,6 +62,7 @@ const REVIEWED: Record<string, Reviewed> = {
       remuxToFileLocal: 1,
       htmlToPdfLocal: 1,
       htmlToPngLocal: 1,
+      pdfPageImagesLocal: 1,
       convertUploadedFile: 1,
       convertMusicFile: 1,
       detectHardwareEncoders: 1
@@ -126,6 +127,12 @@ const REVIEWED: Record<string, Reviewed> = {
       /handOff\('replay-webm'/,
       /canRunHere\('replay-webm'\)/
     ]
+  },
+  'services/pdf-pages.ts': {
+    role: 'local-or-peer',
+    calls: { getBrowser: 1, pdfPageImagesLocal: 1 },
+    why: 'PDF pages as pictures (#3186 paper forms): drawn here with Chromium, else on the render peer (pdf-pages).',
+    guards: [/peerPdfPages\(pdf/, /throw renderUnavailable\('pdf'\)/]
   },
   'services/help-video-encoder.ts': {
     role: 'local-or-peer',

@@ -20,9 +20,13 @@ export interface TemplateSummary {
   layout_type: string | null
   fields: string[]
   sections: number
+  /** #3194: forms that place this section as linked. */
+  linked_forms?: number
 }
 
 export interface BlockPlanResult {
+  /** #3194: the root key a linked drop was planned with. */
+  linked_key?: string
   ops: LayoutOp[]
   keys: Record<string, string>
   already: string[]
@@ -103,6 +107,8 @@ export function planBlock(
     target_bundle: LayoutBundle
     field_map?: FieldMap
     index?: number
+    /** #3194: plan a library section to place as linked. */
+    linked?: boolean
   }
 ) {
   const source =

@@ -1,4 +1,4 @@
-import { BookMarked, X } from 'lucide-react'
+import { BookMarked, Link2, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
@@ -9,6 +9,7 @@ import type { DesignTarget } from '../design-context'
 import { apiFailure } from '../overview/overview-api'
 import type { ApplyOptions } from '../useLayoutDraft'
 import { FieldMapStep, useFieldMapping } from './FieldMapStep'
+import { createLink, useLinkedSectionsContext } from './linked-sections'
 import {
   deleteTemplate,
   leftOutWords,
@@ -45,18 +46,24 @@ function dropIndex(bundle: LayoutBundle, selected: DesignTarget | null): number 
 function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
   const client = useNivaroClient()
   const refresh = useRefreshTemplates()
-  const [mapping, setMapping] = useState(false)
+  const linkedCtx = useLinkedSectionsContext()
+  const [mapping, setMapping] = useState<null | 'copy' | 'linked'>(null)
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const other = !!t.source_collection && t.source_collection !== p.collection
   const map = useFieldMapping(other ? t.fields : [], t.source_collection, p.collection)
+  const layoutId = Number(p.bundle.layout.id)
+  // Linking needs a saved layout to point at (and the editor's link state).
+  const canLink = !!linkedCtx && Number.isInteger(layoutId) && layoutId > 0
 
-  const drop = async () => {
+  /** Drop a copy, or (#3194) a linked section that keeps following the library. */
+  const drop = async (mode: 'copy' | 'linked') => {
     if (busy) return
-    if (other && !mapping && map.needed.length) {
-      setMapping(true)
+    if (other && mapping !== mode && map.needed.length) {
+      setMapping(mode)
       return
     }
+    const linked = mode === 'linked'
     setBusy(true)
     try {
       const plan = await planBlock(client, {
@@ -64,15 +71,29 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
         target_collection: p.collection,
         target_bundle: p.bundle,
         field_map: other ? map.map : undefined,
-        index: dropIndex(p.bundle, p.selected)
+        index: dropIndex(p.bundle, p.selected),
+        linked
       })
       if (!plan.ops.length) throw new Error('Nothing to add')
-      p.apply(plan.ops, { label: `Add ${t.name}` })
+      p.apply(plan.ops, { label: linked ? `Add ${t.name} (linked)` : `Add ${t.name}` })
       const first = plan.ops.find((o) => o.op === 'group_create')
       if (first?.op === 'group_create') p.onSelect({ kind: 'group', key: first.key })
+      if (linked && plan.linked_key)
+        try {
+          await createLink(client, layoutId, {
+            template_id: t.id,
+            group_key: plan.linked_key,
+            field_map: other ? map.map : undefined
+          })
+          linkedCtx?.refresh()
+        } catch (err) {
+          toast.error(
+            `${t.name} was added as an ordinary copy: ${apiFailure(err, 'it could not be linked').message}`
+          )
+        }
       const extra = leftOutWords(plan)
       if (extra) toast(`${t.name} added: ${extra}`)
-      setMapping(false)
+      setMapping(null)
     } catch (err) {
       toast.error(apiFailure(err, 'Could not add the section').message)
     } finally {
@@ -91,6 +112,9 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
 
   const sub = [
     `${t.fields.length} ${t.fields.length === 1 ? 'field' : 'fields'}`,
+    t.linked_forms
+      ? `linked on ${t.linked_forms} ${t.linked_forms === 1 ? 'form' : 'forms'}`
+      : null,
     t.source_collection && t.source_collection !== p.collection
       ? `from ${t.source_collection}`
       : null,
@@ -105,7 +129,7 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
         <button
           type='button'
           disabled={busy || map.loading}
-          onClick={() => void drop()}
+          onClick={() => void drop('copy')}
           className='flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted disabled:opacity-60'
         >
           <span className='flex min-w-0 flex-1 flex-col'>
@@ -118,6 +142,19 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
           </span>
           <BookMarked className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         </button>
+        {canLink && (
+          <button
+            type='button'
+            aria-label={`Add ${t.name} linked`}
+            data-tip='Add linked: it follows the library, so a change there updates this form too'
+            data-library-linked={t.id}
+            disabled={busy || map.loading}
+            onClick={() => void drop('linked')}
+            className='invisible inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-muted hover:text-slate-700 group-hover:visible focus-visible:visible disabled:opacity-50 dark:hover:text-foreground'
+          >
+            <Link2 className='h-3.5 w-3.5' />
+          </button>
+        )}
         <button
           type='button'
           aria-label={`Remove ${t.name} from the library`}
@@ -130,7 +167,10 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
       </div>
       {confirm && (
         <div className='mx-2 mb-1 flex items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'>
-          <span className='flex-1'>Remove from the library? Forms keep their copies.</span>
+          <span className='flex-1'>
+            Remove from the library? Forms keep their copies
+            {t.linked_forms ? '; linked ones become ordinary sections' : ''}.
+          </span>
           <button
             type='button'
             onClick={() => void remove()}
@@ -158,7 +198,7 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
           <div className='mt-2 flex justify-end gap-2'>
             <button
               type='button'
-              onClick={() => setMapping(false)}
+              onClick={() => setMapping(null)}
               className='text-[12px] text-slate-500 hover:underline dark:text-muted-foreground'
             >
               Cancel
@@ -167,9 +207,9 @@ function LibraryRow({ t, ...p }: Props & { t: TemplateSummary }) {
               type='button'
               className={reusePrimary}
               disabled={busy}
-              onClick={() => void drop()}
+              onClick={() => void drop(mapping ?? 'copy')}
             >
-              {busy ? 'Adding…' : 'Add section'}
+              {busy ? 'Adding…' : mapping === 'linked' ? 'Add linked' : 'Add section'}
             </button>
           </div>
         </div>

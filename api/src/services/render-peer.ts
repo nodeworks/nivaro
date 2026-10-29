@@ -353,6 +353,47 @@ export async function peerHtmlToPng(
   }
 }
 
+/** The largest PDF whose pages the peer draws (#3186). */
+export const RENDER_PDF_PAGES_MAX_BYTES = 20 * 1024 * 1024
+
+/** Draw a PDF's first pages as JPEGs on the peer. Same contract as pdf-pages' pdfPageImages. */
+export async function peerPdfPages(
+  pdf: Buffer,
+  opts: { maxPages: number; width: number }
+): Promise<{ pages: Buffer[]; total: number }> {
+  const { url, token } = peerOrThrow('pdf')
+  if (pdf.length > RENDER_PDF_PAGES_MAX_BYTES)
+    throw renderError(413, 'RENDER_TOO_LARGE', 'This PDF is too large to draw.')
+  let res: Response
+  try {
+    res = await fetch(
+      `${url}${RENDER_PEER_PREFIX}/pdf-pages?max_pages=${opts.maxPages}&width=${opts.width}`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/pdf' },
+        body: new Uint8Array(pdf),
+        signal: withTimeout(renderOpTimeoutMs('pdf'))
+      }
+    )
+  } catch (err) {
+    throw networkFailure(err)
+  }
+  if (!res.ok) throw await peerFailure(res)
+  let body: { pages?: unknown; total?: unknown }
+  try {
+    body = JSON.parse((await readCapped(res, RENDER_PDF_OUT_MAX_BYTES)).toString('utf8'))
+  } catch (err) {
+    if ((err as RenderError).code === 'RENDER_PEER_TOO_LARGE') throw err
+    throw networkFailure(err)
+  }
+  const pages = Array.isArray(body.pages)
+    ? body.pages
+        .filter((p): p is string => typeof p === 'string')
+        .map((p) => Buffer.from(p, 'base64'))
+    : []
+  return { pages, total: Number(body.total) || pages.length }
+}
+
 /** The header a file op's JSON result rides on when the body is a file. */
 export const RENDER_META_HEADER = 'x-nivaro-render-meta'
 

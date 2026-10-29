@@ -130,6 +130,11 @@ import { PreviewPanes } from './preview/PreviewPanes'
 import { previewNaturalWidth } from './preview/preview-model'
 import { useRemovalLog } from './removed-log'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
+import {
+  LinkedSectionsProvider,
+  useLinkedSectionMarks,
+  useLinkedSections
+} from './reuse/linked-sections'
 import { useRailCopy } from './reuse/useRailCopy'
 import { SlashInsert } from './SlashInsert'
 import { StagedByOthers } from './StagedChip'
@@ -507,7 +512,8 @@ function Canvas({
   )
   // Fields people may save their own starting value for say so on the canvas.
   const pdMarked = usePersonalDefaultMarks(bundle, ruleMarked)
-  const allMarks = usePinMarks(bundle, pdMarked)
+  const linkedMarks = useLinkedSectionMarks(pdMarked)
+  const allMarks = usePinMarks(bundle, linkedMarks.marks)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -533,6 +539,7 @@ function Canvas({
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
         : undefined,
       ghost,
+      locked: linkedMarks.locked,
       resizeWidth: noDnd
         ? undefined
         : (t, span) => {
@@ -568,6 +575,7 @@ function Canvas({
       compare,
       lastChanges,
       ghost,
+      linkedMarks.locked,
       apply,
       noDnd
     ]
@@ -709,7 +717,10 @@ export function LayoutEditor({
   // Record / Stop (#2663) sees every apply; the draft saves as before.
   const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
   // Recently removed (#3191): every apply is read for what it takes off the form.
-  const { draft, removed } = useRemovalLog(recorded, currentId)
+  const { draft: logged, removed } = useRemovalLog(recorded, currentId)
+  // #3194: linked library sections change only in the library; the guard says so
+  // (outermost, so a refused change never reaches the removal log).
+  const { draft, value: linked } = useLinkedSections(currentId, logged)
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
@@ -1797,10 +1808,12 @@ export function LayoutEditor({
     </div>
   )
 
+  // #3194: the linked sections' state reaches the canvas, inspector and Add panel.
+  const shown = <LinkedSectionsProvider value={linked}>{body}</LinkedSectionsProvider>
   if (!overlay)
     return (
       <EntryEditorContext.Provider value={entryApi}>
-        <PlaceToolsProvider value={placeTools}>{body}</PlaceToolsProvider>
+        <PlaceToolsProvider value={placeTools}>{shown}</PlaceToolsProvider>
       </EntryEditorContext.Provider>
     )
   // Fixed under the page outlet would be offset by its transform: portal out —
@@ -1812,7 +1825,7 @@ export function LayoutEditor({
       <span ref={setMarker} hidden data-layout-editor-marker='' />
       <EntryEditorContext.Provider value={entryApi}>
         <PlaceToolsProvider value={placeTools}>
-          {container && createPortal(body, container)}
+          {container && createPortal(shown, container)}
         </PlaceToolsProvider>
       </EntryEditorContext.Provider>
     </>

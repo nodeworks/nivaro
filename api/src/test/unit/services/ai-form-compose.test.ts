@@ -18,6 +18,12 @@ vi.mock('../../../services/ai-client.js', () => ({
 vi.mock('../../../services/read-gate.js', () => ({
   withReadGate: (_who: unknown, fn: () => unknown) => fn()
 }))
+// No Chromium in unit tests: drawing PDF pages is injected per test (drawPages).
+vi.mock('../../../services/pdf-pages.js', () => ({
+  pdfPageImages: vi.fn(async () => {
+    throw new Error('no renderer in tests')
+  })
+}))
 vi.mock('../../../services/document-extract.js', () => ({
   ACCEPTED_EXTENSIONS: ['.pdf', '.docx', '.xlsx', '.txt'],
   MAX_TEXT_CHARS: 60_000,
@@ -29,6 +35,7 @@ vi.mock('../../../services/document-extract.js', () => ({
   }))
 }))
 
+import sharp from 'sharp'
 import {
   AiImagesUnsupportedError,
   getAiClient,
@@ -38,11 +45,14 @@ import {
   buildComposeContextJson,
   type ComposeContext,
   ComposeRefusal,
+  candidateKey,
   composeAsk,
   composeForm,
   documentContent,
+  documentsContent,
   fieldResolver,
-  parseComposeAnswer
+  parseComposeAnswer,
+  preparePicture
 } from '../../../services/ai-design/form-compose.js'
 import {
   buildMeaningPrompt,
@@ -157,7 +167,7 @@ describe('parseComposeAnswer', () => {
         layout: 'sections',
         groups: [{ label: 'Header', fields: ['reason', 'Store number'] }],
         unmatched: [
-          { label: 'Receipt attached', type: 'yes/no', group: 'Header' },
+          { label: 'Receipt attached', type: 'yes/no', group: 'Header', key: 'receipt_attached' },
           { label: 'Amount', type: 'number' }
         ]
       }),
@@ -166,8 +176,8 @@ describe('parseComposeAnswer', () => {
     )
     expect(form.groups[0].fields).toEqual(['reason'])
     expect(form.candidates).toEqual([
-      { label: 'Store number', type: null, group: 'Header' },
-      { label: 'Receipt attached', type: 'yes/no', group: 'Header' }
+      { label: 'Store number', type: null, group: 'Header', key: 'store_number' },
+      { label: 'Receipt attached', type: 'yes/no', group: 'Header', key: 'receipt_attached' }
     ])
   })
 
@@ -299,6 +309,122 @@ describe('documentContent', () => {
     await expect(documentContent(doc('scan.pdf'), { pdfBlocks: false })).rejects.toThrow(
       /Upload a picture/
     )
+  })
+
+  // #3186: paper forms.
+  const drawn = (n: number, total = n) =>
+    vi.fn(async (_pdf: Buffer, opts?: { maxPages?: number }) => ({
+      pages: Array.from({ length: Math.min(n, opts?.maxPages ?? n) }, (_, i) =>
+        Buffer.from(`page${i}`)
+      ),
+      total
+    }))
+
+  it('looks at the pages of a scanned PDF when it has no text', async () => {
+    const drawPages = drawn(2)
+    const out = await documentContent(doc('scan.pdf'), { pdfBlocks: false, drawPages })
+    expect(out.method).toBe('pdf-pages')
+    expect(out.blocks.map((b) => b.type)).toEqual(['text', 'image', 'text', 'image'])
+    expect(drawPages).toHaveBeenCalledWith(expect.any(Buffer), { maxPages: 4, width: 1600 })
+  })
+
+  it("a form's PDF goes as page pictures first where the provider cannot take PDFs", async () => {
+    const drawPages = drawn(6, 9)
+    const out = await documentContent(doc('form.pdf'), {
+      pdfBlocks: false,
+      pdfPagesFirst: true,
+      drawPages
+    })
+    expect(out.method).toBe('pdf-pages')
+    expect(out.blocks.filter((b) => b.type === 'image')).toHaveLength(4)
+    expect(JSON.stringify(out.blocks.at(-1))).toContain('first 4 of 9 pages')
+    // Where the provider reads PDFs, the PDF itself goes.
+    const native = await documentContent(doc('form.pdf'), {
+      pdfBlocks: true,
+      pdfPagesFirst: true,
+      drawPages
+    })
+    expect(native.blocks[0].type).toBe('document')
+  })
+
+  it('falls back to the text when the pages cannot be drawn', async () => {
+    const drawPages = vi.fn(async () => {
+      throw new Error('RENDER_UNAVAILABLE')
+    })
+    const out = await documentContent(doc('form.pdf'), {
+      pdfBlocks: false,
+      pdfPagesFirst: true,
+      drawPages
+    })
+    expect(out.method).toBe('pdftotext')
+  })
+
+  it('several files are one form, labelled in order, pictures capped', async () => {
+    const out = await documentsContent([doc('p1.png'), doc('p2.png')], { pdfBlocks: false })
+    expect(out.method).toBe('image')
+    expect(out.blocks.map((b) => (b.type === 'text' ? b.text : b.type))).toEqual([
+      'File 1 of 2: "p1.png"',
+      'image',
+      'File 2 of 2: "p2.png"',
+      'image'
+    ])
+    const many = Array.from({ length: 9 }, (_, i) => doc(`p${i}.jpg`))
+    await expect(documentsContent(many, { pdfBlocks: false })).rejects.toThrow(/At most 8/)
+  })
+})
+
+describe('preparePicture (#3186)', () => {
+  it('turns a phone photo upright and shrinks it to 2000 px', async () => {
+    // A 3000x1000 photo stored sideways (EXIF orientation 6 = rotate 90 degrees on display).
+    const photo = await sharp({
+      create: { width: 3000, height: 1000, channels: 3, background: '#88aacc' }
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer()
+    const out = await preparePicture(photo, 'image/jpeg')
+    expect(out.type).toBe('image/jpeg')
+    const meta = await sharp(out.data).metadata()
+    expect([meta.width, meta.height]).toEqual([667, 2000])
+  })
+
+  it('keeps a small screenshot as PNG, and anything unreadable as it came', async () => {
+    const shot = await sharp({
+      create: { width: 400, height: 300, channels: 4, background: '#ffffff' }
+    })
+      .png()
+      .toBuffer()
+    expect((await preparePicture(shot, 'image/png')).type).toBe('image/png')
+    const junk = Buffer.from('not an image')
+    expect(await preparePicture(junk, 'image/webp')).toEqual({ data: junk, type: 'image/webp' })
+  })
+})
+
+describe('candidateKey (#3186)', () => {
+  it('makes a snake_case key no field has', () => {
+    const taken = new Set(['date_of_birth'])
+    expect(candidateKey('Date of birth', taken)).toBe('date_of_birth_2')
+    expect(candidateKey('Café & Bar #', taken)).toBe('cafe_and_bar')
+    expect(candidateKey('2nd contact', taken)).toBe('f_2nd_contact')
+    expect(candidateKey('***', taken)).toBe('field')
+  })
+
+  it('unmatched labels come back with a suggested key', () => {
+    const form = parseComposeAnswer(
+      JSON.stringify({
+        layout: 'sections',
+        groups: [{ label: 'Main', fields: ['reason'] }],
+        unmatched: [
+          { label: 'Reason', type: 'text' },
+          { label: 'Serial number', type: 'text' }
+        ]
+      }),
+      ctx,
+      'picture'
+    )
+    expect(form.candidates).toEqual([
+      { label: 'Serial number', type: 'text', group: null, key: 'serial_number' }
+    ])
   })
 })
 

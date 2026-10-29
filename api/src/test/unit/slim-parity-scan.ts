@@ -17,6 +17,7 @@ export const PRIMITIVES: Record<string, RegExp> = {
   getBrowser: /(?<!function\s)\bgetBrowser\(/g,
   htmlToPdfLocal: /(?<!function\s)\bhtmlToPdfLocal\(/g,
   htmlToPngLocal: /(?<!function\s)\bhtmlToPngLocal\(/g,
+  pdfPageImagesLocal: /(?<!function\s)\bpdfPageImagesLocal\(/g,
   'puppeteer.launch': /\bpuppeteer\.launch\(/g,
   'import puppeteer': /from\s+'puppeteer'|import\(\s*'puppeteer'\s*\)/g,
   // Any process spawn (ffmpeg, ffprobe, chromium or anything else)

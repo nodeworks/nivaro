@@ -90,9 +90,9 @@ export const TEMPLATE_SETTING_KEYS = [
 ] as const
 
 /** Group settings that name this collection's fields in their own words: dropped across collections. */
-const GROUP_FIELD_BOUND = ['visible_when', 'skip_if_filled', 'swap_config'] as const
+export const GROUP_FIELD_BOUND = ['visible_when', 'skip_if_filled', 'swap_config'] as const
 /** Placement settings bound to the field's relation or this collection: dropped across collections. */
-const PLACEMENT_FIELD_BOUND = ['lock_conditions', 'input_bindings', 'overrides'] as const
+export const PLACEMENT_FIELD_BOUND = ['lock_conditions', 'input_bindings', 'overrides'] as const
 
 const pick = <K extends string>(row: object, keys: readonly K[]) => {
   const out: Record<string, unknown> = {}

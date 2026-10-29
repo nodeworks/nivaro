@@ -697,11 +697,15 @@ export const layoutEditor: DocSection = {
       type: 'ul',
       items: [
         'Describe it: "a returns form with a manager approval step". The steps or sections are built from the fields this collection already has. Any name the AI makes up is left out and listed.',
-        'From a picture or PDF: a screenshot, scan, PDF or spreadsheet of an old form (up to 10 MB). Its labels are matched to fields, and its order and grouping are kept. Labels with no field are listed as candidate new fields. They are never created for you.',
+        'From a paper form or PDF: a photo, scan, screenshot, PDF or spreadsheet of an old form — up to 6 files at once (10 MB each, 25 MB together), so a form of several pages can be photographed page by page. Its labels are matched to fields, and its order and grouping are kept. Photos are turned upright and shrunk before they are read. A scanned PDF (no text in it), and any form PDF where the AI provider cannot read PDFs, is read from pictures of its first four pages, drawn on this server or on the render server. Labels with no field are listed under Fields you may want to create, each with a suggested field key, and Copy the list copies them for the data model. They are never created for you.',
         'From a process document: one step per stage, with the passage each step came from. You also get suggested read-only fields per pipeline state (ticked) and required fields (unticked: Required counts for every state).',
         'Lighter version for a role: pick a role. You see the fields its people changed in the last 180 days, and the fields it would hide. Create lighter version makes a new form that inherits from this one, is shown only to that role, and hides the unused fields.',
         'Sections by meaning: at the top of the Add panel (and under AI). Each field not on the form gets a suggested section, based on what the field means. This helps on a new collection that has no usage history yet.'
       ]
+    },
+    {
+      type: 'p',
+      text: 'Each build is one AI call and counts against the per-person AI limits (AI_USER_CALLS_PER_MINUTE, AI_USER_DAILY_TOKENS); past them the panel says when to try again. iPhone photos (HEIC) are not read: share them as JPEG.'
     },
     {
       type: 'note',
@@ -780,6 +784,9 @@ export const layoutEditor: DocSection = {
       items: [
         'Copy a section to another layout: drag a section from the canvas onto a form in the Forms list, or select it and use Copy to layout… in the inspector (which also reaches other collections). It lands at the end of that layout with its tabs, fields and settings. Fields already on that form stay where they are.',
         'Section library: select a section and use Save to library…. Saved sections show under Add → Section library on every collection; a click adds one after the selection as one undo step. Remove one with the × beside it — forms keep their copies.',
+        'Linked sections: the link button beside a library section adds it LINKED instead of as a copy. A linked section is tagged Linked on the canvas and is read-only on the form: its fields do not drag and its settings cannot change there (the section itself still moves, and can be removed from the form). Select it for Edit the shared section, Unlink and, when the copy differs from the library, Update from the library.',
+        'Edit the shared section opens it for editing on this form. Publish saves the form and sends the section to the library and to every other form that links it: each form changes through its own save, with a History entry naming the library update. A form that is frozen, asks for a ticket link with every save or cannot take the section is skipped and listed; it shows Linked · differs until it is updated from its editor. Cancel puts the library version back.',
+        "Unlink keeps the section on the form as an ordinary copy; library changes stop reaching it. Removing a section from the library unlinks every form that uses it (they keep their copies). A linked section from another collection keeps the field mapping chosen when it was added; publishing from that form keeps the library's own step and lock conditions.",
         'Layout templates: ⋯ → Save as template… in the editor saves the whole form (sections, panels, header, how it behaves). New form → Start with → Template makes a new form from one. Rules for who gets a form, defaults and links to other layouts stay behind.',
         "Another collection: fields with no field of the same name get their closest match (by name or label), which you can change or set to Leave out. Step conditions, skip-if-filled, field swaps, lock conditions and grid bindings are written in the other collection's terms and are left out.",
         'New form → Start with → Field list: paste names (one per line or separated by commas) or upload a CSV or text file. Names are matched to fields by name or label, with close spellings marked "?"; names with no match are left out. The form gets one section with the matched fields in that order.',
@@ -1073,6 +1080,19 @@ POST   /api/collection-layouts/blocks/plan  { source: { template_id } | { layout
        → { ops, already, unmapped, dropped }   // read only; the editor applies the ops
 POST   /api/collection-layouts/:id/copy-section  { source_layout_id, group_key, field_map? }
        → { bundle, group_key, already, unmapped, dropped }   // applied through :id's ops
+
+# Linked sections (administrators)
+POST   /api/collection-layouts/blocks/plan  { source: { template_id }, …, linked: true }
+       → { linked_key, ops, … }                 // the dropped section's root key, unique to this placement
+GET    /api/collection-layouts/:id/section-links
+       → { data: [{ id, template_id, template_name, group_key, field_map, confirmed, in_sync, linked_forms }] }
+POST   /api/collection-layouts/:id/section-links  { template_id, group_key, field_map? }   // after the drop
+DELETE /api/collection-layouts/:id/section-links/:group_key        // Unlink: the copy stays
+POST   /api/collection-layouts/:id/section-links/:group_key/plan  { bundle? }
+       → { ops, in_sync, already, unmapped, dropped }   // read only: back to the library version
+PUT    /api/collection-layouts/templates/:id/content  { layout_id, group_key }
+       → { data: { updated: [{ layout_id, name }], unchanged, skipped: [{ layout_id, name, reason }] } }
+       // publishes the SAVED copy on layout_id, then updates every other linked form through its own ops
 
 # Usage
 POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, saved, abandoned_step, steps }] }

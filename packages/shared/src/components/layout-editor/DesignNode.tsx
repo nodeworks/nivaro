@@ -1,4 +1,4 @@
-import { EyeOff, Lock, Pin, UserRound } from 'lucide-react'
+import { EyeOff, Link2, Lock, Pin, UserRound } from 'lucide-react'
 import {
   type CSSProperties,
   cloneElement,
@@ -124,7 +124,7 @@ export function DesignNode({
   // A removed node shown by a comparison is a ghost: it is not on the layout.
   const diff = design?.diffMark?.(target) ?? null
   const ghost = diff?.kind === 'removed'
-  const locked = !design || !!parent || copy || ghost
+  const locked = !design || !!parent || copy || ghost || !!design.locked?.(target)
   // Always called, design or not: the hooks never change between renders.
   const nd = useDesignDndNode(design?.dnd ?? NO_DND, target, { disabled: locked, noDrop: folded })
   if (!design) return <>{children}</>
@@ -288,6 +288,7 @@ export function DesignNode({
       <>
         {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
         {m.icon === 'person' && <UserRound aria-hidden className='h-3 w-3' />}
+        {m.icon === 'link' && <Link2 aria-hidden className='h-3 w-3' />}
         {m.text}
       </>
     )
