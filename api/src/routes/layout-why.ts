@@ -32,6 +32,13 @@ function reasonText(reason: PickReason | null, isAdmin: boolean): string | null 
       return 'a link opened it'
     case 'ab':
       return 'your role is trying out a new version of this form'
+    case 'phone':
+    case 'tablet': {
+      // A screen version (#2715 #3183): why its desktop form won, then the screen.
+      const base = reasonText({ ...reason, kind: reason.desktop_kind ?? 'default' }, isAdmin)
+      const screen = reason.kind === 'phone' ? 'a small screen' : 'a tablet-width screen'
+      return base ? `${base}, in its version for ${screen}` : `it is the version for ${screen}`
+    }
     default:
       return null
   }
