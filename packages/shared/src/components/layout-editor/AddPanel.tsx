@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, CopyPlus, LayoutPanelTop, Plus, Search, Sigma } from 'lucide-react'
+import { Check, CopyPlus, LayoutPanelTop, ListPlus, Plus, Search, Sigma, Undo2 } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import {
@@ -19,9 +20,11 @@ import { MeaningSuggestions } from './ai-forms/MeaningSuggestions'
 import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
+import { parseFieldList, placeListPlan } from './field-list'
 import { useFormFields } from './inspect/inspect-api'
 import { textMatcher } from './nav/find'
 import { useOverviewFields } from './overview/overview-api'
+import { putBackPlan, type RemovedEntry } from './removed-log'
 import { LibraryRows } from './reuse/LibraryRows'
 import { slotName } from './slot-names'
 import { fillText, useFieldFillRates } from './usage/usage-api'
@@ -49,7 +52,7 @@ interface WidgetRow {
 
 // The six slot cards (CANVAS_SLOT_KEYS), then owners, PDF and subtitle —
 // everything the classic editor could add.
-const BUILT_IN_SLOTS = [
+export const BUILT_IN_SLOTS = [
   '__pipeline__',
   '__comments__',
   '__tasks__',
@@ -61,7 +64,7 @@ const BUILT_IN_SLOTS = [
   '__subtitle__'
 ] as const
 
-const SLOT_HINTS: Record<string, string> = {
+export const SLOT_HINTS: Record<string, string> = {
   __pipeline__: 'State track and actions',
   __comments__: 'Notes and replies',
   __tasks__: 'To-dos on this record',
@@ -85,7 +88,7 @@ function widgetPatch(w: WidgetRow): PlacementPatch {
   }
 }
 
-function typeWord(f: AddFieldRow): string {
+export function typeWord(f: AddFieldRow): string {
   const ifc = f.interface ?? ''
   if (ifc.includes('o2m') || ifc === 'list-o2m' || ifc === 'inline-grid') return 'Grid'
   if (ifc.includes('m2m') || ifc.includes('m2a')) return 'Several records'
@@ -190,7 +193,8 @@ export function AddPanel({
   collection,
   selected,
   apply,
-  onSelect
+  onSelect,
+  removed = []
 }: {
   bundle: LayoutBundle
   collection: string
@@ -198,6 +202,8 @@ export function AddPanel({
   apply(ops: LayoutOp[], opts?: ApplyOptions): void
   /** Select something on the canvas (what was just added, or what is already there). */
   onSelect(t: DesignTarget): void
+  /** #3191: what this session took off the form and is still off it, newest first. */
+  removed?: RemovedEntry[]
 }) {
   const client = useNivaroClient()
   const [q, setQ] = useState('')
@@ -213,6 +219,9 @@ export function AddPanel({
   })
   // "Add another copy" refused: which field, and why.
   const [notice, setNotice] = useState<{ field: string; text: string } | null>(null)
+  // #3201: a pasted (or typed) list of field names, placed in order; null = closed.
+  const [list, setList] = useState<string | null>(null)
+  const [backNotice, setBackNotice] = useState<{ id: string; text: string } | null>(null)
 
   const matches = textMatcher(q)
 
@@ -322,6 +331,14 @@ export function AddPanel({
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onPaste={(e) => {
+              // A pasted list of names (lines or commas) opens the list placer instead.
+              const text = e.clipboardData.getData('text/plain')
+              if (/[\n\r,;\t]/.test(text) && parseFieldList(text).length > 1) {
+                e.preventDefault()
+                setList(text)
+              }
+            }}
             placeholder='Find a field, panel or widget'
             aria-label='Find something to add'
             className={searchCls}
@@ -348,6 +365,70 @@ export function AddPanel({
         </div>
       </div>
 
+      {removed.length > 0 && !q.trim() && (
+        <>
+          <p className={head}>Recently removed</p>
+          {removed.slice(0, 8).map((e) => (
+            <div key={e.id}>
+              <Row
+                title={
+                  e.piece.kind === 'field'
+                    ? ((fields as AddFieldRow[]).find(
+                        (f) => e.piece.kind === 'field' && f.field === e.piece.field
+                      )?.label ?? e.label)
+                    : e.label
+                }
+                sub={`${e.where} · ${e.how}`}
+                attrs={{ 'data-removed-entry': e.id }}
+                aside={
+                  <span className='inline-flex shrink-0 items-center gap-1 text-[11.5px] font-medium text-slate-500 group-hover:text-slate-800 dark:text-muted-foreground dark:group-hover:text-foreground'>
+                    <Undo2 className='h-3.5 w-3.5' />
+                    Put back
+                  </span>
+                }
+                onClick={() => {
+                  const plan = putBackPlan(bundle, e, selected)
+                  if (!plan.ok) {
+                    setBackNotice({ id: e.id, text: plan.reason })
+                    return
+                  }
+                  setBackNotice(null)
+                  apply(plan.ops, { label: plan.label })
+                  if (plan.select) onSelect(plan.select)
+                  if (plan.notes.length)
+                    toast.success(plan.label, { description: plan.notes.join('. ') })
+                }}
+              />
+              {backNotice?.id === e.id && (
+                <p
+                  role='status'
+                  className='px-2 pb-1 text-[11.5px] text-amber-700 dark:text-amber-300'
+                >
+                  {backNotice.text}
+                </p>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      {list !== null && (
+        <ListPlacer
+          bundle={bundle}
+          text={list}
+          onText={setList}
+          fields={fields as AddFieldRow[]}
+          selected={selected}
+          to={to}
+          onPlace={(ops, label, select) => {
+            apply(ops, { label })
+            if (select) onSelect(select)
+            setList(null)
+          }}
+          onClose={() => setList(null)}
+        />
+      )}
+
       {to === 'form' && matches(sectionLabel, 'section', 'tab', 'step') && (
         <>
           <p className={head}>Layout</p>
@@ -362,6 +443,15 @@ export function AddPanel({
             }}
           />
         </>
+      )}
+      {list === null && matches('Place a list of fields', 'paste names list several') && (
+        <Row
+          title='Place a list of fields'
+          sub='Paste names or keys, one per line or with commas'
+          attrs={{ 'data-add-list-open': '' }}
+          aside={<ListPlus className='h-3.5 w-3.5 text-slate-400' />}
+          onClick={() => setList('')}
+        />
       )}
       {/* #2712: a read-only figure from the form's fields, worked out on the page. */}
       {to === 'form' &&
@@ -552,4 +642,99 @@ export function otherFormSuggestions(
       names: names.slice(0, 3).concat(names.length > 3 ? [`${names.length - 3} more`] : [])
     }))
     .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
+}
+
+/** #3201: names pasted or typed, matched to fields, placed after the selection in order. */
+function ListPlacer({
+  bundle,
+  text,
+  onText,
+  fields,
+  selected,
+  to,
+  onPlace,
+  onClose
+}: {
+  bundle: LayoutBundle
+  text: string
+  onText(t: string): void
+  fields: AddFieldRow[]
+  selected: DesignTarget | null
+  to: 'form' | 'header'
+  onPlace(ops: LayoutOp[], label: string, select?: DesignTarget): void
+  onClose(): void
+}) {
+  const plan = useMemo(
+    () => placeListPlan(bundle, text, fields, selected, to),
+    [bundle, text, fields, selected, to]
+  )
+  const names = parseFieldList(text).length
+  return (
+    <div
+      data-add-list=''
+      className='mx-1 mt-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2 dark:border-border dark:bg-muted/30'
+    >
+      <label className='block text-[11.5px] font-semibold text-slate-600 dark:text-muted-foreground'>
+        Field names, keys or labels
+        <textarea
+          // biome-ignore lint/a11y/noAutofocus: opened on purpose to paste into
+          autoFocus
+          value={text}
+          onChange={(e) => onText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation()
+              onClose()
+            }
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && plan.ok) {
+              e.preventDefault()
+              onPlace(plan.ops, plan.label, plan.select)
+            }
+          }}
+          rows={4}
+          placeholder={'PO number\nVendor\nstatus, due_date'}
+          className='mt-1 block w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-1.5 font-normal text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
+        />
+      </label>
+      {names > 0 && (
+        <div role='status' className='mt-1.5 space-y-0.5 text-[11.5px] leading-snug'>
+          <p className='m-0 text-slate-600 dark:text-muted-foreground'>
+            {plan.placed.length} of {names} will be placed
+            {plan.ok ? ` · ${plan.label.replace(/^Place \d+ fields? /, '')}` : ''}
+          </p>
+          {plan.unmatched.length > 0 && (
+            <p className='m-0 text-amber-700 dark:text-amber-300' data-add-list-unmatched=''>
+              No field matches: {plan.unmatched.join(', ')}
+            </p>
+          )}
+          {plan.already.length > 0 && (
+            <p className='m-0 text-slate-500 dark:text-muted-foreground'>
+              Already there: {plan.already.join(', ')}
+            </p>
+          )}
+          {!plan.ok && plan.placed.length === 0 && plan.unmatched.length === 0 && (
+            <p className='m-0 text-slate-500 dark:text-muted-foreground'>{plan.reason}</p>
+          )}
+        </div>
+      )}
+      <div className='mt-2 flex items-center justify-end gap-1.5'>
+        <button
+          type='button'
+          onClick={onClose}
+          className='inline-flex h-7 items-center rounded-md px-2.5 text-[12px] font-medium text-slate-600 hover:bg-muted dark:text-muted-foreground dark:hover:text-foreground'
+        >
+          Cancel
+        </button>
+        <button
+          type='button'
+          data-add-list-place=''
+          disabled={!plan.ok}
+          onClick={() => plan.ok && onPlace(plan.ops, plan.label, plan.select)}
+          className='inline-flex h-7 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-40'
+        >
+          {plan.ok ? `Place ${plan.placed.length}` : 'Place'}
+        </button>
+      </div>
+    </div>
+  )
 }
