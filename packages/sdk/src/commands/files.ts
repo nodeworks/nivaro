@@ -64,6 +64,34 @@ export function deleteFile(id: string): Command<void> {
   return cmd('DELETE', `/files/${id}`)
 }
 
+/** What POST /files/attach answers (#3212). */
+export interface AttachedFile {
+  collection: string
+  item: string
+  field: string
+  /** The file a single-file field held before (`replace: true`), else null. */
+  replaced: string | null
+  file: { id: string; filename_download: string; type: string; filesize: number }
+}
+
+/**
+ * Upload a file as base64 and link it to a record's file field in one call (#3212): the
+ * record is judged as the caller (read gate, update permission, field list, edit lock) and the
+ * link goes through the items service. 10 MB decoded at most. A single-file field that already
+ * holds a file answers 409 FIELD_HAS_FILE unless `replace` is true.
+ */
+export function attachFileToRecord(data: {
+  collection: string
+  item: string | number
+  field?: string
+  filename: string
+  content_base64: string
+  type?: string
+  replace?: boolean
+}): Command<{ data: AttachedFile }> {
+  return cmd('POST', '/files/attach', undefined, { ...data, item: String(data.item) })
+}
+
 // ─── Usage tracking ───────────────────────────────────────────────────────────
 
 export interface FileUsageEntry {

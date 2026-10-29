@@ -44,6 +44,7 @@ import { registerLayoutTools } from './tools/layouts.js'
 import { registerLookupTools } from './tools/lookup.js'
 import { registerPipelineTools } from './tools/pipeline.js'
 import { registerRecordTools } from './tools/record.js'
+import { registerSchemaProposalTools } from './tools/schema-proposals.js'
 import { registerStatusTools } from './tools/status.js'
 import { registerSupportTools } from './tools/support.js'
 import { registerWorkTools } from './tools/work.js'
@@ -133,6 +134,7 @@ export const TOOL_NAMES = [
   'list_revisions',
   'list_record_files',
   'read_file',
+  'attach_file',
   'compare_records',
   'build_filter',
   'changes_since',
@@ -155,7 +157,8 @@ export const TOOL_NAMES = [
   'form_state',
   'render_form',
   'list_instance_tools',
-  'call_instance_tool'
+  'call_instance_tool',
+  'propose_schema_change'
 ] as const
 
 /** Chat tools (#2492): the first two with chatAccess 'read', all three with 'post'. */
@@ -284,6 +287,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerFormTools(server, client)
   registerInstanceTools(server, client)
   registerChatTools(server, client, chatAccess)
+  registerSchemaProposalTools(server, client)
   if (options.adminTools === true) {
     registerAdminTools(server, client)
     registerAccessTools(server, client)

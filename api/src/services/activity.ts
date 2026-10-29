@@ -3,7 +3,8 @@ import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { chainFields } from './chain-columns.js'
-import { currentTraceCaller, noteDerivedWrite } from './request-trace.js'
+import { attributionColumns } from './mcp-attribution.js'
+import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
@@ -88,6 +89,10 @@ export async function logActivity(opts: {
         ...(await originColumn(opts.origin, opts.comment)),
         ...(await chainFields('nivaro_activity')),
         ...(await callerColumns(opts.req)),
+        // #3213: a write made through the hosted MCP endpoint names its connection + app.
+        ...(await attributionColumns(
+          (opts.req ?? currentTraceRequestObject()) as Parameters<typeof attributionColumns>[0]
+        )),
         ip: opts.req?.ip ?? null,
         user_agent: opts.req?.headers['user-agent'] ?? null,
         timestamp: new Date()

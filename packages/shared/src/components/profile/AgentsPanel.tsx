@@ -23,6 +23,7 @@ import {
 import { McpScopeSheet, type McpScopeSummary, ScopeBadge } from '../McpConnectionScope'
 import { SimpleSelectXs } from '../ui/SimpleSelect'
 import { Skeleton } from '../ui/skeleton'
+import { ConnectionRollback } from './ConnectionRollback'
 import { ConfirmButton, EmptyLine, Pill, SectionCard } from './primitives'
 
 /**
@@ -218,6 +219,7 @@ function ConnectionRow({
   disconnecting: boolean
 }) {
   const last = c.stats?.last_call_at ?? c.last_used_at
+  const [rollingBack, setRollingBack] = useState(false)
   const [limits, setLimits] = useState(false)
   return (
     <li className='flex flex-wrap items-center gap-x-6 gap-y-3 py-3 first:pt-0 last:pb-0'>
@@ -292,6 +294,15 @@ function ConnectionRow({
             View calls
           </button>
         )}
+        <button
+          type='button'
+          onClick={() => setRollingBack((v) => !v)}
+          aria-expanded={rollingBack}
+          data-tip='Undo what this app changed in a time window'
+          className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+        >
+          Roll back…
+        </button>
         {c.kind === 'oauth' && c.created_at ? (
           <ConfirmButton
             onConfirm={onDisconnect}
@@ -312,6 +323,16 @@ function ConnectionRow({
           </span>
         ) : null}
       </div>
+      {rollingBack && (
+        <div className='basis-full'>
+          <ConnectionRollback
+            conn={c.conn}
+            name={c.name}
+            scope='mine'
+            onClose={() => setRollingBack(false)}
+          />
+        </div>
+      )}
     </li>
   )
 }

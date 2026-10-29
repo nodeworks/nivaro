@@ -174,6 +174,7 @@ import { mcpRoutes } from './mcp.js'
 import { mcpConnectionRoutes } from './mcp-connections.js'
 import { mcpConsoleRoutes } from './mcp-console.js'
 import { mcpContractTestRoutes } from './mcp-contract-tests.js'
+import { mcpRollbackRoutes } from './mcp-rollback.js'
 import { mcpScopeRoutes } from './mcp-scopes.js'
 import { mcpSuggestionRoutes } from './mcp-suggestions.js'
 import { mcpToolRoutes } from './mcp-tools.js'
@@ -252,6 +253,7 @@ import { savedViewsRoutes } from './saved-views.js'
 import { scheduledChangesRoutes } from './scheduled-changes.js'
 import { scheduledReportsRoutes } from './scheduled-reports.js'
 import { schemaRoutes } from './schema.js'
+import { schemaProposalRoutes } from './schema-proposals.js'
 import { schemaSnapshotRoutes } from './schema-snapshot.js'
 import { scimRoutes } from './scim.js'
 import { searchRoutes } from './search.js'
@@ -789,6 +791,10 @@ export async function registerRoutes(app: FastifyInstance) {
   // Agents working with people (#3210, #3220)
   await app.register(agentTriggerRoutes, { prefix: '/agent-triggers' })
   await app.register(agentQuestionRoutes, { prefix: '/agent-questions' })
+  // #3219 — roll back a connection's changes (same prefix: OAUTH_NO_WRITE covers it).
+  await app.register(mcpRollbackRoutes, { prefix: '/mcp-connections' })
+  // #3209 — schema change proposals (agents propose, administrators apply).
+  await app.register(schemaProposalRoutes, { prefix: '/schema-proposals' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

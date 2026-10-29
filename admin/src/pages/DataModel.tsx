@@ -18,23 +18,26 @@ import {
   Database,
   FolderOpen,
   GitBranch,
+  Inbox,
   Plus,
   RefreshCw,
   Search,
   Share2,
   ShieldCheck,
+  Sparkles,
   Table2,
   Trash2,
   Waypoints,
   X
-, Sparkles } from 'lucide-react'
+} from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { CollectionDesigner } from '@/components/collection-designer'
 import { ExplainButton } from '@/components/explain-button'
+import { SchemaProposalsPanel, useOpenSchemaProposals } from '@/components/schema-proposals-panel'
 import { TreePicker } from '@/components/tree-picker'
 import { Button } from '@/components/ui/button'
-import { CollectionDesigner } from '@/components/collection-designer'
 import {
   Command,
   CommandGroup,
@@ -990,6 +993,12 @@ export function DataModelPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  // #3209: schema proposals from assistants; ?proposals=1 opens them.
+  const [showProposals, setShowProposals] = useState(
+    () => new URLSearchParams(window.location.search).get('proposals') === '1'
+  )
+  const openProposals = useOpenSchemaProposals()
+  const waiting = openProposals.data?.length ?? 0
   const [designerOpen, setDesignerOpen] = useState(false)
   const [unregCollapsed, setUnregCollapsed] = useState(true)
   const [sysCollapsed, setSysCollapsed] = useState(true)
@@ -1056,6 +1065,22 @@ export function DataModelPage() {
             <Button size='sm' variant='outline' onClick={() => navigate('/data-model/graph')}>
               <Waypoints className='mr-1.5 h-3.5 w-3.5' /> Graph
             </Button>
+            <Button
+              size='sm'
+              variant='outline'
+              aria-pressed={showProposals}
+              onClick={() => {
+                setShowProposals((v) => !v)
+                setIsCreating(false)
+              }}
+            >
+              <Inbox className='mr-1.5 h-3.5 w-3.5' /> Proposals
+              {waiting > 0 && (
+                <span className='ml-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-nvr-cyan px-1 text-[10.5px] font-semibold text-white'>
+                  {waiting}
+                </span>
+              )}
+            </Button>
             <Button size='sm' variant='outline' onClick={() => setDesignerOpen(true)}>
               <Sparkles className='mr-1.5 h-3.5 w-3.5 text-[#00ceff]' /> Design with AI
             </Button>
@@ -1063,6 +1088,7 @@ export function DataModelPage() {
               size='sm'
               onClick={() => {
                 setIsCreating(true)
+                setShowProposals(false)
               }}
             >
               <Plus className='mr-1.5 h-3.5 w-3.5' /> Create Table
@@ -1289,7 +1315,9 @@ export function DataModelPage() {
 
         {/* Right panel */}
         <div className='flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 dark:bg-background'>
-          {isCreating ? (
+          {showProposals && !isCreating ? (
+            <SchemaProposalsPanel onClose={() => setShowProposals(false)} />
+          ) : isCreating ? (
             <div className='flex-1 overflow-y-auto'>
               <CreateTablePanel
                 onCancel={() => setIsCreating(false)}

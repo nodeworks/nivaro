@@ -305,13 +305,22 @@ export interface McpSettings {
   rate_limit_per_minute: number
   /** Per-connection overrides of the limit, by connection key. */
   connection_limits: Record<string, number>
+  /**
+   * The badge on records an agent wrote (#3213): `app` = "via <the app's name>" (the OAuth
+   * client's registration or the API key's name), `fixed` = always `agent_label`.
+   */
+  agent_label_mode: 'app' | 'fixed'
+  /** The fixed badge text, and the fallback when an app has no name. */
+  agent_label: string
 }
 
 export const MCP_SETTINGS_DEFAULTS: McpSettings = {
   idle_flag_days: 60,
   idle_revoke_days: 90,
   rate_limit_per_minute: 120,
-  connection_limits: {}
+  connection_limits: {},
+  agent_label_mode: 'app',
+  agent_label: 'via assistant'
 }
 /** The notice before an idle disconnection. */
 export const IDLE_NOTICE_DAYS = 7
@@ -361,7 +370,40 @@ export function mergeMcpSettings(base: McpSettings, patch: unknown): McpSettings
     if (Object.keys(out.connection_limits).length > MAX_OVERRIDES)
       throw new Error(`At most ${MAX_OVERRIDES} connection limits`)
   }
+  if (p.agent_label_mode !== undefined) {
+    if (p.agent_label_mode !== 'app' && p.agent_label_mode !== 'fixed')
+      throw new Error('The badge must name the app or use the fixed label')
+    out.agent_label_mode = p.agent_label_mode
+  }
+  if (p.agent_label !== undefined) {
+    const label = typeof p.agent_label === 'string' ? cleanBadge(p.agent_label) : ''
+    if (!label) throw new Error('The badge label cannot be empty')
+    out.agent_label = label
+  }
   return out
+}
+
+/** Badge text made safe to show: no control characters, one line, ≤ 40 characters. */
+export function cleanBadge(raw: string): string {
+  return [...raw]
+    .filter((c) => {
+      const code = c.charCodeAt(0)
+      return code >= 0x20 && code !== 0x7f
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
+}
+
+/**
+ * The badge a record shows beside a write an agent made (#3213), from the app name stored on
+ * the activity row (`via_app`) and the settings: "via Claude Code", or the fixed label.
+ */
+export function agentBadgeLabel(viaApp: string | null | undefined, s: McpSettings): string {
+  const app = typeof viaApp === 'string' ? cleanBadge(viaApp) : ''
+  if (s.agent_label_mode === 'fixed' || !app) return s.agent_label
+  return cleanBadge(`via ${app}`)
 }
 
 /** A stored value read leniently: anything invalid reads as its default. */

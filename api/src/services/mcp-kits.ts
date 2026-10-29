@@ -79,6 +79,8 @@ const ADMIN_READS = [
   'which_form',
   'explain_field',
   'propose_layout_ops',
+  // #3209: stored for review, never applied by the assistant
+  'propose_schema_change',
   'infra_stacks',
   'infra_containers',
   'infra_updates',
@@ -107,6 +109,7 @@ export const BUILTIN_KITS: ToolKit[] = [
       'transition',
       'decide_approval',
       'add_comment',
+      'attach_file',
       'create_task',
       'complete_task',
       'mark_notifications_read'
@@ -126,6 +129,7 @@ export const BUILTIN_KITS: ToolKit[] = [
       'update_item',
       'transition',
       'add_comment',
+      'attach_file',
       'create_task',
       'complete_task',
       'mark_notifications_read',
@@ -149,7 +153,7 @@ export const BUILTIN_KITS: ToolKit[] = [
     key: 'admin',
     label: 'Administrator (look only)',
     description:
-      'Every read plus health, jobs, traffic, access, layout and infrastructure diagnostics. It changes no records; layout ideas are stored as proposals for you to review.',
+      'Every read plus health, jobs, traffic, access, layout and infrastructure diagnostics. It changes no records; layout and data model ideas are stored as proposals for you to review.',
     tools: [
       ...READS,
       'list_custom_queries',

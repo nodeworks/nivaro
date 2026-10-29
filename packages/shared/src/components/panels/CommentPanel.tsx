@@ -24,6 +24,7 @@ import {
 } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { formatRelative } from '../../lib/utils'
+import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { UserAvatar } from '../UserAvatar'
@@ -52,6 +53,8 @@ interface Comment {
   reactions?: Array<{ emoji: string; count: number; mine: boolean }>
   /** Soft-deleted (the server keeps a tombstone for history). */
   deleted?: boolean
+  /** #3213 — posted by an AI assistant through MCP: the badge text ("via Claude"). */
+  via_agent?: string | null
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -1169,6 +1172,7 @@ export function CommentPanel({
                             <span className='text-[13px] font-medium text-slate-800'>
                               {displayName(c.user)}
                             </span>
+                            <AgentBadge label={c.via_agent} />
                             <span className='text-[11px] text-slate-400'>
                               {formatRelative(c.created_at)}
                             </span>

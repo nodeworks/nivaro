@@ -1,3 +1,4 @@
+import { AgentBadge } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -36,6 +37,8 @@ type ActivityRow = {
   first_name: string | null
   last_name: string | null
   user_email: string | null
+  /** #3213 — written by an AI assistant through MCP: the badge text. */
+  via_agent?: string | null
 }
 
 const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
@@ -238,7 +241,12 @@ export function ActivityPage() {
                         <TableCell className='text-sm text-muted-foreground whitespace-nowrap'>
                           {formatDateTime(row.timestamp)}
                         </TableCell>
-                        <TableCell className='text-sm'>{userName(row)}</TableCell>
+                        <TableCell className='text-sm'>
+                          <span className='inline-flex flex-wrap items-center gap-1.5'>
+                            {userName(row)}
+                            <AgentBadge label={row.via_agent} />
+                          </span>
+                        </TableCell>
                         <TableCell>
                           <Badge
                             variant={ACTION_VARIANTS[row.action] ?? 'secondary'}

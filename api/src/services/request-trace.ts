@@ -256,6 +256,13 @@ export function currentTraceCaller(): { auth: string | null; apiKeyId: number | 
   }
 }
 
+/** The live request object itself (#3213 MCP write attribution reads its credential facts);
+ *  null outside a request. */
+export function currentTraceRequestObject(): object | null {
+  const req = als.getStore()?.request
+  return req && typeof req === 'object' ? req : null
+}
+
 /** #1154 — the current request's workspace (the Traffic Map tags write events with it). */
 export function currentTraceWorkspace(): string | null {
   const ws = (als.getStore()?.request as { workspaceId?: unknown } | undefined)?.workspaceId

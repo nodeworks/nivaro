@@ -5,6 +5,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import {
+  attachFileToRecord,
   createComment,
   listComments,
   type NivaroClient,
@@ -21,6 +22,9 @@ import { clampTo, collectionName, recordId, uuid } from '../schema.js'
 import { readItemFields } from './items.js'
 
 type Row = Record<string, unknown>
+
+/** base64 text for 10 MB, with slack — the API refuses anything decoding past 10 MB. */
+const ATTACH_BASE64_MAX = 14_100_000
 
 const FILE_INTERFACES = new Set(['file', 'file-image'])
 const FILES_INTERFACES = new Set(['files-m2m', 'files'])
@@ -142,6 +146,8 @@ export function registerRecordTools(server: McpServer, client: NivaroClient) {
             }
             if (c.edited) row.edited = true
             if (c.deleted) row.deleted = true
+            // #3213: posted by an assistant through MCP ("via Claude").
+            if (typeof c.via_agent === 'string' && c.via_agent) row.via = c.via_agent
             if (mentions.length > 0) {
               row.mentions = mentions.map((m) => personName(m.first_name, m.last_name, m.email))
             }
@@ -291,6 +297,71 @@ export function registerRecordTools(server: McpServer, client: NivaroClient) {
       try {
         const res = await client.request(readFileMeta(file_id))
         return ok(summarizeFile(res.data as unknown as Row))
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'attach_file',
+    {
+      title: 'Attach a file to a record',
+      description:
+        "Upload a file (base64, at most 10 MB) and link it to one record's file field, as the user: they must be able to change that record and that field, and the file then opens for whoever can open the record. Name the field when the record has more than one file field (list_record_files / describe_collection show them). A single-file field that already holds a file is refused unless replace is true; a multi-file field gains the file. Ask the person before attaching anything they did not hand you.",
+      inputSchema: {
+        collection: collectionName,
+        id: recordId,
+        field: z
+          .string()
+          .min(1)
+          .max(128)
+          .optional()
+          .describe('The file field to attach to (needed when there is more than one).'),
+        filename: z
+          .string()
+          .min(1)
+          .max(255)
+          .describe('The file name with its extension, e.g. "site-survey.pdf".'),
+        content_base64: z
+          .string()
+          .min(4)
+          .max(ATTACH_BASE64_MAX)
+          .describe('The file content, base64-encoded (a data: URL works too).'),
+        mime_type: z
+          .string()
+          .max(120)
+          .optional()
+          .describe('The media type, e.g. application/pdf. Default: from the file name.'),
+        replace: z
+          .boolean()
+          .optional()
+          .describe('Put this file in place of the one a single-file field holds.')
+      },
+      annotations: WRITE
+    },
+    async ({ collection, id, field, filename, content_base64, mime_type, replace }) => {
+      try {
+        const res = await client.request(
+          attachFileToRecord({
+            collection,
+            item: String(id),
+            filename,
+            content_base64,
+            ...(field ? { field } : {}),
+            ...(mime_type ? { type: mime_type } : {}),
+            ...(replace ? { replace: true } : {})
+          })
+        )
+        const d = res.data
+        return ok({
+          attached: true,
+          collection: d.collection,
+          id: d.item,
+          field: d.field,
+          file: d.file,
+          ...(d.replaced ? { replaced_file: d.replaced } : {})
+        })
       } catch (err) {
         return fail(err)
       }

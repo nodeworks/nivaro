@@ -13,6 +13,12 @@ import {
   readableFileIdList
 } from '../services/file-access.js'
 import {
+  ATTACH_MAX_BASE64,
+  AttachError,
+  type AttachInput,
+  attachFileToRecord
+} from '../services/file-attach.js'
+import {
   STORED_FILE_SECURITY_HEADERS,
   storedFileSecurityHeaders,
   storedFileServing
@@ -167,6 +173,29 @@ export async function filesRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(201).send({ data: file })
+  })
+
+  /**
+   * POST /files/attach (#3212, the MCP attach_file tool) — {collection, item, field?, filename,
+   * content_base64, type?, replace?}: upload a base64 file and link it to a record's file field
+   * through the items service as the caller (services/file-attach.ts). 10 MB decoded at most.
+   */
+  app.post('/attach', { bodyLimit: ATTACH_MAX_BASE64 + 64 * 1024 }, async (req, reply) => {
+    try {
+      const data = await attachFileToRecord(req, (req.body ?? {}) as AttachInput)
+      return reply.code(201).send({ data })
+    } catch (err) {
+      if (err instanceof AttachError)
+        return reply
+          .code(err.statusCode)
+          .send({ error: err.message, ...(err.code ? { code: err.code } : {}) })
+      const e = err as { statusCode?: number; message?: string; code?: string }
+      if (e?.statusCode && e.statusCode < 500)
+        return reply
+          .code(e.statusCode)
+          .send({ error: e.message ?? 'Refused', ...(e.code ? { code: e.code } : {}) })
+      throw err
+    }
   })
 
   // Presigned direct upload (s3/azure providers only). Creates the file record
