@@ -30,6 +30,7 @@ import { Sheet, SheetContent } from '../ui/sheet'
 import { CollectionImportPanel } from './CollectionImportPanel'
 import { DefinitionHealthPanel } from './DefinitionHealthPanel'
 import { DefinitionsPanel } from './DefinitionsPanel'
+import { DownloadSampleButton } from './DownloadSampleButton'
 import { NewImportDialog } from './NewImportDialog'
 import { RunDetailSheet } from './RunDetailSheet'
 import { LIVE_POLL_MS, queueStanding, STATUS_STYLE, StatusPill, useElapsed } from './run-parts'
@@ -588,6 +589,9 @@ export function ImportConsole({
               )}
             />
           </Button>
+          {isAdmin && tab === 'runs' && (
+            <DownloadSampleButton definitions={definitions.filter((d) => d.is_active)} />
+          )}
           {isAdmin && tab === 'runs' && (
             <Button size='sm' className='h-7' onClick={() => setNewOpen(true)}>
               <Plus className='h-3.5 w-3.5' />

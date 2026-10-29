@@ -158,6 +158,10 @@ export const dataImportGuide: DocSection = {
     },
     {
       type: 'p',
+      text: '**Download sample** (beside New import) gives a CSV for any import: the headers it reads, in order, and a few rows showing how to fill them in. Rows come from the import\u2019s staging table when a recent run left any; otherwise they are generated — real values from each lookup (a warehouse name, a CIFA number), numbers for numeric columns, today\u2019s date for dates. `GET /api/staged-imports/definitions/:id/sample` (admin).'
+    },
+    {
+      type: 'p',
       text: 'Service-mode definitions (rows written through the items service instead of a staging table + procedure) go one step further: the preview is a DRY RUN of the real importer — the same lookups, header mapping, natural-key dedupe and field diff, with nothing written — and reports what a run would do: how many rows would be created, how many existing rows would change (field by field, old → new), how many are unchanged, and every skipped row with the rule that dropped it ("row 12 · no cifa_items match for cifa", "row 40 · duplicate key in file (a later row wins)"). Lookup values a real run would stub-create are listed too. Click a count to see the rows behind it.'
     },
     {

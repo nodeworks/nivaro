@@ -17,11 +17,11 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNivaroClient } from '../../context'
-import { ExplainButton } from '../ai/ExplainButton'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
 import { type ImportLogError, type ImportLogLine, parseImportLog } from '../../lib/import-log'
 import { cn, formatDateTime, formatFileSize, formatNumber, titleCase } from '../../lib/utils'
+import { ExplainButton } from '../ai/ExplainButton'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../ui/sheet'
@@ -119,7 +119,7 @@ function fmtMs(ms: number): string {
 }
 
 /** Authenticated file download — a plain link carries no bearer token. */
-function useDownload() {
+export function useDownload() {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)

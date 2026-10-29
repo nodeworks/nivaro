@@ -14,6 +14,7 @@ import {
 import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
 import { executeRevert, planRevert } from '../services/import-run-revert.js'
+import { buildImportSample } from '../services/import-sample.js'
 import { MANAGED_TABLE, procedureOwner } from '../services/managed-procedures/owners.js'
 import { getManagedProcedure } from '../services/managed-procedures/store.js'
 import {
@@ -440,6 +441,28 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     })
     return reply.code(201).send({ data: await getImportDefinition(key) })
   })
+
+  // Download sample (Import Console): a CSV with the headers this import reads and a few rows
+  // showing how to fill them in (services/import-sample.ts).
+  app.get<{ Params: { id: string } }>(
+    '/definitions/:id/sample',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
+      if (!row) return reply.code(404).send({ error: 'Not found' })
+      const sample = await buildImportSample(row)
+      if (sample.columns.length === 0)
+        return reply.code(422).send({
+          error: 'This import declares no columns and has no staging table to read them from.',
+          code: 'NO_SAMPLE_COLUMNS'
+        })
+      return reply
+        .header('content-type', 'text/csv; charset=utf-8')
+        .header('content-disposition', `attachment; filename="${sample.filename}"`)
+        .header('x-sample-source', sample.source)
+        .send(sample.csv)
+    }
+  )
 
   app.patch<{ Params: { id: string } }>(
     '/definitions/:id',
