@@ -115,11 +115,7 @@ export const managedProceduresDocs: DocSection = {
           'The database differs from the saved version.',
           'Deploy version, or Keep the database’s version.'
         ],
-        [
-          'not deployed',
-          'Config has the procedure and the database does not.',
-          'Deploy version.'
-        ],
+        ['not deployed', 'Config has the procedure and the database does not.', 'Deploy version.'],
         [
           'drop pending',
           'Config marks it dropped, but it still exists in the database.',
@@ -135,16 +131,8 @@ export const managedProceduresDocs: DocSection = {
           'An import definition (or two) also owns this name.',
           'Give the import its own procedure, or drop the managed row.'
         ],
-        [
-          'import',
-          'Owned by an import definition.',
-          'Edit it in the import definition.'
-        ],
-        [
-          'not managed',
-          'Only in the database; nobody owns it yet.',
-          'Adopt it, or leave it alone.'
-        ]
+        ['import', 'Owned by an import definition.', 'Edit it in the import definition.'],
+        ['not managed', 'Only in the database; nobody owns it yet.', 'Adopt it, or leave it alone.']
       ]
     },
     { type: 'h2', id: 'managed-procedures-api', text: 'API' },

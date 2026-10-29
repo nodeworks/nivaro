@@ -207,7 +207,6 @@ import {
   devexWebhookDeliveries,
   devexWebhookSigning
 } from './sections/devex.js'
-import { managedProceduresDocs } from './sections/managed-procedures.js'
 import { disasterRecoveryDocs } from './sections/disaster-recovery.js'
 import { extAssistantTools } from './sections/ext-assistant-tools.js'
 import {
@@ -305,6 +304,7 @@ import {
   lowCodePageBuilder,
   lowCodeRuleBuilder
 } from './sections/low-code.js'
+import { managedProceduresDocs } from './sections/managed-procedures.js'
 import { mcpDocs } from './sections/mcp.js'
 import { metricAlertsGuide } from './sections/metric-alerts.js'
 import {
