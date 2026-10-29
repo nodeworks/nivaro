@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { actorJson, resolveActivityStamp } from './activity-scope.js'
+import type { ActivityActor } from './activity-sentence.js'
 import { chainFields } from './chain-columns.js'
 import { attributionColumns } from './mcp-attribution.js'
 import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
@@ -68,6 +70,35 @@ async function callerColumns(req: FastifyRequest | undefined): Promise<Record<st
   return out
 }
 
+/**
+ * The burst + actor columns (migration 516): the row's group key (one bulk action, import
+ * run, flow run, cron tick, batch or MCP request) and who really did it when that is not
+ * simply the signed-in person (services/activity-scope.ts). A database behind 516 gets
+ * nothing written.
+ */
+async function readableColumns(
+  opts: Parameters<typeof logActivity>[0],
+  req: FastifyRequest | undefined
+): Promise<Record<string, string>> {
+  const stamp = resolveActivityStamp({
+    req: req as Parameters<typeof resolveActivityStamp>[0]['req'],
+    user: opts.user ?? null,
+    group_key: opts.group_key,
+    actor: opts.actor
+  })
+  const actor = actorJson(stamp.actor)
+  if (!stamp.group_key && !actor) return {}
+  try {
+    if (!(await hasColumn('nivaro_activity', 'group_key'))) return {}
+  } catch {
+    return {}
+  }
+  const out: Record<string, string> = {}
+  if (stamp.group_key) out.group_key = stamp.group_key
+  if (actor) out.actor = actor
+  return out
+}
+
 export async function logActivity(opts: {
   action: string
   user: string | null | undefined
@@ -77,8 +108,15 @@ export async function logActivity(opts: {
   req?: FastifyRequest
   /** Who wrote it — person | machine | import | integration (#518). */
   origin?: string | null
+  /** The burst this row belongs to (migration 516); default: the request / runner scope. */
+  group_key?: string | null
+  /** Who really did it (migration 516); default: derived from the request / runner scope. */
+  actor?: ActivityActor | null
 }): Promise<number | null> {
   try {
+    const liveReq = (opts.req ?? currentTraceRequestObject() ?? undefined) as
+      | FastifyRequest
+      | undefined
     const rows = (await db('nivaro_activity')
       .insert({
         action: opts.action,
@@ -90,9 +128,8 @@ export async function logActivity(opts: {
         ...(await chainFields('nivaro_activity')),
         ...(await callerColumns(opts.req)),
         // #3213: a write made through the hosted MCP endpoint names its connection + app.
-        ...(await attributionColumns(
-          (opts.req ?? currentTraceRequestObject()) as Parameters<typeof attributionColumns>[0]
-        )),
+        ...(await attributionColumns(liveReq as Parameters<typeof attributionColumns>[0])),
+        ...(await readableColumns(opts, liveReq)),
         ip: opts.req?.ip ?? null,
         user_agent: opts.req?.headers['user-agent'] ?? null,
         timestamp: new Date()

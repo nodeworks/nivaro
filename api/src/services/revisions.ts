@@ -1,5 +1,7 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { optionalActivityColumns } from './activity-readable.js'
+import { type ActivityActor, actorOf } from './activity-sentence.js'
 import { agentBadgesForActivity } from './mcp-attribution.js'
 import { noteDerivedWrite } from './request-trace.js'
 
@@ -21,6 +23,10 @@ export interface Revision {
   comment?: string | null
   /** #3213 — the badge of a write an agent made through MCP ("via Claude"), else absent. */
   via_agent?: string | null
+  /** Migration 516 — who really did it (View-as, API key, assistant, import, flow, job). */
+  actor?: ActivityActor | null
+  /** Migration 516 — the burst the write belonged to (bulk action, import run, flow run…). */
+  group_key?: string | null
   /** A pipeline event folded into the history (no snapshot): a transition
    *  from nivaro_workflow_history, or the instance start. */
   event?: {
@@ -186,8 +192,48 @@ function hydrateRevision(row: Record<string, unknown>): Revision {
   }
 }
 
+/** The actor inputs a history row reads (column-probed; migration 516 and before). */
+const ACTOR_INPUTS = [
+  'origin',
+  'chain_parent',
+  'auth_method',
+  'api_key_id',
+  'mcp_conn',
+  'via_app',
+  'group_key',
+  'actor'
+]
+const INTERNAL_INPUTS = [
+  'origin',
+  'chain_parent',
+  'auth_method',
+  'api_key_id',
+  'mcp_conn',
+  'via_app'
+]
+
+function withActorInputs(q: ReturnType<typeof db>, cols: Set<string>) {
+  const present = ACTOR_INPUTS.filter((c) => cols.has(c))
+  if (present.length) q.select(...present.map((c) => `a.${c}`))
+  if (cols.has('api_key_id'))
+    q.leftJoin('nivaro_api_keys as k', 'a.api_key_id', 'k.id').select('k.name as api_key_name')
+  return q
+}
+
+/** The derived actor on a history row; the raw credential columns never leave the server. */
+function settleActor(row: Record<string, unknown>): Record<string, unknown> {
+  if (row.activity == null) return row
+  const actor = actorOf(row as never)
+  const out: Record<string, unknown> = { ...row, actor: actor.kind === 'person' ? null : actor }
+  for (const c of [...INTERNAL_INPUTS, 'api_key_name']) delete out[c]
+  return out
+}
+
 export async function listRevisions(collection: string, item: string): Promise<Revision[]> {
-  const behalfCol = await hasColumn('nivaro_workflow_history', 'on_behalf_of').catch(() => false)
+  const [behalfCol, actCols] = await Promise.all([
+    hasColumn('nivaro_workflow_history', 'on_behalf_of').catch(() => false),
+    optionalActivityColumns().catch(() => new Set<string>())
+  ])
   const [revRows, activityRows, transitionRows, addendumHistory] = await Promise.all([
     db('nivaro_revisions as r')
       .leftJoin('nivaro_activity as a', 'r.activity', 'a.id')
@@ -208,6 +254,7 @@ export async function listRevisions(collection: string, item: string): Promise<R
         'u.last_name',
         'u.email as user_email'
       )
+      .modify((q) => withActorInputs(q, actCols))
       .where('r.collection', collection)
       .where('r.item', item)
       .orderBy('r.id', 'desc')
@@ -233,6 +280,7 @@ export async function listRevisions(collection: string, item: string): Promise<R
         'u.last_name',
         'u.email as user_email'
       )
+      .modify((q) => withActorInputs(q, actCols))
       .where('a.collection', collection)
       .where('a.item', item)
       .whereIn('a.action', ['o2m-create', 'o2m-update', 'o2m-delete', 'pipeline-start'])
@@ -336,7 +384,7 @@ export async function listRevisions(collection: string, item: string): Promise<R
     all.map((r) => Number(r.activity)).filter((n) => Number.isInteger(n) && n > 0)
   ).catch(() => new Map<number, string>())
   return all.map((r) => {
-    const rev = hydrateRevision(r)
+    const rev = hydrateRevision(settleActor(r as Record<string, unknown>))
     const badge = rev.activity != null ? badges.get(Number(rev.activity)) : undefined
     return badge ? { ...rev, via_agent: badge } : rev
   })

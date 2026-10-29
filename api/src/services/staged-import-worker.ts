@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
@@ -299,44 +300,56 @@ async function runOne(
       label: definition.label ?? null,
       bytes: fileBuffer.length
     })
+    // Migration 516: the run's activity rows are one burst, written by this import.
+    const importScope = {
+      group_key: activityGroupKey('import_run', next.id),
+      actor: {
+        kind: 'import' as const,
+        id: String(next.import_key),
+        name: definition.label ?? String(next.import_key),
+        on_behalf_of: next.created_by ? String(next.created_by) : null
+      }
+    }
     const { rowCount, durationSeconds, summary, affected, matched } = await startChain(
       chainRoot,
       () =>
-        runAsTrafficSource(IMPORT_SOURCE, () =>
-          runStagedImport({
-            definition,
-            buffer: fileBuffer,
-            createdBy: next.created_by ? String(next.created_by) : null,
-            runId: Number(next.id),
-            onProgress: async (stage, data) => {
-              if (stage === 'row_count') {
-                noteImportRun('rows', {
-                  run_id: Number(next.id),
-                  key: String(next.import_key),
-                  rows: Number(data?.row_count ?? 0)
+        withActivityScope(importScope, () =>
+          runAsTrafficSource(IMPORT_SOURCE, () =>
+            runStagedImport({
+              definition,
+              buffer: fileBuffer,
+              createdBy: next.created_by ? String(next.created_by) : null,
+              runId: Number(next.id),
+              onProgress: async (stage, data) => {
+                if (stage === 'row_count') {
+                  noteImportRun('rows', {
+                    run_id: Number(next.id),
+                    key: String(next.import_key),
+                    rows: Number(data?.row_count ?? 0)
+                  })
+                  await db('nivaro_import_queue')
+                    .where('id', next.id)
+                    .update({ row_count: Number(data?.row_count ?? 0) })
+                }
+                emitImportProgress(next.created_by ? String(next.created_by) : null, {
+                  id: next.id,
+                  stage,
+                  ...data
                 })
-                await db('nivaro_import_queue')
-                  .where('id', next.id)
-                  .update({ row_count: Number(data?.row_count ?? 0) })
+                emitJobProgress(next.created_by ? String(next.created_by) : null, {
+                  key: `import:${next.id}`,
+                  kind: 'import',
+                  label: `${definition.label ?? label(next)} import`,
+                  status: 'running',
+                  progress: {
+                    phase: String(stage),
+                    ...(data?.row_count != null ? { total: Number(data.row_count) } : {})
+                  },
+                  href: `/imports?run=${next.id}`
+                })
               }
-              emitImportProgress(next.created_by ? String(next.created_by) : null, {
-                id: next.id,
-                stage,
-                ...data
-              })
-              emitJobProgress(next.created_by ? String(next.created_by) : null, {
-                key: `import:${next.id}`,
-                kind: 'import',
-                label: `${definition.label ?? label(next)} import`,
-                status: 'running',
-                progress: {
-                  phase: String(stage),
-                  ...(data?.row_count != null ? { total: Number(data.row_count) } : {})
-                },
-                href: `/imports?run=${next.id}`
-              })
-            }
-          })
+            })
+          )
         ),
       chainId
     )
@@ -375,19 +388,21 @@ async function runOne(
     startChain(
       chainRoot,
       () =>
-        withTrafficSource(IMPORT_SOURCE, () =>
-          afterImportCompleted(app, definition, {
-            run_id: String(next.id),
-            import_key: String(next.import_key),
-            definition_label: definition.label ?? null,
-            staging_table: definition.staging_table ?? null,
-            procedure: definition.procedure ?? null,
-            row_count: rowCount,
-            duration_seconds: durationSeconds,
-            created_by: next.created_by ? String(next.created_by) : null,
-            ...(affected ? { affected } : {}),
-            ...(matched ? { matched } : {})
-          })
+        withActivityScope(importScope, () =>
+          withTrafficSource(IMPORT_SOURCE, () =>
+            afterImportCompleted(app, definition, {
+              run_id: String(next.id),
+              import_key: String(next.import_key),
+              definition_label: definition.label ?? null,
+              staging_table: definition.staging_table ?? null,
+              procedure: definition.procedure ?? null,
+              row_count: rowCount,
+              duration_seconds: durationSeconds,
+              created_by: next.created_by ? String(next.created_by) : null,
+              ...(affected ? { affected } : {}),
+              ...(matched ? { matched } : {})
+            })
+          )
         ),
       chainId
     )

@@ -1,3 +1,4 @@
+import type { ActivityActor, ActivityChange, ActivityWhy } from '@nivaro/shared'
 import { clientChaosAxiosInterceptor, forgetSettledReads } from '@nivaro/shared'
 import axios, { AxiosError } from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
@@ -307,6 +308,16 @@ export type ActivityEntry = {
   first_name: string | null
   last_name: string | null
   user_email: string | null
+  origin?: string | null
+  /** Migration 516: the burst the row belongs to (bulk action, import run, flow run…). */
+  group_key?: string | null
+  /** Migration 516: who really did it (stored, else derived from older columns). */
+  actor?: ActivityActor | null
+  /** An update's changed fields (from its revision delta). */
+  changes?: ActivityChange[] | null
+  /** Change reason, transition note and linked approval. */
+  why?: ActivityWhy | null
+  via_agent?: string | null
 }
 
 export type Revision = {
@@ -325,6 +336,8 @@ export type Revision = {
   last_name: string | null
   user_email: string | null
   comment?: string | null
+  /** Migration 516: who really did it when not simply the person. */
+  actor?: ActivityActor | null
 }
 
 export type PipelineTemplate = {

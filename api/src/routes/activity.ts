@@ -4,7 +4,16 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  activityLabelsFor,
+  approvalsForRows,
+  enrichActivityRow,
+  type LabelsRequest,
+  optionalActivityColumns
+} from '../services/activity-readable.js'
+import { markConfigRead } from '../services/config-live.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
+import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
 
 const countOf = (rows: unknown[]) => Number((rows[0] as { count?: string | number })?.count ?? 0)
 
@@ -31,11 +40,17 @@ async function wholeTableCount(fallback: PromiseLike<unknown[]>): Promise<number
   return countOf(await fallback)
 }
 
-/** The listed rows with their user, in the order of `ids`. */
-async function pageRows(ids: number[]): Promise<unknown[]> {
-  if (ids.length === 0) return []
-  const rows = (await db('nivaro_activity as a')
-    .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+/**
+ * The select for listed rows: the base columns, the user, and (column-probed) the readable
+ * trail's inputs — origin, chain step, credential, MCP connection, burst, actor — plus the
+ * API key's name and an update's revision delta, both joined (no extra round trip).
+ */
+async function readableSelect(q: ReturnType<typeof db>) {
+  const cols = await optionalActivityColumns()
+  q.leftJoin('nivaro_users as u', 'a.user', 'u.id')
+    .leftJoin('nivaro_revisions as r', function () {
+      this.on('r.activity', '=', 'a.id').andOnVal('a.action', '=', 'update')
+    })
     .select(
       'a.id',
       'a.action',
@@ -45,18 +60,53 @@ async function pageRows(ids: number[]): Promise<unknown[]> {
       'a.collection',
       'a.item',
       'a.comment',
-      'a.origin',
+      ...[...cols].map((c) => `a.${c}`),
       'u.first_name',
       'u.last_name',
-      'u.email as user_email'
+      'u.email as user_email',
+      'r.delta'
     )
-    .whereIn('a.id', ids)) as Array<{ id: number }>
-  // #3213: rows an agent wrote through MCP carry its badge ("via Claude").
-  const badges = await agentBadgesForActivity(ids).catch(() => new Map<number, string>())
-  const byId = new Map(
-    rows.map((r) => [Number(r.id), { ...r, via_agent: badges.get(Number(r.id)) ?? null }])
+  if (cols.has('api_key_id'))
+    q.leftJoin('nivaro_api_keys as k', 'a.api_key_id', 'k.id').select('k.name as api_key_name')
+  return { q, hasVia: cols.has('via_app') }
+}
+
+/** Rows -> what the page shows: changes, actor, why (one approvals read), agent badge. */
+async function enrichRows(rows: Array<Record<string, unknown>>, hasVia: boolean) {
+  // A revision per activity row is the rule; a duplicate join row is dropped.
+  const seen = new Set<string>()
+  const unique = rows.filter((r) => {
+    const k = String(r.id)
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  const [approvals, settings] = await Promise.all([
+    approvalsForRows(unique as never).catch(() => new Map()),
+    hasVia ? readMcpSettings().catch(() => null) : Promise.resolve(null)
+  ])
+  const badge = settings ? (via: string | null) => agentBadgeLabel(via, settings) : undefined
+  return unique.map((r) =>
+    enrichActivityRow(r as never, { badge, approval: approvals.get(String(r.id)) ?? null })
   )
-  return ids.map((id) => byId.get(Number(id))).filter(Boolean)
+}
+
+/** The listed rows with their user, in the order of `ids`. */
+async function pageRows(ids: number[]): Promise<Array<Record<string, unknown>>> {
+  if (ids.length === 0) return []
+  const { q, hasVia } = await readableSelect(db('nivaro_activity as a'))
+  const rows = (await q.whereIn('a.id', ids)) as Array<Record<string, unknown>>
+  const enriched = (await enrichRows(rows, hasVia)) as Array<Record<string, unknown>>
+  // #3213: rows an agent wrote through MCP carry its badge ("via Claude") — before migration
+  // 512 there is no via_app column, and the badge reader finds nothing either.
+  if (!hasVia) {
+    const badges = await agentBadgesForActivity(ids).catch(() => new Map<number, string>())
+    for (const r of enriched) r.via_agent = badges.get(Number(r.id)) ?? null
+  }
+  const byId = new Map<number, Record<string, unknown>>(
+    enriched.map((r) => [Number(r.id), { ...r, via_agent: r.via_agent ?? null }])
+  )
+  return ids.map((id) => byId.get(Number(id))).filter((r): r is Record<string, unknown> => !!r)
 }
 
 export async function activityRoutes(app: FastifyInstance) {
@@ -101,8 +151,13 @@ export async function activityRoutes(app: FastifyInstance) {
       pageIds.where('a.user', q.user)
       countQuery.where('a.user', q.user)
     }
+    // Migration 516: one burst's rows (the Activity page's expanded group past the page).
+    if (q.group_key && (await optionalActivityColumns()).has('group_key')) {
+      pageIds.where('a.group_key', String(q.group_key).slice(0, 64))
+      countQuery.where('a.group_key', String(q.group_key).slice(0, 64))
+    }
 
-    const filtered = !!(q.collection || q.action || q.user)
+    const filtered = !!(q.collection || q.action || q.user || q.group_key)
     const [data, total] = await Promise.all([
       pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
       filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
@@ -141,28 +196,31 @@ export async function activityRoutes(app: FastifyInstance) {
 
   app.get('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const row = await db('nivaro_activity as a')
-      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-      .select(
-        'a.id',
-        'a.action',
-        'a.user',
-        'a.timestamp',
-        'a.ip',
-        'a.user_agent',
-        'a.collection',
-        'a.item',
-        'a.comment',
-        'a.origin',
-        'u.first_name',
-        'u.last_name',
-        'u.email as user_email'
-      )
-      .where('a.id', Number(id))
-      .first()
-    if (!row) return reply.code(404).send({ error: 'Not found' })
-    const badges = await agentBadgesForActivity([Number(id)]).catch(() => new Map<number, string>())
-    return reply.send({ data: { ...row, via_agent: badges.get(Number(id)) ?? null } })
+    if (!/^[0-9]+$/.test(id)) return reply.code(404).send({ error: 'Not found' })
+    const [rows, ua] = await Promise.all([
+      pageRows([Number(id)]),
+      db('nivaro_activity').where('id', Number(id)).first('user_agent') as Promise<
+        { user_agent?: string | null } | undefined
+      >
+    ])
+    if (!rows.length) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data: { ...rows[0], user_agent: ua?.user_agent ?? null } })
+  })
+
+  /**
+   * Labels for a page of activity entries, read AS THE CALLER (migration 516's readable
+   * trail): records the caller cannot see come back null ("a record you can't see"), people
+   * by name (directory columns only), collection / field / choice labels for collections the
+   * caller may read. Open to anyone signed in: the record history panels use it too, and it
+   * reveals nothing a caller could not read themselves.
+   */
+  app.post('/labels', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Sign in first' })
+    // A read: never a config write (services/config-live.ts).
+    markConfigRead(req)
+    const body = (req.body ?? {}) as LabelsRequest
+    const data = await activityLabelsFor(req.user, body, { isAdmin: !!req.isAdmin })
+    return reply.send({ data })
   })
 
   /**

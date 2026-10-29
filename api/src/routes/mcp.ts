@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { authenticate, enforceRateLimit, requireAuth } from '../middleware/authenticate.js'
+import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import {
   classifyToolAnswer,
   clientSlug,
@@ -260,7 +261,11 @@ export async function mcpRoutes(app: FastifyInstance) {
     })
     try {
       await server.connect(transport)
-      await transport.handleRequest(req.raw, reply.raw, req.body)
+      // Migration 516: every write this POST's tool calls make (they re-enter the API
+      // in-process, inside this async context) is one burst in the activity log.
+      await withActivityScope({ group_key: activityGroupKey('mcp', req.requestId ?? null) }, () =>
+        transport.handleRequest(req.raw, reply.raw, req.body)
+      )
     } catch (err) {
       req.log.error({ err }, 'mcp request failed')
       if (!reply.raw.headersSent) {

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { bulkActionRegistry } from '../extensions/bulk-actions.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { markActivityBurst } from '../services/activity-scope.js'
 import {
   accessAllows,
   BUILTIN_KEYS,
@@ -74,8 +75,21 @@ export async function notUpdatable(
   return out
 }
 
+const BURST_ROUTES = new Set([
+  '/bulk-actions/:id/execute',
+  '/bulk-actions/run',
+  '/bulk-actions/push',
+  '/bulk-actions/retry-push'
+])
+
 export async function bulkActionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+  // Migration 516: a bulk run's activity rows (its summary + every record's) are one burst.
+  app.addHook('preHandler', async (req) => {
+    const url = String(req.routeOptions?.url ?? '')
+    if (req.method === 'POST' && [...BURST_ROUTES].some((r) => url.endsWith(r)))
+      markActivityBurst(req, 'bulk')
+  })
 
   // ── Extension-registered actions (legacy shape, kept for callers) ────────
   app.get('/bulk-actions/registered', { preHandler: [requireAuth] }, async (req) => {

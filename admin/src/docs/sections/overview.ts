@@ -595,15 +595,33 @@ export const userActivity: DocSection = {
     { type: 'h1', id: 'activity', text: 'Activity Log' },
     {
       type: 'p',
-      text: 'Every create, update, and delete on a tracked collection is recorded in `nivaro_activity`. The Activity page shows a paginated, filterable audit log.'
+      text: 'Every create, update, delete, workflow move, sign-in, export and configuration change is recorded in `nivaro_activity` (per collection, as its audit level allows). For item writes a `nivaro_revisions` row keeps the full snapshot and the changed fields, so a record can be put back to any point.'
     },
+    { type: 'h2', id: 'activity-sentences', text: 'Entries read as sentences' },
     {
       type: 'p',
-      text: 'For item mutations, a `nivaro_revisions` row stores the full JSON snapshot and a delta of changed fields, allowing point-in-time restoration.'
+      text: 'The Activity page, an entry\'s detail page and the record history show each entry as one sentence: "Pat moved PO 4471 from Draft to Approved", "Rob changed Vendor on Workflow 85607", "Sam deleted 3 invoices". Actions without their own wording read from the action\'s words ("cancelled the layout schedule"); anything else falls back to a readable title.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Labels, not ids**: records are named by their label, read as the person looking. A record they cannot see reads "a record you can\'t see". People are named by their directory name, choices by their label, and dates show in the reader\'s own time zone.',
+        '**Bursts fold**: one bulk action, import run, flow run, scheduled job tick, batch request or AI-assistant (MCP) request reads as one line ("Pat updated 40 workflows: Status → On Hold") that opens to its records. Older entries fold when the same person did the same thing to the same collection within 60 seconds.',
+        '**Who really did it**: an administrator viewing as someone reads "Rob as Pat"; an API key, an assistant ("Claude for Pat"), an import, a flow or a scheduled job is named instead of a bare id or "System".',
+        '**Why, on the entry**: the change reason, the note left on a workflow move and a linked approval decision show under the sentence.'
+      ]
+    },
+    { type: 'h2', id: 'activity-api', text: 'API' },
+    {
+      type: 'ul',
+      items: [
+        "`GET /api/activity` (administrators): each row also carries `actor` ({kind, id, name, on_behalf_of}; kind = person, view_as, api_key, mcp, import, flow, cron or system), `group_key`, `changes` (an update's changed fields) and `why` ({reason, note, approval}). `?group_key=` lists one burst.",
+        '`POST /api/activity/labels` (anyone signed in): `{refs: [{collection, id}], users: [ids], fields: [{collection, field}], collections: []}` returns record labels read as the caller (`null` = they cannot see it), people, and collection, field and choice labels.'
+      ]
     },
     {
       type: 'note',
-      text: 'Activity logging middleware is planned — the tables exist and are written to by flow triggers, but automatic logging of generic item mutations has not yet been wired up.'
+      text: 'Host apps render entries with `ActivityEntry` / `ActivityFeed` and `useActivityLabels` from @nivaro/shared (re-exported by @nivaro/react); `renderActivitySentence(entry, labels)` is the plain-text form, also used on the server for email digests.'
     }
   ]
 }

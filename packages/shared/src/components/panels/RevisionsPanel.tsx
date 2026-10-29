@@ -11,13 +11,21 @@ import {
   Search,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import {
+  type ActivityActor,
+  type ActivityLabels,
+  activityPredicate,
+  activityWhy,
+  actorName
+} from '../../lib/activity-sentence'
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
 import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
+import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
@@ -51,6 +59,10 @@ interface Revision {
   comment?: string | null
   /** #3213 — made by an AI assistant through MCP: the badge text ("via Claude"). */
   via_agent?: string | null
+  /** Migration 516 — who really did it when not simply the person (View-as, API key,
+   *  assistant, import, flow, scheduled job). */
+  actor?: ActivityActor | null
+  group_key?: string | null
   event?: {
     kind: 'transition' | 'start'
     history_id?: number
@@ -737,7 +749,12 @@ const ACTION_DOT: Record<string, string> = {
   delete: 'bg-red-500'
 }
 
-function revisionUserName(rev: Revision): string {
+/** People the history names that are not on the row itself (View-as admins), read once. */
+const RevisionLabelsContext = createContext<ActivityLabels | undefined>(undefined)
+
+function revisionUserName(rev: Revision, labels?: ActivityLabels): string {
+  // Migration 516: "Rob as Pat", "API key “Sync”", "Import “Vendors”", "Claude for Pat".
+  if (rev.actor && rev.actor.kind !== 'person') return actorName(rev, labels)
   if (rev.first_name || rev.last_name)
     return [rev.first_name, rev.last_name].filter(Boolean).join(' ')
   return rev.user_email ?? rev.user_id?.slice(0, 8) ?? 'System'
@@ -755,14 +772,15 @@ function revisionSentence(rev: Revision, humanCount: number, systemCount: number
 /** A pipeline transition / start or a child-row write, in the same rail as
  *  the snapshots: who, what moved, the comment they left — nothing to diff. */
 function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean }) {
+  const labels = useContext(RevisionLabelsContext)
   const ev = revision.event
   const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
   const behalf = !auto && ev?.on_behalf_of?.name ? ev.on_behalf_of.name : null
   const who = auto
     ? 'Automatic rule'
     : behalf
-      ? `${revisionUserName(revision)}, for ${behalf}`
-      : revisionUserName(revision)
+      ? `${revisionUserName(revision, labels)}, for ${behalf}`
+      : revisionUserName(revision, labels)
   let sentence: React.ReactNode
   if (ev?.kind === 'transition' && ev.addendum) {
     sentence = (
@@ -828,9 +846,10 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
       </>
     )
   } else {
+    // Any other event reads as a sentence (lib/activity-sentence), the record being this one.
     sentence = (
       <>
-        {revision.action ?? 'event'}
+        {activityPredicate({ ...revision, item: null }, labels)}
         {revision.comment ? ` — ${revision.comment}` : ''}
       </>
     )
@@ -924,6 +943,8 @@ function RevisionRow({
   isLast: boolean
 }) {
   const client = useNivaroClient()
+  const labels = useContext(RevisionLabelsContext)
+  const reason = activityWhy(revision).reason
   const [expanded, setExpanded] = useState(false)
   const [confirmRollback, setConfirmRollback] = useState(false)
   const [view, setView] = useState<'changes' | 'all'>('changes')
@@ -1046,7 +1067,7 @@ function RevisionRow({
           className='h-6 w-6'
           fallback={
             <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/10 text-[10px] font-semibold text-nvr-navy dark:text-nvr-cyan'>
-              {revisionUserName(revision)
+              {revisionUserName(revision, labels)
                 .split(' ')
                 .map((p) => p[0])
                 .filter(Boolean)
@@ -1057,10 +1078,19 @@ function RevisionRow({
           }
         />
         <span className='min-w-0 flex-1 truncate text-[12.5px] text-slate-700 dark:text-slate-200'>
-          <span className='font-medium'>{revisionUserName(revision)}</span>{' '}
+          <span className='font-medium'>{revisionUserName(revision, labels)}</span>{' '}
           <span className='text-slate-500 dark:text-slate-400'>
             {revisionSentence(revision, humanDelta, systemDelta)}
           </span>
+          {reason && (
+            <span
+              className='mt-0.5 block truncate text-[11.5px] text-slate-500 dark:text-slate-400'
+              data-revision-reason
+              data-tip={reason}
+            >
+              Reason: {reason}
+            </span>
+          )}
         </span>
         <AgentBadge label={revision.via_agent} />
         <span
@@ -1490,6 +1520,16 @@ function RevisionsList({
   }, [data])
   const count = data?.length ?? 0
   const snapshots = useMemo(() => (data ?? []).filter(isSnapshot), [data])
+  // Migration 516: names for the actors rows carry (the admin behind a View-as, the person an
+  // assistant acted for) — one labels read, only when some row has one.
+  const actorRows = useMemo(
+    () =>
+      (data ?? [])
+        .filter((r) => r.actor && r.actor.kind !== 'person')
+        .map((r) => ({ action: r.action, user: r.user_id, actor: r.actor })),
+    [data]
+  )
+  const actorLabels = useActivityLabels(actorRows, { enabled: actorRows.length > 0 })
 
   const groups = useMemo(() => {
     const out: Array<{ day: string; revisions: Revision[] }> = []
@@ -1522,23 +1562,40 @@ function RevisionsList({
     )
 
   return (
-    <div className='space-y-3 pt-3'>
-      <TimeTravelTools data={snapshots} meta={meta} />
-      {snapshots.length >= 3 && (
-        <TimeLapseBar revisions={snapshots as Array<Revision & { id: string }>} meta={meta} />
-      )}
-      <div>
-        {groups.map((g) => (
-          <div key={g.day}>
-            <div className='sticky top-0 z-10 -mx-6 border-b border-slate-100 bg-white px-6 py-1.5 dark:border-border/60 dark:bg-card'>
-              <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                {g.day}
-              </span>
-            </div>
-            {g.revisions.map((rev) => {
-              const globalIdx = (data ?? []).indexOf(rev)
-              const isLast = globalIdx === (data?.length ?? 1) - 1
-              if (isEvent(rev)) {
+    <RevisionLabelsContext.Provider value={actorLabels}>
+      <div className='space-y-3 pt-3'>
+        <TimeTravelTools data={snapshots} meta={meta} />
+        {snapshots.length >= 3 && (
+          <TimeLapseBar revisions={snapshots as Array<Revision & { id: string }>} meta={meta} />
+        )}
+        <div>
+          {groups.map((g) => (
+            <div key={g.day}>
+              <div className='sticky top-0 z-10 -mx-6 border-b border-slate-100 bg-white px-6 py-1.5 dark:border-border/60 dark:bg-card'>
+                <span className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                  {g.day}
+                </span>
+              </div>
+              {g.revisions.map((rev) => {
+                const globalIdx = (data ?? []).indexOf(rev)
+                const isLast = globalIdx === (data?.length ?? 1) - 1
+                if (isEvent(rev)) {
+                  return (
+                    <div
+                      key={rowKey(rev)}
+                      className={cn(
+                        'nvr-fade-in relative',
+                        freshKeys.has(rowKey(rev)) && 'rounded-md bg-nvr-cyan/[0.06]'
+                      )}
+                    >
+                      {freshKeys.has(rowKey(rev)) && <NewMark />}
+                      <EventRow revision={rev} isLast={isLast} />
+                    </div>
+                  )
+                }
+                // The previous SNAPSHOT — an event row between two saves must
+                // not make the later save read as "every field changed".
+                const prev = (data ?? []).slice(globalIdx + 1).find(isSnapshot)
                 return (
                   <div
                     key={rowKey(rev)}
@@ -1548,37 +1605,22 @@ function RevisionsList({
                     )}
                   >
                     {freshKeys.has(rowKey(rev)) && <NewMark />}
-                    <EventRow revision={rev} isLast={isLast} />
+                    <RevisionRow
+                      revision={rev}
+                      previousData={prev?.data ?? null}
+                      meta={meta}
+                      onRollback={onRollback}
+                      inlineTableFields={inlineTableFields}
+                      isLast={isLast}
+                    />
                   </div>
                 )
-              }
-              // The previous SNAPSHOT — an event row between two saves must
-              // not make the later save read as "every field changed".
-              const prev = (data ?? []).slice(globalIdx + 1).find(isSnapshot)
-              return (
-                <div
-                  key={rowKey(rev)}
-                  className={cn(
-                    'nvr-fade-in relative',
-                    freshKeys.has(rowKey(rev)) && 'rounded-md bg-nvr-cyan/[0.06]'
-                  )}
-                >
-                  {freshKeys.has(rowKey(rev)) && <NewMark />}
-                  <RevisionRow
-                    revision={rev}
-                    previousData={prev?.data ?? null}
-                    meta={meta}
-                    onRollback={onRollback}
-                    inlineTableFields={inlineTableFields}
-                    isLast={isLast}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        ))}
+              })}
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </RevisionLabelsContext.Provider>
   )
 }
 

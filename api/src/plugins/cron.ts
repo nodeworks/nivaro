@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
@@ -909,7 +910,7 @@ export class CronManager {
           if (opts?.quiet) {
             const chainId = newChainId()
             try {
-              await startChain(`cron:${id}`, () => runAsBackground(id, fn), chainId)
+              await startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
             } catch (err) {
               console.error({ err, cronId: id }, 'Cron job error')
               const run = await startJobRun('cron', id, {
@@ -943,7 +944,7 @@ export class CronManager {
             }, budget)
             try {
               // Every tick is its own integration event chain.
-              await startChain(`cron:${id}`, () => runAsBackground(id, fn), chainId)
+              await startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
               await run.complete()
               this.triggerChained(id)
             } catch (err) {
@@ -1096,7 +1097,7 @@ export class CronManager {
           // A NEW chain even when run-now comes from an HTTP request: the job's
           // writes are the cron's, not the admin click's (the click is recorded
           // on nivaro_job_runs.triggered_by).
-          await startChain(`cron:${id}`, () => runAsBackground(id, entry.fn), chainId)
+          await startChain(`cron:${id}`, () => runAsBackground(id, entry.fn, chainId), chainId)
           await run.complete()
           this.triggerChained(id)
         } catch (err) {
@@ -1252,8 +1253,15 @@ export const cronPlugin = fp(async (app: FastifyInstance) => {
 /** A job's handler, attributed to its Traffic Map source and run on the
  *  background pool (#1321): every db call it makes, awaited or not, borrows
  *  from DB_POOL_BACKGROUND_MAX instead of the pool requests wait on. */
-function runAsBackground(id: string, fn: CronFn): Promise<void> {
-  return runInBackgroundPool(() => runAsTrafficSource(cronTrafficSource(id), fn))
+function runAsBackground(id: string, fn: CronFn, chainId?: string): Promise<void> {
+  // Migration 516: the tick's activity rows are one burst, written by this scheduled job.
+  return withActivityScope(
+    {
+      group_key: activityGroupKey('cron', chainId ?? null),
+      actor: { kind: 'cron', id, name: id }
+    },
+    () => runInBackgroundPool(() => runAsTrafficSource(cronTrafficSource(id), fn))
+  )
 }
 
 /** The Traffic Map source a job's run is attributed to (#1105): its writes and partner calls. */

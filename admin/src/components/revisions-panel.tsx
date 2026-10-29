@@ -1,3 +1,4 @@
+import { actorName } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Clock, History, RotateCcw } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -37,6 +38,8 @@ const O2M_LABELS: Record<string, string> = {
 }
 
 function revisionUserName(rev: Revision): string {
+  // Migration 516: "Rob as Pat", "API key “Sync”", "Import “Vendors”", "Claude for Pat".
+  if (rev.actor && rev.actor.kind !== 'person') return actorName(rev)
   if (rev.first_name || rev.last_name)
     return [rev.first_name, rev.last_name].filter(Boolean).join(' ')
   return rev.user_email ?? rev.user_id?.slice(0, 8) ?? 'System'
