@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-29T20:49:49.166Z",
+  "generated_at": "2026-10-29T22:13:29.978Z",
   "releases": [
+    {
+      "version": "0.3.56",
+      "tag": "v0.3.56",
+      "date": "2026-10-29T18:13:14-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "collections",
+              "text": "back + breadcrumb on a collection's records page",
+              "hash": "a7e9e4644"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "collections",
+              "text": "toolbar stays pinned on long scrolls",
+              "hash": "f21f8642e"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.55",
       "tag": "v0.3.55",
-      "date": "2026-10-29T16:49:36-04:00",
+      "date": "2026-10-29T16:49:49-04:00",
       "sections": [
         {
           "label": "Added",
