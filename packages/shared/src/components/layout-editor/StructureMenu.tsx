@@ -1,4 +1,5 @@
 import {
+  AlignHorizontalSpaceAround,
   ArrowLeft,
   ClipboardCopy,
   Columns3,
@@ -35,8 +36,10 @@ import { Checkbox } from '../ui/checkbox'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { duplicateKeys, STRUCTURE_MENU_EVENT } from './ArrangeButton'
 import type { DesignMark, DesignTarget } from './design-context'
+import { evenRowBlocked, evenRowPlan } from './even-row'
 import { readOverrides } from './inspector/model'
 import { isTyping } from './is-typing'
+import { effectText, tintCard } from './panel-style'
 import {
   joinBlocked,
   joinPlan,
@@ -46,7 +49,6 @@ import {
   splitBlocked,
   splitPlan
 } from './section-structure'
-import { effectText, tintCard } from './panel-style'
 import {
   convertChoices,
   copyRulesPlan,
@@ -420,6 +422,16 @@ function MenuView({
           onPick={() => run(rowPlan(bundle, fieldTargets, labelIn(bundle)), { toastNotes: true })}
         >
           Put side by side under one label
+        </MenuItem>
+      )}
+      {fieldTargets.length > 0 && (
+        <MenuItem
+          icon={<AlignHorizontalSpaceAround />}
+          blocked={evenRowBlocked(bundle, fieldTargets)}
+          data-structure-action='even-row'
+          onPick={() => run(evenRowPlan(bundle, fieldTargets))}
+        >
+          {fieldTargets.length > 1 ? 'Even out their rows' : 'Even out this row'}
         </MenuItem>
       )}
       {group && (

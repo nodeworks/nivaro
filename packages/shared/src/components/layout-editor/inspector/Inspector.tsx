@@ -39,6 +39,7 @@ import {
   GlobalWriterContext,
   type InspectorEnv,
   InspectorEnvContext,
+  PinZone,
   ScopeLegend,
   useInspectorEnv
 } from './kit'
@@ -370,7 +371,7 @@ function GroupPanel({
             {body}
           </div>
         ) : (
-          <>
+          <PinZone>
             <ScopeLegend />
             <div className='flex flex-wrap gap-2'>
               <ArrangeButton targets={[{ kind: 'group', key: group.key }]} />
@@ -401,7 +402,7 @@ function GroupPanel({
                 name={group.label || titleCase(group.key)}
               />
             </div>
-          </>
+          </PinZone>
         )}
       </PanelBody>
     </>
@@ -436,10 +437,10 @@ function SimplePanel({
             </fieldset>
           </div>
         ) : (
-          <>
+          <PinZone>
             <ScopeLegend />
             {children}
-          </>
+          </PinZone>
         )}
       </PanelBody>
     </>
@@ -668,11 +669,11 @@ function FieldInspector({
               {tabBody}
             </div>
           ) : (
-            <>
+            <PinZone>
               <PlacementPresets bundle={env.bundle} rows={[row]} apply={env.apply} />
               <ScopeLegend field />
               {tabBody}
-            </>
+            </PinZone>
           )}
         </PanelBody>
       </GlobalWriterContext.Provider>

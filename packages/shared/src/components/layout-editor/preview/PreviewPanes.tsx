@@ -12,9 +12,14 @@ import { useRolePreview } from '../settings/settings-api'
 import { fieldName } from './PreviewModes'
 import { useCollectionPipelines, useFieldAccess } from './preview-api'
 import {
+  ALL_DEVICE_GAP,
+  ALL_DEVICE_WIDTH,
   compareMarks,
+  DEVICE_LABEL,
+  DEVICE_ORDER,
   DEVICE_WIDTH,
   type FieldWho,
+  type FrameDevice,
   fieldAccessForRole,
   fieldsLockedInState,
   leavingNeeds,
@@ -258,7 +263,10 @@ export function PreviewPanes({
     }
   }, [who, fields])
 
-  const width = DEVICE_WIDTH[preview.device ?? 'desktop']
+  // Every device side by side (#3187); two roles side by side keep the full width each.
+  const allDevices = preview.device === 'all'
+  const width =
+    preview.device === 'all' ? null : DEVICE_WIDTH[(preview.device ?? 'desktop') as FrameDevice]
   const paneKey = JSON.stringify(values ?? {})
   const frame = (node: ReactNode) =>
     width ? (
@@ -348,6 +356,19 @@ export function PreviewPanes({
         do on that screen.
       </StripRow>
     )
+  if (allDevices)
+    strip.push(
+      <StripRow key='devices' onClear={() => onPreview({ ...preview, device: 'desktop' })}>
+        {roleB ? (
+          'Every device at once waits while two roles are side by side: each role shows at full width.'
+        ) : (
+          <>
+            Desktop, tablet and phone side by side. Drag fields on the desktop pane; the others
+            follow. Tools → Fit to screen shows all three.
+          </>
+        )}
+      </StripRow>
+    )
 
   const pane = (roleId: string | null, noDnd: boolean) =>
     renderPane({
@@ -385,6 +406,37 @@ export function PreviewPanes({
                 As {r.name ?? '…'}
               </p>
               {frame(pane(r.id, true))}
+            </section>
+          ))}
+        </div>
+      ) : allDevices ? (
+        <div
+          key={paneKey}
+          data-preview-devices=''
+          className='flex min-h-0 flex-1 overflow-x-auto bg-slate-100 dark:bg-background'
+          style={{ gap: ALL_DEVICE_GAP, padding: ALL_DEVICE_GAP }}
+        >
+          {DEVICE_ORDER.map((d, i) => (
+            <section
+              key={d}
+              data-preview-pane={d}
+              data-preview-device={d}
+              aria-label={`${DEVICE_LABEL[d]} width`}
+              className='flex min-h-0 shrink-0 flex-col overflow-hidden rounded-md border border-slate-200 bg-white dark:border-border dark:bg-card'
+              style={{ width: ALL_DEVICE_WIDTH[d] + 2 }}
+            >
+              <p className='flex shrink-0 items-baseline justify-between gap-2 border-b border-slate-200 px-3 py-1.5 text-[12px] dark:border-border'>
+                <span className='font-semibold text-slate-700 dark:text-foreground'>
+                  {DEVICE_LABEL[d]}
+                </span>
+                <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+                  {ALL_DEVICE_WIDTH[d]} px
+                </span>
+              </p>
+              <div className='flex min-h-0 flex-1 flex-col bg-white dark:bg-background'>
+                {/* One draggable per target: only the first (desktop) pane drags. */}
+                {pane(roleA, i > 0)}
+              </div>
             </section>
           ))}
         </div>

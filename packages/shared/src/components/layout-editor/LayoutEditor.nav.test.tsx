@@ -14,7 +14,7 @@ import {
 } from '../../lib/layout-ops'
 import type { CMSField } from '../item-edit/types'
 import { LayoutEditor } from './LayoutEditor'
-import { pickBarRow } from './toolbar-kit.test-utils'
+import { closeBarMenu, openBarMenu, pickBarRow } from './toolbar-kit.test-utils'
 
 // Way-finding in the editor: Find (#2620), the outline (#2621), the
 // inspector breadcrumb (#2622), the shortcut sheet (#2626), compact canvas and
@@ -373,6 +373,80 @@ describe('Compact canvas and collapse all (#2627)', () => {
     )
     expect(($('[data-canvas-density]') as HTMLElement).style.zoom).toBe('0.8')
     expect(localStorage.getItem('nvr_layout_editor_compact')).toBe('1')
+  })
+
+  it('the zoom slider zooms the canvas, keeps it for this viewer, and stacks with compact (#3188)', async () => {
+    await mount()
+    await openBarMenu('Tools')
+    const slider = $('[data-bar-menu-list="Tools"] [data-zoom-slider]') as HTMLInputElement
+    expect(slider).not.toBeNull()
+    type(slider, '0.6')
+    await settle(() => $('[data-canvas-density]')?.style.zoom === '0.6')
+    expect(localStorage.getItem('nvr_layout_editor_zoom')).toBe('0.6')
+    expect($('[data-bar-menu-list="Tools"] [data-zoom-value]')?.textContent).toBe('60%')
+    await closeBarMenu('Tools')
+    // A chip on the canvas while zoomed; its 100% goes back.
+    expect($('[data-zoom-chip]')).not.toBeNull()
+    await pickBarRow('Tools', '[data-editor-compact]')
+    await settle(() => $('[data-canvas-density]')?.style.zoom === '0.48')
+    click($('[data-zoom-chip-reset]'))
+    await settle(() => $('[data-canvas-density]')?.style.zoom === '0.8')
+    expect($('[data-zoom-chip]')).toBeNull()
+    expect(localStorage.getItem('nvr_layout_editor_zoom')).toBeNull()
+  })
+
+  it('Fit to screen fits every device side by side into the pane (#3187 #3188)', async () => {
+    await mount()
+    // Preview → Device → All: three panes, only the desktop one drags.
+    click($('[data-preview-as]'))
+    await settle(() => !!$('[data-preview-modes]'))
+    const all = [...document.querySelectorAll('[data-preview-modes] button')].find(
+      (b) => b.textContent === 'All'
+    )
+    click(all ?? null)
+    await settle(() => !!$('[data-preview-devices]'))
+    expect(
+      [...document.querySelectorAll('[data-preview-devices] > [data-preview-pane]')].map((s) =>
+        s.getAttribute('data-preview-pane')
+      )
+    ).toEqual(['desktop', 'tablet', 'phone'])
+    expect($('[data-preview-summary]')?.textContent).toContain('All devices')
+    expect(document.querySelectorAll('[data-editor-canvas] [data-field="title"]').length).toBe(3)
+    click($('[data-preview-as]'))
+    await settle(() => !$('[data-preview-modes]'))
+    // jsdom lays nothing out: give the pane a width.
+    const pane = $('main') as HTMLElement
+    Object.defineProperty(pane, 'clientWidth', { configurable: true, value: 1126 })
+    // Radix hands focus back to the Preview button a tick after it closes.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    await openBarMenu('Tools')
+    await settle(() => !!$('[data-bar-menu-list="Tools"] [data-zoom-fit]'))
+    click($('[data-bar-menu-list="Tools"] [data-zoom-fit]'))
+    await settle(() => $('[data-canvas-density]')?.style.zoom === '0.5')
+    await closeBarMenu('Tools')
+  })
+
+  it('a sample record fills the preview when the collection has no records (#3196)', async () => {
+    const { calls } = await mount()
+    click($('[data-preview-as]'))
+    await settle(() => !!$('[data-sample-offer="empty"] [data-sample-record]:not([disabled])'))
+    expect($('[data-sample-offer="empty"]')?.textContent).toContain('No records yet')
+    click($('[data-sample-record]'))
+    await settle(() => !!$('[data-sample-chip]'))
+    expect($('[data-preview-summary]')?.textContent).toContain('Sample record')
+    const input = $('[data-editor-canvas] [data-field="title"] input') as HTMLInputElement | null
+    await settle(() => !!input?.value)
+    expect(input?.value).toBeTruthy()
+    // Nothing is written anywhere.
+    expect(
+      calls.some((c) => c._path.startsWith('/items') && c._method && c._method !== 'GET')
+    ).toBe(false)
+    // × goes back to no record.
+    click($('[data-sample-chip] button'))
+    await settle(() => !$('[data-sample-chip]'))
+    expect($('[data-preview-summary]')?.textContent).toBe('No record')
   })
 
   it('collapse all folds every section; expand all opens them and lays out every step', async () => {
