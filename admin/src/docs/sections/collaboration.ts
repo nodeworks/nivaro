@@ -594,6 +594,25 @@ GET    /api/notifications/my-rule-defaults        → { role, rules } for the si
 POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, "at": "<ISO, optional>" }
                                          → { decision, layers, role, quiet_hours, push_subscriptions } for the caller`
     },
+    { type: 'h3', id: 'notification-changes', text: 'What changed, in the notification' },
+    {
+      type: 'p',
+      text: 'A notification about a change to a record shows the changed fields old → new when you open it — "What changed" (or "N changes") under the row in the bell and the inbox, and "See what changed" in its email, which opens the inbox on that notification. The values are read when you open it, as you: from the record revision the notification points at and the one before it, through your own read of the record, so a field you may not see never shows and a record you can no longer open shows nothing. The live push and the stored row carry ids and field names only.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Long text shows a short diff — only the part that moved, with a little context either side; rich text is compared as text.',
+        "Links to other records show their labels, read as you (a record you cannot open shows its collection's name, never its id).",
+        'A record that was just created has nothing earlier to compare; a notification with no revision from its time says the changes were not kept.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/notifications/:id/changes   own notifications only (404 otherwise; 404 when you cannot open the record)
+→ { collection, item, revision_id, at, notified_at, first_revision,
+    changes: [{ field, label, type, old, new, old_label?, new_label?, diff?: { lead, removed, added, trail } }] }`
+    },
     { type: 'h3', text: 'Record bundles in the bell' },
     {
       type: 'p',

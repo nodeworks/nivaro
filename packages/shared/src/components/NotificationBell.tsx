@@ -74,6 +74,26 @@ export interface BellNotification {
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
 
+/** #3079 — a record-change row offers "What changed": the changed fields read as the reader
+ *  on open (GET /notifications/:id/changes). */
+export function offersChanges(n: {
+  kind?: string | null
+  target?: NotificationTargetSpec | null
+  collection?: string | null
+  item?: string | null
+  category?: string | null
+  revision_id?: number | null
+  detail?: NotificationDetailRecord | null
+}): boolean {
+  if (!hasSnapshotView(n)) return false
+  return (
+    n.revision_id != null ||
+    (n.detail?.changes?.length ?? 0) > 0 ||
+    n.category === 'watch' ||
+    n.category === 'workflow'
+  )
+}
+
 /** A record-kind row offers "as it was" — the snapshot from send time. */
 export function hasSnapshotView(n: {
   kind?: string | null
@@ -444,6 +464,7 @@ export function NotificationBell({
         why={n.why}
         delivery={n.delivery}
         notificationId={n.id}
+        recordChanges={offersChanges(n)}
         subscriptionsPath={subscriptionsPath}
         rulesPath={rulesPath}
         onNavigate={navigateAndClose}

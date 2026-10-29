@@ -1066,6 +1066,8 @@ export async function notifyUser(
       : { status: 'not_requested' }
   }
   let notifId: number | null = null
+  // #3079 — the record revision the row points at; set when the in-app row lands.
+  let stampedRevision: number | null = null
   // "Why me?" (#77 / #3078): the caller's source when it named one, else the path derived from
   // what is known — a mention, a direct message, an alert, owning the record's state, the role's
   // default rules, or the recipient's own rules for the category.
@@ -1115,6 +1117,7 @@ export async function notifyUser(
       // open what the person saw. Column-probed: null on a tenant behind
       // migration 393, and the key is then left off the insert entirely.
       const revisionId = await snapshotRevisionFor(target)
+      stampedRevision = revisionId
       const [notif] = await db('nivaro_notifications')
         .insert({
           ...(revisionId != null ? { revision_id: revisionId } : {}),
@@ -1241,7 +1244,7 @@ export async function notifyUser(
         // Generic notices get the record's header-strip card too (business
         // collections only) — the same block the dedicated templates use.
         const { cardFor } = await import('./mail-builders.js')
-        const { resolveLinksFor, recordLink } = await import('./app-links.js')
+        const { resolveLinksFor, recordLink, linkTo } = await import('./app-links.js')
         const card = opts.template_data?.record_card
           ? null
           : await cardFor(opts.collection, opts.item ?? null, userId).catch(() => null)
@@ -1254,6 +1257,14 @@ export async function notifyUser(
             ? await recordLink(opts.collection, opts.item, { recipientUserId: userId }).catch(
                 () => `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`
               )
+            : null
+        // #3079 — a record-change row: "See what changed" opens the inbox on it, where the
+        // values are read as the recipient (never put in the email).
+        const changesUrl =
+          notifId != null && stampedRevision != null && target?.kind === 'record'
+            ? await linkTo('notifications', {}, { recipientUserId: userId })
+                .then((u) => `${u}${u.includes('?') ? '&' : '?'}changes=${notifId}`)
+                .catch(() => null)
             : null
         const category = opts.category ?? classifyNotification(opts.subject)
         const why =
@@ -1282,6 +1293,7 @@ export async function notifyUser(
                     action_label: opts.ack_required ? 'Open to acknowledge' : 'View item'
                   }
                 : {}),
+              ...(changesUrl ? { changes_url: changesUrl } : {}),
               ...(templateData ?? {})
             }
           })

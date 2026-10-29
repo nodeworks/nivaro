@@ -9,6 +9,7 @@ import type {
   NotificationWhy
 } from '../../lib/notification-target'
 import { cn } from '../../lib/utils'
+import { type ChangeLine, changeLines, type NotificationChangesPayload } from './changes-lines'
 import { describeDelivery } from './DeliveryChips'
 import {
   type StoredWhyReason,
@@ -51,6 +52,94 @@ function LayerTag({ layer, role }: { layer: WhyLayer; role?: string | null }) {
       {WHY_LAYER_LABELS[layer]}
       {layer === 'role' && role ? ` · ${role}` : ''}
     </span>
+  )
+}
+
+function ChangeRow({ c }: { c: ChangeLine }) {
+  return (
+    <li
+      className='flex flex-wrap items-baseline gap-x-1.5 text-[11px] leading-snug'
+      data-change-field={c.field}
+    >
+      <span className='font-medium text-slate-700 dark:text-slate-200'>{c.label}</span>
+      {c.diff ? (
+        <span className='min-w-0 whitespace-pre-wrap break-words text-slate-600 dark:text-slate-300'>
+          {c.diff.lead}
+          {c.diff.removed && (
+            <span className='rounded-sm bg-red-50 text-red-700 line-through decoration-red-300 dark:bg-red-500/15 dark:text-red-300'>
+              {c.diff.removed}
+            </span>
+          )}
+          {c.diff.added && (
+            <span className='rounded-sm bg-emerald-50 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300'>
+              {c.diff.added}
+            </span>
+          )}
+          {c.diff.trail}
+        </span>
+      ) : (
+        <>
+          {c.old !== '' && (
+            <>
+              <span className='text-slate-400 line-through decoration-slate-300'>{c.old}</span>
+              <span className='text-slate-300'>→</span>
+            </>
+          )}
+          <span className='text-slate-800 dark:text-slate-100'>{c.new || '—'}</span>
+        </>
+      )}
+    </li>
+  )
+}
+
+/** #3079 — the changed fields, read on open as the reader (never from the push or the row). */
+export function NotificationChangesList({
+  notificationId,
+  className
+}: {
+  notificationId: number
+  className?: string
+}) {
+  const client = useNivaroClient()
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['notification-changes', notificationId],
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () =>
+      client
+        .request<{ data: NotificationChangesPayload }>(
+          get(`/notifications/${notificationId}/changes`)
+        )
+        .then((r) => r.data)
+  })
+  const lines = changeLines(data)
+  return (
+    <ul
+      className={cn(
+        'mt-1 space-y-0.5 rounded-md border border-slate-100 bg-slate-50/70 px-2 py-1.5 dark:border-border/60 dark:bg-muted/40',
+        className
+      )}
+      data-notification-changes-list
+      data-changes-source='reader'
+    >
+      {isLoading && <li className='text-[10.5px] text-slate-400'>Loading what changed…</li>}
+      {isError && (
+        <li className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+          You can't open this record now, so its changes are not shown.
+        </li>
+      )}
+      {data && lines.length === 0 && (
+        <li className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+          {data.note ??
+            (data.first_revision
+              ? 'The record was created — there is no earlier version to compare.'
+              : 'No changes to fields you can see.')}
+        </li>
+      )}
+      {lines.map((c) => (
+        <ChangeRow key={c.field} c={c} />
+      ))}
+    </ul>
   )
 }
 
@@ -164,6 +253,7 @@ export function NotificationDetailBits({
   why,
   delivery,
   notificationId,
+  recordChanges,
   subscriptionsPath,
   rulesPath,
   onNavigate,
@@ -174,6 +264,9 @@ export function NotificationDetailBits({
   delivery?: NotificationDeliveryRecord | null
   /** The row's id — "Why?" reads the stored reason for it (#3078). */
   notificationId?: number | null
+  /** #3079 — the row is about a record with a stamped revision: "What changed" reads the
+   *  changed fields as the reader on open, instead of the lines stored with the row. */
+  recordChanges?: boolean
   /** Host route of the subscriptions page — a watch/subscription "why"
    *  offers a Manage link there. */
   subscriptionsPath?: string | null
@@ -184,11 +277,12 @@ export function NotificationDetailBits({
 }) {
   const [open, setOpen] = useState<null | 'changes' | 'why'>(null)
   const changes = detail?.changes ?? []
+  const live = !!recordChanges && notificationId != null
   const toggle = (k: 'changes' | 'why') => setOpen((o) => (o === k ? null : k))
   return (
     <div className={cn('text-[10.5px]', className)} data-notification-bits>
       <div className='flex flex-wrap items-center gap-2'>
-        {changes.length > 0 && (
+        {(changes.length > 0 || live) && (
           <button
             type='button'
             onClick={(e) => {
@@ -199,7 +293,9 @@ export function NotificationDetailBits({
             data-notification-changes
             className='inline-flex items-center gap-0.5 rounded px-1 py-px font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-100'
           >
-            {changes.length} change{changes.length === 1 ? '' : 's'}
+            {changes.length > 0
+              ? `${changes.length} change${changes.length === 1 ? '' : 's'}`
+              : 'What changed'}
             <ChevronDown
               className={cn('h-3 w-3 transition-transform', open === 'changes' && 'rotate-180')}
             />
@@ -221,7 +317,10 @@ export function NotificationDetailBits({
           </button>
         )}
       </div>
-      {open === 'changes' && (
+      {open === 'changes' && live && notificationId != null && (
+        <NotificationChangesList notificationId={notificationId} />
+      )}
+      {open === 'changes' && !live && (
         <ul
           className='mt-1 space-y-0.5 rounded-md border border-slate-100 bg-slate-50/70 px-2 py-1.5 dark:border-border/60 dark:bg-muted/40'
           data-notification-changes-list
