@@ -51,6 +51,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
+import { ConfigHistoryButton } from '../ConfigHistory'
 import { QueryErrorState } from '../QueryErrorState'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -2894,6 +2895,7 @@ export type PipelineEditorSection =
   | 'coverage'
   | 'lint'
   | 'skip-report'
+  | 'history'
   | 'ai-review'
   | 'versions'
   | 'matrix-versions'
@@ -3471,21 +3473,31 @@ export function PipelineEditorView({
               </button>
             )}
           </div>
-          {onExport && (
-            <Button
-              size='sm'
-              variant='outline'
-              onClick={async () => {
-                try {
-                  await onExport()
-                } catch {
-                  toast.error('Export failed')
-                }
-              }}
-            >
-              <Download className='mr-1.5 h-3.5 w-3.5' /> Export
-            </Button>
-          )}
+          <div className='flex items-center gap-2'>
+            {/* #12 — every recorded change to this template. */}
+            {!hiddenSet.has('history') && (
+              <ConfigHistoryButton
+                collection='nivaro_workflow_templates'
+                item={templateId}
+                title={`History · ${templateData.name}`}
+              />
+            )}
+            {onExport && (
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={async () => {
+                  try {
+                    await onExport()
+                  } catch {
+                    toast.error('Export failed')
+                  }
+                }}
+              >
+                <Download className='mr-1.5 h-3.5 w-3.5' /> Export
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 

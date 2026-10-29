@@ -17,6 +17,8 @@ import { accessExplainRoutes } from './access-explain.js'
 import { accessInsightRoutes } from './access-insights.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
+import { activityInsightRoutes } from './activity-insights.js'
+import { activityViewRoutes } from './activity-views.js'
 import { addendumsRoutes } from './addendums.js'
 import { agentQuestionRoutes } from './agent-questions.js'
 import { agentTriggerRoutes } from './agent-triggers.js'
@@ -505,6 +507,10 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiFieldFillRoutes, { prefix: '/ai' })
   await app.register(aiDesignTextRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
+  // #10/#13 — activity search parse + the person page's "What they did".
+  await app.register(activityInsightRoutes, { prefix: '/activity' })
+  // #11 — saved audit views (migration 517).
+  await app.register(activityViewRoutes, { prefix: '/activity-views' })
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })
   await app.register(opsTaskRoutes, { prefix: '/ops-tasks' })

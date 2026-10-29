@@ -9,6 +9,15 @@ import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import {
+  ActivityPatternBuilder,
+  type ActivityPatternConfig,
+  EMPTY_PATTERN,
+  filterToRows,
+  type PatternFilterRow,
+  rowsToFilter
+} from '@/components/alerts/activity-pattern-builder'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -29,14 +38,6 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import {
-  ActivityPatternBuilder,
-  type ActivityPatternConfig,
-  EMPTY_PATTERN,
-  filterToRows,
-  type PatternFilterRow,
-  rowsToFilter
-} from '@/components/alerts/activity-pattern-builder'
 import { api, type Collection } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, titleCase } from '@/lib/utils'
@@ -336,6 +337,14 @@ export function AlertEditPage() {
             Configure threshold conditions and notification settings
           </p>
         </div>
+        {/* #12 — every recorded change to this alert. */}
+        {!isNew && id && (
+          <ConfigHistoryButton
+            collection='nivaro_alert_definitions'
+            item={id}
+            className='ml-auto'
+          />
+        )}
       </div>
 
       {/* Form */}

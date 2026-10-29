@@ -23,13 +23,14 @@ import {
 } from './PersonAdminTools'
 import { PersonAiMemoryCard } from './PersonAiMemory'
 import { CompareAccessCard } from './PersonCompare'
+import { PersonDidPanel } from './PersonDidPanel'
 import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { PersonWeekCard } from './PersonWeek'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
-export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'tools'
+export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'did' | 'tools'
 /** The Activity tab's two views: the cards, or one day on a timeline (#1367). */
 type ActivityView = 'feed' | 'day'
 
@@ -140,6 +141,7 @@ export function PersonProfile({
                 ['overview', 'Overview'],
                 ['access', 'Access'],
                 ['activity', 'Activity'],
+                ['did', 'What they did'],
                 ['tools', 'Admin tools']
               ] as Array<[PersonProfileTab, string]>
             ).map(([id, label]) => (
@@ -216,6 +218,12 @@ export function PersonProfile({
                   <JourneyCard userId={profile.id} />
                 </div>
               </div>
+            )}
+          </TabsContent>
+          <TabsContent value='did' className='mt-4 focus-visible:outline-none'>
+            {/* #13 — the audit trail by day and collection; CSV export is logged. */}
+            {tab === 'did' && (
+              <PersonDidPanel userId={profile.id} name={profile.first_name ?? profile.name} />
             )}
           </TabsContent>
           <TabsContent value='tools' className='mt-4 focus-visible:outline-none'>

@@ -4,6 +4,12 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  activityWindow,
+  applyActivityFilters,
+  hasActivityFilter,
+  normalizeActivityFilters
+} from '../services/activity-filters.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
 
@@ -90,25 +96,27 @@ export async function activityRoutes(app: FastifyInstance) {
     // The count needs no join (a left join on the users key never adds or drops a row).
     const countQuery = db('nivaro_activity as a').count('* as count')
 
-    if (q.collection) {
-      pageIds.where('a.collection', q.collection)
-      countQuery.where('a.collection', q.collection)
-    }
-    if (q.action) {
-      pageIds.where('a.action', q.action)
-      countQuery.where('a.action', q.action)
-    }
-    if (q.user) {
-      pageIds.where('a.user', q.user)
-      countQuery.where('a.user', q.user)
-    }
+    // #10 — one filter shape (user, action[], collection[], item, from/to/range, q), every
+    // value bound (services/activity-filters.ts). Text search without a window reads 90 days.
+    const parsed = normalizeActivityFilters(q)
+    if (parsed.errors.length) return reply.code(400).send({ error: parsed.errors.join('; ') })
+    const mssql = isMssql(db)
+    applyActivityFilters(pageIds, parsed.filters, { mssql })
+    applyActivityFilters(countQuery, parsed.filters, { mssql })
+    const window = activityWindow(parsed.filters)
 
-    const filtered = !!(q.collection || q.action || q.user)
+    const filtered = hasActivityFilter(parsed.filters)
     const [data, total] = await Promise.all([
       pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
       filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
     ])
-    return reply.send({ data, total, limit, offset })
+    return reply.send({
+      data,
+      total,
+      limit,
+      offset,
+      ...(window.defaulted ? { window_from: window.from?.toISOString() ?? null } : {})
+    })
   })
 
   /** Data-egress audit: clients report each CSV/xlsx/PDF export here.

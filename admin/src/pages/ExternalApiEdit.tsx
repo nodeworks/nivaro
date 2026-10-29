@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ConfigHistoryButton } from '@/components/config-history'
 import {
   ContractFromTraffic,
   FlightRecorderCard,
@@ -287,14 +288,18 @@ export function ExternalApiEditPage() {
         <h1 className='text-2xl font-bold text-slate-900'>
           {isNew ? 'New External API' : form.name || 'Edit External API'}
         </h1>
-        <Button
-          onClick={() => save.mutate()}
-          disabled={!canSave || save.isPending}
-          className='gap-1.5'
-        >
-          <Save className='h-4 w-4' />
-          {save.isPending ? 'Saving…' : 'Save'}
-        </Button>
+        <div className='flex items-center gap-2'>
+          {/* #12 — every recorded change to this API. */}
+          {!isNew && id && <ConfigHistoryButton collection='nivaro_external_apis' item={id} />}
+          <Button
+            onClick={() => save.mutate()}
+            disabled={!canSave || save.isPending}
+            className='gap-1.5'
+          >
+            <Save className='h-4 w-4' />
+            {save.isPending ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
       </div>
 
       <Card className='p-6 space-y-5'>

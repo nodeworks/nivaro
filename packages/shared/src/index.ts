@@ -109,6 +109,12 @@ export type {
   CollectionBrowserViewProps
 } from './components/CollectionBrowserView'
 export { CollectionBrowserView } from './components/CollectionBrowserView'
+export {
+  ConfigHistory,
+  ConfigHistoryButton,
+  type ConfigHistoryEntry,
+  configHistoryLine
+} from './components/ConfigHistory'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
 export { CronBuilder, describeCron } from './components/CronBuilder'
@@ -488,6 +494,7 @@ export {
   type MailSuppression,
   useMailSuppression
 } from './components/profile/MailSuppressedPill'
+export { PersonDidPanel } from './components/profile/PersonDidPanel'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'

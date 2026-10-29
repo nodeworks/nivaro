@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bookmark } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { ExplainDiffButton } from './assist/ExplainDiff'
@@ -164,6 +164,7 @@ export function HistoryPanel({
   fieldLabel?: (field: string) => string
 }) {
   const client = useNivaroClient()
+  const nav = useNavigation()
   const qc = useQueryClient()
   const [diffFor, setDiffFor] = useState<number | null>(null)
   const [confirming, setConfirming] = useState<number | null>(null)
@@ -263,6 +264,8 @@ export function HistoryPanel({
   return (
     <div className='flex flex-col gap-2 text-[12px]' data-layout-history>
       {session && onJump && <SessionHistory session={session} onJump={onJump} />}
+      {/* #12 — versions live here; who did what lives in the audit log (one place, not two). */}
+      <AuditLogLink layoutId={layoutId} nav={nav} />
       {versions.length > 0 && (
         <div className='rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-border dark:bg-muted/40'>
           <div className='flex items-center justify-between gap-2'>
@@ -453,5 +456,27 @@ export function HistoryPanel({
         </ul>
       )}
     </div>
+  )
+}
+
+function AuditLogLink({
+  layoutId,
+  nav
+}: {
+  layoutId: number
+  nav: ReturnType<typeof useNavigation>
+}) {
+  const path = `/activity?collection=nivaro_collection_layouts&item=${encodeURIComponent(String(layoutId))}`
+  const href = nav.consoleUrl ? nav.consoleUrl(path) : path
+  if (!href) return null
+  return (
+    <button
+      type='button'
+      data-layout-audit-link
+      onClick={() => nav.navigate(href)}
+      className='self-end text-[11px] text-nvr-navy underline dark:text-nvr-cyan'
+    >
+      Who changed it — open the audit log
+    </button>
   )
 }

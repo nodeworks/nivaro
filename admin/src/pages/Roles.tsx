@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { RoleDesigner } from '@/components/ai-role-designer'
 import { RoleViewSuggestions } from '@/components/ai-role-views'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -1114,6 +1115,12 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               <p className='text-[12px] text-muted-foreground mt-0.5'>{role.description}</p>
             )}
           </div>
+          {/* #12 — every recorded change to this role. */}
+          <ConfigHistoryButton
+            collection='nivaro_roles'
+            item={role.id}
+            title={`History · ${role.name}`}
+          />
         </div>
       </div>
 

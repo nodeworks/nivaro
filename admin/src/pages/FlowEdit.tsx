@@ -37,6 +37,7 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { ConfigHistoryButton } from '@/components/config-history'
 import { FlowRunsPanel } from '@/components/flow-runs-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -4514,6 +4515,8 @@ export function FlowEditPage() {
             )}
           </div>
           <div className='flex items-center gap-2'>
+            {/* #12 — every recorded change to this flow. */}
+            {flow && id && <ConfigHistoryButton collection='nivaro_flows' item={id} />}
             {flow && (
               <button
                 type='button'
