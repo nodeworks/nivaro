@@ -10,6 +10,7 @@ import fastify from 'fastify'
 import { registerSession } from './auth/session.js'
 import { config } from './config.js'
 import { db } from './db/index.js'
+import { runInBackgroundPool } from './db/pool-context.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
@@ -880,6 +881,9 @@ export async function buildServer() {
         .catch(() => {})
 
       async function runRetentionPurge() {
+        const { noteRetentionPassStarted, noteRetentionPassScheduled, noteRetentionPassResult } =
+          await import('./services/retention-schedule.js')
+        noteRetentionPassStarted()
         try {
           {
             const { pruneJobRuns } = await import('./services/job-runs.js')
@@ -890,6 +894,12 @@ export async function buildServer() {
             .first('activity_retention_days', 'revision_retention_count')
             .catch(() => null)
 
+          // #16/#17 — activity rows go only through purgeActivityRows: records under legal
+          // hold, rows a revision points at, imported history (legacy_id) and the trail head
+          // stay; deleted sealed rows leave a bridge so the trail still verifies.
+          const { purgeActivityRows } = await import('./services/activity-trail/purge.js')
+          let activityDeleted = 0
+          let activityBridged = 0
           // Per-collection retention overrides (#257): a collection with its own
           // activity_retention_days purges on ITS schedule; the global setting
           // covers the rest. Overridden collections are excluded from the
@@ -900,51 +910,49 @@ export async function buildServer() {
             .catch(() => [])) as Array<{ collection: string; activity_retention_days: number }>
           for (const o of overrides) {
             const cutoff = new Date(Date.now() - o.activity_retention_days * 86_400_000)
-            await db('nivaro_activity')
-              .where('collection', o.collection)
-              .where('timestamp', '<', cutoff)
-              .whereNull('legacy_id')
-              .delete()
-              .catch(() => {})
+            const r = await purgeActivityRows((q) => {
+              void q
+                .where('collection', o.collection)
+                .where('timestamp', '<', cutoff)
+                .whereNull('legacy_id')
+            }).catch((err) => {
+              app.log.warn({ err, collection: o.collection }, '[retention] activity purge failed')
+              return null
+            })
+            activityDeleted += r?.deleted ?? 0
+            activityBridged += r?.bridged ?? 0
           }
           if (row?.activity_retention_days) {
             const cutoff = new Date(Date.now() - row.activity_retention_days * 86_400_000)
             // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
-            const q = db('nivaro_activity').where('timestamp', '<', cutoff).whereNull('legacy_id')
-            if (overrides.length > 0)
-              q.whereNotIn(
-                'collection',
-                overrides.map((o) => o.collection)
-              )
-            await q.delete()
+            const r = await purgeActivityRows((q) => {
+              void q.where('timestamp', '<', cutoff).whereNull('legacy_id')
+              // Null-safe: NOT IN alone would keep every row with no collection forever.
+              if (overrides.length > 0)
+                void q.where((w) => {
+                  void w.whereNull('collection').orWhereNotIn(
+                    'collection',
+                    overrides.map((o) => o.collection)
+                  )
+                })
+            }).catch((err) => {
+              // The rest of the pass (revisions, trash, AI log …) still runs.
+              app.log.warn({ err }, '[retention] activity purge failed')
+              return null
+            })
+            activityDeleted += r?.deleted ?? 0
+            activityBridged += r?.bridged ?? 0
           }
+          noteRetentionPassResult({
+            activity_deleted: activityDeleted,
+            activity_bridged: activityBridged
+          })
 
           if (row?.revision_retention_count) {
-            const n = row.revision_retention_count as number
-            // Imported legacy history (legacy_id NOT NULL) is permanent — retention applies to organic rows only.
-            const pairs = await (db('nivaro_revisions')
-              .select('collection', 'item')
-              .whereNull('legacy_id')
-              .count({ cnt: '*' })
-              .groupBy('collection', 'item')
-              .havingRaw('COUNT(*) > ?', [n]) as unknown as Promise<
-              Array<{ collection: string; item: string; cnt: string | number }>
-            >)
-            for (const pair of pairs) {
-              const keep = await db('nivaro_revisions')
-                .where({ collection: pair.collection, item: pair.item })
-                .whereNull('legacy_id')
-                .orderBy('id', 'desc')
-                .limit(n)
-                .pluck('id')
-              if (keep.length) {
-                await db('nivaro_revisions')
-                  .where({ collection: pair.collection, item: pair.item })
-                  .whereNull('legacy_id')
-                  .whereNotIn('id', keep)
-                  .delete()
-              }
-            }
+            // Imported legacy history is permanent; records under legal hold keep every
+            // revision (#17).
+            const { pruneRevisionsByCount } = await import('./services/revision-retention.js')
+            await pruneRevisionsByCount(Number(row.revision_retention_count))
           }
           await purgeExpiredTrash()
           await purgeExpiredRecordings().catch(() => {})
@@ -993,10 +1001,55 @@ export async function buildServer() {
             .catch(() => 0)
         } catch (err) {
           app.log.warn({ err }, '[retention] purge failed')
+          noteRetentionPassResult({
+            activity_deleted: 0,
+            activity_bridged: 0,
+            error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
+          })
         }
-        setTimeout(runRetentionPurge, 24 * 60 * 60 * 1000)
+        noteRetentionPassScheduled(new Date(Date.now() + 24 * 60 * 60 * 1000))
+        setTimeout(() => void runInBackgroundPool(runRetentionPurge), 24 * 60 * 60 * 1000)
       }
-      runRetentionPurge()
+      // Bookkeeping, not a request: its deletes borrow the background pool (#1321).
+      void runInBackgroundPool(runRetentionPurge)
+
+      // ── Tamper-evident activity trail (#16) ──
+      // Sealer: chains new (and, in capped batches, existing) activity rows; never on the
+      // write path. Verify: recomputes the chain from the last good checkpoint once a day.
+      app.cron.schedule(
+        'activity-seal',
+        '* * * * *',
+        async () => {
+          const { sealPending } = await import('./services/activity-trail/sealer.js')
+          await sealPending()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Seals new activity log entries into the tamper-evident hash chain (each entry hashed with the one before it); existing entries are sealed in capped batches until the backlog is through.'
+        }
+      )
+      app.cron.schedule(
+        'activity-trail-verify',
+        '40 2 * * *',
+        async () => {
+          const { runTrailVerify } = await import('./services/activity-trail/verify.js')
+          const r = await runTrailVerify({ kind: 'daily' })
+          if (!r.skipped && !r.ok)
+            app.log.warn(
+              { first: r.mismatches[0], truncated: r.truncated },
+              '[activity-trail] verification found a break'
+            )
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Recomputes the activity log hash chain from the last good checkpoint and records whether it is intact (Security & privacy → Log retention, readiness check activity-trail).'
+        }
+      )
 
       // ── Schedules that live in rows: retention policies, scheduled reports ──
       // Registered here at boot and again whenever a row changes (the routes

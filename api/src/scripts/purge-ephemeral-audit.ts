@@ -1,4 +1,9 @@
+import { Redis } from 'ioredis'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { setTrailLockRedis } from '../services/activity-trail/lock.js'
+import { purgeActivityRows } from '../services/activity-trail/purge.js'
+import { legalHoldsReady } from '../services/legal-holds.js'
 
 // ─── Purge historic audit rows for no-audit collections ──────────────────────
 //
@@ -14,6 +19,9 @@ import { db } from '../db/index.js'
 //     tables (an unbounded DELETE on nivaro_revisions times out)
 //   • legacy-safe — never touches rows with a legacy_id (imported Directus
 //     provenance is permanent; deleting it would let the import re-add it all)
+//   • hold-safe — records under an active legal hold keep their rows (#17)
+//   • trail-safe — activity rows go through purgeActivityRows (#16): bridges for
+//     the sealed chain, under the same Redis lock the API's sealer takes
 //
 //   pnpm --filter @nivaro/api run purge:ephemeral-audit -- --dry-run
 //   pnpm --filter @nivaro/api run purge:ephemeral-audit
@@ -31,11 +39,19 @@ interface Bounds {
   count: number
 }
 
+const HOLD_GUARD = (table: string) =>
+  `NOT EXISTS (SELECT 1 FROM nivaro_legal_holds lh WHERE lh.collection = ${table}.collection
+     AND lh.item_id = ${table}.item AND lh.released_at IS NULL)`
+
+let holdsOn = false
+
 async function bounds(table: string, collections: string[]): Promise<Bounds> {
   const list = collections.map((c) => `'${c.replace(/'/g, "''")}'`).join(',')
   const res = (await db.raw(
     `SELECT MIN(id) AS lo, MAX(id) AS hi, COUNT(*) AS c
-     FROM ${table} WHERE collection IN (${list}) AND legacy_id IS NULL`
+     FROM ${table} WHERE collection IN (${list}) AND legacy_id IS NULL${
+       holdsOn ? ` AND ${HOLD_GUARD(table)}` : ''
+}`
   )) as unknown
   const row = (Array.isArray(res) ? res[0] : res) as {
     lo: number | null
@@ -61,7 +77,9 @@ async function purge(table: string, collections: string[], dryRun: boolean): Pro
     try {
       const res = (await db.raw(
         `DELETE TOP (${BATCH}) FROM ${table}
-         WHERE id >= ${lo} AND id <= ${hi} AND collection IN (${list}) AND legacy_id IS NULL`
+         WHERE id >= ${lo} AND id <= ${hi} AND collection IN (${list}) AND legacy_id IS NULL${
+           holdsOn ? ` AND ${HOLD_GUARD(table)}` : ''
+}`
       )) as unknown
       affected =
         Number(
@@ -109,9 +127,41 @@ async function main(): Promise<void> {
   }
   console.log(`${dryRun ? '[dry run] ' : ''}No-audit collections: ${collections.join(', ')}`)
 
+  holdsOn = await legalHoldsReady()
   // Revisions first — they FK to nivaro_activity.
   await purge('nivaro_revisions', collections, dryRun)
-  await purge('nivaro_activity', collections, dryRun)
+  await purgeActivity(collections, dryRun)
+}
+
+async function purgeActivity(collections: string[], dryRun: boolean): Promise<void> {
+  const redis = new Redis(config.REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 })
+  try {
+    await redis.connect()
+    setTrailLockRedis(redis)
+  } catch {
+    console.warn('  Redis unreachable — run this while no API is sealing the activity trail')
+  }
+  try {
+    const scope = (q: import('knex').Knex.QueryBuilder) => {
+      void q.whereIn('collection', collections).whereNull('legacy_id')
+    }
+    if (dryRun) {
+      const r = await purgeActivityRows(scope, { dryRun: true, maxRows: 1_000_000 })
+      console.log(`  nivaro_activity: ${r.would_delete} row(s) would go`)
+      return
+    }
+    let total = 0
+    for (;;) {
+      const r = await purgeActivityRows(scope, { maxRows: 20_000, batch: BATCH })
+      total += r.deleted
+      if (r.deleted) console.log(`    …${total} deleted (${r.bridged} trail bridge(s))`)
+      if (!r.more) break
+    }
+    console.log(`  nivaro_activity: ${total} row(s) deleted`)
+  } finally {
+    setTrailLockRedis(null)
+    redis.disconnect()
+  }
 }
 
 main()

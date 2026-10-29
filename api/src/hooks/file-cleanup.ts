@@ -7,7 +7,8 @@
  *
  * Runs hourly:
  *  1. Deletes files whose expires_at is in the past (storage object,
- *     cached transforms and the DB row).
+ *     cached transforms and the DB row) — except files a legal hold keeps
+ *     (held directly, or linked to a held record).
  *  2. Removes orphaned transform-cache entries whose source file no longer
  *     exists (providers that support list()).
  */
@@ -39,8 +40,10 @@ async function cleanupExpiredFiles(): Promise<number> {
     .where('expires_at', '<', new Date())
     .select('id')
 
+  const held = await heldFileIds(rows.map((r) => String(r.id)))
   let count = 0
   for (const row of rows) {
+    if (held === 'all' || held.has(String(row.id).toLowerCase())) continue
     try {
       await deleteFile(String(row.id)) // removes storage object + transforms + DB row
       count++
@@ -49,6 +52,27 @@ async function cleanupExpiredFiles(): Promise<number> {
     }
   }
   return count
+}
+
+/**
+ * Expired files a legal hold keeps (#17): a file held by itself (collection nivaro_files) or
+ * linked to a held record. 'all' = holds exist but the links could not be read — keep every
+ * file this round rather than delete held evidence.
+ */
+export async function heldFileIds(ids: string[]): Promise<Set<string> | 'all'> {
+  const out = new Set<string>()
+  if (ids.length === 0) return out
+  const { heldRecordKeys, holdKey } = await import('../services/legal-holds.js')
+  const held = await heldRecordKeys().catch(() => null)
+  if (held == null) return 'all'
+  if (held.size === 0) return out
+  for (const id of ids) if (held.has(holdKey('nivaro_files', id))) out.add(id.toLowerCase())
+  const { fileRecordRefs } = await import('../services/file-access.js')
+  const refs = await fileRecordRefs(ids).catch(() => null)
+  if (!refs || refs.failed) return 'all'
+  for (const [fileId, list] of refs)
+    if (list.some((r) => held.has(holdKey(r.collection, r.id)))) out.add(fileId.toLowerCase())
+  return out
 }
 
 async function cleanupOrphanedTransforms(): Promise<number> {

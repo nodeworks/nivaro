@@ -286,7 +286,7 @@ export const navCategories: NavCategory[] = [
         to: '/security-center',
         section: 'Oversight',
         keywords:
-          'security center sessions logins presence online retention redaction gdpr legal holds'
+          'security center sessions logins presence online retention redaction gdpr legal holds log retention audit trail tamper evidence'
       }
     ]
   },

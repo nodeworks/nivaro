@@ -18,6 +18,7 @@ import { accessInsightRoutes } from './access-insights.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { activityInsightRoutes } from './activity-insights.js'
+import { activityTrailRoutes } from './activity-trail.js'
 import { activityViewRoutes } from './activity-views.js'
 import { addendumsRoutes } from './addendums.js'
 import { agentQuestionRoutes } from './agent-questions.js'
@@ -513,6 +514,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(activityInsightRoutes, { prefix: '/activity' })
   // #11 — saved audit views (migration 517).
   await app.register(activityViewRoutes, { prefix: '/activity-views' })
+  // #16/#17 — /activity/evidence, /activity-trail/*, /log-retention (paths spelled out)
+  await app.register(activityTrailRoutes)
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })
   await app.register(opsTaskRoutes, { prefix: '/ops-tasks' })

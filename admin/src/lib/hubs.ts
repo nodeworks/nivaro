@@ -259,6 +259,7 @@ export const SECURITY_HUB: HubDef = {
     { path: '', label: 'Security', legacy: '/security-center' },
     { path: 'presence', label: 'Presence', legacy: '/presence' },
     { path: 'retention', label: 'Retention', legacy: '/privacy-retention' },
+    { path: 'logs', label: 'Log retention' },
     { path: 'holds', label: 'Legal holds', legacy: '/legal-holds' }
   ]
 }
