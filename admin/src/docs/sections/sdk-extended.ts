@@ -1357,40 +1357,30 @@ export const sdkPresence: DocSection = {
     { type: 'h3', text: 'REST: Query presence' },
     {
       type: 'pre',
-      code: `import { readPresence, readAllPresence } from '@nivaro/sdk'
+      code: `import { getPresence, listActivePresence, readOnlinePresence } from '@nivaro/sdk'
 
-// Who is currently viewing/editing a specific item?
-const { data: viewers } = await nivaro.request(readPresence('contracts', '99'))
-// viewers → Presence[] — { user_id, first_name, last_name, email, is_editing, last_heartbeat }
+// Who is viewing a specific record right now (de-duplicated by user/session)
+const { data: viewers } = await nivaro.request(getPresence('contracts', '99'))
 
-// All active sessions across the instance (admin)
-const { data: sessions, total } = await nivaro.request(readAllPresence())
-// sessions → Presence[] (paginated; default 100 per page)`
+// Who is online (the Online list, filtered to what you may see)
+const online = await nivaro.request(readOnlinePresence())
+
+// Every active page session across the instance (admin)
+const { data: sessions, total } = await nivaro.request(listActivePresence())`
     },
-    { type: 'h3', text: 'Socket.io: Real-time subscription' },
+    { type: 'h3', text: 'Report your own presence' },
     {
       type: 'pre',
-      code: `import { createRealtime } from '@nivaro/sdk'
+      code: `import { createPresence } from '@nivaro/sdk'
 
-const rt = createRealtime(token)
-await rt.connect('https://nivaro.example.com')
-
-// Subscribe to presence updates for an item
-rt.presence.subscribe('contracts:99', (users) => {
-  console.log(\`\${users.length} users viewing\`)
-  users.forEach(u => {
-    if (u.is_editing) console.log(\`\${u.first_name} is editing\`)
-  })
-})
-
-// Announce that you are editing
-rt.presence.setEditing('contracts:99', true)
-
-// Stop editing
-rt.presence.setEditing('contracts:99', false)
-
-// Leave the presence room
-rt.presence.leave('contracts:99')`
+// Starts at once: pings POST /api/presence/ping every 30 s (and when the tab is shown again)
+const presence = createPresence({ apiUrl: 'https://nivaro.example.com', userId, userName })
+presence.setUser(newUserId)   // after a sign-in change
+presence.destroy()            // stop pinging and send the disconnect beacon`
+    },
+    {
+      type: 'note',
+      text: 'Record changes and notifications arrive over the realtime client (`createRealtime`, see Realtime). Presence on records is read over REST; poll `getPresence` while a record is open.'
     },
     { type: 'h3', text: 'Soft edit locks (item locking)' },
     {

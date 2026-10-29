@@ -87,3 +87,77 @@ export function readDashboardWidgetData(
     filters?.length ? { extra_filters: JSON.stringify(filters) } : undefined
   )
 }
+
+// ─── Building dashboards ──────────────────────────────────────────────────────
+
+/**
+ * Create a dashboard owned by the caller. A `role_id` shares it with that role (and forces
+ * `is_shared`).
+ */
+export function createDashboard(body: {
+  name: string
+  is_shared?: boolean
+  role_id?: UUID | null
+}): Command<{ data: Dashboard }> {
+  return cmd('POST', '/dashboards', undefined, body)
+}
+
+/** Rename, share or set the saved filter bar of a dashboard (its owner or an admin). */
+export function updateDashboard(
+  id: UUID,
+  body: {
+    name?: string
+    is_shared?: boolean
+    role_id?: UUID | null
+    /** Up to 20 filters; an empty list clears the bar. */
+    global_filters?: DashboardFilter[] | null
+  }
+): Command<{ data: Dashboard }> {
+  return cmd('PATCH', `/dashboards/${id}`, undefined, body)
+}
+
+/** Delete a dashboard and its widgets (its owner or an admin). */
+export function deleteDashboard(id: UUID): Command<void> {
+  return cmd('DELETE', `/dashboards/${id}`)
+}
+
+/** A widget's settings on create / update. Grid units: `col`/`row` position, `width`/`height`. */
+export interface DashboardWidgetInput {
+  /**
+   * count | sum | avg | latest | bar_chart | line_chart | report_preset | saved_view |
+   * cumulative_flow | ai_query.
+   */
+  type: DashboardWidgetType
+  title: string
+  collection?: string | null
+  /** The summed/averaged field, the `latest` column list, a saved view or preset id. */
+  field?: string | null
+  filters?: unknown
+  col?: number
+  row?: number
+  width?: number
+  height?: number
+  /** Refetch interval in seconds (10–86400); null = the page default. */
+  refresh_seconds?: number | null
+}
+
+/** Add a widget to a dashboard (its owner or an admin). */
+export function createDashboardWidget(
+  dashboardId: UUID,
+  body: DashboardWidgetInput
+): Command<{ data: DashboardWidget }> {
+  return cmd('POST', `/dashboards/${dashboardId}/widgets`, undefined, body)
+}
+
+/** Change a widget (its dashboard's owner or an admin). */
+export function updateDashboardWidget(
+  widgetId: UUID,
+  body: Partial<DashboardWidgetInput>
+): Command<{ data: DashboardWidget }> {
+  return cmd('PATCH', `/dashboards/widgets/${widgetId}`, undefined, body)
+}
+
+/** Remove a widget (its dashboard's owner or an admin). */
+export function deleteDashboardWidget(widgetId: UUID): Command<void> {
+  return cmd('DELETE', `/dashboards/widgets/${widgetId}`)
+}

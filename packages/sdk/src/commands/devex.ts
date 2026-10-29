@@ -152,17 +152,60 @@ export interface GlobalSearchRecord {
   id: string | number
   label: string
   snippet: string
+  display_name?: string | null
+  /** The field the match was found in — always one the caller may read. */
+  matched_field?: string
+  matched_label?: string
+  /** Its value as the caller read it (≤80 characters). */
+  matched_value?: string
+  exact?: boolean
+  score?: number
+  /** The caller created it, owns it, or opened it from search lately. */
+  mine?: boolean
+  updated_at?: string
+}
+
+export interface GlobalSearchPerson {
+  id: string
+  first_name: string | null
+  last_name: string | null
+  email: string | null
+  title: string | null
+  department: string | null
+  status?: string | null
+  account_kind?: string | null
 }
 
 export interface GlobalSearchResults {
   records: GlobalSearchRecord[]
   pages: Array<{ label: string; path: string }>
   actions: Array<{ label: string; path: string }>
+  /** People matches (`@name` scopes to people only). */
+  people?: GlobalSearchPerson[]
+  /** Meaning-based matches when semantic search is on. */
+  semantic?: Array<{ collection: string; id: unknown; label: string; snippet: string }>
+  /** An exact id / friendly-id hit. */
+  exact?: GlobalSearchRecord | null
+  /** "Did you mean" rewordings. */
+  suggestions?: string[]
+  /** How the query was read: plain text, scope prefix and field filters. */
+  query?: { text: string; scope: string | null; filters: unknown[] }
+  /** Other kinds (comments, files, videos, docs, chat, config) — shape per kind. */
+  extra?: unknown
+  /** Commands the client may offer (run only through their own routes, after a confirm). */
+  commands?: unknown
 }
 
-/** Search records (permission-scoped), admin pages, and quick actions. */
-export function globalSearch(q: string): Command<{ data: GlobalSearchResults }> {
-  return cmd('GET', '/global-search', { q })
+/**
+ * Search records (permission-scoped), people, admin pages and quick actions. Understands
+ * the query language (scope prefixes, field filters, exact ids). `labels: true` matches
+ * only what each record's label shows.
+ */
+export function globalSearch(
+  q: string,
+  opts?: { labels?: boolean }
+): Command<{ data: GlobalSearchResults }> {
+  return cmd('GET', '/global-search', opts?.labels ? { q, labels: 1 } : { q })
 }
 
 // ─── API keys (admin) ─────────────────────────────────────────────────────────

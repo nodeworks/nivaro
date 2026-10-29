@@ -34,9 +34,17 @@
  *     }
  *   `)
  *
- *   // Realtime (Socket.io)
- *   nivaro.realtime.connect('https://nivaro.example.com')
- *   const unsub = nivaro.realtime.subscribe('projects', { event: 'update' }, (data) => console.log(data))
+ *   // Realtime (Socket.io) — a separate client; sign in with a token or a ws-token getter
+ *   const rt = createRealtime()
+ *   rt.connect('https://nivaro.example.com', () => nivaro.request(readWsToken()).then((r) => r.token))
+ *   const unsub = rt.subscribe('projects', { event: 'update' }, (changes) => console.log(changes))
+ *
+ *   // Observability (opt-in): hooks, request ids, retries
+ *   const traced = createNivaro(url, {
+ *     token,
+ *     onResponse: (r) => console.log(r.method, r.path, r.status, r.requestId),
+ *     retry: 2
+ *   })
  */
 
 // Feature-area command modules (flat public API — import everything from '@nivaro/sdk')
@@ -52,19 +60,27 @@ export * from './commands/files.js'
 export * from './commands/form-tools.js'
 export * from './commands/help-videos.js'
 export * from './commands/import-templates.js'
+export * from './commands/inbox.js'
 export * from './commands/infra.js'
 export * from './commands/infrastructure-summary.js'
 export * from './commands/layout-ai.js'
 export * from './commands/layout-editor.js'
 export * from './commands/mcp.js'
+export * from './commands/observability.js'
 export * from './commands/ops.js'
 export * from './commands/queues.js'
+export * from './commands/records.js'
 export * from './commands/schema-proposals.js'
 export * from './commands/support.js'
 export type { PresenceClient, PresenceOptions, PresenceSession } from './presence.js'
 export { createPresence } from './presence.js'
-export type { NivaroRealtime, RealtimeEvent } from './realtime.js'
-export { createRealtime } from './realtime.js'
+export type {
+  NivaroRealtime,
+  RealtimeChange,
+  RealtimeEvent,
+  RealtimeToken
+} from './realtime.js'
+export { createRealtime, NOTIFICATIONS_CHANNEL, parseRealtimeChanges } from './realtime.js'
 
 // Import types for NivaroClient interface
 import type { ImportParseResponse } from './commands/import-templates.js'
@@ -167,14 +183,23 @@ export interface Query<T = Record<string, unknown>> {
   offset?: number
   page?: number
   search?: string
+  /** Limit `search` to these fields (each one the caller may read). */
+  search_fields?: string[]
+  /** Order `search` matches by relevance (exact, then prefix, then contains). */
+  search_rank?: boolean
   /**
    * Keyset paging for walking a large collection: 'start' for the first page,
    * then the `next_cursor` of the page before. Sort by the record's own fields
    * only; `id` is added as the tie-break. Replaces offset/page.
    */
   after?: string
-  /** false = skip the count query; `total` answers null. */
-  count?: boolean
+  /**
+   * false = skip the count query; `total` answers null. 'approx' = a total up to a few
+   * seconds old may stand in for COUNT(*) (the answer then carries `total_approx: true`).
+   */
+  count?: boolean | 'approx'
+  /** Flatten each to-one relation's display label into the row (one batched read). */
+  labels?: boolean
 }
 
 export interface ListResponse<T> {
@@ -187,6 +212,13 @@ export interface ListResponse<T> {
   next_cursor?: string | null
   /** To-many aliases whose lists were cut at the per-record limit. */
   truncated_relations?: string[]
+  /** The total came from the list-total cache or the partition row count (`count: 'approx'`). */
+  total_approx?: boolean
+  /** The count ran out of time: `total` is null, the page itself is complete. */
+  total_timed_out?: boolean
+  /** The asked `limit` was above the server cap; `applied_limit` is what was used. */
+  limit_capped?: boolean
+  applied_limit?: number
 }
 
 // ─── Domain types ─────────────────────────────────────────────────────────────
@@ -310,28 +342,75 @@ export interface InstanceOwner {
   email: string
 }
 
+/** Common audit actions; the log also carries feature actions (`export`, `trash-purge`, …). */
+export type ActivityAction =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'login'
+  | 'logout'
+  | 'export'
+  | 'transition'
+  | (string & {})
+
+/** One audit-log row (`GET /activity`, admin). */
 export interface ActivityEntry {
   id: number
-  action: 'create' | 'update' | 'delete' | 'login'
+  action: ActivityAction
   collection: string | null
   item: string | null
   user: UUID | null
   timestamp: ISODate
+  ip?: string | null
+  comment?: string | null
+  /** Where the write came from (`ui`, `api`, `import`, `flow`, …) when recorded. */
+  origin?: string | null
+  first_name?: string | null
+  last_name?: string | null
+  user_email?: string | null
+  /** The badge of a write an agent made through MCP ("via Claude"), else null. */
+  via_agent?: string | null
+  /** Single-entry reads only (`readActivityEntry`). */
+  user_agent?: string | null
 }
 
+/**
+ * One entry of a record's history. Snapshot rows carry `data`/`delta`; pipeline moves and
+ * O2M child events are folded in without a snapshot (`id` null, `event` set or an `o2m-*`
+ * action).
+ */
 export interface Revision {
-  id: number
+  /** Null for a folded entry with no revision row (a transition, an O2M child event). */
+  id: number | null
   activity: number | null
   collection: string
   item: string
-  data: Record<string, unknown>
+  data: Record<string, unknown> | null
   delta: Record<string, unknown> | null
-  action: 'create' | 'update' | 'delete'
+  parent?: number | null
+  action: 'create' | 'update' | 'delete' | (string & {})
   timestamp: ISODate
-  user: UUID | null
+  /** The person behind the entry (the API names it `user_id`). */
+  user_id?: UUID | null
+  /** @deprecated never sent by the API — read `user_id`. */
+  user?: UUID | null
   first_name: string | null
   last_name: string | null
   user_email: string | null
+  comment?: string | null
+  /** The badge of a write an agent made through MCP ("via Claude"), else absent. */
+  via_agent?: string | null
+  /** A pipeline event folded into the history (no snapshot). */
+  event?: {
+    kind: 'transition' | 'start'
+    history_id?: number
+    from_label: string | null
+    to_label: string | null
+    transition_label: string | null
+    source: string | null
+    addendum?: { id: string; title: string | null } | null
+    on_behalf_of?: { id: string; name: string | null } | null
+  } | null
 }
 
 export interface ExternalApi {
@@ -572,9 +651,11 @@ export interface NivaroRuntime {
 // ─── Command descriptor ───────────────────────────────────────────────────────
 
 import { type Command, cmd } from './command.js'
+import { errorBodyMessage, NivaroError, REQUEST_ID_HEADER, retryAfterMs } from './errors.js'
 
 export type { Command } from './command.js'
 export { withSignal } from './command.js'
+export { errorBodyMessage, isNivaroError, NivaroError, REQUEST_ID_HEADER } from './errors.js'
 
 // ─── Items ────────────────────────────────────────────────────────────────────
 
@@ -590,8 +671,12 @@ export function readItems<T = Record<string, unknown>>(
   if (query?.offset != null) params.offset = query.offset
   if (query?.page != null) params.page = query.page
   if (query?.search) params.search = query.search
+  if (query?.search_fields?.length) params.search_fields = query.search_fields.join(',')
+  if (query?.search_rank) params.search_rank = 1
   if (query?.after != null) params.after = query.after
   if (query?.count === false) params.count = 0
+  else if (query?.count === 'approx') params.count = 'approx'
+  if (query?.labels) params.labels = 1
   return cmd('GET', `/items/${collection}`, params)
 }
 
@@ -654,11 +739,20 @@ export function aggregateItems(
   return cmd('GET', `/items/${collection}/aggregate`, params)
 }
 
+/**
+ * One record as the caller may read it (404 when it does not exist or is hidden from them).
+ * `query.fields` projects the answer, dotted paths included (`owner.email`).
+ */
 export function readItem<T = Record<string, unknown>>(
   collection: string,
-  id: string | number
+  id: string | number,
+  query?: { fields?: string[] }
 ): Command<{ data: T }> {
-  return cmd('GET', `/items/${collection}/${id}`)
+  return cmd(
+    'GET',
+    `/items/${collection}/${id}`,
+    query?.fields?.length ? { fields: query.fields.join(',') } : undefined
+  )
 }
 
 /** One read inside {@link readMany}. Without `id` it is a list read. */
@@ -876,12 +970,24 @@ export function readCollection(collection: string): Command<{ data: CMSCollectio
 
 // ─── Revisions ────────────────────────────────────────────────────────────────
 
-/** All revisions for a specific item (newest first). */
+/**
+ * A record's history, newest first (up to 100 revisions plus folded pipeline / O2M events).
+ * Same gate as opening the record; snapshots are cut to the fields the caller may read.
+ * The answer is `{ data }` only — there is no total or paging.
+ */
 export function readRevisions(
   collection: string,
   item: string | number
-): Command<ListResponse<Revision>> {
+): Command<{ data: Revision[] }> {
   return cmd('GET', '/revisions', { collection, item })
+}
+
+/** The newest revision id of a record (collision baseline), without the history. */
+export function readLatestRevisionId(
+  collection: string,
+  item: string | number
+): Command<{ data: { latest: number | null } }> {
+  return cmd('GET', '/revisions', { collection, item, latest_only: 1 })
 }
 
 /** Single revision by ID. */
@@ -893,12 +999,15 @@ export function readRevision(id: number): Command<{ data: Revision }> {
 
 export interface ActivityQuery {
   collection?: string
-  action?: 'create' | 'update' | 'delete' | 'login'
+  /** Any recorded action — `listActivityActions()` lists the ones in the log. */
+  action?: ActivityAction
   user?: string
+  /** Rows per page (default 25, max 200). */
   limit?: number
   offset?: number
 }
 
+/** The audit log, newest first (admin). */
 export function readActivity(query?: ActivityQuery): Command<ListResponse<ActivityEntry>> {
   const params: Record<string, unknown> = {}
   if (query?.collection) params.collection = query.collection
@@ -1843,7 +1952,58 @@ export function listActivePresence(): Command<{ data: PresenceSessionInfo[]; tot
 
 // ─── Client ───────────────────────────────────────────────────────────────────
 
+/** What a request hook sees before the fetch. `headers` may be changed in place. */
+export interface NivaroRequestInfo {
+  method: string
+  /** Path under `/api` (no query string), e.g. `/items/orders`. */
+  path: string
+  /** The full URL about to be fetched. */
+  url: string
+  /** The request's headers — add tracing or app headers here. */
+  headers: Record<string, string>
+  /** 0 on the first try, 1.. on a retry (see `retry`). */
+  attempt: number
+  /** `request` (commands), `graphql`, `upload` or `import-parse`. */
+  kind: 'request' | 'graphql' | 'upload' | 'import-parse'
+}
+
+/** What a response hook sees once the status line arrived (the body is not read yet). */
+export interface NivaroResponseInfo {
+  method: string
+  path: string
+  url: string
+  attempt: number
+  kind: NivaroRequestInfo['kind']
+  status: number
+  ok: boolean
+  /** The `x-nivaro-request-id` the server stamped, else null (see NivaroError.requestId). */
+  requestId: string | null
+  /** From the fetch call to the status line. */
+  durationMs: number
+  /** True when the client is about to retry this answer. */
+  willRetry: boolean
+}
+
+/** Opt-in retries for idempotent reads (off unless `retry` is set). */
+export interface NivaroRetryOptions {
+  /** Further tries after the first (default 2 when `retry` is an object). */
+  retries?: number
+  /** Methods that may be retried (default `['GET']` — writes are never retried by default). */
+  methods?: Array<Command<unknown>['_method']>
+  /** Statuses that are retried (default 408, 429, 502, 503, 504). Network errors always are. */
+  statuses?: number[]
+  /** First backoff (default 300 ms), doubled per try with jitter; a Retry-After wins. */
+  baseDelayMs?: number
+  /** Longest single wait (default 10 000 ms). */
+  maxDelayMs?: number
+}
+
 export interface NivaroClientOptions {
+  /**
+   * Bearer credential: a static user token, a named API key (`nvk_…`), a View-as token, or
+   * an MCP OAuth access token (`nvo_…`, accepted on `/api/mcp` and its tool calls only).
+   * Omit it to ride the browser's session cookie (same-origin admin / portal).
+   */
   token?: string
   fetch?: typeof fetch
   /**
@@ -1860,6 +2020,33 @@ export interface NivaroClientOptions {
    * short.
    */
   timeoutMs?: number
+  /**
+   * Extra headers on every request (e.g. `x-nivaro-app`, `x-workspace`), or a function read
+   * per request. The client's own `Authorization` / `Content-Type` win over these.
+   */
+  headers?: Record<string, string> | (() => Record<string, string>)
+  /** Called before every fetch (each retry too); may change `info.headers`. A throw fails the request. */
+  onRequest?: (info: NivaroRequestInfo) => void | Promise<void>
+  /** Called when each answer's status line arrives (each retry too). Never fails the request. */
+  onResponse?: (info: NivaroResponseInfo) => void
+  /**
+   * Called once when a request finally fails — a NivaroError (non-2xx), a TimeoutError or a
+   * network error. A caller's own abort is not reported. Never fails the request further.
+   */
+  onError?: (
+    error: Error,
+    info: { method: string; path: string; kind: NivaroRequestInfo['kind'] }
+  ) => void
+  /**
+   * Log one line per request: `true` = `console.debug`, or a function of your own.
+   * Lines carry method, path, status, duration and request id — never headers or bodies.
+   */
+  debug?: boolean | ((line: string, details: Record<string, unknown>) => void)
+  /**
+   * Retry idempotent reads on 408 / 429 / 502 / 503 / 504 and network errors, honouring
+   * Retry-After. A number = that many retries with the defaults. Off by default.
+   */
+  retry?: number | NivaroRetryOptions
 }
 
 export interface FileUploadResult {
@@ -1900,10 +2087,47 @@ export interface NivaroClient {
   url: string
 }
 
+const DEFAULT_RETRY_STATUSES = [408, 429, 502, 503, 504]
+
+function abortError(): Error {
+  return Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+}
+
+/** Waits `ms`, or rejects at once with an AbortError when `signal` aborts. */
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError())
+    const onAbort = () => {
+      clearTimeout(t)
+      reject(abortError())
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 export function createNivaro(url: string, options: NivaroClientOptions = {}): NivaroClient {
   const baseUrl = url.replace(/\/$/, '')
   const fetcher = options.fetch ?? globalThis.fetch
   let currentToken: string | undefined = options.token
+
+  const retry: Required<NivaroRetryOptions> | null = (() => {
+    const r = options.retry
+    if (r == null || r === 0) return null
+    const o: NivaroRetryOptions = typeof r === 'number' ? { retries: r } : r
+    const retries = Math.max(0, Math.floor(o.retries ?? 2))
+    if (retries === 0) return null
+    return {
+      retries,
+      methods: o.methods ?? ['GET'],
+      statuses: o.statuses ?? DEFAULT_RETRY_STATUSES,
+      baseDelayMs: o.baseDelayMs ?? 300,
+      maxDelayMs: o.maxDelayMs ?? 10_000
+    }
+  })()
 
   function setToken(token: string | null) {
     currentToken = token ?? undefined
@@ -1913,8 +2137,9 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     return currentToken
   }
 
-  function authHeaders(json = true): Record<string, string> {
-    const h: Record<string, string> = {}
+  function baseHeaders(json: boolean): Record<string, string> {
+    const extra = typeof options.headers === 'function' ? options.headers() : options.headers
+    const h: Record<string, string> = { ...(extra ?? {}) }
     if (json) h['Content-Type'] = 'application/json'
     if (currentToken) h.Authorization = `Bearer ${currentToken}`
     return h
@@ -1922,6 +2147,152 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
 
   function credentialsMode(): RequestCredentials {
     return options.credentials ?? (currentToken ? 'omit' : 'include')
+  }
+
+  function log(line: string, details: Record<string, unknown>) {
+    const d = options.debug
+    if (!d) return
+    try {
+      if (typeof d === 'function') d(line, details)
+      // biome-ignore lint/suspicious/noConsole: `debug: true` asks for console output
+      else console.debug(`[nivaro] ${line}`)
+    } catch {
+      /* a logger never fails a request */
+    }
+  }
+
+  function backoff(attempt: number, res: Response | null): number {
+    if (!retry) return 0
+    const after = retryAfterMs(res?.headers.get('retry-after'))
+    if (after != null) return Math.min(after, retry.maxDelayMs)
+    const exp = retry.baseDelayMs * 2 ** attempt
+    return Math.min(retry.maxDelayMs, Math.round(exp / 2 + Math.random() * (exp / 2)))
+  }
+
+  /**
+   * One request with hooks, logging and (opt-in) retries. `run` performs one fetch for the
+   * given headers; it returns the Response or throws (network error, abort, timeout).
+   */
+  async function send(
+    kind: NivaroRequestInfo['kind'],
+    method: Command<unknown>['_method'],
+    path: string,
+    fullUrl: string,
+    headers: Record<string, string>,
+    run: (headers: Record<string, string>) => Promise<Response>,
+    signal?: AbortSignal
+  ): Promise<Response> {
+    const mayRetry = !!retry && retry.methods.includes(method)
+    for (let attempt = 0; ; attempt++) {
+      const info: NivaroRequestInfo = {
+        method,
+        path,
+        url: fullUrl,
+        headers: { ...headers },
+        attempt,
+        kind
+      }
+      if (options.onRequest) await options.onRequest(info)
+      const started = Date.now()
+      let res: Response
+      try {
+        res = await run(info.headers)
+      } catch (err) {
+        const name = (err as { name?: string })?.name
+        const retryable =
+          mayRetry &&
+          attempt < (retry?.retries ?? 0) &&
+          name !== 'AbortError' &&
+          name !== 'TimeoutError'
+        log(
+          `${method} ${path} failed (${(err as Error)?.message ?? err})${retryable ? ', retrying' : ''}`,
+          {
+            method,
+            path,
+            attempt,
+            error: (err as Error)?.message
+          }
+        )
+        if (!retryable) throw err
+        await wait(backoff(attempt, null), signal)
+        continue
+      }
+      const requestId = res.headers?.get?.(REQUEST_ID_HEADER) ?? null
+      const willRetry =
+        mayRetry &&
+        !res.ok &&
+        attempt < (retry?.retries ?? 0) &&
+        !!retry?.statuses.includes(res.status)
+      const durationMs = Date.now() - started
+      if (options.onResponse) {
+        try {
+          options.onResponse({
+            method,
+            path,
+            url: fullUrl,
+            attempt,
+            kind,
+            status: res.status,
+            ok: res.ok,
+            requestId,
+            durationMs,
+            willRetry
+          })
+        } catch {
+          /* hooks never fail a request */
+        }
+      }
+      log(
+        `${method} ${path} → ${res.status} in ${durationMs}ms${requestId ? ` (req ${requestId})` : ''}`,
+        {
+          method,
+          path,
+          status: res.status,
+          durationMs,
+          requestId,
+          attempt
+        }
+      )
+      if (!willRetry) return res
+      const delay = backoff(attempt, res)
+      try {
+        await res.body?.cancel()
+      } catch {
+        /* the discarded body may already be closed */
+      }
+      await wait(delay, signal)
+    }
+  }
+
+  /** The NivaroError for a non-2xx answer (reads the body). */
+  async function httpError(res: Response, method: string, path: string): Promise<NivaroError> {
+    const body = await res.json().catch(() => ({ error: res.statusText }))
+    const b = (body ?? {}) as { code?: unknown; issues?: unknown }
+    return new NivaroError({
+      message: errorBodyMessage(body) || res.statusText || `HTTP ${res.status}`,
+      status: res.status,
+      code: typeof b.code === 'string' ? b.code : null,
+      requestId: res.headers?.get?.(REQUEST_ID_HEADER) ?? null,
+      response: body,
+      method,
+      path,
+      retryAfterMs: retryAfterMs(res.headers?.get?.('retry-after')),
+      issues: b.issues
+    })
+  }
+
+  function reportError(
+    err: unknown,
+    info: { method: string; path: string; kind: NivaroRequestInfo['kind'] },
+    callerSignal?: AbortSignal
+  ) {
+    if (!options.onError) return
+    if (callerSignal?.aborted && (err as { name?: string })?.name === 'AbortError') return
+    try {
+      options.onError(err instanceof Error ? err : new Error(String(err)), info)
+    } catch {
+      /* hooks never fail a request */
+    }
   }
 
   async function request<T>(command: Command<T>): Promise<T> {
@@ -1938,49 +2309,62 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
 
     const timeoutMs = options.timeoutMs ?? 0
     const timed = command._method === 'GET' && timeoutMs > 0
-    const ctrl = timed ? new AbortController() : null
-    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null
     // The caller's own signal (withSignal) and the read timeout both cancel the fetch.
     const callerSignal = command._signal
+    let ctrl: AbortController | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
     const onCallerAbort = () => ctrl?.abort()
-    if (callerSignal && ctrl) {
-      if (callerSignal.aborted) ctrl.abort()
-      else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
-    }
-    const signal = ctrl ? ctrl.signal : callerSignal
+    let wired = false
+    const fullUrl = `${baseUrl}/api${command._path}${qs}`
+    const where = { method: command._method, path: command._path, kind: 'request' as const }
     // The caller's abort stays wired to the read-timeout controller until the body is read.
     try {
-      let res: Response
-      try {
-        res = await fetcher(`${baseUrl}/api${command._path}${qs}`, {
-          method: command._method,
-          headers: authHeaders(),
-          credentials: credentialsMode(),
-          body: command._body != null ? JSON.stringify(command._body) : undefined,
-          ...(signal ? { signal } : {})
-        })
-      } catch (e) {
-        if (callerSignal?.aborted) throw e
-        if (ctrl?.signal.aborted)
-          throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
-            name: 'TimeoutError'
-          })
-        throw e
-      } finally {
-        if (timer) clearTimeout(timer)
-      }
+      const res = await send(
+        'request',
+        command._method,
+        command._path,
+        fullUrl,
+        baseHeaders(true),
+        async (headers) => {
+          // A fresh timeout per attempt: each try gets the whole budget.
+          ctrl = timed ? new AbortController() : null
+          const attemptCtrl = ctrl
+          timer = attemptCtrl ? setTimeout(() => attemptCtrl.abort(), timeoutMs) : null
+          if (callerSignal && attemptCtrl) {
+            if (callerSignal.aborted) attemptCtrl.abort()
+            else if (!wired) {
+              callerSignal.addEventListener('abort', onCallerAbort, { once: true })
+              wired = true
+            }
+          }
+          const signal = attemptCtrl ? attemptCtrl.signal : callerSignal
+          try {
+            return await fetcher(fullUrl, {
+              method: command._method,
+              headers,
+              credentials: credentialsMode(),
+              body: command._body != null ? JSON.stringify(command._body) : undefined,
+              ...(signal ? { signal } : {})
+            })
+          } catch (e) {
+            if (callerSignal?.aborted) throw e
+            if (attemptCtrl?.signal.aborted)
+              throw Object.assign(new Error(`Request timed out after ${timeoutMs / 1000}s`), {
+                name: 'TimeoutError'
+              })
+            throw e
+          } finally {
+            if (timer) clearTimeout(timer)
+          }
+        },
+        callerSignal
+      )
 
       if (command._method === 'DELETE' && res.status === 204) {
         return undefined as T
       }
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }))
-        throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
-          status: res.status,
-          response: err
-        })
-      }
+      if (!res.ok) throw await httpError(res, command._method, command._path)
 
       // Non-JSON responses:
       //  - binary (e.g. renderPdfTemplate() → application/pdf) resolve to an ArrayBuffer
@@ -1997,8 +2381,11 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       }
 
       return (await res.json()) as T
+    } catch (err) {
+      reportError(err, where, callerSignal)
+      throw err
     } finally {
-      callerSignal?.removeEventListener('abort', onCallerAbort)
+      if (wired) callerSignal?.removeEventListener('abort', onCallerAbort)
     }
   }
 
@@ -2010,23 +2397,19 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     fd.append('file', file)
     if (opts.title) fd.append('title', opts.title)
     if (opts.folder) fd.append('folder', opts.folder)
-
-    const res = await fetcher(`${baseUrl}/api/files/upload`, {
-      method: 'POST',
-      headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
-      credentials: credentialsMode(),
-      body: fd
-    })
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }))
-      throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
-        status: res.status
-      })
+    const path = '/files/upload'
+    const fullUrl = `${baseUrl}/api${path}`
+    try {
+      const res = await send('upload', 'POST', path, fullUrl, baseHeaders(false), (headers) =>
+        fetcher(fullUrl, { method: 'POST', headers, credentials: credentialsMode(), body: fd })
+      )
+      if (!res.ok) throw await httpError(res, 'POST', path)
+      const result = (await res.json()) as { data: FileUploadResult }
+      return result.data
+    } catch (err) {
+      reportError(err, { method: 'POST', path, kind: 'upload' })
+      throw err
     }
-
-    const result = (await res.json()) as { data: FileUploadResult }
-    return result.data
   }
 
   function fileUrl(fileId: string): string {
@@ -2040,19 +2423,24 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
   ): Promise<ImportParseResponse> {
     const form = new FormData()
     form.append('file', file, fileName ?? (file as File).name ?? 'import.xlsx')
-    const res = await fetcher(`${baseUrl}/api/import-templates/${templateId}/parse`, {
-      method: 'POST',
-      headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
-      credentials: credentialsMode(),
-      body: form
-    })
-    const json = await res.json().catch(() => ({ error: res.statusText }))
-    if (!res.ok)
-      throw Object.assign(new Error(json?.error || 'Import parse failed'), {
-        status: res.status,
-        issues: json?.issues
-      })
-    return json.data
+    const path = `/import-templates/${templateId}/parse`
+    const fullUrl = `${baseUrl}/api${path}`
+    try {
+      const res = await send('import-parse', 'POST', path, fullUrl, baseHeaders(false), (headers) =>
+        fetcher(fullUrl, { method: 'POST', headers, credentials: credentialsMode(), body: form })
+      )
+      if (!res.ok) {
+        const err = await httpError(res, 'POST', path)
+        // Earlier versions said "Import parse failed" when the body named no reason.
+        if (!errorBodyMessage(err.response)) err.message = 'Import parse failed'
+        throw err
+      }
+      const json = (await res.json()) as { data: ImportParseResponse }
+      return json.data
+    } catch (err) {
+      reportError(err, { method: 'POST', path, kind: 'import-parse' })
+      throw err
+    }
   }
 
   async function graphql<T = Record<string, unknown>>(
@@ -2060,33 +2448,38 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     variables?: Record<string, unknown>,
     operationName?: string
   ): Promise<T> {
-    const res = await fetcher(`${baseUrl}/api/graphql`, {
-      method: 'POST',
-      headers: authHeaders(),
-      credentials: credentialsMode(),
-      body: JSON.stringify({ query, variables, operationName })
-    })
+    const path = '/graphql'
+    const fullUrl = `${baseUrl}/api${path}`
+    const where = { method: 'POST', path, kind: 'graphql' as const }
+    try {
+      const res = await send('graphql', 'POST', path, fullUrl, baseHeaders(true), (headers) =>
+        fetcher(fullUrl, {
+          method: 'POST',
+          headers,
+          credentials: credentialsMode(),
+          body: JSON.stringify({ query, variables, operationName })
+        })
+      )
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }))
-      throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
-        status: res.status,
-        response: err
-      })
+      if (!res.ok) throw await httpError(res, 'POST', path)
+
+      const json = (await res.json()) as GraphQLResponse<T>
+
+      if (json.errors?.length) {
+        const first = json.errors[0]
+        throw Object.assign(new Error(first.message), {
+          graphqlErrors: json.errors,
+          extensions: first.extensions,
+          requestId: res.headers?.get?.(REQUEST_ID_HEADER) ?? null
+        })
+      }
+
+      if (!json.data) throw new Error('GraphQL response contained no data')
+      return json.data
+    } catch (err) {
+      reportError(err, where)
+      throw err
     }
-
-    const json = (await res.json()) as GraphQLResponse<T>
-
-    if (json.errors?.length) {
-      const first = json.errors[0]
-      throw Object.assign(new Error(first.message), {
-        graphqlErrors: json.errors,
-        extensions: first.extensions
-      })
-    }
-
-    if (!json.data) throw new Error('GraphQL response contained no data')
-    return json.data
   }
 
   return { request, graphql, upload, importParse, fileUrl, setToken, getToken, url: baseUrl }
