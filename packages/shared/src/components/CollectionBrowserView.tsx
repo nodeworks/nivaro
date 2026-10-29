@@ -144,6 +144,11 @@ import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
 import { MapView } from './MapView'
 import {
+  PICKER_EXCLUDED_ROW_CLASS,
+  PICKER_EXCLUDED_TITLE,
+  usePickerExcludedRows
+} from './PickerExcludedRows'
+import {
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   itemActionChoiceStep,
@@ -5381,6 +5386,12 @@ export function CollectionBrowserView({
   // Ids of the rows currently rendered — pipeline state, owners and at-risk
   // are all resolved for just this page rather than the whole collection.
   const pageIdsKey = rows.map((r) => String(r.id)).join(',')
+  // Admins see which rows are left out of every relation picker (quiet eye-off mark).
+  const pickerRows = useMemo(
+    () => rows.map((r) => ({ collection, id: r.id as string | number })),
+    [rows, collection]
+  )
+  const isPickerExcluded = usePickerExcludedRows(pickerRows, isAdmin)
 
   // ── Pipeline state column + bulk transitions ──────────────────────────────
   // Scoped to the visible page's ids: the unscoped endpoint returns every
@@ -8747,6 +8758,7 @@ export function CollectionBrowserView({
                       const risk = riskMap[String(id)]
                       const unseen = unseenMap?.[String(id)]
                       const rowLock = rowLocks.get(String(id)) ?? null
+                      const pickerExcluded = isPickerExcluded(collection, id)
                       const riskTint =
                         !isSelected && risk ? rowHighlightClass(risk.color) : undefined
                       // Pinned cells need an OPAQUE bg — tinted rows carry the tint
@@ -8765,12 +8777,14 @@ export function CollectionBrowserView({
                           title={
                             rowChanges.titleFor(String(id)) ??
                             (rowLock && !rowLock.is_mine ? lockLabel(rowLock) : undefined) ??
-                            (risk ? `At risk — ${risk.rule}` : undefined)
+                            (risk ? `At risk — ${risk.rule}` : undefined) ??
+                            (pickerExcluded ? PICKER_EXCLUDED_TITLE : undefined)
                           }
+                          data-picker-excluded={pickerExcluded ? '' : undefined}
                           style={enterStyle}
                           className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
-                          }`}
+                          } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''}`}
                         >
                           {/* stopPropagation only — the checkbox's own onChange
                             toggles; toggling here too would double-toggle. */}

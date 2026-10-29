@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
+import { PICKER_EXCLUSIONS_PAGE_KEY } from '../PickerExcludedRows'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Input } from '../ui/input'
@@ -53,6 +54,7 @@ export function usePickerExclusion(
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: key })
+      void qc.invalidateQueries({ queryKey: [PICKER_EXCLUSIONS_PAGE_KEY, collection] })
       toast.success(excluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
       opts.onDone?.()
     },

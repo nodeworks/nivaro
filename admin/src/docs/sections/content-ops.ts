@@ -1743,6 +1743,10 @@ export const pickerExclusionsGuide: DocSection = {
       type: 'p',
       text: '**From a list or queue row (administrators):** open the row\'s Actions menu → **Admin only** → "Exclude from pickers", or "Include in pickers" on a record that is already excluded.'
     },
+    {
+      type: 'p',
+      text: 'Administrators see excluded records in lists and queues in muted italics over a faint diagonal hatch; hovering the row says why.'
+    },
     { type: 'h3', text: 'Behavior on existing references' },
     {
       type: 'p',

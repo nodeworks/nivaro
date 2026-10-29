@@ -92,6 +92,11 @@ import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
 import { LiveRowMark } from '../LiveRowMark'
+import {
+  PICKER_EXCLUDED_ROW_CLASS,
+  PICKER_EXCLUDED_TITLE,
+  usePickerExcludedRows
+} from '../PickerExcludedRows'
 import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
@@ -2252,6 +2257,24 @@ export function QueueWorklist({
   }, [items])
 
   const { isAdmin } = useItemEditAuth()
+  // Admins see which rows are left out of every relation picker (quiet eye-off mark).
+  const pickerRowsKey = items.map((r) => `${r.collection}|${r.item_id}`).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the rows' ids, not the array
+  const pickerRows = useMemo(
+    () => items.map((r) => ({ collection: r.collection, id: r.item_id })),
+    [pickerRowsKey]
+  )
+  const isPickerExcluded = usePickerExcludedRows(pickerRows, isAdmin)
+  const rowHighlight = (row: QueueItemRow) =>
+    highlightedId === rowId(row)
+      ? // Pinned sticky cells use bg-inherit — the highlight must be
+        // OPAQUE (nvr-cyan/5-over-white equivalents) or horizontally
+        // scrolled content bleeds through the pinned columns. Same
+        // pair DataTable uses for selected rows when pins are active.
+        'bg-[#f2fdff] dark:bg-[#20303a]'
+      : row.at_risk
+        ? rowHighlightClass(row.at_risk_color ?? 'red')
+        : undefined
   const canManageQueueDefault = isAdmin || (queue?.owner != null && queue.owner === userId)
   const setQueueDefaultMut = useMutation({
     mutationFn: ({ viewId, on }: { viewId: number; on: boolean }) =>
@@ -4406,19 +4429,17 @@ export function QueueWorklist({
                     const lock = rowLocks.get(rowId(row))
                     return (
                       rowChanges.titleFor(rowId(row)) ??
-                      (lock && !lock.is_mine ? lockLabel(lock) : undefined)
+                      (lock && !lock.is_mine ? lockLabel(lock) : undefined) ??
+                      (isPickerExcluded(row.collection, row.item_id)
+                        ? PICKER_EXCLUDED_TITLE
+                        : undefined)
                     )
                   }}
                   rowClassName={(row) =>
-                    highlightedId === rowId(row)
-                      ? // Pinned sticky cells use bg-inherit — the highlight must be
-                        // OPAQUE (nvr-cyan/5-over-white equivalents) or horizontally
-                        // scrolled content bleeds through the pinned columns. Same
-                        // pair DataTable uses for selected rows when pins are active.
-                        'bg-[#f2fdff] dark:bg-[#20303a]'
-                      : row.at_risk
-                        ? rowHighlightClass(row.at_risk_color ?? 'red')
-                        : undefined
+                    cn(
+                      rowHighlight(row),
+                      isPickerExcluded(row.collection, row.item_id) && PICKER_EXCLUDED_ROW_CLASS
+                    )
                   }
                   emptyMessage={
                     itemsFailed ? (
