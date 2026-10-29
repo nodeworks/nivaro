@@ -229,7 +229,9 @@ describe('placing a library section as linked', () => {
         />
       </LinkedSectionsProvider>
     )
-    await settle(() => !!document.querySelector('[data-library-linked="8"]'))
+    const linkBtn = () =>
+      document.querySelector('[data-library-linked="8"]') as HTMLButtonElement | null
+    await settle(() => !!linkBtn() && !linkBtn()?.disabled)
     expect(document.body.textContent).toContain('linked on 2 forms')
     await click('[data-library-linked="8"]')
     await settle(() => calls.some((c) => c._path.endsWith('/section-links')))
