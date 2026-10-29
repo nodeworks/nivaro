@@ -8,7 +8,7 @@ import {
 import { titleCase } from '../../lib/utils'
 import type { DesignTarget } from './design-context'
 import { fieldZones, normalizedBundle, zoneItems } from './field-zones'
-import { pinLocked, pinnedZone } from './pin'
+import { isPlacementPinned, pinLocked, pinnedZone } from './pin'
 
 // Alt+arrow on the canvas (#2603): the selected field or section moves one
 // place in one keystroke — one apply, one undo step — without starting a
@@ -65,6 +65,8 @@ function moveInZone(
   const i = items.findIndex((p) => p.field === t.field)
   const to = i + step(dir)
   if (i < 0 || to < 0 || to >= items.length) return null
+  // A pinned field (#3203) keeps its spot: nothing swaps places with it.
+  if (isPlacementPinned(items[to])) return null
   return {
     ops: [{ op: 'move', from: { field: t.field, group_key: zone }, to_group_key: zone, index: to }],
     label: `Move ${t.kind === 'header' ? 'header tile' : 'field'} ${step(dir) < 0 ? 'up' : 'down'}`,
@@ -75,7 +77,7 @@ function moveInZone(
 /** The ops one Alt+arrow makes for the selected `t`; null when it cannot move that way. */
 export function altArrowMove(bundle: LayoutBundle, t: DesignTarget, dir: ArrowDir): KeyMove | null {
   const b = normalizedBundle(bundle)
-  // Pinned sections (#2628) stay put and take nothing in.
+  // Pinned sections (#2628) and pinned fields (#3203) stay put; pinned sections take nothing in.
   if (pinLocked(b, t)) return null
 
   if (t.kind === 'header') return moveInZone(b, t, HEADER_GROUP_KEY, dir)

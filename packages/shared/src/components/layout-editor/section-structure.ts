@@ -191,9 +191,21 @@ export function joinPlan(bundle: LayoutBundle, key: string): StructurePlan {
   const b = normalizedBundle(bundle)
   const g = findGroup(b, key) as GroupRow
   const next = joinTarget(b, key) as GroupRow
-  const mine = zoneItems(b, g.key)
+  const { ops, notes } = joinOps(b, g, next)
+  return checked(bundle, {
+    ok: true,
+    ops,
+    label: `Join ${nameOf(g)} and ${nameOf(next)}`,
+    notes,
+    select: { kind: 'group', key: g.key }
+  })
+}
+
+/** `from`'s fields appended to `into` (a field both hold shows once), its rows kept, `from` gone. */
+function joinOps(b: LayoutBundle, into: GroupRow, from: GroupRow) {
+  const mine = zoneItems(b, into.key)
   const taken = new Set(mine.map((p) => p.field))
-  const theirs = zoneItems(b, next.key)
+  const theirs = zoneItems(b, from.key)
   const ops: LayoutOp[] = []
   let end = mine.length
   let twins = 0
@@ -203,28 +215,63 @@ export function joinPlan(bundle: LayoutBundle, key: string): StructurePlan {
       ops.push({ op: 'remove', at: keyOf(p) })
       continue
     }
-    ops.push({ op: 'move', from: keyOf(p), to_group_key: g.key, index: end++ })
+    ops.push({ op: 'move', from: keyOf(p), to_group_key: into.key, index: end++ })
   }
-  const s = readGroupStructure(g.swap_config)
+  const s = readGroupStructure(into.swap_config)
   const moved = new Set(theirs.filter((p) => !taken.has(p.field)).map((p) => p.field))
-  const extra = rowsWithin(readGroupStructure(next.swap_config).rows, moved).map((r) => ({
+  const extra = rowsWithin(readGroupStructure(from.swap_config).rows, moved).map((r) => ({
     ...r,
-    key: s.rows.some((x) => x.key === r.key) ? `${r.key}_${next.key}` : r.key
+    key: s.rows.some((x) => x.key === r.key) ? `${r.key}_${from.key}` : r.key
   }))
   if (extra.length)
     ops.push({
       op: 'group_update',
-      key: g.key,
-      patch: { swap_config: withGroupStructure(g.swap_config, { rows: [...s.rows, ...extra] }) }
+      key: into.key,
+      patch: { swap_config: withGroupStructure(into.swap_config, { rows: [...s.rows, ...extra] }) }
     })
-  ops.push({ op: 'group_remove', key: next.key, placements: 'delete' })
-  const notes = [`${plural(theirs.length, 'field')} from ${nameOf(next)} join ${nameOf(g)}`]
-  notes.push(`${nameOf(g)} keeps its settings`)
+  ops.push({ op: 'group_remove', key: from.key, placements: 'delete' })
+  const notes = [`${plural(theirs.length, 'field')} from ${nameOf(from)} join ${nameOf(into)}`]
+  notes.push(`${nameOf(into)} keeps its settings`)
   if (twins) notes.push(`${plural(twins, 'field')} in both ${twins === 1 ? 'shows' : 'show'} once`)
+  return { ops, notes }
+}
+
+/**
+ * Why section `from` cannot be dropped on section `into`'s header to join it
+ * (#3198; null: it can). Any two sections of one holder join this way, not
+ * only neighbours: tab onto tab, step onto step, section onto section.
+ */
+export function mergeBlocked(bundle: LayoutBundle, from: string, into: string): string | null {
+  if (from === into) return 'It is the same section'
+  const a = findGroup(bundle, from)
+  const g = findGroup(bundle, into)
+  if (!a || !g) return 'This comes from the parent form: override it here first'
+  if (!SPLITTABLE.has(a.type) || !SPLITTABLE.has(g.type))
+    return 'Only sections, tabs and steps join'
+  if (a.type !== g.type)
+    return a.type === 'tab' ? 'A tab joins another tab' : 'A section joins another section'
+  if ((a.parent_key ?? null) !== (g.parent_key ?? null)) return 'They sit in different holders'
+  if ([a, g].some((x) => isPinned(x)) || isPinned(findGroup(bundle, a.parent_key)))
+    return 'Unpin it first'
+  return null
+}
+
+/**
+ * Section `from` dropped on section `into`'s header (#3198): `from`'s fields
+ * follow `into`'s, in order, and `from` goes. `into` keeps its settings and
+ * its place; a field both hold shows once. The same ops as Join.
+ */
+export function mergePlan(bundle: LayoutBundle, from: string, into: string): StructurePlan {
+  const blocked = mergeBlocked(bundle, from, into)
+  if (blocked) return refuse(blocked)
+  const b = normalizedBundle(bundle)
+  const a = findGroup(b, from) as GroupRow
+  const g = findGroup(b, into) as GroupRow
+  const { ops, notes } = joinOps(b, g, a)
   return checked(bundle, {
     ok: true,
     ops,
-    label: `Join ${nameOf(g)} and ${nameOf(next)}`,
+    label: `Join ${nameOf(a)} into ${nameOf(g)}`,
     notes,
     select: { kind: 'group', key: g.key }
   })

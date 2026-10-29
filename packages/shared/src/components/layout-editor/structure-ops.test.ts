@@ -16,8 +16,11 @@ import {
   copyRulesPlan,
   duplicateBlocked,
   duplicatePlan,
+  fieldPinBlocked,
+  fieldPinPlan,
   findHits,
   isPinned,
+  isPlacementPinned,
   pinLocked,
   pinPlan,
   replacePlan,
@@ -288,6 +291,57 @@ describe('pin a section (#2628)', () => {
     const m = altArrowMove(next, f('b', 'main'), 'right')
     expect(m?.next).toEqual(f('b', 't2'))
     expect(fieldZones(next).some((z) => z.key === 't1')).toBe(true)
+  })
+})
+
+describe('pin a single field (#3203)', () => {
+  it('stores the flag in the placement’s overrides, other keys kept; undo restores', () => {
+    const b = bundle()
+    const plan = ok(fieldPinPlan(b, f('a', 'main'), true))
+    expect(plan.label).toBe('Pin A')
+    const next = applyLayoutOps(b, plan.ops)
+    const row = next.placements.find((p) => p.field === 'a' && p.group_key === 'main')
+    expect(row?.overrides).toEqual({ label: 'Oracle number', required: true, editor_pinned: true })
+    expect(isPlacementPinned(row)).toBe(true)
+    expect(fieldPinPlan(next, f('a', 'main'), true).ok).toBe(false)
+    const off = applyLayoutOps(next, ok(fieldPinPlan(next, f('a', 'main'), false)).ops)
+    expect(off.placements.find((p) => p.field === 'a')?.overrides).toEqual({
+      label: 'Oracle number',
+      required: true
+    })
+    roundTrips(b, plan)
+  })
+
+  it('a pinned field neither drags nor takes drops; its section still does', () => {
+    const b = bundle()
+    const next = applied(b, fieldPinPlan(b, f('a', 'main'), true))
+    expect(pinLocked(next, f('a', 'main'))).toBe(true)
+    expect(pinLocked(next, f('b', 'main'))).toBe(false)
+    expect(pinLocked(next, g('main'))).toBe(false)
+  })
+
+  it('Alt+arrow neither moves a pinned field nor swaps a neighbour past it', () => {
+    const b = bundle()
+    const next = applied(b, fieldPinPlan(b, f('a', 'main'), true))
+    expect(altArrowMove(next, f('a', 'main'), 'down')).toBeNull()
+    expect(altArrowMove(next, f('b', 'main'), 'up')).toBeNull()
+    // Moving to another section is not a swap.
+    expect(altArrowMove(next, f('b', 'main'), 'right')?.next).toEqual(f('b', 't1'))
+  })
+
+  it('a duplicated section’s copies are never pinned', () => {
+    const b = bundle()
+    const next = applied(b, fieldPinPlan(b, f('a', 'main'), true))
+    const dup = applyLayoutOps(next, ok(duplicatePlan(next, g('main'))).ops)
+    const copy = dup.placements.find((p) => p.field === 'a' && p.group_key === 'main_copy')
+    expect(isPlacementPinned(copy)).toBe(false)
+    expect(copy?.overrides).toEqual({ label: 'Oracle number', required: true })
+  })
+
+  it('needs a field this form owns', () => {
+    const b = bundle()
+    expect(fieldPinBlocked(b, g('main'))).toBe('Select a field first')
+    expect(fieldPinBlocked(b, f('zz', 'main'))).toMatch(/parent form/)
   })
 })
 
