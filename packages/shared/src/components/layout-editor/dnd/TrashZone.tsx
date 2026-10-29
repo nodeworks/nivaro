@@ -1,9 +1,10 @@
 import { useDroppable } from '@dnd-kit/core'
-import { Trash2 } from 'lucide-react'
+import { Link2, Trash2 } from 'lucide-react'
 import { useCallback, useSyncExternalStore } from 'react'
 import { cn } from '../../../lib/utils'
 import type { DndStore } from './node'
 import { TRASH_DROP_ID, type TrashDropData, type TrashPlan } from './trash-drop'
+import type { TrashWarning } from './trash-links'
 
 // Rises from the bottom of the screen while something removable is dragged (dnd/trash-drop.ts).
 // Dashed and quiet until the pointer is over it, then it turns red and says what the drop does.
@@ -16,15 +17,21 @@ const CSS = `
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
+// Effects listed while the pointer is over the trash; the rest fold into "+n more".
+const MAX_EFFECTS = 3
+
 export function TrashZone({
   store,
   plan,
-  name
+  name,
+  warning = null
 }: {
   store: DndStore
   plan: TrashPlan
   /** What is being dragged, as the form names it. */
   name: string
+  /** #3190: what depends on what would leave the form ("Region drives 3 rules"). */
+  warning?: TrashWarning | null
 }) {
   const { setNodeRef } = useDroppable({
     id: TRASH_DROP_ID,
@@ -40,7 +47,9 @@ export function TrashZone({
       ? plan.holds > 0
         ? `With its ${plural(plan.holds, 'field')} · their data is kept`
         : 'It holds no fields'
-      : 'Its data is kept'
+      : (plan.count ?? 1) > 1
+        ? 'Their data is kept'
+        : 'Its data is kept'
   return (
     <div
       ref={setNodeRef}
@@ -78,7 +87,41 @@ export function TrashZone({
         >
           {over ? detail : 'From this form only · Undo brings it back'}
         </span>
+        {warning && <TrashLinks warning={warning} over={over} />}
       </span>
     </div>
+  )
+}
+
+/** #3190: the rules that lose their driver: a quiet line while dragging, the list once over. */
+function TrashLinks({ warning, over }: { warning: TrashWarning; over: boolean }) {
+  const shown = warning.effects.slice(0, MAX_EFFECTS)
+  const more = warning.effects.length - shown.length
+  return (
+    <span
+      data-trash-links={warning.count}
+      className={cn(
+        'mt-1.5 block border-t pt-1.5 text-[11.5px]',
+        over
+          ? 'border-red-200 text-red-800 dark:border-red-500/30 dark:text-red-100'
+          : 'border-slate-200 text-amber-800 dark:border-slate-700 dark:text-amber-200'
+      )}
+    >
+      <span className='flex items-center gap-1 font-medium'>
+        <Link2 aria-hidden className='h-3 w-3 shrink-0' />
+        <span className='truncate'>{warning.headline}</span>
+      </span>
+      {over && (
+        <>
+          <span className='mt-0.5 block truncate'>
+            {shown.join(' · ')}
+            {more > 0 ? ` · +${more} more` : ''}
+          </span>
+          <span className='block truncate text-red-700/90 dark:text-red-200/80'>
+            Off the form, nobody can change it here
+          </span>
+        </>
+      )}
+    </span>
   )
 }

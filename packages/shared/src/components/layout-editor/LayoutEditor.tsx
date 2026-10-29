@@ -73,6 +73,7 @@ import {
 } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
+import { useTrashWarning } from './dnd/trash-links'
 import { stagedTip, useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
@@ -82,7 +83,7 @@ import { TabOrderBar, useTabOrderEditor } from './entry/tab-order'
 import { previewThemeClass, ThemePreviewTool, useAppIsDark } from './entry/theme-preview'
 import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
 import { useDriverHover } from './explain/driver-hover'
-import type { OpenSource } from './explain/field-sources'
+import { fieldLabel, type OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
@@ -946,6 +947,17 @@ export function LayoutEditor({
     [bundle, onSelect]
   )
   useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
+  // #3190: the trash says what depends on a field before it leaves the form.
+  const trashFieldLabel = useCallback(
+    (f: string) => fieldLabel(f, explain.describe),
+    [explain.describe]
+  )
+  const warnTrash = useTrashWarning(collection, explain.deps, trashFieldLabel, explain.groupLabel)
+  // #3204: the trash's Undo chip runs the draft's undo while the removal is the last step.
+  const dndUndo = useMemo(
+    () => ({ run: draft.undo, label: draft.undoLabel }),
+    [draft.undo, draft.undoLabel]
+  )
 
   // Who else is here and what they selected (#2651).
   const peers = useLayoutPresence(currentId, selected ? targetKey(selected) : null)
@@ -1392,6 +1404,9 @@ export function LayoutEditor({
         apply={draft.apply}
         onDragActive={onDragActive}
         onDropOnLayout={copyToLayout}
+        selection={selection}
+        undo={dndUndo}
+        warnTrash={warnTrash}
       >
         <div className='flex min-h-0 flex-1 overflow-hidden'>
           {/* The outline takes the left panel's place while it is open: three side
