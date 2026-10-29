@@ -4749,6 +4749,10 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                               // never push it into the ellipsis.
                               const meta: string[] = []
                               let pageText: string | null = null
+                              // The page line is on, but their tab has not said where it
+                              // is: only a visible tab reports its page, so an app opened
+                              // behind other tabs is online with no place yet.
+                              let pageUnknown = false
                               for (const f of presenceExtras.fields) {
                                 if (f === 'role') {
                                   const r = humanLabel(x?.role_name ?? u.role_name)
@@ -4773,10 +4777,21 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                     (app
                                       ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
                                       : page) || null
+                                  pageUnknown = !pageText && !!x && !x.away
                                 }
                               }
                               const metaText = meta.join(' · ')
-                              if (!metaText && !pageText) {
+                              const unknownLine = pageUnknown ? (
+                                <span
+                                  className='flex items-start gap-1 text-[11px] italic text-slate-400 dark:text-slate-500'
+                                  data-chat-online-page='background'
+                                  data-tip='Their app is open in a tab that is not in front, so where they are is not known until they look at it.'
+                                >
+                                  <MapPin className='mt-[2px] h-3 w-3 shrink-0 opacity-60' />
+                                  <span className='min-w-0 truncate'>Tab in background</span>
+                                </span>
+                              ) : null
+                              if (!metaText && !pageText && !unknownLine) {
                                 return (
                                   <span className='block truncate text-[11px] text-slate-400'>
                                     Online
@@ -4794,6 +4809,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                       {metaText}
                                     </span>
                                   )}
+                                  {unknownLine}
                                   {pageText &&
                                     (() => {
                                       const href = presencePlaceHref(
