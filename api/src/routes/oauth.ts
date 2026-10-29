@@ -543,6 +543,17 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       if (!str(b.client_id))
         return oauthError(reply, 400, 'invalid_request', 'client_id is required')
       const out = await consumeRefreshChecked(app.redis, str(b.refresh_token))
+      if (!out.ok && out.reason === 'reused') {
+        // A spent refresh token came back: a leaked token or a stolen copy. The connection is
+        // already ended; the person's history and the server log say so (ids only).
+        req.log.warn({ grant_id: out.grant_id }, 'oauth: refresh token replayed, connection ended')
+        await logActivity({
+          action: 'oauth-refresh-reuse',
+          user: out.user_id,
+          comment: out.grant_id,
+          req
+        }).catch(() => {})
+      }
       if (!out.ok)
         return oauthError(
           reply,

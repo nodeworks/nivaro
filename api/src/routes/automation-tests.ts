@@ -223,8 +223,16 @@ Cover: the happy path, a condition-filtered path (payload that should NOT pass c
     if (b.expectations !== undefined)
       patch.expectations = b.expectations ? JSON.stringify(b.expectations) : null
     if (b.is_active !== undefined) patch.is_active = !!b.is_active
-    if (Object.keys(patch).length > 0)
+    if (Object.keys(patch).length > 0) {
       await db('nivaro_automation_tests').where('id', row.id).update(patch)
+      await logActivity({
+        action: 'automation-test-update',
+        user: req.user?.id,
+        item: String(row.id),
+        comment: Object.keys(patch).sort().join(', '),
+        req
+      })
+    }
     return { data: { id: row.id } }
   })
 

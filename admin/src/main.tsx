@@ -11,6 +11,7 @@ import './globals.css'
 import { disableRecordOutbox, installStaleChunkRecovery } from '@nivaro/shared'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
+import { installGlobalErrorReport } from './lib/global-error-report'
 import { readMasquerade } from './lib/masquerade'
 import { installPageContextFetch } from './lib/page-context'
 
@@ -27,6 +28,8 @@ installStaleChunkRecovery({
       action: { label: 'Reload', onClick: () => window.location.reload() }
     })
 })
+// Code errors outside a render (handlers, timers, unawaited promises) reach the issue log too.
+installGlobalErrorReport()
 // Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
 // #1048 / #1180 — and which build this tab runs, so old tabs can be counted and reloaded alone.
 installPageContextFetch({

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   claimTotpCode,
   clearLoginFailures,
@@ -88,5 +88,20 @@ describe('claimTotpCode', () => {
     expect(await claimTotpCode(r as never, 'U1', '123456')).toBe(true)
     expect(await claimTotpCode(r as never, 'u1', '123456')).toBe(false)
     expect(await claimTotpCode(r as never, 'U2', '123456')).toBe(true)
+  })
+
+  it('fails open on a Redis error, and says so in the log without the code or user', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const broken = { set: async () => Promise.reject(new Error('down')) }
+      expect(await claimTotpCode(broken as never, 'U9', '654321')).toBe(true)
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = warn.mock.calls[0].join(' ')
+      expect(line).toContain('TOTP replay check failed open')
+      expect(line).not.toContain('654321')
+      expect(line).not.toContain('U9')
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

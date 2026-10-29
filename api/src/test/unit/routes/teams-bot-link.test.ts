@@ -49,6 +49,7 @@ vi.mock('../../../services/teams-bot/links.js', () => ({
 vi.mock('../../../services/teams-bot/send.js', () => ({ deliverTeams: async () => 'sent' }))
 vi.mock('../../../services/users.js', () => ({ canSignIn: () => true, getUser: async () => null }))
 vi.mock('../../../services/teams-bot/connector.js', () => ({ sendActivity: async () => ({}) }))
+vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 
 import { teamsBotRoutes } from '../../../routes/teams-bot.js'
 
@@ -94,6 +95,16 @@ describe('DELETE /teams/link', () => {
     expect(r.statusCode).toBe(200)
     expect(h.asked).toEqual(['user-1'])
     expect(h.marked).toEqual([['oid-1', 'unlinked']])
+    const { logActivity } = await import('../../../services/activity.js')
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'teams-unlink',
+        user: 'user-1',
+        collection: 'nivaro_users',
+        item: 'user-1',
+        comment: 'self'
+      })
+    )
   })
 
   it('404 while the bot is off, and marks nothing', async () => {

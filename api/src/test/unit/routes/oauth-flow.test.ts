@@ -318,6 +318,34 @@ describe('OAuth for remote MCP clients', () => {
     expect(grants).toHaveLength(1)
     expect(await revokeGrant(redis as never, 'U1', grants[0].id)).toBe(true)
     expect(await resolveAccessToken(redis as never, ref.json().access_token)).toBeNull()
+
+    // A replay after the grace window is a stolen-token signal: it is written to the
+    // person's activity (logging audit 2026-10-29), ids only.
+    const { logActivity } = await import('../../../services/activity.js')
+    vi.mocked(logActivity).mockClear()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    try {
+      const replay = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        ...form({
+          grant_type: 'refresh_token',
+          refresh_token: t.refresh_token,
+          client_id: clientId
+        })
+      })
+      expect(replay.statusCode).toBe(400)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'oauth-refresh-reuse',
+        user: 'U1',
+        comment: grants[0].id
+      })
+    )
   })
 
   it("chat is the person's choice on the consent page and rides the grant (#2492)", async () => {

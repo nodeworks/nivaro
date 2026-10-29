@@ -216,14 +216,20 @@ const buffer: TraceRecord[] = []
 /** request object → its trace context, so onResponse readers never depend on the ALS chain. */
 const byRequest = new WeakMap<object, TraceContext>()
 
-export function beginTrace(urlHint?: string, request?: TraceCallerSource): void {
+const UUID_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * `id` = the Fastify request id when it is a uuid (server.ts genReqId), so req.log lines carry the
+ * trace id; anything else (a test app's `req-1`, no request) gets a fresh uuid.
+ */
+export function beginTrace(urlHint?: string, request?: TraceCallerSource, id?: string): void {
   // enterWith (rather than als.run) is what lets a Fastify onRequest hook scope
   // the context for the whole request without wrapping the handler chain.
   const ctx: TraceContext = {
     start: performance.now(),
     spans: [],
     urlHint,
-    id: randomUUID(),
+    id: typeof id === 'string' && UUID_ID.test(id) ? id : randomUUID(),
     request,
     statements: [],
     inflight: new Map(),

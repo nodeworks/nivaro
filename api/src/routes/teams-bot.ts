@@ -1,7 +1,8 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { linkTo } from '../services/app-links.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
@@ -75,6 +76,26 @@ async function reply(activity: TeamsActivity, card: AdaptiveCard): Promise<void>
 // The handler's own `reply` (Fastify's) shadows this one there.
 const replyTo = reply
 
+/**
+ * A Teams account joined to (or parted from) a Nivaro user: Teams commands and card actions act
+ * as that user, so the join is an audit event like a sign-in method. Ids only; never blocks.
+ */
+async function logTeamsLink(
+  userId: string,
+  action: 'teams-link' | 'teams-unlink',
+  how: 'sign_in' | 'entra_oid' | 'command' | 'self',
+  req?: FastifyRequest
+): Promise<void> {
+  await logActivity({
+    action,
+    user: userId,
+    collection: 'nivaro_users',
+    item: userId,
+    comment: how,
+    ...(req ? { req } : {})
+  }).catch(() => {})
+}
+
 const HELP =
   'Ask me anything about your records. Or type: my work (open My Work), mute 1h (pause Teams notifications for an hour), unmute, settings, link, unlink, help.'
 
@@ -114,7 +135,7 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
   const user = who.user as User
   // Keep the 1:1 conversation fresh so notifications reach this chat.
   if (activity.conversation?.conversationType === 'personal' && activity.conversation.id) {
-    if (!who.link || who.link.conversation_id !== activity.conversation.id)
+    if (!who.link || who.link.conversation_id !== activity.conversation.id) {
       await upsertLink(user.id, {
         aadObjectId: oid,
         tenantId,
@@ -122,6 +143,9 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
         serviceUrl: activity.serviceUrl ?? null,
         linkedBy: 'entra_oid'
       })
+      // A first link (matched by Microsoft account); a refreshed conversation is not one.
+      if (!who.link) await logTeamsLink(user.id, 'teams-link', 'entra_oid')
+    }
   }
 
   const text = messageText(activity)
@@ -155,6 +179,7 @@ async function handleMessage(app: FastifyInstance, activity: TeamsActivity): Pro
       return reply(activity, resultCard('Your Teams account is connected to Nivaro.'))
     case 'unlink':
       await markLink(oid, 'unlinked')
+      await logTeamsLink(user.id, 'teams-unlink', 'command')
       return reply(
         activity,
         resultCard(
@@ -182,6 +207,7 @@ async function handleInstall(activity: TeamsActivity): Promise<void> {
     serviceUrl: activity.serviceUrl ?? null,
     linkedBy: 'entra_oid'
   })
+  if (!who.link) await logTeamsLink(who.user.id, 'teams-link', 'entra_oid')
   const first = who.user.first_name?.trim() || 'there'
   await reply(
     activity,
@@ -257,6 +283,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
     const link = await linkForUser((req.user as User).id)
     if (!link) return reply.code(404).send({ error: 'Teams is not connected', code: 'NOT_LINKED' })
     await markLink(link.aad_object_id, 'unlinked')
+    await logTeamsLink((req.user as User).id, 'teams-unlink', 'self', req)
     return reply.send({ data: { status: 'unlinked' } })
   })
 
@@ -412,6 +439,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
       req.log.error({ message: (err as Error)?.message }, 'teams bot: connect failed')
       return send(page(500, 'Something went wrong linking Teams. Try again in a minute.'))
     }
+    await logTeamsLink(user.id, 'teams-link', 'sign_in', req)
     return send(page(200, 'Teams connected. You can close this tab.'))
   })
 }

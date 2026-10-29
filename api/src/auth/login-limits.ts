@@ -41,6 +41,23 @@ export function loginFailureKeys(
 }
 
 /**
+ * Failing open is the policy (module comment), but it switches a guard off: say so in the server
+ * log, at most once a minute per guard, so a Redis outage that disables the sign-in limits or the
+ * TOTP replay check is visible. The error's name/message only — never a key (it names the account).
+ */
+const lastFailOpenWarn = new Map<string, number>()
+function warnFailOpen(guard: string, err: unknown): void {
+  const now = Date.now()
+  if (now - (lastFailOpenWarn.get(guard) ?? 0) < 60_000) return
+  lastFailOpenWarn.set(guard, now)
+  // biome-ignore lint/suspicious/noConsole: a disabled security guard must be visible in the log
+  console.warn(
+    `[login-limits] ${guard} failed open (Redis error):`,
+    err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  )
+}
+
+/**
  * Seconds until another attempt is allowed when either counter is already at its limit,
  * else null (go ahead). Read-only — the attempt itself counts only if it fails.
  */
@@ -68,7 +85,8 @@ export async function loginBlockedFor(
       }
     }
     return wait
-  } catch {
+  } catch (err) {
+    warnFailOpen('sign-in limit check', err)
     return null
   }
 }
@@ -90,8 +108,9 @@ export async function noteLoginFailure(
       // somehow lost its expiry gets one back (never a counter that locks someone out for good).
       if ((await redis.ttl(k)) < 0) await redis.expire(k, LOGIN_WINDOW_S)
     }
-  } catch {
+  } catch (err) {
     /* fail open, see the module comment */
+    warnFailOpen('sign-in failure count', err)
   }
 }
 
@@ -132,7 +151,8 @@ export async function claimTotpCode(
     const key = `nvr:totp:used:${currentTenantKey()}:${digest(`${String(userId).toUpperCase()}:${code}`)}`
     const set = await redis.set(key, '1', 'EX', 180, 'NX')
     return set === 'OK'
-  } catch {
+  } catch (err) {
+    warnFailOpen('TOTP replay check', err)
     return true
   }
 }

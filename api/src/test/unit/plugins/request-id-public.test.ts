@@ -72,3 +72,28 @@ describe('a public hit after an /api request on the same async context', () => {
     await a.close()
   })
 })
+
+describe('the trace id is the Fastify request id (logging audit 2026-10-29)', () => {
+  it('adopts a uuid request id, so req.log lines carry the api_logs / trace id', async () => {
+    const a = Fastify({ genReqId: () => '3f2b8c1e-9d4a-4c7e-8b1f-2a6d5e7c9b10' })
+    await a.register(requestTracePlugin)
+    a.get('/api/ping', async (req) => ({ reqId: req.id, trace: currentTraceMeta()?.id }))
+    await a.ready()
+    const res = await a.inject({ url: '/api/ping' })
+    expect(res.json()).toEqual({
+      reqId: '3f2b8c1e-9d4a-4c7e-8b1f-2a6d5e7c9b10',
+      trace: '3f2b8c1e-9d4a-4c7e-8b1f-2a6d5e7c9b10'
+    })
+    await a.close()
+  })
+  it('keeps a fresh uuid when the request id is not one (a test app reqId)', async () => {
+    const a = Fastify()
+    await a.register(requestTracePlugin)
+    a.get('/api/ping', async (req) => ({ reqId: req.id, trace: currentTraceMeta()?.id }))
+    await a.ready()
+    const body = (await a.inject({ url: '/api/ping' })).json()
+    expect(body.reqId).toBe('req-1')
+    expect(body.trace).toMatch(/^[0-9a-f-]{36}$/i)
+    await a.close()
+  })
+})
