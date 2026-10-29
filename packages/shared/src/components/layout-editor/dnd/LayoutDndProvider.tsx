@@ -28,7 +28,8 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
-  useState
+  useState,
+  useSyncExternalStore
 } from 'react'
 import { createPortal } from 'react-dom'
 import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/layout-ops'
@@ -36,6 +37,14 @@ import { type DesignDnd, type DesignTarget, targetKey } from '../design-context'
 import { type DndNodeData, type DropHint, nodeData, typedKeyboardCoordinates } from './collision'
 import { DndStore, DndStoreContext, IDLE, NO_DND } from './node'
 import { copyableGroup, railAwareCollision, railDropData } from './rail-drop'
+import { TrashZone } from './TrashZone'
+import {
+  TRASH_DROP_ID,
+  type TrashPlan,
+  trashAwareCollision,
+  trashDropData,
+  trashPlan
+} from './trash-drop'
 
 export { NO_DND }
 
@@ -156,8 +165,15 @@ export function designClone(node: HTMLElement): HTMLElement {
 // Tall sections preview their top part only.
 const OVERLAY_MAX_H = 320
 
-function OverlayCopy({ node }: { node: HTMLElement }) {
+function OverlayCopy({ node, store }: { node: HTMLElement; store: DndStore }) {
   const ref = useRef<HTMLDivElement>(null)
+  // Over the trash the copy shrinks and fades toward its top-left corner (away from the
+  // pointer), so the trash's "Release to remove …" stays readable under it.
+  const overTrash = useSyncExternalStore(
+    store.subscribe,
+    useCallback(() => store.state.overKey === TRASH_DROP_ID, [store]),
+    () => false
+  )
   useLayoutEffect(() => {
     const host = ref.current
     if (!host) return
@@ -169,7 +185,13 @@ function OverlayCopy({ node }: { node: HTMLElement }) {
       ref={ref}
       aria-hidden
       data-design-drag-preview=''
-      className='pointer-events-none h-full w-full cursor-grabbing overflow-hidden rounded-lg bg-white shadow-xl ring-1 ring-slate-900/10 dark:bg-card dark:ring-white/10'
+      data-over-trash={overTrash ? '' : undefined}
+      style={{
+        transformOrigin: 'top left',
+        transform: overTrash ? 'scale(0.4)' : undefined,
+        opacity: overTrash ? 0.45 : undefined
+      }}
+      className='pointer-events-none h-full w-full cursor-grabbing overflow-hidden rounded-lg bg-white shadow-xl ring-1 ring-slate-900/10 transition-[transform,opacity] duration-150 ease-out motion-reduce:transition-none dark:bg-card dark:ring-white/10'
     />
   )
 }
@@ -184,7 +206,6 @@ const KEYBOARD_CODES = {
   cancel: [KeyboardCode.Esc],
   end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab]
 }
-const AUTO_SCROLL = { threshold: { x: 0.08, y: 0.15 }, acceleration: 12 }
 const INSTRUCTIONS = {
   draggable:
     'Press space to pick this up. Use the arrow keys to choose where it goes, then space or enter to drop it, or escape to cancel.'
@@ -217,9 +238,23 @@ export function LayoutDndProvider({
   const dropOnLayoutRef = useRef(onDropOnLayout)
   dropOnLayoutRef.current = onDropOnLayout
   // Rail rows take a dragged section only when the host copies (onDropOnLayout).
+  // The trash (dnd/trash-drop.ts) wins over everything under the pointer, then rail rows.
   const [collision] = useState(() =>
-    railAwareCollision((d) => !!dropOnLayoutRef.current && copyableGroup(store.bundle, d) != null)
+    trashAwareCollision(
+      railAwareCollision(
+        (d) => !!dropOnLayoutRef.current && copyableGroup(store.bundle, d) != null
+      ),
+      (d) => trashPlan(store.bundle, d) != null
+    )
   )
+  // No auto-scroll while the pointer rests on the trash at the bottom of the screen.
+  const [autoScroll] = useState(() => ({
+    threshold: { x: 0.08, y: 0.15 },
+    acceleration: 12,
+    canScroll: () => store.state.overKey !== TRASH_DROP_ID
+  }))
+  // What the trash would do with the current drag (null: the trash does not show).
+  const [trash, setTrash] = useState<{ plan: TrashPlan; name: string } | null>(null)
 
   // Nodes read the store through useDesignDndNode; these serve anything else
   // that asks (an inspector, a toolbar).
@@ -253,7 +288,11 @@ export function LayoutDndProvider({
         return store.bundle?.groups.find((g) => g.key === t.key)?.label ?? 'section'
       }
       const el = store.nodes.get(targetKey(t))
-      const label = el?.querySelector('label, [data-header-label]')?.textContent?.trim()
+      // Without the required mark ("Description *").
+      const label = el
+        ?.querySelector('label, [data-header-label]')
+        ?.textContent?.replace(/\s*\*\s*$/, '')
+        .trim()
       return label || (t.kind === 'slot' ? 'panel' : 'field')
     },
     [store]
@@ -262,11 +301,17 @@ export function LayoutDndProvider({
     () => ({
       onDragStart: ({ active }) => `Picked up ${name(active)}.`,
       onDragOver: ({ active, over }) =>
-        over
-          ? `${name(active)} is over ${name(over)}.`
-          : `${name(active)} is not over a place it can go.`,
+        over && trashDropData(over.data.current)
+          ? `${name(active)} is over Remove. Drop it to take it off this form.`
+          : over
+            ? `${name(active)} is over ${name(over)}.`
+            : `${name(active)} is not over a place it can go.`,
       onDragEnd: ({ active, over }) =>
-        over ? `Dropped ${name(active)} by ${name(over)}.` : `Dropped ${name(active)}.`,
+        over && trashDropData(over.data.current)
+          ? `Removed ${name(active)} from this form.`
+          : over
+            ? `Dropped ${name(active)} by ${name(over)}.`
+            : `Dropped ${name(active)}.`,
       onDragCancel: ({ active }) => `Cancelled. ${name(active)} stays where it was.`
     }),
     [name]
@@ -275,6 +320,7 @@ export function LayoutDndProvider({
   const reset = () => {
     store.set(IDLE)
     setOverlay(null)
+    setTrash(null)
     onDragActive?.(false)
   }
 
@@ -284,6 +330,8 @@ export function LayoutDndProvider({
     if (!d) return
     const key = targetKey(d.target)
     store.set({ ...IDLE, activeKey: key })
+    const removable = trashPlan(store.bundle, d)
+    setTrash(removable ? { plan: removable, name: name(active) } : null)
     const node = store.nodes.get(key)
     if (!node || typeof document === 'undefined') return
     // Inside a modal sheet the preview goes into the sheet (outside it, the
@@ -337,6 +385,11 @@ export function LayoutDndProvider({
   }
 
   const track = ({ active, over, collisions }: DragMoveEvent) => {
+    // Over the trash: it lights up, no line on the form.
+    if (over && trashDropData(over.data.current)) {
+      store.set({ overKey: TRASH_DROP_ID, side: null, indicator: null })
+      return
+    }
     // Over a layout in the rail: that row lights up, no line on the form.
     if (over && railDropData(over.data.current)) {
       store.set({ overKey: String(over.id), side: null, indicator: null })
@@ -370,6 +423,13 @@ export function LayoutDndProvider({
   }
 
   const onDragEnd = ({ active, over, collisions }: DragEndEvent) => {
+    if (trashDropData(over?.data.current)) {
+      const removal = trashPlan(store.bundle, nodeData(active.data.current))
+      const label = name(active)
+      reset()
+      if (removal) applyRef.current(removal.ops, { label: `Remove ${label}` })
+      return
+    }
     const rail = railDropData(over?.data.current)
     if (rail) {
       const key = copyableGroup(store.bundle, nodeData(active.data.current))
@@ -404,7 +464,7 @@ export function LayoutDndProvider({
           sensors={sensors}
           collisionDetection={collision}
           measuring={MEASURING}
-          autoScroll={AUTO_SCROLL}
+          autoScroll={autoScroll}
           accessibility={{ announcements, screenReaderInstructions: INSTRUCTIONS }}
           onDragStart={onDragStart}
           onDragMove={track}
@@ -423,9 +483,14 @@ export function LayoutDndProvider({
                 modifiers={[overlay.shift]}
                 style={{ height: overlay.height }}
               >
-                <OverlayCopy node={overlay.node} />
+                <OverlayCopy node={overlay.node} store={store} />
               </DragOverlay>,
               overlay.host
+            )}
+          {trash &&
+            createPortal(
+              <TrashZone store={store} plan={trash.plan} name={trash.name} />,
+              overlay?.host ?? document.body
             )}
         </DndContext>
       </DndApiContext.Provider>

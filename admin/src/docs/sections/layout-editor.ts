@@ -184,6 +184,7 @@ export const layoutEditor: DocSection = {
       items: [
         'The whole element is the handle: field, section header, tab, step or slot card. Keyboard drag works too (focus, Space to lift, arrows to move, Space to drop, Escape to cancel).',
         'The drag preview is a copy of the element as it looks on the form, under the cursor at any scroll position; the canvas scrolls when you near its edge.',
+        'While you drag a field, panel, header item or section, a trash zone rises at the bottom of the screen. Drop on it to take the thing off this form: a field keeps its data, a section goes with its tabs and fields. It is one Undo step and, with Autosave off, nothing changes until Save (Discard throws it away).',
         'An insertion slot opens where the element will land, within a section or across sections, including into an empty section. Dropping on a section header puts the field first in that section; sections reorder by dropping anywhere on the target section.',
         "Widths change with the inspector's width control, snapping to the grid fractions.",
         'Alt+arrow moves the selected item in one keystroke, without picking it up. A field: Alt+↑ / Alt+↓ moves it one place in its section; Alt+← / Alt+→ moves it to the end of the previous section or the start of the next. A section moves up or down the page; a tab or step moves left or right. Each keystroke is one Undo step.'
