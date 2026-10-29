@@ -212,12 +212,9 @@ describe('ItemEditForm personal defaults', () => {
     expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(false)
     expect(calls.some((c) => c._method === 'PUT' && c._path.startsWith('/drafts/'))).toBe(false)
     expect(calls.filter((c) => c._path === '/field-defaults/mine')).toHaveLength(1)
-    // The field menu has a visible way in (touch has no right-click), only where it offers
-    // something about the field.
-    const trigger = host.querySelector('[data-field="title"] [data-field-menu-trigger]')
-    expect(trigger?.getAttribute('aria-label')).toBe('Field options')
-    expect(trigger?.getAttribute('data-tip')).toBe('Field options')
-    expect(host.querySelector('[data-field="notes"] [data-field-menu-trigger]')).toBeNull()
+    // No ⋯ button in the label row: the visible default control carries the actions
+    // (right-click / Shift+F10 still open the field menu).
+    expect(host.querySelector('[data-field-menu-trigger]')).toBeNull()
 
     await act(async () =>
       host.querySelector<HTMLButtonElement>('[data-personal-default-undo="title"]')?.click()

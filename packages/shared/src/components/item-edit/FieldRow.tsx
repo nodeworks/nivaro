@@ -739,28 +739,6 @@ export const FieldRow = memo(function FieldRow({
   const focusFieldControl = () =>
     controlRef.current?.querySelector<HTMLElement>(FOCUSABLE) ??
     wrapperRef.current?.querySelector<HTMLElement>(FOCUSABLE)
-  // The field menu for touch and pointer people (right-click / Shift+F10 still work).
-  // Shown on hover, focus and touch; opacity (not `hidden`) keeps its slot and its tab stop.
-  const fieldMenuTrigger = (
-    <button
-      type='button'
-      data-field-menu-trigger={field.field}
-      aria-label='Field options'
-      aria-haspopup='menu'
-      aria-expanded={fieldMenuOpen && fieldMenuOpenedBy === 'menu'}
-      data-tip='Field options'
-      // 20px glyph box, 24px hit area (44px tall on touch, PersonalDefaultControl's CSS).
-      data-pd-action
-      onClick={(e) => openFieldMenuFrom(e.currentTarget)}
-      className={cn(
-        'relative inline-flex h-5 w-5 before:absolute before:-inset-0.5 before:content-[""] items-center justify-center rounded text-slate-500 opacity-0 transition-[opacity,color,background-color] duration-150 hover:bg-muted hover:text-slate-800 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 dark:focus-visible:ring-sky-300 group-hover/fieldrow:opacity-100 group-focus-within/fieldrow:opacity-100 [@media(hover:none)]:opacity-100 dark:text-slate-400 dark:hover:text-slate-100',
-        fieldMenuOpen && fieldMenuOpenedBy === 'menu' && 'opacity-100'
-      )}
-    >
-      <MoreHorizontal className='h-3.5 w-3.5' aria-hidden />
-    </button>
-  )
-
   // AI button: the field's own setting (#2692), else the form-wide switch.
   const aiButton = showsAiButton(field._overrides, layoutAiEnabled, isAiEligible(field))
   const autofillCheck =
@@ -1267,36 +1245,35 @@ export const FieldRow = memo(function FieldRow({
                 </TooltipProvider>
               )
             })()}
-          {(fieldMenuHasItems || personalDefaultSlot) && (
-            // Right-anchored: the ⋯ trigger, then the personal-default slot flush with the field's
-            // right edge. The slot keeps one box whatever it shows, so nothing to its left moves.
+          {personalDefaultSlot && (
+            // Right-anchored: the personal-default control flush with the field's right edge
+            // (it carries Make / Update / Clear itself — no ⋯ button; right-click and
+            // Shift+F10 still open the field menu). The slot keeps one box whatever it shows,
+            // so nothing to its left moves.
             <span className='ml-auto inline-flex shrink-0 items-center gap-1'>
-              {fieldMenuHasItems && fieldMenuTrigger}
-              {personalDefaultSlot && (
-                <PersonalDefaultSlot
-                  field={field.field}
-                  label={label}
-                  state={personalDefaultSlot}
-                  confirmOpen={
-                    fieldMenuOpenedBy === 'make' || fieldMenuOpenedBy === 'update'
-                      ? fieldMenuOpenedBy
-                      : null
-                  }
-                  onConfirm={(el, mode) =>
-                    // After a save the button becomes "Your default": focus goes to the field.
-                    confirmSaveFrom(el, focusFieldControl, mode)
-                  }
-                  onUndo={() => {
-                    personalDefaults?.undo(field.field)
-                    // The pill (and its button) goes: focus lands on the field, not on <body>.
-                    requestAnimationFrame(() => focusFieldControl()?.focus())
-                  }}
-                  onCleared={() =>
-                    // The Clear button is gone (and not a tab stop): focus goes to the field.
-                    requestAnimationFrame(() => focusFieldControl()?.focus())
-                  }
-                />
-              )}
+              <PersonalDefaultSlot
+                field={field.field}
+                label={label}
+                state={personalDefaultSlot}
+                confirmOpen={
+                  fieldMenuOpenedBy === 'make' || fieldMenuOpenedBy === 'update'
+                    ? fieldMenuOpenedBy
+                    : null
+                }
+                onConfirm={(el, mode) =>
+                  // After a save the button becomes "Your default": focus goes to the field.
+                  confirmSaveFrom(el, focusFieldControl, mode)
+                }
+                onUndo={() => {
+                  personalDefaults?.undo(field.field)
+                  // The pill (and its button) goes: focus lands on the field, not on <body>.
+                  requestAnimationFrame(() => focusFieldControl()?.focus())
+                }}
+                onCleared={() =>
+                  // The Clear button is gone (and not a tab stop): focus goes to the field.
+                  requestAnimationFrame(() => focusFieldControl()?.focus())
+                }
+              />
             </span>
           )}
         </div>
