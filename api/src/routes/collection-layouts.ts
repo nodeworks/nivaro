@@ -66,6 +66,7 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
 import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
 import { registerLayoutCrossformRoutes } from './layout-crossform.js'
+import { registerLayoutFileRoutes } from './layout-file.js'
 import { layoutHistoryRoutes } from './layout-history.js'
 import { layoutMergeRoutes } from './layout-merge.js'
 import { registerLayoutOutputRoutes } from './layout-output.js'
@@ -2692,4 +2693,6 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   await layoutStagedRoutes(app)
   // Form-shaped outputs: spreadsheet template / export, blank printable form, help text sheet.
   await registerLayoutOutputRoutes(app)
+  // Layout as a file (#3189): YAML export, and a read-only parse the editor imports from.
+  await registerLayoutFileRoutes(app)
 }

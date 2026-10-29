@@ -83,7 +83,7 @@ export const layoutEditor: DocSection = {
     { type: 'h2', id: 'layout-editor-editor', text: 'The editor' },
     {
       type: 'p',
-      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Compact / Expand all / Collapse all, Show how full each field is, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
+      text: 'Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar is one row: ‹ Forms, the form’s name and who else has it open, Undo / Redo, the view (Canvas, Table, States, Roles) and Rules, Preview ▾, Tools ▾, AI ▾, the Problems count, History, ⋯, the save status and Save ▾. Tools holds Auto-arrange, Find on this form, Find and replace, Outline, Compact / Expand all / Collapse all, Show how full each field is, Show where saves fail, Every form, Form map and Keyboard shortcuts. AI holds Rebuild or lighter version, Test as a role, Review the look, Tune from autofill, Ask…, Type a change… and Suggested changes (its count shows on AI). ⋯ holds Test, Share & watchers, Watch this form, Save as template, New form from this record and Download this form. On a narrow screen the view switch shows icons only and the Preview summary and the Rules, Tools and AI labels drop away, so the bar never wraps.'
     },
     { type: 'h3', id: 'layout-editor-canvas', text: 'Canvas' },
     {
@@ -267,6 +267,10 @@ export const layoutEditor: DocSection = {
     {
       type: 'p',
       text: "Download as a sheet writes every label, help text and placeholder on the form, with your unsaved edits, to Excel. Edit the amber columns and upload the file back: the editor lists every difference with a tick box, and Apply changes the ticked ones as one Undo step. Clearing a cell removes the text this form set, so the field's own text shows again. Rows for fields or sections that were removed are left out."
+    },
+    {
+      type: 'p',
+      text: 'Layout file (Outputs): Download as YAML writes the saved form — its settings, every section, step, tab and slot card in page order, and each field with only the settings that differ from a new placement — as a text file to keep and review as code. Import a layout file reads one back into the form you have open: the editor shows what it would change (added, moved, removed and changed, form settings, and anything it could not keep: a parent form, widget or name that does not exist here, fields the collection does not have), and Apply to the draft makes every change as one Undo step. Nothing is written until you Save, through the same save as any edit. A field placed once in the file and once on the form but in another section moves (its history stays). Whether a form is active and its place in the order are never in the file; a name or link name another form here already uses is kept as it is. A file from another collection, or for another kind of layout, is refused with the reasons.'
     },
     {
       type: 'p',
@@ -513,8 +517,13 @@ export const layoutEditor: DocSection = {
         'A picker that narrows its choices by a field that is not on the form.',
         'Empty sections, steps and tabs holders.',
         'Steps and sections no record reaches (their show-when rules can never hold, or contradict the record rules of the form, or every role but administrators is hidden from them), and fields that sit only there or are hidden everywhere they are placed.',
-        'Accessibility: fields without a label, a required field whose label (and so its required mark) is hidden, a half-width field that sits after a wider one although it would fit beside the field above it, and a chosen colour that reads below 3:1 on the light or dark background.'
+        'Accessibility: fields without a label, a required field whose label (and so its required mark) is hidden, a half-width field that sits after a wider one although it would fit beside the field above it, and a chosen colour that reads below 3:1 on the light or dark background.',
+        'Label style (tips): a label or section title not in sentence case (Change to … is one click; Change all N labels to sentence case fixes every one in one step), a label longer than the house limit, an abbreviation such as Qty or Dept (with the plain word as the fix), help text that only repeats the label (removed in one click when this form set it), and two fields showing the same label (a warning).'
       ]
+    },
+    {
+      type: 'p',
+      text: 'Label style is house style for every form on the instance. Turn off this check on a finding turns that check off for everyone; the Label style block at the end of the panel turns each check on or off, sets the longest label (40 characters unless you set one), adds abbreviations ("PM = project manager", one per line) and lists words that keep their capital (names such as Fusion; days and months always do). A fix on a field label sets this form\'s label; the field\'s own label in the data model stays. Style tips together cost a form at most 5 health points.'
     },
     {
       type: 'p',
@@ -737,6 +746,11 @@ export const layoutEditor: DocSection = {
         'Rarely opened sections: the form also counts, per visit, each section it showed and whether the person opened it (expanded it, clicked or typed in it). A section that starts open and was opened on 10% of visits or fewer (at least 20 visits) is suggested to start collapsed; the first section of the form or of a step is never suggested, nor any section on an accordion form. Start them collapsed is one change, which Undo reverses.'
       ]
     },
+    { type: 'h3', id: 'layout-editor-refusals', text: 'Where saves fail' },
+    {
+      type: 'p',
+      text: 'The record form also counts each save it refuses and the fields the refusal named: a required field left empty, or a value a rule turned down (a format, a range, a limit, or a refusal from the server that names the field). Show where saves fail (Tools, or the Usage tab) tints each field on the canvas by the share of save attempts refused on it over the last 30 days: amber from 5%, red from 20%, with a chip such as "12% refused" whose tip splits it into required and other rules. Fields with refusals below 5% get the chip only, and nothing is tinted until the form has 5 save attempts. The Usage tab lists the fields saves fail on most. Like the rest of usage, only counts are stored, and records saved outside the form (imports, the API) do not count.'
+    },
     { type: 'h3', id: 'layout-editor-ab-test', text: 'A/B test two versions of a form' },
     {
       type: 'p',
@@ -851,6 +865,17 @@ GET  /api/collection-layouts/explain?collection=orders&item=42[&role_id=<uuid>][
      → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
 GET  /api/collection-layouts/lint-context?collection=orders
      → { data: { fields, roles, requirements } }   // what the Problems panel reads
+GET  /api/collection-layouts/lint-style
+     → { data: { off: [rule], max_label_length: number | null, jargon: [{ term, say }], allow_words } }
+PATCH /api/collection-layouts/lint-style  { off?, max_label_length?, jargon?, allow_words? }
+     // label house style, per instance; style rules: label-sentence-case, label-too-long,
+     // label-jargon, help-repeats-label, label-duplicate (400 names every bad field)
+GET  /api/collection-layouts/:id/file[?download=1]
+     → { data: { filename, text, rev } }   // the saved layout as YAML; download=1 answers the file
+POST /api/collection-layouts/:id/file/parse  { text }
+     → { data: { target: { layout, groups, placements }, warnings, source } }
+     // read only; 400 { error, problems: [...] } for a file that cannot be used.
+     // The editor plans ops from its draft to target and saves them through :id/ops
 GET  /api/collection-layouts/health?collection=orders
      → { data: { rows: [{ layout_id, score, costs, counts, unreachable_fields }] } }
 GET  /api/collection-layouts/coverage?collection=orders[&fresh=1]
@@ -983,7 +1008,9 @@ POST /api/layout-usage/beacon  { events: [{ layout_id, collection, item, open, s
 GET  /api/layout-usage/:layoutId/today            → { data: { ready, day, opens, people, records } }   (admin)
 GET  /api/layout-usage/:layoutId/friction?days=30 → { data: { opens, saves, abandons, steps, changed_after_save } }   (admin)
 GET  /api/layout-usage/co-changes/:collection     → { data: { revisions, fields, pairs: [{ a, b, together, jaccard }] } }   (admin)
-     // beacon events may also carry sections: { shown: [group key], opened: [group key] } and save_ms;
+GET  /api/layout-usage/:layoutId/refusals?days=30 → { data: { saves, refused, attempts, fields: [{ field, required, invalid, refusals, rate }] } }   (admin)
+     // beacon events may also carry sections: { shown: [group key], opened: [group key] }, save_ms
+     // and refused: { tries, fields: { <field>: { required, invalid } } };
      // friction answers sections: [{ key, shown, opened }]
 
 # A/B test (administrators)

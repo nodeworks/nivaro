@@ -1,4 +1,5 @@
 import type { HelpSheetRow, UploadedHelpRow } from './help-sheet'
+import type { FileTarget } from './layout-file-plan'
 
 // The client side of api/src/routes/layout-output.ts (#2721 #2724 #2729): files
 // come back as bytes, so these use fetch with the host's auth, not the SDK client.
@@ -85,6 +86,53 @@ export async function parseHelpSheetFile(cfg: FetchConfig, file: File): Promise<
   })
   if (!resp.ok) throw await failure(resp)
   return ((await resp.json()) as { data: { rows: UploadedHelpRow[] } }).data.rows
+}
+
+// ── Layout as a file (#3189): api/src/routes/layout-file.ts ─────────────────
+
+export const downloadLayoutFile = (cfg: FetchConfig, layoutId: number) =>
+  getFile(cfg, `/collection-layouts/${layoutId}/file?download=1`, 'layout.layout.yaml')
+
+export interface LayoutFileImport {
+  target: FileTarget
+  warnings: string[]
+  source: { layout_id: number | null; name: string | null; at: string | null }
+}
+
+/** A file the API could not use: every problem it found, one per line. */
+export class LayoutFileProblems extends Error {
+  problems: string[]
+  constructor(message: string, problems: string[]) {
+    super(message)
+    this.problems = problems
+  }
+}
+
+/** The layout a file describes (read-only on the server; nothing changes yet). */
+export async function parseLayoutFile(
+  cfg: FetchConfig,
+  layoutId: number,
+  text: string
+): Promise<LayoutFileImport> {
+  const resp = await fetch(`${cfg.apiBase}/collection-layouts/${layoutId}/file/parse`, {
+    method: 'POST',
+    headers: { ...cfg.authHeaders, 'Content-Type': 'application/json' },
+    credentials: cfg.credentials,
+    body: JSON.stringify({ text })
+  })
+  if (!resp.ok) {
+    let body: { error?: string; problems?: string[] } = {}
+    try {
+      body = (await resp.json()) as typeof body
+    } catch {
+      /* keep the status line */
+    }
+    throw new LayoutFileProblems(
+      body.error ?? `Something went wrong (${resp.status})`,
+      Array.isArray(body.problems) ? body.problems : []
+    )
+  }
+  return ((await resp.json()) as { data: LayoutFileImport }).data
 }
 
 /** Hand a downloaded file to the browser. */

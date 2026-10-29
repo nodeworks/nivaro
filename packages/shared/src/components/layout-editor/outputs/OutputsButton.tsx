@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Download,
+  FileCode2,
   FileOutput,
   FileSpreadsheet,
   Loader2,
@@ -18,9 +19,11 @@ import { effectText } from '../panel-style'
 import { ToolButton } from '../toolbar-kit'
 import type { ApplyOptions } from '../useLayoutDraft'
 import { diffHelpSheet, type HelpDiff, helpSheetPlan, helpSheetRows, propWord } from './help-sheet'
+import { type FileImportState, LayoutFilePreview, problemsOf, readLayoutFile } from './LayoutFile'
 import {
   downloadBlankForm,
   downloadHelpSheet,
+  downloadLayoutFile,
   downloadRecords,
   downloadTemplate,
   parseHelpSheetFile,
@@ -130,6 +133,10 @@ export function OutputsButton({
   const [diff, setDiff] = useState<HelpDiff | null>(null)
   const [skip, setSkip] = useState<Set<string>>(new Set())
   const fileRef = useRef<HTMLInputElement | null>(null)
+  // Layout as a file (#3189): an imported file's plan, shown before it applies.
+  const [layoutFile, setLayoutFile] = useState<FileImportState | null>(null)
+  const [problems, setProblems] = useState<string[]>([])
+  const layoutFileRef = useRef<HTMLInputElement | null>(null)
   const { data: meta } = useCollectionMeta(open ? collection : null)
   const globals = meta?.fields
 
@@ -139,10 +146,12 @@ export function OutputsButton({
   const run = async (id: string, job: () => Promise<void>) => {
     setBusy(id)
     setError(null)
+    setProblems([])
     try {
       await job()
     } catch (e) {
       setError((e as Error).message || 'Something went wrong')
+      setProblems(problemsOf(e))
     } finally {
       setBusy(null)
     }
@@ -170,8 +179,15 @@ export function OutputsButton({
     setOpen(v)
     if (!v) {
       setDiff(null)
+      setLayoutFile(null)
       setError(null)
+      setProblems([])
     }
+  }
+
+  const onLayoutFile = (file: File | undefined) => {
+    if (!file) return
+    void run('layout-import', async () => setLayoutFile(await readLayoutFile(cfg, bundle, file)))
   }
 
   return (
@@ -185,8 +201,20 @@ export function OutputsButton({
         hint='Spreadsheet, print and help text'
         data={{ 'data-outputs-open': '' }}
       />
-      <PopoverContent align='end' className='w-[420px] p-3' data-outputs=''>
-        {diff ? (
+      <PopoverContent
+        align='end'
+        className='w-[420px] max-w-[calc(100vw-16px)] p-3'
+        data-outputs=''
+      >
+        {layoutFile ? (
+          <LayoutFilePreview
+            bundle={bundle}
+            state={layoutFile}
+            onBack={() => setLayoutFile(null)}
+            apply={apply}
+            onDone={() => close(false)}
+          />
+        ) : diff ? (
           <>
             <button
               type='button'
@@ -314,13 +342,61 @@ export function OutputsButton({
                 />
               </div>
             </div>
+            <div className='mt-2 border-t border-slate-100 pt-2 dark:border-border'>
+              <p className='px-2 text-[12.5px] font-semibold text-slate-900 dark:text-foreground'>
+                Layout file
+              </p>
+              <div className='mt-1 space-y-0.5'>
+                <Action
+                  data='layout-download'
+                  icon={<FileCode2 className='h-4 w-4' />}
+                  title='Download as YAML'
+                  effect='The saved form, its settings, sections and every field, to keep and review as code.'
+                  busy={busy === 'layout-download'}
+                  onClick={() =>
+                    run('layout-download', async () =>
+                      saveFile(await downloadLayoutFile(cfg, layoutId))
+                    )
+                  }
+                />
+                <Action
+                  data='layout-import'
+                  icon={<Upload className='h-4 w-4' />}
+                  title='Import a layout file'
+                  effect='You see what would change first; applying is one undo step.'
+                  busy={busy === 'layout-import'}
+                  onClick={() => layoutFileRef.current?.click()}
+                />
+                <input
+                  ref={layoutFileRef}
+                  type='file'
+                  accept='.yaml,.yml,.json,application/yaml,text/yaml'
+                  className='hidden'
+                  data-layout-file=''
+                  onChange={(e) => {
+                    onLayoutFile(e.target.files?.[0])
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+            </div>
             {error && (
-              <p
+              <div
                 role='alert'
                 className='mt-2 text-[12px] leading-snug text-red-600 dark:text-red-400'
               >
-                {error}
-              </p>
+                <p>{error}</p>
+                {problems.length > 1 && (
+                  <ul
+                    data-layout-file-problems=''
+                    className='mt-1 max-h-[160px] list-disc space-y-0.5 overflow-y-auto pl-4'
+                  >
+                    {problems.map((p) => (
+                      <li key={p}>{p}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </>
         )}
