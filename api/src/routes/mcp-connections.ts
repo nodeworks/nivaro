@@ -10,6 +10,7 @@ import {
 } from '../services/mcp-activity.js'
 import { CONN_RE, readMcpSettings, writeMcpSettings } from '../services/mcp-calls.js'
 import { idleDecision, runIdleReview } from '../services/mcp-idle-review.js'
+import { deleteScope, scopedKeysNotListed, withScopes } from '../services/mcp-scope.js'
 import { getGrant, listGrants, revokeGrant } from '../services/oauth-store.js'
 import { bumpUserAccessVersion } from '../services/permission-cache.js'
 
@@ -26,6 +27,9 @@ import { bumpUserAccessVersion } from '../services/permission-cache.js'
  *   PATCH  /:conn/limit                  admin: {rate_limit_per_minute: n | null}
  *   GET    /settings  PATCH /settings    admin: idle review days + default rate limit
  *   POST   /idle-review/run              admin: {dry_run?} run the review now
+ *
+ * Every listed connection carries `scope` (#3205 limits, #3214 kit; null = none) and
+ * `scope_editable`; the scope and kit routes are in routes/mcp-scopes.ts.
  *
  * A connected app's own token can never reach these (OAUTH_NO_WRITE, services/mcp-config.ts):
  * an agent cannot undo, revoke or re-limit itself.
@@ -55,7 +59,14 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
     const { logged, connections } = await listConnections(app.redis, settings, {
       userId: String(req.user!.id)
     })
-    return { data: { logged, window_days: 14, settings: await publicSettings(), connections } }
+    return {
+      data: {
+        logged,
+        window_days: 14,
+        settings: await publicSettings(),
+        connections: await withScopes(connections, { admin: false })
+      }
+    }
   })
 
   app.get<{ Querystring: { conn?: string; before?: string; limit?: string } }>(
@@ -107,6 +118,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         })
       const ok = await revokeGrant(app.redis, String(req.user!.id), conn.slice(1))
       if (!ok) return reply.code(404).send({ error: 'Connection not found' })
+      await deleteScope(conn).catch(() => false)
       await logActivity({ action: 'oauth-revoke', user: req.user!.id, comment: conn.slice(1), req })
       return { data: { revoked: true } }
     }
@@ -116,7 +128,27 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: requireAdmin }, async () => {
     const settings = await readMcpSettings()
     const { logged, connections } = await listConnections(app.redis, settings)
-    return { data: { logged, window_days: 14, settings: await publicSettings(), connections } }
+    // #3205 — an API key limited ahead of use shows even before its first MCP call.
+    const extra = await scopedKeysNotListed(new Set(connections.map((c) => c.conn)))
+    const all = [
+      ...connections,
+      ...extra.map(({ scope: _s, ...k }) => ({
+        ...k,
+        kind: 'api_key' as const,
+        rate_limit_per_minute: settings.connection_limits[k.conn] ?? settings.rate_limit_per_minute,
+        rate_limit_custom: settings.connection_limits[k.conn] !== undefined,
+        idle: null,
+        stats: null
+      }))
+    ]
+    return {
+      data: {
+        logged,
+        window_days: 14,
+        settings: await publicSettings(),
+        connections: await withScopes(all, { admin: true })
+      }
+    }
   })
 
   app.get('/idle', { preHandler: requireAdmin }, async () => {
@@ -193,6 +225,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         const g = await getGrant(app.redis, conn.slice(1))
         if (!g || !(await revokeGrant(app.redis, g.user_id, g.id)))
           return reply.code(404).send({ error: 'Connection not found' })
+        await deleteScope(conn).catch(() => false)
         await logActivity({
           action: 'oauth-revoke',
           user: req.user!.id,

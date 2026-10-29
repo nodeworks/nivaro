@@ -1,4 +1,5 @@
 import {
+  AlignHorizontalSpaceAround,
   ArrowLeft,
   ClipboardCopy,
   Columns3,
@@ -35,8 +36,11 @@ import { Checkbox } from '../ui/checkbox'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { duplicateKeys, STRUCTURE_MENU_EVENT } from './ArrangeButton'
 import type { DesignMark, DesignTarget } from './design-context'
+import { evenRowBlocked, evenRowPlan } from './even-row'
 import { readOverrides } from './inspector/model'
 import { isTyping } from './is-typing'
+import { effectText, tintCard } from './panel-style'
+import { placementOf } from './pin'
 import {
   joinBlocked,
   joinPlan,
@@ -46,14 +50,16 @@ import {
   splitBlocked,
   splitPlan
 } from './section-structure'
-import { effectText, tintCard } from './panel-style'
 import {
   convertChoices,
   copyRulesPlan,
   duplicateBlocked,
   duplicatePlan,
+  fieldPinBlocked,
+  fieldPinPlan,
   groupName,
   isPinned,
+  isPlacementPinned,
   kindWord,
   pinPlan,
   RULE_LABELS,
@@ -94,27 +100,48 @@ type Measurable = { getBoundingClientRect(): DOMRect }
 type View = 'menu' | 'convert' | 'rules'
 interface MenuState {
   targets: DesignTarget[]
+  /** The node the menu was opened on (one of `targets`; null from an Arrange button). */
+  origin: DesignTarget | null
   anchor: Measurable
   view: View
+}
+
+/** What extra menu rows (placing tools: copy, paste, look, put back) are told. */
+export interface StructureMenuExtra {
+  targets: DesignTarget[]
+  origin: DesignTarget | null
+  run: (plan: StructurePlan, opts?: { toastNotes?: boolean }) => boolean
+  close: () => void
 }
 
 const pointAnchor = (x: number, y: number): Measurable => ({
   getBoundingClientRect: () => new DOMRect(x, y, 0, 0)
 })
 
-/** "Pinned" on a pinned section, beside the preview modes' own tags. */
+const FIELD_PIN_MARK: DesignMark = {
+  text: 'Pinned',
+  tone: 'slate',
+  icon: 'pin',
+  tip: 'Pinned in the editor: it keeps its spot (no dragging, no drops on it). The form people see is unchanged.'
+}
+
+/** "Pinned" on a pinned section or field, beside the preview modes' own tags. */
 export function usePinMarks(
   bundle: LayoutBundle,
   marks?: (t: DesignTarget) => DesignMark[]
 ): (t: DesignTarget) => DesignMark[] {
   return useMemo(() => {
     const pinned = new Set(bundle.groups.filter((g) => isPinned(g)).map((g) => g.key))
+    const anyField = bundle.placements.some((p) => isPlacementPinned(p))
     const sticky = stickyGroupKey(
       [...bundle.groups].filter((g) => g.parent_key === null).sort((a, b) => a.sort - b.sort)
     )
     return (t: DesignTarget) => {
       const own = marks?.(t) ?? []
-      if (t.kind !== 'group') return own
+      if (t.kind !== 'group')
+        return anyField && isPlacementPinned(placementOf(bundle, t))
+          ? [...own, FIELD_PIN_MARK]
+          : own
       // #2699: the form's one sticky section says so on the canvas (it does not stick there).
       const withSticky: DesignMark[] =
         t.key === sticky
@@ -138,7 +165,7 @@ export function usePinMarks(
         }
       ]
     }
-  }, [bundle.groups, marks])
+  }, [bundle, marks])
 }
 
 export interface StructureActionsProps {
@@ -148,6 +175,8 @@ export interface StructureActionsProps {
   onSelection: (next: DesignTarget[]) => void
   /** The editor's body: right-clicks and Arrange buttons inside it open the menu. */
   rootRef: RefObject<HTMLElement | null>
+  /** More rows after the structure actions (the placing tools, #3179 #3197 #3202). */
+  extraItems?: (ctx: StructureMenuExtra) => ReactNode
 }
 
 /**
@@ -159,7 +188,8 @@ export function StructureActions({
   selection,
   apply,
   onSelection,
-  rootRef
+  rootRef,
+  extraItems
 }: StructureActionsProps) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const live = useRef({ bundle, selection, apply, onSelection })
@@ -214,6 +244,7 @@ export function StructureActions({
       const keyboard = e.button !== 2 && e.clientX === 0 && e.clientY === 0
       setMenu({
         targets,
+        origin: t,
         anchor: keyboard ? (el as HTMLElement) : pointAnchor(e.clientX, e.clientY),
         view: 'menu'
       })
@@ -222,7 +253,12 @@ export function StructureActions({
       const el = e.target as HTMLElement
       if (!inside(el)) return
       const detail = (e as CustomEvent<{ targets: DesignTarget[]; view?: View }>).detail
-      setMenu({ targets: detail.targets, anchor: el, view: detail.view ?? 'menu' })
+      setMenu({
+        targets: detail.targets,
+        origin: detail.targets.length === 1 ? detail.targets[0] : null,
+        anchor: el,
+        view: detail.view ?? 'menu'
+      })
     }
     document.addEventListener('contextmenu', onContext, true)
     document.addEventListener(STRUCTURE_MENU_EVENT, onOpen)
@@ -270,6 +306,12 @@ export function StructureActions({
             targets={menu.targets}
             run={run}
             onView={(view) => setMenu({ ...menu, view })}
+            extra={extraItems?.({
+              targets: menu.targets,
+              origin: menu.origin,
+              run,
+              close: () => setMenu(null)
+            })}
           />
         )}
       </PopoverContent>
@@ -293,7 +335,7 @@ function targetKeyOf(t: DesignTarget): string {
 const itemCls =
   'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 outline-none transition-colors hover:bg-muted focus-visible:bg-muted dark:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-transparent'
 
-function MenuItem({
+export function MenuItem({
   icon,
   children,
   hint,
@@ -355,12 +397,14 @@ function MenuView({
   bundle,
   targets,
   run,
-  onView
+  onView,
+  extra
 }: {
   bundle: LayoutBundle
   targets: DesignTarget[]
   run: (plan: StructurePlan, opts?: { toastNotes?: boolean }) => boolean
   onView: (v: View) => void
+  extra?: ReactNode
 }) {
   const one = targets.length === 1 ? targets[0] : null
   const group =
@@ -422,6 +466,16 @@ function MenuView({
           Put side by side under one label
         </MenuItem>
       )}
+      {fieldTargets.length > 0 && (
+        <MenuItem
+          icon={<AlignHorizontalSpaceAround />}
+          blocked={evenRowBlocked(bundle, fieldTargets)}
+          data-structure-action='even-row'
+          onPick={() => run(evenRowPlan(bundle, fieldTargets))}
+        >
+          {fieldTargets.length > 1 ? 'Even out their rows' : 'Even out this row'}
+        </MenuItem>
+      )}
       {group && (
         <>
           <MenuItem
@@ -474,11 +528,26 @@ function MenuView({
           </MenuItem>
         </>
       )}
-      {!group && fieldTargets.length === 0 && (
+      {one && one.kind !== 'group' && (
+        <MenuItem
+          icon={isPlacementPinned(placementOf(bundle, one)) ? <PinOff /> : <Pin />}
+          blocked={fieldPinBlocked(bundle, one)}
+          data-structure-action='pin-field'
+          onPick={() =>
+            run(fieldPinPlan(bundle, one, !isPlacementPinned(placementOf(bundle, one))))
+          }
+        >
+          {isPlacementPinned(placementOf(bundle, one))
+            ? 'Unpin'
+            : 'Pin in the editor (no dragging)'}
+        </MenuItem>
+      )}
+      {!group && fieldTargets.length === 0 && !extra && (!one || one.kind === 'group') && (
         <p className={cn(effectText, 'px-2 py-1')}>
           Select a section or fields to duplicate, wrap or convert.
         </p>
       )}
+      {extra}
     </div>
   )
 }

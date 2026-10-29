@@ -26,6 +26,7 @@ import { PanelBody, PanelHeader } from '../panel-frame'
 import { effectText } from '../panel-style'
 import { slotName } from '../slot-names'
 import type { ApplyOptions } from '../useLayoutDraft'
+import { EvenRowAction } from './EvenRowAction'
 import { useCollectionMeta } from './field-context'
 import { Choice, Segmented, Setting, Toggle } from './kit'
 import { describeField } from './model'
@@ -159,6 +160,7 @@ export function BulkInspector({
                   )
                 }
               />
+              <EvenRowAction bundle={bundle} targets={selection} apply={apply} />
             </Setting>
             {FLAGS.map((f) => {
               const subject = f.k === 'hidden' ? rows : fields

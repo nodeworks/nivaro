@@ -194,7 +194,9 @@ export function ResizeHandle({ onCommit }: { onCommit: (span: number) => void })
         onKeyDown={onKeyDown}
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          'absolute -right-[7px] top-1/2 z-20 flex h-7 w-3 -translate-y-1/2 cursor-col-resize items-center justify-center gap-[2px] rounded-sm bg-white ring-1 ring-nvr-cyan transition-colors hover:bg-nvr-cyan/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-card motion-reduce:transition-none',
+          'absolute -right-[7px] top-1/2 z-20 flex h-7 w-3 -translate-y-1/2 cursor-col-resize touch-none items-center justify-center gap-[2px] rounded-sm bg-white ring-1 ring-nvr-cyan transition-colors hover:bg-nvr-cyan/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan dark:bg-card motion-reduce:transition-none',
+          // #3193: a finger-sized handle on touch screens (the page does not scroll from it).
+          '[@media(pointer:coarse)]:-right-3 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-6',
           live !== null && 'bg-nvr-cyan/10',
           !usable && 'hidden'
         )}

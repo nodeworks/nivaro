@@ -73,6 +73,7 @@ import {
 } from './design-context'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
+import { useTrashWarning } from './dnd/trash-links'
 import { stagedTip, useDraftRecovery } from './draft-recovery'
 import { canvasRenderer, EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
@@ -82,7 +83,7 @@ import { TabOrderBar, useTabOrderEditor } from './entry/tab-order'
 import { previewThemeClass, ThemePreviewTool, useAppIsDark } from './entry/theme-preview'
 import { explainMarks, RuleLoopsBanner, RulesToggle, useRulesView } from './explain/CanvasRules'
 import { useDriverHover } from './explain/driver-hover'
-import type { OpenSource } from './explain/field-sources'
+import { fieldLabel, type OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
@@ -104,7 +105,8 @@ import { RoleSectionMatrix } from './matrix/RoleSectionMatrix'
 import { FindTool, OutlineTool, ShortcutsTool, ViewTools } from './nav/NavTools'
 import { OutlinePanel } from './nav/OutlinePanel'
 import { useEditorNav } from './nav/useEditorNav'
-import { COMPACT_ZOOM } from './nav/view-prefs'
+import { effectiveZoom, fitZoom } from './nav/view-prefs'
+import { ZoomChip } from './nav/ZoomControls'
 import { OutputsButton } from './outputs/OutputsButton'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
@@ -117,13 +119,17 @@ import {
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
+import { PlaceToolsProvider, usePlaceTools } from './PlaceTools'
 import { amberStrip, segOption, segTrack } from './panel-style'
 import { usePersonalDefaultMarks } from './personal-default-marks'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
+import { previewNaturalWidth } from './preview/preview-model'
+import { useRemovalLog } from './removed-log'
 import { FormMoreMenu } from './reuse/FormMoreMenu'
 import { useRailCopy } from './reuse/useRailCopy'
+import { SlashInsert } from './SlashInsert'
 import { StagedByOthers } from './StagedChip'
 import { StructureActions, usePinMarks } from './StructureMenu'
 import { useRolePreview } from './settings/settings-api'
@@ -698,7 +704,9 @@ export function LayoutEditor({
   useEffect(() => setCurrentId(layoutId), [layoutId])
   const onSaved = useSavedRefresh(collection)
   // Record / Stop (#2663) sees every apply; the draft saves as before.
-  const { draft, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  const { draft: recorded, recorder } = useMacroRecorder(useLayoutDraft(currentId, { onSaved }))
+  // Recently removed (#3191): every apply is read for what it takes off the form.
+  const { draft, removed } = useRemovalLog(recorded, currentId)
   const bundle = draft.bundle
 
   const [left, setLeft] = useState<'layouts' | 'add' | 'usage'>('layouts')
@@ -766,7 +774,11 @@ export function LayoutEditor({
   // The Rules view (#2632 #2640 #2633): rule tags and default ghosts on the canvas.
   const [rulesOn, setRulesOn] = useRulesView()
   const explain = useCanvasExplain(collection, canvasLayout, rulesOn)
-  const ghosts = useDefaultGhosts(collection, canvasLayout, rulesOn && !preview.record)
+  const ghosts = useDefaultGhosts(
+    collection,
+    canvasLayout,
+    rulesOn && !preview.record && !preview.sample
+  )
 
   // Required change note (#2654): the server's copy decides (turning it off asks too).
   const { data: serverBundle } = useLayoutBundle(currentId)
@@ -946,6 +958,17 @@ export function LayoutEditor({
     [bundle, onSelect]
   )
   useAltArrowKeys(bundle, selection, draft.apply, dragging, onMoved)
+  // #3190: the trash says what depends on a field before it leaves the form.
+  const trashFieldLabel = useCallback(
+    (f: string) => fieldLabel(f, explain.describe),
+    [explain.describe]
+  )
+  const warnTrash = useTrashWarning(collection, explain.deps, trashFieldLabel, explain.groupLabel)
+  // #3204: the trash's Undo chip runs the draft's undo while the removal is the last step.
+  const dndUndo = useMemo(
+    () => ({ run: draft.undo, label: draft.undoLabel }),
+    [draft.undo, draft.undoLabel]
+  )
 
   // Who else is here and what they selected (#2651).
   const peers = useLayoutPresence(currentId, selected ? targetKey(selected) : null)
@@ -1043,7 +1066,7 @@ export function LayoutEditor({
   const onAskCite = useCallback(
     (c: AskCite) => {
       if (c.kind === 'record')
-        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` } }))
+        setPreview((p) => ({ ...p, record: { id: c.id, label: `#${c.id}` }, sample: null }))
       else if (c.kind === 'layout') openLayoutRef.current(c.id)
       else {
         const p = bundle?.placements.find((x) => x.field === c.field)
@@ -1077,7 +1100,39 @@ export function LayoutEditor({
     canvasShown: !(arrangeable && view === 'table')
   })
   const outlineShown = nav.outlineOpen && !!bundle && arrangeable
+  // #3188 canvas zoom: the slider times compact's own shrink; Fit divides the
+  // pane by the preview's natural width (a device frame, every device at once).
+  const canvasPaneRef = useRef<HTMLElement | null>(null)
+  const canvasZoom = effectiveZoom(nav.zoom, nav.compact)
+  const { zoom: navZoom, setZoom: setNavZoom, compact: navCompact } = nav
+  const naturalWidth = previewNaturalWidth(
+    preview.device,
+    preview.roleId && preview.compareRoleId ? 2 : 1
+  )
+  const zoomControl = useMemo(
+    () => ({
+      value: navZoom,
+      onChange: setNavZoom,
+      onFit: () =>
+        setNavZoom(fitZoom(canvasPaneRef.current?.clientWidth ?? 0, naturalWidth, navCompact))
+    }),
+    [navZoom, setNavZoom, navCompact, naturalWidth]
+  )
   const warning = host.warning ?? overview?.warning ?? null
+
+  // Copy / paste, pasted field lists, the format painter, put back as saved (#3179 #3201 #3202 #3197).
+  const placeTools = usePlaceTools({
+    bundle,
+    savedBundle: savedBundle ?? null,
+    collection,
+    layoutId: currentId,
+    layoutName,
+    fields,
+    selection,
+    apply: draft.apply,
+    onSelection: setSelection,
+    rootRef: bodyRef
+  })
 
   // Overlay mode is a modal dialog over the record page.
   const dialogProps = overlay
@@ -1185,7 +1240,8 @@ export function LayoutEditor({
                         compact: nav.compact,
                         onCompact: nav.setCompact,
                         onExpandAll: nav.expandAll,
-                        onCollapseAll: nav.collapseAll
+                        onCollapseAll: nav.collapseAll,
+                        zoom: zoomControl
                       }
                     : null
                 }
@@ -1392,6 +1448,9 @@ export function LayoutEditor({
         apply={draft.apply}
         onDragActive={onDragActive}
         onDropOnLayout={copyToLayout}
+        selection={selection}
+        undo={dndUndo}
+        warnTrash={warnTrash}
       >
         <div className='flex min-h-0 flex-1 overflow-hidden'>
           {/* The outline takes the left panel's place while it is open: three side
@@ -1453,6 +1512,7 @@ export function LayoutEditor({
                   selected={selected}
                   apply={draft.apply}
                   onSelect={onSelect}
+                  removed={removed.entries}
                 />
               ) : left === 'usage' && bundle ? (
                 <UsagePanel
@@ -1496,7 +1556,7 @@ export function LayoutEditor({
               scrolls inside its own body, and anything taller (tables, matrices, a summary)
               still scrolls the pane. A min-h-full chain here let the form's body take the
               whole pane height under its header, so the pane scrolled into blank space. */}
-          <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
+          <main ref={canvasPaneRef} className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
             {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
             {compareState.compare && (view === 'canvas' || !arrangeable) && (
               <CompareBanner compare={compareState.compare} onClose={compareState.close} />
@@ -1529,8 +1589,10 @@ export function LayoutEditor({
             ) : bundle ? (
               <div
                 data-canvas-density={nav.compact && arrangeable ? 'compact' : 'normal'}
-                // Compact (#2627): editor-only zoom; the record page is unchanged.
-                style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
+                data-canvas-zoom={arrangeable ? canvasZoom : undefined}
+                // Compact (#2627) and the zoom slider (#3188): editor-only zoom; the record
+                // page is unchanged.
+                style={arrangeable && canvasZoom !== 1 ? { zoom: canvasZoom } : undefined}
                 className={cn(
                   'flex min-h-0 flex-1 flex-col',
                   previewThemeClass(previewDark, appDark),
@@ -1543,7 +1605,8 @@ export function LayoutEditor({
                   parent={parent}
                   preview={preview}
                   onPreview={setPreview}
-                  record={record}
+                  // #3196: a sample record's made-up values stand in for a real one.
+                  record={preview.sample ?? record}
                   fields={fields}
                   renderPane={(pane) => (
                     <Canvas
@@ -1584,6 +1647,7 @@ export function LayoutEditor({
                 <Skeleton className='h-48 w-full rounded-lg' />
               </div>
             )}
+            {bundle && arrangeable && view === 'canvas' && <ZoomChip zoom={zoomControl} />}
           </main>
           <aside
             data-editor-inspector=''
@@ -1658,6 +1722,15 @@ export function LayoutEditor({
         apply={draft.apply}
         onSelection={setSelection}
         rootRef={bodyRef}
+        extraItems={placeTools.menuItems}
+      />
+      <SlashInsert
+        bundle={bundle}
+        fields={fields}
+        apply={draft.apply}
+        onSelect={onSelect}
+        rootRef={bodyRef}
+        enabled={!(arrangeable && view !== 'canvas')}
       />
       <UnsavedConfirm
         request={leaveAsk}
@@ -1706,7 +1779,11 @@ export function LayoutEditor({
   )
 
   if (!overlay)
-    return <EntryEditorContext.Provider value={entryApi}>{body}</EntryEditorContext.Provider>
+    return (
+      <EntryEditorContext.Provider value={entryApi}>
+        <PlaceToolsProvider value={placeTools}>{body}</PlaceToolsProvider>
+      </EntryEditorContext.Provider>
+    )
   // Fixed under the page outlet would be offset by its transform: portal out —
   // into the hosting modal when there is one (a body portal would sit under
   // its pointer/scroll lock), else body.
@@ -1715,7 +1792,9 @@ export function LayoutEditor({
     <>
       <span ref={setMarker} hidden data-layout-editor-marker='' />
       <EntryEditorContext.Provider value={entryApi}>
-        {container && createPortal(body, container)}
+        <PlaceToolsProvider value={placeTools}>
+          {container && createPortal(body, container)}
+        </PlaceToolsProvider>
       </EntryEditorContext.Provider>
     </>
   )

@@ -20,6 +20,7 @@ import {
   formatNumber,
   formatRelative
 } from '../../lib/utils'
+import { McpScopeSheet, type McpScopeSummary, ScopeBadge } from '../McpConnectionScope'
 import { SimpleSelectXs } from '../ui/SimpleSelect'
 import { Skeleton } from '../ui/skeleton'
 import { ConnectionRollback } from './ConnectionRollback'
@@ -62,6 +63,9 @@ export interface McpConnection {
     status: 'active' | 'idle' | 'notice'
   } | null
   stats: McpConnectionStats | null
+  /** #3205 / #3214 — the connection's limits (null = none) and whether this caller may change them. */
+  scope?: McpScopeSummary | null
+  scope_editable?: boolean
 }
 
 export interface McpConnectionsAnswer {
@@ -216,6 +220,7 @@ function ConnectionRow({
 }) {
   const last = c.stats?.last_call_at ?? c.last_used_at
   const [rollingBack, setRollingBack] = useState(false)
+  const [limits, setLimits] = useState(false)
   return (
     <li className='flex flex-wrap items-center gap-x-6 gap-y-3 py-3 first:pt-0 last:pb-0'>
       <div className='min-w-[220px] flex-1'>
@@ -231,6 +236,19 @@ function ConnectionRow({
           {last ? `last used ${formatRelative(last)}` : 'never used'}
         </p>
         <IdleNote c={c} />
+        {c.scope !== undefined && (
+          <p className='mt-1 flex min-w-0 items-center gap-1.5'>
+            <span className='shrink-0 text-[12px] text-slate-500 dark:text-slate-400'>
+              May use:
+            </span>
+            <ScopeBadge scope={c.scope ?? null} />
+            {c.scope?.locked && (
+              <span className='shrink-0 text-[11.5px] text-slate-500 dark:text-slate-400'>
+                · set by an administrator
+              </span>
+            )}
+          </p>
+        )}
       </div>
       <div className='flex min-w-[180px] flex-col gap-1'>
         {c.stats && <CallsSparkline days={c.stats.days} />}
@@ -248,6 +266,25 @@ function ConnectionRow({
         ))}
       </div>
       <div className='ml-auto flex items-center gap-1.5'>
+        {c.scope_editable && (
+          <>
+            <button
+              type='button'
+              onClick={() => setLimits(true)}
+              className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+            >
+              Limits
+            </button>
+            <McpScopeSheet
+              open={limits}
+              onClose={() => setLimits(false)}
+              conn={c.conn}
+              name={c.name}
+              scope={c.scope ?? null}
+              mode='mine'
+            />
+          </>
+        )}
         {(c.stats?.calls ?? 0) > 0 && (
           <button
             type='button'

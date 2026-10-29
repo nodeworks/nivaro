@@ -729,7 +729,12 @@ export const dashboardsApiDoc: DocSection = {
         ],
         ['PATCH', '/api/dashboards/widgets/:widgetId', 'Update widget. Owner or admin.'],
         ['DELETE', '/api/dashboards/widgets/:widgetId', 'Remove widget.'],
-        ['GET', '/api/dashboards/widgets/:widgetId/data', 'Fetch live data for a widget.']
+        ['GET', '/api/dashboards/widgets/:widgetId/data', 'Fetch live data for a widget.'],
+        [
+          'POST',
+          '/api/dashboards/widgets/:widgetId/rows',
+          'What the number is and the records behind it, read as the caller (MCP drill_widget). Body: { segment?: { field, value }, extra_filters?, fields?, limit? (≤100) }. Also POST /api/report-studio/:id/widgets/:widgetId/rows { segment?, date_range?, entity_filters?, fields?, limit? }.'
+        ]
       ]
     },
     { type: 'h3', text: 'Widget types and required fields' },

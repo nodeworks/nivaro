@@ -6,6 +6,9 @@ import { FindPanel } from './FindPanel'
 import type { FindHit } from './find'
 import { ShortcutSheet } from './ShortcutSheet'
 import type { NavNode } from './tree'
+import { type ZoomControl, ZoomRow } from './ZoomControls'
+
+export type { ZoomControl } from './ZoomControls'
 
 // The editor's way-finding tools, as rows of the top bar's Tools menu: Find
 // on this form (⌘F), the outline, the canvas view (compact, expand all /
@@ -31,6 +34,8 @@ export interface NavToolsProps {
     onCompact: (on: boolean) => void
     onExpandAll: () => void
     onCollapseAll: () => void
+    /** Canvas zoom (#3188): the slider row and Fit to screen. */
+    zoom?: ZoomControl
   } | null
   shortcuts: { open: boolean; onOpenChange: (open: boolean) => void }
 }
@@ -84,6 +89,7 @@ export function ViewTools({ view }: Pick<NavToolsProps, 'view'>) {
   if (!view) return null
   return (
     <>
+      {view.zoom && <ZoomRow zoom={view.zoom} />}
       <ToolButton
         label='Compact canvas'
         icon={<ZoomOut className='h-4 w-4' />}

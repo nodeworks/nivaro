@@ -14,6 +14,7 @@ import {
   oauthAudienceRefusal,
   oauthScopeRefusal
 } from '../services/mcp-config.js'
+import { applyMcpConnectionScope } from '../services/mcp-scope.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
 import { notePrincipalKind, onPermissionCacheReset } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
@@ -619,6 +620,9 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
 
 async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
   await authenticateIdentity(req, reply)
+  // #3205 — an MCP connection's own limits (tools, collections, actions), on /api/mcp and the
+  // in-process calls its tools make. They only narrow what the credential already allows.
+  await applyMcpConnectionScope(req)
   // The compiled permission cache keys every entry by how the request signed in.
   if (req.user) notePrincipalKind(req.user, principalKind(req))
   // Traffic Map circuit breaker (#1157): a caller an admin paused or limited during an incident.

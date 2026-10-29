@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, Loader2, Plug } from 'lucide-react'
+import { AlertTriangle, Check, ChevronsUpDown, KeyRound, Loader2, Plug } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useNivaroClient } from '../context'
+import { useNavigation, useNivaroClient } from '../context'
 import { del, get, patch } from '../lib/commands'
 import { cn, formatDate, formatNumber, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
+import { McpKitsPanel, McpScopeSheet, ScopeBadge } from './McpConnectionScope'
 import {
   CallFigures,
   CallsSparkline,
@@ -15,6 +16,15 @@ import {
 } from './profile/AgentsPanel'
 import { ConnectionRollback } from './profile/ConnectionRollback'
 import { ConfirmButton, Pill } from './profile/primitives'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from './ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
 
 /**
@@ -22,9 +32,11 @@ import { Skeleton } from './ui/skeleton'
  * review): every AI assistant connected to this instance, its last 14 days of tool calls, the
  * idle review's state, a per-connection tool-call limit, and disconnect. Settings for the idle
  * review and the default limit sit at the top. Reads /api/mcp-connections (administrators).
+ * #3205 / #3214: each connection's limits (tools, collections, actions, kit) with an editor, and
+ * a Kits tab for the tool kits people pick when they connect an assistant.
  */
 
-export type McpAdminTab = 'all' | 'idle'
+export type McpAdminTab = 'all' | 'idle' | 'kits'
 
 interface IdleRow extends McpConnection {
   next_step: 'none' | 'clear' | 'flag' | 'notice' | 'revoke'
@@ -275,13 +287,119 @@ function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
   )
 }
 
+function ScopeCell({ c }: { c: McpConnection }) {
+  const [open, setOpen] = useState(false)
+  if (c.scope === undefined) return <span className='text-slate-400'>—</span>
+  return (
+    <span className='flex min-w-0 items-center gap-1.5'>
+      <span className='min-w-0 max-w-[220px]'>
+        <ScopeBadge scope={c.scope ?? null} />
+      </span>
+      {c.scope_editable && (
+        <>
+          <button
+            type='button'
+            onClick={() => setOpen(true)}
+            aria-label={`Change the limits of ${c.name}`}
+            className='h-6 shrink-0 rounded px-1.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
+          >
+            {c.scope ? 'Edit' : 'Limit'}
+          </button>
+          <McpScopeSheet
+            open={open}
+            onClose={() => setOpen(false)}
+            conn={c.conn}
+            name={c.name}
+            who={c.user_name}
+            scope={c.scope ?? null}
+            mode='admin'
+          />
+        </>
+      )}
+    </span>
+  )
+}
+
+/** Limit an API key before it has made an MCP call (it is not in the list until then). */
+function LimitKeyButton({ listed }: { listed: Set<string> }) {
+  const client = useNivaroClient()
+  const [open, setOpen] = useState(false)
+  const [picked, setPicked] = useState<{ id: number; name: string } | null>(null)
+  const keys = useQuery({
+    queryKey: ['nvr-mcp-api-keys'],
+    queryFn: () =>
+      client
+        .request(
+          get<{ data: Array<{ id: number; name: string; is_active?: boolean | number }> }>(
+            '/api-keys'
+          )
+        )
+        .then((r) => (r.data ?? []).filter((k) => k.is_active === true || k.is_active === 1)),
+    enabled: open,
+    staleTime: 30_000
+  })
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type='button'
+            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] font-medium text-slate-700 transition-colors hover:bg-muted dark:border-border dark:bg-card dark:text-slate-200'
+          >
+            <KeyRound className='h-3.5 w-3.5' /> Limit an API key
+            <ChevronsUpDown className='h-3 w-3 opacity-60' />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align='end' className='w-72 p-0'>
+          <Command>
+            <CommandInput placeholder='Find a key' />
+            <CommandList>
+              <CommandEmpty>{keys.isLoading ? 'Loading…' : 'No active key matches.'}</CommandEmpty>
+              <CommandGroup>
+                {(keys.data ?? [])
+                  .filter((k) => !listed.has(`k${k.id}`))
+                  .map((k) => (
+                    <CommandItem
+                      key={k.id}
+                      value={`${k.name} ${k.id}`}
+                      onSelect={() => {
+                        setPicked({ id: k.id, name: k.name })
+                        setOpen(false)
+                      }}
+                    >
+                      <span className='truncate'>{k.name}</span>
+                    </CommandItem>
+                  ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      {picked && (
+        <McpScopeSheet
+          open
+          onClose={() => setPicked(null)}
+          conn={`k${picked.id}`}
+          name={picked.name}
+          scope={null}
+          mode='admin'
+        />
+      )}
+    </>
+  )
+}
+
 export function McpConnectionsAdminView({
   tab,
-  onTabChange
+  onTabChange,
+  consolePath
 }: {
   tab: McpAdminTab
   onTabChange: (t: McpAdminTab) => void
+  /** The host's MCP console; when given, a connection's top tools open it to save a test (#3215). */
+  consolePath?: string
 }) {
+  const nav = useNavigation()
   const client = useNivaroClient()
   const qc = useQueryClient()
   const all = useQuery({
@@ -329,8 +447,10 @@ export function McpConnectionsAdminView({
 
   return (
     <div className='flex flex-col gap-4' data-nvr-mcp-admin>
-      {all.data?.settings && <SettingsStrip settings={all.data.settings} onSaved={refresh} />}
-      <BadgeSetting />
+      {all.data?.settings && tab !== 'kits' && (
+        <SettingsStrip settings={all.data.settings} onSaved={refresh} />
+      )}
+      {tab !== 'kits' && <BadgeSetting />}
       {all.data && !all.data.logged && (
         <p className='flex items-center gap-1.5 text-[12.5px] text-amber-700 dark:text-amber-400'>
           <AlertTriangle className='h-3.5 w-3.5' />
@@ -344,7 +464,8 @@ export function McpConnectionsAdminView({
           {(
             [
               ['all', `All connections${totals.n ? ` · ${totals.n}` : ''}`],
-              ['idle', `Idle${totals.idle ? ` · ${totals.idle}` : ''}`]
+              ['idle', `Idle${totals.idle ? ` · ${totals.idle}` : ''}`],
+              ['kits', 'Kits']
             ] as Array<[McpAdminTab, string]>
           ).map(([key, label]) => (
             <button
@@ -364,163 +485,200 @@ export function McpConnectionsAdminView({
             </button>
           ))}
         </div>
-        <span className='text-[12px] text-slate-500 dark:text-slate-400'>
-          {formatNumber(totals.calls)} tool calls in the last {all.data?.window_days ?? 14} days
-        </span>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder='Find an app or person'
-          aria-label='Find an app or person'
-          className='ml-auto h-8 w-56 rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-500 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100 dark:placeholder:text-slate-400'
-        />
+        {tab !== 'kits' && (
+          <>
+            <span className='text-[12px] text-slate-500 dark:text-slate-400'>
+              {formatNumber(totals.calls)} tool calls in the last {all.data?.window_days ?? 14} days
+            </span>
+            <span className='ml-auto flex flex-wrap items-center gap-2'>
+              {tab === 'all' && (
+                <LimitKeyButton
+                  listed={new Set((all.data?.connections ?? []).map((c) => c.conn))}
+                />
+              )}
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder='Find an app or person'
+                aria-label='Find an app or person'
+                className='h-8 w-56 max-w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-500 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100 dark:placeholder:text-slate-400'
+              />
+            </span>
+          </>
+        )}
       </div>
 
-      <section className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-        {loading ? (
-          <div className='space-y-2 p-4'>
-            {Array.from({ length: 4 }, (_, i) => (
-              <Skeleton key={i} className='h-9' />
-            ))}
-          </div>
-        ) : failed ? (
-          <p className='p-4 text-[12.5px] text-slate-500 dark:text-slate-400'>
-            Connections could not be loaded. Try again in a moment.
-          </p>
-        ) : rows.length === 0 ? (
-          <div className='flex items-start gap-3 p-4'>
-            <Plug className='mt-0.5 h-5 w-5 text-slate-400' />
-            <p className='max-w-[70ch] text-[12.5px] text-slate-600 dark:text-slate-300'>
-              {tab === 'idle'
-                ? 'No connection has gone unused long enough to be flagged.'
-                : q
-                  ? 'Nothing matches that search.'
-                  : 'Nobody has connected an AI assistant yet. When someone adds Nivaro as a connector and signs in, it appears here.'}
+      {tab === 'kits' ? (
+        <McpKitsPanel />
+      ) : (
+        <section className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+          {loading ? (
+            <div className='space-y-2 p-4'>
+              {Array.from({ length: 4 }, (_, i) => (
+                <Skeleton key={i} className='h-9' />
+              ))}
+            </div>
+          ) : failed ? (
+            <p className='p-4 text-[12.5px] text-slate-500 dark:text-slate-400'>
+              Connections could not be loaded. Try again in a moment.
             </p>
-          </div>
-        ) : (
-          <table className='w-full min-w-[880px] text-left text-[12px]'>
-            <thead>
-              <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
-                <th className='px-4 py-2 font-medium'>App</th>
-                <th className='py-2 pr-3 font-medium'>Person</th>
-                <th className='py-2 pr-3 font-medium'>Last used</th>
-                <th className='py-2 pr-3 font-medium'>
-                  {tab === 'idle' ? 'Idle review' : 'Last 14 days'}
-                </th>
-                <th className='py-2 pr-3 font-medium'>Top tools</th>
-                <th className='py-2 pr-3 font-medium'>Calls a minute</th>
-                <th className='py-2 pr-4' />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c) => {
-                const last = c.stats?.last_call_at ?? c.last_used_at
-                return (
-                  <Fragment key={c.conn}>
-                    <tr className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'>
-                      <td className='px-4 py-2.5'>
-                        <div className='flex items-center gap-2'>
-                          <span className='font-medium text-slate-800 dark:text-slate-100'>
-                            {c.name}
-                          </span>
-                          <KindPill kind={c.kind} />
-                        </div>
-                      </td>
-                      <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>
-                        {c.user_name ?? '—'}
-                      </td>
-                      <td className='whitespace-nowrap py-2.5 pr-3 text-slate-600 dark:text-slate-300'>
-                        {last ? formatRelative(last) : 'Never'}
-                      </td>
-                      <td className='py-2.5 pr-3'>
-                        {tab === 'idle' && c.idle ? (
-                          <span className='flex flex-wrap items-center gap-1.5'>
-                            <Pill tone={c.idle.status === 'notice' ? 'red' : 'amber'}>
-                              {c.idle.idle_days} days unused
-                            </Pill>
-                            <span className='text-slate-600 dark:text-slate-300'>
-                              {NEXT_STEP[(c as IdleRow).next_step]} · disconnects{' '}
-                              {formatDate(`${c.idle.revoke_on}T12:00:00Z`, {
-                                month: 'short',
-                                day: 'numeric'
-                              })}
+          ) : rows.length === 0 ? (
+            <div className='flex items-start gap-3 p-4'>
+              <Plug className='mt-0.5 h-5 w-5 text-slate-400' />
+              <p className='max-w-[70ch] text-[12.5px] text-slate-600 dark:text-slate-300'>
+                {tab === 'idle'
+                  ? 'No connection has gone unused long enough to be flagged.'
+                  : q
+                    ? 'Nothing matches that search.'
+                    : 'Nobody has connected an AI assistant yet. When someone adds Nivaro as a connector and signs in, it appears here.'}
+              </p>
+            </div>
+          ) : (
+            <table className='w-full min-w-[1040px] text-left text-[12px]'>
+              <thead>
+                <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-slate-400'>
+                  <th className='px-4 py-2 font-medium'>App</th>
+                  <th className='py-2 pr-3 font-medium'>Person</th>
+                  <th className='py-2 pr-3 font-medium'>Last used</th>
+                  <th className='py-2 pr-3 font-medium'>
+                    {tab === 'idle' ? 'Idle review' : 'Last 14 days'}
+                  </th>
+                  <th className='py-2 pr-3 font-medium'>Top tools</th>
+                  <th className='py-2 pr-3 font-medium'>May use</th>
+                  <th className='py-2 pr-3 font-medium'>Calls a minute</th>
+                  <th className='py-2 pr-4' />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c) => {
+                  const last = c.stats?.last_call_at ?? c.last_used_at
+                  return (
+                    <Fragment key={c.conn}>
+                      <tr className='border-b border-slate-100 align-middle last:border-0 hover:bg-muted/50 dark:border-border/60'>
+                        <td className='px-4 py-2.5'>
+                          <div className='flex items-center gap-2'>
+                            <span className='font-medium text-slate-800 dark:text-slate-100'>
+                              {c.name}
                             </span>
-                          </span>
-                        ) : (
-                          <span className='flex items-center gap-3'>
-                            {c.stats && <CallsSparkline days={c.stats.days} />}
-                            <CallFigures s={c.stats} />
-                          </span>
-                        )}
-                      </td>
-                      <td className='py-2.5 pr-3'>
-                        <span className='flex flex-wrap gap-1'>
-                          {(c.stats?.top_tools ?? []).slice(0, 3).map((t) => (
-                            <span
-                              key={t.tool}
-                              data-tip={`${formatNumber(t.calls)} calls`}
-                              className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
-                            >
-                              {t.tool}
+                            <KindPill kind={c.kind} />
+                          </div>
+                        </td>
+                        <td className='py-2.5 pr-3 text-slate-700 dark:text-slate-200'>
+                          {c.user_name ?? '—'}
+                        </td>
+                        <td className='whitespace-nowrap py-2.5 pr-3 text-slate-600 dark:text-slate-300'>
+                          {last ? formatRelative(last) : 'Never'}
+                        </td>
+                        <td className='py-2.5 pr-3'>
+                          {tab === 'idle' && c.idle ? (
+                            <span className='flex flex-wrap items-center gap-1.5'>
+                              <Pill tone={c.idle.status === 'notice' ? 'red' : 'amber'}>
+                                {c.idle.idle_days} days unused
+                              </Pill>
+                              <span className='text-slate-600 dark:text-slate-300'>
+                                {NEXT_STEP[(c as IdleRow).next_step]} · disconnects{' '}
+                                {formatDate(`${c.idle.revoke_on}T12:00:00Z`, {
+                                  month: 'short',
+                                  day: 'numeric'
+                                })}
+                              </span>
                             </span>
-                          ))}
-                        </span>
-                      </td>
-                      <td className='py-2.5 pr-3'>
-                        <LimitCell c={c} onSaved={refresh} />
-                      </td>
-                      <td className='py-2.5 pr-4 text-right'>
-                        <span className='inline-flex items-center justify-end gap-1.5'>
-                          <button
-                            type='button'
-                            onClick={() => setRollbackConn(rollbackConn === c.conn ? null : c.conn)}
-                            aria-expanded={rollbackConn === c.conn}
-                            data-tip='Undo what this app changed in a time window'
-                            className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
-                          >
-                            Roll back…
-                          </button>
-                          {c.kind !== 'token' && (c.kind !== 'oauth' || c.created_at) && (
-                            <ConfirmButton
-                              onConfirm={() => disconnect.mutate(c.conn)}
-                              disabled={disconnect.isPending}
-                              confirmLabel={
-                                c.kind === 'api_key' ? 'Switch key off?' : 'Disconnect?'
-                              }
-                              title={
-                                c.kind === 'api_key'
-                                  ? `Switch off ${c.name}`
-                                  : `Disconnect ${c.name}`
-                              }
-                              className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
-                              armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
-                            >
-                              {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}
-                            </ConfirmButton>
+                          ) : (
+                            <span className='flex items-center gap-3'>
+                              {c.stats && <CallsSparkline days={c.stats.days} />}
+                              <CallFigures s={c.stats} />
+                            </span>
                           )}
-                        </span>
-                      </td>
-                    </tr>
-                    {rollbackConn === c.conn && (
-                      <tr className='border-b border-slate-100 dark:border-border/60'>
-                        <td colSpan={7} className='px-4 pb-3 pt-1'>
-                          <ConnectionRollback
-                            conn={c.conn}
-                            name={c.name}
-                            scope='admin'
-                            onClose={() => setRollbackConn(null)}
-                          />
+                        </td>
+                        <td className='py-2.5 pr-3'>
+                          <span className='flex flex-wrap gap-1'>
+                            {(c.stats?.top_tools ?? []).slice(0, 3).map((t) =>
+                              consolePath && t.tool !== 'unknown' ? (
+                                <button
+                                  key={t.tool}
+                                  type='button'
+                                  onClick={() =>
+                                    nav.navigate(
+                                      `${consolePath}?tool=${encodeURIComponent(t.tool)}`
+                                    )
+                                  }
+                                  data-tip={`${formatNumber(t.calls)} calls · open in the console to save a contract test`}
+                                  className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900 dark:bg-muted dark:text-slate-300 dark:hover:bg-border dark:hover:text-white'
+                                >
+                                  {t.tool}
+                                </button>
+                              ) : (
+                                <span
+                                  key={t.tool}
+                                  data-tip={`${formatNumber(t.calls)} calls`}
+                                  className='rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
+                                >
+                                  {t.tool}
+                                </span>
+                              )
+                            )}
+                          </span>
+                        </td>
+                        <td className='py-2.5 pr-3'>
+                          <ScopeCell c={c} />
+                        </td>
+                        <td className='py-2.5 pr-3'>
+                          <LimitCell c={c} onSaved={refresh} />
+                        </td>
+                        <td className='py-2.5 pr-4 text-right'>
+                          <span className='inline-flex items-center justify-end gap-1.5'>
+                            <button
+                              type='button'
+                              onClick={() =>
+                                setRollbackConn(rollbackConn === c.conn ? null : c.conn)
+                              }
+                              aria-expanded={rollbackConn === c.conn}
+                              data-tip='Undo what this app changed in a time window'
+                              className='h-7 rounded-md px-2 text-[12px] font-medium text-slate-600 transition-colors hover:bg-muted hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-300 dark:hover:text-white'
+                            >
+                              Roll back…
+                            </button>
+                            {c.kind !== 'token' && (c.kind !== 'oauth' || c.created_at) && (
+                              <ConfirmButton
+                                onConfirm={() => disconnect.mutate(c.conn)}
+                                disabled={disconnect.isPending}
+                                confirmLabel={
+                                  c.kind === 'api_key' ? 'Switch key off?' : 'Disconnect?'
+                                }
+                                title={
+                                  c.kind === 'api_key'
+                                    ? `Switch off ${c.name}`
+                                    : `Disconnect ${c.name}`
+                                }
+                                className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-40 dark:border-border dark:text-slate-200 dark:hover:border-red-500/50 dark:hover:text-red-400'
+                                armedClassName='border-red-300 bg-red-50 text-red-700 dark:border-red-500/50 dark:bg-red-500/10 dark:text-red-400'
+                              >
+                                {c.kind === 'api_key' ? 'Switch off' : 'Disconnect'}
+                              </ConfirmButton>
+                            )}
+                          </span>
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+                      {rollbackConn === c.conn && (
+                        <tr className='border-b border-slate-100 dark:border-border/60'>
+                          <td colSpan={8} className='px-4 pb-3 pt-1'>
+                            <ConnectionRollback
+                              conn={c.conn}
+                              name={c.name}
+                              scope='admin'
+                              onClose={() => setRollbackConn(null)}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
       {disconnect.isError && (
         <p className='text-[12px] text-red-600 dark:text-red-400'>
           {(disconnect.error as Error)?.message || 'Could not disconnect'}

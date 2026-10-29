@@ -1,5 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Hammer, Plus, Puzzle, Trash2, X } from 'lucide-react'
+import {
+  ArrowRight,
+  Check,
+  ChevronsUpDown,
+  Hammer,
+  Lightbulb,
+  Plus,
+  Puzzle,
+  Trash2,
+  X
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
@@ -26,6 +36,8 @@ import { cn, formatRelative } from '@/lib/utils'
  * Assistant tools (#2464, #2465) — the tools this instance adds to MCP
  * clients beyond the built-in set: saved queries and flows an administrator
  * exposes under their own names, and the tools extensions register.
+ * #3206: patterns of calls assistants keep making one after another are offered as
+ * suggestions, each opening the editor prefilled.
  */
 
 type ParamType = 'string' | 'number' | 'integer' | 'boolean' | 'date'
@@ -74,7 +86,30 @@ interface FlowRow {
   status: string
 }
 
-type Selection = { kind: 'named'; index: number } | { kind: 'new' } | { kind: 'ext'; name: string }
+interface Suggestion {
+  key: string
+  tools: string[]
+  sessions: number
+  occurrences: number
+  connections: number
+  people: number
+  last_seen_at: string
+  collections: string[]
+  dismissed: boolean
+  prefill: { name: string; description: string; kind: NamedTool['kind']; read_only: boolean }
+}
+interface Suggestions {
+  logged: boolean
+  window_days: number
+  dismiss_ready: boolean
+  suggestions: Suggestion[]
+}
+
+type Selection =
+  | { kind: 'named'; index: number }
+  | { kind: 'new'; prefill?: Partial<NamedTool>; from?: string }
+  | { kind: 'ext'; name: string }
+  | { kind: 'suggestion'; key: string }
 
 const NAME_RE = /^[a-z][a-z0-9_]{2,47}$/
 const PARAM_TYPES: Array<{ value: ParamType; label: string }> = [
@@ -124,6 +159,20 @@ export function McpToolsPage() {
     queryFn: async () => (await api.get('/flows')).data.data as FlowRow[],
     staleTime: 60_000
   })
+  const suggestions = useQuery({
+    queryKey: ['mcp-tools', 'suggestions'],
+    queryFn: async () => (await api.get('/mcp-tools/suggestions')).data.data as Suggestions,
+    staleTime: 5 * 60_000
+  })
+  const dismiss = useMutation({
+    mutationFn: async (key: string) => api.post('/mcp-tools/suggestions/dismiss', { key }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['mcp-tools', 'suggestions'] })
+      setSel(null)
+      toast.success('Suggestion dismissed')
+    },
+    onError: (e) => toast.error(errMsg(e))
+  })
   const save = useMutation({
     mutationFn: async (tools: NamedTool[]) =>
       (await api.put('/mcp-tools/config', { tools })).data.data.tools as NamedTool[],
@@ -135,8 +184,25 @@ export function McpToolsPage() {
   const tools = config.data?.tools ?? []
   const ext = config.data?.extension_tools ?? []
   const current =
-    sel?.kind === 'named' ? tools[sel.index] : sel?.kind === 'new' ? blank() : undefined
+    sel?.kind === 'named'
+      ? tools[sel.index]
+      : sel?.kind === 'new'
+        ? { ...blank(), ...sel.prefill }
+        : undefined
   const extSel = sel?.kind === 'ext' ? ext.find((t) => t.name === sel.name) : undefined
+  const suggested = suggestions.data?.suggestions ?? []
+  const sugSel = sel?.kind === 'suggestion' ? suggested.find((x) => x.key === sel.key) : undefined
+  const fromSuggestion = (x: Suggestion) =>
+    setSel({
+      kind: 'new',
+      from: x.key,
+      prefill: {
+        name: x.prefill.name,
+        description: x.prefill.description,
+        kind: x.prefill.kind,
+        read_only: x.prefill.read_only
+      }
+    })
 
   return (
     <div className='flex min-h-0 flex-1 flex-col'>
@@ -211,6 +277,20 @@ export function McpToolsPage() {
                   />
                 ))}
               </ListGroup>
+              {suggested.length > 0 && (
+                <ListGroup label='Suggested from use' count={suggested.length}>
+                  {suggested.map((x) => (
+                    <ListRow
+                      key={x.key}
+                      active={sel?.kind === 'suggestion' && sel.key === x.key}
+                      title={x.tools.join(' → ')}
+                      mono
+                      sub={`${x.sessions} sessions · ${x.people} ${x.people === 1 ? 'person' : 'people'}`}
+                      onClick={() => setSel({ kind: 'suggestion', key: x.key })}
+                    />
+                  ))}
+                </ListGroup>
+              )}
               <p className='px-3 py-3 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                 {config.data?.builtin_names.length ?? 0} built-in tools are always offered as well.
               </p>
@@ -220,7 +300,11 @@ export function McpToolsPage() {
         <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
           {current ? (
             <ToolEditor
-              key={sel?.kind === 'named' ? `n${sel.index}` : 'new'}
+              key={
+                sel?.kind === 'named'
+                  ? `n${sel.index}`
+                  : `new:${sel?.kind === 'new' ? (sel.from ?? '') : ''}`
+              }
               initial={current}
               isNew={sel?.kind === 'new'}
               taken={
@@ -267,8 +351,23 @@ export function McpToolsPage() {
             />
           ) : extSel ? (
             <ExtensionToolDetail tool={extSel} />
+          ) : sugSel ? (
+            <SuggestionDetail
+              s={sugSel}
+              windowDays={suggestions.data?.window_days ?? 14}
+              canCreate={!!config.data?.ready}
+              canDismiss={!!suggestions.data?.dismiss_ready}
+              dismissing={dismiss.isPending}
+              onCreate={() => fromSuggestion(sugSel)}
+              onDismiss={() => dismiss.mutate(sugSel.key)}
+            />
           ) : (
-            <NothingSelected />
+            <NothingSelected
+              suggestions={suggested.length}
+              onShowSuggestion={() =>
+                suggested[0] && setSel({ kind: 'suggestion', key: suggested[0].key })
+              }
+            />
           )}
         </div>
       </div>
@@ -344,7 +443,102 @@ function ListRow({
   )
 }
 
-function NothingSelected() {
+function SuggestionDetail({
+  s,
+  windowDays,
+  canCreate,
+  canDismiss,
+  dismissing,
+  onCreate,
+  onDismiss
+}: {
+  s: Suggestion
+  windowDays: number
+  canCreate: boolean
+  canDismiss: boolean
+  dismissing: boolean
+  onCreate: () => void
+  onDismiss: () => void
+}) {
+  return (
+    <div className='px-6 py-5'>
+      <div className='mb-3 flex items-center gap-2'>
+        <Lightbulb className='h-4 w-4 text-amber-500' />
+        <h2 className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+          Assistants keep doing this in {s.tools.length} steps
+        </h2>
+      </div>
+      <ol className='mb-4 flex flex-wrap items-center gap-1.5' aria-label='The calls, in order'>
+        {s.tools.map((t, i) => (
+          <li key={`${t}-${i}`} className='flex items-center gap-1.5'>
+            {i > 0 && <ArrowRight className='h-3.5 w-3.5 text-slate-400' aria-hidden />}
+            <span className='rounded bg-slate-100 px-2 py-0.5 font-mono text-[12px] text-slate-800 dark:bg-muted dark:text-slate-100'>
+              {t}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className='grid max-w-[720px] grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 md:grid-cols-4 dark:border-border dark:bg-border'>
+        <Meta label={`Sessions (${windowDays} days)`} value={s.sessions.toLocaleString()} />
+        <Meta label='Times in all' value={s.occurrences.toLocaleString()} />
+        <Meta
+          label='People · connections'
+          value={`${s.people.toLocaleString()} · ${s.connections.toLocaleString()}`}
+        />
+        <Meta label='Last seen' value={formatRelative(s.last_seen_at)} />
+      </div>
+      {s.collections.length > 0 && (
+        <p className='mt-3 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          Mostly on{' '}
+          {s.collections.map((c, i) => (
+            <span key={c}>
+              {i > 0 && ', '}
+              <span className='font-mono text-[12px] text-slate-800 dark:text-foreground'>{c}</span>
+            </span>
+          ))}
+          .
+        </p>
+      )}
+      <p className='mt-3 max-w-[70ch] text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+        One named tool could answer this in a single call: fewer round trips, a smaller answer and
+        less for the assistant to get wrong.{' '}
+        {s.prefill.kind === 'custom_query'
+          ? 'Every step only reads, so a saved query that returns what the last step needed is usually enough.'
+          : 'Some steps write, so a flow that does the whole job is the natural fit.'}{' '}
+        Arguments are never recorded, so you choose the query or flow and its inputs.
+      </p>
+      <div className='mt-4 flex items-center gap-2'>
+        <Button
+          size='sm'
+          className='h-8 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan/90'
+          disabled={!canCreate}
+          onClick={onCreate}
+        >
+          <Plus className='mr-1 h-3.5 w-3.5' /> Create tool
+        </Button>
+        {canDismiss && (
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-8 text-[12px]'
+            disabled={dismissing}
+            onClick={onDismiss}
+          >
+            Not useful
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function NothingSelected({
+  suggestions = 0,
+  onShowSuggestion
+}: {
+  suggestions?: number
+  onShowSuggestion?: () => void
+}) {
   return (
     <div className='flex h-full flex-col items-start justify-center gap-2 px-10 py-16'>
       <Hammer className='h-6 w-6 text-slate-400' />
@@ -357,6 +551,17 @@ function NothingSelected() {
         query's own access level and user scopes still decide what comes back. Pick a tool on the
         left, or start a new one.
       </p>
+      {suggestions > 0 && (
+        <button
+          type='button'
+          onClick={onShowSuggestion}
+          className='mt-1 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
+        >
+          <Lightbulb className='h-3.5 w-3.5' />
+          {suggestions} suggestion{suggestions === 1 ? '' : 's'} from how assistants use this
+          instance
+        </button>
+      )}
     </div>
   )
 }

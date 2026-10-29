@@ -7,12 +7,12 @@ import {
   computeWidgetData,
   latestColumns,
   normalizeWidgetFilters,
-  registeredFieldSet,
   SYSTEM_COLLECTION,
   widgetSourceRefusal
 } from '../services/dashboard-widgets.js'
 import { readItems } from '../services/items.js'
 import { getLabels } from '../services/queues.js'
+import { DrillError, dashboardDrillFilter, drillDashboardWidget } from '../services/widget-drill.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -708,78 +708,38 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
     if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    if (!widget.collection) return reply.code(400).send({ error: 'Widget has no collection' })
-    if (SYSTEM_COLLECTION.test(widget.collection))
-      return reply.code(400).send({ error: 'Unknown collection' })
-
-    const fieldSet = await registeredFieldSet(widget.collection)
-    // Readable fields only: the widget's own filter on a field the viewer cannot read refuses;
-    // a dashboard filter-bar one does not bind; the clicked segment must be readable.
-    const { getAllowedFields } = await import('../services/permissions.js')
-    const allowed = await getAllowedFields(req.user!, 'read', widget.collection)
-    const readable = (f: string) =>
-      f === 'id' || allowed == null || allowed.includes('*') || allowed.includes(f)
-    const ownConds = normalizeWidgetFilters(widget.filters).filter((f) => fieldSet.has(f.field))
-    if (ownConds.some((f) => !readable(f.field)))
-      return reply.code(403).send({ error: 'Forbidden' })
-    const conds = [
-      ...ownConds,
-      ...normalizeWidgetFilters(req.body?.extra_filters).filter(
-        (f) => fieldSet.has(f.field) && readable(f.field)
+    let built: Awaited<ReturnType<typeof dashboardDrillFilter>>
+    try {
+      built = await dashboardDrillFilter(
+        req.user!,
+        widget,
+        req.body?.segment ?? null,
+        req.body?.extra_filters
       )
-    ]
-
-    const OP_MAP: Record<string, string> = {
-      eq: '_eq',
-      neq: '_neq',
-      gt: '_gt',
-      gte: '_gte',
-      lt: '_lt',
-      lte: '_lte',
-      contains: '_contains',
-      in: '_in'
+    } catch (err) {
+      if (err instanceof DrillError) return reply.code(err.statusCode).send({ error: err.message })
+      throw err
     }
-    const and: Array<Record<string, unknown>> = conds.map((f) => ({
-      [f.field]: { [OP_MAP[f.op ?? 'eq'] ?? '_eq']: f.value }
-    }))
-
-    const seg = req.body?.segment
-    if (seg && typeof seg.field === 'string' && seg.value !== undefined && seg.value !== null) {
-      if (seg.field === 'date') {
-        // Built-in charts bucket by CAST(created_at AS DATE) — a clicked bar's
-        // "date" segment means that calendar day, not a physical column.
-        const day = String(seg.value).slice(0, 10)
-        if (/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-          const next = new Date(`${day}T00:00:00Z`)
-          next.setUTCDate(next.getUTCDate() + 1)
-          and.push({ created_at: { _gte: day } })
-          and.push({ created_at: { _lt: next.toISOString().slice(0, 10) } })
-        }
-      } else if (fieldSet.has(seg.field) && readable(seg.field)) {
-        and.push({ [seg.field]: { _eq: seg.value } })
-      } else {
-        return reply.code(400).send({ error: 'Unknown segment field' })
-      }
-    }
+    const and = built.and
 
     try {
-      const res = await readItems(req.user!, widget.collection, {
+      const res = await readItems(req.user!, built.collection, {
         fields: ['id'],
         filter: and.length ? { _and: and } : undefined,
         limit: 100
       })
       const ids = (res.data ?? []).map((r: Record<string, unknown>) => String(r.id))
       const labels = ids.length
-        ? await getLabels(new Map([[widget.collection, new Set(ids)]]))
+        ? await getLabels(new Map([[built.collection, new Set(ids)]]))
         : ({} as Record<string, string>)
       return {
         data: {
-          collection: widget.collection,
+          collection: built.collection,
           total: res.total ?? ids.length,
           capped: ids.length >= 100,
           records: ids.map((id) => ({
             id,
-            label: labels[`${widget.collection}:${id}`] ?? `#${id}`
+            label: labels[`${built.collection}:${id}`] ?? `#${id}`
           }))
         }
       }
@@ -788,6 +748,49 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       return reply
         .code(status)
         .send({ error: status === 403 ? 'Forbidden' : 'Failed to resolve records' })
+    }
+  })
+
+  // ── POST /widgets/:widgetId/rows — the definition and the rows behind a number (#3208) ──
+  // The MCP drill_widget tool: the same filter as /drill (dashboardDrillFilter),
+  // whole rows (asked-for or the widget's own columns, readable only), capped.
+  app.post<{
+    Params: { widgetId: string }
+    Body: {
+      segment?: { field?: string; value?: unknown } | null
+      extra_filters?: unknown
+      fields?: unknown
+      limit?: unknown
+    }
+  }>('/widgets/:widgetId/rows', async (req, reply) => {
+    const userId = req.user!.id
+    const widget = (await db('nivaro_dashboard_widgets')
+      .where('id', req.params.widgetId)
+      .first()) as WidgetRow | undefined
+    if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+    const dashboard = (await db('nivaro_dashboards').where('id', widget.dashboard).first()) as
+      | DashboardRow
+      | undefined
+    if (!dashboard) return reply.code(404).send({ error: 'Dashboard not found' })
+    if (!req.isAdmin && dashboard.user !== userId && !dashboard.is_shared) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    try {
+      const out = await drillDashboardWidget(req.user!, widget, {
+        segment: req.body?.segment ?? null,
+        extra_filters: req.body?.extra_filters,
+        fields: req.body?.fields,
+        limit: req.body?.limit
+      })
+      return {
+        data: {
+          ...out,
+          dashboard: { id: dashboard.id, name: (dashboard as { name?: string }).name }
+        }
+      }
+    } catch (err) {
+      if (err instanceof DrillError) return reply.code(err.statusCode).send({ error: err.message })
+      throw err
     }
   })
 }

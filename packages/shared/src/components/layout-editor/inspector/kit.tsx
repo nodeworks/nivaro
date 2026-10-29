@@ -1,6 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, Globe2, X } from 'lucide-react'
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, ChevronRight, Globe2, Star, X } from 'lucide-react'
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
@@ -18,6 +28,7 @@ import { SimpleSelect } from '../../ui/SimpleSelect'
 import { Switch } from '../../ui/switch'
 import type { DesignTarget } from '../design-context'
 import { useFocusBuffer } from '../focus-buffer'
+import { togglePinnedSetting, usePinnedSettings } from '../nav/view-prefs'
 import { effectText, groupTitle, inputBase, labelText, segOption, segTrack } from '../panel-style'
 import type { ApplyOptions } from '../useLayoutDraft'
 
@@ -275,8 +286,21 @@ export function Setting({
   className?: string
 }) {
   const w = useContext(GlobalWriterContext)
-  return (
-    <div data-setting={k} data-setting-row='' className={cn('relative space-y-1.5', className)}>
+  // #3200: inside a pin zone the row can be starred; a starred row shows at the tab's top.
+  const zone = useContext(PinZoneContext)
+  const pins = usePinnedSettings()
+  const at = zone ? pins.indexOf(k) : -1
+  const pinned = at >= 0
+  const register = zone?.register
+  useEffect(() => (pinned && register ? register() : undefined), [pinned, register])
+  const row = (
+    <div
+      data-setting={k}
+      data-setting-row=''
+      data-setting-pinned={pinned ? '' : undefined}
+      style={pinned ? { order: at } : undefined}
+      className={cn('group/setting relative space-y-1.5', className)}
+    >
       <div className='flex min-h-5 items-center justify-between gap-3'>
         <span className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5'>
           <span className={labelText}>{label}</span>
@@ -290,7 +314,77 @@ export function Setting({
       </p>
       {enforced && <EnforcementNote />}
       {scope === 'field' && w?.pending?.key === (confirmAt ?? k) && <GlobalConfirm />}
+      {zone && <PinStar k={k} label={label} pinned={pinned} />}
     </div>
+  )
+  // The row moves, its state and context with it (a portal keeps the React tree).
+  return pinned && zone?.el ? createPortal(row, zone.el) : row
+}
+
+// ── Pinned settings (#3200) ─────────────────────────────────────────────────
+
+interface PinZoneValue {
+  /** Where pinned rows of this tab render. */
+  el: HTMLElement | null
+  /** A pinned row is showing here (the zone shows while any is); returns its release. */
+  register: () => () => void
+}
+
+const PinZoneContext = createContext<PinZoneValue | null>(null)
+
+/** The star in a setting row's left gutter: hover (or focus) shows it; on when pinned. */
+function PinStar({ k, label, pinned }: { k: string; label: ReactNode; pinned: boolean }) {
+  const name = typeof label === 'string' ? label : 'this setting'
+  return (
+    <button
+      type='button'
+      data-setting-pin={k}
+      aria-pressed={pinned}
+      aria-label={pinned ? `Unpin ${name}` : `Pin ${name} to the top of this tab`}
+      data-tip={pinned ? 'Unpin' : 'Pin to the top of this tab'}
+      onClick={() => togglePinnedSetting(k)}
+      className={cn(
+        'absolute -left-[15px] top-0 inline-flex h-5 w-3.5 items-center justify-center rounded-sm text-slate-400 transition-colors hover:text-amber-500 focus-visible:visible focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:text-amber-300',
+        pinned
+          ? 'visible text-amber-500 dark:text-amber-300'
+          : 'invisible group-hover/setting:visible'
+      )}
+    >
+      <Star className={cn('h-3 w-3', pinned && 'fill-current')} />
+    </button>
+  )
+}
+
+/**
+ * The top of an inspector tab: the settings this person pinned there, then
+ * the tab itself. Settings pin by their parity key, so a pin follows the
+ * setting to every field that shows it. Read-only (inherited) views render
+ * no zone: a pinned control must never leave its disabled fieldset.
+ */
+export function PinZone({ children }: { children: ReactNode }) {
+  const [el, setEl] = useState<HTMLElement | null>(null)
+  const [count, setCount] = useState(0)
+  const register = useCallback(() => {
+    setCount((n) => n + 1)
+    return () => setCount((n) => n - 1)
+  }, [])
+  const value = useMemo(() => ({ el, register }), [el, register])
+  return (
+    <PinZoneContext.Provider value={value}>
+      {/* The hidden attribute (not a class): the panel's space-y skips it while empty. */}
+      <div
+        data-pinned-settings={count}
+        hidden={count === 0}
+        className='space-y-3 border-b border-slate-100 pb-5 dark:border-border/60'
+      >
+        <h3 className={cn(groupTitle, 'flex items-center gap-1.5')}>
+          <Star className='h-3 w-3 fill-current text-amber-500 dark:text-amber-300' />
+          Pinned
+        </h3>
+        <div ref={setEl} className='flex flex-col gap-5' />
+      </div>
+      {children}
+    </PinZoneContext.Provider>
   )
 }
 

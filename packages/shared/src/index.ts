@@ -335,6 +335,16 @@ export * from './components/layout-editor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
+  type McpCatalogTool,
+  McpKitsPanel,
+  McpScopeSheet,
+  type McpScopeSummary,
+  type McpToolKit,
+  ScopeBadge,
+  scopeSummaryText,
+  useMcpCatalog
+} from './components/McpConnectionScope'
+export {
   type McpAdminTab,
   McpConnectionsAdminView
 } from './components/McpConnectionsAdminView'

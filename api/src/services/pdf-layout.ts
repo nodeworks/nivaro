@@ -10,7 +10,7 @@ import { isEmptyValue, isFolded, shapePdfFields } from './form-structure.js'
 import type { PdfLayoutData } from './pdf-layout-themes.js'
 import { classicTheme, escHtml, executiveTheme, minimalTheme } from './pdf-layout-themes.js'
 import { resolvePlacementText, type TextContext, textRulesOf } from './placement-behaviour.js'
-import { peerHtmlToPdf, renderPeerUrl, renderUnavailable } from './render-peer.js'
+import { peerHtmlToPdf, peerHtmlToPng, renderPeerUrl, renderUnavailable } from './render-peer.js'
 
 // Allowlist-based HTML sanitizer for richtext fields rendered in PDF.
 // Strips all tags not on the allowlist (keeps inner text), drops block-removed tags
@@ -910,6 +910,85 @@ export async function htmlToPdfLocal(html: string, opts: PdfOptions = {}): Promi
       console.warn(
         `[pdf] blocked ${blocked.size} request(s) to: ${[...blocked].slice(0, 5).join(', ')}`
       )
+    await page.close()
+  }
+}
+
+export interface PngOptions {
+  /** Viewport width in CSS pixels (320–1600, default 1100). */
+  width?: number
+  /** The image is cut at this height in CSS pixels (400–8000, default 6000). */
+  maxHeight?: number
+  /** Device pixel ratio (1 or 2, default 1). */
+  scale?: number
+  /** Origins besides PUBLIC_URL / ADMIN_URL the page may load from. */
+  allowOrigins?: string[]
+}
+
+export function pngBounds(opts: PngOptions): { width: number; maxHeight: number; scale: number } {
+  const clamp = (v: unknown, lo: number, hi: number, d: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d
+  }
+  return {
+    width: clamp(opts.width, 320, 1600, 1100),
+    maxHeight: clamp(opts.maxHeight, 400, 8000, 6000),
+    scale: Number(opts.scale) === 2 ? 2 : 1
+  }
+}
+
+/** Render an HTML string to a PNG (JS disabled; the full page, cut at maxHeight).
+ *  Locally when this process has Chromium; otherwise on the render peer
+ *  (RENDER_URL, #2789) — the same Buffer either way; otherwise a 503 that
+ *  says why. Used by the MCP form image (#3216). */
+export async function htmlToPng(html: string, opts: PngOptions = {}): Promise<Buffer> {
+  if (!(await hasLocalChromium())) {
+    if (renderPeerUrl())
+      return peerHtmlToPng(html, { ...opts, allowOrigins: pdfOwnOrigins(opts.allowOrigins) })
+    throw renderUnavailable('pdf')
+  }
+  return htmlToPngLocal(html, opts)
+}
+
+/** The local PNG render, also what the render peer's own route calls. Every
+ *  request the page makes goes through pdfRequestAllowed. */
+export async function htmlToPngLocal(html: string, opts: PngOptions = {}): Promise<Buffer> {
+  const own = pdfOwnOrigins(opts.allowOrigins)
+  const { width, maxHeight, scale } = pngBounds(opts)
+  const b = await getBrowser()
+  const page = await b.newPage()
+  try {
+    await page.setJavaScriptEnabled(false)
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      if (req.isInterceptResolutionHandled()) return
+      void pdfRequestAllowed(req.url(), own)
+        .then((ok) => (ok ? req.continue() : req.abort('blockedbyclient')))
+        .catch(() => req.abort('blockedbyclient').catch(() => undefined))
+    })
+    // A short viewport: the content size then measures the page, not the window.
+    await page.setViewport({ width, height: 200, deviceScaleFactor: scale })
+    await page.setContent(html, { waitUntil: 'domcontentloaded' })
+    // The page's own height from the layout metrics (no page script runs), cut at maxHeight.
+    const cdp = await page.createCDPSession()
+    let contentHeight = 200
+    try {
+      const m = (await cdp.send('Page.getLayoutMetrics')) as {
+        cssContentSize?: { height?: number }
+        contentSize?: { height?: number }
+      }
+      const h = Number(m.cssContentSize?.height ?? m.contentSize?.height)
+      if (Number.isFinite(h) && h > 0) contentHeight = Math.ceil(h)
+    } finally {
+      await cdp.detach().catch(() => undefined)
+    }
+    const shot = await page.screenshot({
+      type: 'png',
+      clip: { x: 0, y: 0, width, height: Math.min(contentHeight, maxHeight) },
+      captureBeyondViewport: true
+    })
+    return Buffer.from(shot)
+  } finally {
     await page.close()
   }
 }

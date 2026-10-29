@@ -613,6 +613,101 @@ Authorization: Bearer <token>
       type: 'note',
       text: 'Extension hooks receive `ctx.dryRun = true`. A hook may read and shape the payload. It must not write, send or notify while the flag is set.'
     },
+    { type: 'h3', text: 'Preview an update (`dry_run`)' },
+    {
+      type: 'p',
+      text: '`PATCH /api/items/:collection/:id?dry_run=1` reports what the update would change and saves nothing. Everything a real update runs before it writes runs here: contracts, permissions, row filters and User Scopes, the edit lock, mid-air collisions (`_base_revision`), before-hooks (with `ctx.dryRun = true`), change-reason rules, rules, field rules, row rules, computed fields, validation, relation limits and picker rules. The UPDATE is tried inside a transaction that is rolled back, so the database’s own refusals are found too. No activity row, revision, after-hook, notification, webhook, rollup or live update happens.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/items/orders/1042?dry_run=1
+{ "status": "approved", "colour": "red" }
+
+// Response (200)
+{
+  "dry_run": true,
+  "ok": true,
+  "status": 200,
+  "would": "update",
+  "id": "1042",
+  "changes": [
+    { "field": "status", "from": "review", "to": "approved" },
+    { "field": "approved_on", "from": null, "to": "2026-10-29" }
+  ],
+  "unchanged": [],
+  "hidden": [],                   // would change, but you cannot read them: names only
+  "filled": ["approved_on"],      // changed by rules, not sent
+  "ignored": ["colour"],          // stored nowhere
+  "links": {}, "nested": {},
+  "notes": ["Nothing was saved. After-save rules, hooks, notifications, rollups and webhooks did not run."]
+}
+
+// A change that would be refused (still 200: the preview ran)
+{ "dry_run": true, "ok": false, "status": 422, "code": "CHANGE_REASON_REQUIRED",
+  "error": "A reason is required when changing: amount", "violations": { ... }, ... }`
+    },
+    {
+      type: 'p',
+      text: '`from` and `to` are the values as you read them. A record you may not update, one outside your scope, and a collection that does not exist answer a real `403` / `404`, as an update would. A sandbox key may preview too.'
+    },
+    { type: 'h3', text: 'Check a filter (`filter-check`)' },
+    {
+      type: 'p',
+      text: '`GET /api/items/:collection/filter-check?filter=<json>` judges a filter without reading a record. Each clause of the filter is run on its own through the same checks a list read runs (fields, relation paths, operators, field read access), so every problem is named, not just the first. Clauses that pass are also checked against the field: a text operator on a number or date, a range on a yes/no field or an id, a value a number or date column can never match, and a value outside the field’s choices (a choice label where the stored value was meant). Where the fix is clear (the nearest field name, the operator as the API spells it, the stored choice value, a single value wrapped in a list), `suggestion` is the corrected filter. It is only offered when it passes every check itself.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/items/orders/filter-check?filter={"stauts":{"_eq":"Open"},"amount":{"_like":"5"}}
+
+{ "data": {
+  "ok": false,
+  "collection": "orders",
+  "errors": [
+    { "path": "stauts", "code": "UNKNOWN_FIELD", "message": "orders has no field \\"stauts\\"", "fix": "did you mean \\"status\\"?" },
+    { "path": "amount", "code": "FILTER_OPERATOR_UNKNOWN", "message": "\\"_like\\" is not a filter operator (at \\"amount\\")", "fix": "use \\"_contains\\"" }
+  ],
+  "warnings": [],
+  "suggestion": { "status": { "_eq": "open" }, "amount": { "_eq": "5" } },
+  "clauses": 2
+} }`
+    },
+    { type: 'h3', text: 'Follow changes (`/api/changes`)' },
+    {
+      type: 'p',
+      text: '`GET /api/changes` is a change feed for a client that cannot keep a live connection (a script, a nightly sync, an MCP assistant). Call it once without a cursor to start from now (or with `since=<ISO time>`), keep the `cursor` it returns, and pass it next time. It lists record ids, the action (`create`, `update`, `delete`) and the names of the fields that changed, never values and never who changed them. Read the records for their values. Only records you can see now are listed, and field names are cut to the fields you can read. A delete is listed when you deleted it yourself, or when you can see every record of that collection (otherwise a deleted id could not be checked against your scope). Collections whose audit level keeps no activity never appear. `has_more: true` means call again at once; the newest few seconds wait for the next call.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/changes?cursor=c1.eyJhIjo5MTIzNH0&collections=orders,order_lines&limit=100
+
+{ "data": {
+  "changes": [
+    { "collection": "orders", "id": "1042", "action": "update", "fields": ["status", "approved_on"], "at": "2026-10-29T14:02:11.000Z" },
+    { "collection": "order_lines", "id": "88812", "action": "create", "at": "2026-10-29T14:02:12.000Z" }
+  ],
+  "cursor": "c1.eyJhIjo5MTI0MH0",
+  "has_more": false
+} }`
+    },
+    {
+      type: 'table',
+      head: ['Parameter', 'Meaning'],
+      rows: [
+        [
+          '`cursor`',
+          'The cursor the last call returned. A cursor this feed did not make is a `400 BAD_CURSOR`.'
+        ],
+        ['`since`', 'Without a cursor: start at this time.'],
+        [
+          '`collections`',
+          'Comma list (up to 50). Ones you cannot read come back in `not_readable`.'
+        ],
+        [
+          '`limit`',
+          'Records per page, 1–500 (default 100). A record changed several times in one page is listed once.'
+        ]
+      ]
+    },
     { type: 'h3', text: 'Create with related rows' },
     {
       type: 'p',

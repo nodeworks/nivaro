@@ -530,7 +530,10 @@ export function AppLayout() {
           .map((Comp, i) => (
             <Comp key={`cloud-${i}`} />
           ))}
-        <div className='flex h-screen flex-col overflow-hidden bg-secondary'>
+        {/* relative (here and on the page outlet): absolute descendants — every sr-only label —
+            need a containing block inside the app, or they anchor to the page, escape the
+            overflow-hidden shell and stretch the document past its end (profile, layout editor). */}
+        <div className='relative flex h-screen flex-col overflow-hidden bg-secondary'>
           {/* API redeploy notice — clears itself once this tab reloads onto the
             new build (see the shared api-version watcher). */}
           <ApiUpdateBanner
@@ -864,7 +867,7 @@ export function AppLayout() {
                     ) : (
                       <div
                         key={pageKey}
-                        className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
+                        className='animate-page-enter relative flex-1 min-h-0 overflow-auto flex flex-col'
                       >
                         <Outlet />
                       </div>

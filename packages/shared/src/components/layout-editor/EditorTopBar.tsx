@@ -31,6 +31,7 @@ import { useDisplayTemplate, useRoleNames, useRuleChoiceLabels } from './overvie
 import { Pill, purposeSegments, rowPill, Sentence, TYPE_USE } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import type { PreviewDevice } from './preview/preview-model'
+import { SampleRecordChip, SampleRecordOffer } from './preview/SampleRecord'
 import { ScheduleChange } from './ScheduleChange'
 import {
   BarMenu,
@@ -65,6 +66,8 @@ export interface PreviewAs {
   values?: Record<string, unknown> | null
   /** Tint fields by how many roles see them (#2580). */
   who?: boolean
+  /** Made-up values the canvas shows instead of a record's (#3196); never saved. */
+  sample?: Record<string, unknown> | null
 }
 
 const inputCls =
@@ -236,14 +239,16 @@ function PreviewAsButton({
   const compareName = roles.find((r) => r.id === value.compareRoleId)?.name ?? null
   const summary =
     [
-      value.record?.label,
+      value.sample ? 'Sample record' : value.record?.label,
       compareName && roleName ? `${roleName} | ${compareName}` : roleName,
       value.state?.label,
       value.values && Object.keys(value.values).length > 0 ? 'What if' : null,
       value.device && value.device !== 'desktop'
         ? value.device === 'phone'
           ? 'Phone'
-          : 'Tablet'
+          : value.device === 'all'
+            ? 'All devices'
+            : 'Tablet'
         : null,
       value.who ? 'Who sees' : null,
       // #2858 — pretending something is down is a preview mode too: never forgotten on screen.
@@ -289,7 +294,13 @@ function PreviewAsButton({
         className='max-h-[min(80vh,640px)] w-[320px] overflow-y-auto overscroll-contain p-3'
       >
         <p className={labelCls}>Record</p>
-        {value.record ? (
+        {value.sample ? (
+          <SampleRecordChip
+            collection={collection}
+            onSample={(sample) => onChange({ ...value, record: null, sample })}
+            onClear={() => onChange({ ...value, sample: null })}
+          />
+        ) : value.record ? (
           <span className='inline-flex max-w-full items-center gap-1.5 rounded-full bg-nvr-cyan/10 px-2.5 py-1 text-[12px] font-medium text-slate-800 dark:text-foreground'>
             <span className='truncate'>{value.record.label}</span>
             <button
@@ -316,19 +327,29 @@ function PreviewAsButton({
                   key={String(o.id)}
                   type='button'
                   onClick={() =>
-                    onChange({ ...value, record: { id: String(o.id), label: o.label } })
+                    onChange({
+                      ...value,
+                      record: { id: String(o.id), label: o.label },
+                      sample: null
+                    })
                   }
                   className='block w-full truncate rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-foreground'
                 >
                   {o.label}
                 </button>
               ))}
-              {!loading && options.length === 0 && (
+              {!loading && options.length === 0 && debounced.trim() !== '' && (
                 <p className='px-2 py-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
                   No records match.
                 </p>
               )}
             </div>
+            {/* #3196: made-up values, offered first when there is nothing to pick. */}
+            <SampleRecordOffer
+              collection={collection}
+              empty={!loading && options.length === 0 && debounced.trim() === ''}
+              onSample={(sample) => onChange({ ...value, record: null, sample })}
+            />
           </>
         )}
         <p className={cn(labelCls, 'mt-3')}>As a role</p>

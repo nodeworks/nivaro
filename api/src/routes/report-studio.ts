@@ -487,6 +487,47 @@ export async function reportStudioRoutes(app: FastifyInstance) {
     }
   })
 
+  // ── The definition and the rows behind a widget's number (#3208) ────────────
+  // The MCP drill_widget tool. As the viewer (readItems): the widget's filters,
+  // the report's (or the given) date range on its date field, entity filters and
+  // an optional clicked dimension value; custom-query widgets answer their rows.
+  app.post<{
+    Params: { id: string; widgetId: string }
+    Body: {
+      date_range?: DateRange | null
+      entity_filters?: EntityFilter[]
+      segment?: { field?: string | null; value?: unknown } | null
+      fields?: unknown
+      limit?: unknown
+    }
+  }>('/:id/widgets/:widgetId/rows', { preHandler: requireAuth }, async (req, reply) => {
+    const report = await loadReport(req.params.id)
+    if (!report) return reply.code(404).send({ error: 'Report not found' })
+    if (!canReadReport(report, req)) return reply.code(403).send({ error: 'Forbidden' })
+    const widget = (await db('nivaro_report_widgets')
+      .where({ id: req.params.widgetId, report: report.id })
+      .first()) as WidgetRow | undefined
+    if (!widget) return reply.code(404).send({ error: 'Widget not found' })
+    const { DrillError, drillReportWidget } = await import('../services/widget-drill.js')
+    try {
+      const out = await drillReportWidget(req.user!, report.id, widget, {
+        segment: req.body?.segment ?? null,
+        date_range:
+          req.body?.date_range ??
+          parseJson<{ date_range?: DateRange }>(report.global_filters)?.date_range ??
+          null,
+        entity_filters: Array.isArray(req.body?.entity_filters) ? req.body.entity_filters : [],
+        fields: req.body?.fields,
+        limit: req.body?.limit
+      })
+      return reply.send({ data: { ...out, report: { id: report.id, name: report.name } } })
+    } catch (err) {
+      if (err instanceof DrillError) return reply.code(err.statusCode).send({ error: err.message })
+      const status = (err as { statusCode?: number }).statusCode ?? 500
+      return reply.code(status).send({ error: 'Failed to read the rows' })
+    }
+  })
+
   // Preview an unsaved widget config (builder live preview)
   app.post<{
     Body: {

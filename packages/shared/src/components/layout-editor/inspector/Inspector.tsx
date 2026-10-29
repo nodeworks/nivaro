@@ -17,6 +17,7 @@ import { AutoArrangeButton } from '../AutoArrange'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
 import { PlacementPresets } from '../entry/PlacementPresets'
 import { FIELD_HOLDERS } from '../field-zones'
+import { RevertInline } from '../PlaceTools'
 import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
 import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
@@ -39,6 +40,7 @@ import {
   GlobalWriterContext,
   type InspectorEnv,
   InspectorEnvContext,
+  PinZone,
   ScopeLegend,
   useInspectorEnv
 } from './kit'
@@ -370,10 +372,11 @@ function GroupPanel({
             {body}
           </div>
         ) : (
-          <>
+          <PinZone>
             <ScopeLegend />
             <div className='flex flex-wrap gap-2'>
               <ArrangeButton targets={[{ kind: 'group', key: group.key }]} />
+              <RevertInline target={{ kind: 'group', key: group.key }} bundle={env.bundle} />
               {FIELD_HOLDERS.has(group.type) &&
                 env.layoutType !== 'table' &&
                 env.layoutType !== 'file' && (
@@ -401,7 +404,7 @@ function GroupPanel({
                 name={group.label || titleCase(group.key)}
               />
             </div>
-          </>
+          </PinZone>
         )}
       </PanelBody>
     </>
@@ -436,10 +439,10 @@ function SimplePanel({
             </fieldset>
           </div>
         ) : (
-          <>
+          <PinZone>
             <ScopeLegend />
             {children}
-          </>
+          </PinZone>
         )}
       </PanelBody>
     </>
@@ -668,11 +671,15 @@ function FieldInspector({
               {tabBody}
             </div>
           ) : (
-            <>
+            <PinZone>
+              {/* #3197: only while this field differs from the saved form. */}
+              <div className='mb-3 empty:hidden'>
+                <RevertInline target={target} bundle={env.bundle} />
+              </div>
               <PlacementPresets bundle={env.bundle} rows={[row]} apply={env.apply} />
               <ScopeLegend field />
               {tabBody}
-            </>
+            </PinZone>
           )}
         </PanelBody>
       </GlobalWriterContext.Provider>

@@ -10,6 +10,7 @@
     "chaos:gallery": "node scripts/chaos/error-gallery.mjs",
     "chaos:deploy-load": "node scripts/chaos/deploy-under-load.mjs",
     "dev:check": "node scripts/dev-preflight.mjs --check",
+    "mcp:contract-tests": "node scripts/mcp-contract-tests.mjs",
     "dev:db": "node scripts/dev-against-db.mjs",
     "dev:api": "pnpm --filter @nivaro/api dev",
     "dev:admin": "pnpm --filter @nivaro/admin dev",
