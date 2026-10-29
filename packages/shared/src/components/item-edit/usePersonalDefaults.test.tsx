@@ -332,6 +332,39 @@ describe('usePersonalDefaults: later parent changes', () => {
     expect(draft().region).toBe('11')
   })
 
+  it('undo also takes back the parents its default filled on the way in', async () => {
+    // Only Ship-to has a default; its saved set brings Zone and Region with it.
+    await mount({ defaults: [d('ship_to', '100', { zone: '2', region: '10' })] })
+    expect(draft()).toMatchObject({ zone: '2', region: '10', ship_to: '100' })
+    await act(async () => api.undo('ship_to'))
+    await flush()
+    expect(draft()).toMatchObject({ zone: null, region: null, ship_to: null })
+    expect(api.ledger.size).toBe(0)
+  })
+
+  it('undo keeps a filled parent another applied default still sits on', async () => {
+    const rules = { ...RULES, dock: [{ parent_field: 'zone', filter_column: 'zone' }] }
+    await mount({
+      rules,
+      allowed: ['zone', 'region', 'ship_to', 'dock'],
+      defaults: [d('ship_to', '100', { zone: '2', region: '10' }), d('dock', '7', { zone: '2' })]
+    })
+    expect(draft()).toMatchObject({ zone: '2', region: '10', ship_to: '100', dock: '7' })
+    await act(async () => api.undo('ship_to'))
+    await flush()
+    // Region was Ship-to's alone; Zone still carries Dock's default.
+    expect(draft()).toMatchObject({ zone: '2', region: null, ship_to: null, dock: '7' })
+  })
+
+  it('undo leaves a parent the person set since', async () => {
+    await mount({ defaults: [d('ship_to', '100', { zone: '2', region: '10' })] })
+    await act(async () => form.personEdit('zone', '2'))
+    await act(async () => api.undo('ship_to'))
+    await flush()
+    expect(draft().ship_to).toBeNull()
+    expect(draft().zone).toBe('2')
+  })
+
   it('undo clears the field and its auto-filled children', async () => {
     await mount({ defaults: defaults() })
     await act(async () => api.undo('zone'))

@@ -221,6 +221,9 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const [hints, setHints] = useState<Map<string, string>>(() => new Map())
   // Fields the person undid: never refilled by a later parent change.
   const undoneRef = useRef(new Set<string>())
+  // Parents a field's default filled on its way in (empty parents set from the same saved
+  // set): undoing that field takes them back too, unless something still applied needs them.
+  const filledByRef = useRef(new Map<string, string[]>())
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
@@ -397,6 +400,10 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
         return 'stale'
       }
       write(field, pick.value, replacing ? start : undefined)
+      filledByRef.current.set(
+        field,
+        filled.map(([p]) => p)
+      )
       return [...filled.map(([p]) => p), field]
     },
     [currentValue, viewOf, setHint, blockedHint, label, write]
@@ -533,22 +540,55 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     if (again.length > 0) void runPass(again)
   }, [personTick])
 
+  /**
+   * Undo takes back everything the default brought with it: the field, the auto-filled
+   * children that cascade from it, and the empty parents its default filled on the way in —
+   * unless another default that stays still sits on that parent (its own fill, or a child that
+   * cascades from it). Each is cleared only while it still holds the applied value.
+   */
   const undo = useCallback(
     (field: string) => {
       const o = optsRef.current
-      if (!ledgerRef.current.has(field)) return
-      const targets = [
-        field,
-        ...[...ledgerRef.current.keys()].filter(
-          (f) => f !== field && cascadeParents(f, o.rulesFor).includes(field)
-        )
-      ]
-      for (const f of targets) {
-        const v = ledgerRef.current.get(f)
-        if (sameDefaultValue(currentValue(f), v)) o.setFieldValue(f, null, v)
-        ledgerRef.current.delete(f)
+      const ledger = ledgerRef.current
+      if (!ledger.has(field)) return
+      const parentsOf = (f: string) => cascadeParents(f, o.rulesFor)
+      const going = new Set<string>([field])
+      for (let grew = true; grew; ) {
+        grew = false
+        // Downstream: applied fields that cascade from anything going.
+        for (const f of ledger.keys()) {
+          if (going.has(f)) continue
+          if (parentsOf(f).some((p) => going.has(p))) {
+            going.add(f)
+            grew = true
+          }
+        }
+        // Upstream: parents a going field's default filled, when nothing staying needs them.
+        for (const g of [...going]) {
+          for (const p of filledByRef.current.get(g) ?? []) {
+            if (going.has(p) || !ledger.has(p)) continue
+            const needed = [...ledger.keys()].some(
+              (f) =>
+                f !== p &&
+                !going.has(f) &&
+                ((filledByRef.current.get(f) ?? []).includes(p) || parentsOf(f).includes(p))
+            )
+            if (!needed) {
+              going.add(p)
+              grew = true
+            }
+          }
+        }
       }
-      undoneRef.current.add(field)
+      // Children before their parents, so a cleared parent never clears a child twice.
+      const depth = (f: string) => parentsOf(f).length
+      for (const f of [...going].sort((a, b) => depth(b) - depth(a))) {
+        const v = ledger.get(f)
+        if (sameDefaultValue(currentValue(f), v)) o.setFieldValue(f, null, v)
+        ledger.delete(f)
+        filledByRef.current.delete(f)
+        undoneRef.current.add(f)
+      }
       publish()
     },
     [currentValue, publish]
@@ -576,6 +616,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     ledgerRef.current.clear()
     hintsRef.current.clear()
     undoneRef.current.clear()
+    filledByRef.current.clear()
     repickRef.current.clear()
     queueRef.current.clear()
     appliedOnceRef.current = false
