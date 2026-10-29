@@ -1,4 +1,4 @@
-import { AgentBadge } from '@nivaro/shared'
+import { ActivityFeed, readableTitle, UndoButton, useActivityLabels } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
@@ -12,7 +12,6 @@ import {
 } from '@/components/activity/activity-search'
 import { SavedViewsMenu } from '@/components/activity/saved-views'
 import { HubToolbar } from '@/components/hub-page'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -23,118 +22,13 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from '@/components/ui/table'
-import { api, type CMSField, type Collection } from '@/lib/api'
-import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
-import { formatDate, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
-
-type ActivityRow = {
-  id: number
-  action: string
-  user: string | null
-  timestamp: string
-  collection: string | null
-  item: string | null
-  comment: string | null
-  first_name: string | null
-  last_name: string | null
-  user_email: string | null
-  /** #3213 — written by an AI assistant through MCP: the badge text. */
-  via_agent?: string | null
-}
-
-const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
-  create: 'success',
-  delete: 'destructive',
-  update: 'default',
-  login: 'secondary',
-  logout: 'secondary',
-  'pipeline-transition': 'default',
-  'pipeline-start': 'success'
-}
-
-const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
-
-function formatAction(action: string): string {
-  return action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-function userName(row: ActivityRow): string {
-  if (row.first_name || row.last_name) {
-    return [row.first_name, row.last_name].filter(Boolean).join(' ')
-  }
-  return row.user_email ?? row.user?.slice(0, 8) ?? '—'
-}
+import { type ActivityEntry, api, type Collection } from '@/lib/api'
+import { formatDate, formatNumber, titleCase } from '@/lib/utils'
 
 function collectionLabel(name: string, collections: Collection[]): string {
   const found = collections.find((c) => c.collection === name)
   if (found?.display_name) return found.display_name
   return titleCase(name.replace(/^nivaro_/, '').replace(/_/g, ' '))
-}
-
-const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
-
-function ItemLabel({
-  collection,
-  item,
-  action
-}: {
-  collection: string
-  item: string
-  action?: string
-}) {
-  // Skip the label lookup for delete rows — the record is gone by definition,
-  // and legacy-import history references many long-deleted items. 404s on
-  // create/update rows of since-deleted items still fall back to the raw id.
-  const isSystem =
-    !collection ||
-    collection.startsWith('nivaro_') ||
-    collection.startsWith('directus_') ||
-    action === 'delete'
-
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem,
-    retry: false
-  })
-
-  const displayTemplate: string | null = colMeta?.display_template ?? null
-  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
-  const wantedFields = [
-    ...new Set(['id', ...extractTemplateFields(displayTemplate), ...LABEL_FALLBACKS])
-  ]
-  const safeFields = actualFields.length
-    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
-    : null
-
-  const { data: itemData } = useQuery({
-    queryKey: ['activity-item-label', collection, item, safeFields],
-    queryFn: () =>
-      api
-        .get(`/items/${collection}/${item}`, { params: { fields: safeFields } })
-        .then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem && !!safeFields,
-    retry: false
-  })
-
-  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
-  const hasLabel = label && label !== item && label.trim() !== ''
-
-  return hasLabel ? (
-    <span title={item}>{label}</span>
-  ) : (
-    <span className='font-mono text-muted-foreground'>{item}</span>
-  )
 }
 
 function filtersFromUrl(p: URLSearchParams): ActivityFilters {
@@ -160,7 +54,9 @@ export function ActivityPage() {
   const navigate = useNavigate()
   // #10/#11 — one filter set, from the controls, the search box or a saved view.
   // Deep links (`/activity?collection=&item=` from a config screen's History) open filtered.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  // `?group_key=` (an entry's "See the whole burst"): one bulk action / import / flow run.
+  const groupKey = searchParams.get('group_key') ?? ''
   const [filters, setFiltersState] = useState<ActivityFilters>(() => filtersFromUrl(searchParams))
   const [userLabel, setUserLabel] = useState<string | null>(null)
   const [candidates, setCandidates] = useState<PersonCandidate[] | undefined>()
@@ -191,16 +87,22 @@ export function ActivityPage() {
   })
 
   const { data, isLoading } = useQuery({
-    queryKey: ['activity', filters, page],
+    queryKey: ['activity', filters, groupKey, page],
     queryFn: () =>
       api
         .get('/activity', {
-          params: { ...activityParams(filters), limit, offset: (page - 1) * limit }
+          params: {
+            ...activityParams(filters),
+            group_key: groupKey || undefined,
+            limit,
+            offset: (page - 1) * limit
+          }
         })
         .then((r) => r.data)
   })
 
-  const rows: ActivityRow[] = data?.data ?? []
+  const rows: ActivityEntry[] = data?.data ?? []
+  const labels = useActivityLabels(rows)
   const total: number = data?.total ?? 0
   const totalPages = Math.ceil(total / limit)
 
@@ -211,7 +113,7 @@ export function ActivityPage() {
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
-        description='Every create, update, delete and workflow move, newest first. Open a row for its full detail and what changed.'
+        description='Everything that happened, newest first, in plain sentences. Bulk changes, imports and automations fold into one line — open it to see each record. Open an entry for its full detail.'
         actions={
           <>
             <ActivitySearchBox
@@ -251,7 +153,7 @@ export function ActivityPage() {
                 <SelectItem value='__all__'>All Actions</SelectItem>
                 {(actionsData ?? []).map((a) => (
                   <SelectItem key={a} value={a}>
-                    {formatAction(a)}
+                    {readableTitle(a) || a}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -287,6 +189,24 @@ export function ActivityPage() {
       </HubToolbar>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+        {groupKey && (
+          <div className='mb-3 flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+            <span>Showing every entry of one bulk change, import or automation run.</span>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-7'
+              onClick={() => {
+                const next = new URLSearchParams(searchParams)
+                next.delete('group_key')
+                setSearchParams(next, { replace: true })
+                setPage(1)
+              }}
+            >
+              Show all activity
+            </Button>
+          </div>
+        )}
         <Card>
           {isLoading ? (
             <div className='p-6 space-y-3'>
@@ -297,81 +217,25 @@ export function ActivityPage() {
             </div>
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Time</TableHead>
-                    <TableHead>User</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Collection</TableHead>
-                    <TableHead>Detail</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((row) => {
-                    const isPipeline = PIPELINE_ACTIONS.has(row.action)
-                    return (
-                      <TableRow
-                        key={row.id}
-                        className='cursor-pointer hover:bg-slate-50'
-                        onClick={() => navigate(`/activity/${row.id}`)}
-                      >
-                        <TableCell className='text-sm text-muted-foreground whitespace-nowrap'>
-                          {formatDateTime(row.timestamp)}
-                        </TableCell>
-                        <TableCell className='text-sm'>
-                          <span className='inline-flex flex-wrap items-center gap-1.5'>
-                            {userName(row)}
-                            <AgentBadge label={row.via_agent} />
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={ACTION_VARIANTS[row.action] ?? 'secondary'}
-                            className='text-xs whitespace-nowrap'
-                          >
-                            {formatAction(row.action)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className='text-sm text-slate-600'>
-                          {row.collection
-                            ? collectionLabel(row.collection, collectionsData ?? [])
-                            : '—'}
-                        </TableCell>
-                        <TableCell className='max-w-xs text-sm text-slate-600'>
-                          {isPipeline && row.comment ? (
-                            <span className='block truncate' title={row.comment}>
-                              {row.comment}
-                            </span>
-                          ) : row.collection && row.item ? (
-                            <ItemLabel
-                              collection={row.collection}
-                              item={row.item}
-                              action={row.action}
-                            />
-                          ) : (
-                            <span className='font-mono text-muted-foreground'>
-                              {row.item ?? '—'}
-                            </span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                  {rows.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={5} className='text-center text-muted-foreground py-12'>
-                        {Object.keys(filters).length
-                          ? 'Nothing matches these filters.'
-                          : 'No activity recorded yet.'}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+              <ActivityFeed
+                className='px-2 py-1'
+                entries={rows}
+                labels={labels}
+                onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
+                actionsFor={(g) =>
+                  g.entries[0]?.id != null ? <UndoButton activityId={g.entries[0].id} /> : null
+                }
+                empty={
+                  <p className='py-12 text-center text-sm text-muted-foreground'>
+                    {Object.keys(filters).length || groupKey
+                      ? 'Nothing matches these filters.'
+                      : 'No activity recorded yet.'}
+                  </p>
+                }
+              />
 
               {total > 0 && (
-                <div className='flex items-center justify-between px-4 py-3 border-t'>
+                <div className='flex items-center justify-between px-4 py-3 border-t dark:border-border'>
                   <p className='text-sm text-muted-foreground'>{formatNumber(total)} events</p>
                   <div className='flex items-center gap-2'>
                     <Button

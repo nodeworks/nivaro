@@ -1,3 +1,5 @@
+export type { ActivityEntryProps } from './components/ActivityEntry'
+export { ActivityEntry, ActivityFeed, useActivityLabels } from './components/ActivityEntry'
 export { AgentBadge } from './components/AgentBadge'
 export * from './components/AnnouncementBanner'
 export { ApiUpdateBanner } from './components/ApiUpdateBanner'
@@ -582,6 +584,44 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export type {
+  ActionParts,
+  ActivityActor,
+  ActivityActorKind,
+  ActivityApproval,
+  ActivityChange,
+  ActivityEntryInput,
+  ActivityGroup,
+  ActivityLabels,
+  ActivityLabelsRequest,
+  ActivityWhy,
+  CollectionNames,
+  ParsedTransition
+} from './lib/activity-sentence'
+export {
+  actionParts,
+  activityLabelRefs,
+  activityPredicate,
+  activityWhy,
+  actorName,
+  actorOf,
+  BURST_WINDOW_MS,
+  choiceText,
+  collectionNouns,
+  countNoun,
+  fieldLabel,
+  fieldList,
+  groupActivity,
+  HIDDEN_RECORD,
+  parseActor,
+  parseTransitionComment,
+  readableTitle,
+  recordPhrase,
+  renderActivityGroupSentence,
+  renderActivitySentence,
+  valueShowable,
+  valueText
+} from './lib/activity-sentence'
 export {
   type DrillSource,
   defaultQuestionFor,

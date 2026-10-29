@@ -5,6 +5,7 @@ import { runInBackgroundPool } from '../db/pool-context.js'
 import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { createOne, updateOne } from '../services/items.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
@@ -528,7 +529,20 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
 
   // Fire-and-forget, on the background connection pool (#1321): the rows it
   // writes must not hold connections the people using the app wait for.
-  runInBackgroundPool(() => processImportJob(id, app)).catch(console.error)
+  // Migration 516: the job's activity rows are one burst, written by this import (a fresh
+  // scope: the request that queued it has already answered).
+  withActivityScope(
+    {
+      group_key: activityGroupKey('import_job', id),
+      actor: {
+        kind: 'import',
+        id,
+        name: input.file_name ?? 'CSV import',
+        on_behalf_of: input.created_by ? String(input.created_by) : null
+      }
+    },
+    () => runInBackgroundPool(() => processImportJob(id, app))
+  ).catch(console.error)
 
   return job
 }

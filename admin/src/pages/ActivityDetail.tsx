@@ -1,14 +1,25 @@
+import {
+  activityWhy,
+  actorName,
+  actorOf,
+  collectionNouns,
+  HIDDEN_RECORD,
+  readableTitle,
+  recordPhrase,
+  renderActivitySentence,
+  useActivityLabels
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, GitBranch } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
+import { useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { useGoBack } from '@/lib/nav'
 import { RevisionsPanel } from '@/components/revisions-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type ActivityEntry, api, type CMSField } from '@/lib/api'
-import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+import { type ActivityEntry, api } from '@/lib/api'
+import { useGoBack } from '@/lib/nav'
 import { formatDateTime } from '@/lib/utils'
 
 const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 'secondary'> = {
@@ -21,53 +32,23 @@ const ACTION_VARIANTS: Record<string, 'default' | 'success' | 'destructive' | 's
   'pipeline-start': 'success'
 }
 
-const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
-const LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
-
-function useItemLabel(collection: string | null, item: string | null, action?: string | null) {
-  // Delete rows reference a record that no longer exists — skip the lookup.
-  const isSystem =
-    !collection ||
-    collection.startsWith('nivaro_') ||
-    collection.startsWith('directus_') ||
-    action === 'delete'
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem && !!collection,
-    retry: false
-  })
-  const displayTemplate: string | null = colMeta?.display_template ?? null
-  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
-  const wantedFields = [...new Set(['id', ...extractTemplateFields(displayTemplate), ...LABEL_FALLBACKS])]
-  const safeFields = actualFields.length
-    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
-    : null
-  const { data: itemData } = useQuery({
-    queryKey: ['activity-item-label', collection, item, safeFields],
-    queryFn: () =>
-      api.get(`/items/${collection}/${item}`, { params: { fields: safeFields } }).then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem && !!safeFields && !!item,
-    retry: false
-  })
-  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
-  return label && label !== item && label.trim() !== '' ? label : null
-}
-
-function userName(entry: ActivityEntry): string {
-  if (entry.first_name || entry.last_name)
-    return [entry.first_name, entry.last_name].filter(Boolean).join(' ')
-  return entry.user_email ?? entry.user?.slice(0, 8) ?? '—'
+const ACTOR_KIND_LABEL: Record<string, string> = {
+  person: 'Person',
+  view_as: 'Administrator viewing as someone',
+  api_key: 'API key',
+  mcp: 'AI assistant (MCP)',
+  import: 'Import',
+  flow: 'Flow',
+  cron: 'Scheduled job',
+  system: 'System'
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className='flex items-start justify-between py-2.5 border-b last:border-0 border-slate-100 gap-4'>
-      <span className='text-sm text-slate-500 shrink-0 w-32'>{label}</span>
-      <span className='text-sm text-slate-800 text-right break-all'>
-        {value ?? <span className='text-slate-300'>—</span>}
+    <div className='flex items-start justify-between gap-4 border-b border-slate-100 py-2.5 last:border-0 dark:border-border'>
+      <span className='w-32 shrink-0 text-sm text-slate-500 dark:text-slate-400'>{label}</span>
+      <span className='break-all text-right text-sm text-slate-800 dark:text-slate-200'>
+        {value ?? <span className='text-slate-300 dark:text-slate-600'>—</span>}
       </span>
     </div>
   )
@@ -83,28 +64,27 @@ export function ActivityDetailPage() {
     queryFn: () => api.get(`/activity/${id}`).then((r) => r.data.data as ActivityEntry),
     enabled: !!id
   })
-  const itemLabel = useItemLabel(entry?.collection ?? null, entry?.item ?? null, entry?.action ?? null)
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', entry?.collection],
-    queryFn: () => api.get(`/collections/${entry!.collection}`).then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !!entry?.collection && !entry.collection.startsWith('nivaro_'),
-    retry: false
-  })
-  const collectionDisplayName = colMeta?.display_name
-    ?? (entry?.collection
-      ? entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
-      : null)
+  const entries = useMemo(() => (entry ? [entry] : []), [entry])
+  const labels = useActivityLabels(entries)
+  const why = entry ? activityWhy(entry) : null
+  const actor = entry ? actorOf(entry) : null
+  const record = entry ? recordPhrase(entry.collection, entry.item, labels) : null
 
   return (
-    <div className='p-8 max-w-3xl'>
-      <div className='flex items-center gap-4 mb-8'>
-        <Button variant='ghost' size='icon' onClick={goBack}>
+    <div className='max-w-3xl p-8'>
+      <div className='mb-8 flex items-center gap-4'>
+        <Button variant='ghost' size='icon' onClick={goBack} aria-label='Back'>
           <ArrowLeft className='h-4 w-4' />
         </Button>
-        <div>
-          <h1 className='text-2xl font-bold text-slate-900'>Activity Event</h1>
-          <p className='text-muted-foreground text-sm font-mono mt-0.5'>#{id}</p>
+        <div className='min-w-0'>
+          <h1 className='text-2xl font-bold text-slate-900 dark:text-slate-100'>Activity Event</h1>
+          {entry ? (
+            <p className='mt-0.5 text-sm text-slate-600 dark:text-slate-300' data-activity-sentence>
+              {renderActivitySentence(entry, labels)}
+            </p>
+          ) : (
+            <p className='mt-0.5 font-mono text-sm text-muted-foreground'>#{id}</p>
+          )}
         </div>
       </div>
 
@@ -123,61 +103,85 @@ export function ActivityDetailPage() {
               <div className='flex items-center gap-3'>
                 <Badge
                   variant={ACTION_VARIANTS[entry.action] ?? 'secondary'}
-                  className='text-xs capitalize'
+                  className='text-xs'
+                  title={entry.action}
                 >
-                  {entry.action}
+                  {readableTitle(entry.action) || entry.action}
                 </Badge>
-                <CardTitle className='text-sm font-medium text-slate-500'>Details</CardTitle>
+                <CardTitle className='text-sm font-medium text-slate-500 dark:text-slate-400'>
+                  Details
+                </CardTitle>
               </div>
             </CardHeader>
             <CardContent>
-              {/* Pipeline transition summary banner */}
-              {PIPELINE_ACTIONS.has(entry.action) && entry.comment && (
-                <div className='mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5'>
-                  <GitBranch className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-                  <span className='text-[13px] font-medium text-slate-700'>{entry.comment}</span>
+              {why && (why.note || why.reason || why.approval) && (
+                <div className='mb-3 space-y-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-slate-200'>
+                  {why.note && <p className='italic'>“{why.note}”</p>}
+                  {why.reason && <p>Reason: {why.reason}</p>}
+                  {why.approval && <p>Approval: {why.approval}</p>}
                 </div>
               )}
               <Field label='Time' value={formatDateTime(entry.timestamp)} />
-              <Field label='User' value={userName(entry)} />
+              <Field label='Who' value={actorName(entry, labels)} />
+              {actor && actor.kind !== 'person' && (
+                <Field label='Acting as' value={ACTOR_KIND_LABEL[actor.kind] ?? actor.kind} />
+              )}
               <Field
                 label='Collection'
                 value={
                   entry.collection ? (
-                    <span className='text-slate-600' title={entry.collection}>
-                      {collectionDisplayName ?? entry.collection}
+                    <span title={entry.collection}>
+                      {collectionNouns(entry.collection, labels).plural}
                     </span>
                   ) : null
                 }
               />
               <Field
-                label='Item'
+                label='Record'
                 value={
-                  entry.item && entry.collection ? (
+                  entry.item && entry.collection && record && record !== HIDDEN_RECORD ? (
                     <button
                       type='button'
                       onClick={() => navigate(`/collections/${entry.collection}/${entry.item}`)}
                       className='text-nvr-cyan hover:underline'
+                      title={entry.item}
                     >
-                      {itemLabel ?? <span className='font-mono'>{entry.item}</span>}
+                      {record}
                     </button>
-                  ) : entry.item ? (
-                    <span className='font-mono'>{entry.item}</span>
-                  ) : null
+                  ) : (
+                    record
+                  )
                 }
               />
+              {entry.group_key && (
+                <Field
+                  label='Part of'
+                  value={
+                    <button
+                      type='button'
+                      onClick={() =>
+                        navigate(`/activity?group_key=${encodeURIComponent(entry.group_key ?? '')}`)
+                      }
+                      className='text-nvr-cyan hover:underline'
+                      title={entry.group_key}
+                    >
+                      See every entry of this run
+                    </button>
+                  }
+                />
+              )}
               <Field label='IP' value={entry.ip} />
               <Field
                 label='User Agent'
                 value={
                   entry.user_agent ? (
-                    <span className='font-mono text-[11px] text-slate-500'>{entry.user_agent}</span>
+                    <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
+                      {entry.user_agent}
+                    </span>
                   ) : null
                 }
               />
-              {entry.comment && !PIPELINE_ACTIONS.has(entry.action) && (
-                <Field label='Comment' value={entry.comment} />
-              )}
+              {entry.comment && <Field label='Stored note' value={entry.comment} />}
             </CardContent>
           </Card>
 

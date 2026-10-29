@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
 import { outOfViewReason } from '../services/access-explain.js'
 import { logActivity } from '../services/activity.js'
+import { markActivityBurst } from '../services/activity-scope.js'
 import {
   type AutoIdToken,
   autoIdFieldsFor,
@@ -485,6 +486,8 @@ export async function itemsRoutes(app: FastifyInstance) {
 
   // Import — multipart CSV upload
   app.post('/:collection/import', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'import')
     const { collection } = req.params as { collection: string }
 
     const multipart = await req.file()
@@ -525,6 +528,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   // ─── Bulk actions ─────────────────────────────────────────────────────────
 
   app.post('/:collection/bulk-delete', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     const { ids } = req.body as { ids: string[] }
     if (!Array.isArray(ids) || ids.length === 0)
@@ -562,6 +567,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   registerBulkFieldsRoute(app)
 
   app.post('/:collection/bulk-update', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     const { ids, data, by_form } = req.body as {
       ids: string[]
@@ -661,6 +668,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   })
 
   app.post('/:collection/bulk-transition', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     const { ids, transition_id, comment } = req.body as {
       ids: string[]
@@ -1291,6 +1300,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   // the FULL items service (RBAC, validation, hooks, revisions) — this is a
   // round-trip saver, never a fast path around the rules. Cap 100 rows.
   app.post('/:collection/batch', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     if (req.user?.api_key_sandbox) {
       return reply.code(403).send({ error: 'Sandbox keys cannot batch-write' })
@@ -1582,6 +1593,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   }
 
   app.post('/:collection/bulk', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     const q = req.query as Record<string, string>
     if (req.user?.api_key_sandbox) {
@@ -1933,6 +1946,8 @@ export async function itemsRoutes(app: FastifyInstance) {
   // updated when it exists, created when the collection is empty. A
   // collection holding several records is not a singleton and says so.
   app.patch('/:collection', async (req, reply) => {
+    // Migration 516: every activity row this request writes is one burst.
+    markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
     if (req.user?.api_key_sandbox) {
       const sim = await simulateSandboxWrite(req, collection, 'update', 'singleton')
