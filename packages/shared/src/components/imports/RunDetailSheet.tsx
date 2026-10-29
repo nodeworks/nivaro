@@ -1408,9 +1408,12 @@ export function RunDetailSheet({
                     </div>
                     {fileHref && (
                       <a
-                        href={fileHref}
-                        target='_blank'
+                        // ?download=1 asks the file route for an attachment: a CSV served
+                        // inline opened as text in a new tab instead of downloading.
+                        href={`${fileHref}${fileHref.includes('?') ? '&' : '?'}download=1`}
+                        download={run.file_name ?? true}
                         rel='noreferrer'
+                        data-run-file-download
                         className={cn(
                           'rounded p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:hover:bg-muted',
                           focusRing
