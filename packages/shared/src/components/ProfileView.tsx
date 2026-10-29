@@ -131,6 +131,11 @@ const NOTIFY_CATS: Array<{ key: string; label: string; help: string }> = [
     help: 'Threshold alerts you subscribe to: metric alert rules, per-record alert definitions, report alerts, and the alert digest.'
   },
   {
+    key: 'audit',
+    label: 'Audit log patterns',
+    help: 'An activity-pattern alert you subscribe to matched: someone made the kind of change it watches for (for example a large amount edited, or a zone changed). Past the rule’s hourly limit the rest arrive as one digest.'
+  },
+  {
     key: 'anomaly',
     label: 'Anomaly detections',
     help: 'Anomaly rules you created flag an outlier, spike, or duplicate pattern.'

@@ -4,6 +4,8 @@ export type NotifyCategory =
   | 'sla'
   | 'watch'
   | 'alerts'
+  /** Activity-pattern alerts on the audit log (#23). */
+  | 'audit'
   | 'anomaly'
   | 'reports'
   | 'integrations'

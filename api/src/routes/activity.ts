@@ -5,6 +5,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
+import { registerActivityUndoRoutes } from './activity-undo.js'
 
 const countOf = (rows: unknown[]) => Number((rows[0] as { count?: string | number })?.count ?? 0)
 
@@ -133,6 +134,9 @@ export async function activityRoutes(app: FastifyInstance) {
     })
     return { data: { logged: true } }
   })
+
+  // #22 — Undo from the log: POST /undoable + POST /:id/undo (own changes; admins any).
+  registerActivityUndoRoutes(app)
 
   app.get('/actions', { preHandler: requireAdmin }, async (_req, reply) => {
     const rows = await db('nivaro_activity').distinct('action').orderBy('action')

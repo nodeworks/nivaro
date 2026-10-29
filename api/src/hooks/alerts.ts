@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { ACTIVITY_PATTERN_KIND } from '../services/activity-pattern-gate.js'
 import { type AnomalyResult, evaluateAnomalyAlert } from '../services/anomaly.js'
 import { chainFields } from '../services/chain-columns.js'
 import { sendMail } from '../services/mail.js'
@@ -185,6 +186,8 @@ export async function evaluateAlertsForCollection(
     .select<AlertDefinition[]>('*')
 
   for (const def of defs) {
+    // #23 — activity-pattern rules are judged from the activity log (activity-pattern-gate.ts).
+    if (def.detection_type === ACTIVITY_PATTERN_KIND) continue
     try {
       const rawVal = record[def.field]
       if (rawVal == null) continue
@@ -219,6 +222,7 @@ export async function evaluateAlerts(): Promise<number> {
   let triggered = 0
 
   for (const def of defs) {
+    if (def.detection_type === ACTIVITY_PATTERN_KIND) continue
     try {
       // Anomaly definitions compare the latest value against recent history
       if (def.detection_type === 'anomaly') {
@@ -259,6 +263,14 @@ export async function evaluateAlerts(): Promise<number> {
     } catch (err) {
       console.warn(`[alerts] evaluation failed for definition ${def.id}:`, err)
     }
+  }
+
+  // #23 — activity-pattern digests of earlier hours (matches held by the hourly limit).
+  try {
+    const { flushActivityPatternDigests } = await import('../services/activity-pattern-alerts.js')
+    await flushActivityPatternDigests()
+  } catch (err) {
+    console.warn('[alerts] activity-pattern digests failed:', err)
   }
 
   return triggered

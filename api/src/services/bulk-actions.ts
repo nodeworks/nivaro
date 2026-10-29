@@ -18,6 +18,7 @@ import {
 } from './pipeline-engine.js'
 import { checkTransitionOwner } from './record-access.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
+import { valueUnchanged } from './value-unchanged.js'
 import { TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 import { applyTransition, runAutoTransitions } from './workflow-transitions.js'
@@ -503,32 +504,8 @@ export async function transitionLabelsFor(collection: string): Promise<string[]>
   return out
 }
 
-/** Loose "already that value" test for a bulk write: null/''/undefined agree,
- *  booleans accept 1/'1'/'true', numbers compare numerically, else as strings.
- *  A record already holding every value an action would set is SKIPPED —
- *  no write, no change reason on its history (the note belongs to the
- *  records that actually moved). */
-export function valueUnchanged(current: unknown, next: unknown): boolean {
-  const empty = (v: unknown) => v === null || v === undefined || v === ''
-  if (empty(current) && empty(next)) return true
-  if (empty(current) !== empty(next)) return false
-  const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
-  const falsy = (v: unknown) => v === false || v === 0 || v === '0' || v === 'false'
-  if ((truthy(current) || falsy(current)) && (truthy(next) || falsy(next)))
-    return truthy(current) === truthy(next)
-  const nc = Number(current)
-  const nn = Number(next)
-  if (
-    typeof current !== 'object' &&
-    typeof next !== 'object' &&
-    String(current).trim() !== '' &&
-    String(next).trim() !== '' &&
-    Number.isFinite(nc) &&
-    Number.isFinite(nn)
-  )
-    return nc === nn
-  return JSON.stringify(current) === JSON.stringify(next)
-}
+// A leaf module (activity-undo.ts judges "changed since" with it, without this file's graph).
+export { valueUnchanged }
 
 export interface BulkRunResult {
   succeeded: number
