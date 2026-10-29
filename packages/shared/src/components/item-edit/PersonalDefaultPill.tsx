@@ -1,39 +1,7 @@
-import { Undo2, UserRound } from 'lucide-react'
+import { UserRound } from 'lucide-react'
 
-// "Your default" marker on a field a personal default prefilled (spec "Applying on a new
-// record" 7). Same size and tone as the document-autofill "derived" pill (sky tint, 10.5px);
-// the undo control is always visible (no hover reveal), so the label row never shifts. Its glyph
-// box is 16px; an invisible ::before reaches 4px further on every side (24×24 hit area).
-
-export function PersonalDefaultPill({
-  field,
-  label,
-  onUndo
-}: {
-  field: string
-  label?: string
-  onUndo: () => void
-}) {
-  return (
-    <span
-      data-personal-default={field}
-      data-tip='Prefilled from your saved default · Undo'
-      className='inline-flex h-5 items-center gap-1 rounded bg-sky-50 pl-1.5 pr-0.5 text-[10.5px] font-medium text-sky-800 dark:bg-sky-900/30 dark:text-sky-200'
-    >
-      <UserRound className='h-3 w-3' aria-hidden />
-      Your default
-      <button
-        type='button'
-        onClick={onUndo}
-        aria-label={label ? `Undo your default for ${label}` : 'Undo your default'}
-        data-personal-default-undo={field}
-        className='relative inline-flex h-4 w-4 items-center justify-center rounded text-sky-700 before:absolute before:-inset-1 before:content-[""] transition-colors duration-150 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 dark:text-sky-300 dark:focus-visible:ring-sky-300 dark:hover:bg-sky-800/50 dark:hover:text-white'
-      >
-        <Undo2 className='h-3 w-3' aria-hidden />
-      </button>
-    </span>
-  )
-}
+// Small personal-default pieces shared by the field menu's confirm and My defaults. The
+// "Your default" marker itself lives in PersonalDefaultControl (one control per field).
 
 /** The quiet Cancel shared by My defaults' Save / Cancel and the field menu's confirm. */
 export const PERSONAL_DEFAULT_GHOST_BUTTON =

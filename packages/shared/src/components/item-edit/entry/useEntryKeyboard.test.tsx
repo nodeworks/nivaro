@@ -43,6 +43,9 @@ function Form({
         <>
           <button type='button' id='menu' data-field-menu-trigger='title' />
           <button type='button' id='undo' data-personal-default-undo='title' />
+          <button type='button' id='make' data-personal-default-make='title' />
+          <button type='button' id='update' data-personal-default-update='title' />
+          <button type='button' id='clear' data-personal-default-clear='title' />
           <input id='title' />
         </>
       )}
@@ -88,7 +91,7 @@ describe('useEntryKeyboard (#2707 #2708)', () => {
     expect(document.activeElement).toBe($('vendor'))
   })
 
-  it('entering a field lands on its input, never the field menu or a default undo', async () => {
+  it('entering a field lands on its input, never the field menu, Make default or a default undo / clear', async () => {
     await render(<Form config={{ tab_order: ['amount', 'title'] }} />)
     $('amount').focus()
     press($('amount'), 'Tab')

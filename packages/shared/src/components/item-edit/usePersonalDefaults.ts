@@ -29,12 +29,24 @@ import type { CascadeRule } from './helpers'
 
 /** What a field's ⋯ menu (Save / Clear my default) and FieldRow (pill, hint) read. */
 export type PersonalDefaultsApi = {
-  /** The layout lets this field carry a personal default. */
+  /** The layout lets this field carry a personal default (and the form reads them: never on
+   *  the design canvas). */
   allowed(field: string): boolean
+  /** The person's saved defaults have been read (until then nobody can tell what is saved). */
+  loaded: boolean
   /** The caller's saved default that fits the record's current parent values. */
   defaultFor(field: string): SavedDefault | null
+  /** The field holds a value and it IS the saved default for the current parent values
+   *  (the visible control then says "Your default" instead of offering Make default). */
+  isDefault(field: string): boolean
   /** Saves the field's current value (with its context) and every allowed parent that has one. */
   save(field: string): Promise<void>
+  /** Replaces the value of the default `defaultFor(field)` answers with the field's current
+   *  value, keeping that default's context (the same slot: no new row, parents untouched). */
+  update(field: string): Promise<void>
+  /** The confirm line for `update(field)`: the new value's label and the saved default's
+   *  context labels, top-down ("Zone 2", "Boston"). */
+  describeUpdate(field: string): Promise<{ value: string; context: string[] }>
   /** Deletes the default `defaultFor(field)` answers; resolves with what it removed (for Undo). */
   clear(field: string): Promise<SavedDefault | null>
   /** Saves a removed default back exactly as it was (value + context): the Clear toast's Undo. */
@@ -561,6 +573,15 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     (field: string) => !isEmptyValue(currentValue(field)),
     [currentValue]
   )
+  const isDefault = useCallback(
+    (field: string) => {
+      const cur = currentValue(field)
+      if (isEmptyValue(cur)) return false
+      const d = defaultFor(field)
+      return !!d && sameDefaultValue(d.value, cur)
+    },
+    [currentValue, defaultFor]
+  )
   const describeSave = useCallback(
     async (field: string): Promise<string[]> => {
       const o = optsRef.current
@@ -609,6 +630,47 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     [client, qc, collection, currentValue, viewOf]
   )
 
+  const update = useCallback(
+    async (field: string) => {
+      const d = defaultFor(field)
+      if (!d) throw new Error('You have no default here to update')
+      const value = currentValue(field)
+      if (isEmptyValue(value)) throw new Error('Pick a value first')
+      try {
+        await client.request(
+          put('/field-defaults/mine', {
+            collection,
+            field,
+            value: plain(value),
+            context: d.context ?? {}
+          })
+        )
+      } finally {
+        await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
+      }
+    },
+    [client, qc, collection, currentValue, defaultFor]
+  )
+  const describeUpdate = useCallback(
+    async (field: string) => {
+      const o = optsRef.current
+      const d = defaultFor(field)
+      const ctx = d?.context ?? {}
+      const order = [...cascadeParents(field, o.rulesFor)].reverse()
+      const keys = [
+        ...order.filter((p) => p in ctx),
+        ...Object.keys(ctx).filter((k) => !order.includes(k))
+      ]
+      const name = (f: string) => o.fieldLabel?.(f) ?? titleCase(f)
+      const [value, ...context] = await Promise.all([
+        label(field, currentValue(field)).then((l) => l ?? name(field)),
+        ...keys.map((k) => label(k, ctx[k]).then((l) => l ?? name(k)))
+      ])
+      return { value, context }
+    },
+    [currentValue, defaultFor, label]
+  )
+
   const clear = useCallback(
     async (field: string) => {
       const d = defaultFor(field)
@@ -637,9 +699,13 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
 
   const context = useMemo<PersonalDefaultsApi>(
     () => ({
-      allowed: (f) => optsRef.current.layoutAllows(f),
+      allowed: (f) => (optsRef.current.enabled ?? true) && optsRef.current.layoutAllows(f),
+      loaded: data !== undefined,
       defaultFor,
+      isDefault,
       save,
+      update,
+      describeUpdate,
       clear,
       restore,
       refresh,
@@ -649,7 +715,22 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       hintFor,
       undo
     }),
-    [defaultFor, save, clear, restore, refresh, hasValue, describeSave, ledger, hintFor, undo]
+    [
+      data,
+      defaultFor,
+      isDefault,
+      save,
+      update,
+      describeUpdate,
+      clear,
+      restore,
+      refresh,
+      hasValue,
+      describeSave,
+      ledger,
+      hintFor,
+      undo
+    ]
   )
 
   return { ledger, hintFor, undo, onPersonChange, release, appliedNow, context }

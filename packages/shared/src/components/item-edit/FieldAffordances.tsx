@@ -25,6 +25,8 @@ import { toast } from 'sonner'
 import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
+import { useOverflowTip } from '../TipLayer'
+import { clearPersonalDefault, refusalText } from './PersonalDefaultControl'
 import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
@@ -200,17 +202,6 @@ interface MenuItem {
   stay?: boolean
 }
 
-/** The server's refusal text (`{ error, code }`), else the thrown message. */
-function refusalText(e: unknown, fallback: string): string {
-  const x = e as {
-    response?: { data?: { error?: string } }
-    data?: { error?: string }
-    error?: string
-    message?: string
-  }
-  return x?.response?.data?.error ?? x?.data?.error ?? x?.error ?? x?.message ?? fallback
-}
-
 /**
  * What "Copy value" should yield for the element the menu was opened on:
  * an input's current value, else the text of the table cell (grid rows),
@@ -256,27 +247,36 @@ export function useFieldContextMenu({
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
   // Personal defaults: "Save as my default" asks inline (in the menu panel) before it saves.
   const personalDefaults = usePersonalDefaultsApi()
-  const [confirming, setConfirming] = useState(false)
+  // 'save' = Make default / Save as my default; 'update' = Update default (same slot, new value).
+  const [confirming, setConfirming] = useState<'save' | 'update' | false>(false)
   const [parts, setParts] = useState<string[] | null>(null)
+  const [updateText, setUpdateText] = useState<{ value: string; context: string[] } | null>(null)
   const [saving, setSaving] = useState(false)
   const openAt = useCallback((x: number, y: number) => setAt({ x, y }), [])
-  // Opened from the ⋯ button: focus goes back there when the menu closes (unless the person
-  // clicked into something else that took focus).
+  /** What opened the panel: the ⋯ button / right-click ('menu'), or the visible Make default /
+   *  Update default control. */
+  const [openedBy, setOpenedBy] = useState<'menu' | 'make' | 'update' | null>(null)
+  // Opened from the ⋯ button or Make default: focus goes back there when the panel closes
+  // (unless the person clicked into something else that took focus). When that button is gone
+  // (a save turned Make default into "Your default"), `refocusRef` says where to go instead.
   const returnFocusRef = useRef<HTMLElement | null>(null)
+  const refocusRef = useRef<(() => HTMLElement | null | undefined) | null>(null)
   const close = useCallback(() => {
     setAt(null)
+    setOpenedBy(null)
     setConfirming(false)
     setParts(null)
+    setUpdateText(null)
     setSaving(false)
     const back = returnFocusRef.current
+    const instead = refocusRef.current
     returnFocusRef.current = null
-    if (back)
+    refocusRef.current = null
+    if (back || instead)
       window.setTimeout(() => {
-        if (
-          back.isConnected &&
-          (!document.activeElement || document.activeElement === document.body)
-        )
-          back.focus()
+        if (document.activeElement && document.activeElement !== document.body) return
+        if (back?.isConnected) back.focus()
+        else instead?.()?.focus()
       }, 0)
   }, [])
   const isOpen = at !== null
@@ -290,9 +290,52 @@ export function useFieldContextMenu({
       const r = el.getBoundingClientRect()
       targetRef.current = null
       returnFocusRef.current = el
+      setOpenedBy('menu')
       openAt(r.left, r.bottom + 4)
     },
     [isOpen, close, openAt]
+  )
+  const startConfirm = useCallback(() => {
+    if (!personalDefaults) return
+    setParts(null)
+    setConfirming('save')
+    personalDefaults.describeSave(field.field).then(
+      (p) => setParts(p),
+      () => setParts([])
+    )
+  }, [personalDefaults, field.field])
+  const startUpdate = useCallback(() => {
+    if (!personalDefaults) return
+    setUpdateText(null)
+    setConfirming('update')
+    personalDefaults.describeUpdate(field.field).then(
+      (t) => setUpdateText(t),
+      () => setUpdateText({ value: '', context: [] })
+    )
+  }, [personalDefaults, field.field])
+  /** The visible Make default / Update default control: the same inline confirm as the menu's
+   *  "Save as my default", right-aligned under the control; a second click closes it. */
+  const confirmSaveFrom = useCallback(
+    (
+      el: HTMLElement,
+      refocus?: () => HTMLElement | null | undefined,
+      mode: 'make' | 'update' = 'make'
+    ) => {
+      // A second click closes it; with the ⋯ menu open, it switches to the confirm instead.
+      if (isOpen && openedBy === mode) {
+        close()
+        return
+      }
+      const r = el.getBoundingClientRect()
+      targetRef.current = null
+      returnFocusRef.current = el
+      refocusRef.current = refocus ?? null
+      setOpenedBy(mode)
+      if (mode === 'update') startUpdate()
+      else startConfirm()
+      openAt(r.right - MENU_WIDTH, r.bottom + 4)
+    },
+    [isOpen, openedBy, close, openAt, startConfirm, startUpdate]
   )
   // The element under the cursor when the menu opened. "Copy value" reads
   // THIS, not the field's draft value: an inline grid is one FieldRow whose
@@ -309,6 +352,7 @@ export function useFieldContextMenu({
       if (sel && t.closest('input, textarea, [contenteditable]')) return
       e.preventDefault()
       targetRef.current = t
+      setOpenedBy('menu')
       openAt(e.clientX, e.clientY)
     },
     [openAt]
@@ -319,6 +363,7 @@ export function useFieldContextMenu({
         e.preventDefault()
         const r = wrapperRef.current?.getBoundingClientRect()
         targetRef.current = document.activeElement as HTMLElement | null
+        setOpenedBy('menu')
         openAt(r ? r.left + 16 : 16, r ? r.top + 28 : 16)
       }
     },
@@ -421,14 +466,7 @@ export function useFieldContextMenu({
             label: 'Save as my default',
             icon: <UserRound className='h-3.5 w-3.5' />,
             stay: true,
-            run: () => {
-              setParts(null)
-              setConfirming(true)
-              personalDefaults.describeSave(field.field).then(
-                (p) => setParts(p),
-                () => setParts([])
-              )
-            }
+            run: startConfirm
           } satisfies MenuItem
         ]
       : []),
@@ -440,61 +478,70 @@ export function useFieldContextMenu({
             icon: <UserRoundX className='h-3.5 w-3.5' />,
             // Runs at once (a menu pick is deliberate); the toast's Undo saves it back.
             run: () => {
-              personalDefaults.clear(field.field).then(
-                (removed) =>
-                  toast.success(
-                    'Your default was cleared',
-                    removed
-                      ? {
-                          action: {
-                            label: 'Undo',
-                            onClick: () => {
-                              personalDefaults.restore(removed).then(
-                                () => toast.success('Your default is back'),
-                                (e) =>
-                                  toast.error(refusalText(e, 'Could not put your default back'))
-                              )
-                            }
-                          }
-                        }
-                      : undefined
-                  ),
-                (e) => toast.error(refusalText(e, 'Could not clear your default'))
-              )
+              void clearPersonalDefault(personalDefaults, field.field)
             }
           } satisfies MenuItem
         ]
       : [])
   ]
 
-  const confirm =
-    confirming && personalDefaults
+  const updateLine = (t: { value: string; context: string[] }, done: boolean) => {
+    const to = t.value ? ` to ${t.value}` : ''
+    const where = t.context.length ? ` for ${t.context.join(' · ')}` : ''
+    return done ? `Updated your default${where}${to}` : `Update your default${where}${to}?`
+  }
+  const confirm: MenuConfirm | null =
+    confirming === 'update' && personalDefaults
       ? {
-          text: parts?.length
-            ? `Save ${parts.join(' · ')} as your ${parts.length > 1 ? 'defaults' : 'default'}?`
-            : 'Save as your default?',
-          ready: parts !== null && !saving,
+          label: 'Update my default',
+          action: 'Update',
+          text: updateText ? updateLine(updateText, false) : 'Update your default?',
+          ready: updateText !== null && !saving,
           saving,
           onCancel: close,
           onSave: () => {
             setSaving(true)
-            personalDefaults.save(field.field).then(
+            personalDefaults.update(field.field).then(
               () => {
-                toast.success(
-                  parts?.length
-                    ? `Saved ${parts.join(' · ')} as your default${parts.length > 1 ? 's' : ''}`
-                    : 'Your default was saved'
-                )
+                toast.success(updateText ? updateLine(updateText, true) : 'Updated your default')
                 close()
               },
               (e) => {
-                toast.error(refusalText(e, 'Could not save your default'))
+                toast.error(refusalText(e, 'Could not update your default'))
                 close()
               }
             )
           }
         }
-      : null
+      : confirming && personalDefaults
+        ? {
+            label: 'Save as my default',
+            action: 'Save',
+            text: parts?.length
+              ? `Save ${parts.join(' · ')} as your ${parts.length > 1 ? 'defaults' : 'default'}?`
+              : 'Save as your default?',
+            ready: parts !== null && !saving,
+            saving,
+            onCancel: close,
+            onSave: () => {
+              setSaving(true)
+              personalDefaults.save(field.field).then(
+                () => {
+                  toast.success(
+                    parts?.length
+                      ? `Saved ${parts.join(' · ')} as your default${parts.length > 1 ? 's' : ''}`
+                      : 'Your default was saved'
+                  )
+                  close()
+                },
+                (e) => {
+                  toast.error(refusalText(e, 'Could not save your default'))
+                  close()
+                }
+              )
+            }
+          }
+        : null
   const menu = at ? (
     <FieldContextMenu
       at={at}
@@ -507,10 +554,31 @@ export function useFieldContextMenu({
   // The ⋯ button shows only where the menu offers something about this field beyond the copy
   // items every field has: today, Save / Clear my default.
   const hasFieldItems = items.some((i) => i.key === 'save-default' || i.key === 'clear-default')
-  return { onContextMenu, onKeyDown, menu, openFrom, isOpen, hasFieldItems }
+  return {
+    onContextMenu,
+    onKeyDown,
+    menu,
+    openFrom,
+    isOpen,
+    hasFieldItems,
+    confirmSaveFrom,
+    openedBy
+  }
 }
 
+const MENU_WIDTH = 240
+/** Confirm buttons on touch screens: 44px tall (the panel can grow; the label row cannot). */
+const TOUCH_TALL =
+  '[@media(hover:none)_and_(pointer:coarse)]:h-11 [@media(hover:none)_and_(pointer:coarse)]:px-3.5'
+/** The buttons in a field's label row that open (and toggle shut) this field's panel. */
+const PANEL_TRIGGERS =
+  '[data-field-menu-trigger], [data-personal-default-make], [data-personal-default-update]'
+
 type MenuConfirm = {
+  /** The panel's accessible name while it asks. */
+  label: string
+  /** The confirming button ("Save" / "Update"). */
+  action: string
   text: string
   ready: boolean
   saving?: boolean
@@ -541,8 +609,9 @@ function FieldContextMenu({
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
       if (ref.current?.contains(t)) return
-      // This field's own ⋯ button toggles the menu itself (closing here would reopen it).
-      if (t?.closest?.('[data-field-menu-trigger]') && anchor?.contains(t)) return
+      // This field's own ⋯ / Make default button toggles the panel itself (closing here would
+      // reopen it).
+      if (t?.closest?.(PANEL_TRIGGERS) && anchor?.contains(t)) return
       onClose()
     }
     const onKey = (e: KeyboardEvent) => {
@@ -600,8 +669,11 @@ function FieldContextMenu({
       saveRef.current?.focus()
   }, [confirmReady])
 
-  // Keep the panel on screen: its real height once drawn (the confirm line wraps to 1–3 rows).
-  const w = 240
+  // Keep the panel on screen: its real height once drawn (the confirm line wraps to 1–4 rows),
+  // and never wider than the viewport less an 8px margin each side (a 320px phone gets 304px).
+  const w = Math.min(MENU_WIDTH, window.innerWidth - 16)
+  // A very long value label is clamped to 4 lines; the whole line is then on its tip.
+  const confirmTextRef = useOverflowTip<HTMLParagraphElement>(confirm?.text)
   const [h, setH] = useState(() => (confirm ? 96 : items.length * 30 + 12))
   useLayoutEffect(() => {
     const drawn = ref.current?.offsetHeight
@@ -626,18 +698,19 @@ function FieldContextMenu({
       ref={ref}
       // While it asks "Save … as your default?" the panel is a small non-modal dialog, not a menu.
       {...(confirm
-        ? { role: 'dialog', 'aria-modal': false, 'aria-label': 'Save as my default' }
+        ? { role: 'dialog', 'aria-modal': false, 'aria-label': confirm.label }
         : { role: 'menu', 'aria-label': 'Field options' })}
       tabIndex={-1}
       data-field-context-menu
-      style={{ ...place, width: w, zIndex: 110 }}
+      style={{ ...place, width: w, maxWidth: 'calc(100vw - 16px)', zIndex: 110 }}
       className='rounded-lg border border-slate-200 bg-white p-1 shadow-xl outline-none dark:border-border dark:bg-card'
     >
       {confirm ? (
         <div data-personal-default-confirm className='space-y-2 px-2 py-1.5'>
           <p
+            ref={confirmTextRef}
             aria-live='polite'
-            className='text-[12.5px] leading-snug text-slate-700 dark:text-slate-200'
+            className='line-clamp-4 text-[12.5px] leading-snug text-slate-700 [overflow-wrap:anywhere] dark:text-slate-200'
           >
             {confirm.text}
           </p>
@@ -646,7 +719,7 @@ function FieldContextMenu({
               ref={cancelRef}
               type='button'
               onClick={confirm.onCancel}
-              className={PERSONAL_DEFAULT_GHOST_BUTTON}
+              className={cn(PERSONAL_DEFAULT_GHOST_BUTTON, TOUCH_TALL)}
             >
               <X className='h-3 w-3' aria-hidden /> Cancel
             </button>
@@ -655,9 +728,12 @@ function FieldContextMenu({
               type='button'
               disabled={!confirm.ready}
               onClick={confirm.onSave}
-              className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50'
+              className={cn(
+                'h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
+                TOUCH_TALL
+              )}
             >
-              {confirm.saving ? 'Saving…' : 'Save'}
+              {confirm.saving ? 'Saving…' : confirm.action}
             </button>
           </div>
         </div>
