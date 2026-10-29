@@ -44,9 +44,15 @@ const REVIEWED: Record<string, Reviewed> = {
   },
   'services/pdf-layout.ts': {
     role: 'binary',
-    calls: { getBrowser: 1, htmlToPdfLocal: 1, 'puppeteer.launch': 1, 'import puppeteer': 2 },
-    why: 'Chromium itself: htmlToPdf goes to the render peer without a local Chromium; getBrowser refuses with RENDER_UNAVAILABLE.',
-    guards: [/peerHtmlToPdf\(/, /throw renderUnavailable\('pdf'\)/]
+    calls: {
+      getBrowser: 2,
+      htmlToPdfLocal: 1,
+      htmlToPngLocal: 1,
+      'puppeteer.launch': 1,
+      'import puppeteer': 2
+    },
+    why: 'Chromium itself: htmlToPdf and htmlToPng (the MCP form image, #3216) go to the render peer without a local Chromium; getBrowser refuses with RENDER_UNAVAILABLE.',
+    guards: [/peerHtmlToPdf\(/, /peerHtmlToPng\(/, /throw renderUnavailable\('pdf'\)/]
   },
   'routes/internal-render.ts': {
     role: 'peer-side',
@@ -55,6 +61,7 @@ const REVIEWED: Record<string, Reviewed> = {
       probeStreamsLocal: 1,
       remuxToFileLocal: 1,
       htmlToPdfLocal: 1,
+      htmlToPngLocal: 1,
       convertUploadedFile: 1,
       convertMusicFile: 1,
       detectHardwareEncoders: 1

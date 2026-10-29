@@ -148,6 +148,33 @@ function evaluateCondition(cond: Condition, values: Record<string, unknown>): bo
   }
 }
 
+/**
+ * Does a field's own `visibility_rules` ({show_when, hide_when}) hide it for
+ * these values? hide_when: any match hides; show_when: shown only when one
+ * matches. The one evaluator behind POST /:collection/evaluate-visibility and
+ * the form state (#3218, services/form-state.ts).
+ */
+export function hiddenByVisibilityRules(raw: unknown, values: Record<string, unknown>): boolean {
+  if (!raw) return false
+  const rules = parseJsonSafe(raw) as VisibilityRules | null
+  if (!rules || typeof rules !== 'object') return false
+  if (rules.hide_when && rules.hide_when.length > 0) {
+    if (rules.hide_when.some((c) => evaluateCondition(c, values))) return true
+  }
+  if (rules.show_when && rules.show_when.length > 0) {
+    if (!rules.show_when.some((c) => evaluateCondition(c, values))) return true
+  }
+  return false
+}
+
+/** Does a field's own `lock_condition` lock it for these values? (evaluate-lock, #3218) */
+export function lockedByLockCondition(raw: unknown, values: Record<string, unknown>): boolean {
+  if (!raw) return false
+  const condition = parseJsonSafe(raw) as Condition | null
+  if (!condition || typeof condition !== 'object') return false
+  return evaluateCondition(condition, values)
+}
+
 // ─── Layout field rows ────────────────────────────────────────────────────────
 // ONE formatter for "the collection's fields as these layout placements show
 // them": GET /field-config/:collection answers it for a saved layout's
@@ -832,27 +859,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     }>
 
     const hidden_fields: string[] = []
-
     for (const row of rows) {
-      if (!row.visibility_rules) continue
-      const rules = parseJsonSafe(row.visibility_rules) as VisibilityRules | null
-      if (!rules) continue
-
-      let isVisible = true
-
-      // hide_when: if any condition matches, hide the field
-      if (rules.hide_when && rules.hide_when.length > 0) {
-        const shouldHide = rules.hide_when.some((c) => evaluateCondition(c, values))
-        if (shouldHide) isVisible = false
-      }
-
-      // show_when: field is only shown if at least one condition matches
-      if (isVisible && rules.show_when && rules.show_when.length > 0) {
-        const shouldShow = rules.show_when.some((c) => evaluateCondition(c, values))
-        if (!shouldShow) isVisible = false
-      }
-
-      if (!isVisible) hidden_fields.push(row.field)
+      if (hiddenByVisibilityRules(row.visibility_rules, values)) hidden_fields.push(row.field)
     }
 
     return reply.send({ hidden_fields })
@@ -906,13 +914,8 @@ export async function fieldConfigRoutes(app: FastifyInstance) {
     }>
 
     const locked_fields: string[] = []
-
     for (const row of rows) {
-      const condition = parseJsonSafe(row.lock_condition) as Condition | null
-      if (!condition) continue
-      if (evaluateCondition(condition, values)) {
-        locked_fields.push(row.field)
-      }
+      if (lockedByLockCondition(row.lock_condition, values)) locked_fields.push(row.field)
     }
 
     return reply.send({ locked_fields })
