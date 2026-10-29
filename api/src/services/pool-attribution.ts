@@ -47,9 +47,37 @@ function tracker(): Tracker {
 const trackers: Record<PoolName, Tracker> = { main: tracker(), background: tracker() }
 let sampler: NodeJS.Timeout | null = null
 
+// A busy import checks out hundreds of thousands of connections inside one window. Dropping
+// expired entries with shift() in a loop copied the whole array per entry — O(n²) — and froze
+// the event loop for 48–90 s five minutes after a 6k–14k-row import (2026-10-29: the staging
+// worker failed its health check and was killed). Expired entries are now cut with ONE splice,
+// and the window keeps at most MAX_WAITS waits (the newest), which is plenty for percentiles.
+const MAX_WAITS = 50_000
+
+/** Index of the first entry at or after `cutoff` (entries are in time order). */
+export function firstAtOrAfter(list: ReadonlyArray<{ at: number }>, cutoff: number): number {
+  let lo = 0
+  let hi = list.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (list[mid].at < cutoff) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+export function pruneWindow<T extends { at: number }>(
+  list: T[],
+  cutoff: number,
+  max: number
+): void {
+  const drop = Math.max(firstAtOrAfter(list, cutoff), list.length - max)
+  if (drop > 0) list.splice(0, drop)
+}
+
 function prune(t: Tracker, now: number): void {
-  while (t.waits.length && t.waits[0].at < now - WINDOW_MS) t.waits.shift()
-  while (t.samples.length && t.samples[0].at < now - WINDOW_MS) t.samples.shift()
+  pruneWindow(t.waits, now - WINDOW_MS, MAX_WAITS)
+  pruneWindow(t.samples, now - WINDOW_MS, Number.MAX_SAFE_INTEGER)
 }
 
 function percentile(sorted: number[], p: number): number {
