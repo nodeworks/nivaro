@@ -115,6 +115,9 @@ export type UsePersonalDefaultsOptions = {
   valueLabel?: (field: string, value: unknown) => string | null | Promise<string | null>
   /** The field's data type (decimal, date, timestamp…): equal values compare by type. */
   fieldType?: (field: string) => string | null | undefined
+  /** Runs after undo with every field it took back: the form then takes back what those
+   *  values derived (upstream cascades, cross-record defaults). */
+  onUndone?: (fields: string[]) => void
   /** Runs once a pass has applied its values (field rules, cross-record defaults, cascades). */
   afterApply?: (field: string, value: unknown) => void
   /** The record the form shows (e.g. `orders:new`): a change starts the ledger over — a
@@ -589,13 +592,18 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       }
       // Children before their parents, so a cleared parent never clears a child twice.
       const depth = (f: string) => parentsOf(f).length
+      const cleared: string[] = []
       for (const f of [...going].sort((a, b) => depth(b) - depth(a))) {
         const v = ledger.get(f)
-        if (sameDefaultValue(currentValue(f), v)) o.setFieldValue(f, null, v)
+        if (sameDefaultValue(currentValue(f), v)) {
+          o.setFieldValue(f, null, v)
+          cleared.push(f)
+        }
         ledger.delete(f)
         filledByRef.current.delete(f)
         undoneRef.current.add(f)
       }
+      if (cleared.length) o.onUndone?.(cleared)
       publish()
     },
     [currentValue, publish]

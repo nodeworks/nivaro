@@ -2480,6 +2480,10 @@ function ItemEditFormView({
     Map<string, Array<{ parent: string; stagingKey: string; ids: string[] }>>
   >(new Map())
   const derivedOriginRef = useRef<Map<string, string>>(new Map())
+  // Scalar fills a pick derived (cross-record defaults, upstream cascades): target → the
+  // field whose value filled it and the value it wrote. Undoing a personal default walks
+  // this to take back what that default brought in (only where the value is unchanged).
+  const fillSourceRef = useRef<Map<string, { source: string; value: unknown }>>(new Map())
   const m2mStagingCtx = useMemo<M2MStagingCtx>(
     () => ({
       getStagedLinks: (k) => m2mLinks.get(k) ?? [],
@@ -4179,6 +4183,7 @@ function ItemEditFormView({
               else setIsDirty(true)
               crossDefaultsRef.current?.(parent, v, 1)
               derivedOriginRef.current.set(parent, root)
+              fillSourceRef.current.set(parent, { source: root, value: v })
               upstreamCascadesRef.current?.(parent, v, depth + 1, chainSeen, root)
             }
           } catch {
@@ -4366,6 +4371,8 @@ function ItemEditFormView({
             draftRef.current = { ...draftRef.current, ...patch }
             setDraft((prev) => ({ ...prev, ...patch }))
             markAutoFilled(Object.keys(patch))
+            for (const [k, v] of Object.entries(patch))
+              if (k !== field) fillSourceRef.current.set(k, { source: field, value: v })
             // Derived from a personal default: prefill too, not the person's work.
             if (pdQuietRef.current.has(field))
               for (const k of Object.keys(patch)) pdQuietRef.current.add(k)
@@ -4756,6 +4763,43 @@ function ItemEditFormView({
       }),
     [client, collection, fieldConfig, relations, pdReadValue]
   )
+  // Undo of a personal default (#personal-defaults): take back what that value derived — the
+  // upstream-cascade parents and cross-record-default targets filled from it, transitively
+  // (Shipping Location → Region → Zone) — but only fields still holding the derived value, and
+  // the links those picks staged.
+  const pdUndoDerived = useCallback(
+    (roots: string[]) => {
+      const going = new Set(roots)
+      for (let grew = true; grew; ) {
+        grew = false
+        for (const [t, rec] of fillSourceRef.current)
+          if (!going.has(t) && going.has(rec.source)) {
+            going.add(t)
+            grew = true
+          }
+      }
+      const idOf = (v: unknown) =>
+        v && typeof v === 'object' && 'id' in (v as object) ? (v as { id: unknown }).id : v
+      const patch: Record<string, unknown> = {}
+      for (const f of going) {
+        undoDerivedFills(f)
+        if (roots.includes(f)) continue
+        const rec = fillSourceRef.current.get(f)
+        if (!rec) continue
+        fillSourceRef.current.delete(f)
+        if (derivedOriginRef.current.has(f)) derivedOriginRef.current.delete(f)
+        const cur = draftRef.current[f]
+        if (cur != null && String(idOf(cur)) === String(idOf(rec.value))) {
+          patch[f] = null
+          pdQuietRef.current.delete(f)
+        }
+      }
+      if (Object.keys(patch).length === 0) return
+      draftRef.current = { ...draftRef.current, ...patch }
+      setDraft((prev) => ({ ...prev, ...patch }))
+    },
+    [undoDerivedFills]
+  )
   const pdSetFieldValue = useCallback(
     (field: string, value: unknown, previous?: unknown) => {
       if (isEmptyValue(value)) pdQuietRef.current.delete(field)
@@ -4799,6 +4843,7 @@ function ItemEditFormView({
     layoutManage: (f) => !pdProfileOnly.has(f),
     draftRef,
     setFieldValue: pdSetFieldValue,
+    onUndone: pdUndoDerived,
     markAutoFilled,
     revalidate: pdChecks.revalidate,
     disabled: designOn || draftRestored,

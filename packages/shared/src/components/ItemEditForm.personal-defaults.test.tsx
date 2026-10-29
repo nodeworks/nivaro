@@ -162,6 +162,8 @@ async function settle(until: () => boolean) {
 
 // The form's M2M staging, as a picker would use it.
 let staging: M2MStagingCtx | null = null
+// Each field's value as the form last rendered it (renderField sees them all).
+const rendered: Record<string, unknown> = {}
 function GrabStaging() {
   staging = useM2MStaging()
   return null
@@ -181,7 +183,14 @@ async function mountNew(onDirtyChange = vi.fn(), opts: MountOpts = {}) {
               itemId={o.itemId}
               documentTitle={false}
               onDirtyChange={onDirtyChange}
-              renderField={o.grabStaging ? () => <GrabStaging /> : undefined}
+              renderField={
+                o.grabStaging
+                  ? (p) => {
+                      rendered[p.field.field] = p.value
+                      return <GrabStaging />
+                    }
+                  : undefined
+              }
             />
           </ItemEditAuthContext.Provider>
         </NivaroProvider>
@@ -396,6 +405,22 @@ describe('ItemEditForm personal defaults: fix round 1', () => {
     expect(onDirtyChange.mock.calls.some(([dirty]) => dirty === true)).toBe(true)
     // The recovery draft is kept (mirrored to the server).
     expect(calls.some((c) => c._method === 'PUT' && c._path === '/drafts/orders/new')).toBe(true)
+  })
+
+  it('undo of a default takes back the upstream parent its pick filled', async () => {
+    tagsFixture(true)
+    fx.defaults = [{ ...TITLE_DEFAULT, id: 2, field: 'tags', value: ['8'] }]
+    const { calls } = await mountNew(vi.fn(), { grabStaging: true })
+    await settle(() => calls.some((c) => c._path === '/items/tags/8') && rendered.zone === 'Z')
+    expect(rendered.zone).toBe('Z')
+    await act(async () =>
+      host.querySelector<HTMLButtonElement>('[data-personal-default-undo="tags"]')?.click()
+    )
+    await settle(
+      () => (staging?.getStagedLinks('tags') ?? []).length === 0 && rendered.zone == null
+    )
+    expect(staging?.getStagedLinks('tags')).toEqual([])
+    expect(rendered.zone ?? null).toBeNull()
   })
 
   it('default → field rule → cascade: everything derived stays prefill', async () => {
