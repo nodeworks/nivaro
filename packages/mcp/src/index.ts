@@ -20,6 +20,7 @@ import {
   readMcpCapabilities,
   readMe
 } from '@nivaro/sdk'
+import { restrictTools } from './allow.js'
 import { confirmSecretFor } from './confirm.js'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerRecordResource, type SubscriptionHost } from './record-resource.js'
@@ -84,6 +85,12 @@ export interface NivaroMcpOptions {
    * server reaches the same tools through list_instance_tools / call_instance_tool.
    */
   instanceTools?: InstanceToolEntry[]
+  /**
+   * Only these tools (#3205, a connection's tool allowlist); omitted or null = every tool the
+   * options above register. It only removes tools — a name here that the options do not
+   * register (an admin tool for a non-admin) is not added.
+   */
+  allowedTools?: readonly string[] | null
 }
 
 export interface NivaroMcp {
@@ -238,6 +245,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   )
 
   tagToolCalls(server)
+  if (options.allowedTools) restrictTools(server, options.allowedTools)
   registerAccountTools(server, client)
   registerCollectionTools(server, client)
   registerItemTools(server, client, {
@@ -278,6 +286,7 @@ export async function serveStdio(options: NivaroMcpOptions): Promise<NivaroMcp> 
   return mcp
 }
 
+export { restrictTools } from './allow.js'
 export { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from './annotations.js'
 export type { SubscriptionHost, SubscriptionRefusal } from './record-resource.js'
 export { parseRecordUri, RECORD_URI_TEMPLATE, recordUri } from './record-resource.js'

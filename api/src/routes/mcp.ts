@@ -157,10 +157,13 @@ export function mcpToolOptions(req: FastifyRequest): {
  */
 export async function mcpInstanceTools(req: FastifyRequest) {
   const { instanceToolCatalog, mcpCallerAccess } = await import('../services/mcp-tools.js')
-  return instanceToolCatalog(mcpCallerAccess(req)).catch((err) => {
+  const tools = await instanceToolCatalog(mcpCallerAccess(req)).catch((err) => {
     req.log.warn({ err }, 'mcp instance tool catalog failed')
     return []
   })
+  // #3205 — a connection limited to some tools lists only those.
+  const allowed = req.mcpScope?.tools
+  return allowed ? tools.filter((t) => allowed.includes(t.name)) : tools
 }
 
 let mcpModules: Promise<{
@@ -228,6 +231,8 @@ export async function mcpRoutes(app: FastifyInstance) {
       fetch: injectFetch(app, req),
       ...mcpToolOptions(req),
       instanceTools,
+      // #3205 — the connection's tool allowlist (services/mcp-scope.ts); null = every tool.
+      allowedTools: req.mcpScope?.tools ?? null,
       subscriptions: live ? subscriptionHost(app, req, live.session) : undefined
     } as Parameters<typeof createNivaroMcpServer>[0])
     const transport = new StreamableHTTPServerTransport({

@@ -19,6 +19,8 @@ import {
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
+import { listKits, type ToolKit } from '../services/mcp-kits.js'
+import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/mcp-scope.js'
 import {
   consumeCode,
   consumeRefreshChecked,
@@ -163,12 +165,47 @@ main{width:100%;max-width:440px;background:var(--card);border:1px solid var(--li
 h1{font-size:18px;margin:0 0 12px}p{margin:0 0 12px;color:var(--muted)}strong{color:var(--fg)}
 ul{margin:0 0 16px;padding-left:18px;color:var(--muted)}.who{font-size:12.5px;border-top:1px solid var(--line);padding-top:12px;margin-top:4px}
 .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+fieldset{border:0;margin:0 0 4px;padding:0;min-width:0}legend{padding:0;margin:0 0 8px;font-weight:600;color:var(--fg)}fieldset .opt{margin:0 0 10px}
 .opt{display:flex;gap:8px;align-items:flex-start;margin:0 0 16px;color:var(--fg);cursor:pointer}.opt input{margin:3px 0 0;accent-color:var(--accent)}.opt span span{display:block;color:var(--muted);font-size:12.5px}
 button{font:inherit;border-radius:6px;padding:8px 14px;cursor:pointer;border:1px solid var(--line);background:var(--btn);color:var(--fg)}
 button.allow{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 </style></head><body><main>${body}</main></body></html>`
 
-function consentPage(client: OAuthClient, p: AuthorizeParams, user: User, csrf: string): string {
+/**
+ * The kit choice on the consent page (#3214): which tools the app may use. `current` is the
+ * limit an earlier connection of this app already has (kept unless the person picks again);
+ * a limit an administrator locked is shown, not offered.
+ */
+export interface ConsentKits {
+  kits: ToolKit[]
+  current: { kit: string | null; custom: boolean; locked: boolean } | null
+}
+
+/** The kit picker's HTML (pure; every string escaped). Empty when there is nothing to pick. */
+export function kitFieldset(choice: ConsentKits | null): string {
+  if (!choice || choice.kits.length === 0) return ''
+  const cur = choice.current
+  if (cur?.locked)
+    return `<input type="hidden" name="kit" value="__keep"><p>An administrator has set which tools this app may use.</p>`
+  const keep = !!cur && (cur.custom || !cur.kit)
+  const selected = keep ? '__keep' : (cur?.kit ?? '')
+  const opt = (value: string, label: string, hint: string) =>
+    `<label class="opt"><input type="radio" name="kit" value="${escapeHtml(value)}"${value === selected ? ' checked' : ''}>
+<span>${escapeHtml(label)}<span>${escapeHtml(hint)}</span></span></label>`
+  return `<fieldset><legend>What it may use</legend>
+${keep ? opt('__keep', 'Keep its current limits', 'The tools and collections you set for this app before.') : ''}
+${opt('', 'Everything you can do', 'Every tool your role allows.')}
+${choice.kits.map((k) => opt(k.key, k.label, k.description)).join('\n')}
+</fieldset>`
+}
+
+function consentPage(
+  client: OAuthClient,
+  p: AuthorizeParams,
+  user: User,
+  csrf: string,
+  kits: ConsentKits | null = null
+): string {
   const host = new URL(p.redirect_uri).host
   const name = escapeHtml(cleanClientName(client.client_name))
   const who = escapeHtml(
@@ -188,12 +225,63 @@ function consentPage(client: OAuthClient, p: AuthorizeParams, user: User, csrf: 
 <li>Its actions are recorded as yours.</li>
 <li>You can disconnect it at any time from your profile.</li></ul>
 <form method="post" action="/oauth/authorize">${hidden}
+${kitFieldset(kits)}
 <label class="opt"><input type="checkbox" name="chat" value="1"${askedChat ? ' checked' : ''}>
 <span>Also let it read and post in your chat conversations<span>Only rooms you can open. Its messages say they came from ${name}.</span></span></label>
 <div class="who">Signed in as <strong>${who}</strong></div>
 <div class="row"><button type="submit" name="decision" value="deny">Cancel</button>
 <button type="submit" name="decision" value="allow" class="allow">Allow</button></div></form>`
   )
+}
+
+/** The kits to offer, and this app's current limit when the person connected it before. */
+async function consentKits(
+  app: FastifyInstance,
+  userId: string,
+  clientId: string
+): Promise<ConsentKits | null> {
+  if (!(await scopesReady())) return null
+  const kits = await listKits()
+  const prior = (await listGrants(app.redis, userId)).find((g) => g.client_id === clientId)
+  const row = prior ? await readScopeRow(`o${prior.id.toLowerCase()}`) : null
+  return {
+    kits,
+    current: row
+      ? {
+          kit: row.kit,
+          custom: row.tools != null || row.collections != null || row.actions != null,
+          locked: row.locked
+        }
+      : null
+  }
+}
+
+/**
+ * Store the consent page's kit choice on the grant: `__keep` (or nothing posted) leaves the
+ * limit as it is, '' clears it, a kit key sets it. A locked limit is never touched; an unknown
+ * kit changes nothing. Returns the kit set, if any.
+ */
+async function applyConsentKit(
+  userId: string,
+  grantId: string,
+  raw: unknown
+): Promise<string | null> {
+  if (raw === undefined || raw === '__keep' || !(await scopesReady())) return null
+  const conn = `o${grantId.toLowerCase()}`
+  const row = await readScopeRow(conn)
+  if (row?.locked) return null
+  const choice = typeof raw === 'string' ? raw : ''
+  if (!choice) {
+    if (row) await deleteScope(conn)
+    return null
+  }
+  if (!(await listKits()).some((k) => k.key === choice)) return null
+  await writeScope(
+    conn,
+    { kit: choice, tools: null, collections: null, actions: null, locked: false, note: null },
+    { userId, owner: userId }
+  )
+  return choice
 }
 
 /** A signed-in consent needs a sign-in this recent (a connected app keeps access for 30 days). */
@@ -360,7 +448,8 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     if (!user || stale) return reply.redirect(signInUrl(req.url, stale))
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
-    return reply.type('text/html').send(consentPage(checked.client, checked.p, user, csrf))
+    const kits = await consentKits(app, String(user.id), checked.client.client_id).catch(() => null)
+    return reply.type('text/html').send(consentPage(checked.client, checked.p, user, csrf, kits))
   })
 
   app.post('/oauth/authorize', async (req, reply) => {
@@ -389,6 +478,12 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       )
     const scope = grantedScope(body.chat === '1' || body.chat === 'on')
     const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
+    // #3214 — the kit the person picked becomes this connection's limit (never a widening:
+    // services/mcp-scope.ts intersects it with what they may do).
+    const kit = await applyConsentKit(String(user.id), grant.id, body.kit).catch((err) => {
+      req.log.warn({ err }, 'oauth consent kit not applied')
+      return null
+    })
     const code = await issueCode(app.redis, {
       client_id: checked.client.client_id,
       user_id: String(user.id),
@@ -400,7 +495,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'oauth-connect',
       user: user.id,
-      comment: `${checked.client.client_name} (${new URL(p.redirect_uri).host})${scope === OAUTH_SCOPE ? '' : ` · ${scope}`}`,
+      comment: `${checked.client.client_name} (${new URL(p.redirect_uri).host})${scope === OAUTH_SCOPE ? '' : ` · ${scope}`}${kit ? ` · kit ${kit}` : ''}`,
       req
     }).catch(() => {})
     return reply.redirect(
@@ -505,6 +600,7 @@ export async function oauthConnectionRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const ok = await revokeGrant(app.redis, String(req.user!.id), req.params.id)
       if (!ok) return reply.code(404).send({ error: 'Connection not found' })
+      await deleteScope(`o${req.params.id.toLowerCase()}`).catch(() => false)
       await logActivity({
         action: 'oauth-revoke',
         user: req.user!.id,

@@ -37,9 +37,12 @@ async function builtinNames(): Promise<Set<string>> {
 }
 
 export async function mcpToolRoutes(app: FastifyInstance) {
-  app.get('/', { preHandler: authenticate }, async (req) => ({
-    data: await instanceToolCatalog(mcpCallerAccess(req))
-  }))
+  app.get('/', { preHandler: authenticate }, async (req) => {
+    const tools = await instanceToolCatalog(mcpCallerAccess(req))
+    // #3205 — an MCP connection limited to some tools sees only those.
+    const allowed = req.mcpScope?.tools
+    return { data: allowed ? tools.filter((t) => allowed.includes(t.name)) : tools }
+  })
 
   app.post<{ Params: { name: string }; Body: { input?: Record<string, unknown> } }>(
     '/:name/call',
