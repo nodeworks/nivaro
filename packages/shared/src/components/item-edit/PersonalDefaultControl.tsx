@@ -1,4 +1,4 @@
-import { Check, Undo2, UserRound, UserRoundX } from 'lucide-react'
+import { Check, Undo2, UserRound, UserRoundPen, UserRoundPlus, UserRoundX } from 'lucide-react'
 import { Fragment, type ReactElement, useInsertionEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { type PersonalDefaultsApi, usePersonalDefaultsApi } from './usePersonalDefaults'
@@ -37,6 +37,9 @@ export function personalDefaultSlotState(s: {
   hasDefault: boolean
   isDefault: boolean
   applied: boolean
+  /** The saved defaults could not be read: offer Make default on a value, else nothing (never
+   *  an empty reserved box that waits forever). */
+  failed?: boolean
 }): PersonalDefaultSlotState | null {
   if (!s.allowed) return null
   // The prefilled marker and the default-state actions are ONE control while the value stands.
@@ -44,6 +47,7 @@ export function personalDefaultSlotState(s: {
   if (s.applied && s.hasDefault) return 'applied'
   if (!s.editable) return null
   if (!s.loaded) return 'reserve'
+  if (s.failed && !s.hasDefault) return s.hasValue ? 'offer' : null
   if (s.hasDefault) return !s.hasValue ? 'saved-empty' : s.isDefault ? 'saved' : 'update'
   return s.hasValue ? 'offer' : 'reserve'
 }
@@ -62,7 +66,8 @@ export function personalDefaultSlotFor(
     hasValue: api.hasValue(field),
     hasDefault: api.defaultFor(field) !== null,
     isDefault: api.isDefault(field),
-    applied: api.applied(field)
+    applied: api.applied(field),
+    failed: api.failed
   })
 }
 
@@ -107,37 +112,52 @@ export function clearPersonalDefault(api: PersonalDefaultsApi, field: string): P
   )
 }
 
-// Width steps, as attribute rules this control owns (a host stylesheet that loads later
-// re-declares plain utilities like `hidden` and would beat responsive classes — gotchas "Host
-// CSS loads after full.css"). The label row of a field with a slot is the container
-// (`data-pd-row`), so the steps follow the FIELD's width, not the viewport: a col_span 1 of 4
-// column on a wide desktop compacts exactly like a phone.
+// Width steps and touch sizes, as attribute rules this control owns: a host stylesheet that
+// loads later (efp-new's global.css) re-declares plain utilities (`.h-7`, `.opacity-0`,
+// `hidden`) and would beat responsive or media-variant classes (gotchas "Host CSS loads after
+// full.css"), so every rule here outranks a single class. The label row of a field with a slot
+// is the container (`data-pd-row`), so the steps follow the FIELD's width, not the viewport: a
+// col_span 1 of 4 column on a wide desktop compacts exactly like a phone.
 //   ≥ 320px   every label in words
 //   < 320px   secondary pieces (Your default, Undo, Clear default) become icons with their tip;
 //             Make / Update default keep their words (the one action worth reading)
-//   < 192px   Make / Update default become their icon too; the slot's reserve shrinks to 24px
+//   < 192px   Make / Update default become their icon too
+// Reserve: the slot always takes the width of the WIDEST state this field can reach at that
+// step (Update default · Clear default; on a new record the prefilled Your default · Undo ·
+// Clear default), so no state change ever re-wraps the label row. A container query sees the
+// row's width, not the room a long label leaves, so "fold when crowded" would need per-field
+// JS measuring; a fixed reserve is deterministic and costs nothing. A crowded row wraps the
+// slot onto its own line once, at render, and it stays there.
 // Touch (no hover + coarse pointer): every action's invisible hit area grows to 44px tall,
-// reaching mostly upward (16px) and 8px down so it never covers the input below.
+// reaching mostly upward (16px) and 8px down so it never covers the input below; the
+// confirm's Cancel / Save grow to 44px; the ⋯ trigger is always shown.
 export const PERSONAL_DEFAULT_CSS = `
 [data-pd-row]{container-type:inline-size;container-name:nvrpd}
-[data-personal-default-slot]{min-width:6rem}
+[data-personal-default-slot]{min-width:13rem}
+[data-personal-default-slot][data-pd-new]{min-width:16rem}
 [data-personal-default-slot] [data-pd-icon]{display:none}
 @container nvrpd (max-width: 319px){
+[data-personal-default-slot],[data-personal-default-slot][data-pd-new]{min-width:9rem}
 [data-personal-default-slot] [data-pd-label]{display:none}
 [data-personal-default-slot] [data-pd-icon]{display:inline-block}
 }
 @container nvrpd (max-width: 191px){
-[data-personal-default-slot]{min-width:1.5rem}
+[data-personal-default-slot]{min-width:3.25rem}
+[data-personal-default-slot][data-pd-new]{min-width:5rem}
 [data-personal-default-slot] [data-pd-primary]{display:none}
 }
 @media (hover: none) and (pointer: coarse){
 [data-pd-row] [data-pd-action]::before{top:-16px;bottom:-8px}
+[data-personal-default-confirm] button{height:2.75rem;padding-inline:.875rem}
+}
+@media (hover: none){
+button[data-field-menu-trigger]{opacity:1}
 }
 `
 const STYLE_ID = 'nvr-personal-default-css'
 
-/** Puts the width steps in the document once (first slot on the page). */
-function usePersonalDefaultCss() {
+/** Puts the width steps and touch sizes in the document once (the first slot or field menu). */
+export function usePersonalDefaultCss() {
   useInsertionEffect(() => {
     if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return
     const el = document.createElement('style')
@@ -216,6 +236,7 @@ export function PersonalDefaultSlot({
           : 'Forget your saved default'
       }
       data-pd-action
+      tabIndex={-1}
       disabled={clearing || !api}
       aria-busy={clearing || undefined}
       onClick={() => {
@@ -252,10 +273,17 @@ export function PersonalDefaultSlot({
           : 'Start your new records with this value instead'
       }
       data-pd-action
+      // Pointer and touch only: keyboard people reach the same action through ⋯ (the tab order
+      // stays what it was: ⋯, then Undo when a default was just filled in).
+      tabIndex={-1}
       onClick={(e) => onConfirm(e.currentTarget, mode)}
       className={ACTION}
     >
-      <UserRound className='h-3 w-3' aria-hidden />
+      {mode === 'make' ? (
+        <UserRoundPlus className='h-3 w-3' aria-hidden />
+      ) : (
+        <UserRoundPen className='h-3 w-3' aria-hidden />
+      )}
       <span data-pd-primary>{mode === 'make' ? 'Make default' : 'Update default'}</span>
     </button>
   )
@@ -323,6 +351,7 @@ export function PersonalDefaultSlot({
     <span
       data-personal-default-slot={field}
       data-state={state}
+      data-pd-new={api?.isNew ? '' : undefined}
       aria-hidden={state === 'reserve' ? true : undefined}
       className='inline-flex shrink-0 items-center justify-end'
     >

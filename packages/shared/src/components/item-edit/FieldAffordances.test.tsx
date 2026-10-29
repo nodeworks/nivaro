@@ -43,6 +43,8 @@ let host: HTMLDivElement
 let saved: SavedDefault[]
 /** false = the picker knows no label (a record the person cannot read, a failed lookup). */
 let labelsKnown: boolean
+/** GET /field-defaults/mine fails. */
+let getFails: boolean
 const FIELD_LABELS: Record<string, string> = { zone: 'Zone', region: 'Region', ship_to: 'Ship to' }
 
 function Harness({
@@ -151,7 +153,10 @@ async function mount(props: React.ComponentProps<typeof Harness>) {
     request: vi.fn(async (cmd: Req) => {
       requests.push(cmd)
       const m = cmd._method ?? 'GET'
-      if (m === 'GET') return { data: saved }
+      if (m === 'GET') {
+        if (getFails) throw new Error('offline')
+        return { data: saved }
+      }
       if (failWith)
         throw Object.assign(new Error('boom'), { response: { data: { error: failWith } } })
       // The server's upsert (one row per field + context) and delete, so the refetch sees them.
@@ -213,6 +218,7 @@ beforeEach(() => {
   failWith = null
   saved = []
   labelsKnown = true
+  getFails = false
   vi.clearAllMocks()
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -819,5 +825,107 @@ describe('responsive: compact steps, touch targets, the confirm on a phone', () 
     const p = document.querySelector<HTMLElement>('[data-personal-default-confirm] p')
     expect(p?.className).toContain('line-clamp-4')
     expect(p?.className).toContain('[overflow-wrap:anywhere]')
+  })
+})
+
+describe('Make default fix round 1', () => {
+  const row: SavedDefault = {
+    id: 7,
+    field: 'ship_to',
+    value: 101,
+    context: { zone: 2, region: 10 },
+    updated_at: '2026-10-20'
+  }
+  const q = (sel: string) => host.querySelector<HTMLElement>(sel)
+  const iconOf = (el: HTMLElement | null) => el?.querySelector('svg')?.getAttribute('class') ?? ''
+
+  it('Make, Update and the status each have their own icon', async () => {
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(iconOf(q('[data-personal-default-make]'))).toContain('lucide-user-round-plus')
+    act(() => root.unmount())
+    root = createRoot(host)
+    saved = [row]
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(iconOf(q('[data-personal-default-update]'))).toContain('lucide-user-round-pen')
+    act(() => root.unmount())
+    root = createRoot(host)
+    saved = [row]
+    await mount({
+      field: 'ship_to',
+      draft: { zone: 2, region: 10 },
+      allowed: ['ship_to'],
+      editable: true
+    })
+    const status = iconOf(q('[data-personal-default-saved]'))
+    expect(status).toMatch(/lucide-user-round(?!-)/)
+    expect(status).not.toMatch(/plus|pen/)
+  })
+
+  it('Make, Update and Clear default are not tab stops (⋯ is the keyboard way in)', async () => {
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(q('[data-personal-default-make]')?.tabIndex).toBe(-1)
+    act(() => root.unmount())
+    root = createRoot(host)
+    saved = [row]
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(q('[data-personal-default-update]')?.tabIndex).toBe(-1)
+    expect(q('[data-personal-default-clear]')?.tabIndex).toBe(-1)
+    expect(q('[data-personal-default-update]')?.getAttribute('aria-label')).toBeTruthy()
+  })
+
+  it('the ⋯ menu says what the control says: Update my default replaces that default', async () => {
+    saved = [row]
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(items()).toContain('Update my default')
+    expect(items()).not.toContain('Save as my default')
+    expect(items()).toContain('Clear my default')
+    await click(item('Update my default'))
+    expect(document.querySelector('[data-personal-default-confirm] p')?.textContent).toBe(
+      'Update your default for Zone 2 · Boston to Cambridge?'
+    )
+    await click(button('Update'))
+    expect(writes().map((r) => [r._method, r._body])).toEqual([
+      [
+        'PUT',
+        { collection: 'orders', field: 'ship_to', value: 100, context: { zone: 2, region: 10 } }
+      ]
+    ])
+  })
+
+  it('the value IS the default: the menu offers only Clear my default', async () => {
+    saved = [{ ...row, value: 100 }]
+    await open({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(items()).toContain('Clear my default')
+    expect(items()).not.toContain('Save as my default')
+    expect(items()).not.toContain('Update my default')
+  })
+
+  it('a failed read: Make default on a value, and no empty reserved box on an empty field', async () => {
+    getFails = true
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(q('[data-personal-default-make]')).not.toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount({ field: 'ship_to', draft: { zone: 2 }, allowed: ['ship_to'], editable: true })
+    expect(q('[data-personal-default-slot]')).toBeNull()
+  })
+
+  it('touch sizes and reserves are owned rules a host class cannot beat; the menu injects them too', async () => {
+    expect(PERSONAL_DEFAULT_CSS).toContain(
+      '[data-personal-default-confirm] button{height:2.75rem;padding-inline:.875rem}'
+    )
+    expect(PERSONAL_DEFAULT_CSS).toContain('button[data-field-menu-trigger]{opacity:1}')
+    expect(PERSONAL_DEFAULT_CSS).toContain(
+      '[data-personal-default-slot][data-pd-new]{min-width:16rem}'
+    )
+    await mount({ field: 'ship_to', draft: FULL, allowed: ['ship_to'], editable: true })
+    expect(q('[data-personal-default-slot]')?.hasAttribute('data-pd-new')).toBe(true)
+    document.getElementById('nvr-personal-default-css')?.remove()
+    await act(async () => {
+      host
+        .querySelector('[data-testid=row]')
+        ?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    expect(document.getElementById('nvr-personal-default-css')).not.toBeNull()
   })
 })

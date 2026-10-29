@@ -32,8 +32,13 @@ export type PersonalDefaultsApi = {
   /** The layout lets this field carry a personal default (and the form reads them: never on
    *  the design canvas). */
   allowed(field: string): boolean
-  /** The person's saved defaults have been read (until then nobody can tell what is saved). */
+  /** The person's saved defaults have been read, or the read failed (until then nobody can
+   *  tell what is saved). */
   loaded: boolean
+  /** The read failed: nothing is known to be saved (Make default still works). */
+  failed: boolean
+  /** The form shows a new record (the prefilled state can appear on it). */
+  isNew: boolean
   /** The caller's saved default that fits the record's current parent values. */
   defaultFor(field: string): SavedDefault | null
   /** The field holds a value and it IS the saved default for the current parent values
@@ -101,6 +106,8 @@ export type UsePersonalDefaultsOptions = {
   fieldLabel?: (field: string) => string
   /** The label the picker would show; null = none (hints then say "Your saved default"). */
   valueLabel?: (field: string, value: unknown) => string | null | Promise<string | null>
+  /** The field's data type (decimal, date, timestamp…): equal values compare by type. */
+  fieldType?: (field: string) => string | null | undefined
   /** Runs once a pass has applied its values (field rules, cross-record defaults, cascades). */
   afterApply?: (field: string, value: unknown) => void
   /** The record the form shows (e.g. `orders:new`): a change starts the ledger over — a
@@ -127,9 +134,33 @@ function plain(v: unknown): unknown {
   return v
 }
 
-/** Same value for the ledger: ids as strings, id lists in any order. */
-export function sameDefaultValue(a: unknown, b: unknown): boolean {
+const NUMERIC_TYPES = new Set(['integer', 'bigInteger', 'float', 'decimal', 'number', 'double'])
+const DATE_TYPES = new Set(['date'])
+const DATETIME_TYPES = new Set(['dateTime', 'datetime', 'timestamp', 'time'])
+
+/** Same value for the ledger: ids as strings, id lists in any order. With the field's type,
+ *  numbers compare as numbers ("1.50" = 1.5), dates by their day ("2026-10-28" =
+ *  "2026-10-28T00:00:00") and date-times by their instant. */
+export function sameDefaultValue(a: unknown, b: unknown, type?: string | null): boolean {
   if (isEmptyValue(a) && isEmptyValue(b)) return true
+  if (type && !Array.isArray(a) && !Array.isArray(b) && !isEmptyValue(a) && !isEmptyValue(b)) {
+    const pa = plain(a)
+    const pb = plain(b)
+    if (NUMERIC_TYPES.has(type)) {
+      const na = Number(pa)
+      const nb = Number(pb)
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb
+    } else if (DATE_TYPES.has(type)) {
+      const day = (v: unknown) => /^(\d{4}-\d{2}-\d{2})/.exec(String(v))?.[1]
+      const da = day(pa)
+      const db = day(pb)
+      if (da && db) return da === db
+    } else if (DATETIME_TYPES.has(type)) {
+      const ta = Date.parse(String(pa))
+      const tb = Date.parse(String(pb))
+      if (Number.isFinite(ta) && Number.isFinite(tb)) return ta === tb
+    }
+  }
   const norm = (v: unknown) => {
     const p = plain(v)
     return Array.isArray(p) ? p.map((x) => String(x)).sort() : String(p)
@@ -163,7 +194,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const optsRef = useRef(opts)
   optsRef.current = opts
 
-  const { data } = useQuery<SavedDefault[]>({
+  const { data, isError } = useQuery<SavedDefault[]>({
     queryKey: personalDefaultsKey(collection),
     queryFn: () =>
       client
@@ -578,7 +609,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       const cur = currentValue(field)
       if (isEmptyValue(cur)) return false
       const d = defaultFor(field)
-      return !!d && sameDefaultValue(d.value, cur)
+      return !!d && sameDefaultValue(d.value, cur, optsRef.current.fieldType?.(field))
     },
     [currentValue, defaultFor]
   )
@@ -676,10 +707,16 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       const d = defaultFor(field)
       if (!d) return null
       await client.request(del(`/field-defaults/mine/${d.id}`))
+      // A prefilled value whose default is forgotten is the person's to keep ("this field keeps
+      // its value"): out of the ledger, so no parent change empties or re-picks it.
+      if (ledgerRef.current.delete(field)) {
+        undoneRef.current.add(field)
+        publish()
+      }
       await qc.invalidateQueries({ queryKey: personalDefaultsKey(collection) })
       return d
     },
-    [client, qc, collection, defaultFor]
+    [client, qc, collection, defaultFor, publish]
   )
 
   const restore = useCallback(
@@ -700,7 +737,9 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
   const context = useMemo<PersonalDefaultsApi>(
     () => ({
       allowed: (f) => (optsRef.current.enabled ?? true) && optsRef.current.layoutAllows(f),
-      loaded: data !== undefined,
+      loaded: data !== undefined || isError,
+      failed: data === undefined && isError,
+      isNew,
       defaultFor,
       isDefault,
       save,
@@ -717,6 +756,8 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     }),
     [
       data,
+      isError,
+      isNew,
       defaultFor,
       isDefault,
       save,

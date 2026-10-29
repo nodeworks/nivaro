@@ -6,6 +6,7 @@ import {
   Lock,
   Sigma,
   UserRound,
+  UserRoundPen,
   UserRoundX,
   X
 } from 'lucide-react'
@@ -26,7 +27,7 @@ import type { TextContext } from '../../lib/placement-behaviour'
 import { htmlToText } from '../../lib/sanitize-html'
 import { cn, formatRelative } from '../../lib/utils'
 import { useOverflowTip } from '../TipLayer'
-import { clearPersonalDefault, refusalText } from './PersonalDefaultControl'
+import { clearPersonalDefault, refusalText, usePersonalDefaultCss } from './PersonalDefaultControl'
 import { PERSONAL_DEFAULT_GHOST_BUTTON } from './PersonalDefaultPill'
 import type { CMSField, CMSRelation } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
@@ -382,6 +383,11 @@ export function useFieldContextMenu({
     }
     return false
   }
+  const pdAllowed = !!personalDefaults?.allowed(field.field)
+  const pdHasValue = pdAllowed && editable && !!personalDefaults?.hasValue(field.field)
+  const pdSaved = pdAllowed ? (personalDefaults?.defaultFor(field.field) ?? null) : null
+  const pdOffer = pdHasValue && !pdSaved
+  const pdUpdate = pdHasValue && !!pdSaved && !personalDefaults?.isDefault(field.field)
   const items: MenuItem[] = [
     {
       key: 'copy',
@@ -459,7 +465,9 @@ export function useFieldContextMenu({
           } satisfies MenuItem
         ]
       : []),
-    ...(personalDefaults?.allowed(field.field) && editable && personalDefaults.hasValue(field.field)
+    // Same states as the visible control: no default here → Save; a default holding another
+    // value → Update (that default, in place); the value IS the default → only Clear.
+    ...(pdOffer
       ? [
           {
             key: 'save-default',
@@ -470,7 +478,18 @@ export function useFieldContextMenu({
           } satisfies MenuItem
         ]
       : []),
-    ...(personalDefaults?.allowed(field.field) && personalDefaults.defaultFor(field.field)
+    ...(pdUpdate
+      ? [
+          {
+            key: 'update-default',
+            label: 'Update my default',
+            icon: <UserRoundPen className='h-3.5 w-3.5' />,
+            stay: true,
+            run: startUpdate
+          } satisfies MenuItem
+        ]
+      : []),
+    ...(pdSaved && personalDefaults
       ? [
           {
             key: 'clear-default',
@@ -553,7 +572,9 @@ export function useFieldContextMenu({
   ) : null
   // The ⋯ button shows only where the menu offers something about this field beyond the copy
   // items every field has: today, Save / Clear my default.
-  const hasFieldItems = items.some((i) => i.key === 'save-default' || i.key === 'clear-default')
+  const hasFieldItems = items.some(
+    (i) => i.key === 'save-default' || i.key === 'update-default' || i.key === 'clear-default'
+  )
   return {
     onContextMenu,
     onKeyDown,
@@ -567,9 +588,6 @@ export function useFieldContextMenu({
 }
 
 const MENU_WIDTH = 240
-/** Confirm buttons on touch screens: 44px tall (the panel can grow; the label row cannot). */
-const TOUCH_TALL =
-  '[@media(hover:none)_and_(pointer:coarse)]:h-11 [@media(hover:none)_and_(pointer:coarse)]:px-3.5'
 /** The buttons in a field's label row that open (and toggle shut) this field's panel. */
 const PANEL_TRIGGERS =
   '[data-field-menu-trigger], [data-personal-default-make], [data-personal-default-update]'
@@ -601,6 +619,9 @@ function FieldContextMenu({
    *  (a body portal inherits the modal lock's pointer-events:none and the focus trap). */
   anchor?: HTMLElement | null
 }) {
+  // The confirm's touch sizes live in the control's owned CSS (a form whose only way in is the
+  // ⋯ menu must get them too).
+  usePersonalDefaultCss()
   const ref = useRef<HTMLDivElement>(null)
   const [cursor, setCursor] = useState(0)
   const enabled = items.filter((i) => !i.disabled)
@@ -719,7 +740,7 @@ function FieldContextMenu({
               ref={cancelRef}
               type='button'
               onClick={confirm.onCancel}
-              className={cn(PERSONAL_DEFAULT_GHOST_BUTTON, TOUCH_TALL)}
+              className={PERSONAL_DEFAULT_GHOST_BUTTON}
             >
               <X className='h-3 w-3' aria-hidden /> Cancel
             </button>
@@ -728,10 +749,8 @@ function FieldContextMenu({
               type='button'
               disabled={!confirm.ready}
               onClick={confirm.onSave}
-              className={cn(
-                'h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50',
-                TOUCH_TALL
-              )}
+              // 44px on touch screens: PERSONAL_DEFAULT_CSS (a host's `.h-7` would win a class).
+              className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[11.5px] font-semibold text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50'
             >
               {confirm.saving ? 'Saving…' : confirm.action}
             </button>

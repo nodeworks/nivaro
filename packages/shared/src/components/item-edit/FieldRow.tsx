@@ -1292,14 +1292,8 @@ export const FieldRow = memo(function FieldRow({
                     requestAnimationFrame(() => focusFieldControl()?.focus())
                   }}
                   onCleared={() =>
-                    // Clear swaps "Your default" for Make default: focus follows to it.
-                    requestAnimationFrame(() =>
-                      (
-                        wrapperRef.current?.querySelector<HTMLElement>(
-                          `[data-personal-default-make="${CSS.escape(field.field)}"]`
-                        ) ?? focusFieldControl()
-                      )?.focus()
-                    )
+                    // The Clear button is gone (and not a tab stop): focus goes to the field.
+                    requestAnimationFrame(() => focusFieldControl()?.focus())
                   }
                 />
               )}

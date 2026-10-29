@@ -4785,6 +4785,8 @@ function ItemEditFormView({
       return fc?.label || titleCase(f)
     },
     valueLabel: pdChecks.valueLabel,
+    // "1.50" is 1.5 and a date is its day: the visible control compares by the field's type.
+    fieldType: (f) => (fieldConfig ?? []).find((x) => x.field === f)?.type ?? null,
     afterApply: (f, v) => {
       // What a pick of this value fills (field rules, cross-record defaults, upstream
       // cascades) — fill-only-when-empty, so a personal default is never replaced by them.

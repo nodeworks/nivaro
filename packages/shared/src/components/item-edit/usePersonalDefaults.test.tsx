@@ -9,6 +9,7 @@ import type { CascadeRule } from './helpers'
 import {
   linksBeyond,
   type PersonalDefaultsApi,
+  sameDefaultValue,
   type UsePersonalDefaultsResult,
   usePersonalDefaults
 } from './usePersonalDefaults'
@@ -63,6 +64,9 @@ type HarnessOpts = {
   valueLabel?: (f: string, v: unknown) => string | null
   isNew?: boolean
   resetKey?: string
+  fieldType?: (f: string) => string | null
+  /** GET /field-defaults/mine fails. */
+  getFails?: boolean
 }
 
 let root: Root
@@ -119,7 +123,8 @@ function Harness({ o }: { o: HarnessOpts }) {
     replaceable: o.replaceable,
     fieldLabel: (f) => LABELS[f] ?? f,
     valueLabel: o.valueLabel ?? ((_f, v) => VALUE_LABELS[String(v)] ?? String(v)),
-    afterApply: (f) => calls.after.push(f)
+    afterApply: (f) => calls.after.push(f),
+    fieldType: o.fieldType
   })
   api = result
   form = {
@@ -162,8 +167,10 @@ async function mount(o: HarnessOpts) {
       requests.push(cmd)
       if (failField && (cmd as { _body?: { field?: string } })._body?.field === failField)
         throw new Error('refused')
-      if (cmd._path === '/field-defaults/mine' && (cmd._method ?? 'GET') === 'GET')
+      if (cmd._path === '/field-defaults/mine' && (cmd._method ?? 'GET') === 'GET') {
+        if (o.getFails) throw new Error('offline')
         return { data: o.defaults }
+      }
       return { data: null }
     })
   }
@@ -518,5 +525,63 @@ describe('usePersonalDefaults: fix round 2', () => {
     expect(draft().zone).toBeUndefined()
     expect(api.ledger.size).toBe(0)
     expect(calls.auto).toEqual([])
+  })
+})
+
+describe('usePersonalDefaults: Make default fix round 1', () => {
+  const defaults = () => [
+    d('zone', '2'),
+    d('region', '10', { zone: '2' }),
+    d('region', '20', { zone: '5' })
+  ]
+  it('Clear default on a prefilled field takes it out of the ledger: a parent change keeps it', async () => {
+    await mount({ defaults: defaults() })
+    expect(api.ledger.get('region')).toBe('10')
+    await act(async () => {
+      await api.context.clear('region')
+    })
+    await flush()
+    expect(api.ledger.has('region')).toBe(false)
+    expect(api.context.applied('region')).toBe(false)
+    await act(async () => form.personEdit('zone', '5'))
+    await flush()
+    // "This field keeps its value": no re-pick, no emptying.
+    expect(draft().region).toBe('10')
+  })
+
+  it('a failed read still lets the form offer Make default (loaded + failed), never a stuck box', async () => {
+    await mount({ defaults: [], getFails: true, initial: { zone: '2' }, canFill: () => false })
+    expect(api.context.loaded).toBe(true)
+    expect(api.context.failed).toBe(true)
+    expect(api.context.defaultFor('zone')).toBeNull()
+  })
+
+  it('equal numbers and dates are the default whatever their spelling (field type)', async () => {
+    const types: Record<string, string> = { zone: 'decimal', region: 'date', ship_to: 'timestamp' }
+    await mount({
+      defaults: [
+        d('zone', '1.50'),
+        d('region', '2026-10-28', { zone: 1.5 }),
+        d('ship_to', '2026-10-28T09:00:00.000Z')
+      ],
+      initial: { zone: 1.5, region: '2026-10-28T00:00:00', ship_to: '2026-10-28T09:00:00Z' },
+      canFill: () => false,
+      fieldType: (f) => types[f] ?? null
+    })
+    expect(api.context.isDefault('zone')).toBe(true)
+    expect(api.context.isDefault('region')).toBe(true)
+    expect(api.context.isDefault('ship_to')).toBe(true)
+  })
+
+  it('sameDefaultValue: typed compare for numbers and dates, string compare otherwise', () => {
+    expect(sameDefaultValue('1.50', 1.5, 'decimal')).toBe(true)
+    expect(sameDefaultValue('1.50', 1.5, 'float')).toBe(true)
+    expect(sameDefaultValue('2', 3, 'integer')).toBe(false)
+    expect(sameDefaultValue('2026-10-28', '2026-10-28T00:00:00.000Z', 'date')).toBe(true)
+    expect(sameDefaultValue('2026-10-28', '2026-10-29', 'date')).toBe(false)
+    expect(sameDefaultValue('2026-10-28T09:00:00.000Z', '2026-10-28T09:00:00Z', 'dateTime')).toBe(
+      true
+    )
+    expect(sameDefaultValue('1.50', 1.5)).toBe(false)
   })
 })
