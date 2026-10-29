@@ -375,6 +375,8 @@ describe('DesignNode tag row (design review)', () => {
   it('ranks tags: comparison, preview, rule loop, rules, AI, from parent', () => {
     expect(markRank({ kind: 'preview' })).toBe(1)
     expect(markRank({ kind: 'loop' })).toBe(2)
+    // A personal-default field says so ahead of plain rule tags (never behind "+n").
+    expect(markRank({ kind: 'personal' })).toBe(2)
     expect(markRank({ highlight: true })).toBe(2)
     expect(markRank({})).toBe(3)
     expect(markRank({ kind: 'ai', highlight: true })).toBe(4)

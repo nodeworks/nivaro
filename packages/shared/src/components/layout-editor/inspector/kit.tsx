@@ -276,7 +276,7 @@ export function Setting({
 }) {
   const w = useContext(GlobalWriterContext)
   return (
-    <div data-setting={k} data-setting-row='' className={cn('space-y-1.5', className)}>
+    <div data-setting={k} data-setting-row='' className={cn('relative space-y-1.5', className)}>
       <div className='flex min-h-5 items-center justify-between gap-3'>
         <span className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5'>
           <span className={labelText}>{label}</span>

@@ -71,7 +71,6 @@ import {
   type SelectOptions,
   targetKey
 } from './design-context'
-import { WIDTH_LABELS } from './field-zones'
 import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { NO_DND } from './dnd/node'
 import { stagedTip, useDraftRecovery } from './draft-recovery'
@@ -87,8 +86,8 @@ import type { OpenSource } from './explain/field-sources'
 import type { RuleDep } from './explain/rule-graph'
 import { useCanvasExplain, useDefaultGhosts } from './explain/use-explain'
 import { FindReplaceButton } from './FindReplace'
-import { OutputsButton } from './outputs/OutputsButton'
 import { FormMapButton } from './FormMapButton'
+import { WIDTH_LABELS } from './field-zones'
 import { useSectionChanges } from './history-api'
 import { useLayoutEditorHost } from './host'
 import { overriddenTargets, overrideMark } from './inheritance'
@@ -106,6 +105,7 @@ import { FindTool, OutlineTool, ShortcutsTool, ViewTools } from './nav/NavTools'
 import { OutlinePanel } from './nav/OutlinePanel'
 import { useEditorNav } from './nav/useEditorNav'
 import { COMPACT_ZOOM } from './nav/view-prefs'
+import { OutputsButton } from './outputs/OutputsButton'
 import type { DescribeField, Segment } from './overview/describe-conditions'
 import {
   useApproxRecordCount,
@@ -118,6 +118,7 @@ import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { PlacementsTable } from './PlacementsTable'
 import { amberStrip, segOption, segTrack } from './panel-style'
+import { usePersonalDefaultMarks } from './personal-default-marks'
 import { peersByTarget, useLayoutPresence } from './presence'
 import { PreviewModes } from './preview/PreviewModes'
 import { PreviewPanes } from './preview/PreviewPanes'
@@ -495,7 +496,9 @@ function Canvas({
         : (overrideMarks ?? ruleMarks),
     [overrideMarks, ruleMarks]
   )
-  const allMarks = usePinMarks(bundle, ruleMarked)
+  // Fields people may save their own starting value for say so on the canvas.
+  const pdMarked = usePersonalDefaultMarks(bundle, ruleMarked)
+  const allMarks = usePinMarks(bundle, pdMarked)
   const design = useMemo<LayoutDesign>(
     () => ({
       selected,
@@ -562,7 +565,7 @@ function Canvas({
   )
   const hoverRef = useDriverHover(deps)
   return (
-    <div ref={hoverRef} className='flex min-h-full flex-col'>
+    <div ref={hoverRef} className='flex min-h-0 flex-1 flex-col'>
       <EditorCanvas
         collection={collection}
         bundle={shown}
@@ -1489,7 +1492,11 @@ export function LayoutEditor({
               />
             </aside>
           )}
-          <main className='min-w-0 flex-1 overflow-y-auto'>
+          {/* A flex column so the canvas below gets the pane's height exactly: a record form
+              scrolls inside its own body, and anything taller (tables, matrices, a summary)
+              still scrolls the pane. A min-h-full chain here let the form's body take the
+              whole pane height under its header, so the pane scrolled into blank space. */}
+          <main className='flex min-w-0 flex-1 flex-col overflow-y-auto'>
             {view === 'canvas' && <TabOrderBar editor={tabOrder} />}
             {compareState.compare && (view === 'canvas' || !arrangeable) && (
               <CompareBanner compare={compareState.compare} onClose={compareState.close} />
@@ -1525,7 +1532,7 @@ export function LayoutEditor({
                 // Compact (#2627): editor-only zoom; the record page is unchanged.
                 style={nav.compact && arrangeable ? { zoom: COMPACT_ZOOM } : undefined}
                 className={cn(
-                  'min-h-full',
+                  'flex min-h-0 flex-1 flex-col',
                   previewThemeClass(previewDark, appDark),
                   previewDark && !appDark && 'bg-background text-foreground'
                 )}

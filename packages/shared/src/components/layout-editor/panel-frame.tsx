@@ -63,7 +63,10 @@ export function PanelBody({
       {...(tabpanel
         ? { role: 'tabpanel', id: tabpanel.id, 'aria-labelledby': tabpanel.labelledBy }
         : {})}
-      className={cn('min-h-0 flex-1 space-y-5 overflow-y-auto px-4 pb-8 pt-4', className)}
+      // relative: the containing block for absolute descendants (the sr-only scope tags on every
+      // setting row). Without one they anchor to the page, escape the overflow-hidden app shell
+      // and stretch the document, so the whole app scrolled past its bottom on long tabs.
+      className={cn('relative min-h-0 flex-1 space-y-5 overflow-y-auto px-4 pb-8 pt-4', className)}
     >
       {children}
     </div>

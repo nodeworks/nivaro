@@ -1134,6 +1134,10 @@ export const layoutPersonalDefaults: DocSection = {
       type: 'p',
       text: 'Select the field on the canvas and turn on **Personal default** under Rules in the inspector. The switch is part of the placement, so it applies to that field on that form only, and it is offered for fields that hold a value (not computed fields). Only fields a person may set on create, and may read, can be saved.'
     },
+    {
+      type: 'p',
+      text: 'On the canvas, every field opted in carries a **Personal default** tag (a person icon), shown ahead of the plain rule tags. In Summary mode on a record, the field label carries a small person icon: grey when the field takes a personal default, accent when the value shown IS your own default; hover it for which.'
+    },
     { type: 'h2', id: 'layout-personal-defaults-use', text: 'Saving and using a default' },
     {
       type: 'ul',

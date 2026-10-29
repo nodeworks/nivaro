@@ -101,16 +101,17 @@ export interface DesignMark {
   /** Instant tooltip (data-tip) with the detail. */
   tip?: string
   highlight?: boolean
-  /** A small icon before the text (a pinned section's pin, #2628). */
-  icon?: 'pin'
+  /** A small icon before the text (a pinned section's pin, #2628; a personal-default field's person). */
+  icon?: 'pin' | 'person'
   /**
    * Where the tag ranks when a node has more than fit (DesignNode shows two,
    * then "+n"): `preview` (a preview mode's own tag) ranks with the role
    * mark, `loop` (a rule loop) next, plain rule and state tags after, `ai`
    * (an AI finding) last but one, "from <parent>" last. A highlighted tag
-   * without a kind ranks as a loop.
+   * without a kind ranks as a loop. `personal` (the field takes personal defaults) ranks with a
+   * loop: it says what the field IS for people, so it never hides behind "+n".
    */
-  kind?: 'preview' | 'loop' | 'ai'
+  kind?: 'preview' | 'loop' | 'ai' | 'personal'
   /** Clickable: opens what the tag explains (the node is selected first). */
   onClick?: () => void
 }

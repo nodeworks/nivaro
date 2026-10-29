@@ -364,3 +364,37 @@ export function PersonalDefaultSlot({
     </span>
   )
 }
+
+/**
+ * Summary mode's quiet marker beside a field label: the field takes a personal default on this
+ * form. A muted person glyph, never a button or a pill — the reader is reading the record, not
+ * editing it. Accent when this record's value IS the reader's saved default; the tip says which.
+ * Renders nothing outside a form that provides PersonalDefaultsContext, or for a field the
+ * layout does not open to personal defaults.
+ */
+export function PersonalDefaultMark({ field }: { field: string }) {
+  const api = usePersonalDefaultsApi()
+  if (!api?.allowed(field)) return null
+  const mine = api.loaded && api.isDefault(field)
+  const saved = api.loaded && api.defaultFor(field) !== null
+  const tip = mine
+    ? 'Your default: new records you start get this value.'
+    : saved
+      ? 'You have your own default for this field, different from this value.'
+      : 'You can save your own default for this field (Edit mode).'
+  return (
+    <span
+      data-personal-default-mark={mine ? 'mine' : saved ? 'saved' : 'allowed'}
+      data-tip={tip}
+      role='img'
+      aria-label={tip}
+      className={
+        mine
+          ? 'ml-1.5 inline-flex align-middle text-cyan-700 dark:text-nvr-cyan'
+          : 'ml-1.5 inline-flex align-middle text-slate-500 dark:text-slate-400'
+      }
+    >
+      <UserRound aria-hidden className='h-3 w-3' strokeWidth={2.25} />
+    </span>
+  )
+}

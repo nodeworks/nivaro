@@ -1,4 +1,4 @@
-import { EyeOff, Lock, Pin } from 'lucide-react'
+import { EyeOff, Lock, Pin, UserRound } from 'lucide-react'
 import {
   type CSSProperties,
   cloneElement,
@@ -285,6 +285,7 @@ export function DesignNode({
     const inner = (
       <>
         {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
+        {m.icon === 'person' && <UserRound aria-hidden className='h-3 w-3' />}
         {m.text}
       </>
     )
@@ -531,7 +532,7 @@ interface BadgeChip {
 export function markRank(m: Pick<DesignMark, 'kind' | 'highlight'>): number {
   if (m.kind === 'preview') return 1
   if (m.kind === 'ai') return 4
-  if (m.kind === 'loop' || m.highlight) return 2
+  if (m.kind === 'loop' || m.kind === 'personal' || m.highlight) return 2
   return 3
 }
 

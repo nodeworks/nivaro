@@ -27,6 +27,7 @@ import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
+import { PersonalDefaultMark } from './item-edit/PersonalDefaultControl'
 import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
 import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
@@ -1704,6 +1705,7 @@ function RecordReadViewBody({
               <dt className={FACT_LABEL}>
                 {labelFor(a)}
                 <IntegrityMark field={a.field} />
+                <PersonalDefaultMark field={a.field} />
                 {touchMark(a.field)}
               </dt>
               <dd
@@ -1948,6 +1950,7 @@ function RecordReadViewBody({
                       <dt className={FACT_LABEL}>
                         {labelFor(a)}
                         <IntegrityMark field={a.field} />
+                        <PersonalDefaultMark field={a.field} />
                         {touchMark(a.field)}
                       </dt>
                       <dd

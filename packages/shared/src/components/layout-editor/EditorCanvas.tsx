@@ -90,7 +90,15 @@ export function EditorCanvas({
       </LayoutDesignContext.Provider>
     )
   return (
-    <div data-editor-canvas='' data-renderer={renderer} className='flex min-h-full flex-col'>
+    <div
+      data-editor-canvas=''
+      data-renderer={renderer}
+      // The record form scrolls inside its own body, so it takes exactly the height it is
+      // given; the other renderers grow with their content and the editor pane scrolls them.
+      className={
+        renderer === 'item-edit-form' ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-1 flex-col'
+      }
+    >
       <PlacementTextContext.Provider value={placementText}>{body}</PlacementTextContext.Provider>
     </div>
   )

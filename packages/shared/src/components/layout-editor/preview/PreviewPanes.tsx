@@ -264,7 +264,7 @@ export function PreviewPanes({
     width ? (
       <div
         data-preview-device={preview.device}
-        className='mx-auto w-full border-x border-dashed border-slate-300 bg-white dark:border-slate-600 dark:bg-background'
+        className='mx-auto flex min-h-0 w-full flex-1 flex-col border-x border-dashed border-slate-300 bg-white dark:border-slate-600 dark:bg-background'
         style={{ maxWidth: width }}
       >
         {node}
@@ -360,7 +360,7 @@ export function PreviewPanes({
     })
 
   return (
-    <div className='flex min-h-full flex-col'>
+    <div className='flex min-h-0 flex-1 flex-col'>
       {strip.length > 0 && (
         <div
           data-preview-strip=''
