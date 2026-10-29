@@ -417,7 +417,7 @@ export async function enforcePickerRules(input: PickerRulesInput): Promise<void>
       .first('id')
     if (excluded) {
       throw refuse(
-        `"${rule.label}" cannot be ${String(value)}: that record is excluded from pickers`,
+        `"${rule.label}" cannot be ${String(value)}: that record is hidden from pickers`,
         where('picker_exclusion')
       )
     }

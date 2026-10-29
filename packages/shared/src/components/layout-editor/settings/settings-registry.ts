@@ -266,7 +266,7 @@ export const SETTINGS: SettingDef[] = [
   {
     key: 'layout.allow_disable_pickers',
     section: 'buttons',
-    label: 'Hide-from-pickers button for everyone',
+    label: 'Hide from pickers button for everyone',
     effect: 'Everyone who can edit may hide a record from pickers, not only admins.',
     types: ON_SCREEN
   },

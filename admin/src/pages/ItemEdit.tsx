@@ -568,7 +568,7 @@ export function ItemEditPage() {
         : api.post('/picker-exclusions', { collection, item_id: id, layout: layoutSlug ?? null }),
     onSuccess: () => {
       refetchExclusion()
-      toast.success(isExcluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
+      toast.success(isExcluded ? 'Shown in pickers again' : 'Hidden from pickers')
     },
     onError: () => toast.error('Failed to update picker status')
   })
@@ -1054,7 +1054,7 @@ export function ItemEditPage() {
                         type='button'
                         onClick={() => toggleExclusion.mutate()}
                         disabled={toggleExclusion.isPending}
-                        title={isExcluded ? 'Re-enable in pickers' : 'Disable in pickers'}
+                        title={isExcluded ? 'Show in pickers' : 'Hide from pickers'}
                         className={cn(
                           'inline-flex items-center gap-1.5 rounded-none border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                           isExcluded
@@ -1063,7 +1063,7 @@ export function ItemEditPage() {
                         )}
                       >
                         <EyeOff className='h-3.5 w-3.5' />
-                        {isExcluded ? 'Excluded from pickers' : 'Disable in pickers'}
+                        {isExcluded ? 'Hidden from pickers' : 'Hide from pickers'}
                       </button>
                     )}
                     {id && !isNew && canSchedule && (

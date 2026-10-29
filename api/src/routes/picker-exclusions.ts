@@ -9,7 +9,7 @@ import { recordVisibleTo } from '../services/revision-access.js'
 
 /**
  * Who may switch one record in or out of pickers: administrators, and anyone
- * whose form for this record turns on "Disable in pickers" for all users
+ * whose form for this record turns on "Hide from pickers" for all users
  * (layout allow_disable_pickers) and who may update this record — see
  * recordToolRefusal. A ?layout= pin (`layout`) only counts when it is a form
  * the person could legitimately be on for this record.

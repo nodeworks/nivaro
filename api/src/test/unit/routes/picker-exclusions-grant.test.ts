@@ -69,7 +69,7 @@ beforeEach(() => {
   state.inserts = 0
 })
 
-describe('pickerToggleRefusal — "Disable in pickers" for all users', () => {
+describe('pickerToggleRefusal — "Hide from pickers" for all users', () => {
   it('lets administrators through without resolving a layout', async () => {
     expect(await pickerToggleRefusal({ ...member, isAdmin: true }, 'orders', '7')).toBeNull()
     expect(state.resolveArgs).toHaveLength(0)

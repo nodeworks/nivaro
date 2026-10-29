@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider } from '../context'
 import { RowActionsMenu } from './CollectionBrowserView'
 
-// The list / queue row Actions menu carries an "Admin only" section: Exclude
-// from pickers / Include in pickers (Rob 2026-10-29). Non-admins never see it.
+// The list / queue row Actions menu carries an "Admin only" section: Hide from
+// pickers / Show in pickers (Rob 2026-10-29). Non-admins never see it.
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 vi.mock('sonner', () => ({
   toast: Object.assign(vi.fn(), { success: vi.fn(), info: vi.fn(), error: vi.fn() })
@@ -67,11 +67,11 @@ async function openMenu(isAdmin: boolean, excluded: boolean) {
 }
 
 describe('RowActionsMenu — Admin only section', () => {
-  it('offers Exclude from pickers to an admin and posts the exclusion', async () => {
+  it('offers Hide from pickers to an admin and posts the exclusion', async () => {
     const calls = await openMenu(true, false)
     expect(document.querySelector('[data-row-admin-actions]')?.textContent).toBe('Admin only')
     const btn = document.querySelector<HTMLButtonElement>('[data-row-picker-exclusion]')
-    expect(btn?.textContent).toBe('Exclude from pickers')
+    expect(btn?.textContent).toBe('Hide from pickers')
     await act(async () => btn?.click())
     await tick()
     const write = calls.find((c) => c._path === '/picker-exclusions')
@@ -79,10 +79,10 @@ describe('RowActionsMenu — Admin only section', () => {
     expect(write?._body).toEqual({ collection: 'divisions', item_id: '3', layout: null })
   })
 
-  it('offers Include in pickers for an excluded record and deletes the exclusion', async () => {
+  it('offers Show in pickers for a hidden record and deletes the exclusion', async () => {
     const calls = await openMenu(true, true)
     const btn = document.querySelector<HTMLButtonElement>('[data-row-picker-exclusion]')
-    expect(btn?.textContent).toBe('Include in pickers')
+    expect(btn?.textContent).toBe('Show in pickers')
     await act(async () => btn?.click())
     await tick()
     expect(calls.find((c) => c._path === '/picker-exclusions')?._method).toBe('DELETE')

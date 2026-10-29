@@ -196,7 +196,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
     }
     // Non-admins: the record must be visible (404), its form must grant
     // "Schedule a change" (allow_schedule) and they must be able to update
-    // THIS record — the same gate as "Disable in pickers".
+    // THIS record — the same gate as "Hide from pickers".
     const refusal = await recordToolRefusal(
       req,
       body.collection,

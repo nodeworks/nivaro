@@ -8,7 +8,7 @@ import { layoutGrantedTools } from '../lib/layout-grants'
 import { ItemEditForm } from './ItemEditForm'
 import type { CMSField } from './item-edit/types'
 
-// "Schedule a change" and "Disable in pickers" (Form settings → Buttons &
+// "Schedule a change" and "Hide from pickers" (Form settings → Buttons &
 // panels → allow_schedule / allow_disable_pickers) used to work in the admin
 // ItemEdit page only. The shared record form offers them in its More menu
 // when a host opts in (efp-new), with the same grant rule.

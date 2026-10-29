@@ -12,7 +12,7 @@ export type RecordToolRequest = Pick<FastifyRequest, 'user' | 'isAdmin'> & {
 }
 
 /**
- * Who may use a record tool a form grants to all users ("Disable in pickers",
+ * Who may use a record tool a form grants to all users ("Hide from pickers",
  * "Schedule a change…"): administrators, and anyone whose form for this record
  * turns the grant column on — provided they can see the record and may update
  * THIS record (the item-level gates updateOne applies). The form is the one

@@ -63,7 +63,7 @@ export function usePickerExcludedRows(
 
 /** Hover text for a row that is left out of every relation picker. */
 export const PICKER_EXCLUDED_TITLE =
-  'Excluded from pickers — not offered in any dropdown. Actions → Include in pickers to offer it again.'
+  'Hidden from pickers — not offered in any dropdown. Actions → Show in pickers to offer it again.'
 
 /**
  * A row left out of every relation picker reads as "not on offer": muted

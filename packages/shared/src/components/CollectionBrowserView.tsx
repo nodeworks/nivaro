@@ -1461,8 +1461,8 @@ export function RowActionsMenu({
                       {pickerExclusion.isLoading
                         ? 'Checking pickers…'
                         : pickerExclusion.excluded
-                          ? 'Include in pickers'
-                          : 'Exclude from pickers'}
+                          ? 'Show in pickers'
+                          : 'Hide from pickers'}
                     </button>
                   </>
                 )}

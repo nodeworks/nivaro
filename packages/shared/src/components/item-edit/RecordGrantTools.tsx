@@ -55,7 +55,7 @@ export function usePickerExclusion(
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: key })
       void qc.invalidateQueries({ queryKey: [PICKER_EXCLUSIONS_PAGE_KEY, collection] })
-      toast.success(excluded ? 'Record re-enabled in pickers' : 'Record excluded from pickers')
+      toast.success(excluded ? 'Shown in pickers again' : 'Hidden from pickers')
       opts.onDone?.()
     },
     onError: (e) => toast.error(errorText(e, 'Could not change picker visibility'))
@@ -64,7 +64,7 @@ export function usePickerExclusion(
 }
 
 /**
- * "Disable in pickers" for one record — a More-menu row that takes the record
+ * "Hide from pickers" for one record — a More-menu row that takes the record
  * out of every relation picker (or puts it back). Shown when the form grants
  * it (allow_disable_pickers) or to administrators; the server checks the same
  * grant against the form this record opens with (`layoutSlug` = ?layout=).
@@ -94,7 +94,7 @@ export function PickerExclusionToggle({
       className='inline-flex items-center'
     >
       {toggle.isPending ? <Loader2 className='animate-spin' /> : <EyeOff />}
-      {excluded ? 'Re-enable in pickers' : 'Disable in pickers'}
+      {excluded ? 'Show in pickers' : 'Hide from pickers'}
     </button>
   )
 }

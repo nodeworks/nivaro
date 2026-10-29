@@ -649,7 +649,7 @@ export interface ItemEditFormProps {
    *  header toolbar. Off by default — the admin's ItemEdit page renders its
    *  own copy in the page header; headless hosts opt in. */
   showItemActions?: boolean
-  /** Offer "Schedule a change…" and "Disable in pickers" in the More menu
+  /** Offer "Schedule a change…" and "Hide from pickers" in the More menu
    *  when this record's form grants them to everyone (allow_schedule /
    *  allow_disable_pickers) or the viewer is an admin. Off by default — the
    *  admin's ItemEdit page renders its own copies in the page header;

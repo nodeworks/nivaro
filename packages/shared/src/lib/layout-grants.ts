@@ -1,6 +1,6 @@
 /**
  * The record tools a form layout can switch on for everyone (Form settings →
- * Buttons & panels): "Schedule a change" (allow_schedule) and "Disable in
+ * Buttons & panels): "Schedule a change" (allow_schedule) and "Hide from
  * pickers" (allow_disable_pickers). Administrators always have both. One
  * reader for every host — admin ItemEdit and the shared record form.
  */

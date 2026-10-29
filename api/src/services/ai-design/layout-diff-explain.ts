@@ -165,7 +165,7 @@ const SETTING_NAMES: Array<[string, string]> = [
   ['disable_delete', 'Hide Delete button'],
   ['ai_enabled', 'AI buttons'],
   ['allow_schedule', 'Schedule button for everyone'],
-  ['allow_disable_pickers', 'Hide-from-pickers button for everyone'],
+  ['allow_disable_pickers', 'Hide from pickers button for everyone'],
   ['create_hidden', 'Hide from New menu'],
   ['create_label', 'New-menu label'],
   ['hide_integrity_banner', 'Hide data-integrity banner'],

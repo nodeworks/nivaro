@@ -1723,34 +1723,38 @@ export const pickerFilterGuide: DocSection = {
 
 export const pickerExclusionsGuide: DocSection = {
   id: 'picker-exclusions',
-  label: 'Record Picker Exclusions',
+  label: 'Hide from Pickers',
   content: [
-    { type: 'h1', id: 'picker-exclusions', text: 'Record Picker Exclusions' },
+    { type: 'h1', id: 'picker-exclusions', text: 'Hide from Pickers' },
     {
       type: 'p',
-      text: 'Individual records can be excluded from all M2O and M2M relation pickers without any schema changes. Exclusions are stored in `nivaro_picker_exclusions` and applied whenever pickers fetch options with `?picker=1`.'
+      text: 'A record can be hidden from every M2O and M2M relation picker without any schema change. It still shows in lists, queues, reports, search and the API; it is only no longer offered as a choice. Hidden records are stored in `nivaro_picker_exclusions` and left out whenever a picker fetches options with `?picker=1`.'
     },
-    { type: 'h3', text: 'How to exclude a record' },
+    { type: 'h3', text: 'How to hide a record' },
     {
       type: 'p',
-      text: '**From the edit form:** open the record → click "Disable in pickers" in the item header. The button turns amber and shows "Excluded from pickers". Click again to re-enable.'
-    },
-    {
-      type: 'p',
-      text: '**Bulk:** in any collection browser, select records → click "Disable in pickers" or "Enable in pickers" above the bulk action bar.'
+      text: '**From the record:** click "Hide from pickers" in the record header (admin) or the More menu (shared record form). The button then reads "Hidden from pickers"; click "Show in pickers" to offer it again.'
     },
     {
       type: 'p',
-      text: '**From a list or queue row (administrators):** open the row\'s Actions menu → **Admin only** → "Exclude from pickers", or "Include in pickers" on a record that is already excluded.'
+      text: '**From a list or queue row (administrators):** open the row\'s Actions menu → **Admin only** → "Hide from pickers", or "Show in pickers" on a record that is already hidden.'
     },
     {
       type: 'p',
-      text: 'Administrators see excluded records in lists and queues in muted italics over a faint diagonal hatch; hovering the row says why.'
+      text: '**Many at once:** `POST /api/picker-exclusions/bulk` (below).'
+    },
+    {
+      type: 'p',
+      text: 'Administrators see hidden records in lists and queues in muted italics over a faint diagonal hatch; hovering the row says why.'
+    },
+    {
+      type: 'p',
+      text: 'Hide from pickers is not "inactive": nothing else about the record changes. A collection that has its own active column keeps it; an extension can turn that column into hidden-from-pickers (EFP does this for zones).'
     },
     { type: 'h3', text: 'Behavior on existing references' },
     {
       type: 'p',
-      text: 'Excluding a record does not affect existing FK references. Forms that already reference an excluded record load and display it normally. The user can clear the field or pick a different value, but cannot re-select the excluded record.'
+      text: 'Hiding a record does not affect existing references. Forms that already point to a hidden record load and display it normally. The user can clear the field or pick a different value, but cannot re-select the hidden record.'
     },
     { type: 'h3', text: 'API' },
     {
@@ -1762,8 +1766,16 @@ export const pickerExclusionsGuide: DocSection = {
           '/api/picker-exclusions/status/:collection/:itemId',
           'Check exclusion status for a single record.'
         ],
-        ['POST', '/api/picker-exclusions', 'Exclude a record. Body: `{collection, item_id}`.'],
-        ['DELETE', '/api/picker-exclusions', 'Remove exclusion. Body: `{collection, item_id}`.'],
+        [
+          'POST',
+          '/api/picker-exclusions',
+          'Hide a record from pickers. Body: `{collection, item_id}`.'
+        ],
+        [
+          'DELETE',
+          '/api/picker-exclusions',
+          'Show it in pickers again. Body: `{collection, item_id}`.'
+        ],
         [
           'POST',
           '/api/picker-exclusions/batch-status',
@@ -1772,7 +1784,7 @@ export const pickerExclusionsGuide: DocSection = {
         [
           'POST',
           '/api/picker-exclusions/bulk',
-          'Exclude/include many records. Body: `{collection, ids[], exclude: boolean}`.'
+          'Hide or show many records. Body: `{collection, ids[], exclude: boolean}`.'
         ]
       ]
     },

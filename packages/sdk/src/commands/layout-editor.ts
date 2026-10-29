@@ -453,7 +453,7 @@ export function readPickerExclusion(
   return cmd('GET', `/picker-exclusions/status/${collection}/${itemId}`)
 }
 
-/** Which of these ids are excluded from pickers? */
+/** Which of these ids are hidden from pickers? */
 export function readPickerExclusions(
   collection: string,
   ids: Array<string | number>
