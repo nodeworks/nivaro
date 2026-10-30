@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-30T18:29:10.725Z",
+  "generated_at": "2026-10-30T20:53:42.768Z",
   "releases": [
+    {
+      "version": "0.3.65",
+      "tag": "v0.3.65",
+      "date": "2026-10-30T16:53:25-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "rollups",
+              "text": "drift sweep honours the rollup's parent_filter",
+              "hash": "b5e04a619"
+            },
+            {
+              "section": "Fixed",
+              "scope": "command-center",
+              "text": "forecast no longer blocks the event loop",
+              "hash": "76d1e774f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "image",
+              "text": "admin bundle gets an 8 GB heap",
+              "hash": "f172f52ac"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.64",
       "tag": "v0.3.64",
-      "date": "2026-10-30T14:28:46-04:00",
+      "date": "2026-10-30T14:29:10-04:00",
       "sections": [],
       "count": 0
     },
