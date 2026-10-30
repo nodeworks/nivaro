@@ -111,6 +111,12 @@ export { CollectionBrowserView } from './components/CollectionBrowserView'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
 export { CronBuilder, describeCron } from './components/CronBuilder'
+export {
+  ChangeImpactStrip,
+  ConfigReadBack,
+  FieldSourceBody,
+  FieldSourceInfo
+} from './components/ConfigReadBack'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export {
   activeCustomStatus,
@@ -645,6 +651,37 @@ export {
   type StoredDraft,
   saveDraft
 } from './lib/draft-store'
+export {
+  andList,
+  collectionLabelOf,
+  cronInWords,
+  describeAlert,
+  describeCascadeFilter,
+  describeCondition,
+  describeConditionList,
+  describeFieldChangeImpact,
+  describeFieldReach,
+  describeFieldRule,
+  describeFieldSource,
+  describeFilterObject,
+  describeFlow,
+  describeFlowTrigger,
+  describeLockCondition,
+  describeOwnerGroup,
+  describeSectionShowWhen,
+  describeTransition,
+  describeValidationRule,
+  describeValidationRules,
+  describeVisibilityRules,
+  type FieldChange,
+  type FieldImpactInput,
+  type FieldSource,
+  fieldLabelOf,
+  formulaInWords,
+  type SentenceLabels,
+  sentenceLabelsFromFields,
+  valueTextOf
+} from './lib/config-sentences'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'

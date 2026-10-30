@@ -126,8 +126,10 @@ import {
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
+import type { FieldSource } from '../lib/config-sentences'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import type { AvailableBulkAction } from './bulk/BulkActionButtons'
+import { FieldSourcesContext } from './ConfigReadBack'
 import { CopyAsButton } from './CopyAsButton'
 import { useHuddleFollowSurface } from './chat/huddle/huddle-follow-bus'
 import { FormWhatsNew } from './FormWhatsNew'
@@ -167,6 +169,7 @@ import {
   type RemoteFieldChange
 } from './item-edit/FieldAffordances'
 import { FieldRow } from './item-edit/FieldRow'
+import { fieldSourcesFor } from './item-edit/field-sources'
 import {
   buildTourSteps,
   FormTour,
@@ -1612,16 +1615,20 @@ function translateFields(rows: CMSField[]): CMSField[] {
 function FieldContexts({
   affordances,
   personalDefaults,
+  sources,
   children
 }: {
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
+  sources?: Record<string, FieldSource> | null
   children: ReactNode
 }) {
   return (
     <FieldAffordancesContext.Provider value={affordances}>
       <PersonalDefaultsContext.Provider value={personalDefaults}>
-        {children}
+        <FieldSourcesContext.Provider value={sources ?? null}>
+          {children}
+        </FieldSourcesContext.Provider>
       </PersonalDefaultsContext.Provider>
     </FieldAffordancesContext.Provider>
   )
@@ -1828,6 +1835,12 @@ function ItemEditFormView({
         .then((r) => r.data ?? []),
     staleTime: 60_000
   })
+
+  // #10: "where does this come from?" — each derived field's source in words.
+  const fieldSources = useMemo(
+    () => fieldSourcesFor(fieldConfig ?? [], relations, collection),
+    [fieldConfig, relations, collection]
+  )
 
   // Dynamic field rules (cascading auto-fill) — fetched once per collection.
   // When empty, handleFieldChange's rulesForTriggerField lookup always
@@ -3266,7 +3279,11 @@ function ItemEditFormView({
       // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
       // remote change.
       const live = liveRecordWrite(collection, String(itemId))
-      const noted = !live ? [] : live.fields ? changed.filter((k) => live.fields?.includes(k)) : changed
+      const noted = !live
+        ? []
+        : live.fields
+          ? changed.filter((k) => live.fields?.includes(k))
+          : changed
       if (changed.length > 0) {
         const lt = lastTouchRef.current
         const by = remoteChangeAuthor(lt, authUserId)
@@ -11310,6 +11327,7 @@ function ItemEditFormView({
                             <FieldContexts
                               affordances={fieldAffordances}
                               personalDefaults={personalDefaults.context}
+                              sources={fieldSources}
                             >
                               {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a

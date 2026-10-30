@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
-import { CollectionFieldPicker } from '@nivaro/shared'
+import {
+  CollectionFieldPicker,
+  ConfigReadBack,
+  describeAlert,
+  sentenceLabelsFromFields
+} from '@nivaro/shared'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -117,6 +122,55 @@ export function AlertEditPage() {
   const realCollections = allCollections.filter(
     (c) => !allCollections.some((x) => x.collection === c.group)
   )
+
+  // #11: the alert read back in words (field labels from the collection's metadata).
+  const { data: colMeta } = useQuery({
+    queryKey: ['alert-edit', 'collection-meta', collection],
+    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    enabled: !!collection,
+    staleTime: 30_000
+  })
+  const readBack = useMemo(() => {
+    const labels = sentenceLabelsFromFields(
+      Array.isArray(colMeta?.fields) ? colMeta.fields : [],
+      [],
+      collection,
+      {
+        collections: Object.fromEntries(
+          allCollections
+            .filter((c) => c.display_name)
+            .map((c) => [c.collection, c.display_name as string])
+        )
+      }
+    )
+    const rows = filterRows.filter((r) => r.field.trim())
+    return describeAlert(
+      {
+        collection,
+        field,
+        operator,
+        threshold,
+        unit,
+        cooldown_minutes: cooldownMinutes,
+        detection_type: detectionType,
+        sensitivity,
+        filters: rows.length ? Object.fromEntries(rows.map((r) => [r.field.trim(), r.value])) : null
+      },
+      labels
+    )
+  }, [
+    colMeta,
+    allCollections,
+    collection,
+    field,
+    operator,
+    threshold,
+    unit,
+    cooldownMinutes,
+    detectionType,
+    sensitivity,
+    filterRows
+  ])
 
   // Load existing definition
   const { data: existing, isLoading } = useQuery<AlertDefinition>({
@@ -565,6 +619,7 @@ export function AlertEditPage() {
             )}
           </div>
         )}
+        <ConfigReadBack kind='alert' sentences={readBack} />
         {/* Actions */}
         <div className='flex items-center gap-2 pt-2 border-t'>
           {detectionType === 'threshold' && (

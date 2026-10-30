@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { describeOwnerGroup, sentenceLabelsFromFields } from '../../lib/config-sentences'
 import { useRecordReader } from '../../lib/record-loader'
+import { ConfigReadBack } from '../ConfigReadBack'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import {
@@ -437,7 +439,6 @@ export function PipelineStateOwners({
   const client = useNivaroClient()
   const queryClient = useQueryClient()
   void templateId
-  void stateName
 
   const { data: colMeta } = useQuery({
     queryKey: ['collection-meta', collection],
@@ -616,6 +617,14 @@ export function PipelineStateOwners({
                     <p className='font-mono text-[11px] text-slate-400'>
                       {filterSummary(g.filters)}
                     </p>
+                    <ConfigReadBack
+                      kind='owner-group'
+                      sentences={describeOwnerGroup(
+                        g,
+                        { stateLabel: stateName },
+                        sentenceLabelsFromFields(colFields, colRelations, collection)
+                      )}
+                    />
                     {g.users.length > 0 && (
                       <div className='flex items-center gap-1 flex-wrap pt-0.5'>
                         {g.users.map((u) => (

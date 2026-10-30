@@ -20,6 +20,7 @@ import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill
 import { del, get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
 import { GlossaryLabel } from '../ai/GlossaryText'
+import { FieldSourceInfo, useFieldSource } from '../ConfigReadBack'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
@@ -636,6 +637,7 @@ export const FieldRow = memo(function FieldRow({
   // lock reasons, apply-to-lines, related-record opener) — null in hosts that
   // render FieldRow outside ItemEditForm.
   const affordances = useFieldAffordances()
+  const fieldSource = useFieldSource(field.field)
   const wrapperRef = useRef<HTMLDivElement>(null)
   // The visible label names the field's control for screen readers: every
   // picker announced itself as just "Select…". The control is whatever the
@@ -1092,6 +1094,7 @@ export const FieldRow = memo(function FieldRow({
               </Tooltip>
             </TooltipProvider>
           )}
+          {fieldSource && <FieldSourceInfo source={fieldSource} label={label} />}
           {!isCalc && itemId && itemId !== 'new' && (
             <FieldHistoryButton
               collection={collection}

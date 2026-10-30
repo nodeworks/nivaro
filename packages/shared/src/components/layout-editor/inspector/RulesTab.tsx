@@ -3,6 +3,8 @@ import { X } from 'lucide-react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { cn, titleCase } from '../../../lib/utils'
+import { FieldSourceBody } from '../../ConfigReadBack'
+import { fieldSourcesFor } from '../../item-edit/field-sources'
 import { FieldRuleWriter } from '../ai-rules/FieldRuleWriter'
 import { RuleWriter } from '../ai-rules/RuleWriter'
 import { ValidationSuggest } from '../ai-rules/ValidationSuggest'
@@ -106,11 +108,27 @@ export function RulesTab() {
     info.type !== 'alias' &&
     info.computedType !== 'virtual'
 
+  // #10: where a calculated / copied value comes from, in words.
+  const source = special
+    ? null
+    : (fieldSourcesFor(ctx.globals, ctx.relations, env.collection)[row.field] ?? null)
+
   const defaults = defaultValuesOf(layout)
   const maxValues = typeof opts.max_values === 'number' ? opts.max_values : null
 
   return (
     <div className='space-y-5'>
+      {source && (
+        <div
+          data-setting='field.source'
+          className='rounded-md border border-slate-200 bg-slate-50 p-2.5 dark:border-border dark:bg-muted/40'
+        >
+          <p className='mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+            Where the value comes from
+          </p>
+          <FieldSourceBody source={source} />
+        </div>
+      )}
       <Toggle
         k='field.required'
         label='Required'

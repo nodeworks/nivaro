@@ -153,6 +153,23 @@ export const fieldRulesGuide: DocSection = {
     {
       type: 'note',
       text: 'CRUD endpoints (POST/PATCH/DELETE), POST /api/field-rules/explain and GET /api/field-rules/stats require admin access. GET /api/field-rules?collection=… and POST /api/field-rules/evaluate require any authenticated user.'
+    },
+    { type: 'h2', id: 'field-rules-read-back', text: 'Rules read back in plain English' },
+    {
+      type: 'p',
+      text: 'Every rule builder shows a quiet line under it saying what the rule does, for example “When Zone changes to East, set Region to North (only if Region is empty).” The same sentences appear for field rules, picker narrowing (cascade filters), alerts, flows (trigger and steps), owner groups, pipeline transitions, validation rules and show / read-only conditions. Field and choice labels are used, never keys.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A “not” condition also matches empty values, so it reads “Zone is not East (or is empty)”.',
+        'A rule the app cannot put into words (an unknown operator or shape) shows no sentence rather than a wrong one.',
+        'Validation types that nothing enforces (min_length, max_length, unique) get no sentence — a sign the rule does nothing.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Before a field change that hides it, makes it required or read-only, or changes its type, the field editor says what the change touches — “This will hide Vendor on 3 forms (“Default”, …) and affect 1,240 records that have a Vendor.” — and asks Save anyway / Cancel inline. Nothing touched: it saves at once. The counts come from GET /api/data-model/:collection/fields/:field/impact?counts=1 (admin), which adds `records: {total, with_value}` (null for alias or virtual fields).'
     }
   ]
 }

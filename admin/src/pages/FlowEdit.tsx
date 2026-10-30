@@ -1,4 +1,4 @@
-import { CronBuilder } from '@nivaro/shared'
+import { ConfigReadBack, CronBuilder, describeFlow } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -4561,6 +4561,14 @@ export function FlowEditPage() {
                   placeholder='What does this flow do?'
                   rows={2}
                   className='resize-none text-[13px]'
+                />
+                <ConfigReadBack
+                  kind='flow'
+                  sentences={describeFlow({
+                    trigger,
+                    trigger_options: triggerOptions,
+                    operations: flow?.operations ?? []
+                  })}
                 />
               </div>
               <div className='space-y-1.5'>
