@@ -198,12 +198,29 @@ export interface ThroughputSeries {
     href?: string | null
   }>
   live_only?: boolean
+  /** IANA zone whose day the hours are (the person's zone, else the instance's, else New York). */
+  time_zone?: string
+  today_total?: number
+  yesterday_same_time?: number
+  /** false = the region focus could not be applied to every collection (answered for everywhere). */
+  region_applies?: boolean
+}
+
+/** GET /command-center/activity ?filter= chips. */
+export type FeedFilter = 'all' | 'records' | 'transitions' | 'team'
+
+/** GET /command-center/banner — maintenance (everyone) + open incident (administrators). */
+export interface BoardBannerState {
+  maintenance: { on: true; message: string | null; until: string | null } | null
+  incident: { title: string; started_at: string; href: string } | null
 }
 
 export interface FeedEntry {
   id: number
   action: string
   collection: string | null
+  /** Readable collection name ("Purchase Orders"), when the server built one. */
+  collection_label?: string | null
   item: string | null
   comment: string | null
   timestamp: string
