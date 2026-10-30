@@ -35,6 +35,7 @@ import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ApprovalPanel } from '@/components/approval-panel'
+import { PageTrail } from '@/components/page-trail'
 import { RecordDrilldownSheet } from '@/components/record-drilldown-sheet'
 import { ShareLinkPopover } from '@/components/share-link-popover'
 import { TimelineSheet } from '@/components/timeline-sheet'
@@ -674,6 +675,15 @@ export function ItemEditPage() {
   const canSchedule = granted.schedule
   const canDisablePickers = granted.disablePickers
   const displayName = colMeta?.display_name ?? titleCase(collection ?? '')
+  // #3225 — what this record is called in the breadcrumb trail (read as the
+  // viewer: the same display template the Ask AI chip uses). Null until loaded,
+  // so a placeholder never gets stored on the history entry.
+  const trailLabel = isNew
+    ? `New ${colMeta?.singular || displayName}`
+    : itemData
+      ? renderDisplayTemplate(colMeta?.display_template, itemData as Record<string, unknown>) ||
+        `${displayName} #${id}`
+      : null
   const allFields: CMSField[] = colMeta?.fields ?? []
   const itemStatus = (itemData as Record<string, unknown> | undefined)?._status as
     | string
@@ -844,6 +854,9 @@ export function ItemEditPage() {
                       )}
                       <span className='text-[12px] text-slate-400 font-mono'>{collection}</span>
                     </div>
+                    {!(ancestors && ancestors.length > 1) && (
+                      <PageTrail currentLabel={trailLabel} showCurrent={false} className='mt-1' />
+                    )}
                     {ancestors && ancestors.length > 1 && (
                       <nav className='flex items-center gap-1 text-[12px] text-slate-400 mt-1 flex-wrap'>
                         {ancestors.slice(0, -1).map((ancestor, i) => (

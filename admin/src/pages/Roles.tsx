@@ -42,9 +42,10 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
-import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { api } from '@/lib/api'
+import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
+import { RoleSidebarStarter } from '@/pages/roles/RoleSidebarStarter'
 
 type User = {
   id: string
@@ -70,7 +71,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
+type ActiveTab = 'permissions' | 'members' | 'ui' | 'sidebar' | 'simulate' | 'compare' | 'views'
 
 // A hub entry is listed tab by tab, keyed by each tab's permission key (its
 // old standalone path), so a role can still hide one tab of a hub.
@@ -1119,21 +1120,24 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]).map(
-          (tab) => (
-            <button
-              key={tab}
-              type='button'
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
-                activeTab === tab
-                  ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
-              )}
-            >
-              {tab === 'ui'
-                ? 'UI Access'
+        {(
+          ['permissions', 'members', 'ui', 'sidebar', 'simulate', 'compare', 'views'] as ActiveTab[]
+        ).map((tab) => (
+          <button
+            key={tab}
+            type='button'
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
+              activeTab === tab
+                ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
+            )}
+          >
+            {tab === 'ui'
+              ? 'UI Access'
+              : tab === 'sidebar'
+                ? 'Sidebar'
                 : tab === 'simulate'
                   ? 'Simulator'
                   : tab === 'compare'
@@ -1141,9 +1145,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
                     : tab === 'views'
                       ? 'Suggested views'
                       : tab}
-            </button>
-          )
-        )}
+          </button>
+        ))}
       </div>
 
       {/* Tab content */}
@@ -1173,6 +1176,15 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           <UiPermissionsTab
             roleId={role.id}
             isAdmin={role.admin_access}
+            disabled={
+              (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
+                ?.ui_permissions ?? []
+            }
+          />
+        ) : activeTab === 'sidebar' ? (
+          <RoleSidebarStarter
+            roleId={role.id}
+            isAdminRole={role.admin_access}
             disabled={
               (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
                 ?.ui_permissions ?? []

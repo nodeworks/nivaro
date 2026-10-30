@@ -847,6 +847,16 @@ export async function usersRoutes(app: FastifyInstance) {
         .slice(0, 60)
       patch.nav_favorites = clean
     }
+    if ('nav_layout' in body) {
+      // #3227 — the person's own sidebar arrangement (pin / hide / order inside
+      // the nav map's categories). null = back to their role's starter. Only
+      // rearranges pages the nav map already has; the client applies it after
+      // the role's ui_permissions filter.
+      const { normalizeNavLayout } = await import('../services/nav-layout.js')
+      const n = normalizeNavLayout(body.nav_layout)
+      if (n.error) return reply.code(400).send({ error: n.error })
+      patch.nav_layout = n.layout
+    }
     if ('theme_accent' in body) {
       // #83 — one of the instance's approved accents, or null/'brand' for the
       // instance colour. Validated against the live palette so a stale key

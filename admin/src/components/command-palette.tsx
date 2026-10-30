@@ -41,6 +41,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showContrastAudit } from '@/lib/contrast-audit'
+import { recordHref, useRecentViews } from '@/lib/recent-views'
 import { formatRelative, titleCase } from '@/lib/utils'
 import {
   runSearchCommand,
@@ -551,6 +552,13 @@ export function CommandPalette() {
   // Recents stored without a label (or with an old pk-only one) are named as the viewer.
   const recentLabels = useRecentRecordLabels(recentRecords, open, setRecentRecords)
   const recentTitle = (r: RecentRecord) => recentLabels[`${r.collection}:${r.id}`] ?? recordLabel(r)
+  // #3226 — recently viewed records from the server store (every record the
+  // person opened, anywhere), shown first before anything is typed, with state
+  // and a "changed since you looked" dot. The palette's own local list keeps
+  // only what the server list does not already show.
+  const { data: recentViews = [] } = useRecentViews(8, open)
+  const viewedKeys = new Set(recentViews.map((r) => `${r.collection}:${r.item_id}`))
+  const localRecentRecords = recentRecords.filter((r) => !viewedKeys.has(`${r.collection}:${r.id}`))
   const recallRef = useRef<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   // Back to the box once a command's confirm closes.
@@ -705,7 +713,17 @@ export function CommandPalette() {
         path: recordPath(r.collection, r.id),
         record: r
       })
-  for (const r of recentRecords)
+  for (const r of recentViews)
+    entries.set(`rview-${r.collection}-${r.item_id}`, {
+      kind: titleCase(r.collection),
+      title: r.label,
+      sub: [r.state?.label, r.changed ? 'Changed since you looked' : null]
+        .filter(Boolean)
+        .join(' · '),
+      path: recordHref(r),
+      record: { collection: r.collection, id: r.item_id, label: r.label }
+    })
+  for (const r of localRecentRecords)
     entries.set(`rrec-${r.collection}-${r.id}`, {
       kind: r.kind ?? titleCase(r.collection),
       title: recentTitle(r),
@@ -1068,6 +1086,54 @@ export function CommandPalette() {
                     </CommandGroup>
                   )}
 
+                  {!q && recentViews.length > 0 && (
+                    <CommandGroup heading='Recently viewed' data-palette-recent-views>
+                      {recentViews.map((r) => {
+                        const value = `rview-${r.collection}-${r.item_id}`
+                        return (
+                          <CommandItem
+                            key={value}
+                            value={value}
+                            data-palette-recent-view={`${r.collection}:${r.item_id}`}
+                            onSelect={() =>
+                              go(recordHref(r), { label: r.label, kind: titleCase(r.collection) })
+                            }
+                          >
+                            <span className='relative mr-2 flex h-3.5 w-3.5 shrink-0 items-center justify-center'>
+                              <History className='h-3.5 w-3.5 text-muted-foreground' />
+                              {r.changed && (
+                                <span
+                                  className='absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-nvr-cyan ring-2 ring-white dark:ring-popover'
+                                  aria-hidden
+                                />
+                              )}
+                            </span>
+                            <span className='min-w-0 truncate text-[13px]'>{r.label}</span>
+                            {r.changed && (
+                              <span className='sr-only'> (changed since you looked)</span>
+                            )}
+                            <span className='ml-auto flex shrink-0 items-center gap-1.5 pl-2'>
+                              {r.state && (
+                                <span
+                                  className='max-w-[120px] truncate rounded-full px-1.5 py-0.5 text-[10px] font-semibold'
+                                  style={{
+                                    backgroundColor: `${r.state.color ?? '#64748b'}1f`,
+                                    color: r.state.color ?? '#64748b'
+                                  }}
+                                >
+                                  {r.state.label}
+                                </span>
+                              )}
+                              <span className='rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
+                                {titleCase(r.collection)}
+                              </span>
+                            </span>
+                          </CommandItem>
+                        )
+                      })}
+                    </CommandGroup>
+                  )}
+
                   {!q && saved.length > 0 && (
                     <CommandGroup heading='Saved searches'>
                       {saved.slice(0, 6).map((s) => (
@@ -1108,9 +1174,9 @@ export function CommandPalette() {
                     </CommandGroup>
                   )}
 
-                  {!q && recentRecords.length > 0 && (
+                  {!q && localRecentRecords.length > 0 && (
                     <CommandGroup heading='Recently opened'>
-                      {recentRecords.map((r) => {
+                      {localRecentRecords.map((r) => {
                         const value = `rrec-${r.collection}-${r.id}`
                         return (
                           <CommandItem

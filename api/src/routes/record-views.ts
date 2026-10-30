@@ -126,7 +126,7 @@ export async function recordViewRoutes(app: FastifyInstance) {
    *  record's friendly label and current pipeline state. The watermark table
    *  already knows every record the person opened; this is a read of it
    *  dressed for a rail. Collections the person cannot read are skipped. */
-  app.get<{ Querystring: { limit?: string } }>(
+  app.get<{ Querystring: { limit?: string; changed?: string } }>(
     '/record-views/recent',
     { preHandler: requireAuth },
     async (req, reply) => {
@@ -215,6 +215,45 @@ export async function recordViewRoutes(app: FastifyInstance) {
           { key: i.key, label: i.label, color: i.color }
         ])
       )
+      // #3226 — ?changed=1: has someone else changed it since the caller last
+      // opened it? Judged from what the caller can read: the record is already
+      // known visible (above); an edit counts only when it touched a field the
+      // caller may read, and a transition or comment is on a visible record.
+      // Best-effort — a failed read answers "not changed", never an error.
+      const changed = new Map<string, string>()
+      if (req.query.changed === '1' || req.query.changed === 'true') {
+        const { unseenChangesFor, editsTouchingReadable } = await import(
+          '../services/record-unseen.js'
+        )
+        const { getAllowedFields } = await import('../services/permissions.js')
+        for (const [collection, ids] of byCollection) {
+          try {
+            const map = await unseenChangesFor(userId, collection, [...ids])
+            if (map.size === 0) continue
+            const editOnly = [...map].filter(
+              ([, c]) => c.kinds.length === 1 && c.kinds[0] === 'edit'
+            )
+            let readableEdits: Set<string> | null = null
+            if (editOnly.length > 0 && !req.isAdmin) {
+              const allowed = await getAllowedFields(req.user!, 'read', collection)
+              const list = allowed?.includes('*') ? null : allowed
+              readableEdits = await editsTouchingReadable(
+                userId,
+                collection,
+                editOnly.map(([id]) => id),
+                list
+              )
+            }
+            for (const [id, c] of map) {
+              const onlyEdit = c.kinds.length === 1 && c.kinds[0] === 'edit'
+              if (onlyEdit && readableEdits && !readableEdits.has(id)) continue
+              changed.set(`${collection}:${id}`, c.changed_at)
+            }
+          } catch (err) {
+            req.log.warn({ err, collection }, 'recent views: changed check failed')
+          }
+        }
+      }
       return reply.send({
         data: visible.map((r) => {
           const k = `${r.collection}:${r.item_id}`
@@ -223,7 +262,10 @@ export async function recordViewRoutes(app: FastifyInstance) {
             item_id: String(r.item_id),
             label: friendly.get(k) ?? labels[k] ?? `#${r.item_id}`,
             state: stateByKey.get(k) ?? null,
-            last_viewed_at: r.last_viewed_at
+            last_viewed_at: r.last_viewed_at,
+            ...(changed.size > 0 || req.query.changed
+              ? { changed: changed.has(k), changed_at: changed.get(k) ?? null }
+              : {})
           }
         })
       })
