@@ -778,6 +778,14 @@ export {
   withGetCoalescing,
   workerSocketPreference
 } from '@nivaro/shared'
+// #3225 — breadcrumbs that know the path: hosts feed the per-tab trail and draw the crumbs.
+export {
+  displayTrail,
+  recordNavigation,
+  setTrailLabel,
+  trailChain,
+  useNavTrail
+} from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
 export { FileField } from './components/fields/FileField'
