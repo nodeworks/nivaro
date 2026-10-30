@@ -1,10 +1,255 @@
 {
-  "generated_at": "2026-10-29T22:13:29.978Z",
+  "generated_at": "2026-10-30T01:27:11.718Z",
   "releases": [
+    {
+      "version": "0.3.57",
+      "tag": "v0.3.57",
+      "date": "2026-10-29T21:26:57-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "an Overview page that says what changed and what needs you",
+              "hash": "66728e737"
+            },
+            {
+              "section": "Added",
+              "scope": "forms",
+              "text": "hidden sections explain themselves + comment on a single field",
+              "hash": "c5df33de1"
+            },
+            {
+              "section": "Added",
+              "scope": "ux",
+              "text": "shaped skeletons, prefetch on hover, slow reads say why",
+              "hash": "a89c3e0c3"
+            },
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "section components and /api/overview reads",
+              "hash": "063aed595"
+            },
+            {
+              "section": "Added",
+              "scope": "nav",
+              "text": "breadcrumbs that follow your path, recent records everywhere, personal sidebars",
+              "hash": "a7af5eb0c"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "edit in the list (per-list setting) and share this list",
+              "hash": "1f426e5ed"
+            },
+            {
+              "section": "Added",
+              "scope": "audit",
+              "text": "the Audit report reads as sentences",
+              "hash": "f61f9d700"
+            },
+            {
+              "section": "Added",
+              "scope": "activity",
+              "text": "readable dashboard feed and Live tab",
+              "hash": "9d7be4664"
+            },
+            {
+              "section": "Added",
+              "scope": "config",
+              "text": "plain-English read-backs, field sources and change impact",
+              "hash": "f27fb6549"
+            },
+            {
+              "section": "Added",
+              "scope": "search",
+              "text": "config search in plain words + help videos matched to the screen",
+              "hash": "f0065aa9b"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "filter sentence + readable record ids",
+              "hash": "8a4fd6856"
+            },
+            {
+              "section": "Added",
+              "scope": "errors",
+              "text": "error answers say what to do",
+              "hash": "cf307e013"
+            },
+            {
+              "section": "Added",
+              "scope": "access",
+              "text": "permissions in words + one app glossary with <Term>",
+              "hash": "20776ab05"
+            },
+            {
+              "section": "Added",
+              "scope": "audit",
+              "text": "readable activity entries — sentences, labels, bursts, actor, why",
+              "hash": "c63ded8ef"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "readable integration errors, request story, error clusters, job sentences",
+              "hash": "5f67135c9"
+            },
+            {
+              "section": "Added",
+              "scope": "audit",
+              "text": "tamper-evident activity trail + visible log retention",
+              "hash": "060374fea"
+            },
+            {
+              "section": "Added",
+              "scope": "config",
+              "text": "read-only diagrams for pipelines and flows",
+              "hash": "31b614612"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "what changed, in the notification (#3079)",
+              "hash": "f26febb81"
+            },
+            {
+              "section": "Added",
+              "scope": "audit",
+              "text": "find the audit trail — NL search, saved views, History, \"What they did\"",
+              "hash": "801611800"
+            },
+            {
+              "section": "Added",
+              "scope": "audit",
+              "text": "undo from the activity log + activity-pattern alerts",
+              "hash": "4232376cc"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "\"Why?\" on every notification + Test my rules (#3078)",
+              "hash": "a26fb7dae"
+            },
+            {
+              "section": "Added",
+              "scope": "sdk",
+              "text": "audit against the API; observability hooks, logs, records, inbox",
+              "hash": "c21478403"
+            },
+            {
+              "section": "Added",
+              "scope": "notify",
+              "text": "audience preview + confirm before saving configs that send (#3080)",
+              "hash": "ac8efb28c"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "default notification rules by role (#3077)",
+              "hash": "649953886"
+            },
+            {
+              "section": "Added",
+              "scope": "realtime",
+              "text": "reload old tabs when idle (#2937)",
+              "hash": "8391d9289"
+            },
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "paged, searchable member list for large rooms (#3082)",
+              "hash": "717673323"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "overview",
+              "text": "config changes are writes only; plain screen names; honest status cell",
+              "hash": "9b1bd48eb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "comments",
+              "text": "field comments only reach people who may read the field",
+              "hash": "1aefd1f2c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "grouped picker hide/show entries read as sentences",
+              "hash": "6a9a3cc88"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "SMS goes through the SMS service",
+              "hash": "348e561fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "a failed error explanation never fails the call detail",
+              "hash": "7afd82cd5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "audit",
+              "text": "scoped API keys and connected apps can't read a person's whole trail",
+              "hash": "2993e2dca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "audit",
+              "text": "activity-pattern alerts judge each recipient on the record",
+              "hash": "8d4e05f25"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "expose x-nivaro-request-id to cross-origin callers",
+              "hash": "3b10d634d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "logging",
+              "text": "close audit-trail, error and request-id logging gaps",
+              "hash": "16e19d146"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync docs for Overview, lists, navigation, forms, loading and audit sections",
+              "hash": "f71a218d5"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "wire the new list, navigation, form, loading and overview sections",
+              "hash": "2e22a6a4c"
+            }
+          ]
+        }
+      ],
+      "count": 37
+    },
     {
       "version": "0.3.56",
       "tag": "v0.3.56",
-      "date": "2026-10-29T18:13:14-04:00",
+      "date": "2026-10-29T18:13:30-04:00",
       "sections": [
         {
           "label": "Added",
