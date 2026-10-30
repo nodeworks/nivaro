@@ -247,6 +247,9 @@ export interface QueueDisplayConfig {
     formula: string
     format?: 'currency' | 'number' | null
   }> | null
+  /** #3224 — edit in the list: which plain extra-field columns people may change
+   *  straight in a row (through the items service PATCH). null = off (default). */
+  inline_edit: { enabled: boolean; fields: string[] } | null
 }
 
 export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
@@ -263,7 +266,8 @@ export const DEFAULT_DISPLAY_CONFIG: QueueDisplayConfig = {
   admin_only_columns: null,
   default_pins: null,
   priority_weights: null,
-  formula_columns: null
+  formula_columns: null,
+  inline_edit: null
 }
 
 /** Normalize a display_config sheet width: finite px in [280, 2000], or an
@@ -394,8 +398,32 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
             | null
         }))
       return out.length > 0 ? out : null
-    })()
+    })(),
+    inline_edit: normalizeQueueInlineEdit(src.inline_edit)
   }
+}
+
+/** `{enabled, fields}` with plain field names only; nothing switched on and no columns = null. */
+export function normalizeQueueInlineEdit(
+  raw: unknown
+): { enabled: boolean; fields: string[] } | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const src = raw as { enabled?: unknown; fields?: unknown }
+  const fields = Array.isArray(src.fields)
+    ? [
+        ...new Set(
+          src.fields.filter(
+            (f): f is string =>
+              typeof f === 'string' &&
+              /^[A-Za-z_][A-Za-z0-9_]*$/.test(f) &&
+              f !== 'id' &&
+              !f.startsWith('__')
+          )
+        )
+      ].slice(0, 200)
+    : []
+  const enabled = src.enabled === true
+  return !enabled && fields.length === 0 ? null : { enabled, fields }
 }
 
 export interface QueueOwner {

@@ -78,6 +78,20 @@ import {
   pageRequest,
   stopCursors
 } from '../lib/keyset-pager'
+import {
+  type InlineFieldMeta,
+  inlineChoices,
+  inlineEditFor,
+  inlineM2oTarget,
+  nextInlineKey,
+  normalizeInlineEdit
+} from '../lib/list-inline-edit'
+import {
+  type CbvLinkState,
+  dropListLinkParam,
+  readListLinkFromLocation,
+  sanitizeCbvLinkState
+} from '../lib/list-link'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
@@ -151,6 +165,8 @@ import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
+import { CopyListLinkButton } from './list/CopyListLinkButton'
+import { InlineEditCell, useInlineEdit } from './list/InlineEdit'
 import { MapView } from './MapView'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
@@ -237,6 +253,8 @@ export interface CollectionBrowserConfig {
   /** #2490 — live record events: 'on' (default), 'batched' (one id list per 2 s window) or
    *  'off' (none — this list polls every 30 s instead). */
   live_events?: 'on' | 'batched' | 'off'
+  /** #3224 — edit in the list: `{enabled, fields}`; off by default (see lib/list-inline-edit). */
+  inline_edit?: unknown
 }
 
 interface CMSRelation {
@@ -745,6 +763,21 @@ export function invalidateCbvRowQueries(qc: QueryClient, collection: string): vo
 type MyPermissions = {
   is_admin?: boolean
   collections?: Array<{ collection: string; actions: string[] }>
+}
+
+/** Whether the person's role policies allow updating in this collection (#3224 —
+ *  the inline cell editor's offer; the server judges each record and field). */
+export function roleMayUpdate(
+  perms: MyPermissions | null | undefined,
+  collection: string
+): boolean {
+  if (!perms) return false
+  if (perms.is_admin) return true
+  return (perms.collections ?? []).some(
+    (c) =>
+      (c.collection === collection || c.collection === '*') &&
+      (c.actions.includes('update') || c.actions.includes('*'))
+  )
 }
 
 /** Whether the person's role policies allow deleting in this collection. */
@@ -4203,13 +4236,24 @@ export function CollectionBrowserView({
   const qc = useQueryClient()
   const { open: openTarget, urlFor } = useItemNavigation()
 
-  const [page, setPage] = useState(1)
+  // #3233 — a shared list link (`?lv=`) opens the view exactly as the sender saw it:
+  // it replaces the host's deep-link seeds, the default view and the scope-default
+  // quick filters. Only view settings ride it — the reader's own access applies.
+  const [sharedLink] = useState<CbvLinkState | null>(() =>
+    sanitizeCbvLinkState(readListLinkFromLocation(`cbv:${collection}`))
+  )
+  const [sharedSplit] = useState(() =>
+    sharedLink ? splitRiskFilter((sharedLink.f ?? []) as unknown as ActiveFilter[]) : null
+  )
+  const [page, setPage] = useState(sharedLink?.p ?? 1)
   // #2447 — cursors that reach the next pages of the current list (forgotten on any change).
   const cursorBookRef = useRef(createCursorBook())
-  const [search, setSearch] = useState(initialSearch)
+  const [search, setSearch] = useState(sharedLink ? (sharedLink.q ?? '') : initialSearch)
   const appliedSearch = useDebounced(search.trim(), 350)
-  const [filters, setFilters] = useState<ActiveFilter[]>(initialFilters ?? [])
-  const [sort, setSort] = useState<string>(initialSort ?? '')
+  const [filters, setFilters] = useState<ActiveFilter[]>(
+    sharedSplit ? sharedSplit.filters : (initialFilters ?? [])
+  )
+  const [sort, setSort] = useState<string>(sharedLink ? (sharedLink.s ?? '') : (initialSort ?? ''))
   const [displayColumns, setDisplayColumns] = useState<string[] | null>(initialColumns ?? null)
   const [columnLabels, setColumnLabels] = useState<Record<string, string>>({})
   // #644 formula columns: `__f:<n>` key → expression.
@@ -4223,11 +4267,17 @@ export function CollectionBrowserView({
   const [formattingCol, setFormattingCol] = useState<string | null>(null)
   const [presetOpen, setPresetOpen] = useState(false)
   const dragIdxRef = useRef<number | null>(null)
-  const [quickSel, setQuickSel] = useState<Record<string, Array<string | number>>>({})
-  const [appliedQuick, setAppliedQuick] = useState<Record<string, Array<string | number>>>({})
+  const [quickSel, setQuickSel] = useState<Record<string, Array<string | number>>>(
+    () => sharedLink?.qf ?? {}
+  )
+  const [appliedQuick, setAppliedQuick] = useState<Record<string, Array<string | number>>>(
+    () => sharedLink?.qf ?? {}
+  )
   // Deep-link context (dashboard tiles etc.) — ANDed into every fetch until
   // the user clears the chip; separate from user-built filters on purpose.
-  const [linkConds, setLinkConds] = useState(initialConditions ?? [])
+  const [linkConds, setLinkConds] = useState(
+    sharedLink ? (sharedLink.lc ?? []) : (initialConditions ?? [])
+  )
   // User Scopes: seed quick filters from the user's DEFAULTS once (skipped for
   // keys the user/view already set); RESTRICTED values narrow facet options.
   const { scopes: myScopes, ready: scopesReady } = useMyScopes()
@@ -4237,7 +4287,9 @@ export function CollectionBrowserView({
   // Which quick-filter keys got their selection from default scopes — drives
   // the chip's "default" badge so the seeding is visible, not silent.
   const [scopeSeededKeys, setScopeSeededKeys] = useState<ReadonlySet<string>>(new Set())
-  const [colFilters, setColFilters] = useState<Record<string, ColFilterVal>>({})
+  const [colFilters, setColFilters] = useState<Record<string, ColFilterVal>>(
+    () => (sharedLink?.cf ?? {}) as unknown as Record<string, ColFilterVal>
+  )
   // The whole drill stack lives in the host's overlay history when one is
   // provided, so the browser's Back button steps down a level instead of
   // abandoning the browser behind the sheet. Without a host adapter this is
@@ -4268,6 +4320,7 @@ export function CollectionBrowserView({
   // Per-collection preference; grouping fetches up to 500 rows in one page so
   // sections cover the (filtered) set rather than one page of it.
   const [groupBy, setGroupBy] = useState<string | null>(() => {
+    if (sharedLink) return sharedLink.g ?? null
     try {
       return localStorage.getItem(`nvr_cbv_group_${collection}`) || null
     } catch {
@@ -4358,7 +4411,7 @@ export function CollectionBrowserView({
       label: string
       field: string
     }>
-  >([])
+  >(() => (sharedLink?.ex ?? []) as never)
   useEffect(() => {
     if (!cellMenu) return
     const close = () => setCellMenu(null)
@@ -4390,7 +4443,8 @@ export function CollectionBrowserView({
   }, [exportMenuOpen])
   const colsRef = useRef<HTMLDivElement>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
-  const defaultAppliedRef = useRef(false)
+  // A shared link IS the view: the collection / role default view never lands over it.
+  const defaultAppliedRef = useRef(!!sharedLink)
   const { isAdmin } = useItemEditAuth()
 
   // Reset ONLY when the collection actually changes. A plain [collection]
@@ -4460,7 +4514,7 @@ export function CollectionBrowserView({
     bc.fulfilment?.shipped_field && bc.fulfilment?.requested_field ? bc.fulfilment : null
   // Default sort (#395): one-shot seed once meta lands, only when nothing
   // else has claimed the sort (view application and user clicks both win).
-  const defaultSortSeededRef = useRef(false)
+  const defaultSortSeededRef = useRef(!!sharedLink)
   useEffect(() => {
     if (defaultSortSeededRef.current || !meta) return
     defaultSortSeededRef.current = true
@@ -4533,7 +4587,11 @@ export function CollectionBrowserView({
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
   }, [newItemMenuOpen])
-  const effPageSize = bc.page_size && bc.page_size > 0 ? Math.min(bc.page_size, 200) : pageSize
+  const effPageSize = sharedLink?.ps
+    ? sharedLink.ps
+    : bc.page_size && bc.page_size > 0
+      ? Math.min(bc.page_size, 200)
+      : pageSize
   const effQuickFilters = quickFilters.length > 0 ? quickFilters : (bc.quick_filters ?? [])
 
   useEffect(() => {
@@ -4546,7 +4604,8 @@ export function CollectionBrowserView({
     const hasSeedMaterial =
       Object.values(scopes?.defaults ?? {}).some((v) => v.length > 0) ||
       Object.values(scopes?.restricted ?? {}).some((v) => v.length > 0)
-    if (!scopes || effQuickFilters.length === 0 || !hasSeedMaterial) {
+    // A shared link states its quick filters exactly — no scope defaults on top.
+    if (!scopes || effQuickFilters.length === 0 || !hasSeedMaterial || sharedLink) {
       setScopeGateOpen(true)
       return
     }
@@ -4587,6 +4646,103 @@ export function CollectionBrowserView({
   }
   const fieldByName = useMemo(() => new Map(nonHidden.map((f) => [f.field, f])), [nonHidden])
   const relations = meta?.relations ?? []
+
+  // ── #3224 Edit in the list (browser_config.inline_edit; off by default) ───
+  // A commit is the record form's PATCH through the items service, so the
+  // server judges every rule; this only decides which cells offer an editor.
+  const inlineCfg = useMemo(() => normalizeInlineEdit(bc.inline_edit), [bc.inline_edit])
+  const { data: inlinePerms } = useQuery<MyPermissions>({
+    queryKey: ['my-permissions'],
+    queryFn: () =>
+      client.request<{ data: MyPermissions }>(get('/security/my/permissions')).then((r) => r.data),
+    enabled: inlineCfg.enabled && !isAdmin,
+    staleTime: 5 * 60_000
+  })
+  const inlineMayUpdate = isAdmin || roleMayUpdate(inlinePerms, collection)
+  const inlineFieldMeta = useMemo(
+    () => new Map(((meta?.fields ?? []) as unknown as InlineFieldMeta[]).map((f) => [f.field, f])),
+    [meta]
+  )
+  const inlineEdit = useInlineEdit()
+  const inlineKindOf = (key: string) =>
+    // Ask-the-table answers are a one-off overlay, not the list's own rows.
+    aiResult
+      ? null
+      : inlineEditFor({
+          config: inlineCfg,
+          key,
+          field: inlineFieldMeta.get(key),
+          collection,
+          relations,
+          mayUpdate: inlineMayUpdate
+        })
+  const commitInlineCell = (
+    row: Record<string, unknown>,
+    key: string,
+    kind: NonNullable<ReturnType<typeof inlineKindOf>>,
+    value: unknown,
+    dir: 0 | 1 | -1
+  ) => {
+    const id = row.id as string | number
+    const nextKey =
+      dir === 0
+        ? null
+        : nextInlineKey(
+            effectiveColumns.filter((k) => !!inlineKindOf(k)),
+            key,
+            dir
+          )
+    inlineEdit.commit({
+      cellKey: `${String(id)}|${key}`,
+      collection,
+      id,
+      field: key,
+      kind,
+      before: row[key],
+      value,
+      next: nextKey ? `${String(id)}|${nextKey}` : null,
+      optimistic: () => {
+        const snaps = qc.getQueriesData({ queryKey: ['cbv-items', collection] })
+        qc.setQueriesData({ queryKey: ['cbv-items', collection] }, (old: unknown) => {
+          const page = old as { data?: Array<Record<string, unknown>> } | undefined
+          if (!page?.data) return old
+          return {
+            ...page,
+            data: page.data.map((r) => (String(r.id) === String(id) ? { ...r, [key]: value } : r))
+          }
+        })
+        return () => {
+          for (const [k, d] of snaps) qc.setQueryData(k, d)
+        }
+      },
+      // Rollups, computed columns and the row's position may follow the change.
+      onSaved: () => void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
+    })
+  }
+  const wrapInline = (
+    row: Record<string, unknown>,
+    key: string,
+    lockedByOther: boolean,
+    node: React.ReactNode
+  ): React.ReactNode => {
+    const kind = lockedByOther ? null : inlineKindOf(key)
+    if (!kind) return node
+    const f = inlineFieldMeta.get(key)
+    return (
+      <InlineEditCell
+        controller={inlineEdit}
+        cellKey={`${String(row.id)}|${key}`}
+        kind={kind}
+        value={row[key]}
+        label={columnLabel(key)}
+        choices={f ? inlineChoices(f) : undefined}
+        target={kind === 'm2o' ? inlineM2oTarget(relations, collection, key) : null}
+        onCommit={(v, dir) => commitInlineCell(row, key, kind, v, dir)}
+      >
+        {node}
+      </InlineEditCell>
+    )
+  }
   const effectiveColumns = useMemo(() => {
     const wanted = displayColumns ?? nonHidden.slice(0, 7).map((f) => f.field)
     // Dotted keys are related-value columns resolved server-side; plain keys
@@ -4757,7 +4913,7 @@ export function CollectionBrowserView({
   // ── Rows (admin dialect: search + conditions + total) ─────────────────────
   const debouncedColFilters = useDebounced(colFilters, 350)
   // Session-only toggle (not part of saved views): show only records being amended.
-  const [addendumsOnly, setAddendumsOnly] = useState(false)
+  const [addendumsOnly, setAddendumsOnly] = useState(sharedLink?.a === true)
   // #743 — hierarchy parent scope + alternate views (tree / host views).
   const [hierarchyParentId, setHierarchyParentId] = useState<string | number | null>(null)
   const hierarchy = useHierarchyScope(collection, hierarchyParentId)
@@ -4766,7 +4922,7 @@ export function CollectionBrowserView({
   // Highlight-rule pills ("On hold", "Sent back"): the same nivaro_at_risk_rules
   // rows that tint rows also FILTER the list through the `$at_risk` condition
   // (OR across picked rules). Session-only, like the addendums pill.
-  const [riskFilter, setRiskFilter] = useState<number[]>([])
+  const [riskFilter, setRiskFilter] = useState<number[]>(() => sharedSplit?.riskIds ?? [])
   const conditionsParam = useMemo(() => {
     const conds = filtersToConditions(filters)
     for (const qf of effQuickFilters) {
@@ -6125,6 +6281,52 @@ export function CollectionBrowserView({
       .catch((e: unknown) => toast.error(userErrorMessage(e, 'Could not start the export')))
   }
 
+  // #3233 — the shared link's columns (labels, formats, pins, widths…) go through
+  // the saved-view path once the collection's fields are known; filters, sort,
+  // search and paging were already seeded into state so the first read is right.
+  const sharedColumnsApplied = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot once fields land
+  useEffect(() => {
+    if (sharedColumnsApplied.current || !sharedLink || nonHidden.length === 0) return
+    sharedColumnsApplied.current = true
+    if (sharedLink.c?.length) {
+      applyView({
+        id: -1,
+        name: '',
+        user: '',
+        is_shared: false,
+        filters: (sharedLink.f ?? []) as unknown as ActiveFilter[],
+        sort: sharedLink.s ?? null,
+        columns: sharedLink.c as SavedViewColumn[]
+      })
+      setActiveViewId(null)
+      setPage(sharedLink.p ?? 1)
+    }
+  }, [nonHidden])
+  // The link has done its job once applied: a reload starts from the person's own defaults.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per mount
+  useEffect(() => {
+    if (sharedLink) dropListLinkParam()
+  }, [])
+  /** What "Copy link" puts in the URL — the view exactly as on screen. */
+  const listLinkState = (): CbvLinkState => {
+    const vs = viewState()
+    return {
+      q: appliedSearch,
+      f: vs.filters as unknown as Array<Record<string, unknown>>,
+      s: sort,
+      c: vs.columns as Array<string | Record<string, unknown>>,
+      qf: appliedQuick,
+      cf: colFilters as unknown as Record<string, Record<string, unknown>>,
+      lc: linkConds,
+      ex: cellExcludes as unknown as Array<Record<string, unknown>>,
+      ...(groupBy ? { g: groupBy } : {}),
+      ps: effPageSize,
+      ...(page > 1 ? { p: page } : {}),
+      ...(addendumsOnly ? { a: true } : {})
+    }
+  }
+
   const saveView = useMutation({
     mutationFn: () =>
       client.request<{ data: SavedView }>(
@@ -7246,6 +7448,7 @@ export function CollectionBrowserView({
         >
           <RotateCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
+        <CopyListLinkButton listKey={`cbv:${collection}`} getState={listLinkState} />
         {isAdmin && bc.copy_as !== false && (
           <CopyAsButton
             collection={collection}
@@ -9328,113 +9531,130 @@ export function CollectionBrowserView({
                                 }}
                                 className={`whitespace-nowrap px-3 py-1.5 ${isNumericCol(key) ? 'text-right' : ''} ${pinCls(key, 'z-[1]', stickyBg)}`}
                               >
-                                {isResolvedCol(key) ? (
-                                  resolvedTargetFor(key) === 'nivaro_users' ? (
-                                    (() => {
-                                      const upath = key.includes('.') ? key : aliasPathByField[key]
-                                      const uids =
-                                        resolvedData?.rows?.[String(id)]?.[upath]?.ids ?? []
-                                      const val = resolvedFor(id, key) ?? ''
-                                      if (uids.length === 0 || !val || val === '—')
-                                        return <span className='text-[12px] text-slate-300'>—</span>
-                                      if (uids.length === 1)
+                                {wrapInline(
+                                  row,
+                                  key,
+                                  !!rowLock && !rowLock.is_mine,
+                                  isResolvedCol(key) ? (
+                                    resolvedTargetFor(key) === 'nivaro_users' ? (
+                                      (() => {
+                                        const upath = key.includes('.')
+                                          ? key
+                                          : aliasPathByField[key]
+                                        const uids =
+                                          resolvedData?.rows?.[String(id)]?.[upath]?.ids ?? []
+                                        const val = resolvedFor(id, key) ?? ''
+                                        if (uids.length === 0 || !val || val === '—')
+                                          return (
+                                            <span className='text-[12px] text-slate-300'>—</span>
+                                          )
+                                        if (uids.length === 1)
+                                          return (
+                                            <span onClick={(e) => e.stopPropagation()}>
+                                              <UserChip userId={String(uids[0])} size='compact' />
+                                            </span>
+                                          )
+                                        const names = val.split(', ')
                                         return (
-                                          <span onClick={(e) => e.stopPropagation()}>
-                                            <UserChip userId={String(uids[0])} size='compact' />
-                                          </span>
+                                          <UserRosterCluster
+                                            users={uids.map((uid, i) => ({
+                                              id: String(uid),
+                                              name: names[i] ?? String(uid)
+                                            }))}
+                                            showSingleName={false}
+                                          />
                                         )
-                                      const names = val.split(', ')
-                                      return (
-                                        <UserRosterCluster
-                                          users={uids.map((uid, i) => ({
-                                            id: String(uid),
-                                            name: names[i] ?? String(uid)
-                                          }))}
-                                          showSingleName={false}
-                                        />
-                                      )
-                                    })()
-                                  ) : drill && resolvedFor(id, key) !== '—' ? (
+                                      })()
+                                    ) : drill && resolvedFor(id, key) !== '—' ? (
+                                      <button
+                                        type='button'
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          recordDrill.push([
+                                            { collection: drill.target, itemId: drill.id }
+                                          ])
+                                        }}
+                                        data-tip={resolvedFor(id, key) ?? undefined}
+                                        className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
+                                      >
+                                        {columnFormats[key]?.type === 'count' && isFilesCol(key)
+                                          ? '📎 '
+                                          : ''}
+                                        {fmtCell(resolvedFor(id, key) ?? '', key, id)}
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className='block max-w-[260px] truncate text-[12px] text-slate-700 dark:text-slate-200'
+                                        data-tip={resolvedFor(id, key) ?? undefined}
+                                      >
+                                        {resolvedFor(id, key) != null ? (
+                                          `${columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}${fmtCell(resolvedFor(id, key) ?? '', key, id)}`
+                                        ) : (
+                                          <span className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
+                                        )}
+                                      </span>
+                                    )
+                                  ) : m2oRel?.one_collection === 'nivaro_users' &&
+                                    row[key] != null ? (
+                                    <span onClick={(e) => e.stopPropagation()}>
+                                      <UserChip userId={String(row[key])} size='compact' />
+                                    </span>
+                                  ) : m2oRel?.one_collection &&
+                                    row[key] != null &&
+                                    !isSystemCol(m2oRel.one_collection) ? (
                                     <button
                                       type='button'
                                       onClick={(e) => {
                                         e.stopPropagation()
                                         recordDrill.push([
-                                          { collection: drill.target, itemId: drill.id }
+                                          {
+                                            collection: m2oRel.one_collection as string,
+                                            itemId: String(row[key])
+                                          }
                                         ])
                                       }}
-                                      data-tip={resolvedFor(id, key) ?? undefined}
-                                      className='block max-w-[260px] truncate text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
+                                      className='text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
                                     >
-                                      {columnFormats[key]?.type === 'count' && isFilesCol(key)
-                                        ? '📎 '
-                                        : ''}
-                                      {fmtCell(resolvedFor(id, key) ?? '', key, id)}
+                                      <RelationLabel
+                                        relatedCollection={m2oRel.one_collection as string}
+                                        id={row[key]}
+                                      />
                                     </button>
-                                  ) : (
+                                  ) : key === 'id' && friendlyIdOf(meta, row) ? (
+                                    // #776 — the readable id; the internal one on hover.
                                     <span
-                                      className='block max-w-[260px] truncate text-[12px] text-slate-700 dark:text-slate-200'
-                                      data-tip={resolvedFor(id, key) ?? undefined}
+                                      data-record-ref
+                                      data-tip={`#${String(row.id)}`}
+                                      className='font-mono text-[12px] text-slate-700 dark:text-slate-200'
                                     >
-                                      {resolvedFor(id, key) != null ? (
-                                        `${columnFormats[key]?.type === 'count' && isFilesCol(key) ? '📎 ' : ''}${fmtCell(resolvedFor(id, key) ?? '', key, id)}`
-                                      ) : (
-                                        <span className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
-                                      )}
+                                      {friendlyIdOf(meta, row)}
                                     </span>
-                                  )
-                                ) : m2oRel?.one_collection === 'nivaro_users' &&
-                                  row[key] != null ? (
-                                  <span onClick={(e) => e.stopPropagation()}>
-                                    <UserChip userId={String(row[key])} size='compact' />
-                                  </span>
-                                ) : m2oRel?.one_collection &&
-                                  row[key] != null &&
-                                  !isSystemCol(m2oRel.one_collection) ? (
-                                  <button
-                                    type='button'
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      recordDrill.push([
-                                        {
-                                          collection: m2oRel.one_collection as string,
-                                          itemId: String(row[key])
-                                        }
-                                      ])
-                                    }}
-                                    className='text-left text-[12px] font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 transition-colors hover:text-[#0284c7] hover:decoration-[#0284c7] dark:text-slate-200 dark:decoration-slate-600 dark:hover:text-[#38bdf8]'
-                                  >
-                                    <RelationLabel
-                                      relatedCollection={m2oRel.one_collection as string}
-                                      id={row[key]}
-                                    />
-                                  </button>
-                                ) : key === 'id' && friendlyIdOf(meta, row) ? (
-                                  // #776 — the readable id; the internal one on hover.
-                                  <span
-                                    data-record-ref
-                                    data-tip={`#${String(row.id)}`}
-                                    className='font-mono text-[12px] text-slate-700 dark:text-slate-200'
-                                  >
-                                    {friendlyIdOf(meta, row)}
-                                  </span>
-                                ) : columnFormats[key] && row[key] != null ? (
-                                  <span
-                                    className={cn(
-                                      'text-[12px] tabular-nums text-slate-700 dark:text-slate-200',
-                                      tintFor(row[key], columnTints[key]) &&
+                                  ) : columnFormats[key] && row[key] != null ? (
+                                    <span
+                                      className={cn(
+                                        'text-[12px] tabular-nums text-slate-700 dark:text-slate-200',
+                                        tintFor(row[key], columnTints[key]) &&
+                                          TINT_TEXT[tintFor(row[key], columnTints[key])!]
+                                      )}
+                                    >
+                                      {formatValue(String(row[key]), columnFormats[key])}
+                                    </span>
+                                  ) : tintFor(row[key], columnTints[key]) ? (
+                                    <span
+                                      className={cn(
+                                        'text-[12px]',
                                         TINT_TEXT[tintFor(row[key], columnTints[key])!]
-                                    )}
-                                  >
-                                    {formatValue(String(row[key]), columnFormats[key])}
-                                  </span>
-                                ) : tintFor(row[key], columnTints[key]) ? (
-                                  <span
-                                    className={cn(
-                                      'text-[12px]',
-                                      TINT_TEXT[tintFor(row[key], columnTints[key])!]
-                                    )}
-                                  >
+                                      )}
+                                    >
+                                      <CellValue
+                                        collection={collection}
+                                        field={key}
+                                        fieldType={fieldByName.get(key)?.type ?? null}
+                                        value={row[key]}
+                                        relations={relations}
+                                      />
+                                    </span>
+                                  ) : (
                                     <CellValue
                                       collection={collection}
                                       field={key}
@@ -9442,15 +9662,7 @@ export function CollectionBrowserView({
                                       value={row[key]}
                                       relations={relations}
                                     />
-                                  </span>
-                                ) : (
-                                  <CellValue
-                                    collection={collection}
-                                    field={key}
-                                    fieldType={fieldByName.get(key)?.type ?? null}
-                                    value={row[key]}
-                                    relations={relations}
-                                  />
+                                  )
                                 )}
                               </td>
                             )

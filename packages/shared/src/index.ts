@@ -131,6 +131,13 @@ export {
 } from './components/ConfigReadBack'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
+export { CopyListLinkButton } from './components/list/CopyListLinkButton'
+export {
+  type InlineCommit,
+  InlineEditCell,
+  type InlineEditController,
+  useInlineEdit
+} from './components/list/InlineEdit'
 export { CronBuilder, describeCron } from './components/CronBuilder'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export {
@@ -1115,6 +1122,8 @@ export {
   type UserSyncOptions,
   useUserSync
 } from './lib/user-sync'
+export * from './lib/list-inline-edit'
+export * from './lib/list-link'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

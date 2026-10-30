@@ -949,6 +949,27 @@ describe('normalizeDisplayConfig', () => {
     expect(normalizeDisplayConfig({ views: ['table', 'gantt'] }).views).toEqual(['table'])
   })
 
+  it('#3224 inline_edit: off by default, plain field names only', () => {
+    expect(normalizeDisplayConfig({}).inline_edit).toBeNull()
+    expect(
+      normalizeDisplayConfig({ inline_edit: { enabled: false, fields: [] } }).inline_edit
+    ).toBeNull()
+    expect(
+      normalizeDisplayConfig({
+        inline_edit: {
+          enabled: true,
+          fields: ['amount', 'amount', 'vendor.name', '__state__', 'id', 3]
+        }
+      }).inline_edit
+    ).toEqual({ enabled: true, fields: ['amount'] })
+    expect(
+      normalizeDisplayConfig({ inline_edit: { enabled: 'yes', fields: ['a'] } }).inline_edit
+    ).toEqual({
+      enabled: false,
+      fields: ['a']
+    })
+  })
+
   it('coerces default_view outside views to table', () => {
     const dc = normalizeDisplayConfig({ views: ['table'], default_view: 'kanban' })
     expect(dc.default_view).toBe('table')
