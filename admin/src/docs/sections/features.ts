@@ -765,17 +765,23 @@ export const userReportsGuide: DocSection = {
     { type: 'h1', id: 'reports-guide', text: 'Audit & Compliance Reports' },
     {
       type: 'p',
-      text: 'The Reports page (admin-only) provides filtered views of the audit log with CSV export for compliance workflows.'
+      text: 'The Audit report (Activity → Audit report, admin-only) reads the audit log as sentences — "Pat moved PO 4471 from Draft to Approved" — with who really did it (View-as, API key, assistant, import, flow, scheduled job), the record named as you can see it, and the reason or note. Bulk changes, imports and automation runs fold into one line you can open.'
     },
-    { type: 'h3', text: 'Activity report' },
+    { type: 'h3', text: 'Quick views and filters' },
+    {
+      type: 'ul',
+      items: [
+        'Quick views: Last 7 days (the default), Permission changes (roles, policies, scopes), Deletes, Imports, By me.',
+        'Narrow it down: when (a relative window or two dates), what happened (actions by name), where (collections by display name), who (search people by name) and words (reason, record number).',
+        'A line above the list says what is shown, e.g. "Updates and deletes in Workflows by Pat, last 7 days — 128 entries", and the totals read in words: "128 entries by 6 people · 40 updates in one import · most active: Workflows".',
+        'Reads are hidden unless Show reads is on — every opened record is logged as one.',
+        'Save the filters as a view (personal or shared with administrators) and email it on a schedule.'
+      ]
+    },
+    { type: 'h3', text: 'Export' },
     {
       type: 'p',
-      text: 'Filter by collection, user, action (create/update/delete), and date range. Results are paginated in the UI. Click Export CSV to download the full filtered dataset with no row limit.'
-    },
-    { type: 'h3', text: 'Summary report' },
-    {
-      type: 'p',
-      text: 'Aggregated counts for the selected date range: breakdown by action type, top collections by mutation volume, and top users by activity count.'
+      text: 'Export CSV downloads the matching entries (newest 20,000) with a sentence, who and why column in your time zone, then the raw columns: timestamp, id, action, collection, item, user id, name and email, actor kind, origin, group key and comment.'
     },
     {
       type: 'note',
@@ -805,6 +811,11 @@ Authorization: Bearer <admin-token>
 ?page=1&limit=50        // pagination; max limit 500
 ?format=csv             // download full result set as CSV (no pagination)
 
+// Readable export (the Audit report): GET /api/activity's filters
+?format=csv&readable=1&range=last_7_days&exclude_actions=read&tz=America/New_York
+// → when, sentence, who, why, action_label, collection_label, record_label + raw columns;
+//   newest 20,000 rows; headers X-Export-Rows, X-Export-Truncated (1 = more matched)
+
 // JSON response:
 {
   "data": [
@@ -823,13 +834,19 @@ Authorization: Bearer <admin-token>
 Authorization: Bearer <admin-token>
 ?from=2025-01-01&to=2025-12-31   // without from: the last 30 days (before to, or now)
                                   // a bare date in to includes that whole day
+?user=&action=&exclude_actions=&collection=&item=&range=&q=
+                                  // optional: GET /api/activity's filters — every count
+                                  // then covers what the Audit report lists
 
 → {
   "by_action":     [{ "action": "create", "count": 450 }],
   "by_collection": [{ "collection": "projects", "count": 300 }],
   "by_user":       [{ "user_id", "first_name", "last_name", "email", "count" }],
   "total_events":  1234,
-  "date_range":    { "from": "...", "to": "...", "default_days": 30 | null }
+  "date_range":    { "from": "...", "to": "...", "default_days": 30 | null, "range": null },
+  "largest_burst": { "group_key": "import_run:7", "count": 40,
+                     "action": "update" | null, "collection": "workflows" | null } | null,
+  "filtered":      true
 }`
     }
   ]
