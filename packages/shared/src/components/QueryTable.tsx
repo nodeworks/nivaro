@@ -991,7 +991,7 @@ export function QueryTable({
   return (
     <div className={sticky ? 'flex min-h-0 flex-1 flex-col' : undefined}>
       {(config?.pivot?.quarter_toggle || (config?.toggles?.length ?? 0) > 0 || treeToggle) && (
-        <div className='flex shrink-0 items-center justify-between gap-2 pb-2'>
+        <div className='flex shrink-0 flex-wrap items-center justify-between gap-2 pb-2'>
           {(config?.toggles?.length ?? 0) > 0 ? (
             <div className='inline-flex gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5 dark:border-border dark:bg-muted/40'>
               {config!.toggles!.map((t) => {
@@ -1009,7 +1009,7 @@ export function QueryTable({
                         return n
                       })
                     }
-                    className={`rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors ${
+                    className={`whitespace-nowrap rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors ${
                       on
                         ? 'bg-nvr-cyan text-white shadow-sm'
                         : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
@@ -1023,7 +1023,7 @@ export function QueryTable({
           ) : (
             <span />
           )}
-          <div className='flex items-center gap-2'>
+          <div className='ml-auto flex items-center gap-2'>
             {treeToggle}
             {config?.pivot?.quarter_toggle && (
               <div className='inline-flex gap-0.5 rounded-md border border-slate-200 p-0.5 dark:border-border'>

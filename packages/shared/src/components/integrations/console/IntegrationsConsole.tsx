@@ -105,7 +105,12 @@ export function IntegrationsConsole({
   return (
     <div className={cn('flex flex-col gap-5', className)} data-ic-console>
       <TipLayer />
-      <div role='tablist' aria-label='Integrations' className='flex gap-6 border-b border-border'>
+      {/* One line, scrolls sideways when the tabs outgrow the width (never wraps a label). */}
+      <div
+        role='tablist'
+        aria-label='Integrations'
+        className='flex shrink-0 gap-6 overflow-x-auto overflow-y-hidden border-b border-border [scrollbar-width:none]'
+      >
         {tabs.map((t) => {
           const on = t.key === current.key
           return (
@@ -117,7 +122,7 @@ export function IntegrationsConsole({
               data-ic-tab={t.key}
               onClick={() => go(t.key)}
               className={cn(
-                '-mb-px inline-flex items-center gap-2 border-b-2 pb-2.5 pt-1 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 pb-2.5 pt-1 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                 on
                   ? 'border-nvr-cyan text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground'

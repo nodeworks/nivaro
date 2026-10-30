@@ -552,7 +552,7 @@ export function ImportConsole({
     <div className='flex min-h-0 flex-1 flex-col gap-3'>
       {/* ── Tabs + primary action ──────────────────────────────────────── */}
       <div className='flex flex-wrap items-center gap-2'>
-        <div className='flex items-center gap-1'>
+        <div className='flex flex-wrap items-center gap-1'>
           {/* Staged runs are readable by anyone; `/api/imports` and the
               definition registry are admin-only routes, so their sections are
               hidden rather than shown to 403. */}
@@ -564,7 +564,7 @@ export function ImportConsole({
                 type='button'
                 onClick={() => setTab(t)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-[12.5px] font-medium transition-colors',
+                  'whitespace-nowrap rounded-md px-2.5 py-1 text-[12.5px] font-medium transition-colors',
                   tab === t
                     ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                     : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-muted'
@@ -657,7 +657,7 @@ export function ImportConsole({
                 onClick={() => setStatus(status === s ? 'all' : s)}
               />
             ))}
-            <div className='ml-auto flex items-stretch divide-x divide-slate-200 dark:divide-border'>
+            <div className='ml-auto flex flex-wrap items-stretch divide-x divide-slate-200 dark:divide-border'>
               <InsightTile
                 label='Success rate'
                 value={
@@ -681,7 +681,7 @@ export function ImportConsole({
                     type='button'
                     onClick={() => setWindowDays(w.value)}
                     className={cn(
-                      'rounded px-1.5 py-1 text-[11px] font-medium transition-colors',
+                      'whitespace-nowrap rounded px-1.5 py-1 text-[11px] font-medium transition-colors',
                       windowDays === w.value
                         ? 'bg-nvr-cyan/15 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                         : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted'

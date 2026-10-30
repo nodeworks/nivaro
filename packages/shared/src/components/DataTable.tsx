@@ -1093,12 +1093,12 @@ export function DataTable<T = Record<string, unknown>>({
       >
         {/* Toolbar */}
         {hasToolbar && (
-          <div className='flex items-center gap-2 border-b border-slate-100 px-3 py-2.5'>
+          <div className='flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2.5'>
             {onSearchChange !== undefined && (
-              <div className='relative'>
+              <div className='relative min-w-0 max-w-full'>
                 <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
                 <Input
-                  className='h-8 w-56 border-slate-200 bg-slate-50 pl-8 text-[13px]'
+                  className='h-8 w-56 max-w-full border-slate-200 bg-slate-50 pl-8 text-[13px]'
                   placeholder={searchPlaceholder}
                   value={searchValue ?? ''}
                   onChange={(e) => onSearchChange(e.target.value)}

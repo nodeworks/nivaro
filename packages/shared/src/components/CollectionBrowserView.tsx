@@ -3121,20 +3121,313 @@ function FilterBar({
   ]
 
   return (
-    <div className='flex min-w-0 flex-1 flex-wrap items-center gap-2'>
-      {/* Search */}
-      <div className='relative'>
-        <Search
-          aria-hidden
-          className='pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400'
-        />
-        <input
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-          placeholder='Search…'
-          aria-label={`Search ${collection}`}
-          className='h-8 w-48 rounded-md border border-slate-200 bg-white pl-8 pr-3 text-[13px] outline-none focus:border-nvr-cyan/50 focus:ring-2 focus:ring-nvr-cyan/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
-        />
+    // Min width = search + Add Filter on one line: on a narrow toolbar the bar wraps to a row of
+    // its own instead of being squeezed to the search box's width. Search and Add Filter are one
+    // non-wrapping pair (Add Filter always right of search; the search box gives way first), the
+    // applied chips follow. No basis / responsive width pairs here: hosts load their own CSS after
+    // full.css, so a host's plain flex-1 or w-full would win over them.
+    <div className='flex min-w-[min(19rem,100%)] flex-1 flex-wrap items-center gap-2'>
+      <div className='flex min-w-0 max-w-[24rem] flex-1 items-center gap-2'>
+        {/* Search */}
+        <div className='relative min-w-0 flex-1'>
+          <Search
+            aria-hidden
+            className='pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400'
+          />
+          <input
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder='Search…'
+            aria-label={`Search ${collection}`}
+            className='h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-3 text-[13px] outline-none focus:border-nvr-cyan/50 focus:ring-2 focus:ring-nvr-cyan/30 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100'
+          />
+        </div>
+        {/* Add filter */}
+        <div className='relative shrink-0' ref={rootRef}>
+          <button
+            type='button'
+            onClick={() => (open ? setOpen(false) : openFresh())}
+            className='inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-md border border-dashed border-slate-300 px-2.5 text-[12.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-slate-600 dark:text-slate-400'
+          >
+            + Add Filter
+          </button>
+          {open && (
+            <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900'>
+              {picked == null ? (
+                <>
+                  {level.path.length > 0 && (
+                    <button
+                      type='button'
+                      onClick={() => setLevel({ collection, path: [], pathLabels: [] })}
+                      className='flex w-full items-center gap-1 border-b border-slate-100 px-3 py-2 text-left text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'
+                    >
+                      ‹ {level.pathLabels.join(' › ')}
+                    </button>
+                  )}
+                  <div className='p-2 pb-1'>
+                    <input
+                      autoFocus
+                      value={fieldFilter}
+                      onChange={(e) => setFieldFilter(e.target.value)}
+                      placeholder='Find field…'
+                      className='h-8 w-full rounded-lg border-2 border-nvr-cyan/50 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-nvr-cyan/20 dark:border-nvr-cyan/40 dark:bg-slate-800 dark:text-slate-100'
+                    />
+                  </div>
+                  <div className='max-h-80 overflow-y-auto py-1'>
+                    {level.path.length === 0 && !fieldFilter && (
+                      <div className='mb-1 border-b border-slate-100 pb-1 dark:border-slate-800'>
+                        {(
+                          [
+                            ['$has_files', 'Has attachments'],
+                            ['$has_comments', 'Has comments'],
+                            ['$has_tasks', 'Has open tasks'],
+                            ['$has_failed_push', 'Has a failed integration push'],
+                            ['$missing_required', 'Missing required fields'],
+                            ['$unseen', 'Changed since I last looked']
+                          ] as Array<[string, string]>
+                        ).map(([pathKey, label]) => (
+                          <button
+                            key={pathKey}
+                            type='button'
+                            onClick={() => {
+                              onFiltersChange([
+                                ...filters.filter((x) => x.path[0] !== pathKey),
+                                {
+                                  id: `${pathKey}-${Date.now()}`,
+                                  path: [pathKey],
+                                  pathLabels: [label],
+                                  fieldType: 'boolean',
+                                  op: '_eq',
+                                  value: 'true'
+                                }
+                              ])
+                              setOpen(false)
+                            }}
+                            className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
+                          >
+                            <span className='text-[#00a5cc] dark:text-nvr-cyan'>◈</span>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <FieldLevel
+                      collection={level.collection}
+                      path={level.path}
+                      pathLabels={level.pathLabels}
+                      search={fieldFilter}
+                      depth={level.path.length}
+                      onDrill={(c, pth, lbls) => {
+                        setLevel({ collection: c, path: pth, pathLabels: lbls })
+                        setFieldFilter('')
+                      }}
+                      onPick={(leaf) => {
+                        setPicked(leaf)
+                        setPickedOp(
+                          leaf.fieldType === 'integer' ||
+                            leaf.fieldType === 'decimal' ||
+                            leaf.fieldType === 'float'
+                            ? '_eq'
+                            : '_contains'
+                        )
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setPicked(null)
+                      setRelSel([])
+                      setValue('')
+                      setValue2('')
+                    }}
+                    className='flex w-full items-center gap-1 border-b border-slate-100 px-3 py-2 text-left text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'
+                  >
+                    ‹ {picked.pathLabels.join(' › ')}
+                  </button>
+
+                  {leafKind === 'relation' && picked.relTarget ? (
+                    <div className='pt-2'>
+                      <RelationValueList
+                        target={picked.relTarget}
+                        selected={relSel}
+                        labels={relLabels}
+                        onToggle={(id, label) => {
+                          setRelSel((sel) =>
+                            sel.map(String).includes(String(id))
+                              ? sel.filter((v) => String(v) !== String(id))
+                              : [...sel, id]
+                          )
+                          setRelLabels((l) => ({ ...l, [String(id)]: label }))
+                        }}
+                      />
+                      <div className='border-t border-slate-100 p-2 dark:border-slate-800'>
+                        <button
+                          type='button'
+                          disabled={relSel.length === 0}
+                          onClick={applyRelation}
+                          className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
+                        >
+                          Apply{relSel.length > 0 ? ` (${relSel.length})` : ''}
+                        </button>
+                      </div>
+                    </div>
+                  ) : leafKind === 'boolean' ? (
+                    <div className='flex gap-1.5 p-3'>
+                      {[
+                        { label: 'Yes', op: '_eq:true' },
+                        { label: 'No', op: '_eq:false' },
+                        { label: 'Empty', op: '_null' }
+                      ].map((b) => (
+                        <button
+                          key={b.op}
+                          type='button'
+                          onClick={() =>
+                            applyScalar(
+                              b.op.includes(':') ? b.op.split(':')[0] : b.op,
+                              b.op.includes(':') ? b.op.split(':')[1] : ''
+                            )
+                          }
+                          className='h-8 flex-1 rounded-md border border-slate-200 text-[12.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
+                        >
+                          {b.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : leafKind === 'date' ? (
+                    <div className='space-y-2 p-3'>
+                      <div className='flex flex-wrap gap-1'>
+                        {DATE_PRESETS.filter((d) => d.value).map((d) => (
+                          <button
+                            key={d.value}
+                            type='button'
+                            onClick={() => {
+                              // Rolling (#196): the TOKEN is stored, resolved at
+                              // query time — a saved view's "last 30 days" keeps
+                              // rolling instead of freezing the pick-day range.
+                              applyScalar('_preset', d.value)
+                            }}
+                            className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className='flex items-center gap-1.5'>
+                        <input
+                          type='date'
+                          value={value}
+                          onChange={(e) => setValue(e.target.value)}
+                          aria-label='From date'
+                          className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                        />
+                        <span className='text-[11px] text-slate-400'>to</span>
+                        <input
+                          type='date'
+                          value={value2}
+                          onChange={(e) => setValue2(e.target.value)}
+                          aria-label='To date'
+                          className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                        />
+                      </div>
+                      <button
+                        type='button'
+                        disabled={!value && !value2}
+                        onClick={() => {
+                          if (value && value2) applyScalar('_between', `${value}..${value2}`)
+                          else if (value) applyScalar('_gte', value)
+                          else if (value2) applyScalar('_lte', value2)
+                        }}
+                        className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      className='space-y-2 p-3'
+                      onSubmit={(e) => {
+                        e.preventDefault()
+                        if (leafKind === 'number' && pickedOp === '_between') {
+                          if (value !== '' && value2 !== '')
+                            applyScalar('_between', `${value}..${value2}`)
+                        } else if (value.trim()) applyScalar(pickedOp, value.trim())
+                      }}
+                    >
+                      <div className='flex flex-wrap gap-1'>
+                        {(leafKind === 'number'
+                          ? [...numberOps, { value: '_between', label: 'Between' }]
+                          : stringOps
+                        ).map((o) => (
+                          <button
+                            key={o.value}
+                            type='button'
+                            onClick={() => setPickedOp(o.value)}
+                            className={`rounded-md border px-2 py-1 text-[11.5px] ${
+                              pickedOp === o.value
+                                ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
+                                : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                            }`}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                        <button
+                          type='button'
+                          onClick={() => applyScalar('_null', '')}
+                          className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                        >
+                          Empty
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => applyScalar('_nnull', '')}
+                          className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
+                        >
+                          Not empty
+                        </button>
+                      </div>
+                      <div className='flex items-center gap-1.5'>
+                        <input
+                          autoFocus
+                          type={leafKind === 'number' ? 'number' : 'text'}
+                          value={value}
+                          onChange={(e) => setValue(e.target.value)}
+                          placeholder='Value…'
+                          className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                        />
+                        {leafKind === 'number' && pickedOp === '_between' && (
+                          <>
+                            <span className='text-[11px] text-slate-400'>to</span>
+                            <input
+                              type='number'
+                              value={value2}
+                              onChange={(e) => setValue2(e.target.value)}
+                              placeholder='To…'
+                              className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
+                            />
+                          </>
+                        )}
+                      </div>
+                      <button
+                        type='submit'
+                        disabled={
+                          pickedOp === '_between' ? value === '' || value2 === '' : !value.trim()
+                        }
+                        className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
+                      >
+                        {editingId ? 'Update' : 'Apply'}
+                      </button>
+                    </form>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Applied chips — click to edit in place */}
@@ -3181,293 +3474,6 @@ function FilterBar({
           </span>
         )
       })}
-
-      {/* Add filter */}
-      <div className='relative' ref={rootRef}>
-        <button
-          type='button'
-          onClick={() => (open ? setOpen(false) : openFresh())}
-          className='inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-slate-300 px-2.5 text-[12.5px] text-slate-500 hover:border-slate-400 hover:text-slate-700 dark:border-slate-600 dark:text-slate-400'
-        >
-          + Add Filter
-        </button>
-        {open && (
-          <div className='nvr-pop-in absolute left-0 top-full z-50 mt-1 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900'>
-            {picked == null ? (
-              <>
-                {level.path.length > 0 && (
-                  <button
-                    type='button'
-                    onClick={() => setLevel({ collection, path: [], pathLabels: [] })}
-                    className='flex w-full items-center gap-1 border-b border-slate-100 px-3 py-2 text-left text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'
-                  >
-                    ‹ {level.pathLabels.join(' › ')}
-                  </button>
-                )}
-                <div className='p-2 pb-1'>
-                  <input
-                    autoFocus
-                    value={fieldFilter}
-                    onChange={(e) => setFieldFilter(e.target.value)}
-                    placeholder='Find field…'
-                    className='h-8 w-full rounded-lg border-2 border-nvr-cyan/50 bg-white px-2.5 text-[12.5px] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-nvr-cyan/20 dark:border-nvr-cyan/40 dark:bg-slate-800 dark:text-slate-100'
-                  />
-                </div>
-                <div className='max-h-80 overflow-y-auto py-1'>
-                  {level.path.length === 0 && !fieldFilter && (
-                    <div className='mb-1 border-b border-slate-100 pb-1 dark:border-slate-800'>
-                      {(
-                        [
-                          ['$has_files', 'Has attachments'],
-                          ['$has_comments', 'Has comments'],
-                          ['$has_tasks', 'Has open tasks'],
-                          ['$has_failed_push', 'Has a failed integration push'],
-                          ['$missing_required', 'Missing required fields'],
-                          ['$unseen', 'Changed since I last looked']
-                        ] as Array<[string, string]>
-                      ).map(([pathKey, label]) => (
-                        <button
-                          key={pathKey}
-                          type='button'
-                          onClick={() => {
-                            onFiltersChange([
-                              ...filters.filter((x) => x.path[0] !== pathKey),
-                              {
-                                id: `${pathKey}-${Date.now()}`,
-                                path: [pathKey],
-                                pathLabels: [label],
-                                fieldType: 'boolean',
-                                op: '_eq',
-                                value: 'true'
-                              }
-                            ])
-                            setOpen(false)
-                          }}
-                          className='flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800'
-                        >
-                          <span className='text-[#00a5cc] dark:text-nvr-cyan'>◈</span>
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <FieldLevel
-                    collection={level.collection}
-                    path={level.path}
-                    pathLabels={level.pathLabels}
-                    search={fieldFilter}
-                    depth={level.path.length}
-                    onDrill={(c, pth, lbls) => {
-                      setLevel({ collection: c, path: pth, pathLabels: lbls })
-                      setFieldFilter('')
-                    }}
-                    onPick={(leaf) => {
-                      setPicked(leaf)
-                      setPickedOp(
-                        leaf.fieldType === 'integer' ||
-                          leaf.fieldType === 'decimal' ||
-                          leaf.fieldType === 'float'
-                          ? '_eq'
-                          : '_contains'
-                      )
-                    }}
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <button
-                  type='button'
-                  onClick={() => {
-                    setPicked(null)
-                    setRelSel([])
-                    setValue('')
-                    setValue2('')
-                  }}
-                  className='flex w-full items-center gap-1 border-b border-slate-100 px-3 py-2 text-left text-[12px] font-medium text-slate-500 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800'
-                >
-                  ‹ {picked.pathLabels.join(' › ')}
-                </button>
-
-                {leafKind === 'relation' && picked.relTarget ? (
-                  <div className='pt-2'>
-                    <RelationValueList
-                      target={picked.relTarget}
-                      selected={relSel}
-                      labels={relLabels}
-                      onToggle={(id, label) => {
-                        setRelSel((sel) =>
-                          sel.map(String).includes(String(id))
-                            ? sel.filter((v) => String(v) !== String(id))
-                            : [...sel, id]
-                        )
-                        setRelLabels((l) => ({ ...l, [String(id)]: label }))
-                      }}
-                    />
-                    <div className='border-t border-slate-100 p-2 dark:border-slate-800'>
-                      <button
-                        type='button'
-                        disabled={relSel.length === 0}
-                        onClick={applyRelation}
-                        className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
-                      >
-                        Apply{relSel.length > 0 ? ` (${relSel.length})` : ''}
-                      </button>
-                    </div>
-                  </div>
-                ) : leafKind === 'boolean' ? (
-                  <div className='flex gap-1.5 p-3'>
-                    {[
-                      { label: 'Yes', op: '_eq:true' },
-                      { label: 'No', op: '_eq:false' },
-                      { label: 'Empty', op: '_null' }
-                    ].map((b) => (
-                      <button
-                        key={b.op}
-                        type='button'
-                        onClick={() =>
-                          applyScalar(
-                            b.op.includes(':') ? b.op.split(':')[0] : b.op,
-                            b.op.includes(':') ? b.op.split(':')[1] : ''
-                          )
-                        }
-                        className='h-8 flex-1 rounded-md border border-slate-200 text-[12.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
-                      >
-                        {b.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : leafKind === 'date' ? (
-                  <div className='space-y-2 p-3'>
-                    <div className='flex flex-wrap gap-1'>
-                      {DATE_PRESETS.filter((d) => d.value).map((d) => (
-                        <button
-                          key={d.value}
-                          type='button'
-                          onClick={() => {
-                            // Rolling (#196): the TOKEN is stored, resolved at
-                            // query time — a saved view's "last 30 days" keeps
-                            // rolling instead of freezing the pick-day range.
-                            applyScalar('_preset', d.value)
-                          }}
-                          className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-600 hover:border-nvr-cyan/40 hover:bg-nvr-cyan/5 dark:border-slate-700 dark:text-slate-300'
-                        >
-                          {d.label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className='flex items-center gap-1.5'>
-                      <input
-                        type='date'
-                        value={value}
-                        onChange={(e) => setValue(e.target.value)}
-                        aria-label='From date'
-                        className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                      />
-                      <span className='text-[11px] text-slate-400'>to</span>
-                      <input
-                        type='date'
-                        value={value2}
-                        onChange={(e) => setValue2(e.target.value)}
-                        aria-label='To date'
-                        className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-[12px] dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                      />
-                    </div>
-                    <button
-                      type='button'
-                      disabled={!value && !value2}
-                      onClick={() => {
-                        if (value && value2) applyScalar('_between', `${value}..${value2}`)
-                        else if (value) applyScalar('_gte', value)
-                        else if (value2) applyScalar('_lte', value2)
-                      }}
-                      className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
-                    >
-                      Apply
-                    </button>
-                  </div>
-                ) : (
-                  <form
-                    className='space-y-2 p-3'
-                    onSubmit={(e) => {
-                      e.preventDefault()
-                      if (leafKind === 'number' && pickedOp === '_between') {
-                        if (value !== '' && value2 !== '')
-                          applyScalar('_between', `${value}..${value2}`)
-                      } else if (value.trim()) applyScalar(pickedOp, value.trim())
-                    }}
-                  >
-                    <div className='flex flex-wrap gap-1'>
-                      {(leafKind === 'number'
-                        ? [...numberOps, { value: '_between', label: 'Between' }]
-                        : stringOps
-                      ).map((o) => (
-                        <button
-                          key={o.value}
-                          type='button'
-                          onClick={() => setPickedOp(o.value)}
-                          className={`rounded-md border px-2 py-1 text-[11.5px] ${
-                            pickedOp === o.value
-                              ? 'border-nvr-cyan/40 bg-nvr-cyan/[0.08] font-medium text-slate-800 dark:text-slate-100'
-                              : 'border-slate-200 text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-                          }`}
-                        >
-                          {o.label}
-                        </button>
-                      ))}
-                      <button
-                        type='button'
-                        onClick={() => applyScalar('_null', '')}
-                        className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-                      >
-                        Empty
-                      </button>
-                      <button
-                        type='button'
-                        onClick={() => applyScalar('_nnull', '')}
-                        className='rounded-md border border-slate-200 px-2 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 dark:border-slate-700 dark:text-slate-400'
-                      >
-                        Not empty
-                      </button>
-                    </div>
-                    <div className='flex items-center gap-1.5'>
-                      <input
-                        autoFocus
-                        type={leafKind === 'number' ? 'number' : 'text'}
-                        value={value}
-                        onChange={(e) => setValue(e.target.value)}
-                        placeholder='Value…'
-                        className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                      />
-                      {leafKind === 'number' && pickedOp === '_between' && (
-                        <>
-                          <span className='text-[11px] text-slate-400'>to</span>
-                          <input
-                            type='number'
-                            value={value2}
-                            onChange={(e) => setValue2(e.target.value)}
-                            placeholder='To…'
-                            className='h-8 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 text-[13px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
-                          />
-                        </>
-                      )}
-                    </div>
-                    <button
-                      type='submit'
-                      disabled={
-                        pickedOp === '_between' ? value === '' || value2 === '' : !value.trim()
-                      }
-                      className='h-8 w-full rounded-md bg-nvr-cyan text-[13px] font-medium text-white disabled:opacity-40'
-                    >
-                      {editingId ? 'Update' : 'Apply'}
-                    </button>
-                  </form>
-                )}
-              </>
-            )}
-          </div>
-        )}
-      </div>
     </div>
   )
 }

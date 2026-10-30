@@ -34,6 +34,7 @@ export function HeaderTools({ children }: { children: ReactNode }) {
   const collapsedRef = useRef(false)
   collapsedRef.current = collapsed
   const neededRef = useRef(0)
+  const wrapNeededRef = useRef(0)
   const [open, setOpen] = useState(false)
 
   // No deps on purpose: the tool set changes as queries land (custom actions,
@@ -49,7 +50,18 @@ export function HeaderTools({ children }: { children: ReactNode }) {
           setCollapsed(true)
           setOpen(false)
         }
-      } else if (neededRef.current > 0 && header.clientWidth > neededRef.current + 32) {
+        return
+      }
+      // Second stage: still too wide with the tools folded (a narrow pane beside the sidebar),
+      // so the row may wrap — the actions drop under the title instead of running off the edge.
+      // Unwraps once the folded row fits again, with the same margin against flapping.
+      const wrapped = header.hasAttribute('data-nvr-header-wrap')
+      if (!wrapped && header.scrollWidth > header.clientWidth + 2) {
+        wrapNeededRef.current = header.scrollWidth
+        header.setAttribute('data-nvr-header-wrap', '')
+      } else if (wrapped && header.clientWidth > wrapNeededRef.current + 32) {
+        header.removeAttribute('data-nvr-header-wrap')
+      } else if (!wrapped && neededRef.current > 0 && header.clientWidth > neededRef.current + 32) {
         setCollapsed(false)
       }
     }

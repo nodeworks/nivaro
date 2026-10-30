@@ -44,7 +44,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
         data-sla-override-banner
         className='nvr-expand-in flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-border dark:bg-muted/40'
       >
-        <p className='min-w-0 flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
+        <p className='min-w-[min(16rem,100%)] flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
           <span className='font-semibold'>SLA</span>
           {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(left)} left ·{' '}
           {overrideSentence(data.override)}
@@ -63,7 +63,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
 
   return (
     <div className='nvr-expand-in flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
-      <p className='min-w-0 flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
+      <p className='min-w-[min(16rem,100%)] flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
         <span className='font-semibold'>SLA breached</span>
         {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(hoursPast)} past the limit
         {data.acknowledged

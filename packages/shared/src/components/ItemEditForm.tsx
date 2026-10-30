@@ -1802,12 +1802,14 @@ function ItemEditFormView({
   // the grouped layout above renders read-only instead (the pre-layout
   // behaviour). Fetched only for saved records — Summary mode never applies
   // to a new one.
+  // A small screen gets the Summary layout's phone version too (#2715), read with
+  // the same once-per-open viewport as the form.
   const { data: summaryLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['summary-layout', collection],
+    queryKey: ['summary-layout', collection, ...(viewport ? [viewport] : [])],
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
-          get(`/collection-layouts/summary/${collection}`)
+          get(`/collection-layouts/summary/${collection}`, viewport ? { viewport } : undefined)
         )
         .then((r) => r.data)
         .catch(() => null),
@@ -11716,7 +11718,7 @@ function ItemEditFormView({
                                 {showHeader && (
                                   <header
                                     className={cn(
-                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-x-3 gap-y-2 max-md:[&[data-nvr-header-row]]:flex-wrap max-md:[&[data-nvr-header-row]]:px-4 transition-[padding] duration-200',
+                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-x-3 gap-y-2 max-md:[&[data-nvr-header-row]]:flex-wrap [&[data-nvr-header-wrap]]:flex-wrap max-md:[&[data-nvr-header-row]]:px-4 transition-[padding] duration-200',
                                       headerCondensed ? 'py-1.5' : 'py-3.5',
                                       headerClassName
                                     )}
