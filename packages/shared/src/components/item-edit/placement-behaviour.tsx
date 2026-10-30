@@ -3,6 +3,7 @@ import { createContext, useContext, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { evaluateExpression, parseExpression, readPath } from '../../lib/expression'
 import {
   type CounterConfig,
@@ -167,7 +168,7 @@ export function RepeatLastButton({
         `Filled ${label} from your last record${r.data.at ? ` (${formatRelative(r.data.at)})` : ''}`
       )
     } catch (err) {
-      toast.error((err as Error)?.message || 'Could not read your last value')
+      toastError(err, 'Could not read your last value')
     } finally {
       setBusy(false)
     }

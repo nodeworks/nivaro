@@ -49,6 +49,7 @@ import {
   type PlacementPatch,
   type PlacementRow
 } from '../../lib/layout-ops'
+import { plainErrorText } from '../../lib/safe-error'
 
 export type DraftStatus = 'idle' | 'saving' | 'saved' | 'error' | 'conflict'
 
@@ -256,7 +257,11 @@ export function parseSaveFailure(
     (typeof body?.message === 'string' && body.message) ||
     (typeof e?.message === 'string' && e.message) ||
     fallback
-  return { status, message: humanizeOpError(message), bundle: parseBundle(body?.bundle) }
+  return {
+    status,
+    message: plainErrorText(humanizeOpError(message), fallback, status),
+    bundle: parseBundle(body?.bundle)
+  }
 }
 
 // ── Inverse ops ─────────────────────────────────────────────────────────────

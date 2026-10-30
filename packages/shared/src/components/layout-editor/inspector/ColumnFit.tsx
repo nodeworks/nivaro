@@ -1,5 +1,6 @@
 import { AlertTriangle, Ruler } from 'lucide-react'
 import { useContext, useState } from 'react'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn } from '../../../lib/utils'
 import { columnOf, useColumnFacts, useValueLengths } from '../inspect/inspect-api'
 import {
@@ -96,7 +97,7 @@ export function ColumnFit() {
             <p className={effectText}>Reading the newest stored values…</p>
           ) : lengths.isError ? (
             <p className='text-[12px] text-red-700 dark:text-red-300'>
-              {(lengths.error as Error)?.message || 'The stored values could not be read.'}
+              {userErrorMessage(lengths.error, 'The stored values could not be read.')}
             </p>
           ) : !lengths.data || lengths.data.filled === 0 ? (
             <p className={effectText}>No stored values to measure yet.</p>

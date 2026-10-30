@@ -1,21 +1,39 @@
 import { Ban, Compass, ServerCrash } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { describeError } from '../lib/error-message'
+import { isRawErrorText } from '../lib/safe-error'
+import { ErrorDetails } from './ErrorNotice'
 
 /**
  * Error surface family (#324): 403/404/500 as one designed system — a name
  * for what happened, an honest cause line, and the one right action. The
  * smart-404 (#219) and AccessDeniedPanel remain the record-scoped variants;
  * this is the page-level chrome.
+ *
+ * `detail` is shown only when it is a plain sentence; raw text (a status line,
+ * a stack, SQL, a JavaScript error) never is. Pass the `error` itself to put
+ * its reference in a collapsed "Details for support" with Copy.
  */
+const spec500Title = 'Something broke rendering this page'
+
 export function ErrorSurface({
   variant,
   detail,
+  error,
   action
 }: {
   variant: '403' | '404' | '500'
   detail?: string
+  error?: unknown
   action?: ReactNode
 }) {
+  const plainDetail = detail && !isRawErrorText(detail) ? detail : null
+  const described =
+    error !== undefined && error !== null
+      ? describeError(error)
+      : detail && !plainDetail
+        ? { title: spec500Title, technical: detail.slice(0, 500) }
+        : null
   const spec = {
     '403': {
       icon: Ban,
@@ -46,12 +64,13 @@ export function ErrorSurface({
       <p className='max-w-[440px] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
         {spec.body}
       </p>
-      {detail && (
-        <p className='max-w-[520px] rounded-md bg-slate-50 px-3 py-1.5 font-mono text-[11px] text-slate-500 dark:bg-muted dark:text-muted-foreground'>
-          {detail.length > 300 ? `${detail.slice(0, 300)}…` : detail}
+      {plainDetail && (
+        <p className='max-w-[520px] text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+          {plainDetail.length > 300 ? `${plainDetail.slice(0, 300)}…` : plainDetail}
         </p>
       )}
       {action && <div className='mt-1'>{action}</div>}
+      {described && <ErrorDetails description={described} className='mt-1' />}
     </div>
   )
 }

@@ -22,7 +22,7 @@ describe('ListLoadError', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain(
       'This list took too long to load.'
     )
-    act(() => (host.querySelector('button') as HTMLButtonElement).click())
+    act(() => (host.querySelector('[data-error-action]') as HTMLButtonElement).click())
     expect(onRetry).toHaveBeenCalledOnce()
     act(() => root.unmount())
     host.remove()

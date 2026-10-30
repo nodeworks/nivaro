@@ -3,6 +3,7 @@ import { Users } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { helpVideoApi, helpVideoKeys } from '../api'
@@ -68,7 +69,7 @@ export function AuthorRolesButton() {
           void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
         } catch (e) {
           failures.current += 1
-          setSaveError(`That change was not saved. ${(e as Error).message}`)
+          setSaveError(`That change was not saved. ${userErrorMessage(e, '')}`)
         }
       })
       .finally(() => {

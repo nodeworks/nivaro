@@ -3,6 +3,7 @@ import { Clock3 } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { formatRelative, humanHours } from '../../lib/utils'
 import { invalidateRecordNotes } from '../item-edit/RecordInsights'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -38,8 +39,7 @@ export interface SlaStatusData {
 }
 
 function errorText(e: unknown): string | null {
-  const err = e as { response?: { error?: string }; message?: string } | null
-  return err?.response?.error ?? err?.message ?? null
+  return e ? userErrorMessage(e, 'Could not load the deadline') : null
 }
 
 export function slaStatusKey(collection: string, itemId: string) {

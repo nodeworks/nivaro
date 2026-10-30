@@ -3,6 +3,7 @@ import { Archive, EyeOff, History, Pencil, Plus, Search, Send, Trash2, Upload } 
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { modalHostOf } from '../../ui/popover'
@@ -143,7 +144,7 @@ export function HelpVideoLibrary({
         if (err?.code === 'HELP_VIDEO_NOT_ARCHIVED') {
           void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
         }
-        return { ok: false, message: `It could not be deleted. ${(e as Error).message}` }
+        return { ok: false, message: `It could not be deleted. ${userErrorMessage(e, '')}` }
       }
     }
     focusAfter.current = { gone: v.id, next: next?.id ?? null }
@@ -175,7 +176,9 @@ export function HelpVideoLibrary({
       if (helpVideoError(e)?.code === 'HELP_VIDEO_NOT_STALE') {
         void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
       } else {
-        setArchiveError(`The note on "${v.title}" could not be dismissed. ${(e as Error).message}`)
+        setArchiveError(
+          `The note on "${v.title}" could not be dismissed. ${userErrorMessage(e, '')}`
+        )
       }
     } finally {
       setDismissing((cur) => {
@@ -204,7 +207,7 @@ export function HelpVideoLibrary({
       void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
     } catch (e) {
       setArchiveError(
-        `"${title}" could not be ${to === 'draft' ? 'unpublished' : 'published again'}. ${(e as Error).message}`
+        `"${title}" could not be ${to === 'draft' ? 'unpublished' : 'published again'}. ${userErrorMessage(e, '')}`
       )
     } finally {
       setArchiving((cur) => {
@@ -224,7 +227,7 @@ export function HelpVideoLibrary({
       toast.success(`"${v.title}" archived`)
       void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
     } catch (e) {
-      setArchiveError(`"${v.title}" could not be archived. ${(e as Error).message}`)
+      setArchiveError(`"${v.title}" could not be archived. ${userErrorMessage(e, '')}`)
     } finally {
       setArchiving((cur) => {
         const next = new Set(cur)

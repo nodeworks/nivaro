@@ -19,7 +19,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
-import { errorSentence } from '../../lib/error-message'
+import { errorSentence, rowErrorSentence } from '../../lib/error-message'
 import { type ImportLogError, type ImportLogLine, parseImportLog } from '../../lib/import-log'
 import { cn, formatDateTime, formatFileSize, formatNumber, titleCase } from '../../lib/utils'
 import { ExplainButton } from '../ai/ExplainButton'
@@ -1623,7 +1623,7 @@ function LogError({ error }: { error: ImportLogError }) {
             error.source && 'mt-1'
           )}
         >
-          {error.message}
+          {rowErrorSentence(error.message)}
         </p>
       ) : error.values.length === 0 ? (
         <p

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { put } from '../../../lib/commands'
+import { toastError } from '../../../lib/error-toast'
 import { cn } from '../../../lib/utils'
 import { useCcQuery } from '../api'
 import { BUTTON, FAINT, FOCUS, MUTED } from '../theme'
@@ -72,7 +73,7 @@ export function BoardSettings({ onClose }: { onClose: () => void }) {
       const e = err as { status?: number; code?: string | null; message?: string }
       if (e.code === 'MIGRATION_PENDING' || e.status === 409)
         toast.error('These settings can be saved once this instance finishes its update.')
-      else toast.error(e.message || 'Could not save the board settings')
+      else toastError(err, 'Could not save the board settings', { action: 'Save board settings' })
     }
   })
 

@@ -7,8 +7,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2, Upload } from 'lucide-react'
 import { type ChangeEvent, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { toastError } from '../../lib/error-toast'
+import { userErrorMessage } from '../../lib/safe-error'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -78,7 +79,7 @@ export function ImportFromFileButton({
       // opens in a dialog. NEVER inline under the button — an error appearing
       // in the header row displaces the layout around it.
       if (parseErr.issues?.length) setError(parseErr)
-      else toast.error(parseErr.message || 'Import parse failed', { duration: 8000 })
+      else toastError(err, 'The file could not be read', { action: 'Import from file' })
     } finally {
       setImportingFile(null)
     }
@@ -89,9 +90,7 @@ export function ImportFromFileButton({
   const labelOf = (t: ImportTemplateSummary) => (getLabel ? getLabel(t) : t.button_label)
   const firstLabel = templates[0] ? labelOf(templates[0])?.trim() : undefined
   const customLabel =
-    firstLabel && templates.every((t) => labelOf(t) === labelOf(templates[0]))
-      ? firstLabel
-      : null
+    firstLabel && templates.every((t) => labelOf(t) === labelOf(templates[0])) ? firstLabel : null
   const buttonLabel = importing ? (
     <>
       <Loader2 className='h-3.5 w-3.5 animate-spin' /> Importing…
@@ -179,7 +178,7 @@ export function ImportFromFileButton({
               onClick={(e) => e.stopPropagation()}
             >
               <p className='mb-2 text-[13px] font-semibold text-red-600 dark:text-red-400'>
-                {error.message || 'Import parse failed'}
+                {userErrorMessage(error, 'The file could not be read')}
               </p>
               <ImportIssuesPanel issues={error.issues} />
               <div className='mt-3 flex justify-end'>

@@ -1,11 +1,10 @@
-import { loadErrorText, serverErrorText } from '../lib/load-error'
-import { cn } from '../lib/utils'
-import { LoadErrorNote } from './LoadErrorNote'
+import { ErrorNotice } from './ErrorNotice'
 
 /**
- * The page-level error state for a read that failed (#2857): "Couldn't load <thing>." with the
- * short reason and Try again, in place of a blank screen, an empty state that reads as "no data"
- * or a skeleton that never ends. Fill the area the content would have used.
+ * The page-level error state for a read that failed (#2857): "Couldn't load <thing>" with what
+ * to do and the one button that helps (Try again, Sign in again, Ask for access…), in place of a
+ * blank screen, an empty state that reads as "no data" or a skeleton that never ends. Fill the
+ * area the content would have used. The reference stays in "Details for support".
  */
 export function QueryErrorState({
   error,
@@ -19,11 +18,7 @@ export function QueryErrorState({
   onRetry?: () => void
   className?: string
 }) {
-  const server = serverErrorText(error)
-  const message = server ? `Couldn’t load ${what}. ${server}` : loadErrorText(error, what)
   return (
-    <div className={cn('flex min-h-[200px] flex-1 items-center justify-center p-8', className)}>
-      <LoadErrorNote centered message={message} onRetry={onRetry} className='max-w-[320px]' />
-    </div>
+    <ErrorNotice variant='page' error={error} what={what} onRetry={onRetry} className={className} />
   )
 }

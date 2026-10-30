@@ -29,6 +29,7 @@ import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useStat
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { del, patch, post } from '../../../lib/commands'
+import { toastError } from '../../../lib/error-toast'
 import { dayWords, localDay } from '../../../lib/layout-resolve'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
@@ -382,7 +383,7 @@ function DeleteConfirm({
     } catch (err) {
       const f = apiFailure(err, 'Could not delete the form')
       if (f.status === 409) setBlocked({ message: f.message, refs: f.references })
-      else toast.error(f.message)
+      else toastError(err, f.message, { action: 'Delete form' })
     } finally {
       setBusy(false)
     }

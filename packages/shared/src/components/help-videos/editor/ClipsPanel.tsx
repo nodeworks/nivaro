@@ -3,6 +3,7 @@ import { Download, Film, Link2, Loader2, Plus, Trash2 } from 'lucide-react'
 import { memo, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { helpVideoApi, helpVideoKeys, useHelpVideoClips } from '../api'
 import { CLIP_LIMITS, type ClipDto, type VideoEdits } from '../types'
@@ -177,7 +178,7 @@ export const ClipsPanel = memo(function ClipsPanel({
         cur?.filter((x) => x.id !== c.id)
       )
     } catch (err) {
-      onNote?.(`The clip could not be deleted. ${(err as Error).message}`)
+      onNote?.(`The clip could not be deleted. ${userErrorMessage(err, '')}`)
     } finally {
       setDeleting(null)
       void qc.invalidateQueries({ queryKey: helpVideoKeys.clips(videoId) })
@@ -211,7 +212,7 @@ export const ClipsPanel = memo(function ClipsPanel({
       </div>
       {clips.error ? (
         <p className='text-[12px] text-rose-700 dark:text-rose-300'>
-          The clips could not be loaded. {(clips.error as Error).message}
+          The clips could not be loaded. {userErrorMessage(clips.error, '')}
         </p>
       ) : list.length === 0 ? (
         <p className='text-[12px] leading-snug text-muted-foreground'>

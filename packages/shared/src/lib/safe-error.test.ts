@@ -26,9 +26,9 @@ describe('userErrorMessage — never raw JavaScript error text', () => {
     ).toBe('Choose a Zone you have access to')
   })
 
-  it('a network failure and a plain Error keep their message', () => {
+  it('a network failure reads plainly; a plain Error keeps its message', () => {
     expect(isCodeError(new TypeError('Failed to fetch'))).toBe(false)
-    expect(userErrorMessage(new TypeError('Failed to fetch'))).toBe('Failed to fetch')
+    expect(userErrorMessage(new TypeError('Failed to fetch'))).toBe('Cannot reach the server')
     expect(userErrorMessage(new Error('Lines did not save'))).toBe('Lines did not save')
     expect(userErrorMessage(undefined, 'Save failed')).toBe('Save failed')
   })

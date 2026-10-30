@@ -3,6 +3,7 @@ import { MailX } from 'lucide-react'
 import { toast } from 'sonner'
 import { useOptionalNivaroClient } from '../../context'
 import { del, get } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { cn, formatDate } from '../../lib/utils'
 
 /**
@@ -60,8 +61,7 @@ export function MailSuppressedPill({
       void qc.invalidateQueries({ queryKey: ['mail-suppression'] })
       void qc.invalidateQueries({ queryKey: ['mail-suppressions'] })
     },
-    onError: (e: unknown) =>
-      toast.error(e instanceof Error && e.message ? e.message : 'Could not clear the mark')
+    onError: (e: unknown) => toastError(e, 'Could not clear the mark')
   })
   if (!data?.suppressed) return null
   const since = data.since ? formatDate(data.since) : null

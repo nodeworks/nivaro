@@ -28,6 +28,8 @@ export function SupportRequestDialog({
   collection,
   item,
   recordLabel,
+  initialTitle,
+  initialDescription,
   onCreated
 }: {
   open: boolean
@@ -36,6 +38,9 @@ export function SupportRequestDialog({
   item?: string | number | null
   /** Friendly id of the record ("CM26-79811"), shown in the title. */
   recordLabel?: string | null
+  /** Prefill (an error's "Get help": what happened and its reference). */
+  initialTitle?: string
+  initialDescription?: string
   onCreated?: (ticket: SupportTicket) => void
 }) {
   const client = useNivaroClient()
@@ -58,6 +63,11 @@ export function SupportRequestDialog({
   useEffect(() => {
     installReplayTail()
   }, [])
+  useEffect(() => {
+    if (!open) return
+    if (initialTitle) setTitle((t) => t || initialTitle)
+    if (initialDescription) setDescription((d) => d || initialDescription)
+  }, [open, initialTitle, initialDescription])
   useEffect(() => {
     if (!open) {
       moment.current = null

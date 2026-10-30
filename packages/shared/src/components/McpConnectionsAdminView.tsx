@@ -3,6 +3,7 @@ import { AlertTriangle, Check, ChevronsUpDown, KeyRound, Loader2, Plug } from 'l
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../context'
 import { del, get, patch } from '../lib/commands'
+import { userErrorMessage } from '../lib/safe-error'
 import { cn, formatDate, formatNumber, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { McpKitsPanel, McpScopeSheet, ScopeBadge } from './McpConnectionScope'
@@ -126,7 +127,7 @@ function SettingsStrip({
         disconnect, then disconnected. API keys keep their own expiry.
         {save.isError && (
           <span className='ml-1 text-red-600 dark:text-red-400'>
-            {(save.error as Error)?.message || 'Could not save'}
+            {userErrorMessage(save.error, 'Could not save')}
           </span>
         )}
       </p>
@@ -237,7 +238,7 @@ function BadgeSetting() {
         comments and the activity log. Changing it relabels earlier changes too.
         {save.isError && (
           <span className='ml-1 text-red-600 dark:text-red-400'>
-            {(save.error as Error)?.message || 'Could not save'}
+            {userErrorMessage(save.error, 'Could not save')}
           </span>
         )}
       </p>
@@ -273,7 +274,7 @@ function LimitCell({ c, onSaved }: { c: McpConnection; onSaved: () => void }) {
         aria-invalid={save.isError || undefined}
         data-tip={
           save.isError
-            ? (save.error as Error)?.message || 'Could not save the limit'
+            ? userErrorMessage(save.error, 'Could not save the limit')
             : 'Blank = the default limit'
         }
         className={cn(
@@ -681,7 +682,7 @@ export function McpConnectionsAdminView({
       )}
       {disconnect.isError && (
         <p className='text-[12px] text-red-600 dark:text-red-400'>
-          {(disconnect.error as Error)?.message || 'Could not disconnect'}
+          {userErrorMessage(disconnect.error, 'Could not disconnect')}
         </p>
       )}
     </div>

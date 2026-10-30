@@ -49,6 +49,7 @@ import { toast } from 'sonner'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { describeTransition, sentenceLabelsFromFields } from '../../lib/config-sentences'
+import { toastError } from '../../lib/error-toast'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { ConfigHistoryButton } from '../ConfigHistory'
@@ -3195,8 +3196,7 @@ export function PipelineEditorView({
       setEditingRoute(null)
     },
     onError: (err: unknown) => {
-      const resp = (err as { response?: { error?: string } })?.response
-      toast.error(resp?.error ?? (err as Error)?.message ?? 'Failed to update route')
+      toastError(err, 'Failed to update route')
     }
   })
 
@@ -3291,8 +3291,7 @@ export function PipelineEditorView({
       )
     },
     onError: (err: unknown) => {
-      const resp = (err as { response?: { error?: string } })?.response
-      toast.error(resp?.error ?? (err as Error)?.message ?? 'Failed to rename')
+      toastError(err, 'Failed to rename')
     }
   })
 

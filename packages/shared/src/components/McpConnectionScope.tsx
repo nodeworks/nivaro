@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { del, get, post, put } from '../lib/commands'
+import { userErrorMessage } from '../lib/safe-error'
 import { cn, formatNumber } from '../lib/utils'
 import { ConfirmButton, Pill } from './profile/primitives'
 import {
@@ -797,7 +798,7 @@ function KitEditor({
       </div>
       {save.isError && (
         <p className='text-[12px] text-red-600 dark:text-red-400'>
-          {(save.error as Error)?.message || 'Could not save the kit'}
+          {userErrorMessage(save.error, 'Could not save the kit')}
         </p>
       )}
       <div className='flex justify-end gap-2'>
@@ -968,7 +969,7 @@ export function McpKitsPanel() {
       </ul>
       {remove.isError && (
         <p className='text-[12px] text-red-600 dark:text-red-400'>
-          {(remove.error as Error)?.message || 'Could not remove the kit'}
+          {userErrorMessage(remove.error, 'Could not remove the kit')}
         </p>
       )}
     </div>

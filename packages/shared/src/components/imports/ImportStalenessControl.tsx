@@ -3,6 +3,7 @@ import { Loader2, Pencil } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -74,8 +75,7 @@ export function hoursText(h: number): string {
 }
 
 export function errorText(err: unknown): string {
-  const e = err as { response?: { error?: string }; message?: string }
-  return e?.response?.error ?? e?.message ?? 'Could not save'
+  return userErrorMessage(err, 'Could not save')
 }
 
 export function parseHours(raw: string): number | null {

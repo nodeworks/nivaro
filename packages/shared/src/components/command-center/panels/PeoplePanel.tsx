@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { post } from '../../../lib/commands'
+import { toastError } from '../../../lib/error-toast'
 import { cn } from '../../../lib/utils'
 import { UserChip } from '../../item-edit/UserChip'
 import { useCc } from '../state'
@@ -271,7 +272,7 @@ function MessageComposer({
     },
     onError: (err: unknown) => {
       setArmed(false)
-      toast.error((err as { message?: string }).message || 'Message not sent')
+      toastError(err, 'Message not sent')
     }
   })
   const fieldId = `cc-msg-${label.replace(/[^A-Za-z0-9_-]/g, '_')}`

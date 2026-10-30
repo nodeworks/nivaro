@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { type DragEvent, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig } from '../../context'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatFileSize, formatNumber } from '../../lib/utils'
 import { Button } from '../ui/button'
 import {
@@ -708,7 +709,7 @@ function ProcedureRehearsal({
       </div>
       {run.isError && (
         <p className='text-[11.5px] text-red-700 dark:text-red-300'>
-          {(run.error as Error).message}
+          {userErrorMessage(run.error, 'The import could not run')}
         </p>
       )}
       {r?.refused && (

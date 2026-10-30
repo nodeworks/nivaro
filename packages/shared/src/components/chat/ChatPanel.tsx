@@ -50,6 +50,7 @@ import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { usePresenceOnlinePoll } from '../../lib/presence-live'
 import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { userErrorMessage } from '../../lib/safe-error'
 import { userCardQuery } from '../../lib/user-cards'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
@@ -3073,7 +3074,9 @@ export function ChatChannelSettings({
               </div>
             )}
             {update.isError && (
-              <p className='text-[11.5px] text-red-500'>{(update.error as Error).message}</p>
+              <p className='text-[11.5px] text-red-500'>
+                {userErrorMessage(update.error, 'Could not save the changes')}
+              </p>
             )}
             {!channel.is_direct && (
               <ChannelExtrasEditor channel={channel} th={th} isAdmin={isAdmin} />
@@ -3844,7 +3847,9 @@ export function ChatChannelBrowser({
             />
           )}
           {create.isError && (
-            <p className='text-[11.5px] text-red-500'>{(create.error as Error).message}</p>
+            <p className='text-[11.5px] text-red-500'>
+              {userErrorMessage(create.error, 'Could not create it')}
+            </p>
           )}
         </form>
       )}

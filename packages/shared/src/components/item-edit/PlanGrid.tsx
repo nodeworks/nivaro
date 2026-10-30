@@ -17,6 +17,7 @@ import { useItemEditAuth, useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateNumeric } from '../../lib/expression'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -29,12 +30,12 @@ import {
   closedThroughLabel,
   compareColumnClosed,
   extraSeriesValue,
-  SeriesFigurePopover,
   GridStatChip,
   monthLabel,
   monthLabelLong,
   planLabel,
   resolveCompareEndpoint,
+  SeriesFigurePopover,
   unitWord,
   useCompareSeries
 } from './CompareSeries'
@@ -352,8 +353,9 @@ export function PlanGridField(props: {
   }
   const onCellFocusCapture = (e: React.FocusEvent) => {
     const cell =
-      (e.target as HTMLElement | null)?.closest?.('[data-grid-cell]')?.getAttribute('data-grid-cell') ??
-      null
+      (e.target as HTMLElement | null)
+        ?.closest?.('[data-grid-cell]')
+        ?.getAttribute('data-grid-cell') ?? null
     if (cell === cellFocusRef.current) return
     if (cellFocusRef.current) emitCell(cellFocusRef.current, 'end')
     cellFocusRef.current = cell
@@ -910,7 +912,10 @@ export function PlanGridField(props: {
           : Object.fromEntries(Object.entries(open).filter(([c]) => num(b.top?.values[c]) === 0))
         if (Object.keys(patch).length && stage(b.top, patch, p.change_reason))
           cells += Object.keys(patch).length
-      } else if (Object.keys(open).length && !(adding && Object.values(open).every((v) => num(v) < 0))) {
+      } else if (
+        Object.keys(open).length &&
+        !(adding && Object.values(open).every((v) => num(v) < 0))
+      ) {
         addKey(pr.key, adding ? onto(undefined) : open, p.change_reason)
         cells += Object.keys(open).length
       }
@@ -2362,8 +2367,7 @@ function BlockMenu(props: {
 }
 
 function errorText(err: unknown): string {
-  const e = err as { response?: { error?: string; message?: string }; message?: string }
-  return e?.response?.error ?? e?.response?.message ?? e?.message ?? 'Something went wrong'
+  return userErrorMessage(err, 'Something went wrong')
 }
 
 function SplitPane(props: {

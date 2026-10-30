@@ -1,6 +1,7 @@
 import { Check, History, Link2, Megaphone, Plus, UserPlus, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
 import {
   Command,
@@ -31,7 +32,7 @@ interface Th {
 }
 
 function errorText(e: unknown, fallback: string): string {
-  return (e as { response?: { error?: string } })?.response?.error ?? fallback
+  return userErrorMessage(e, fallback)
 }
 
 export function ChannelExtrasEditor({

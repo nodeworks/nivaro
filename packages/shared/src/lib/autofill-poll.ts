@@ -1,3 +1,4 @@
+import { statusTitle } from './safe-error'
 /**
  * Polls a running document-autofill proposal until it lands or fails.
  *
@@ -39,7 +40,10 @@ export function pollProposal(opts: {
       return
     }
     if (!answer.ok) {
-      opts.onError(answer.json?.error || `Document autofill failed (${answer.status})`)
+      opts.onError(
+        answer.json?.error ||
+          `Document autofill failed. ${statusTitle(answer.status) ?? 'Try again.'}`.trim()
+      )
       opts.onSettled()
       return
     }

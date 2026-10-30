@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, put } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { Button } from '../ui/button'
 import { Textarea } from '../ui/textarea'
 
@@ -60,7 +61,7 @@ export function DataGuideCard({
       void qc.invalidateQueries({ queryKey: ['nvr-ai-data-guide', collection] })
       void qc.invalidateQueries({ queryKey: ['nvr-ai-data-guides'] })
     },
-    onError: (e: Error) => toast.error(e.message || 'Could not save the data guide')
+    onError: (e: Error) => toastError(e, 'Could not save the data guide')
   })
 
   const dirty =

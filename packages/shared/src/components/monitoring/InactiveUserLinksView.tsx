@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, RotateCw, Search, UserX } from 'lucide-react
 import { useCallback, useMemo, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
 
@@ -283,7 +284,7 @@ export function InactiveUserLinksView({ className }: { className?: string }) {
           </div>
         ) : scan.isError ? (
           <p className='p-6 text-[12.5px] text-rose-700 dark:text-rose-300'>
-            The scan failed. {(scan.error as Error)?.message}
+            The scan failed. {userErrorMessage(scan.error, '')}
           </p>
         ) : shown.length === 0 ? (
           <div className='flex flex-1 flex-col items-center justify-center gap-2 p-10 text-center'>
@@ -635,7 +636,7 @@ function Reassign({
       onDone()
     } catch (e) {
       const resp = (e as { response?: { error?: string } }).response
-      setError(resp?.error ?? (e as Error).message)
+      setError(resp?.error ?? userErrorMessage(e, ''))
     } finally {
       setBusy(false)
     }
@@ -785,7 +786,7 @@ function PlatformEntries({
       setConfirmRemove(false)
       onChanged()
     } catch (e) {
-      setNote((e as { response?: { error?: string } }).response?.error ?? (e as Error).message)
+      setNote((e as { response?: { error?: string } }).response?.error ?? userErrorMessage(e, ''))
     } finally {
       setBusy(false)
     }

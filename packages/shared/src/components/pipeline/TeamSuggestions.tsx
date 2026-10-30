@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -110,7 +111,7 @@ function SuggestionCard({ s, onApplied }: { s: Suggestion; onApplied: (id: numbe
         .request<{ data: ApplyPlan }>(post('/user-groups/suggestions/apply', body(false)))
         .then((r) => r.data),
     onSuccess: (p) => setPlan(p),
-    onError: (e) => toast.error((e as Error).message || 'Preview failed')
+    onError: (e) => toastError(e, 'Preview failed')
   })
   const apply = useMutation({
     mutationFn: () =>
@@ -127,7 +128,7 @@ function SuggestionCard({ s, onApplied }: { s: Suggestion; onApplied: (id: numbe
       void qc.invalidateQueries({ queryKey: ['owner-groups'] })
       if (p.team.id != null) onApplied(p.team.id)
     },
-    onError: (e) => toast.error((e as Error).message || 'Could not apply')
+    onError: (e) => toastError(e, 'Could not apply')
   })
   const templates = [...new Set(s.cells.map((c) => c.template_name ?? 'Template'))]
   const inactive = s.members.filter((m) => m.redacted || (m.status && m.status !== 'active'))

@@ -3,6 +3,7 @@ import { AlertCircle, RotateCw } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Skeleton } from '../../ui/skeleton'
 import { helpVideoApi, helpVideoError, helpVideoKeys } from '../api'
@@ -67,7 +68,7 @@ export function VersionsTab({
       setNote(
         code === 'HELP_VIDEO_VERSION_FILES_REMOVED'
           ? `Version ${version} couldn't be restored: its files were removed by retention.`
-          : `Version ${version} couldn't be restored. ${(e as Error).message}`
+          : `Version ${version} couldn't be restored. ${userErrorMessage(e, '')}`
       )
       if (code === 'HELP_VIDEO_VERSION_FILES_REMOVED') void versions.refetch()
     } finally {
@@ -123,7 +124,7 @@ export function VersionsTab({
       {versions.error && (
         <div className='flex items-center gap-2 text-rose-700 dark:text-rose-300' role='alert'>
           <AlertCircle className='h-4 w-4' aria-hidden />
-          <span>The versions couldn't load. {(versions.error as Error).message}</span>
+          <span>The versions couldn't load. {userErrorMessage(versions.error, '')}</span>
           <Button
             size='sm'
             variant='outline'

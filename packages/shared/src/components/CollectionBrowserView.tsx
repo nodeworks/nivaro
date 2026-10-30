@@ -57,7 +57,7 @@ import {
   parseDateFilter
 } from '../lib/date-filter'
 import { errorSentence } from '../lib/error-message'
-import { errorToastOptions } from '../lib/error-toast'
+import { errorToastOptions, toastError } from '../lib/error-toast'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
 import {
   clauseFromCondition,
@@ -4637,7 +4637,7 @@ export function CollectionBrowserView({
       const id = await startDocumentExtraction(autofillApi, files, collection)
       openTarget({ collection, itemId: 'new', layoutSlug: autofillSlug, query: { autofill: id } })
     } catch (err) {
-      toast.error((err as Error).message)
+      toastError(err, 'The document could not be read', { action: 'New from document' })
     } finally {
       setAutofillBusy(false)
     }

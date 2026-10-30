@@ -3030,7 +3030,7 @@ export function InlineTableField({
         )
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } catch (err) {
-        toast.error(`Could not save: ${(err as Error)?.message ?? 'unknown error'}`)
+        toast.error(`Could not save: ${userErrorMessage(err, 'unknown error')}`)
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4940,7 +4940,7 @@ export function InlineTableField({
       setRerunPreview(null)
       setRerunOpen(false)
     } catch (err) {
-      toast.error(`Re-run rules failed: ${(err as Error)?.message ?? 'unknown error'}`)
+      toast.error(`Re-run rules failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setRerunBusy(null)
     }
@@ -5836,7 +5836,7 @@ export function InlineTableField({
       localCreateAtRef.current = Date.now()
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch (err) {
-      toast.error(`Could not add rows: ${(err as Error)?.message ?? 'unknown error'}`)
+      toast.error(`Could not add rows: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
       setBulkAdding(false)
     }
@@ -6568,7 +6568,7 @@ export function InlineTableField({
             qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
             return
           }
-          failed.push(`#${t.key} ${(err as Error)?.message ?? 'failed'}`)
+          failed.push(`#${t.key} ${userErrorMessage(err, 'failed')}`)
         }
       }
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })

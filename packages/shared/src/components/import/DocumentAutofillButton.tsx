@@ -189,7 +189,11 @@ export async function startDocumentExtraction(
     body: form
   })
   const json = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(json?.error || `Document autofill failed (${res.status})`)
+  if (!res.ok)
+    throw Object.assign(new Error(json?.error || 'Document autofill failed'), {
+      status: res.status,
+      response: json
+    })
   const id = String(json?.data?.proposal_id ?? '')
   if (!id) throw new Error('The server did not return a proposal id')
   if (opts.notify) {

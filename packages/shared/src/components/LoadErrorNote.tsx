@@ -1,21 +1,44 @@
 import { AlertTriangle, RotateCw } from 'lucide-react'
+import { plainErrorText } from '../lib/safe-error'
 import { cn } from '../lib/utils'
+import { ErrorNotice } from './ErrorNotice'
 
 /**
  * The degraded state for a widget or panel whose data did not load (#2858): what happened in
  * plain words and a way to try again, instead of a blank box, "No data" or a raw error string.
+ *
+ * Pass the `error` itself (with `what`, "this widget") to get the full reading — what to do,
+ * the one right button (Sign in again, Ask for access…) and "Details for support". A `message`
+ * alone still works; raw text in it ("Request failed with status code 500") is never shown.
  */
 export function LoadErrorNote({
   message,
+  error,
+  what,
   onRetry,
   className,
   centered = false
 }: {
-  message: string
+  message?: string
+  error?: unknown
+  what?: string
   onRetry?: () => void
   className?: string
   centered?: boolean
 }) {
+  if (error !== undefined && error !== null && !message) {
+    return (
+      <ErrorNotice
+        error={error}
+        what={what ?? 'this'}
+        onRetry={onRetry}
+        variant='inline'
+        centered={centered}
+        className={className}
+      />
+    )
+  }
+  const text = plainErrorText(message, 'Couldn’t load this.')
   return (
     <div
       role='status'
@@ -31,7 +54,7 @@ export function LoadErrorNote({
         aria-hidden
       />
       <div className={cn('min-w-0', centered && 'max-w-[240px]')}>
-        <p className='leading-snug [text-wrap:balance]'>{message}</p>
+        <p className='leading-snug [text-wrap:balance]'>{text}</p>
         {onRetry && (
           <button
             type='button'

@@ -12,6 +12,7 @@ import {
 import { Fragment, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import {
   cn,
   formatDate,
@@ -561,7 +562,7 @@ export function AgentsPanel({ className }: { className?: string }) {
       void qc.invalidateQueries({ queryKey: mcpConnectionsKey('mine') })
     },
     onError: (e: unknown) =>
-      setNotice({ tone: 'bad', text: (e as Error)?.message || 'Could not disconnect' })
+      setNotice({ tone: 'bad', text: userErrorMessage(e, 'Could not disconnect') })
   })
 
   const undo = useMutation({
@@ -578,7 +579,7 @@ export function AgentsPanel({ className }: { className?: string }) {
       void qc.invalidateQueries({ queryKey: ['nvr-mcp-activity'] })
     },
     onError: (e: unknown) =>
-      setNotice({ tone: 'bad', text: (e as Error)?.message || 'Could not undo that change' })
+      setNotice({ tone: 'bad', text: userErrorMessage(e, 'Could not undo that change') })
   })
 
   const list = connections.data?.connections ?? []

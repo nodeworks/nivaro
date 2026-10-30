@@ -40,7 +40,8 @@ describe('describeError', () => {
       fields: ['supplier_site'],
       requestId: 'r-9',
       code: 'REQUIRED_VALUE_MISSING',
-      status: 422
+      status: 422,
+      kind: 'validation'
     })
   })
 
@@ -58,17 +59,19 @@ describe('describeError', () => {
   it('an unknown code falls back to the status hint', () => {
     const d = describeError(sdk(409, { error: 'Not now', code: 'BRAND_NEW_CODE' }))
     expect(d.hint).toBe(STATUS_HINTS[409])
+    expect(d.action?.kind).toBe('reload')
     expect(d.code).toBe('BRAND_NEW_CODE')
   })
 
   it('never shows "Request failed with status code 409" or a bare status word', () => {
     const d = describeError(axios(409, ''))
-    expect(d.title).toBe('This changed while you were working on it')
-    expect(d.hint).toBe(STATUS_HINTS[409])
+    expect(d.title).toBe('Someone else changed this')
+    expect(d.hint).toBe('Reload to see their changes, then make yours again.')
+    expect(d.action).toEqual({ kind: 'reload', label: 'Reload' })
     expect(describeError(sdk(403, { error: 'Forbidden' })).title).toBe(
       'You do not have access to do this'
     )
-    expect(userErrorMessage(axios(404, ''))).toBe('That could not be found')
+    expect(userErrorMessage(axios(404, ''))).toBe('This could not be found')
   })
 
   it('axios: the global handler’s {error: status word, message} reads the message; header request id', () => {
@@ -130,7 +133,12 @@ describe('describeError', () => {
     expect(
       describeError(new TypeError("Cannot read properties of null (reading 'id')")).title
     ).toBe(SOMETHING_WENT_WRONG)
-    expect(describeError(undefined, 'Save failed')).toEqual({ title: 'Save failed' })
+    expect(describeError(undefined, 'Save failed')).toEqual({
+      title: 'Save failed',
+      kind: 'unknown',
+      hint: 'Try again. If it keeps happening, ask for help.',
+      action: { kind: 'retry', label: 'Try again' }
+    })
     expect(describeError(new Error('Lines did not save')).title).toBe('Lines did not save')
   })
 

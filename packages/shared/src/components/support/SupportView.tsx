@@ -3,6 +3,7 @@ import { LifeBuoy, Plus, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { type SupportDraft, takeSupportDraft } from '../../lib/error-actions'
 import { useLiveOps } from '../../lib/live-ops'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -53,7 +54,14 @@ export function SupportView({
     setTabState(t)
   }
   const [openId, setOpenId] = useState<number | null>(initialTicketId ?? null)
-  const [raising, setRaising] = useState(false)
+  // An error's "Get help" / "Ask for access" opened this page (?new=1) with a
+  // request prepared: open it filled in with what happened and the reference.
+  const [draft, setDraft] = useState<SupportDraft | null>(() =>
+    typeof window !== 'undefined' && /[?&]new=1\b/.test(window.location.search)
+      ? takeSupportDraft()
+      : null
+  )
+  const [raising, setRaising] = useState(!!draft)
   const [mineStatus, setMineStatus] = useState<'open' | 'closed'>('open')
   const [deskFilter, setDeskFilter] = useState<DeskFilter>('unassigned')
   const [search, setSearch] = useState('')
@@ -288,7 +296,12 @@ export function SupportView({
 
       <SupportRequestDialog
         open={raising}
-        onOpenChange={setRaising}
+        onOpenChange={(o) => {
+          setRaising(o)
+          if (!o) setDraft(null)
+        }}
+        initialTitle={draft?.title}
+        initialDescription={draft?.description}
         onCreated={(t) => {
           setTab('mine')
           setMineStatus('open')

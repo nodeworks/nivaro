@@ -200,6 +200,7 @@ export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDistur
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
+export { ErrorDetails, ErrorNotice } from './components/ErrorNotice'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
@@ -778,16 +779,36 @@ export {
   type StoredDraft,
   saveDraft
 } from './lib/draft-store'
-export { ERROR_HINTS, hintFor, STATUS_HINTS } from './lib/error-hints'
-export type { ErrorDescription } from './lib/error-message'
+export type { ErrorActionHost, SupportDraft } from './lib/error-actions'
 export {
+  goToSignIn,
+  openSupportForError,
+  runErrorAction,
+  saveSupportDraft,
+  setErrorActionHost,
+  supportDraftFor,
+  takeSupportDraft
+} from './lib/error-actions'
+export { ERROR_HINTS, hintFor, STATUS_HINTS } from './lib/error-hints'
+export type {
+  DescribeErrorOptions,
+  ErrorAction,
+  ErrorActionKind,
+  ErrorDescription,
+  ErrorKind
+} from './lib/error-message'
+export {
+  ASK_FOR_HELP_HINT,
   copyErrorDetails,
   describeError,
+  describeLoadError,
   errorDetailsText,
+  errorFieldList,
+  errorFieldName,
   errorSentence,
   rowErrorSentence
 } from './lib/error-message'
-export { errorToastOptions, toastError } from './lib/error-toast'
+export { errorToastOptions, guardErrorToasts, toastError } from './lib/error-toast'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
@@ -1076,9 +1097,12 @@ export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition
 export {
   isBareStatusText,
   isCodeError,
+  isRawErrorText,
+  plainErrorText,
   reportCodeError,
   SOMETHING_WENT_WRONG,
   STATUS_TITLES,
+  statusInText,
   statusTitle,
   userErrorMessage
 } from './lib/safe-error'

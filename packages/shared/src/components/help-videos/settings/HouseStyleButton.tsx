@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Palette } from 'lucide-react'
 import { useEffect, useId, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { SimpleSelect } from '../../ui/SimpleSelect'
@@ -134,7 +135,7 @@ export function HouseStyleButton() {
       setError(
         err?.code === 'HELP_VIDEO_SETTINGS_MIGRATION_PENDING'
           ? 'Not saved: this database needs the update that adds these settings (migration 410).'
-          : `Not saved. ${(e as Error).message}`
+          : `Not saved. ${userErrorMessage(e, '')}`
       )
     } finally {
       setSaving(false)

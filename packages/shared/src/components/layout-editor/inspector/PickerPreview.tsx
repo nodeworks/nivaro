@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get, post } from '../../../lib/commands'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { cn } from '../../../lib/utils'
 import type { CascadeRule } from '../../item-edit/helpers'
 import { extractTemplateFields, renderDisplayTemplate } from '../../pipeline/relations'
@@ -133,7 +134,7 @@ export function PickerPreview({ rules }: { rules: CascadeRule[] }) {
             <p className={effectText}>Working out the options…</p>
           ) : err ? (
             <p className='text-[12px] text-red-700 dark:text-red-300'>
-              {err.message || 'The options could not be worked out.'}
+              {userErrorMessage(err, 'The options could not be worked out.')}
             </p>
           ) : data ? (
             <>

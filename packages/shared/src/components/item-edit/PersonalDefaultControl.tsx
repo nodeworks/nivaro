@@ -1,6 +1,7 @@
 import { Check, Undo2, UserRound, UserRoundPen, UserRoundPlus, UserRoundX } from 'lucide-react'
 import { Fragment, type ReactElement, useInsertionEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { plainErrorText, userErrorMessage } from '../../lib/safe-error'
 import { type PersonalDefaultsApi, usePersonalDefaultsApi } from './usePersonalDefaults'
 
 // The visible personal-default control in a field's label row (spec
@@ -83,7 +84,8 @@ export function refusalText(e: unknown, fallback: string): string {
     error?: string
     message?: string
   }
-  return x?.response?.data?.error ?? x?.data?.error ?? x?.error ?? x?.message ?? fallback
+  const said = x?.response?.data?.error ?? x?.data?.error ?? x?.error
+  return typeof said === 'string' ? plainErrorText(said, fallback) : userErrorMessage(e, fallback)
 }
 
 /** Clears the field's saved default at once; the toast's Undo saves it back exactly.

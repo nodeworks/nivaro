@@ -8,7 +8,7 @@ import { createRoot } from 'react-dom/client'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import './globals.css'
-import { disableRecordOutbox, installStaleChunkRecovery } from '@nivaro/shared'
+import { disableRecordOutbox, guardErrorToasts, installStaleChunkRecovery } from '@nivaro/shared'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
 import { installGlobalErrorReport } from './lib/global-error-report'
@@ -30,6 +30,9 @@ installStaleChunkRecovery({
 })
 // Code errors outside a render (handlers, timers, unawaited promises) reach the issue log too.
 installGlobalErrorReport()
+// No error toast ever shows raw text ("Request failed with status code 500", SQL, a stack):
+// it reads as what it means. Before any screen (or extension) can raise one.
+guardErrorToasts()
 // Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
 // #1048 / #1180 — and which build this tab runs, so old tabs can be counted and reloaded alone.
 installPageContextFetch({

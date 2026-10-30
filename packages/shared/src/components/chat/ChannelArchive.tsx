@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post, put } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
 
@@ -14,7 +15,7 @@ import { Skeleton } from '../ui/skeleton'
  */
 
 function errorText(e: unknown, fallback: string): string {
-  return (e as { response?: { error?: string } })?.response?.error ?? fallback
+  return userErrorMessage(e, fallback)
 }
 
 // ── Owner: the suggestion banner ───────────────────────────────────────────

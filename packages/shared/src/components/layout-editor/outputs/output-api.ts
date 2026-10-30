@@ -1,3 +1,4 @@
+import { statusTitle } from '../../../lib/safe-error'
 import type { HelpSheetRow, UploadedHelpRow } from './help-sheet'
 import type { FileTarget } from './layout-file-plan'
 
@@ -16,14 +17,16 @@ export interface DownloadedFile {
 }
 
 async function failure(resp: Response): Promise<Error> {
-  let message = `Something went wrong (${resp.status})`
+  let message = statusTitle(resp.status) ?? 'Something went wrong'
+  let body: unknown = null
   try {
-    const body = (await resp.json()) as { error?: string }
-    if (body.error) message = body.error
+    body = await resp.json()
+    const said = (body as { error?: string } | null)?.error
+    if (said) message = said
   } catch {
-    /* keep the status line */
+    /* keep the status sentence */
   }
-  return new Error(message)
+  return Object.assign(new Error(message), { status: resp.status, response: body })
 }
 
 function filenameOf(resp: Response, fallback: string): string {
@@ -128,7 +131,7 @@ export async function parseLayoutFile(
       /* keep the status line */
     }
     throw new LayoutFileProblems(
-      body.error ?? `Something went wrong (${resp.status})`,
+      body.error ?? statusTitle(resp.status) ?? 'Something went wrong',
       Array.isArray(body.problems) ? body.problems : []
     )
   }

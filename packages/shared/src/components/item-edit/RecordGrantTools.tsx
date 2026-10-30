@@ -5,6 +5,7 @@ import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { userErrorMessage } from '../../lib/safe-error'
 import { cn, titleCase } from '../../lib/utils'
 import { PICKER_EXCLUSIONS_PAGE_KEY } from '../PickerExcludedRows'
 import { Button } from '../ui/button'
@@ -13,7 +14,7 @@ import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 function errorText(e: unknown, fallback: string): string {
-  return e instanceof Error && e.message ? e.message : fallback
+  return userErrorMessage(e, fallback)
 }
 
 /**

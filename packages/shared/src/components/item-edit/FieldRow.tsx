@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { cn, titleCase } from '../../lib/utils'
 import { GlossaryLabel } from '../ai/GlossaryText'
 import { FieldSourceInfo, useFieldSource } from '../ConfigReadBack'
@@ -789,8 +790,7 @@ export const FieldRow = memo(function FieldRow({
       if (res.data?.missing?.length)
         toast.info(`Filled without ${res.data.missing.join(', ')} (empty or not visible to you)`)
     } catch (err) {
-      const e = err as { response?: { data?: { error?: string } }; message?: string }
-      toast.error(e?.response?.data?.error ?? e?.message ?? 'AI fill failed')
+      toastError(err, 'AI fill failed', { action: 'Fill with AI' })
     } finally {
       setIsGenerating(false)
     }

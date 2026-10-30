@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
+import { toastError } from '../../lib/error-toast'
 import { cn } from '../../lib/utils'
 import { useCcQuery } from './api'
 import { CcSidePanel, slaWords } from './panels/map-shared'
@@ -107,7 +108,7 @@ function PeekBody({ rec, canAct }: { rec: PeekRecord; canAct: boolean }) {
     },
     onError: (err: unknown) => {
       setArmed(null)
-      toast.error((err as { message?: string }).message || 'That move did not go through')
+      toastError(err, 'That move did not go through')
     }
   })
   const sla = slaWords(rec.sla)

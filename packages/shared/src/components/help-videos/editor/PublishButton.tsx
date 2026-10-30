@@ -3,6 +3,7 @@ import { AlertCircle } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
 import { Label } from '../../ui/label'
@@ -94,7 +95,7 @@ export function PublishButton({
       void qc.invalidateQueries({ queryKey: helpVideoKeys.one(video.id) })
       onPublished()
     } catch (e) {
-      setNote(`It couldn't be published. ${(e as Error).message}`)
+      setNote(`It couldn't be published. ${userErrorMessage(e, '')}`)
     } finally {
       setBusy(false)
     }
@@ -107,7 +108,7 @@ export function PublishButton({
       .rerender(video.id)
       .then(() => qc.invalidateQueries({ queryKey: helpVideoKeys.one(video.id) }))
       .catch((e) => {
-        setNote(`The render couldn't start. ${(e as Error).message}`)
+        setNote(`The render couldn't start. ${userErrorMessage(e, '')}`)
         setOpen(true)
       })
   }

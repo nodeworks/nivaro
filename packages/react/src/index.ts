@@ -3,6 +3,7 @@
 // SDK re-exports (types useful in form consumers)
 export type { CascadeFilterRule, FieldDependencyConfig } from '@nivaro/sdk'
 // Expression engine result types (the functions were already exported)
+// Errors a person can act on: what happened, what to do, one button, reference in Details.
 export type {
   ActiveGameday,
   ApiVersionInfo,
@@ -19,9 +20,15 @@ export type {
   ColumnFormatConfig,
   CustomStatus,
   DataTableProps,
+  DescribeErrorOptions,
   DrilldownContextValue,
   DrilldownTarget,
   DrilldownViewOverride,
+  ErrorAction,
+  ErrorActionHost,
+  ErrorActionKind,
+  ErrorDescription,
+  ErrorKind,
   EvaluateOptions,
   ExprNode,
   ExprValue,
@@ -95,6 +102,7 @@ export type {
 // Search text vocabulary (2026-10-28 search program #22): one tokenizer / matcher /
 // highlighter for pickers, palettes and search pages.
 // #3229 shape-matched skeletons · #3230 prefetch on intent · #3231 slow-read reasons
+// #3225 — breadcrumbs that know the path: hosts feed the per-tab trail and draw the crumbs.
 export {
   ACTIVE_GAMEDAYS_KEY,
   ACTIVE_USER_OPTION_FILTER,
@@ -210,6 +218,7 @@ export {
   configureTabSound,
   configureUserSync,
   connectionAllowsPrefetch,
+  copyErrorDetails,
   createGatedClient,
   createLeaderSocket,
   createLiveQueryBridge,
@@ -237,13 +246,18 @@ export {
   defaultItemUrl,
   deriveGroupKey,
   describeCron,
+  describeError,
+  describeLoadError,
   dismissAutofillRun,
+  displayTrail,
   dmPeer,
   dmRoom,
   dotsForRecord,
   EmptyState,
   ErpFailureBanner,
   type ErpSubmission,
+  ErrorDetails,
+  ErrorNotice,
   ErrorSurface,
   EventPathSheet,
   type EventPathSheetProps,
@@ -251,6 +265,8 @@ export {
   effectiveScopeSeedIds,
   encodePrefill,
   endHelpVideoWalk,
+  errorSentence,
+  errorToastOptions,
   evaluateBoolean,
   evaluateExpression,
   evaluateNumeric,
@@ -301,6 +317,7 @@ export {
   getMentionQuery,
   getReplayTail,
   groupActivity,
+  guardErrorToasts,
   guardIdentityCall,
   HelpVideoButton,
   type HelpVideoContext,
@@ -385,6 +402,7 @@ export {
   isCleanRecording,
   isCodeError,
   isListTimeout,
+  isRawErrorText,
   isReloadingForUpdate,
   isSignedOut,
   isSignedOutError,
@@ -462,6 +480,7 @@ export {
   openChatRoom,
   openClientChaosToolbar,
   openDmWith,
+  openSupportForError,
   PageRenderer,
   PartnerDependenciesPanel,
   PartnerDetail,
@@ -494,12 +513,14 @@ export {
   PushReadinessChip,
   pageAtPayload,
   parseExpression,
+  plainErrorText,
   playNotificationSound,
   precisionOf,
   prefetchCollectionList,
   prefetchRecord,
   prepareReplayClip,
   QualityRulesView,
+  QueryErrorState,
   QueryStatStrip,
   QueryTable,
   QueryWidgetBody,
@@ -551,6 +572,7 @@ export {
   RowPresence,
   rankSignals,
   rankTeamForFilters,
+  recordNavigation,
   recordQueryKeys,
   registerCatalogItemOpener,
   registerDmOpener,
@@ -579,6 +601,7 @@ export {
   rowPresenceKey,
   rumRouteChange,
   rumWidget,
+  runErrorAction,
   runNotificationTarget,
   SearchHighlight,
   type SearchTextOptions,
@@ -614,12 +637,14 @@ export {
   seedQuickPickerSteps,
   serverNow,
   setDisplayTimezone,
+  setErrorActionHost,
   setFiscalStartMonth,
   setFormulaConstants,
   setNumberFormat,
   setRecordingSelf,
   setServerClockOffset,
   setTimeDisplay,
+  setTrailLabel,
   sharedWorkerSupported,
   shouldUseWorkerSocket,
   signalSentence,
@@ -653,9 +678,11 @@ export {
   type TuningSummary,
   tapReplaySocket,
   titleCase,
+  toastError,
   tokenize,
   toneForOutcome,
   trackActivity,
+  trailChain,
   translateScopeValues,
   UserAvatar,
   UserChip,
@@ -721,6 +748,7 @@ export {
   useMarkRoomRead,
   useMyScopes,
   useNavigation,
+  useNavTrail,
   useNotificationSoundPreference,
   useOnlineUsers,
   useOpenRoomRegistration,
@@ -777,14 +805,6 @@ export {
   withClipKind,
   withGetCoalescing,
   workerSocketPreference
-} from '@nivaro/shared'
-// #3225 — breadcrumbs that know the path: hosts feed the per-tab trail and draw the crumbs.
-export {
-  displayTrail,
-  recordNavigation,
-  setTrailLabel,
-  trailChain,
-  useNavTrail
 } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'

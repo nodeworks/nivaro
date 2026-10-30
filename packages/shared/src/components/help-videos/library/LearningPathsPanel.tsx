@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
@@ -179,7 +180,7 @@ function PathEditor({
       toast.success(path ? `"${title}" saved` : `"${title}" created`)
       onSaved(saved)
     } catch (e) {
-      setProblem(`The path could not be saved. ${(e as Error).message}`)
+      setProblem(`The path could not be saved. ${userErrorMessage(e, '')}`)
     } finally {
       setBusy(false)
     }
@@ -194,7 +195,7 @@ function PathEditor({
       toast.success(`"${path.title}" deleted`)
       onSaved(null)
     } catch (e) {
-      setProblem(`The path could not be deleted. ${(e as Error).message}`)
+      setProblem(`The path could not be deleted. ${userErrorMessage(e, '')}`)
       setBusy(false)
     }
   }

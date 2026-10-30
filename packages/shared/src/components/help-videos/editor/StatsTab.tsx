@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, CornerDownRight, RotateCw, ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useId, useState } from 'react'
 import { useNivaroClient } from '../../../context'
+import { userErrorMessage } from '../../../lib/safe-error'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
 import { Skeleton } from '../../ui/skeleton'
@@ -43,7 +44,7 @@ export function StatsTab({
         role='alert'
       >
         <AlertCircle className='h-4 w-4' aria-hidden />
-        <span>The stats couldn't load. {(q.error as Error).message}</span>
+        <span>The stats couldn't load. {userErrorMessage(q.error, '')}</span>
         <Button size='sm' variant='outline' className='h-7' onClick={() => void q.refetch()}>
           <RotateCw className='!size-3.5' /> Try again
         </Button>
@@ -204,7 +205,7 @@ function QuestionRow({
       setText('')
       void qc.invalidateQueries({ queryKey: ['help-videos', 'analytics', video.id] })
     },
-    onError: (err) => setNote((err as Error).message || 'The answer was not saved.')
+    onError: (err) => setNote(userErrorMessage(err, 'The answer was not saved.'))
   })
   return (
     <li

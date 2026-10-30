@@ -2,6 +2,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { plainErrorText } from '../../../lib/safe-error'
 import { renderDisplayTemplate, USER_SYSTEM_COLS, userDisplayLabel } from '../../pipeline/relations'
 import { collectionMetaKey, useCollectionBody } from '../collection-meta'
 import { type ChoiceLabels, choiceLabelsFrom, type DescribeField } from './describe-conditions'
@@ -152,7 +153,7 @@ export function apiFailure(err: unknown, fallback: string): ApiFailure {
   const references = Array.isArray(body?.references)
     ? (body.references as OverviewReference[]).filter((r) => r && typeof r.label === 'string')
     : []
-  return { status, message, references }
+  return { status, message: plainErrorText(message, fallback, status), references }
 }
 
 /**
