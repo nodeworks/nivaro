@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { hasFieldCommentColumns, recordCommentsOnly } from '../services/field-comments.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 
 /**
@@ -69,6 +70,7 @@ export async function timelineRoutes(app: FastifyInstance) {
       db('nivaro_comments')
         .where({ collection, item })
         .whereNull('deleted_at')
+        .modify(recordCommentsOnly(await hasFieldCommentColumns()))
         .orderBy('created_at', 'desc')
         .limit(CAP)
         .select('id', 'user', 'text', 'created_at'),

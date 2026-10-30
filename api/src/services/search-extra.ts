@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
 import { stripHtmlToText } from './latest-comment.js'
 import { safeRecordLabel } from './record-label-fallback.js'
@@ -115,6 +116,7 @@ export interface ExtraDeps {
 async function commentRows(phrase: string, cap: number): Promise<TextRow[]> {
   const rows = (await db('nivaro_comments')
     .whereNull('deleted_at')
+    .modify(recordCommentsOnly(await hasFieldCommentColumns()))
     .whereRaw(`[text] ${LIKE}`, [likeOf(phrase)])
     .whereRaw(`[collection] not like 'nivaro\\_%' escape '\\'`)
     .whereRaw(`[collection] not like 'directus\\_%' escape '\\'`)

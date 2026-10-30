@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { hasFieldCommentColumns, recordCommentsOnly } from '../services/field-comments.js'
 import { loadFormLayout } from '../services/form-layout.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { htmlToPdf } from '../services/pdf-layout.js'
@@ -103,6 +104,7 @@ export async function dossierRoutes(app: FastifyInstance) {
         db('nivaro_comments')
           .where({ collection, item: id })
           .whereNull('deleted_at')
+          .modify(recordCommentsOnly(await hasFieldCommentColumns()))
           .orderBy('created_at', 'asc')
           .limit(30)
           .select('user', 'text', 'created_at')

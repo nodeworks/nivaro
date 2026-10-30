@@ -66,6 +66,10 @@ vi.mock('../../../db/index.js', () => {
       'insert'
     ])
       b[m] = () => b
+    b.modify = (fn: (q: unknown) => void) => {
+      fn(b)
+      return b
+    }
     b.first = async () => rows()[0]
     // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
     b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>

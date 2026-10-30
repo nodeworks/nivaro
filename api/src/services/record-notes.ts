@@ -16,6 +16,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
+import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { accountKindOf } from './machine-accounts.js'
 import { originOfRow } from './note-authorship.js'
 
@@ -489,6 +490,7 @@ export async function loadRecordNotes(
       const rows = (await db('nivaro_comments')
         .where({ collection: cc.collection })
         .whereNull('deleted_at')
+        .modify(recordCommentsOnly(await hasFieldCommentColumns()))
         .whereIn('item', [...labelByChildId.keys()])
         .orderBy('created_at', 'desc')
         .limit(CAP)
