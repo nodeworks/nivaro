@@ -109,6 +109,7 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
+import { BINARY_COLLATION, textKindOf } from './search-like.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -4071,6 +4072,53 @@ export async function resolveFilterPath(
   return null
 }
 
+/** A searched list's matching rows, as its count query would count them. */
+export interface SearchProbe {
+  /** Distinct primary keys of every matching row. */
+  ids: unknown[]
+  /** What COUNT(*) over the same query answers. */
+  n: number
+}
+
+/** Matches up to which a searched list reads its page by key and skips COUNT(*)
+ *  (past ~50 ids they ride one OPENJSON parameter: one plan, no 2100-parameter cap). */
+export const SEARCH_PROBE_CAP = 5000
+
+/** The probe's verdict on the rows it read (`cap + 1` at most): null = too many. */
+export function searchProbeOutcome(
+  rows: Array<{ id: unknown }>,
+  cap = SEARCH_PROBE_CAP
+): SearchProbe | null {
+  if (rows.length > cap) return null
+  return { ids: [...new Set(rows.map((r) => r.id))], n: rows.length }
+}
+
+/** The count query (every gate, filter and the search) asked for ids instead. Exported for tests. */
+export function searchProbeQuery(
+  countQ: Knex.QueryBuilder,
+  collection: string,
+  cap = SEARCH_PROBE_CAP
+) {
+  return countQ
+    .clone()
+    .clearSelect()
+    .select(`${collection}.id as id`)
+    .limit(cap + 1)
+}
+
+/** The page restricted to the probe's keys. Exported for tests. */
+export function searchProbePage(qb: Knex.QueryBuilder, column: string, ids: unknown[]) {
+  if (ids.length < 50 || !isMssql()) return qb.whereIn(column, ids as never[])
+  return qb.whereRaw('?? IN (SELECT [value] FROM OPENJSON(?))', [
+    column,
+    JSON.stringify(ids.filter((v) => v != null).map(String))
+  ])
+}
+
+async function probeSearchMatches(countQ: Knex.QueryBuilder, collection: string) {
+  return searchProbeOutcome((await searchProbeQuery(countQ, collection)) as Array<{ id: unknown }>)
+}
+
 export async function readItems(
   user: User,
   collection: string,
@@ -4399,6 +4447,13 @@ export async function readItems(
           for (const f of searchCols) {
             if (narrow && NON_UNICODE_TYPES.has(columnTypes.get(f) ?? ''))
               w.orWhereRaw('?? LIKE CAST(? AS varchar(4000))', [f, pattern])
+            // An nvarchar column scans ~3x faster upper-cased in a binary collation,
+            // and for a printable-ASCII pattern finds the same rows (services/search-like.ts).
+            else if (narrow && textKindOf(columnTypes.get(f)) === 'unicode')
+              w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [
+                f,
+                pattern.toUpperCase()
+              ])
             else w.orWhere(db.raw('??', [f]), 'like', pattern)
           }
         }
@@ -4542,39 +4597,70 @@ export async function readItems(
     const plan = countSql ? listTotalPlan(countSql, user?.id, keyset?.values != null) : null
     const epoch = plan?.store ? readEpoch(collection) : ''
     const cachedTotal = plan?.reuse ? getCachedTotal(collection, plan.statement) : null
+    // A searched list's page and its COUNT(*) are two scans of the same rows (a
+    // contains-LIKE seeks nothing): ask once for the matching ids instead. Up to
+    // SEARCH_PROBE_CAP of them the count IS that number and the page reads only
+    // those rows by key; past it, page and count run as before.
+    let probe: SearchProbe | null = null
+    if (search && !skipCount && cachedTotal == null) {
+      try {
+        probe = await span('search-probe', () => probeSearchMatches(countQ, collection))
+      } catch (err) {
+        if (isStatementTimeout(err)) throw new ListTimeoutError(true)
+        probe = null // anything else: the two-statement path below
+      }
+      if (probe && plan?.store) putCachedTotal(collection, plan.statement, probe.n, epoch)
+    }
     const countPromise: Promise<number | null> = skipCount
       ? Promise.resolve(null)
       : cachedTotal != null
         ? Promise.resolve(cachedTotal)
-        : (async () => {
-            // An unfiltered list of a big table: the row count SQL Server keeps per partition.
-            const estimate =
-              plan?.selfContained && countSql && isUngatedCount(collection, countSql)
-                ? await partitionRowCount(collection)
-                : null
-            if (estimate != null && plan) {
-              totalApprox = true
-              putCachedTotal(collection, plan.statement, estimate, epoch)
-              return estimate
-            }
-            let counted: Array<{ count: string | number }>
-            try {
-              counted = (await countQ) as Array<{ count: string | number }>
-            } catch (err) {
-              // A count that outlived the statement timeout costs the total, not the page.
-              if (!isStatementTimeout(err)) throw err
-              totalTimedOut = true
-              return null
-            }
-            const n = Number(counted[0]?.count)
-            if (plan?.store) putCachedTotal(collection, plan.statement, n, epoch)
-            return n
-          })()
+        : probe
+          ? Promise.resolve(probe.n)
+          : (async () => {
+              // An unfiltered list of a big table: the row count SQL Server keeps per partition.
+              const estimate =
+                plan?.selfContained && countSql && isUngatedCount(collection, countSql)
+                  ? await partitionRowCount(collection)
+                  : null
+              if (estimate != null && plan) {
+                totalApprox = true
+                putCachedTotal(collection, plan.statement, estimate, epoch)
+                return estimate
+              }
+              let counted: Array<{ count: string | number }>
+              try {
+                counted = (await countQ) as Array<{ count: string | number }>
+              } catch (err) {
+                // A count that outlived the statement timeout costs the total, not the page.
+                if (!isStatementTimeout(err)) throw err
+                totalTimedOut = true
+                return null
+              }
+              const n = Number(counted[0]?.count)
+              if (plan?.store) putCachedTotal(collection, plan.statement, n, epoch)
+              return n
+            })()
     if (cachedTotal != null) totalApprox = true
+    const matched = probe?.ids
+    const pageQ: Promise<unknown> | QB = matched
+      ? matched.length
+        ? (async () => {
+            try {
+              return await searchProbePage(q.clone(), `${collection}.id`, matched)
+            } catch (err) {
+              // The key list cannot be read (OPENJSON needs compatibility level 130):
+              // the page as it always ran — same rows, one more scan.
+              if (isStatementTimeout(err)) throw err
+              return await q
+            }
+          })()
+        : Promise.resolve([])
+      : q
     let settled: [unknown, number | null, unknown]
     try {
       settled = await span('query+count', () =>
-        Promise.all([q, countPromise, sumQ ?? Promise.resolve(null)])
+        Promise.all([pageQ, countPromise, sumQ ?? Promise.resolve(null)])
       )
     } catch (err) {
       // A list read the database gave up on used to come back as a 500 with the

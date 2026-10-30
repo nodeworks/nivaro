@@ -17547,6 +17547,14 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
 // back as data.exact (exact: true) and first in records. Scoped, the record id too.
 GET /api/global-search?q=AB26-77260
 
+// Time budget: every part of the answer (each big collection, the exact-id pass, people,
+// meaning matches, comments, files…) runs side by side under one budget (1.8 s,
+// SEARCH_BUDGET_MS). A part still running at the deadline is stopped and left out; the
+// answer then names it in "partial" (collection names, "small tables", or people /
+// semantic / comments / files / videos / docs / chat / config). An exact id found through
+// an index ends the wait 0.3 s later — the remaining scans are cut. No "partial" = complete.
+// "partial": ["line_items", "comments"]
+
 // Typo tolerance: when fewer than 3 results matched, a near-spelling pass over name
 // columns (tables up to 200k rows) adds hits below every real match; suggestions then
 // lists the closest names ("did you mean").

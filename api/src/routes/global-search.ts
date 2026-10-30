@@ -10,8 +10,16 @@ import { withReadGate } from '../services/read-gate.js'
 import { fallbackDisplayRef, recordDisplayRefs } from '../services/record-display-ref.js'
 import { safeRecordLabel } from '../services/record-label-fallback.js'
 import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
+import { SearchBudget } from '../services/search-budget.js'
 import { labelSearchFieldsOf } from '../services/search-fields.js'
 import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
+import {
+  fastLike,
+  onMssql,
+  type TextKind,
+  textKindOf,
+  typedEquals
+} from '../services/search-like.js'
 import { buildSearchPreview } from '../services/search-preview.js'
 import {
   type FieldMeta,
@@ -167,6 +175,11 @@ interface PlanEntry {
   /** false: over ROW_BUDGET or no text columns — never scanned, but still a scope
    *  target (filters through the items service, `id` equality). */
   textSearchable: boolean
+  /** Each string column's text kind (nvarchar vs varchar) — how its LIKE is bound
+   *  (services/search-like.ts). Missing = plain LIKE. */
+  kinds?: Record<string, TextKind>
+  /** Columns that lead an index: an exact id there is a seek. */
+  indexed?: string[]
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -197,6 +210,29 @@ export function parseLabelSearchFields(browserConfig: unknown): string[] {
   return [...new Set(names)].slice(0, MAX_LABEL_SEARCH)
 }
 
+/** Each table's columns that lead an (unfiltered, enabled) index. Empty off SQL Server. */
+async function indexLeads(): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>()
+  try {
+    const rows = (await db.raw(`
+      select t.name as table_name, c.name as column_name
+      from sys.index_columns ic
+      join sys.indexes i on i.object_id = ic.object_id and i.index_id = ic.index_id
+      join sys.tables t on t.object_id = ic.object_id
+      join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id
+      where ic.key_ordinal = 1 and i.is_disabled = 0 and i.has_filter = 0
+    `)) as Array<{ table_name: string; column_name: string }>
+    for (const r of rows ?? []) {
+      const set = out.get(r.table_name) ?? new Set<string>()
+      set.add(r.column_name)
+      out.set(r.table_name, set)
+    }
+  } catch {
+    /* other dialects: no seeks claimed */
+  }
+  return out
+}
+
 // One plan per tenant: in cloud mode one process serves many tenant databases.
 const planCacheOf = tenantState(() => ({ value: null as { at: number; plan: PlanEntry[] } | null }))
 
@@ -204,47 +240,50 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
   const planCache = planCacheOf().value
   if (planCache && Date.now() - planCache.at < 60_000) return planCache.plan
 
-  const [collections, stringCols, numericCols, relations, idTables, rowCounts] = await Promise.all([
-    db('nivaro_collections')
-      .whereNot('collection', 'like', 'nivaro\\_%')
-      .whereNot('collection', 'like', 'directus\\_%')
-      .where((qb) => void qb.where('is_virtual', 0).orWhereNull('is_virtual'))
-      .select('collection', 'display_name', 'display_template', 'browser_config') as Promise<
-      Array<{
-        collection: string
-        display_name: string | null
-        display_template: string | null
-        browser_config: unknown
-      }>
-    >,
-    db.raw(`
-      select table_name, column_name from information_schema.columns
+  const [collections, stringCols, numericCols, relations, idTables, rowCounts, leads] =
+    await Promise.all([
+      db('nivaro_collections')
+        .whereNot('collection', 'like', 'nivaro\\_%')
+        .whereNot('collection', 'like', 'directus\\_%')
+        .where((qb) => void qb.where('is_virtual', 0).orWhereNull('is_virtual'))
+        .select('collection', 'display_name', 'display_template', 'browser_config') as Promise<
+        Array<{
+          collection: string
+          display_name: string | null
+          display_template: string | null
+          browser_config: unknown
+        }>
+      >,
+      db.raw(`
+      select table_name, column_name, data_type from information_schema.columns
       where data_type in ('nvarchar', 'varchar', 'char', 'nchar')
         and (character_maximum_length between 1 and 2000 or character_maximum_length = -1)
-    `) as Promise<Array<{ table_name: string; column_name: string }>>,
-    // Quoted numbers stored as numbers (po_number int) — name-filtered in JS.
-    db.raw(`
+    `) as Promise<Array<{ table_name: string; column_name: string; data_type: string }>>,
+      // Quoted numbers stored as numbers (po_number int) — name-filtered in JS.
+      db.raw(`
       select table_name, column_name from information_schema.columns
       where data_type in ('int', 'bigint', 'numeric', 'decimal')
         and (column_name like '%number' or column_name like '%[_]num' or column_name like '%[_]no')
     `) as Promise<Array<{ table_name: string; column_name: string }>>,
-    // Junction collections carry no human labels — searching them is noise.
-    db('nivaro_relations').whereNotNull('junction_field').select('many_collection') as Promise<
-      Array<{ many_collection: string }>
-    >,
-    // Registry junk exists (sysdiagrams made it into nivaro_collections) —
-    // every union arm selects `id`, so a table without one breaks the batch.
-    db.raw(`select table_name from information_schema.columns where column_name = 'id'`) as Promise<
-      Array<{ table_name: string }>
-    >,
-    // Row counts from partition stats — one query for every table (the
-    // config-diff inventory precedent; serial COUNT(*)s took seconds).
-    db.raw(`
+      // Junction collections carry no human labels — searching them is noise.
+      db('nivaro_relations').whereNotNull('junction_field').select('many_collection') as Promise<
+        Array<{ many_collection: string }>
+      >,
+      // Registry junk exists (sysdiagrams made it into nivaro_collections) —
+      // every union arm selects `id`, so a table without one breaks the batch.
+      db.raw(
+        `select table_name from information_schema.columns where column_name = 'id'`
+      ) as Promise<Array<{ table_name: string }>>,
+      // Row counts from partition stats — one query for every table (the
+      // config-diff inventory precedent; serial COUNT(*)s took seconds).
+      db.raw(`
       select tb.name as table_name, sum(p.rows) as row_count
       from sys.partitions p join sys.tables tb on tb.object_id = p.object_id
       where p.index_id in (0, 1) group by tb.name
-    `) as Promise<Array<{ table_name: string; row_count: number | string }>>
-  ])
+    `) as Promise<Array<{ table_name: string; row_count: number | string }>>,
+      // Columns leading an index (an exact id there is a seek, not a scan).
+      indexLeads()
+    ])
 
   const junctions = new Set(relations.map((r) => r.many_collection))
   const hasId = new Set(idTables.map((t) => t.table_name))
@@ -260,6 +299,9 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
   }
   const colsByTable = group(stringCols)
   const numsByTable = group(numericCols)
+  const kindOf = new Map(
+    stringCols.map((c) => [`${c.table_name}.${c.column_name}`, textKindOf(c.data_type)])
+  )
 
   const plan: PlanEntry[] = []
   for (const col of collections) {
@@ -295,6 +337,8 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       .sort()
       .slice(0, MAX_NUM_ID_COLS)
     const textSearchable = rows <= ROW_BUDGET && columns.length > 0
+    const kinds: Record<string, TextKind> = {}
+    for (const c of available) kinds[c] = kindOf.get(`${col.collection}.${c}`) ?? 'other'
     plan.push({
       collection: col.collection,
       display_name: col.display_name,
@@ -305,25 +349,25 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       numIdColumns: rows <= ROW_BUDGET ? numIdColumns : [],
       template: col.display_template,
       rows,
-      textSearchable
+      textSearchable,
+      kinds,
+      indexed: [...(leads.get(col.collection) ?? [])]
     })
   }
   planCacheOf().value = { at: Date.now(), plan }
   return plan
 }
 
-const SEARCH_BATCHES = 4
+/** Statements one search runs at a time (the rest queue for a slot). */
+const SEARCH_CONCURRENCY = 4
+/** A search's time budget: parts still running past it are cut and named in
+ *  `partial`. SEARCH_BUDGET_MS overrides it (300 ms – 15 s). */
+const DEFAULT_SEARCH_BUDGET_MS = 1_800
 
-/** Split the plan into `n` batches of about equal total rows (largest first,
- *  each into the lightest batch so far). Empty batches are dropped. */
-export function balanceByRows<T extends { rows: number }>(plan: T[], n: number): T[][] {
-  const bins = Array.from({ length: Math.max(1, n) }, () => ({ rows: 0, items: [] as T[] }))
-  for (const p of [...plan].sort((a, b) => b.rows - a.rows)) {
-    const bin = bins.reduce((lo, b) => (b.rows < lo.rows ? b : lo))
-    bin.items.push(p)
-    bin.rows += p.rows
-  }
-  return bins.map((b) => b.items).filter((items) => items.length > 0)
+export function searchBudgetMs(env: string | undefined = process.env.SEARCH_BUDGET_MS): number {
+  const n = Number(env)
+  if (!env || !Number.isFinite(n)) return DEFAULT_SEARCH_BUDGET_MS
+  return Math.min(15_000, Math.max(300, Math.floor(n)))
 }
 
 function escapeLike(v: string): string {
@@ -536,23 +580,127 @@ function groupCandidates(rows: Array<{ c: string; id: string }>, cap: number) {
   return by
 }
 
-/** Run batched raw candidate statements side by side; a failed batch drops the plan cache. */
-async function runBatches(
-  stmts: Array<{ sql: string; bindings: unknown[] }>
-): Promise<Array<{ c: string; id: string }>> {
-  let rows: Array<{ c: string; id: string }> = []
-  const settled = await Promise.allSettled(
-    stmts.map((s) => db.raw(s.sql, s.bindings as never) as Promise<typeof rows>)
-  )
-  for (const r of settled) {
-    if (r.status === 'fulfilled') rows = rows.concat(r.value)
-    else planCacheOf().value = null // stale plan (dropped table/column) — rebuild next request
+/** Tables below this many rows are searched together in one statement. */
+const SMALL_TABLE_ROWS = 20_000
+/** Bindings per batched statement (SQL Server takes ~2100). */
+const MAX_BATCH_BINDINGS = 1800
+
+interface Arm {
+  collection: string
+  rows: number
+  sql: string
+  bindings: unknown[]
+}
+
+const kindOfCol = (p: Pick<PlanEntry, 'kinds'>, c: string): TextKind => p.kinds?.[c] ?? 'other'
+
+/**
+ * One collection's arm of the text pass: TOP n ids where a search column contains the
+ * phrase (or, with synonyms, any `nvr_syn` form), best matches first. Plain phrases
+ * bind each column's LIKE in its cheap form (services/search-like.ts). Exported for tests.
+ */
+export function textArm(
+  p: Pick<PlanEntry, 'collection' | 'kinds'>,
+  cols: string[],
+  q: string,
+  likes: string[],
+  ft: { cols: string[]; cond: { sql: string; bindings: string[] } } | null,
+  perCollection: number,
+  mssql = onMssql()
+): { sql: string; bindings: unknown[] } {
+  const bindings: unknown[] = []
+  let wheres: string
+  if (likes.length > 1) {
+    wheres = `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
+  } else {
+    const likeCols = ft ? cols.filter((c) => !ft.cols.includes(c)) : cols
+    const parts: string[] = []
+    if (ft) {
+      parts.push(ft.cond.sql)
+      bindings.push(...ft.cond.bindings)
+    }
+    for (const c of likeCols) {
+      const l = fastLike(`[${c}]`, likes[0], kindOfCol(p, c), { escape: '\\', mssql })
+      parts.push(l.sql)
+      bindings.push(...l.bindings)
+    }
+    wheres = parts.join(' OR ')
   }
-  return rows
+  // Best matches first within each collection (army 2026-10-25: an exact
+  // name came back nowhere because TOP took an arbitrary five): a column
+  // equal to the phrase, then one starting with it, then the newest.
+  const eq = cols.map((c) => typedEquals(`[${c}]`, q, kindOfCol(p, c), { indexed: false, mssql }))
+  const pre = cols.map((c) =>
+    fastLike(`[${c}]`, `${escapeLike(q)}%`, kindOfCol(p, c), { escape: '\\', mssql })
+  )
+  const rank = `CASE WHEN ${eq.map((e) => e.sql).join(' OR ')} THEN 0 WHEN ${pre.map((e) => e.sql).join(' OR ')} THEN 1 ELSE 2 END`
+  for (const e of [...eq, ...pre]) bindings.push(...e.bindings)
+  return {
+    sql: `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`,
+    bindings
+  }
+}
+
+/** Group arms into statements: each big table alone, the small ones packed together
+ *  (within the binding cap). Exported for tests. */
+export function packArms<A extends { rows: number; bindings: unknown[] }>(
+  arms: A[],
+  reserved = 0
+): A[][] {
+  const out: A[][] = []
+  let small: A[] = []
+  let used = reserved
+  for (const a of [...arms].sort((x, y) => y.rows - x.rows)) {
+    if (a.rows >= SMALL_TABLE_ROWS) {
+      out.push([a])
+      continue
+    }
+    if (small.length && used + a.bindings.length > MAX_BATCH_BINDINGS) {
+      out.push(small)
+      small = []
+      used = reserved
+    }
+    small.push(a)
+    used += a.bindings.length
+  }
+  if (small.length) out.push(small)
+  return out
+}
+
+/**
+ * Run arms under the search's budget: one statement per group (packArms), at most the
+ * budget's concurrency at a time, each cancelled on the server at the deadline. A
+ * group that fails (a stale plan: dropped table or column) drops the plan cache; one
+ * that runs out of time is recorded in the budget (`timedOut`) under its collections.
+ */
+async function runArms(
+  budget: SearchBudget,
+  arms: Arm[],
+  prefix: { sql: string; bindings: unknown[] } | null = null
+): Promise<Array<{ c: string; id: string }>> {
+  const groups = packArms(arms, prefix?.bindings.length ?? 0)
+  const results = await Promise.all(
+    groups.map((g) => {
+      // `partial` names a big table; the small ones together are one entry.
+      const label = g.length === 1 ? g[0].collection : 'small tables'
+      const sql = (prefix?.sql ?? '') + g.map((a) => a.sql).join(' UNION ALL ')
+      const bindings = [...(prefix?.bindings ?? []), ...g.flatMap((a) => a.bindings)]
+      return budget
+        .run(label, [] as Array<{ c: string; id: string }>, () =>
+          budget.query<{ c: string; id: string }>(sql, bindings)
+        )
+        .catch(() => {
+          planCacheOf().value = null // stale plan — rebuild next request
+          return [] as Array<{ c: string; id: string }>
+        })
+    })
+  )
+  return results.flat()
 }
 
 interface SearchCtx {
   user: User
+  budget: SearchBudget
   labelsOnly: boolean
   allowed: Map<string, string[] | null>
   labelOf: LabelOf
@@ -591,46 +739,25 @@ async function searchUnion(
       })
     )
   }
-  const statement = (batch: PlanEntry[]) => {
-    const parts: string[] = []
-    const bindings: string[] = []
-    for (const p of batch) {
-      const cols = colsOf(p)
-      const ft = fts.get(p.collection)
-      const likeCols = ft ? cols.filter((c) => !ft.cols.includes(c)) : cols
-      const wheres =
-        likes.length > 1
-          ? `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
-          : [
-              ...(ft ? [ft.cond.sql] : []),
-              ...likeCols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`)
-            ].join(' OR ')
-      // Best matches first within each collection (army 2026-10-25: an exact
-      // name came back nowhere because TOP took an arbitrary five): a column
-      // equal to the phrase, then one starting with it, then the newest.
-      const rank = `CASE WHEN ${cols.map((c) => `[${c}] = ?`).join(' OR ')} THEN 0 WHEN ${cols.map((c) => `[${c}] LIKE ? ESCAPE '\\'`).join(' OR ')} THEN 1 ELSE 2 END`
-      parts.push(
-        `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`
-      )
-      if (likes.length === 1) {
-        if (ft) bindings.push(...ft.cond.bindings)
-        bindings.push(...likeCols.map(() => likes[0]))
-      }
-      bindings.push(...cols.map(() => q), ...cols.map(() => `${escapeLike(q)}%`))
+  const prefix =
+    likes.length > 1
+      ? {
+          sql: `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `,
+          bindings: likes
+        }
+      : null
+  const arms = plan.map((p) => {
+    const ft = fts.get(p.collection)
+    return {
+      collection: p.collection,
+      rows: p.rows,
+      ...textArm(p, colsOf(p), q, likes, ft ?? null, perCollection)
     }
-    const cte =
-      likes.length > 1
-        ? `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `
-        : ''
-    if (cte) bindings.unshift(...likes)
-    return { sql: cte + parts.join(' UNION ALL '), bindings }
-  }
-
-  // The arms of one UNION run one after another (~2.5 s on EFP: workflows,
-  // units and the two line tables are 0.4–0.6 s each), so they go out as a few
-  // row-balanced statements side by side instead — the answer waits for the
-  // slowest batch, and a search holds at most SEARCH_BATCHES connections.
-  const candidatesRows = await runBatches(balanceByRows(plan, SEARCH_BATCHES).map(statement))
+  })
+  // Every big table is its own statement with its own share of the search's time
+  // budget (a scan that runs past it is cancelled and answers nothing — the answer
+  // says which); the small tables go together in one statement.
+  const candidatesRows = await runArms(ctx.budget, arms, prefix)
   const rows = await confirmRows(ctx.user, groupCandidates(candidatesRows, perCollection))
 
   const planByName = new Map(plan.map((p) => [p.collection, p]))
@@ -657,30 +784,73 @@ async function searchUnion(
   return out
 }
 
+/** After an exact id hit, how long the other scans may still add to the answer. */
+const EXACT_GRACE_MS = 300
+
+interface ExactSpec {
+  collection: string
+  cols: string[]
+  nums: string[]
+  kinds?: Record<string, TextKind>
+  /** true: every column leads an index (the arm is a seek); false: a scan. */
+  indexed?: boolean
+}
+
 /**
  * Exact-id pass (item 1): an id-ish query equal to a business-id column of a
  * collection (string `*_id` / `*_number`, numeric `*_number` for digits), or —
  * scoped — the record's own `id`. Readable columns only; every candidate is
- * re-read as the caller and must still show that exact value. Exported for tests
- * of the statement shape via `exactStatement`.
+ * re-read as the caller and must still show that exact value. Each value is bound
+ * in its column's own type (a varchar column compared with an nvarchar value is
+ * converted row by row and its index never sought). Exported for tests.
  */
 export function exactStatement(
-  batch: Array<{ collection: string; cols: string[]; nums: string[] }>,
-  q: string
+  batch: ExactSpec[],
+  q: string,
+  mssql = onMssql()
 ): { sql: string; bindings: unknown[] } | null {
   const parts: string[] = []
   const bindings: unknown[] = []
   const digits = /^\d{1,15}$/.test(q)
   for (const b of batch) {
     const nums = digits ? b.nums : []
-    const preds = [...b.cols.map((c) => `[${c}] = ?`), ...nums.map((c) => `[${c}] = ?`)]
-    if (preds.length === 0) continue
-    parts.push(
-      `SELECT * FROM (SELECT TOP 2 '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${preds.join(' OR ')}) AS [x_${b.collection}]`
+    const preds = b.cols.map((c) =>
+      typedEquals(`[${c}]`, q, b.kinds?.[c] ?? 'other', { indexed: b.indexed !== false, mssql })
     )
-    bindings.push(...b.cols.map(() => q), ...nums.map(() => Number(q)))
+    if (preds.length + nums.length === 0) continue
+    const where = [...preds.map((p) => p.sql), ...nums.map((c) => `[${c}] = ?`)].join(' OR ')
+    parts.push(
+      `SELECT * FROM (SELECT TOP 2 '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}) AS [x_${b.collection}]`
+    )
+    bindings.push(...preds.flatMap((p) => p.bindings), ...nums.map(() => Number(q)))
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
+}
+
+/** Split each collection's exact columns into the ones an index leads (one seek
+ *  statement for the whole search) and the rest (scans, budgeted per table).
+ *  Exported for tests. */
+export function splitExactSpecs(
+  specs: Array<ExactSpec & { rows: number; indexedCols: string[] }>,
+  q: string
+): { seek: ExactSpec[]; scan: Array<ExactSpec & { rows: number }> } {
+  const digits = /^\d{1,15}$/.test(q)
+  const seek: ExactSpec[] = []
+  const scan: Array<ExactSpec & { rows: number }> = []
+  for (const s of specs) {
+    const idx = new Set(s.indexedCols)
+    const pick = (list: string[], indexed: boolean) => list.filter((c) => idx.has(c) === indexed)
+    const base = { collection: s.collection, kinds: s.kinds }
+    const seekCols = pick(s.cols, true)
+    const seekNums = digits ? pick(s.nums, true) : []
+    if (seekCols.length + seekNums.length > 0)
+      seek.push({ ...base, cols: seekCols, nums: seekNums, indexed: true })
+    const scanCols = pick(s.cols, false)
+    const scanNums = digits ? pick(s.nums, false) : []
+    if (scanCols.length + scanNums.length > 0)
+      scan.push({ ...base, cols: scanCols, nums: scanNums, indexed: false, rows: s.rows })
+  }
+  return { seek, scan }
 }
 
 async function searchExact(
@@ -697,27 +867,75 @@ async function searchExact(
         collection: p.collection,
         rows: p.rows,
         cols: readableOnly(p.idColumns, allowed),
-        nums: readableOnly(p.numIdColumns, allowed)
+        nums: readableOnly(p.numIdColumns, allowed),
+        kinds: p.kinds,
+        indexedCols: p.indexed ?? []
       }
     })
     .filter((s) => s.cols.length + s.nums.length > 0)
-  const stmts = balanceByRows(specs, 2)
-    .map((batch) => exactStatement(batch, q))
-    .filter((s): s is { sql: string; bindings: unknown[] } => s != null)
-  const [found, byId] = await Promise.all([
-    runBatches(stmts),
-    // Scoped: the record's own id. A primary-key seek, so any table size; its
-    // own statement — an id type clash (uuid vs digits) fails only this one.
-    scope && candidates.some((p) => p.collection === scope)
-      ? (
-          db.raw(
-            `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
-            [/^\d{1,15}$/.test(q) ? Number(q) : q]
-          ) as Promise<Array<{ c: string; id: string }>>
-        ).catch(() => [])
-      : Promise.resolve([] as Array<{ c: string; id: string }>)
-  ])
-  const rows = await confirmRows(ctx.user, groupCandidates([...byId, ...found], 2))
+  const { seek, scan } = splitExactSpecs(specs, q)
+  const budget = ctx.budget
+
+  // 1. The index-backed path: every seekable id column of every collection plus —
+  //    scoped — the record's own id, in one round trip. An exact hit found here
+  //    brings the whole search's deadline in: the answer is known.
+  const seekPass = (async () => {
+    const stmt = exactStatement(seek, q)
+    const [byCol, byId] = await Promise.all([
+      stmt
+        ? budget
+            .run('exact', [] as Array<{ c: string; id: string }>, () =>
+              budget.query<{ c: string; id: string }>(stmt.sql, stmt.bindings)
+            )
+            .catch(() => [] as Array<{ c: string; id: string }>)
+        : [],
+      // A primary-key seek, so any table size; its own statement — an id type
+      // clash (uuid vs digits) fails only this one.
+      scope && candidates.some((p) => p.collection === scope)
+        ? budget
+            .run('exact:id', [] as Array<{ c: string; id: string }>, () =>
+              budget.query<{ c: string; id: string }>(
+                `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
+                [/^\d{1,15}$/.test(q) ? Number(q) : q]
+              )
+            )
+            .catch(() => [] as Array<{ c: string; id: string }>)
+        : []
+    ])
+    const hits = await exactHits(ctx, specs, candidates, [...byId, ...byCol], q, scope)
+    if (hits.length > 0) budget.shorten(EXACT_GRACE_MS)
+    return hits
+  })()
+  // 2. Id columns no index leads: scans, each big table on its own budget.
+  const scanPass = (async () => {
+    if (scan.length === 0) return [] as Found[]
+    const arms = scan
+      .map((s) => ({ collection: s.collection, rows: s.rows, stmt: exactStatement([s], q) }))
+      .filter(
+        (
+          a
+        ): a is { collection: string; rows: number; stmt: { sql: string; bindings: unknown[] } } =>
+          a.stmt != null
+      )
+      .map((a) => ({ collection: a.collection, rows: a.rows, ...a.stmt }))
+    const rows = await runArms(budget, arms)
+    return exactHits(ctx, specs, candidates, rows, q, scope)
+  })()
+  const [a, b] = await Promise.all([seekPass, scanPass])
+  return [...a, ...b]
+}
+
+/** Exact candidates → hits the caller may read that still show the exact value. */
+async function exactHits(
+  ctx: SearchCtx,
+  specs: Array<{ p: PlanEntry; collection: string; cols: string[]; nums: string[] }>,
+  candidates: PlanEntry[],
+  found: Array<{ c: string; id: string }>,
+  q: string,
+  scope: string | null
+): Promise<Found[]> {
+  if (found.length === 0) return []
+  const rows = await confirmRows(ctx.user, groupCandidates(found, 2))
   const lower = q.toLowerCase()
   const out: Found[] = []
   for (const [collection, items] of rows) {
@@ -762,8 +980,9 @@ async function searchExact(
 /** The typo pass statement (item 4): rows where enough 3-letter chunks of the
  *  query appear in a name column, best first. Exported for tests. */
 export function fuzzyStatement(
-  batch: Array<{ collection: string; cols: string[] }>,
-  q: string
+  batch: Array<{ collection: string; cols: string[]; kinds?: Record<string, TextKind> }>,
+  q: string,
+  mssql = onMssql()
 ): { sql: string; bindings: string[] } | null {
   const { chunks, need } = fuzzyChunks(q)
   if (chunks.length < 2) return null
@@ -771,16 +990,23 @@ export function fuzzyStatement(
   const bindings: string[] = []
   for (const b of batch) {
     if (b.cols.length === 0) continue
-    const sums = b.cols.map(
-      (c, i) =>
-        `(${chunks.map(() => `CASE WHEN t.[${c}] LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
+    const likes = b.cols.map((c) =>
+      chunks.map((ch) =>
+        fastLike(`t.[${c}]`, `%${escapeLike(ch)}%`, b.kinds?.[c] ?? 'other', {
+          escape: '\\',
+          mssql
+        })
+      )
+    )
+    const sums = likes.map(
+      (ls, i) => `(${ls.map((l) => `CASE WHEN ${l.sql} THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
     )
     const where = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
     const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
     parts.push(
       `SELECT * FROM (SELECT TOP ${FUZZY_PER_COLLECTION} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
     )
-    for (const _c of b.cols) bindings.push(...chunks.map((ch) => `%${escapeLike(ch)}%`))
+    for (const ls of likes) for (const l of ls) bindings.push(...l.bindings)
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
 }
@@ -796,17 +1022,22 @@ async function searchFuzzy(ctx: SearchCtx, candidates: PlanEntry[], q: string): 
         p,
         collection: p.collection,
         rows: p.rows,
+        kinds: p.kinds,
         cols: (named.length ? named : cols).slice(0, 2)
       }
     })
     .filter((s) => s.cols.length > 0)
-  const stmts = balanceByRows(specs, SEARCH_BATCHES)
-    .map((batch) => fuzzyStatement(batch, q))
-    .filter((s): s is { sql: string; bindings: string[] } => s != null)
-  if (stmts.length === 0) return []
+  const arms = specs
+    .map((s) => ({ collection: s.collection, rows: s.rows, stmt: fuzzyStatement([s], q) }))
+    .filter(
+      (a): a is { collection: string; rows: number; stmt: { sql: string; bindings: string[] } } =>
+        a.stmt != null
+    )
+    .map((a) => ({ collection: a.collection, rows: a.rows, ...a.stmt }))
+  if (arms.length === 0) return []
   const rows = await confirmRows(
     ctx.user,
-    groupCandidates(await runBatches(stmts), FUZZY_PER_COLLECTION)
+    groupCandidates(await runArms(ctx.budget, arms), FUZZY_PER_COLLECTION)
   )
   const out: Found[] = []
   for (const [collection, items] of rows) {
@@ -894,12 +1125,14 @@ async function searchFiltered(
         // Text with no column to match it on cannot match: the collection sits out.
         if (text && cols.length === 0) return
         try {
-          const r = await readItems(ctx.user, p.collection, {
-            filter: combinedFilter(text ? phraseFilter(cols, phrases) : null, clauses),
-            sort: ['-id'],
-            limit: perCollection,
-            count: false
-          })
+          const r = await ctx.budget.run<{ data: unknown[] }>(p.collection, { data: [] }, () =>
+            readItems(ctx.user, p.collection, {
+              filter: combinedFilter(text ? phraseFilter(cols, phrases) : null, clauses),
+              sort: ['-id'],
+              limit: perCollection,
+              count: false
+            })
+          )
           for (const item of r.data as Array<Record<string, unknown>>) {
             if (text) {
               const hit = toHit(p, item, cols, forms, ctx.labelOf)
@@ -1032,7 +1265,8 @@ async function searchRecords(
   labelsOnly: boolean,
   fieldRows: FieldRow[],
   /** The query as typed — what the palette logs, so what learned ranking keys on. */
-  raw: string
+  raw: string,
+  budget: SearchBudget
 ): Promise<RecordSearchResult> {
   const readableSet = new Set(readable)
   const scope = parsed.scope && parsed.scope !== PEOPLE_SCOPE ? parsed.scope : null
@@ -1041,7 +1275,7 @@ async function searchRecords(
   const empty = { records: [], exact: null, chips: [], text: parsed.text, suggestions: [] }
   if (plan.length === 0) return empty
   const allowed = await allowedByCollection(user, plan)
-  const ctx: SearchCtx = { user, labelsOnly, allowed, labelOf: fieldLabelMap(fieldRows) }
+  const ctx: SearchCtx = { user, budget, labelsOnly, allowed, labelOf: fieldLabelMap(fieldRows) }
 
   const filters: FilterPlan = planFilters(parsed, readableMetas(plan, fieldRows, allowed), {
     scope
@@ -1054,6 +1288,12 @@ async function searchRecords(
   const phrases = text.length >= 2 ? await searchPhrases(text).catch(() => [text]) : []
   const per = scope ? RECORD_CAP : PER_COLLECTION
 
+  // The exact-id pass goes first: its index seeks take the search's first
+  // connection slot, and an exact hit brings the deadline of the scans in.
+  const exactP =
+    !filtering && looksLikeId(text)
+      ? searchExact(ctx, plan, text, scope)
+      : Promise.resolve([] as Found[])
   const [main, exact] = await Promise.all([
     filtering
       ? searchFiltered(
@@ -1068,9 +1308,7 @@ async function searchRecords(
       : text.length >= 2
         ? searchUnion(ctx, plan, text, phrases, per)
         : Promise.resolve([] as Found[]),
-    !filtering && looksLikeId(text)
-      ? searchExact(ctx, plan, text, scope)
-      : Promise.resolve([] as Found[])
+    exactP
   ])
   // Typo pass only when the exact and contains passes found little.
   const fuzzy =
@@ -1610,98 +1848,123 @@ async function runGlobalSearch(
     byCollection.set(f.collection, list)
   }
 
-  const [found, people] = await Promise.all([
-    searchRecords(user as User, readable, parsed, labelsOnly, fieldRows, raw),
-    !scoped && !hasFilterTokens(parsed) && q.length >= 2
-      ? searchPeople(q, req.isAdmin === true)
-      : Promise.resolve([] as PersonHit[])
-  ])
-  const records = found.records
-  query.text = found.text
-  query.filters = found.chips
-
-  // Semantic hits — meaning-based matches from the embeddings index, deduped
-  // against keyword records. Only collections that are both indexed and
-  // readable are searched; label resolution goes through a direct id read.
-  let semantic: Array<{ collection: string; id: unknown; label: string; snippet: string }> = []
-  if (q.length >= 4 && !scoped && !hasFilterTokens(parsed)) {
-    try {
-      const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
-      const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
-        collection: string
-      }>
-      const targets = indexed.map((r) => r.collection).filter((c) => readable.includes(c))
-      if (targets.length > 0) {
-        const vec = await embedText(q)
-        const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
-        for (const collection of targets) {
-          const hits = (await searchEmbeddings(collection, vec, 4)).filter((h) => h.score > 0.15)
-          if (hits.length === 0) continue
-          const fields = pickSearchFields(byCollection.get(collection) ?? [])
-          const labelField = fields[0] ?? 'id'
-          // Confirmed as the caller, like the keyword path: row filter and
-          // User Scopes drop hits they cannot open.
-          const rows = (
-            await readItems(user as User, collection, {
-              filter: { id: { _in: hits.map((h) => h.item) } },
-              fields: [...new Set(['id', labelField])],
-              limit: hits.length,
-              count: false
-            }).catch(() => ({ data: [] as unknown[] }))
-          ).data as Array<Record<string, unknown>>
-          const displayName = rows.length
-            ? ((await getCollection(collection).catch(() => undefined))?.display_name ?? null)
-            : null
-          for (const row of rows) {
-            const key = `${collection}:${String(row.id)}`
-            if (seen.has(key)) continue
-            seen.add(key)
-            semantic.push({
-              collection,
-              id: row.id,
-              label: safeRecordLabel(labelField === 'id' ? '' : row[labelField], {
-                collection,
-                id: row.id,
-                display_name: displayName
-              }).slice(0, 80),
-              snippet: 'semantic match'
-            })
-          }
-        }
-        semantic = semantic.slice(0, 8)
-      }
-    } catch {
-      semantic = []
-    }
-  }
-
-  // Extra kinds (comments/notes/files/videos/docs/chat/config), confirmable
-  // commands and people role/zones (services/search-extra.ts). Each part judges
-  // its own hits as the caller and never fails the search. Unscoped words only:
-  // `wf: …` and field filters ask for records.
+  // Every part of the answer runs side by side under one time budget
+  // (services/search-budget.ts): records (exact ids first), people, meaning
+  // matches and the extra kinds. A part still going at the deadline is cut —
+  // its statement cancelled on the server — and named in `partial`.
+  const budget = new SearchBudget(searchBudgetMs(), SEARCH_CONCURRENCY)
   const plain = !scoped && !hasFilterTokens(parsed)
   const { searchExtra, searchCommands, searchPeopleExtras } = await import(
     '../services/search-extra.js'
   )
-  const opts = { isAdmin: req.isAdmin === true, req }
-  const [extra, commands, peopleOut] = await Promise.all([
-    plain ? searchExtra(user as User, q, opts).catch(() => ({})) : Promise.resolve({}),
-    searchCommands(user as User, q, records, opts).catch(() => []),
-    searchPeopleExtras(user as User, q, people, { isAdmin: req.isAdmin === true }).catch(
-      () => people
-    )
-  ])
+  const opts = { isAdmin: req.isAdmin === true, req, budget }
+  try {
+    const isAdmin = req.isAdmin === true
+    const [found, peopleOut, semanticAll, extra] = await Promise.all([
+      searchRecords(user as User, readable, parsed, labelsOnly, fieldRows, raw, budget),
+      // People, then their role / zones (services/search-people.ts).
+      (plain && q.length >= 2
+        ? budget.run('people', [] as PersonHit[], () => searchPeople(q, isAdmin))
+        : Promise.resolve([] as PersonHit[])
+      ).then((people) =>
+        searchPeopleExtras(user as User, q, people, { isAdmin }).catch(() => people)
+      ),
+      q.length >= 4 && plain
+        ? budget.run('semantic', [] as SemanticHit[], () =>
+            searchSemantic(user as User, q, readable, byCollection)
+          )
+        : Promise.resolve([] as SemanticHit[]),
+      plain ? searchExtra(user as User, q, opts).catch(() => ({})) : Promise.resolve({})
+    ])
+    const records = found.records
+    query.text = found.text
+    query.filters = found.chips
+    // Meaning matches never repeat a keyword hit.
+    const seen = new Set(records.map((r) => `${r.collection}:${String(r.id)}`))
+    const semantic = semanticAll
+      .filter((h) => !seen.has(`${h.collection}:${String(h.id)}`))
+      .slice(0, 8)
 
-  const data: Record<string, unknown> = {
-    ...base,
-    records,
-    people: peopleOut,
-    semantic,
-    exact: found.exact,
-    suggestions: found.suggestions,
-    query,
-    extra,
-    commands
+    // Confirmable commands (services/search-commands.ts): judged as the caller,
+    // never fail the search.
+    const commands = await searchCommands(user as User, q, records, opts).catch(() => [])
+    const partial = [...budget.timedOut]
+    const data: Record<string, unknown> = {
+      ...base,
+      records,
+      people: peopleOut,
+      semantic,
+      exact: found.exact,
+      suggestions: found.suggestions,
+      query,
+      extra,
+      commands,
+      // Parts that ran out of time (collection names, or people / semantic /
+      // comments / files …): the answer holds everything else.
+      ...(partial.length ? { partial } : {})
+    }
+    return data
+  } finally {
+    budget.finish()
   }
-  return data
+}
+
+type SemanticHit = { collection: string; id: unknown; label: string; snippet: string }
+
+/** Meaning-based matches from the embeddings index (readable, indexed collections
+ *  only), confirmed as the caller like the keyword path. */
+async function searchSemantic(
+  user: User,
+  q: string,
+  readable: string[],
+  byCollection: Map<string, FieldRow[]>
+): Promise<SemanticHit[]> {
+  const out: SemanticHit[] = []
+  try {
+    const { embedText, searchEmbeddings } = await import('../services/embeddings.js')
+    const indexed = (await db('nivaro_embeddings').distinct('collection').limit(5)) as Array<{
+      collection: string
+    }>
+    const targets = indexed.map((r) => r.collection).filter((c) => readable.includes(c))
+    if (targets.length === 0) return []
+    const vec = await embedText(q)
+    const seen = new Set<string>()
+    for (const collection of targets) {
+      const hits = (await searchEmbeddings(collection, vec, 4)).filter((h) => h.score > 0.15)
+      if (hits.length === 0) continue
+      const fields = pickSearchFields(byCollection.get(collection) ?? [])
+      const labelField = fields[0] ?? 'id'
+      // Confirmed as the caller, like the keyword path: row filter and
+      // User Scopes drop hits they cannot open.
+      const rows = (
+        await readItems(user, collection, {
+          filter: { id: { _in: hits.map((h) => h.item) } },
+          fields: [...new Set(['id', labelField])],
+          limit: hits.length,
+          count: false
+        }).catch(() => ({ data: [] as unknown[] }))
+      ).data as Array<Record<string, unknown>>
+      const displayName = rows.length
+        ? ((await getCollection(collection).catch(() => undefined))?.display_name ?? null)
+        : null
+      for (const row of rows) {
+        const key = `${collection}:${String(row.id)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({
+          collection,
+          id: row.id,
+          label: safeRecordLabel(labelField === 'id' ? '' : row[labelField], {
+            collection,
+            id: row.id,
+            display_name: displayName
+          }).slice(0, 80),
+          snippet: 'semantic match'
+        })
+      }
+    }
+  } catch {
+    return []
+  }
+  return out
 }

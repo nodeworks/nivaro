@@ -373,6 +373,21 @@ describe('extra hits are judged as the caller', () => {
     expect(out.videos).toBeUndefined()
     expect(out.comments).toBeDefined()
   })
+
+  it('under a search budget: a kind still running at the deadline is left out and named', async () => {
+    const { SearchBudget } = await import('./search-budget.js')
+    const budget = new SearchBudget(60)
+    const out = await searchExtra(user, 'wrong cifa', {
+      isAdmin: false,
+      req,
+      budget,
+      deps: extraDeps({ fileRows: () => new Promise(() => {}) })
+    })
+    budget.finish()
+    expect(out.files).toBeUndefined()
+    expect(out.comments).toBeDefined()
+    expect([...budget.timedOut]).toEqual(['files'])
+  })
 })
 
 // ─── People ─────────────────────────────────────────────────────────────────

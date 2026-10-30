@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
@@ -6,6 +7,8 @@ import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
 import { stripHtmlToText } from './latest-comment.js'
 import { safeRecordLabel } from './record-label-fallback.js'
+import type { SearchBudget } from './search-budget.js'
+import { fastLike, onMssql, type TextKind, textKindOf } from './search-like.js'
 
 /**
  * Global search's extra result kinds (search program 2026-10-28, items 15/17/18):
@@ -64,6 +67,26 @@ export function escapeLike(v: string): string {
 
 const likeOf = (phrase: string) => `%${escapeLike(phrase)}%`
 const LIKE = `LIKE ? ESCAPE '\\'`
+
+/** `col` contains the phrase, in the column's cheap LIKE form (services/search-like.ts). */
+function containsRaw(colSql: string, phrase: string, kind: TextKind = 'unicode') {
+  const l = fastLike(colSql, likeOf(phrase), kind, { escape: '\\', mssql: onMssql() })
+  return { sql: l.sql, bindings: l.bindings }
+}
+
+/** How a kind's TOP-N statement runs: as knex runs it, or under a search's time
+ *  budget (cancelled on the server at the deadline — global search). */
+export type Exec = <T = Record<string, unknown>>(qb: Knex.QueryBuilder) => Promise<T[]>
+const directExec: Exec = <T>(qb: Knex.QueryBuilder) => qb as unknown as Promise<T[]>
+
+export function budgetExec(budget: SearchBudget): Exec {
+  // Other dialects run as knex runs them (the budget still bounds the kind).
+  if (!onMssql()) return directExec
+  return <T>(qb: Knex.QueryBuilder) => {
+    const n = qb.toSQL().toNative()
+    return budget.query<T>(n.sql, n.bindings as unknown[], { native: true })
+  }
+}
 const isSystem = (c: string) => /^(nivaro_|directus_)/i.test(c)
 
 export function recordHref(collection: string, item: string, query = ''): string {
@@ -94,12 +117,12 @@ export interface FileHitRow {
 }
 
 export interface ExtraDeps {
-  commentRows(phrase: string, cap: number): Promise<TextRow[]>
-  noteRows(user: User, phrase: string, cap: number): Promise<TextRow[]>
+  commentRows(phrase: string, cap: number, exec?: Exec): Promise<TextRow[]>
+  noteRows(user: User, phrase: string, cap: number, exec?: Exec): Promise<TextRow[]>
   visibleIds(user: User, collection: string, ids: string[], isAdmin: boolean): Promise<string[]>
   recordLabels(user: User, byCollection: Map<string, Set<string>>): Promise<Record<string, string>>
   displayNames(collections: string[]): Promise<Map<string, string>>
-  fileRows(phrase: string, cap: number): Promise<FileHitRow[]>
+  fileRows(phrase: string, cap: number, exec?: Exec): Promise<FileHitRow[]>
   readableFiles(files: FileHitRow[], req: Caller): Promise<Set<string>>
   fileRefs(ids: string[]): Promise<Map<string, Array<{ collection: string; id: string }>>>
   videos(user: User, q: string, limit: number): Promise<ExtraHit[]>
@@ -113,16 +136,23 @@ export interface ExtraDeps {
   configHits(phrase: string, cap: number, isAdmin: boolean): Promise<ExtraHit[]>
 }
 
-async function commentRows(phrase: string, cap: number): Promise<TextRow[]> {
-  const rows = (await db('nivaro_comments')
-    .whereNull('deleted_at')
-    .modify(recordCommentsOnly(await hasFieldCommentColumns()))
-    .whereRaw(`[text] ${LIKE}`, [likeOf(phrase)])
-    .whereRaw(`[collection] not like 'nivaro\\_%' escape '\\'`)
-    .whereRaw(`[collection] not like 'directus\\_%' escape '\\'`)
-    .orderBy('created_at', 'desc')
-    .limit(cap)
-    .select('id', 'collection', 'item', 'text')) as Array<Record<string, unknown>>
+async function commentRows(
+  phrase: string,
+  cap: number,
+  exec: Exec = directExec
+): Promise<TextRow[]> {
+  const text = containsRaw('[text]', phrase)
+  const rows = (await exec(
+    db('nivaro_comments')
+      .whereNull('deleted_at')
+      .modify(recordCommentsOnly(await hasFieldCommentColumns()))
+      .whereRaw(text.sql, text.bindings)
+      .whereRaw(`[collection] not like 'nivaro\\_%' escape '\\'`)
+      .whereRaw(`[collection] not like 'directus\\_%' escape '\\'`)
+      .orderBy('created_at', 'desc')
+      .limit(cap)
+      .select('id', 'collection', 'item', 'text')
+  )) as Array<Record<string, unknown>>
   return rows
     .filter((r) => r.item != null && r.item !== '')
     .map((r) => ({
@@ -159,76 +189,102 @@ async function tableRows(table: string): Promise<number> {
   return rows
 }
 
-async function noteRows(user: User, phrase: string, cap: number): Promise<TextRow[]> {
-  const out: TextRow[] = []
-  const like = likeOf(phrase)
-  try {
-    if ((await tableRows('nivaro_workflow_history')) > HISTORY_ROW_BUDGET)
-      throw new Error('history too large to scan')
-    const hist = (await db('nivaro_workflow_history as h')
+async function noteRows(
+  user: User,
+  phrase: string,
+  cap: number,
+  exec: Exec = directExec
+): Promise<TextRow[]> {
+  // Transition notes and the note tables are independent scans: side by side.
+  const [hist, tables] = await Promise.all([
+    historyNoteRows(phrase, cap, exec).catch(() => [] as TextRow[]),
+    tableNoteRows(user, phrase, cap, exec).catch(() => [] as TextRow[])
+  ])
+  return [...hist, ...tables]
+}
+
+async function historyNoteRows(phrase: string, cap: number, exec: Exec): Promise<TextRow[]> {
+  if ((await tableRows('nivaro_workflow_history')) > HISTORY_ROW_BUDGET) return []
+  const comment = containsRaw('h.[comment]', phrase)
+  const hist = (await exec(
+    db('nivaro_workflow_history as h')
       .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
       .whereNotNull('h.comment')
-      .whereRaw(`h.[comment] ${LIKE}`, [like])
+      .whereRaw(comment.sql, comment.bindings)
       .limit(cap)
-      .select('h.id', 'h.comment', 'i.collection', 'i.item')) as Array<Record<string, unknown>>
-    for (const r of hist) {
-      if (!r.collection || r.item == null || isSystem(String(r.collection))) continue
-      out.push({
-        id: `history:${String(r.id)}`,
-        collection: String(r.collection),
-        item: String(r.item),
-        text: String(r.comment ?? ''),
-        kind: 'note'
-      })
-    }
-  } catch {
-    /* no pipeline tables on this tenant */
+      .select('h.id', 'h.comment', 'i.collection', 'i.item')
+  )) as Array<Record<string, unknown>>
+  const out: TextRow[] = []
+  for (const r of hist) {
+    if (!r.collection || r.item == null || isSystem(String(r.collection))) continue
+    out.push({
+      id: `history:${String(r.id)}`,
+      collection: String(r.collection),
+      item: String(r.item),
+      text: String(r.comment ?? ''),
+      kind: 'note'
+    })
   }
-  try {
-    const rels = (
-      (await db('nivaro_relations')
-        .whereNotNull('many_collection')
-        .whereNotNull('one_collection')
-        .whereNotNull('many_field')
-        .select('many_collection', 'many_field', 'one_collection')) as Array<{
-        many_collection: string
-        many_field: string
-        one_collection: string
-      }>
+  return out
+}
+
+async function tableNoteRows(
+  user: User,
+  phrase: string,
+  cap: number,
+  exec: Exec
+): Promise<TextRow[]> {
+  const rels = (
+    (await db('nivaro_relations')
+      .whereNotNull('many_collection')
+      .whereNotNull('one_collection')
+      .whereNotNull('many_field')
+      .select('many_collection', 'many_field', 'one_collection')) as Array<{
+      many_collection: string
+      many_field: string
+      one_collection: string
+    }>
+  )
+    .filter(
+      (r) =>
+        /(^|_)(notes?|comments?)$/i.test(r.many_collection) &&
+        !isSystem(r.many_collection) &&
+        !isSystem(r.one_collection) &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(r.many_collection) &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(r.many_field)
     )
-      .filter(
-        (r) =>
-          /(^|_)(notes?|comments?)$/i.test(r.many_collection) &&
-          !isSystem(r.many_collection) &&
-          !isSystem(r.one_collection) &&
-          /^[A-Za-z_][A-Za-z0-9_]*$/.test(r.many_collection) &&
-          /^[A-Za-z_][A-Za-z0-9_]*$/.test(r.many_field)
+    .slice(0, 4)
+  if (rels.length === 0) return []
+  const cols = (await db('information_schema.columns')
+    .whereIn(
+      'table_name',
+      rels.map((r) => r.many_collection)
+    )
+    .select('table_name', 'column_name', 'data_type')) as Array<{
+    table_name: string
+    column_name: string
+    data_type?: string
+  }>
+  const parts = await Promise.all(
+    rels.map(async (rel) => {
+      const mine = cols.filter(
+        (c) => c.table_name.toLowerCase() === rel.many_collection.toLowerCase()
       )
-      .slice(0, 4)
-    if (rels.length === 0) return out
-    const cols = (await db('information_schema.columns')
-      .whereIn(
-        'table_name',
-        rels.map((r) => r.many_collection)
-      )
-      .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
-    for (const rel of rels) {
-      const names = new Set(
-        cols
-          .filter((c) => c.table_name.toLowerCase() === rel.many_collection.toLowerCase())
-          .map((c) => c.column_name.toLowerCase())
-      )
+      const types = new Map(mine.map((c) => [c.column_name.toLowerCase(), c.data_type]))
       const textCol = ['text', 'note', 'notes', 'comment', 'body', 'message'].find((c) =>
-        names.has(c)
+        types.has(c)
       )
-      if (!textCol || !names.has('id')) continue
+      if (!textCol || !types.has('id')) return [] as TextRow[]
       try {
-        const found = (await db(rel.many_collection)
-          .whereNotNull(rel.many_field)
-          .whereRaw(`[${textCol}] ${LIKE}`, [like])
-          .limit(cap)
-          .select({ id: 'id' })) as Array<{ id: unknown }>
-        if (found.length === 0) continue
+        const text = containsRaw(`[${textCol}]`, phrase, textKindOf(types.get(textCol)))
+        const found = (await exec(
+          db(rel.many_collection)
+            .whereNotNull(rel.many_field)
+            .whereRaw(text.sql, text.bindings)
+            .limit(cap)
+            .select({ id: 'id' })
+        )) as Array<{ id: unknown }>
+        if (found.length === 0) return [] as TextRow[]
         // The note rows are re-read AS THE CALLER (their own policy, row filter,
         // User Scopes and field list), and the snippet comes only from what that
         // read returned: a note table, or its text column, the caller may not
@@ -242,40 +298,41 @@ async function noteRows(user: User, phrase: string, cap: number): Promise<TextRo
             count: false
           })
         ).data as Array<Record<string, unknown>>
-        const rows = read
+        return read
           .filter((r) => r[rel.many_field] != null && typeof r[textCol] === 'string')
-          .map((r) => ({ id: r.id, item: r[rel.many_field], text: r[textCol] }))
-        for (const r of rows) {
-          out.push({
+          .map((r) => ({
             id: `note:${rel.many_collection}:${String(r.id)}`,
             collection: rel.one_collection,
-            item: String(r.item),
-            text: String(r.text ?? ''),
-            kind: 'note'
-          })
-        }
+            item: String(r[rel.many_field]),
+            text: String(r[textCol] ?? ''),
+            kind: 'note' as const
+          }))
       } catch {
         /* a stale relation — skip that table */
+        return [] as TextRow[]
       }
-    }
-  } catch {
-    /* relations unreadable — transition notes only */
-  }
-  return out
+    })
+  )
+  return parts.flat()
 }
 
-async function fileRows(phrase: string, cap: number): Promise<FileHitRow[]> {
+async function fileRows(
+  phrase: string,
+  cap: number,
+  exec: Exec = directExec
+): Promise<FileHitRow[]> {
   const { whereNotHelpVideoFile } = await import('./help-video-files.js')
-  const like = likeOf(phrase)
+  const name = containsRaw('[filename_download]', phrase)
+  const title = containsRaw('[title]', phrase)
   const qb = db('nivaro_files')
     .where((w) => {
-      w.whereRaw(`[filename_download] ${LIKE}`, [like]).orWhereRaw(`[title] ${LIKE}`, [like])
+      w.whereRaw(name.sql, name.bindings).orWhereRaw(title.sql, title.bindings)
     })
     .orderBy('uploaded_on', 'desc')
     .limit(cap)
     .select('id', 'filename_download', 'title', 'uploaded_by', 'tags')
   whereNotHelpVideoFile(qb, 'nivaro_files.id')
-  return ((await qb) as Array<Record<string, unknown>>).map((r) => ({
+  return ((await exec(qb)) as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     filename_download: (r.filename_download as string | null) ?? null,
     title: (r.title as string | null) ?? null,
@@ -392,11 +449,12 @@ export async function searchTextHits(
   user: User,
   q: string,
   isAdmin: boolean,
-  deps: ExtraDeps = defaultExtraDeps
+  deps: ExtraDeps = defaultExtraDeps,
+  exec?: Exec
 ): Promise<ExtraHit[]> {
   const [comments, notes] = await Promise.all([
-    deps.commentRows(q, RAW_CAP).catch(() => [] as TextRow[]),
-    deps.noteRows(user, q, RAW_CAP).catch(() => [] as TextRow[])
+    deps.commentRows(q, RAW_CAP, exec).catch(() => [] as TextRow[]),
+    deps.noteRows(user, q, RAW_CAP, exec).catch(() => [] as TextRow[])
   ])
   const rows = [...comments, ...notes]
   if (rows.length === 0) return []
@@ -461,9 +519,10 @@ export async function searchFileHits(
   user: User,
   q: string,
   req: Caller,
-  deps: ExtraDeps = defaultExtraDeps
+  deps: ExtraDeps = defaultExtraDeps,
+  exec?: Exec
 ): Promise<ExtraHit[]> {
-  const rows = await deps.fileRows(q, 20)
+  const rows = await deps.fileRows(q, 20, exec)
   if (rows.length === 0) return []
   const readable = await deps.readableFiles(rows, req)
   const files = rows.filter((f) => readable.has(f.id.toLowerCase())).slice(0, EXTRA_CAP)
@@ -541,18 +600,25 @@ export async function searchChatHits(
 export async function searchExtra(
   user: User,
   q: string,
-  opts: { isAdmin: boolean; req: Caller; deps?: ExtraDeps }
+  opts: { isAdmin: boolean; req: Caller; deps?: ExtraDeps; budget?: SearchBudget }
 ): Promise<SearchExtra> {
   const phrase = q.trim()
   if (phrase.length < EXTRA_MIN_CHARS) return {}
   const deps = opts.deps ?? defaultExtraDeps
+  // Under a search's time budget (global search) every kind runs side by side and
+  // a kind still going at the deadline answers nothing (its scans are cancelled on
+  // the server); the budget records which.
+  const budget = opts.budget
+  const exec = budget ? budgetExec(budget) : undefined
+  const kind = (label: string, fn: () => Promise<ExtraHit[]>): Promise<ExtraHit[]> =>
+    budget ? budget.run(label, [] as ExtraHit[], fn) : fn()
   const [comments, files, videos, docs, chat, config] = await Promise.allSettled([
-    searchTextHits(user, phrase, opts.isAdmin, deps),
-    searchFileHits(user, phrase, opts.req, deps),
-    deps.videos(user, phrase, 5),
-    deps.docs(phrase, opts.isAdmin, 5),
-    searchChatHits(user, phrase, deps),
-    deps.configHits(phrase, EXTRA_CAP, opts.isAdmin)
+    kind('comments', () => searchTextHits(user, phrase, opts.isAdmin, deps, exec)),
+    kind('files', () => searchFileHits(user, phrase, opts.req, deps, exec)),
+    kind('videos', () => deps.videos(user, phrase, 5)),
+    kind('docs', () => deps.docs(phrase, opts.isAdmin, 5)),
+    kind('chat', () => searchChatHits(user, phrase, deps)),
+    kind('config', () => deps.configHits(phrase, EXTRA_CAP, opts.isAdmin))
   ])
   const out: SearchExtra = {}
   const put = (key: keyof SearchExtra, r: PromiseSettledResult<ExtraHit[]>) => {
