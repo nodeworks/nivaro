@@ -640,6 +640,39 @@ function TreeWidget({
 
 /** Automatic drill for query rows — the server infers which record a row's
  *  identifier columns point at (permission-checked); a miss just doesn't drill. */
+/**
+ * True once `ref`'s element has come within ~a screen of the viewport, and from then on
+ * (latched). A report fans out one custom query per widget — ~20 on the EFP reports — and
+ * the per-person read gate runs four at a time, so the widgets below the fold used to queue
+ * ahead of nothing and hold the first screen back (2026-10-30 demo). Without
+ * IntersectionObserver everything loads at once; printing loads everything too.
+ */
+function useNearViewport(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [near, setNear] = useState(() => typeof IntersectionObserver === 'undefined')
+  useEffect(() => {
+    if (near) return
+    const el = ref.current
+    if (!el) {
+      setNear(true)
+      return
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setNear(true)
+      },
+      { rootMargin: '600px 0px' }
+    )
+    io.observe(el)
+    const all = () => setNear(true)
+    window.addEventListener('beforeprint', all)
+    return () => {
+      io.disconnect()
+      window.removeEventListener('beforeprint', all)
+    }
+  }, [near, ref])
+  return near
+}
+
 function useAutoDrill(onDrill?: (t: { collection: string; itemId: string }) => void) {
   const client = useNivaroClient()
   const busyRef = useRef(false)
@@ -723,12 +756,15 @@ export function QueryWidgetBody({
   entityFilters,
   refetchInterval,
   onStatus,
-  onDrill
+  onDrill,
+  deferred = false
 }: {
   cfg: ReportQueryWidgetConfig
   dateRange: ReportDateRange | null
   entityFilters: ReportEntityFilter[]
   refetchInterval?: number
+  /** Not near the viewport yet: hold the query (and show the loading line) until it is. */
+  deferred?: boolean
   onStatus?: (s: { isFetching: boolean; refetch: () => void }) => void
   onDrill?: (t: { collection: string; itemId: string; title?: string }) => void
 }) {
@@ -744,6 +780,7 @@ export function QueryWidgetBody({
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['nivaro-report-query', cfg.slug, params],
     queryFn: ({ signal }) => queryWidgetRows(client, cfg.slug, params, signal),
+    enabled: !deferred,
     staleTime: 60_000,
     refetchInterval,
     retry: false
@@ -752,6 +789,8 @@ export function QueryWidgetBody({
     onStatus?.({ isFetching, refetch: () => void refetch() })
   }, [isFetching]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (deferred && data === undefined)
+    return <p className='px-1 text-[12px] text-slate-300'>Loading…</p>
   if (isLoading)
     return (
       <div className='flex flex-col gap-2 px-1'>
@@ -2005,6 +2044,7 @@ const WidgetCard = memo(function WidgetCard({
   const [asTable, setAsTable] = useState(false)
   const [drillPath, setDrillPath] = useState<Array<{ field: string; value: string }>>([])
   const cardRef = useRef<HTMLDivElement>(null)
+  const nearView = useNearViewport(cardRef)
   const [explainOpen, setExplainOpen] = useState(false)
   const [explainText, setExplainText] = useState<string | null>(null)
   const [explainBusy, setExplainBusy] = useState(false)
@@ -2055,7 +2095,7 @@ const WidgetCard = memo(function WidgetCard({
     widget: widget.id,
     report: reportId,
     params: liveParams,
-    enabled: widget.type !== 'divider' && widget.type !== 'query',
+    enabled: nearView && widget.type !== 'divider' && widget.type !== 'query',
     onData: (d) =>
       queryCache.setQueryData(
         ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
@@ -2083,7 +2123,7 @@ const WidgetCard = memo(function WidgetCard({
     // Query widgets resolve client-side in QueryWidgetBody — but when a
     // snapshot comparison is active, the server-resolved value (the same
     // number the snapshot stored) is fetched so the delta badge can render.
-    enabled: widget.type !== 'divider' && (widget.type !== 'query' || !!snapshot),
+    enabled: nearView && widget.type !== 'divider' && (widget.type !== 'query' || !!snapshot),
     staleTime: 60_000,
     // Per-widget auto-refresh (#168) overrides the report-level interval.
     refetchInterval: liveWidgetInterval(
@@ -2157,11 +2197,14 @@ const WidgetCard = memo(function WidgetCard({
         entityFilters={entityFilters}
         refetchInterval={refetchInterval}
         onDrill={onDrill}
+        deferred={!nearView}
       />
     )
   } else if (widget.type === 'query') {
     body = <p className='px-1 text-[12px] text-slate-400'>No query configured.</p>
-  } else if (isLoading)
+  } else if (!nearView && data === undefined)
+    body = <p className='px-1 text-[12px] text-slate-300'>Loading…</p>
+  else if (isLoading)
     body = (
       <div className='flex flex-col gap-2 px-1'>
         <p className='text-[12px] text-slate-300'>Loading…</p>
