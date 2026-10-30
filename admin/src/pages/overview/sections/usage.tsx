@@ -25,8 +25,15 @@ export function useOverviewUsage() {
 /** "admin /collections/:col" → "/collections/:col" (the app prefix is the RUM summary's). */
 export function screenName(route: string): string {
   const m = /^(\S+)\s+(\/.*)$/.exec(route)
-  if (!m) return route
-  return m[1] === 'admin' ? m[2] : `${m[2]} (${m[1]})`
+  if (m) return m[1] === 'admin' ? m[2] : `${m[2]} (${m[1]})`
+  // Page views store the full address; show the path (and the app's port when it isn't this one).
+  try {
+    const u = new URL(route)
+    const other = u.origin !== window.location.origin
+    return other ? `${u.pathname} (${u.port ? `:${u.port}` : u.host})` : u.pathname
+  } catch {
+    return route
+  }
 }
 
 function seconds(ms: number): string {
@@ -85,11 +92,11 @@ export function UsageSection({ hideTitle }: SectionProps = {}) {
         <Surface className='grid gap-px bg-slate-200 sm:grid-cols-3 dark:bg-border'>
           <div className='bg-white dark:bg-card'>
             <Column title='Busiest collections' to='/activity' toLabel='Activity'>
-              {data.busiest_collections.length === 0 ? (
+              {(data.busiest_collections ?? []).length === 0 ? (
                 quiet('No records changed today.')
               ) : (
                 <ol className='space-y-1'>
-                  {data.busiest_collections.map((c) => (
+                  {(data.busiest_collections ?? []).map((c) => (
                     <li key={c.collection} className='flex items-baseline gap-2 text-[12.5px]'>
                       <Link
                         to={`/collections/${encodeURIComponent(c.collection)}`}
@@ -108,11 +115,11 @@ export function UsageSection({ hideTitle }: SectionProps = {}) {
           </div>
           <div className='bg-white dark:bg-card'>
             <Column title='Most-used screens' to='/analytics' toLabel='Page analytics'>
-              {data.screens.length === 0 ? (
+              {(data.screens ?? []).length === 0 ? (
                 quiet('No page views recorded today.')
               ) : (
                 <ol className='space-y-1'>
-                  {data.screens.map((s) => (
+                  {(data.screens ?? []).map((s) => (
                     <li key={s.route} className='flex items-baseline gap-2 text-[12.5px]'>
                       <span
                         className='min-w-0 flex-1 truncate font-mono text-[11.5px] text-slate-700 dark:text-slate-200'

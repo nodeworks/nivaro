@@ -164,11 +164,15 @@ export function InstanceSection() {
                 : `${fmt(onlineNow)} ${onlineNow === 1 ? 'session' : 'sessions'}`}
             </Cell>
             <Cell
-              label='Status'
+              label='Core services'
               status={health ? (health.status === 'ok' ? 'ok' : 'down') : null}
               to='/health'
             >
-              {health ? (health.status === 'ok' ? 'All checks passing' : 'Degraded') : 'Unknown'}
+              {health
+                ? health.status === 'ok'
+                  ? 'Database and Redis up'
+                  : 'Database or Redis down'
+                : 'Unknown'}
             </Cell>
           </>
         )}

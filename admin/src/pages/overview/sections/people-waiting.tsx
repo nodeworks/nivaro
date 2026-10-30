@@ -55,7 +55,7 @@ function PersonRow({
   return (
     <li className='relative px-3 py-2.5' data-person-waiting={person.id}>
       <div className='flex flex-wrap items-start gap-x-3 gap-y-2'>
-        <div className='min-w-0 flex-1'>
+        <div className='min-w-0 basis-full'>
           <Link
             to={`/users/${encodeURIComponent(person.id)}`}
             className='block truncate text-[13px] font-medium text-slate-800 hover:underline dark:text-slate-100'
@@ -78,7 +78,7 @@ function PersonRow({
           )}
         </div>
         {confirming ? (
-          <div className='flex w-full flex-wrap items-center gap-2 sm:w-auto'>
+          <div className='flex w-full flex-wrap items-center gap-2'>
             <span className='text-[12px] text-slate-600 dark:text-slate-300'>
               Give {person.name} the {roleName} role?
             </span>
@@ -101,12 +101,12 @@ function PersonRow({
             </Button>
           </div>
         ) : (
-          <div className='flex w-full items-center gap-2 sm:w-auto'>
+          <div className='flex w-full items-center gap-2'>
             <SimpleSelect
               value={roleId}
               onChange={setRoleId}
               ariaLabel={`Role for ${person.name}`}
-              className='h-7 w-full text-[12px] sm:w-44'
+              className='h-7 min-w-0 flex-1 text-[12px]'
               options={[
                 { value: '', label: 'Choose a role…' },
                 ...roles.map((r) => ({ value: r.id, label: r.name }))

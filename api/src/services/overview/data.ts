@@ -557,6 +557,19 @@ export async function loadProblems(): Promise<ProblemCandidate[]> {
 const CONFIG_CHANGE_TABLES = CONFIG_TABLES.filter((t) => t !== 'nivaro_users')
 const NOISE_ACTIONS = ['read', 'login', 'logout', 'config-epoch', 'config-snapshot-store', 'export']
 
+/**
+ * A config CHANGE is a write: create / update / delete (and their dashed forms such as
+ * `layout-update`, `field-delete`), restore, publish. Running, testing, previewing or reading a
+ * config row (a custom query run, a contract test) is not a change.
+ */
+function onlyConfigWrites(q: { where(cb: (b: any) => void): unknown }, col = 'action'): void {
+  q.where((b: any) => {
+    b.whereIn(col, ['create', 'update', 'delete', 'restore', 'publish', 'revert', 'adopt'])
+    for (const verb of ['create', 'update', 'delete', 'publish', 'restore'])
+      b.orWhere(col, 'like', `%-${verb}`)
+  })
+}
+
 export async function loadTimeline(now = new Date()): Promise<Timeline> {
   return memo('timeline', 60_000, () =>
     sharedGatedRead('overview:timeline', 'overview', async () => {
@@ -591,6 +604,7 @@ export async function loadTimeline(now = new Date()): Promise<Timeline> {
           .leftJoin('nivaro_users as u', 'u.id', 'a.user')
           .whereIn('a.collection', CONFIG_CHANGE_TABLES)
           .whereNotIn('a.action', NOISE_ACTIONS)
+          .modify((q) => onlyConfigWrites(q, 'a.action'))
           .where('a.timestamp', '>=', since)
           .orderBy('a.timestamp', 'desc')
           .limit(300)
@@ -696,6 +710,7 @@ export async function loadConfigChanges(limit = 5): Promise<Array<Record<string,
   const ids = (await db('nivaro_activity')
     .whereIn('collection', CONFIG_CHANGE_TABLES)
     .whereNotIn('action', NOISE_ACTIONS)
+    .modify((q) => onlyConfigWrites(q))
     .where('timestamp', '>=', since)
     .orderBy([
       { column: 'timestamp', order: 'desc' },
