@@ -41,6 +41,8 @@ import {
 } from '@/components/global-search-api'
 import {
   altDigit,
+  type ConfigAnswer,
+  configReadAs,
   type ExtraHit,
   extraHref,
   extraTabs,
@@ -58,7 +60,9 @@ import {
   type SearchSort,
   sortRecords,
   toCsv,
-  whyMatched
+  wantsPlainConfig,
+  whyMatched,
+  withConfigAnswer
 } from '@/components/global-search-helpers'
 import { ScrollTabs } from '@/components/scroll-tabs'
 import { Button } from '@/components/ui/button'
@@ -170,7 +174,24 @@ export function SearchPage() {
 
   const records = live ? withExactFirst(data?.records ?? [], data?.exact) : []
   const people: SearchPerson[] = live ? (data?.people ?? []) : []
-  const extras = live ? extraTabs(data?.extra) : []
+  // Config search in plain words (search item 24): an administrator's question
+  // ("where is the Fusion push for IRs set up") also asks the config index,
+  // which may rewrite it once with AI when its keywords find little.
+  const plainConfig = live && wantsPlainConfig(q, isAdmin)
+  const { data: configAnswer } = useQuery({
+    queryKey: ['global-search-config', q],
+    queryFn: () =>
+      api
+        .get<{ data: ConfigAnswer }>('/global-search/config', { params: { q, ai: '1' } })
+        .then((r) => r.data.data),
+    enabled: plainConfig,
+    staleTime: 300_000,
+    retry: false
+  })
+  const configNote = plainConfig ? configReadAs(configAnswer) : null
+  const extras = live
+    ? extraTabs(plainConfig ? withConfigAnswer(data?.extra, configAnswer) : data?.extra)
+    : []
   const suggestions = (data?.suggestions ?? []).filter((s) => s.toLowerCase() !== q.toLowerCase())
   const chips = live ? queryChips(q, data?.query, scopeLabel) : []
 
@@ -612,7 +633,12 @@ export function SearchPage() {
 
           {live && data && !nothing && tab === PEOPLE_TAB && <PeopleList people={people} q={q} />}
 
-          {live && data && !nothing && activeExtra && <ExtraList hits={activeExtra.hits} q={q} />}
+          {live && data && !nothing && activeExtra && (
+            <>
+              {activeExtra.kind === 'config' && <ConfigReadAs note={configNote} />}
+              <ExtraList hits={activeExtra.hits} q={q} />
+            </>
+          )}
 
           {live && data && !nothing && !tab && (
             <AllResults
@@ -620,6 +646,7 @@ export function SearchPage() {
               tabs={tabs}
               people={people}
               extras={extras}
+              configNote={configNote}
               q={q}
               onTab={(t) => set({ tab: t, page: null })}
               onOpen={onOpenRecord}
@@ -649,6 +676,7 @@ function AllResults({
   tabs,
   people,
   extras,
+  configNote,
   q,
   onTab,
   onOpen
@@ -657,6 +685,7 @@ function AllResults({
   tabs: Array<{ collection: string; label: string; count: string }>
   people: SearchPerson[]
   extras: ReturnType<typeof extraTabs>
+  configNote: string | null
   q: string
   onTab: (t: string) => void
   onOpen: (r: SearchRecord, position: number) => void
@@ -740,6 +769,7 @@ function AllResults({
               </button>
             )}
           </div>
+          {x.kind === 'config' && <ConfigReadAs note={configNote} />}
           <ExtraList hits={x.hits.slice(0, 5)} q={q} />
         </section>
       ))}
@@ -1026,6 +1056,19 @@ function ExtraList({ hits, q }: { hits: ExtraHit[]; q: string }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Config search: how the AI read a plain-words question (item 24). */
+function ConfigReadAs({ note }: { note: string | null }) {
+  if (!note) return null
+  return (
+    <p
+      className='mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'
+      data-config-read-as
+    >
+      {note}
+    </p>
   )
 }
 

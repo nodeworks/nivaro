@@ -292,7 +292,8 @@ function extraDeps(over: Partial<ExtraDeps> = {}): ExtraDeps {
       { key: 'secret', name: 'Secret', topic: null }
     ],
     canSeeRoom: async (_u, room) => room === 'ch:ops',
-    configHits: async () => [{ kind: 'flow', id: '1', label: 'Wrong cifa flow', href: '/flows/1' }],
+    configHits: async (_p, _c, isAdmin) =>
+      isAdmin ? [{ kind: 'flow', id: '1', label: 'Wrong cifa flow', href: '/flows/1' }] : [],
     ...over
   }
 }

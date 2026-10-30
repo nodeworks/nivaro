@@ -109,6 +109,10 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Details → Where it shows. Pick record forms (a collection) and, optionally, the pipeline steps a video applies to. Choosing steps limits the video to those steps — a video for the Manager Approval step shows on records in that step and nowhere else — and one with no steps picked shows at every step. Other pages appear in the list once they have been opened with a Videos button on them.'
     },
+    {
+      type: 'p',
+      text: 'A screen lists its videos best first: the record’s step, then this exact screen, then the same screen for any record type (a page key with `:c` in place of the collection, such as `efp.records.:c`), then the record type, then the area the screen belongs to (a hub such as Jobs), then videos whose title or description mentions a glossary term of that collection or a term the screen passes. Within each, a video required for your role comes first, then one made for your role, then the most watched lately, then the newest. When one of the first four is a video you have not finished, a small “Watch: How to submit an IR (2:10)” chip appears above the page; × hides that video’s chip for good in this browser.'
+    },
     { type: 'h3', text: 'Publishing, versions and required viewing' },
     {
       type: 'p',
@@ -218,9 +222,9 @@ export const helpVideosApi: DocSection = {
           'Library: search, category, status (authors), page; returns can_author'
         ],
         [
-          'GET /help-videos/for?collection=&item=&page=',
+          'GET /help-videos/for?collection=&item=&page=&path=&app=&terms=',
           'everyone',
-          'Videos for a screen; the server reads the record’s pipeline step itself'
+          'Videos for a screen, best first; the server reads the record’s pipeline step itself. path (the route) gives the screen, screens like it, the record type and the area; terms is a comma list of glossary terms on the screen. Each video carries match {tier 0–5, reason}; best_id is the strong match (tier ≤ 3) this person has not finished, for the screen chip'
         ],
         [
           'GET /help-videos/:id',

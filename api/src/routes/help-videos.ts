@@ -336,8 +336,23 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send(await listVideos(req, req.query as Record<string, string>))
   })
   app.get('/for', async (req, reply) => {
-    const q = req.query as { collection?: string; item?: string; state?: string; page?: string }
-    return reply.send(await videosForContext(req, q))
+    // #18: `path` (the route), `app` and `terms` (glossary terms on the screen)
+    // widen the match — screen, screens like it, record type, area, terms —
+    // and `best_id` names the strong match the person has not finished.
+    const raw = req.query as Record<string, unknown>
+    const s = (k: string, max: number) =>
+      typeof raw[k] === 'string' && raw[k] ? String(raw[k]).slice(0, max) : undefined
+    return reply.send(
+      await videosForContext(req, {
+        collection: s('collection', 100),
+        item: s('item', 100),
+        state: s('state', 100),
+        page: s('page', 100),
+        path: s('path', 500),
+        app: s('app', 20),
+        terms: s('terms', 800)
+      })
+    )
   })
   // #2615: videos attached to single fields / sections of a collection's form.
   app.get('/for-form', async (req, reply) => {

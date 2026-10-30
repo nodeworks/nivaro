@@ -84,6 +84,7 @@ import { configDiffRoutes } from './config-diff.js'
 import { configHealthRoutes } from './config-health.js'
 import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
+import { configPlainSearchRoutes } from './config-search-plain.js'
 import { configSeedRoutes } from './config-seeds.js'
 import { connectionReportRoutes } from './connection-reports.js'
 import { contentExportRoutes } from './content-export.js'
@@ -778,6 +779,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(globalSearchRoutes, { prefix: '/global-search' })
   // GET /global-search/why — admin-only "why can't they find it?" (search item 25).
   await app.register(globalSearchWhyRoutes, { prefix: '/global-search' })
+  // GET /global-search/config — config search in plain words (search item 24).
+  await app.register(configPlainSearchRoutes, { prefix: '/global-search' })
   await app.register(savedViewsRoutes, { prefix: '/saved-views' })
   await app.register(apiAnalyticsRoutes, { prefix: '/api-analytics' })
   await app.register(partnerDependencyRoutes, { prefix: '/partner-dependencies' })

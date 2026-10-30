@@ -301,6 +301,7 @@ export {
   type HelpVideoDto,
   HelpVideoEditor,
   HelpVideoLibrary,
+  HelpVideoMatchChip,
   HelpVideoPlayer,
   HelpVideoRecorder,
   HelpVideoRecordingProvider,

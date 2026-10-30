@@ -382,6 +382,53 @@ export function extraHref(h: ExtraHit): string | null {
   return href
 }
 
+// ─── Config search in plain words (search item 24) ───────────────────────────
+
+/** GET /global-search/config answer. */
+export interface ConfigAnswer {
+  hits: ExtraHit[]
+  rewrite: { keywords: string[]; kinds: string[]; collection: string | null } | null
+  ai: 'used' | 'not_needed' | 'off' | 'failed' | 'admin_only'
+}
+
+/** A question worth the plain-words config call: administrators, 3+ words,
+ *  no prefix scope or field filter (those ask for records). */
+export function wantsPlainConfig(q: string, isAdmin: boolean): boolean {
+  const t = q.trim()
+  if (!isAdmin || t.length < 8) return false
+  if (/^\S+:\s/.test(t) || /\s\S+:\S/.test(` ${t}`) || t.startsWith('@')) return false
+  return t.split(/\s+/).length >= 3
+}
+
+/** The extras with the plain-words config answer first (one hit per screen),
+ *  capped at 20. Unchanged when the answer is empty or missing. */
+export function withConfigAnswer(
+  extra: SearchExtra | null | undefined,
+  answer: ConfigAnswer | null | undefined
+): SearchExtra | null | undefined {
+  const hits = Array.isArray(answer?.hits) ? answer.hits : []
+  if (!hits.length) return extra
+  const seen = new Set<string>()
+  const config: ExtraHit[] = []
+  for (const h of [...hits, ...(extra?.config ?? [])]) {
+    const key = extraHref(h) ?? `${h.kind}:${h.id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    config.push(h)
+    if (config.length >= 20) break
+  }
+  return { ...(extra ?? {}), config }
+}
+
+/** "Read as: fusion, push · flow" when the AI rewrote the question. */
+export function configReadAs(answer: ConfigAnswer | null | undefined): string | null {
+  const r = answer?.ai === 'used' ? answer.rewrite : null
+  if (!r || !r.keywords?.length) return null
+  const parts = [r.keywords.join(', '), ...(r.kinds ?? []).map((k) => k.replace(/_/g, ' '))]
+  if (r.collection) parts.push(r.collection.replace(/_/g, ' '))
+  return `Read as: ${parts.join(' · ')}`
+}
+
 // ─── People ──────────────────────────────────────────────────────────────────
 
 /** role · zones · title (#17); falls back to the email when none came back. */
