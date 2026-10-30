@@ -563,7 +563,16 @@ export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
 export { SearchHighlight } from './components/SearchHighlight'
+// #3229 shape-matched skeletons · #3231 slow-read reasons
+export {
+  CardSkeleton,
+  FormSkeleton,
+  ListSkeleton,
+  SkeletonBar,
+  TableSkeletonRows
+} from './components/Skeletons'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export { SlowNotice, SlowNoticeView } from './components/SlowNotice'
 export { type StaleBuild, StaleBuildChip } from './components/StaleBuildChip'
 export {
   buildReportPayload,
@@ -642,6 +651,12 @@ export {
   valueShowable,
   valueText
 } from './lib/activity-sentence'
+export {
+  type SlowReadRequest,
+  type SlowReason,
+  type UseSlowReasonOptions,
+  useSlowReason
+} from './hooks/useSlowReason'
 export {
   type DrillSource,
   defaultQuestionFor,
@@ -1098,6 +1113,20 @@ export {
   SIGNED_OUT_MAX_MS,
   signedOutBackoff
 } from './lib/signed-out'
+export {
+  type CellShape as SkeletonCellShape,
+  type FormSkeletonPlan,
+  formSkeletonFromLayout,
+  type SkeletonColumn,
+  shapeForField as skeletonShapeForField,
+  skeletonColumnsFrom
+} from './lib/skeleton-shapes'
+export {
+  knownTotalFrom,
+  type SlowReasonContext,
+  slowReasonText,
+  type WaitAnswer as SlowReadWaitAnswer
+} from './lib/slow-reason'
 export * from './lib/socket-realtime'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'

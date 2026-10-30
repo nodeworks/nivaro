@@ -52,7 +52,7 @@ import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { FloatingReplaySlot } from '@/components/replay-player/FloatingReplaySlot'
 import { SystemBusy } from '@/components/system-busy'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
-import { adminRecordTarget, preloadRoute } from '@/lib/route-preload'
+import { adminListTarget, adminRecordTarget, preloadRoute } from '@/lib/route-preload'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
 
@@ -1229,14 +1229,16 @@ function UserSyncInner({ onPrefsChanged }: { onPrefsChanged: () => void }) {
   return null
 }
 
-/** Prefetch on intent (#2448): resting on a link loads its screen's code; a record link also
- *  warms the record and its layout (capped per minute, see @nivaro/shared lib/prefetch). */
+/** Prefetch on intent (#2448, #3230): resting on a link loads its screen's code; a record link
+ *  also warms the record and its layout, a list link the list's metadata (capped per minute,
+ *  at most two in flight, see @nivaro/shared lib/prefetch). */
 function IntentPrefetchHost() {
   const qc = useQueryClient()
   useIntentPrefetch({
     qc,
     client: announcementsClient,
     matchRecord: adminRecordTarget,
+    matchList: adminListTarget,
     preloadRoute
   })
   return null

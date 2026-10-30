@@ -52,6 +52,7 @@ import {
   useNivaroClient,
   useRecordSurface
 } from '../context'
+import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
 import {
@@ -117,6 +118,7 @@ import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { htmlToText } from '../lib/sanitize-html'
+import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -341,6 +343,8 @@ import {
 } from './panels'
 import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
 import type { PendingTask } from './panels/TaskPanel'
+import { FormSkeleton } from './Skeletons'
+import { SlowNoticeView } from './SlowNotice'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import {
@@ -2044,6 +2048,18 @@ function ItemEditFormView({
   })
   // Design mode: the preview record stands in for the fetched one.
   const itemData = designOn ? (design.record ?? undefined) : fetchedItemData
+  // #3229 — the form's own shape for its loading placeholder, from the layout alone (it
+  // resolves before the record, or a hover prefetch already put it in the cache).
+  const loadingPlan = useMemo(
+    () => (designOn ? null : formSkeletonFromLayout(activeLayoutData, { isNew })),
+    [designOn, activeLayoutData, isNew]
+  )
+  // #3231 — a record that takes a while says what it is waiting on.
+  const recordSlow = useSlowReason({
+    pending: !isNew && !designOn && itemLoading,
+    request: !isNew && collection ? { method: 'GET', url: `/items/${collection}/${itemId}` } : null,
+    noun: 'this record'
+  })
   const itemLoadDenied = (() => {
     if (isNew || !itemLoadError) return false
     const status =
@@ -11326,8 +11342,10 @@ function ItemEditFormView({
   const fieldConfigReady = designOn ? fieldConfig !== undefined : fieldConfigFetched
   const isLoading = !fieldConfigReady || (!isNew && itemLoading)
   if (isLoading) {
-    // A big, centered loading state — the sparse two-skeleton layout read as a
-    // blank page for the first second on record open.
+    // #3229 — when the form's layout is already known (it resolves first, or a hover
+    // prefetched it), the placeholder IS the form: its tabs, section titles and field grid,
+    // in the body's own padding. Without one, the centered loader (a sparse generic form read
+    // as a blank page for the first second).
     return (
       <div className={cn('flex flex-1 min-h-0 flex-col', className)}>
         {showHeader && (
@@ -11335,14 +11353,29 @@ function ItemEditFormView({
             <Skeleton className='h-6 w-40' />
           </div>
         )}
-        <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6'>
-          <span className='relative flex h-10 w-10 items-center justify-center'>
-            <span className='absolute inset-0 animate-spin rounded-full border-2 border-slate-200 border-t-nvr-cyan dark:border-border dark:border-t-nvr-cyan' />
-          </span>
-          <p className='text-[13px] font-medium text-slate-500 dark:text-muted-foreground'>
-            Loading record…
-          </p>
-        </div>
+        {loadingPlan ? (
+          <div className='relative flex-1 min-h-0 overflow-hidden p-6'>
+            <p className='sr-only' role='status'>
+              Loading record…
+            </p>
+            <FormSkeleton plan={loadingPlan} />
+            {recordSlow.slow && (
+              <div className='pointer-events-none absolute inset-x-0 top-3 flex justify-center px-4'>
+                <SlowNoticeView reason={recordSlow} variant='pill' />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6'>
+            <span className='relative flex h-10 w-10 items-center justify-center'>
+              <span className='absolute inset-0 animate-spin rounded-full border-2 border-slate-200 border-t-nvr-cyan motion-reduce:animate-none dark:border-border dark:border-t-nvr-cyan' />
+            </span>
+            <p className='text-[13px] font-medium text-slate-500 dark:text-muted-foreground'>
+              Loading record…
+            </p>
+            {recordSlow.slow && <SlowNoticeView reason={recordSlow} />}
+          </div>
+        )}
       </div>
     )
   }

@@ -3,7 +3,13 @@ import { act, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter, Route } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
-import { adminRecordTarget, lazy, PreloadRoutes, preloadRoute } from './route-preload'
+import {
+  adminListTarget,
+  adminRecordTarget,
+  lazy,
+  PreloadRoutes,
+  preloadRoute
+} from './route-preload'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -57,5 +63,11 @@ describe('route preload (#2448)', () => {
     expect(adminRecordTarget('/collections/projects')).toBeNull()
     expect(adminRecordTarget('/collections/projects/s/slug-x')).toBeNull()
     expect(adminRecordTarget('/users/42')).toBeNull()
+  })
+
+  it('names admin list pages (#3230)', () => {
+    expect(adminListTarget('/collections/projects')).toBe('projects')
+    expect(adminListTarget('/collections/projects/42')).toBeNull()
+    expect(adminListTarget('/collections')).toBeNull()
   })
 })

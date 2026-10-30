@@ -29,13 +29,13 @@ import { cn, formatNumber } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
 import { EmptyState } from './EmptyState'
 import { HScrollProxy } from './HScrollProxy'
+import { TableSkeletonRows } from './Skeletons'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
-import { Skeleton } from './ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1099,17 +1099,44 @@ export function DataTable<T = Record<string, unknown>>({
 
         {/* Table */}
         {isLoading ? (
-          <div className='divide-y divide-slate-100'>
-            {SKELETON_ROWS.map((n) => (
-              <div key={n} className='flex items-center gap-3 px-4 py-2.5'>
-                {columns.map((col) => (
-                  <Skeleton
-                    key={col.key}
-                    className={cn('h-4 rounded', col.className ? undefined : 'flex-1')}
-                  />
-                ))}
-              </div>
-            ))}
+          // #3229 — the real header (same labels, h-9) over rows with the real cell padding
+          // and line height for this density, in the body's real minimum height: the table
+          // keeps its shape when the rows land.
+          <div
+            data-skeleton='table'
+            aria-busy='true'
+            className={cn(fillHeight && 'min-h-0 flex-1 overflow-hidden')}
+            style={minBodyHeight ? { minHeight: minBodyHeight } : undefined}
+          >
+            <Table className='border-separate border-spacing-0'>
+              <TableHeader>
+                <TableRow className='border-b border-slate-200 hover:bg-transparent'>
+                  {onSelectionChange && (
+                    <TableHead className='h-9 w-9 border-b border-slate-200 bg-slate-50 px-3 py-0 dark:border-border dark:bg-muted' />
+                  )}
+                  {orderedColumns.map((col) => (
+                    <TableHead
+                      key={col.key}
+                      className={cn(
+                        'h-9 whitespace-nowrap border-b border-slate-200 bg-slate-50 px-3 py-0 text-[11px] font-medium text-slate-500 dark:border-border dark:bg-muted',
+                        col.headerClassName
+                      )}
+                    >
+                      {col.header}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableSkeletonRows
+                  columns={orderedColumns.map((col) => ({ key: col.key }))}
+                  rows={Math.min(Math.max(limit ?? SKELETON_ROWS.length, 1), 15)}
+                  rowClassName=''
+                  cellClassName={cn('px-3', density === 'compact' ? 'py-1' : 'py-2')}
+                  leadingCells={onSelectionChange ? 1 : 0}
+                />
+              </TableBody>
+            </Table>
           </div>
         ) : (
           <>

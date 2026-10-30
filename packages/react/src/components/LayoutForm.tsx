@@ -28,6 +28,11 @@ export type SlotRendererProps = {
 
 type LayoutFormProps = {
   form: UseNivaroFormReturn
+  /**
+   * #3229 — shown while the schema or the record is still loading (default: nothing, the form
+   * stays headless). Pass a shape-matched placeholder, e.g. `<FormSkeleton plan={…} />`.
+   */
+  loadingFallback?: React.ReactNode
   components?: ComponentOverrides
   /** CSS class applied to the <form> element */
   className?: string
@@ -108,7 +113,8 @@ export function LayoutForm({
   prevButtonClassName,
   nextButtonClassName,
   lastStepActions,
-  layoutSlug: _layoutSlug
+  layoutSlug: _layoutSlug,
+  loadingFallback
 }: LayoutFormProps) {
   const { schema, values, errors, setValue, isVisible, isLocked, isSubmitting, gridFlushersRef } =
     form
@@ -130,7 +136,8 @@ export function LayoutForm({
   // For tab mode: key-based active tab
   const [activeTabKey, setActiveTabKey] = useState<string | null>(null)
 
-  if (!schema) return null
+  if (!schema) return loadingFallback ?? null
+  if (loadingFallback !== undefined && form.isLoading) return loadingFallback
 
   const tabGroups = schema.groups.filter((g) => g.type === 'tab')
   const sectionGroups = schema.groups.filter((g) => g.type === 'section')

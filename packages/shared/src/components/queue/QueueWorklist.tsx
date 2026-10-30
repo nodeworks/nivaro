@@ -52,6 +52,7 @@ import {
 } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
+import { useSlowReason } from '../../hooks/useSlowReason'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
@@ -83,6 +84,7 @@ import {
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
+import { usePrefetchIntent } from '../../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../../lib/presence-hooks'
 import { buildGroups } from '../../lib/queue-grouping'
 import { useOptionalRealtime } from '../../lib/realtime'
@@ -1396,6 +1398,15 @@ export function QueueWorklist({
   const transitionNote = useTransitionNote()
   // Long-request honesty (#370)
   const loadElapsed = useElapsedLoading(isFetching && !liveRefetchRef.current)
+  // #3231 — and what it is waiting on: a queue's sources hold heavy-read slots, so a busy
+  // server reads "Waiting for a free slot — busy right now (2 ahead of you)".
+  const queueSlow = useSlowReason({
+    pending: isFetching && !liveRefetchRef.current,
+    request: queueId != null ? { method: 'GET', url: `/queues/${queueId}/items` } : null,
+    noun: 'items'
+  })
+  // #3230 — resting on a row warms the record it opens (readOne + layout, never the queue).
+  const rowIntent = usePrefetchIntent()
 
   async function performTransition(item: QueueItemRow, targetState: string) {
     const instanceRes = await client.request<{
@@ -4655,7 +4666,7 @@ export function QueueWorklist({
               >
                 {loadElapsed != null && (
                   <span className='nvr-slide-up-centered absolute left-1/2 top-6 z-[6] -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-border dark:bg-card dark:text-slate-300'>
-                    Still working — {loadElapsed}s
+                    {queueSlow.text ?? 'Still working'} — {loadElapsed}s
                   </span>
                 )}
                 <DataTable<QueueItemRow>
@@ -4672,7 +4683,10 @@ export function QueueWorklist({
                   isLoading={showLoading}
                   onPageChange={setPage}
                   onRowClick={(row) => openItem(row)}
-                  rowDragProps={(row) => askDrag({ collection: row.collection, id: row.item_id })}
+                  rowDragProps={(row) => ({
+                    ...askDrag({ collection: row.collection, id: row.item_id }),
+                    ...rowIntent.record(row.collection, row.item_id)
+                  })}
                   onRowContextMenu={(row, e) => {
                     e.preventDefault()
                     setRowCtxMenu({ x: e.clientX, y: e.clientY, row })

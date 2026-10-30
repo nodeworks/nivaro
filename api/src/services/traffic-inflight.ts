@@ -43,6 +43,34 @@ interface Entry {
   inAuth: boolean
   /** Epoch ms the client closed the connection before the response finished; null = still there. */
   goneAt: number | null
+  /** #3231 — what the request is waiting on (slow paths only; null until one notes a wait). */
+  waits: Map<WaitKind, WaitNote> | null
+}
+
+/**
+ * #3231 — "what is this request waiting on". Only slow paths note a wait (a read-gate queue,
+ * an uncached custom query or widget, an external call), so a normal request never allocates
+ * one. One note per kind; the newest note of a kind replaces the last.
+ */
+export type WaitKind = 'slot' | 'query' | 'widget' | 'external'
+
+export interface WaitPosition {
+  /** 1 = next in line. */
+  position: number
+  /** People/reads queued in all. */
+  of: number
+}
+
+export interface WaitNote {
+  kind: WaitKind
+  /** Custom-query slug, widget id, external API name. Never a value, never SQL. */
+  subject?: string | null
+  /** Riding another caller's identical run (single flight). */
+  shared?: boolean
+  /** Live queue position (read-gate waiters). */
+  position?: () => WaitPosition | null
+  /** Epoch ms. */
+  since: number
 }
 
 /** What a finished request carries for the taps (`req.__nvrSql`). */
@@ -85,7 +113,8 @@ export function inflightStart(req: unknown): void {
       ms: 0,
       rows: 0,
       inAuth: false,
-      goneAt: null
+      goneAt: null,
+      waits: null
     })
     byReq.set(req, id)
   } catch {
@@ -324,6 +353,127 @@ export function inflightRunning(): Array<{
 
 export function inflightCount(): number {
   return byTrace.size
+}
+
+// ── #3231: wait notes ─────────────────────────────────────────────────────────
+
+const noop = () => {}
+
+/**
+ * Note that the CURRENT request (its trace context) is waiting on something. Returns the
+ * function that withdraws this note (a no-op outside an in-flight request, or in cloud mode).
+ */
+export function inflightNoteWait(note: Omit<WaitNote, 'since'>): () => void {
+  if (byTrace.size === 0) return noop
+  try {
+    const id = currentTraceMeta()?.id
+    const e = id ? byTrace.get(id) : undefined
+    if (!e || !id) return noop
+    const full: WaitNote = { ...note, since: Date.now() }
+    if (!e.waits) e.waits = new Map()
+    e.waits.set(note.kind, full)
+    return () => {
+      const cur = byTrace.get(id)
+      if (cur?.waits?.get(note.kind) === full) cur.waits.delete(note.kind)
+    }
+  } catch {
+    return noop
+  }
+}
+
+/** What one unfinished request is doing right now — the status read (#3231) answers from it. */
+export interface WaitSnapshot {
+  id: string
+  user_id: string | null
+  method: string
+  path: string
+  age_ms: number
+  phase: 'auth' | 'sql' | 'handler'
+  /** Rows answered so far by finished statements. */
+  rows: number
+  queries: number
+  /** Age of the oldest statement still running; 0 = none. */
+  statement_ms: number
+  waits: Array<{
+    kind: WaitKind
+    subject: string | null
+    shared: boolean
+    since_ms: number
+    position: number | null
+    of: number | null
+  }>
+}
+
+function snapshotOf(id: string, e: Entry, now: number, nowPerf: number): WaitSnapshot {
+  let oldest = 0
+  for (const s of e.running.values()) oldest = Math.max(oldest, nowPerf - s.perf)
+  const waits: WaitSnapshot['waits'] = []
+  if (e.waits)
+    for (const w of e.waits.values()) {
+      let pos: WaitPosition | null = null
+      try {
+        pos = w.position?.() ?? null
+      } catch {
+        pos = null
+      }
+      // A slot note whose waiter already left the queue says nothing any more.
+      if (w.kind === 'slot' && w.position && !pos) continue
+      waits.push({
+        kind: w.kind,
+        subject: w.subject ? String(w.subject).slice(0, 120) : null,
+        shared: !!w.shared,
+        since_ms: Math.max(0, now - w.since),
+        position: pos?.position ?? null,
+        of: pos?.of ?? null
+      })
+    }
+  return {
+    id,
+    user_id: userIdOf(e.req),
+    method: e.method,
+    path: e.path,
+    age_ms: now - e.startedAt,
+    phase: e.running.size ? 'sql' : e.inAuth ? 'auth' : 'handler',
+    rows: e.rows,
+    queries: e.n,
+    statement_ms: Math.round(oldest),
+    waits
+  }
+}
+
+/**
+ * The caller's newest unfinished request to `method path` on THIS process (path with the /api
+ * prefix, no query string). Only that person's own requests are ever matched.
+ */
+export function inflightWaitFor(
+  userId: string,
+  method: string,
+  path: string,
+  exclude?: string | null
+): WaitSnapshot | null {
+  if (byTrace.size === 0 || !userId) return null
+  const now = Date.now()
+  const nowPerf = performance.now()
+  let best: [string, Entry] | null = null
+  for (const [id, e] of byTrace) {
+    if (id === exclude || e.goneAt != null) continue
+    if (e.method !== method || e.path !== path || userIdOf(e.req) !== userId) continue
+    if (!best || e.startedAt > best[1].startedAt) best = [id, e]
+  }
+  return best ? snapshotOf(best[0], best[1], now, nowPerf) : null
+}
+
+/** Every signed-in request older than `minAgeMs` (the cross-replica beat publishes these). */
+export function inflightWaitSnapshots(minAgeMs: number, cap = 200): WaitSnapshot[] {
+  const now = Date.now()
+  const nowPerf = performance.now()
+  const out: WaitSnapshot[] = []
+  for (const [id, e] of byTrace) {
+    if (out.length >= cap) break
+    if (e.goneAt != null || now - e.startedAt < minAgeMs || !userIdOf(e.req)) continue
+    out.push(snapshotOf(id, e, now, nowPerf))
+  }
+  return out
 }
 
 /** Test hook. */
