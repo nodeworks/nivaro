@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-30T01:27:11.718Z",
+  "generated_at": "2026-10-30T02:03:20.594Z",
   "releases": [
+    {
+      "version": "0.3.58",
+      "tag": "v0.3.58",
+      "date": "2026-10-29T22:03:07-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "react",
+              "text": "export the navigation trail helpers for hosts (#3225)",
+              "hash": "45ff9f5c7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.57",
       "tag": "v0.3.57",
-      "date": "2026-10-29T21:26:57-04:00",
+      "date": "2026-10-29T21:27:11-04:00",
       "sections": [
         {
           "label": "Added",
