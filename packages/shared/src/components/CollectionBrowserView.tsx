@@ -7434,21 +7434,6 @@ export function CollectionBrowserView({
         )}
       {/* Toolbar */}
       <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-slate-700 dark:bg-slate-900'>
-        {meta?.color && /^#[0-9a-fA-F]{3,8}$/.test(meta.color) && (
-          // Collection accent (#195): the collection's configured color as an
-          // identity chip, so multi-tab work reads at a glance.
-          <span
-            className='inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-semibold'
-            style={{
-              borderColor: `${meta.color}55`,
-              backgroundColor: `${meta.color}14`,
-              color: meta.color
-            }}
-          >
-            <span className='h-2 w-2 rounded-full' style={{ backgroundColor: meta.color }} />
-            {meta.display_name || collection}
-          </span>
-        )}
         <FilterBar
           collection={collection}
           meta={meta}
