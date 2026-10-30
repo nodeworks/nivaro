@@ -96,7 +96,7 @@ present, the Environments page shows a **Release** card. **Show plan** runs
 `node scripts/release-chain.mjs --events` (touches nothing) and lists what the
 release would cut. **Release** runs it with `--go` as a detached process whose
 log lives under `.release-runs/<id>.log`; the card shows the seven stages
-(preflight → release → publish → artifacts → frontends → deployments → verify),
+(preflight → release → publish → artifacts → deployments → frontends → verify — the API deploys and passes its gate before any frontend is pushed, and a frontend must keep serving its new build for 150 s, past its own deploy gate),
 the live log, a Cancel while running and a **Resume from <stage>** after a
 failure (`--from <stage>`). One run at a time. The run survives the dev API
 restarting because its state is read from the process id and the log's last

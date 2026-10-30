@@ -11,8 +11,8 @@ const STAGES = [
   'release',
   'publish',
   'artifacts',
-  'frontends',
   'deployments',
+  'frontends',
   'verify'
 ] as const
 /** scripts/promote-production.mjs (#722). */

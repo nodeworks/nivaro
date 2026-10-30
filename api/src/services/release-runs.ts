@@ -18,8 +18,8 @@ export const STAGES = [
   'release',
   'publish',
   'artifacts',
-  'frontends',
   'deployments',
+  'frontends',
   'verify'
 ] as const
 /** scripts/promote-production.mjs — the production target (#722). */

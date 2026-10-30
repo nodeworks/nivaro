@@ -162,6 +162,16 @@ async function main() {
     setAggregateCapApp(app)
   }
 
+  // Open a few DB connections before listening, so the first burst after a deploy does not
+  // queue behind simultaneous SQL Server logins (services/pool-warm.ts). Never fails boot.
+  if (!process.env.CLOUD_META_DB_URL && !realtime) {
+    await bootPhase('Database pool warm-up', async () => {
+      const { warmDbPool } = await import('./services/pool-warm.js')
+      const opened = await warmDbPool({ max: config.DB_POOL_MAX }).catch(() => 0)
+      app.log.info(`database pool warm: ${opened} connection(s) open`)
+    })
+  }
+
   // A development restart can race the previous child still releasing the
   // port (tsx watch starts the new process while the old one drains), and tsx
   // does not retry a child that exits at boot — an EADDRINUSE here would sit

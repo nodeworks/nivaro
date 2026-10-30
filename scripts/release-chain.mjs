@@ -69,7 +69,9 @@ const emit = (stage, status, detail) => {
   if (detail) e.detail = String(detail).slice(0, 500)
   console.log(`@@event ${JSON.stringify(e)}`)
 }
-const STAGES = ['preflight', 'release', 'publish', 'artifacts', 'frontends', 'deployments', 'verify']
+// The API deploys (and passes its gate) BEFORE the frontends are pushed: a portal whose
+// deploy gate runs while the API is still settling rolled itself back on 2026-10-30.
+const STAGES = ['preflight', 'release', 'publish', 'artifacts', 'deployments', 'frontends', 'verify']
 
 const expand = (p) => resolve(p.startsWith('~') ? p.replace(/^~/, homedir()) : p)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -237,26 +239,29 @@ function plan(cfg, ch) {
   if (ch.migrations.length > 0) {
     add('artifacts', `${ch.migrations.length} migration(s) ship in this release → no deployment is pushed until the image tag is confirmed`)
   }
-  for (const f of cfg.frontends) {
-    if (!wantReact && !wantSdk) add('frontends', `${f.name}: nothing to pin — skipped`)
-    else add('frontends', `${f.name}: pin the new package version(s), install until the LOCKFILE carries them, build locally, commit, push`)
-  }
   for (const d of cfg.deployments) {
     add('deployments', `${d.name}: ${(d.prepare ?? []).join(' && ') || 'no prepare step'}, commit (empty if nothing changed), push`)
   }
   for (const v of cfg.verify) {
-    const fe = v.expect?.startsWith('frontend:') ? v.expect.slice('frontend:'.length) : null
-    const what = fe ? `the pushed ${fe} commit` : 'the new version'
-    add('verify', `${v.name}: poll ${v.url} until it reports ${what} twice in a row`)
+    if (v.expect?.startsWith('frontend:')) continue
+    add('deployments', `${v.name}: poll ${v.url} until it reports the new version for 15 s — before any frontend is pushed`)
   }
   for (const { v, base } of gateTargets(cfg)) {
     const authed = !!gateToken(v, base)
     add(
-      'verify',
+      'deployments',
       authed
         ? `${v.name}: then the gate — /api/ready, /api/preflight, strict smoke check, readiness score no lower than before the push`
         : `${v.name}: then /api/ready only — no gate token, so preflight, smoke and readiness are NOT checked`
     )
+  }
+  for (const f of cfg.frontends) {
+    if (!wantReact && !wantSdk) add('frontends', `${f.name}: nothing to pin — skipped`)
+    else add('frontends', `${f.name}: pin the new package version(s), install until the LOCKFILE carries them, build locally, commit, push — after the API passed its gate`)
+  }
+  for (const v of cfg.verify) {
+    const fe = v.expect?.startsWith('frontend:') ? v.expect.slice('frontend:'.length) : null
+    if (fe) add('verify', `${v.name}: poll ${v.url} until it reports the pushed ${fe} commit for 150 s (past the portal's own deploy gate, so a rollback there fails the release)`)
   }
   if (!cfg.path) add('frontends', 'no release-chain.config.json — the chain stops after artifacts')
   return { lines, wantSdk, wantReact, wantKit, wantMcp }
@@ -550,11 +555,9 @@ async function main() {
       emit('publish', 'ok')
     } else emit('publish', 'skip', `resumed from ${FROM}`)
 
-    // The frontends need the npm packages, not the image; only the deployment
-    // push needs the image. So the frontends pin and push while the image is
-    // still building (it is the slow artifact, ~5 min). On a resume that
-    // re-enters `artifacts`, a frontend already pinned + committed is pushed
-    // as it is, never re-bumped.
+    // The frontends are pushed after the API's deployment has passed its gate (see STAGES): a
+    // portal deploy gate that runs while the API is still settling rolls back a healthy build.
+    // On a resume, a frontend already pinned + committed is pushed as it is, never re-bumped.
     let frontendsDone = false
     const runFrontends = async () => {
       frontendsDone = true
@@ -622,14 +625,101 @@ async function main() {
       if (p.wantSdk) await until(`@nivaro/sdk@${SV} on npm`, async () => npmHas('@nivaro/sdk', SV), NPM_WAIT)
       if (p.wantReact) await until(`@nivaro/react@${RV} on npm`, async () => npmHas('@nivaro/react', RV), NPM_WAIT)
       if (p.wantMcp) await until(`@nivaro/mcp@${MV} on npm`, async () => npmHas('@nivaro/mcp', MV), NPM_WAIT)
-      await runFrontends()
-      currentStage = 'artifacts'
       await imageWait
       emit('artifacts', 'ok')
     } else emit('artifacts', 'skip', `resumed from ${FROM}`)
 
-    if (runs('frontends') && !frontendsDone) await runFrontends()
-    else if (!runs('frontends')) emit('frontends', 'skip', `resumed from ${FROM}`)
+    // One verify entry: wait for the expected version to hold, then (API entries) the gate.
+    // Frontend entries must hold for FRONTEND_STABLE_MS: the portal's own deploy gate keeps
+    // checking for a minute or more after its tasks serve the new build, and a rollback there
+    // used to pass this check (the new build answered for 16 s, then rolled back).
+    const FRONTEND_STABLE_MS = 150_000
+    const verifyEntry = async (v) => {
+      // A recreating container answers the new version once and then 502s
+      // for a minute. Two consecutive good answers, not one.
+      // Probed with curl, not fetch: node's fetch trusts only its bundled
+      // CAs and rejects the corporate-signed staging cert
+      // (UNABLE_TO_VERIFY_LEAF_SIGNATURE) — 50 polls read "not yet" on
+      // 2026-09-21 while curl, which uses the system keychain, answered the
+      // new version every time. A probe failure is printed once per
+      // distinct reason so a broken probe can never pass for a slow deploy.
+      // `expect: "frontend:<name>"` waits for the commit this run pushed to
+      // that frontend. When this run pushed nothing there (nothing to pin,
+      // or resumed past `frontends`), origin's head is what that frontend's
+      // CI deployed — never the local HEAD, which can hold unpushed commits.
+      const frontendName = v.expect?.startsWith('frontend:')
+        ? v.expect.slice('frontend:'.length)
+        : null
+      let expected = V
+      if (frontendName) {
+        const fe = cfg.frontends.find((f) => f.name === frontendName)
+        if (!fe) {
+          throw new StageError(
+            `verify "${v.name}": no frontend named ${frontendName} in release-chain.config.json`
+          )
+        }
+        if (pushedShas[frontendName]) expected = pushedShas[frontendName]
+        else {
+          const cwd = expand(fe.path)
+          const branch = fe.branch ?? 'main'
+          sh('git', ['fetch', 'origin', branch], { cwd, quiet: true, allowFail: true })
+          expected = git(['rev-parse', '--short=8', `origin/${branch}`], { cwd })
+        }
+      }
+      // Asked every 5 s so the new version is seen sooner, but it must keep
+      // answering for 15 s with no bad answer between — the window the old
+      // "two answers 15 s apart" rule gave against the answer-once-then-502.
+      let goodSince = 0
+      let lastErr = ''
+      await until(`${v.name} on ${expected}`, async () => {
+        let body = null
+        try {
+          body = JSON.parse(
+            execFileSync('curl', ['-sS', '-m', '10', v.url], {
+              encoding: 'utf8',
+              stdio: ['ignore', 'pipe', 'pipe']
+            })
+          )
+        } catch (err) {
+          const msg = String(err?.stderr || err?.message || err).trim().split('\n')[0]
+          if (msg !== lastErr) log(`  probe: ${msg}`)
+          lastErr = msg
+        }
+        if (body?.[v.field ?? 'version'] !== expected) {
+          goodSince = 0
+          return false
+        }
+        goodSince ||= Date.now()
+        return Date.now() - goodSince >= (frontendName ? FRONTEND_STABLE_MS : 15_000)
+        // The GitLab deploy job npm-installs on the host, prunes, pulls the
+        // image and runs the gate: 13–15 minutes end to end, which outran
+        // the earlier 12.5-minute window. Wait up to 30 minutes.
+      }, { tries: 360, every: 5_000 })
+
+      // #1045 — answering the version proves the process booted, not that
+      // the deploy is coherent. API entries run the post-deploy gate.
+      const base = !frontendName && v.gate !== false ? apiBase(v.url) : null
+      if (base) {
+        const token = gateToken(v, base)
+        const prior = readGateBefore()[base]
+        const before = prior && prior.for_version === V ? prior.snap : null
+        emit(currentStage, 'progress', `${v.name}: post-deploy gate`)
+        const gate = await runGate({
+          name: v.name,
+          token,
+          request: curlRequest(base, token),
+          before,
+          readinessTolerance: v.gate && typeof v.gate === 'object' ? (v.gate.readiness_tolerance ?? 0) : 0,
+          sleep
+        })
+        for (const line of gate.lines) log(`  ${line}`)
+        if (!gate.ok) {
+          throw new StageError(`${v.name} answered ${expected} but the post-deploy gate failed — ${gate.failures.join(' · ')}`)
+        }
+      }
+    }
+    const isFrontendEntry = (v) => !!v.expect?.startsWith('frontend:')
+    let apiVerified = false
 
     if (runs('deployments')) {
       currentStage = 'deployments'
@@ -662,95 +752,22 @@ async function main() {
         }
         sh('git', ['push', 'origin', d.branch ?? 'main'], { cwd })
       }
+      // The API must be live and through its gate before any frontend is pushed.
+      if (!flag('skip-verify')) {
+        for (const v of cfg.verify) if (!isFrontendEntry(v)) await verifyEntry(v)
+        apiVerified = true
+      }
       emit('deployments', 'ok')
     } else emit('deployments', 'skip', `resumed from ${FROM}`)
+
+    if (runs('frontends') && !frontendsDone) await runFrontends()
+    else if (!runs('frontends')) emit('frontends', 'skip', `resumed from ${FROM}`)
 
     if (runs('verify') && !flag('skip-verify')) {
       currentStage = 'verify'
       emit('verify', 'start')
       for (const v of cfg.verify) {
-        // A recreating container answers the new version once and then 502s
-        // for a minute. Two consecutive good answers, not one.
-        // Probed with curl, not fetch: node's fetch trusts only its bundled
-        // CAs and rejects the corporate-signed staging cert
-        // (UNABLE_TO_VERIFY_LEAF_SIGNATURE) — 50 polls read "not yet" on
-        // 2026-09-21 while curl, which uses the system keychain, answered the
-        // new version every time. A probe failure is printed once per
-        // distinct reason so a broken probe can never pass for a slow deploy.
-        // `expect: "frontend:<name>"` waits for the commit this run pushed to
-        // that frontend. When this run pushed nothing there (nothing to pin,
-        // or resumed past `frontends`), origin's head is what that frontend's
-        // CI deployed — never the local HEAD, which can hold unpushed commits.
-        const frontendName = v.expect?.startsWith('frontend:')
-          ? v.expect.slice('frontend:'.length)
-          : null
-        let expected = V
-        if (frontendName) {
-          const fe = cfg.frontends.find((f) => f.name === frontendName)
-          if (!fe) {
-            throw new StageError(
-              `verify "${v.name}": no frontend named ${frontendName} in release-chain.config.json`
-            )
-          }
-          if (pushedShas[frontendName]) expected = pushedShas[frontendName]
-          else {
-            const cwd = expand(fe.path)
-            const branch = fe.branch ?? 'main'
-            sh('git', ['fetch', 'origin', branch], { cwd, quiet: true, allowFail: true })
-            expected = git(['rev-parse', '--short=8', `origin/${branch}`], { cwd })
-          }
-        }
-        // Asked every 5 s so the new version is seen sooner, but it must keep
-        // answering for 15 s with no bad answer between — the window the old
-        // "two answers 15 s apart" rule gave against the answer-once-then-502.
-        let goodSince = 0
-        let lastErr = ''
-        await until(`${v.name} on ${expected}`, async () => {
-          let body = null
-          try {
-            body = JSON.parse(
-              execFileSync('curl', ['-sS', '-m', '10', v.url], {
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'pipe']
-              })
-            )
-          } catch (err) {
-            const msg = String(err?.stderr || err?.message || err).trim().split('\n')[0]
-            if (msg !== lastErr) log(`  probe: ${msg}`)
-            lastErr = msg
-          }
-          if (body?.[v.field ?? 'version'] !== expected) {
-            goodSince = 0
-            return false
-          }
-          goodSince ||= Date.now()
-          return Date.now() - goodSince >= 15_000
-          // The GitLab deploy job npm-installs on the host, prunes, pulls the
-          // image and runs the gate: 13–15 minutes end to end, which outran
-          // the earlier 12.5-minute window. Wait up to 30 minutes.
-        }, { tries: 360, every: 5_000 })
-
-        // #1045 — answering the version proves the process booted, not that
-        // the deploy is coherent. API entries run the post-deploy gate.
-        const base = !frontendName && v.gate !== false ? apiBase(v.url) : null
-        if (base) {
-          const token = gateToken(v, base)
-          const prior = readGateBefore()[base]
-          const before = prior && prior.for_version === V ? prior.snap : null
-          emit('verify', 'progress', `${v.name}: post-deploy gate`)
-          const gate = await runGate({
-            name: v.name,
-            token,
-            request: curlRequest(base, token),
-            before,
-            readinessTolerance: v.gate && typeof v.gate === 'object' ? (v.gate.readiness_tolerance ?? 0) : 0,
-            sleep
-          })
-          for (const line of gate.lines) log(`  ${line}`)
-          if (!gate.ok) {
-            throw new StageError(`${v.name} answered ${expected} but the post-deploy gate failed — ${gate.failures.join(' · ')}`)
-          }
-        }
+        if (isFrontendEntry(v) || !apiVerified) await verifyEntry(v)
       }
       emit('verify', 'ok')
     } else if (flag('skip-verify')) emit('verify', 'skip', '--skip-verify')
