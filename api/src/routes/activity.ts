@@ -100,6 +100,13 @@ async function enrichRows(rows: Array<Record<string, unknown>>, hasVia: boolean)
 
 /** The listed rows with their user, in the order of `ids` (also the Audit report's CSV). */
 export async function pageRows(ids: number[]): Promise<Array<Record<string, unknown>>> {
+  return pageRowsImpl(ids)
+}
+
+/** Same as pageRows; the Overview's config changes import it by this name. */
+export const activityPageRows = pageRows
+
+async function pageRowsImpl(ids: number[]): Promise<Array<Record<string, unknown>>> {
   if (ids.length === 0) return []
   const { q, hasVia } = await readableSelect(db('nivaro_activity as a'))
   const rows = (await q.whereIn('a.id', ids)) as Array<Record<string, unknown>>
