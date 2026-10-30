@@ -1085,12 +1085,24 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- /SYNC:settings -->
         </div>
 
-        <div class="doc-section" id="s-activity" data-toc='[{"id":"activity","label":"Activity Log"}]'>
+        <div class="doc-section" id="s-activity" data-toc='[{"id":"activity","label":"Activity Log"},{"id":"activity-sentences","label":"Entries read as sentences"},{"id":"activity-api","label":"API"}]'>
           <!-- SYNC:activity -->
           <h1 class="doc-h1" id="activity">Activity Log</h1>
-          <p class="doc-p">Every create, update, and delete on a tracked collection is recorded in <code class="doc-code">nivaro_activity</code>. The Activity page shows a paginated, filterable audit log.</p>
-          <p class="doc-p">For item mutations, a <code class="doc-code">nivaro_revisions</code> row stores the full JSON snapshot and a delta of changed fields, allowing point-in-time restoration.</p>
-          <div class="doc-note">Activity logging middleware is planned — the tables exist and are written to by flow triggers, but automatic logging of generic item mutations has not yet been wired up.</div>
+          <p class="doc-p">Every create, update, delete, workflow move, sign-in, export and configuration change is recorded in <code class="doc-code">nivaro_activity</code> (per collection, as its audit level allows). For item writes a <code class="doc-code">nivaro_revisions</code> row keeps the full snapshot and the changed fields, so a record can be put back to any point.</p>
+          <h2 class="doc-h2" id="activity-sentences">Entries read as sentences</h2>
+          <p class="doc-p">The Activity page, an entry's detail page and the record history show each entry as one sentence: "Pat moved PO 4471 from Draft to Approved", "Rob changed Vendor on Workflow 85607", "Sam deleted 3 invoices". Actions without their own wording read from the action's words ("cancelled the layout schedule"); anything else falls back to a readable title.</p>
+          <ul class="doc-ul">
+            <li>**Labels, not ids**: records are named by their label, read as the person looking. A record they cannot see reads "a record you can't see". People are named by their directory name, choices by their label, and dates show in the reader's own time zone.</li>
+            <li>**Bursts fold**: one bulk action, import run, flow run, scheduled job tick, batch request or AI-assistant (MCP) request reads as one line ("Pat updated 40 workflows: Status → On Hold") that opens to its records. Older entries fold when the same person did the same thing to the same collection within 60 seconds.</li>
+            <li>**Who really did it**: an administrator viewing as someone reads "Rob as Pat"; an API key, an assistant ("Claude for Pat"), an import, a flow or a scheduled job is named instead of a bare id or "System".</li>
+            <li>**Why, on the entry**: the change reason, the note left on a workflow move and a linked approval decision show under the sentence.</li>
+          </ul>
+          <h2 class="doc-h2" id="activity-api">API</h2>
+          <ul class="doc-ul">
+            <li><code class="doc-code">GET /api/activity</code> (administrators): each row also carries <code class="doc-code">actor</code> ({kind, id, name, on_behalf_of}; kind = person, view_as, api_key, mcp, import, flow, cron or system), <code class="doc-code">group_key</code>, <code class="doc-code">changes</code> (an update's changed fields) and <code class="doc-code">why</code> ({reason, note, approval}). <code class="doc-code">?group_key=</code> lists one burst.</li>
+            <li><code class="doc-code">POST /api/activity/labels</code> (anyone signed in): <code class="doc-code">{refs: [{collection, id}], users: [ids], fields: [{collection, field}], collections: []}</code> returns record labels read as the caller (<code class="doc-code">null</code> = they cannot see it), people, and collection, field and choice labels.</li>
+          </ul>
+          <div class="doc-note">Host apps render entries with <code class="doc-code">ActivityEntry</code> / <code class="doc-code">ActivityFeed</code> and <code class="doc-code">useActivityLabels</code> from @nivaro/shared (re-exported by @nivaro/react); <code class="doc-code">renderActivitySentence(entry, labels)</code> is the plain-text form, also used on the server for email digests.</div>
           <!-- /SYNC:activity -->
         </div>
 
@@ -1165,7 +1177,7 @@ emitNotification(app.io, targetUserId, {
           <!-- /SYNC:comments -->
         </div>
 
-        <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"},{"id":"computed-rollup-stored","label":"Stored rollups"}]'>
+        <div class="doc-section" id="s-computed-fields" data-toc='[{"id":"computed-fields","label":"Computed Fields"},{"id":"computed-rollup","label":"Rollup fields"},{"id":"computed-rollup-stored","label":"Stored rollups"},{"id":"computed-fields-where-from","label":"Where does this value come from?"}]'>
           <!-- SYNC:computed-fields -->
           <h1 class="doc-h1" id="computed-fields">Computed Fields</h1>
           <p class="doc-p">Fields can have a formula that is evaluated automatically. Formulas use <code class="doc-code">expr-eval</code> — a safe, sandboxed arithmetic/logical expression evaluator. No arbitrary code execution.</p>
@@ -1274,6 +1286,8 @@ item.status == "active" ? 1 : 0</code></pre>
 const article = await nivaro.request(readItem('articles', '123'))
 // article.data.full_name   → computed read-time value (evaluated server-side)
 // article.data.total_price → computed write+store value</code></pre>
+          <h2 class="doc-h2" id="computed-fields-where-from">Where does this value come from?</h2>
+          <p class="doc-p">On the record form, a calculated, rolled-up, looked-up or copied field has a small ⓘ beside its label. It opens the formula in words with its inputs — “Sum of Amount on Lines where Status is not Cancelled (or is empty).”, “Copied from the Project’s Zone when Project is set.”, “Filled from the Project’s Zone when Project is set, on the form or through the API.” (cross-record defaults). The layout editor’s field inspector shows the same text on the Rules tab. A config the app cannot put into words shows nothing.</p>
           <!-- /SYNC:computed-fields -->
         </div>
 
@@ -1306,11 +1320,17 @@ const article = await nivaro.request(readItem('articles', '123'))
         <div class="doc-section" id="s-reports-guide" data-toc='[{"id":"reports-guide","label":"Audit &amp; Compliance Reports"}]'>
           <!-- SYNC:reports-guide -->
           <h1 class="doc-h1" id="reports-guide">Audit &amp; Compliance Reports</h1>
-          <p class="doc-p">The Reports page (admin-only) provides filtered views of the audit log with CSV export for compliance workflows.</p>
-          <h3 class="doc-h3">Activity report</h3>
-          <p class="doc-p">Filter by collection, user, action (create/update/delete), and date range. Results are paginated in the UI. Click Export CSV to download the full filtered dataset with no row limit.</p>
-          <h3 class="doc-h3">Summary report</h3>
-          <p class="doc-p">Aggregated counts for the selected date range: breakdown by action type, top collections by mutation volume, and top users by activity count.</p>
+          <p class="doc-p">The Audit report (Activity → Audit report, admin-only) reads the audit log as sentences — "Pat moved PO 4471 from Draft to Approved" — with who really did it (View-as, API key, assistant, import, flow, scheduled job), the record named as you can see it, and the reason or note. Bulk changes, imports and automation runs fold into one line you can open.</p>
+          <h3 class="doc-h3">Quick views and filters</h3>
+          <ul class="doc-ul">
+            <li>Quick views: Last 7 days (the default), Permission changes (roles, policies, scopes), Deletes, Imports, By me.</li>
+            <li>Narrow it down: when (a relative window or two dates), what happened (actions by name), where (collections by display name), who (search people by name) and words (reason, record number).</li>
+            <li>A line above the list says what is shown, e.g. "Updates and deletes in Workflows by Pat, last 7 days — 128 entries", and the totals read in words: "128 entries by 6 people · 40 updates in one import · most active: Workflows".</li>
+            <li>Reads are hidden unless Show reads is on — every opened record is logged as one.</li>
+            <li>Save the filters as a view (personal or shared with administrators) and email it on a schedule.</li>
+          </ul>
+          <h3 class="doc-h3">Export</h3>
+          <p class="doc-p">Export CSV downloads the matching entries (newest 20,000) with a sentence, who and why column in your time zone, then the raw columns: timestamp, id, action, collection, item, user id, name and email, actor kind, origin, group key and comment.</p>
           <div class="doc-note">Reports require admin access. Non-admin users cannot access this page or its API.</div>
           <!-- /SYNC:reports-guide -->
         </div>
@@ -2410,7 +2430,20 @@ const { data: tx } = await nivaro.request(
   "statusCode": 401,
   "error": "Unauthorized",
   "message": "This API key expired on 2026-09-01",
-  "code": "API_KEY_EXPIRED"
+  "code": "API_KEY_EXPIRED",
+  "hint": "Create a new key under API keys and use it instead.",
+  "request_id": "4f0c2a9e-…"
+}</code></pre>
+          <p class="doc-p">Every error answer also says what to do. <code class="doc-code">hint</code> is one plain sentence (chosen by <code class="doc-code">code</code>, else by status). <code class="doc-code">fields</code> lists the field keys the refusal is about, so a form can mark them. <code class="doc-code">request_id</code> matches the <code class="doc-code">x-nivaro-request-id</code> header and the API log; quote it when you report a problem. A key the route already set is never replaced, and <code class="doc-code">error</code>, <code class="doc-code">message</code> and <code class="doc-code">code</code> keep their values.</p>
+          <p class="doc-p">A write the database refuses is told in the collection’s field labels: a duplicate value names the field and your value ("Another record already has this PO number (4471)"), a missing link names the field you picked, a left-out required column answers <code class="doc-code">REQUIRED_VALUE_MISSING</code>, and a delete still linked to names the records that point at it. Constraint, table and column names never appear.</p>
+          <pre class="doc-pre"><code>HTTP/1.1 422 Unprocessable Entity
+
+{
+  "error": "Supplier site is required",
+  "code": "REQUIRED_VALUE_MISSING",
+  "hint": "Fill in Supplier site, then save again.",
+  "fields": ["supplier_site"],
+  "request_id": "4f0c2a9e-…"
 }</code></pre>
           <h3 class="doc-h3">Sign-in and credential codes</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -2437,6 +2470,7 @@ const { data: tx } = await nivaro.request(
               <tr><td>RECORD_IN_USE</td><td>409</td><td>The record cannot be removed while other records point at it.</td></tr>
               <tr><td>DUPLICATE_RECORD</td><td>409</td><td>A record with the same unique value already exists.</td></tr>
               <tr><td>VALUE_TOO_LONG</td><td>422</td><td>A value is longer than its field allows.</td></tr>
+              <tr><td>REQUIRED_VALUE_MISSING</td><td>422</td><td>A field that must have a value was left out or sent empty. <code class="doc-code">fields</code> names it.</td></tr>
               <tr><td>FIELD_NOT_FILTERABLE</td><td>400</td><td>A filter or sort names a calculated field that cannot be compared in the database.</td></tr>
               <tr><td>VALIDATION_RULE_FAILED</td><td>400</td><td>A field rule refused the value. <code class="doc-code">violations</code> lists field, rule and message.</td></tr>
               <tr><td>CHANGE_REASON_REQUIRED</td><td>422</td><td>The change needs <code class="doc-code">_change_reason</code>. <code class="doc-code">violations</code> lists the fields.</td></tr>
@@ -4055,6 +4089,11 @@ Authorization: Bearer &lt;admin-token&gt;
 ?page=1&amp;limit=50        // pagination; max limit 500
 ?format=csv             // download full result set as CSV (no pagination)
 
+// Readable export (the Audit report): GET /api/activity's filters
+?format=csv&amp;readable=1&amp;range=last_7_days&amp;exclude_actions=read&amp;tz=America/New_York
+// → when, sentence, who, why, action_label, collection_label, record_label + raw columns;
+//   newest 20,000 rows; headers X-Export-Rows, X-Export-Truncated (1 = more matched)
+
 // JSON response:
 {
   "data": [
@@ -4070,13 +4109,19 @@ Authorization: Bearer &lt;admin-token&gt;
 Authorization: Bearer &lt;admin-token&gt;
 ?from=2025-01-01&amp;to=2025-12-31   // without from: the last 30 days (before to, or now)
                                   // a bare date in to includes that whole day
+?user=&amp;action=&amp;exclude_actions=&amp;collection=&amp;item=&amp;range=&amp;q=
+                                  // optional: GET /api/activity's filters — every count
+                                  // then covers what the Audit report lists
 
 → {
   "by_action":     [{ "action": "create", "count": 450 }],
   "by_collection": [{ "collection": "projects", "count": 300 }],
   "by_user":       [{ "user_id", "first_name", "last_name", "email", "count" }],
   "total_events":  1234,
-  "date_range":    { "from": "...", "to": "...", "default_days": 30 | null }
+  "date_range":    { "from": "...", "to": "...", "default_days": 30 | null, "range": null },
+  "largest_burst": { "group_key": "import_run:7", "count": 40,
+                     "action": "update" | null, "collection": "workflows" | null } | null,
+  "filtered":      true
 }</code></pre>
           <!-- /SYNC:reports-api -->
         </div>
@@ -4757,10 +4802,25 @@ const nivaro = createNivaro('https://nivaro.example.com', {
 // Full options
 const nivaro = createNivaro('https://nivaro.example.com', {
   token: 'nvk_abc123...',
-  workspace: 'workspace-uuid',  // optional: workspace to target
-  headers: { 'X-Custom': 'value' },  // optional: extra headers
-  timeoutMs: 90_000,  // optional: abandon a GET read that has not answered (off by default)
+  headers: { 'x-workspace': 'workspace-uuid', 'x-nivaro-app': 'my-app' },  // extra headers (or a function)
+  timeoutMs: 90_000,  // abandon a GET read that has not answered (off by default)
+  retry: 2,           // retry GETs on 408/429/502/503/504 + network errors, honouring Retry-After (off by default)
+  debug: true,        // one console.debug line per request: method, path, status, ms, request id
+  onRequest: (req) =&gt; { req.headers['traceparent'] = currentTrace() },
+  onResponse: (res) =&gt; metrics.observe(res.path, res.status, res.durationMs, res.requestId),
+  onError: (err, where) =&gt; logger.warn({ where, err }),
 })</code></pre>
+          <h3 class="doc-h3">Errors</h3>
+          <p class="doc-p">Every non-2xx answer throws a <code class="doc-code">NivaroError</code> (an <code class="doc-code">Error</code>): <code class="doc-code">status</code>, the API machine <code class="doc-code">code</code> (e.g. <code class="doc-code">QUOTA_EXCEEDED</code>, <code class="doc-code">SERVER_BUSY</code>), <code class="doc-code">requestId</code> (the <code class="doc-code">x-nivaro-request-id</code> the server stamped — quote it when reporting a problem), the parsed body on <code class="doc-code">response</code>, <code class="doc-code">method</code>, <code class="doc-code">path</code> and <code class="doc-code">retryAfterMs</code>. A GET past <code class="doc-code">timeoutMs</code> throws a <code class="doc-code">TimeoutError</code>; a caller abort (<code class="doc-code">withSignal</code>) throws the platform <code class="doc-code">AbortError</code>.</p>
+          <pre class="doc-pre"><code>import { isNivaroError, readItem } from '@nivaro/sdk'
+
+try {
+  await nivaro.request(readItem('orders', 42))
+} catch (err) {
+  if (isNivaroError(err) &amp;&amp; err.status === 404) return null
+  if (isNivaroError(err)) console.error(err.code, err.message, 'request', err.requestId)
+  throw err
+}</code></pre>
           <h3 class="doc-h3">Client methods</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Purpose</th><th>Example</th></tr></thead>
@@ -4841,60 +4901,40 @@ await nivaro.request(deleteItem('articles', 42))</code></pre>
         <div class="doc-section" id="s-sdk-realtime" data-toc='[{"id":"sdk-realtime","label":"SDK — Realtime (Socket.io)"}]'>
           <!-- SYNC:sdk-realtime -->
           <h1 class="doc-h1" id="sdk-realtime">SDK — Realtime (Socket.io)</h1>
-          <p class="doc-p">Subscribe to live events (item updates, notifications, presence) via Socket.io. The SDK wraps Socket.io with a simple subscribe/unsubscribe API.</p>
-          <h3 class="doc-h3">Basic setup</h3>
-          <pre class="doc-pre"><code>import { createRealtime } from '@nivaro/sdk'
+          <p class="doc-p">Hear record changes and notifications as they happen. <code class="doc-code">createRealtime()</code> signs the socket in, joins one read-gated room per subscribed collection, and re-joins after every reconnect. Events carry ids, the action and changed field NAMES only — never values; read the record through the REST API when you need it.</p>
+          <h3 class="doc-h3">Connect and sign in</h3>
+          <pre class="doc-pre"><code>import { createNivaro, createRealtime, readWsToken } from '@nivaro/sdk'
 
-// Create and connect
+const nivaro = createNivaro('https://nivaro.example.com', { token: process.env.NIVARO_TOKEN })
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com', { token: 'nvk_...' })</code></pre>
-          <h3 class="doc-h3">Subscribe to events</h3>
-          <pre class="doc-pre"><code>// Subscribe to all updates on a collection
-const unsubscribe = rt.subscribe(
-  'articles',
-  { event: 'update' },
-  (article) =&gt; {
-    console.log('Article updated:', article)
-    // article → full updated item snapshot
+
+// A ws-token works for every sign-in (session cookie, API key, static token). It is single-use,
+// so pass a getter: it is asked again on every reconnect.
+rt.connect('https://nivaro.example.com', () =&gt; nivaro.request(readWsToken()).then((r) =&gt; r.token))
+
+// A user's static token or a View-as token may be passed as a plain string instead.
+rt.onAuthenticated((userId) =&gt; console.log('signed in as', userId))</code></pre>
+          <h3 class="doc-h3">Subscribe to a collection</h3>
+          <pre class="doc-pre"><code>const unsubscribe = rt.subscribe('orders', { event: 'update' }, (changes) =&gt; {
+  for (const c of changes) {
+    // c → { collection, item, action, changed_fields?, source?, coalesced?, many? }
+    if (c.many) refetchList()          // a burst too large to list ids
+    else refetchRow(c.item)
   }
-)
+})
 
-// Subscribe to updates on a specific item
-rt.subscribe(
-  'articles:123',
-  { event: 'update' },
-  (article) =&gt; console.log('This article changed')
-)
+rt.subscribe('orders', { event: '*' }, (changes) =&gt; {})  // create + update + delete
 
-// Subscribe to your notifications
-rt.subscribe(
-  `user:${userId}`,
-  { event: 'notification:new' },
-  (notif) =&gt; console.log('New notification:', notif.subject)
-)
-
-// Subscribe to presence changes on an item
-rt.subscribe(
-  'articles:123',
-  { event: 'presence' },
-  (users) =&gt; console.log(`${users.length} users viewing`)
-)</code></pre>
-          <h3 class="doc-h3">Event types</h3>
-          <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Event</th><th>Fires On</th><th>Data</th></tr></thead>
-            <tbody><tr><tr><td>create</td><td>New item added</td><td>Full item snapshot</td></tr>
-              <tr><td>update</td><td>Item field changed</td><td>Full item snapshot (with updated values)</td></tr>
-              <tr><td>delete</td><td>Item deleted</td><td>Item ID and deletion timestamp</td></tr>
-              <tr><td>notification:new</td><td>Notification created</td><td>Notification object</td></tr>
-              <tr><td>presence</td><td>User joins/leaves/edits</td><td>Array of currently viewing users</td></tr></tr></tbody>
-          </table></div>
-          <h3 class="doc-h3">Unsubscribe and disconnect</h3>
-          <pre class="doc-pre"><code>// Unsubscribe from a room
-unsubscribe()
-
-// Disconnect from server (closes all subscriptions)
+unsubscribe()   // leaves the room when no subscription on it is left
 rt.disconnect()</code></pre>
-          <div class="doc-note">Socket.io is multiplexed over the same URL as the API (e.g., https://nivaro.example.com). No separate server configuration needed. The Redis pub/sub adapter means events propagate across all server replicas.</div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Event</th><th>Fires on</th><th>Payload (one RealtimeChange per record)</th></tr></thead>
+            <tbody><tr><tr><td>create</td><td>A record was created</td><td>{ collection, item, action: "create" }</td></tr>
+              <tr><td>update</td><td>A record changed</td><td>{ collection, item, action: "update", changed_fields? }</td></tr>
+              <tr><td>delete</td><td>A record was deleted</td><td>{ collection, item, action: "delete" }</td></tr>
+              <tr><td>NOTIFICATIONS_CHANNEL</td><td>notification:new for the signed-in person</td><td>The notification object</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Wire protocol: the client emits <code class="doc-code">auth {token}</code> after connecting (the server answers <code class="doc-code">auth:ok</code>), then <code class="doc-code">collection:join {collection}</code> per room; the server sends <code class="doc-code">collection:update</code> (bursts coalesced as <code class="doc-code">{ items, many, count, coalesced: true }</code>) and <code class="doc-code">notification:new</code>. A collection whose realtime mode is <code class="doc-code">off</code> sends nothing — poll it. SDK 0.2.x and earlier emitted <code class="doc-code">subscribe</code> and listened for <code class="doc-code">items:*</code>, which the server never handled.</div>
           <!-- /SYNC:sdk-realtime -->
         </div>
 
@@ -5473,53 +5513,64 @@ if (deleted) return &lt;p&gt;This order was deleted.&lt;/p&gt;</code></pre>
         <div class="doc-section" id="s-sdk-notifications" data-toc='[{"id":"sdk-notifications","label":"SDK — Notifications &amp; Inbox"}]'>
           <!-- SYNC:sdk-notifications -->
           <h1 class="doc-h1" id="sdk-notifications">SDK — Notifications &amp; Inbox</h1>
-          <p class="doc-p">Manage your notification inbox. Notifications are created by rules, workflows, comments (@mentions), and alerts — use these endpoints to read, mark as read, and delete them.</p>
+          <p class="doc-p">Read and work the caller's own inbox. Notifications are created by rules, pipelines, comments (@mentions), alerts and people. Every command acts on the caller's own rows only.</p>
           <pre class="doc-pre"><code>import {
-  readNotifications, readNotificationCount,
-  markNotificationRead, markAllNotificationsRead, deleteNotification
+  listNotifications, readUnreadNotificationCount,
+  markNotificationRead, markNotificationsRead, markAllNotificationsRead, deleteNotification
 } from '@nivaro/sdk'
 
-// List your inbox notifications (paginated)
-const { data: notifs, total, offset } = await nivaro.request(
-  readNotifications({ limit: 50, offset: 0 })
+// One page of the inbox (default 50, max 200). Filters match the notification center's own.
+const page = await nivaro.request(
+  listNotifications({ page: 1, limit: 50, lane: 'attention', search: 'invoice', unread: true })
 )
-// notifs → Notification[] — { id, subject, message, status, timestamp, collection, item }
+// page.data → NotificationItem[]; page.pinned → acknowledgement-required rows (page 1)
+// status: 'inbox' | 'read' | 'archived' | 'all'; snoozed: true lists only sleeping rows
 
-// Get unread count (lightweight, for badge)
-const { data: counts } = await nivaro.request(readNotificationCount())
-// counts → { unread: 5, total: 42 }
+// Badge figures, split by lane
+const counts = await nivaro.request(readUnreadNotificationCount())
+// → { unread: 5, attention: 3, lanes: { critical, needs_you, fyi } }
 
-// Mark one as read
-await nivaro.request(markNotificationRead(notif.id))
-
-// Mark all as read
+await nivaro.request(markNotificationRead(id))
+await nivaro.request(markNotificationsRead([id1, id2]))
 await nivaro.request(markAllNotificationsRead())
+await nivaro.request(deleteNotification(id))</code></pre>
+          <h3 class="doc-h3">Snooze, acknowledge, bulk actions, mutes</h3>
+          <pre class="doc-pre"><code>import {
+  snoozeNotification, acknowledgeNotification, bulkNotificationAction,
+  archiveReadNotifications, listSentNotifications, readRecordMute, toggleRecordMute
+} from '@nivaro/sdk'
 
-// Delete one
-await nivaro.request(deleteNotification(notif.id))</code></pre>
-          <h3 class="doc-h3">Real-time notifications via Socket.io</h3>
-          <p class="doc-p">For live notifications as they arrive, subscribe to the Socket.io event:</p>
-          <pre class="doc-pre"><code>import { createRealtime } from '@nivaro/sdk'
+await nivaro.request(snoozeNotification(id, { until: '2026-11-02T09:00:00Z' }))
+await nivaro.request(snoozeNotification(id, { untilChange: true }))  // wake when the record moves
+await nivaro.request(acknowledgeNotification(id))  // when the sender asked for an acknowledgement
+
+// One action over explicit ids (≤1000) or everything matching a filter (≤2000)
+await nivaro.request(bulkNotificationAction({ action: 'archive', filter: { status: 'read', lane: 'fyi' } }))
+await nivaro.request(archiveReadNotifications(30))  // read rows older than 30 days
+
+// What I sent, with each recipient's read / acknowledgement state
+const { data: sent } = await nivaro.request(listSentNotifications({ lane: 'all' }))
+
+// Mute one record's notifications for me
+const { data: mute } = await nivaro.request(toggleRecordMute('orders', 42))  // { muted: true }</code></pre>
+          <h3 class="doc-h3">Delivery history and reminders</h3>
+          <pre class="doc-pre"><code>import { readNotificationHistory, listReminders, createReminder, deleteReminder } from '@nivaro/sdk'
+
+// What actually reached me: in-app rows, alert firings, report alerts, digest-queued emails
+const { data: history } = await nivaro.request(readNotificationHistory(80))
+// history[i] → { kind, at, title, detail, collection?, item?, status?, channels: ['in-app', 'push'] }
+
+const { data: r } = await nivaro.request(createReminder({ note: 'Call vendor', remind_at: '2026-11-03T14:00:00Z' }))
+const { data: mine } = await nivaro.request(listReminders())
+await nivaro.request(deleteReminder(r.id))</code></pre>
+          <h3 class="doc-h3">Live notifications</h3>
+          <pre class="doc-pre"><code>import { createRealtime, NOTIFICATIONS_CHANNEL, readWsToken } from '@nivaro/sdk'
 
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com')
+rt.connect('https://nivaro.example.com', () =&gt; nivaro.request(readWsToken()).then((r) =&gt; r.token))
 
-// Subscribe to your notifications room
-rt.subscribe(`user:${userId}`, { event: 'notification:new' }, (notif) =&gt; {
-  console.log('New notification:', notif.subject)
-  // Update badge, toast, etc.
-})</code></pre>
-          <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>id</td><td>string</td><td>UUID.</td></tr>
-              <tr><td>subject</td><td>string</td><td>Notification title.</td></tr>
-              <tr><td>message</td><td>string</td><td>Full message body.</td></tr>
-              <tr><td>status</td><td>string</td><td>"inbox" | "read"</td></tr>
-              <tr><td>timestamp</td><td>string</td><td>ISO 8601 when created.</td></tr>
-              <tr><td>collection</td><td>string | null</td><td>Related collection (if from an item event).</td></tr>
-              <tr><td>item</td><td>string | null</td><td>Related item ID.</td></tr>
-              <tr><td>sender</td><td>string | null</td><td>User who triggered it (if applicable).</td></tr></tr></tbody>
-          </table></div>
+// notification:new for the signed-in person
+rt.subscribe(NOTIFICATIONS_CHANNEL, {}, ([notif]) =&gt; console.log('New notification', notif))</code></pre>
           <!-- /SYNC:sdk-notifications -->
         </div>
 
@@ -5669,7 +5720,15 @@ await nivaro.request(deleteComment(comment.id))</code></pre>
         <div class="doc-section" id="s-sdk-auth" data-toc='[{"id":"sdk-auth","label":"SDK — Authentication"}]'>
           <!-- SYNC:sdk-auth -->
           <h1 class="doc-h1" id="sdk-auth">SDK — Authentication</h1>
-          <p class="doc-p">The SDK supports two authentication methods: static tokens (for backends/scripts) and session cookies (for browser SPAs).</p>
+          <p class="doc-p">The SDK sends whatever <code class="doc-code">token</code> you give it as <code class="doc-code">Authorization: Bearer</code>; without one it rides the browser session cookie.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Credential</th><th>Where it comes from</th><th>Notes</th></tr></thead>
+            <tbody><tr><tr><td>Named API key <code class="doc-code">nvk_…</code></td><td>API Keys page / createApiKey()</td><td>Scopes, expiry, IP allowlist, rate limit; sandbox keys never write. Sockets: use a ws-token.</td></tr>
+              <tr><td>Static user token</td><td>generateToken() / generateUserToken()</td><td>Acts as that user; also signs a socket in directly.</td></tr>
+              <tr><td>Session cookie</td><td>OIDC / SAML / password sign-in in the browser</td><td>No token; <code class="doc-code">credentials: include</code>. Sockets: use a ws-token.</td></tr>
+              <tr><td>View-as token <code class="doc-code">nvm_…</code></td><td>An admin’s View-as</td><td>Acts as the viewed person; ends with the View-as.</td></tr>
+              <tr><td>OAuth access token <code class="doc-code">nvo_…</code></td><td>Remote MCP clients (OAuth 2.1)</td><td>Accepted on /api/mcp and its tool calls only — never on other routes.</td></tr></tr></tbody>
+          </table></div>
           <h3 class="doc-h3">Static tokens (server-side / CLI)</h3>
           <p class="doc-p">Use a static API token for automated scripts, cron jobs, and server-to-server communication:</p>
           <pre class="doc-pre"><code>import { createNivaro, readItems } from '@nivaro/sdk'
@@ -5725,67 +5784,89 @@ nivaro.setToken(null)
 
 // Admin: revoke another user's token
 await nivaro.request(revokeUserToken('user-uuid'))</code></pre>
+          <h3 class="doc-h3">Session helpers</h3>
+          <pre class="doc-pre"><code>import { readMe, logout, logoutAll, readWsToken, readAuthProviders } from '@nivaro/sdk'
+
+const { data: me } = await nivaro.request(readMe())
+const { data: providers } = await nivaro.request(readAuthProviders())  // public: which sign-ins exist
+const { token } = await nivaro.request(readWsToken())   // one-time socket token (2 min)
+await nivaro.request(logout())      // end this session (cookie sign-in)
+await nivaro.request(logoutAll())   // end every session of mine</code></pre>
           <!-- /SYNC:sdk-auth -->
         </div>
 
-        <div class="doc-section" id="s-sdk-activity" data-toc='[{"id":"sdk-activity","label":"SDK — Activity &amp; Revisions"}]'>
+        <div class="doc-section" id="s-sdk-activity" data-toc='[{"id":"sdk-activity","label":"SDK — Activity, Revisions &amp; Logs"}]'>
           <!-- SYNC:sdk-activity -->
-          <h1 class="doc-h1" id="sdk-activity">SDK — Activity &amp; Revisions</h1>
-          <p class="doc-p">The activity log records all changes and actions in your CMS. Revisions give you full audit trail and rollback capability.</p>
-          <h3 class="doc-h3">Activity log</h3>
-          <pre class="doc-pre"><code>import { readActivity } from '@nivaro/sdk'
+          <h1 class="doc-h1" id="sdk-activity">SDK — Activity, Revisions &amp; Logs</h1>
+          <p class="doc-p">The audit log records every change and notable action; revisions are a record's own history; the change feed, request log, job runs and mail log answer "what happened" from the API itself. Reads of the system-wide logs are for administrators.</p>
+          <h3 class="doc-h3">Audit log (administrators)</h3>
+          <pre class="doc-pre"><code>import { readActivity, readActivityEntry, listActivityActions, logExport } from '@nivaro/sdk'
 
-// All activity, newest first (system-wide audit log; administrators only — 403 otherwise)
+// Newest first; limit default 25, max 200
 const { data: entries, total } = await nivaro.request(
-  readActivity({ limit: 50, offset: 0 })
+  readActivity({ collection: 'orders', action: 'update', user: 'user-uuid', limit: 50 })
 )
-// entries → Activity[] — { id, action, collection, item, user_id, timestamp, ... }
+// entries[i] → { id, action, collection, item, user, timestamp, ip, comment, origin,
+//                first_name, last_name, user_email, via_agent }
 
-// Filter by collection, action, or user
-const { data: creates } = await nivaro.request(
-  readActivity({
-    collection: 'inventory_requests',
-    action: 'create',  // 'create' | 'update' | 'delete' | 'schema-*'
-    user_id: 'user-uuid',  // optional
-    limit: 25,
-  })
-)</code></pre>
-          <h3 class="doc-h3">Revisions (item-level history)</h3>
-          <pre class="doc-pre"><code>import { readRevisions, readRevision } from '@nivaro/sdk'
+const { data: entry } = await nivaro.request(readActivityEntry(entries[0].id))  // + user_agent
+const { data: actions } = await nivaro.request(listActivityActions())  // every action in the log
 
-// All revisions for a specific item (newest first)
-const { data: revisions } = await nivaro.request(
-  readRevisions('inventory_requests', itemId, { limit: 50 })
+// Anyone signed in: report an export made in the browser (an `export` audit row)
+await nivaro.request(logExport({ collection: 'orders', row_count: 120, format: 'csv' }))</code></pre>
+          <h3 class="doc-h3">Revisions (a record’s history)</h3>
+          <pre class="doc-pre"><code>import { readRevisions, readRevision, readLatestRevisionId, rollbackRevision } from '@nivaro/sdk'
+
+// Newest first: up to 100 revisions plus folded pipeline moves and O2M child events.
+// Same gate as opening the record; snapshots are cut to the fields you may read. No paging.
+const { data: revisions } = await nivaro.request(readRevisions('orders', 42))
+for (const rev of revisions) {
+  if (rev.event) console.log('moved', rev.event.from_label, '→', rev.event.to_label)
+  else console.log(rev.action, 'by', rev.first_name, 'changed', Object.keys(rev.delta ?? {}))
+}
+
+const { data: rev } = await nivaro.request(readRevision(revisions[0].id!))
+const { data: latest } = await nivaro.request(readLatestRevisionId('orders', 42))  // { latest }
+await nivaro.request(rollbackRevision(rev.id!))  // through the items service, as you</code></pre>
+          <h3 class="doc-h3">Change feed</h3>
+          <pre class="doc-pre"><code>import { readChanges } from '@nivaro/sdk'
+
+// Ids, actions and changed field NAMES only, for records you can see now
+let page = (await nivaro.request(readChanges({ since: '2026-10-29T12:00:00Z', collections: ['orders'] }))).data
+while (page.has_more) page = (await nivaro.request(readChanges({ cursor: page.cursor }))).data
+// keep page.cursor and call again later for what changed since</code></pre>
+          <h3 class="doc-h3">API request log, key usage, jobs and mail (administrators)</h3>
+          <pre class="doc-pre"><code>import {
+  listApiRequests, readApiAnalyticsByKey, readApiKeyUsage, readApiKeyMonthlyUsage,
+  listJobRuns, readJobRunLog, cancelJobRun, readBusyJobs,
+  listMailLog, readMailLogEntry, resendMail, listRecordMail
+} from '@nivaro/sdk'
+
+const { data: failures } = await nivaro.request(listApiRequests({ status: '5xx', hours: 6 }))
+const { data: byKey } = await nivaro.request(readApiAnalyticsByKey(24))
+const { data: usage } = await nivaro.request(readApiKeyUsage(keyId))          // last 30 days
+const csv = await nivaro.request(readApiKeyMonthlyUsage(keyId, '2026-10', 'csv'))
+
+const { data: runs } = await nivaro.request(listJobRuns({ status: 'error' }))
+const { data: log } = await nivaro.request(readJobRunLog(runs[0].id))        // { run, lines }
+const { data: busy } = await nivaro.request(readBusyJobs())
+
+const { data: mails } = await nivaro.request(listMailLog({ status: 'failed' }))
+await nivaro.request(resendMail(mails[0].id))
+// Anyone who can read the record: the mail sent about it (headers only)
+const { data: recordMail } = await nivaro.request(listRecordMail('orders', 42))</code></pre>
+          <h3 class="doc-h3">Your own jobs and background reads</h3>
+          <pre class="doc-pre"><code>import { listMyJobs, startBackgroundRun, readBackgroundRun, readBackgroundRunResult } from '@nivaro/sdk'
+
+const { data: jobs } = await nivaro.request(listMyJobs())  // running or finished in the last 30 min
+
+// Hand a slow read to the server; it is replayed as you
+const { data: run } = await nivaro.request(
+  startBackgroundRun({ method: 'POST', url: '/api/custom-queries/q/execute', body: { params: {} } })
 )
-// revisions → Revision[] — each revision includes action, full snapshot, and delta
-
-revisions.forEach(rev =&gt; {
-  console.log(
-    `${rev.action.toUpperCase()} by ${rev.first_name} at ${rev.timestamp}`
-  )
-  if (rev.delta) {
-    console.log('Changed:', Object.keys(rev.delta))
-  }
-})
-
-// Single revision detail with full snapshot and delta
-const { data: rev } = await nivaro.request(readRevision(revisionId))
-console.log('Full snapshot:', rev.data)
-console.log('Changed fields:', rev.delta)</code></pre>
-          <h3 class="doc-h3">Revision shape</h3>
-          <div class="doc-table-wrap"><table class="doc-table">
-            <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
-            <tbody><tr><tr><td>id</td><td>string</td><td>Revision UUID.</td></tr>
-              <tr><td>action</td><td>string</td><td>"create" | "update" | "delete"</td></tr>
-              <tr><td>collection</td><td>string</td><td>Collection name.</td></tr>
-              <tr><td>item_id</td><td>string</td><td>Item ID (null for create).</td></tr>
-              <tr><td>data</td><td>Record</td><td>Full snapshot of the record at that revision.</td></tr>
-              <tr><td>delta</td><td>Record | null</td><td>Only changed fields (for updates). Null for create/delete.</td></tr>
-              <tr><td>timestamp</td><td>string</td><td>ISO 8601 datetime.</td></tr>
-              <tr><td>user_id</td><td>string</td><td>User who made the change.</td></tr>
-              <tr><td>first_name / last_name / user_email</td><td>string</td><td>Display info from nivaro_users.</td></tr></tr></tbody>
-          </table></div>
-          <div class="doc-note">Revisions are immutable — they form a complete audit trail. You can compare any two revisions to see exactly what changed. For rollback, use the delta as a PATCH to the current item.</div>
+const { data: now } = await nivaro.request(readBackgroundRun(run.id))
+if (now.status === 'completed') console.log(await nivaro.request(readBackgroundRunResult(run.id)))</code></pre>
+          <div class="doc-note">Every API answer carries an <code class="doc-code">x-nivaro-request-id</code> header — the id the slow-trace buffer, the access log and the request log share. The client puts it on <code class="doc-code">NivaroError.requestId</code> and on the <code class="doc-code">onResponse</code> hook (see Setup). A cross-origin browser call can only read it when the API exposes the header through CORS.</div>
           <!-- /SYNC:sdk-activity -->
         </div>
 
@@ -5948,13 +6029,13 @@ console.log('Created:', result.createArticle.id)</code></pre>
           <pre class="doc-pre"><code>// GraphQL subscriptions require a separate WebSocket transport
 // Use the Socket.io realtime client instead — it's simpler and handles reconnection
 
-import { createRealtime } from '@nivaro/sdk'
+import { createRealtime, readWsToken } from '@nivaro/sdk'
 
 const rt = createRealtime()
-await rt.connect('https://nivaro.example.com')
+rt.connect('https://nivaro.example.com', () =&gt; nivaro.request(readWsToken()).then((r) =&gt; r.token))
 
-rt.subscribe('articles', { event: 'update' }, (article) =&gt; {
-  console.log('Article updated:', article)
+rt.subscribe('articles', { event: 'update' }, (changes) =&gt; {
+  console.log('Articles changed:', changes.map((c) =&gt; c.item))
 })</code></pre>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Purpose</th></tr></thead>
@@ -6331,8 +6412,23 @@ const { data, total, limit, offset } = await nivaro.request(
 )
 // data → T[]
 
-// Single item
-const { data: article } = await nivaro.request(readItem('articles', '123'))
+// Search a few fields by relevance, a cached total, relation labels flattened in
+const found = await nivaro.request(
+  readItems('articles', {
+    search: 'pump',
+    search_fields: ['title', 'code'],
+    search_rank: true,
+    count: 'approx',  // or false to skip the count (total → null)
+    labels: true,
+  })
+)
+
+// Keyset paging for walking a large collection
+let res = await nivaro.request(readItems('articles', { after: 'start', limit: 500 }))
+while (res.next_cursor) res = await nivaro.request(readItems('articles', { after: res.next_cursor, limit: 500 }))
+
+// Single item (optionally projected)
+const { data: article } = await nivaro.request(readItem('articles', '123', { fields: ['id', 'title'] }))
 // data → T</code></pre>
           <h3 class="doc-h3">Create items</h3>
           <pre class="doc-pre"><code>import { createItem } from '@nivaro/sdk'
@@ -6361,27 +6457,52 @@ const { data: updated } = await nivaro.request(
           <pre class="doc-pre"><code>import { deleteItem } from '@nivaro/sdk'
 
 await nivaro.request(deleteItem('articles', '123'))</code></pre>
-          <h3 class="doc-h3">Bulk operations</h3>
-          <pre class="doc-pre"><code>import { bulkCreateItems, bulkUpdateItems, bulkDeleteItems } from '@nivaro/sdk'
+          <h3 class="doc-h3">Bulk, batch and rehearsed writes</h3>
+          <p class="doc-p">Every row goes through the items service as the caller — permissions, row filters, User Scopes, validation, hooks and revisions apply row by row; one refused row never fails the others unless you ask for all-or-nothing.</p>
+          <pre class="doc-pre"><code>import {
+  bulkWriteItems, queueBulkWriteItems, readBulkRun, batchItems,
+  bulkUpdateItems, bulkDeleteItems, bulkTransitionItems,
+  rehearseCreateItem, rehearseUpdateItem, checkItemFilter
+} from '@nivaro/sdk'
 
-// Bulk create
-const { data: created } = await nivaro.request(
-  bulkCreateItems('articles', [
-    { title: 'Article 1', status: 'draft' },
-    { title: 'Article 2', status: 'draft' },
-  ])
+// Up to 500 rows: a row with an id is an update, without one a create (207, per-row status)
+const { data: out } = await nivaro.request(
+  bulkWriteItems('articles', [{ title: 'A' }, { id: '124', status: 'published' }])
 )
+// out.results[i] → { index, op, status, id?, error?, code? }; atomic: true = creates, all or nothing
 
-// Bulk update
-const { data: updated } = await nivaro.request(
-  bulkUpdateItems('articles', [
-    { id: '123', status: 'published' },
-    { id: '124', status: 'published' },
-  ])
-)
+// Bigger runs in the background, results kept 24 h
+const { data: queued } = await nivaro.request(queueBulkWriteItems('articles', rows))
+const { data: results } = await nivaro.request(readBulkRun('articles', queued.run_id))
 
-// Bulk delete
-await nivaro.request(bulkDeleteItems('articles', ['123', '124']))</code></pre>
+// Up to 100 creates + updates, one result per row
+await nivaro.request(batchItems('articles', { create: [{ title: 'B' }], update: [{ id: '9', title: 'C' }] }))
+
+// The same values on several records; a transition on several records; delete several
+await nivaro.request(bulkUpdateItems('articles', ['123', '124'], { status: 'published' }))
+await nivaro.request(bulkTransitionItems('articles', ['123'], 'transition-uuid', 'Approved'))
+await nivaro.request(bulkDeleteItems('articles', ['123', '124']))
+
+// Rehearse: everything runs, nothing is saved
+const plan = await nivaro.request(rehearseUpdateItem('articles', '123', { status: 'published' }))
+// plan.changes → [{ field, from, to }]; plan.ok / plan.error / plan.code when it would be refused
+const check = await nivaro.request(checkItemFilter('articles', { status: { _eq: 'live' } }))</code></pre>
+          <h3 class="doc-h3">Lookups, trash and history</h3>
+          <pre class="doc-pre"><code>import {
+  readItem, readItemBySlug, readItemDistinct, listTrash, restoreTrashItem,
+  readOwnerHistory, readCommentCounts
+} from '@nivaro/sdk'
+
+const { data: a } = await nivaro.request(readItem('articles', '123', { fields: ['id', 'author.email'] }))
+const { data: page } = await nivaro.request(readItemBySlug('pages', 'about-us'))
+const { data: statuses } = await nivaro.request(readItemDistinct('articles', 'status'))
+
+// Deleted records (admins: all; everyone else: their own deletions)
+const { data: trash } = await nivaro.request(listTrash({ collection: 'articles', days: 30 }))
+await nivaro.request(restoreTrashItem(trash[0].id))
+
+const { data: owners } = await nivaro.request(readOwnerHistory('articles', '123'))  // per pipeline state
+const { data: counts } = await nivaro.request(readCommentCounts('articles', ['123', '124']))</code></pre>
           <h3 class="doc-h3">Singletons</h3>
           <p class="doc-p">For single-record collections (e.g., site settings), use singleton commands:</p>
           <pre class="doc-pre"><code>import { readSingleton, updateSingleton } from '@nivaro/sdk'
@@ -6407,12 +6528,12 @@ const { data: updated } = await nivaro.request(
           <h3 class="doc-h3">Revisions (audit trail)</h3>
           <pre class="doc-pre"><code>import { readRevisions, readRevision } from '@nivaro/sdk'
 
-// All changes to an item (newest first)
+// All changes to an item (newest first, up to 100; no paging)
 const { data: revisions } = await nivaro.request(readRevisions('articles', '123'))
-// Each revision: { id, action ('create'|'update'|'delete'), data, delta, timestamp, user_id, first_name, last_name }
+// Each revision: { id, action, data, delta, timestamp, user_id, first_name, last_name, comment, event? }
 
 // Single revision detail
-const { data: rev } = await nivaro.request(readRevision('rev-uuid'))
+const { data: rev } = await nivaro.request(readRevision(revisions[0].id!))
 // rev.data → full snapshot at that point in time
 // rev.delta → only the fields that changed (for updates)</code></pre>
           <!-- /SYNC:sdk-rest -->
@@ -6802,37 +6923,24 @@ await nivaro.request(setQueueDefaultView(queues[0].id, view.data.id))</code></pr
           <h1 class="doc-h1" id="sdk-presence">SDK — Presence &amp; Awareness</h1>
           <p class="doc-p">Real-time presence tracking via Socket.io. See who is currently viewing/editing an item and take coordination actions (lock, merge, notify).</p>
           <h3 class="doc-h3">REST: Query presence</h3>
-          <pre class="doc-pre"><code>import { readPresence, readAllPresence } from '@nivaro/sdk'
+          <pre class="doc-pre"><code>import { getPresence, listActivePresence, readOnlinePresence } from '@nivaro/sdk'
 
-// Who is currently viewing/editing a specific item?
-const { data: viewers } = await nivaro.request(readPresence('contracts', '99'))
-// viewers → Presence[] — { user_id, first_name, last_name, email, is_editing, last_heartbeat }
+// Who is viewing a specific record right now (de-duplicated by user/session)
+const { data: viewers } = await nivaro.request(getPresence('contracts', '99'))
 
-// All active sessions across the instance (admin)
-const { data: sessions, total } = await nivaro.request(readAllPresence())
-// sessions → Presence[] (paginated; default 100 per page)</code></pre>
-          <h3 class="doc-h3">Socket.io: Real-time subscription</h3>
-          <pre class="doc-pre"><code>import { createRealtime } from '@nivaro/sdk'
+// Who is online (the Online list, filtered to what you may see)
+const online = await nivaro.request(readOnlinePresence())
 
-const rt = createRealtime(token)
-await rt.connect('https://nivaro.example.com')
+// Every active page session across the instance (admin)
+const { data: sessions, total } = await nivaro.request(listActivePresence())</code></pre>
+          <h3 class="doc-h3">Report your own presence</h3>
+          <pre class="doc-pre"><code>import { createPresence } from '@nivaro/sdk'
 
-// Subscribe to presence updates for an item
-rt.presence.subscribe('contracts:99', (users) =&gt; {
-  console.log(`${users.length} users viewing`)
-  users.forEach(u =&gt; {
-    if (u.is_editing) console.log(`${u.first_name} is editing`)
-  })
-})
-
-// Announce that you are editing
-rt.presence.setEditing('contracts:99', true)
-
-// Stop editing
-rt.presence.setEditing('contracts:99', false)
-
-// Leave the presence room
-rt.presence.leave('contracts:99')</code></pre>
+// Starts at once: pings POST /api/presence/ping every 30 s (and when the tab is shown again)
+const presence = createPresence({ apiUrl: 'https://nivaro.example.com', userId, userName })
+presence.setUser(newUserId)   // after a sign-in change
+presence.destroy()            // stop pinging and send the disconnect beacon</code></pre>
+          <div class="doc-note">Record changes and notifications arrive over the realtime client (<code class="doc-code">createRealtime</code>, see Realtime). Presence on records is read over REST; poll <code class="doc-code">getPresence</code> while a record is open.</div>
           <h3 class="doc-h3">Soft edit locks (item locking)</h3>
           <p class="doc-p">Pair presence with item locking to prevent conflicting edits:</p>
           <pre class="doc-pre"><code>// Admin UI example
@@ -10494,7 +10602,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
         </div>
 
         <!-- FIELD RULES -->
-        <div class="doc-section" id="s-field-rules" data-toc='[{"id":"field-rules","label":"Field Rules"},{"id":"field-rules-grid-row-rules","label":"Grid row rules (inline tables)"}]'>
+        <div class="doc-section" id="s-field-rules" data-toc='[{"id":"field-rules","label":"Field Rules"},{"id":"field-rules-grid-row-rules","label":"Grid row rules (inline tables)"},{"id":"field-rules-read-back","label":"Rules read back in plain English"}]'>
           <!-- SYNC:field-rules -->
           <h1 class="doc-h1" id="field-rules">Field Rules</h1>
           <p class="doc-p">Field Rules are lightweight, per-collection automations that set or clear the value of one field based on the value of another. When a trigger field matches a condition, a target field is automatically set to a literal value or cleared. Rules run both server-side on save and in real time inside the item editor.</p>
@@ -10589,6 +10697,14 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
 // Rule evaluation cost per collection (admin; also on the API Analytics page):
 // GET /api/field-rules/stats</code></pre>
           <div class="doc-note">CRUD endpoints (POST/PATCH/DELETE), POST /api/field-rules/explain and GET /api/field-rules/stats require admin access. GET /api/field-rules?collection=… and POST /api/field-rules/evaluate require any authenticated user.</div>
+          <h2 class="doc-h2" id="field-rules-read-back">Rules read back in plain English</h2>
+          <p class="doc-p">Every rule builder shows a quiet line under it saying what the rule does, for example “When Zone changes to East, set Region to North (only if Region is empty).” The same sentences appear for field rules, picker narrowing (cascade filters), alerts, flows (trigger and steps), owner groups, pipeline transitions, validation rules and show / read-only conditions. Field and choice labels are used, never keys.</p>
+          <ul class="doc-ul">
+            <li>A “not” condition also matches empty values, so it reads “Zone is not East (or is empty)”.</li>
+            <li>A rule the app cannot put into words (an unknown operator or shape) shows no sentence rather than a wrong one.</li>
+            <li>Validation types that nothing enforces (min_length, max_length, unique) get no sentence — a sign the rule does nothing.</li>
+          </ul>
+          <p class="doc-p">Before a field change that hides it, makes it required or read-only, or changes its type, the field editor says what the change touches — “This will hide Vendor on 3 forms (“Default”, …) and affect 1,240 records that have a Vendor.” — and asks Save anyway / Cancel inline. Nothing touched: it saves at once. The counts come from GET /api/data-model/:collection/fields/:field/impact?counts=1 (admin), which adds <code class="doc-code">records: {total, with_value}</code> (null for alias or virtual fields).</p>
           <!-- /SYNC:field-rules -->
         </div>
 
@@ -16645,6 +16761,7 @@ GET /api/approvals/decisions?instance=X
             <li>DM time hint: the DM header shows the other person’s local time, from their profile time zone or else the zone their browser reported. While you type outside their working hours (08:00 to 18:00 on weekdays unless they set <code class="doc-code">working_hours</code> in preferences) a quiet note says what time it is for them.</li>
             <li>Quiet channels: a channel with no posts for 90 days (Admin &gt; Chat analytics &gt; Channels sets the number, 0 turns it off) sends its owner one notification. The owner sees Archive or Keep open at the top of the channel. Keep restarts the clock. Archived channels stay searchable and can be reopened in their settings. Admins see the waiting and archived lists in the same tab.</li>
             <li>Membership history: owners and admins see who joined, left, was added or removed, and by whom, under the members panel. Admins see every channel’s changes in Chat analytics &gt; Channels. <code class="doc-code">GET /api/chat/channels/:id/membership-history</code> and <code class="doc-code">GET /api/chat/admin/membership-history</code> return the same events.</li>
+            <li>Big rooms: the members list and the room info drawer show the first 50 people (online first, then by name) with the true count ("1,248 members"), a search box (name, @handle, email start) and load more as you scroll. <code class="doc-code">GET /api/chat/channels/:id/members?limit=50&amp;offset=0&amp;q=ann</code> (limit up to 200) returns <code class="doc-code">{ data, total, has_more }</code>; with no paging parameters it still returns the whole list. <code class="doc-code">GET /api/chat/rooms/:room/members</code> pages the same way for the drawer.</li>
           </ul>
           <h2 class="doc-h2" id="collab-chat-cards">Link cards, request ids, offline sending and long rooms</h2>
           <ul class="doc-ul">
@@ -16856,7 +16973,7 @@ PATCH /api/item-locks/config/:collection
         </div>
 
         <!-- NOTIFICATIONS CENTER -->
-        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"}]'>
+        <div class="doc-section" id="s-notifications-center" data-toc='[{"id":"notifications-center","label":"Notifications Center"},{"id":"notification-role-defaults","label":"Default notification rules by role"},{"id":"notification-why","label":"Why did I get this?"},{"id":"notification-changes","label":"What changed, in the notification"}]'>
           <!-- SYNC:notifications-center -->
           <h1 class="doc-h1" id="notifications-center">Notifications Center</h1>
           <p class="doc-p">Beyond the bell dropdown, the /notifications page is a full paginated inbox of every notification — filter by status, jump to the related record, and mark all as read in one click.</p>
@@ -16897,6 +17014,41 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&amp;category=workfl
           </ul>
           <pre class="doc-pre"><code>PATCH /api/users/me/preferences
 { "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }</code></pre>
+          <h3 class="doc-h3" id="notification-role-defaults">Default notification rules by role</h3>
+          <p class="doc-p">Roles → a role → Notification defaults sets the starting notification rules for everyone in that role — categories, channels, quiet hours, daily summary or individual email, and the "if it stays unread" steps — with the same editor people use on their Profile. A person's own Profile → Notification rules win for every value they set; everything they never set follows their role. Nothing is copied onto people: the rules are merged when each notification is decided, so moving someone to another role brings that role's defaults at once for anything they never set.</p>
+          <ul class="doc-ul">
+            <li>On Profile → Notification rules, a value that comes from the role carries a small "R" mark. Changing it makes it the person's own; the reset arrow on a row (or "Use the role defaults for everything") puts it back on the role.</li>
+            <li>Clearing quiet hours over a role's window stores "no quiet hours" for that person; "Use the role's" goes back to the role window. Setting an escalation step to never over a role step that escalates stores an explicit never.</li>
+            <li>A person's account-wide daily email choice beats a role's email mode; Individual email is the system default and never shadows the role.</li>
+            <li>Notification Bench → simulate shows, per channel, which layer decided it: their own rules, the role default (named), or the system default — and the person's own and role rows side by side.</li>
+            <li>Role defaults are configuration (promoted between instances with roles). Deleting a role deletes its defaults.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET    /api/notifications/role-defaults/:roleId   (admin) → { role, rules, updated_at, updated_by, members }
+PUT    /api/notifications/role-defaults/:roleId   (admin) { "rules": { "quiet_start": "22:00", "quiet_end": "07:00",
+         "matrix": { "workflow": { "push": false, "email": "daily" } },
+         "escalation": { "sla": { "push_after_min": 60 } } } }
+DELETE /api/notifications/role-defaults/:roleId   (admin) → 204, back to the system defaults
+GET    /api/notifications/my-rule-defaults        → { role, rules } for the signed-in person</code></pre>
+          <h3 class="doc-h3" id="notification-why">Why did I get this?</h3>
+          <p class="doc-p">Every bell and inbox row has a "Why?" that names the path that sent it — a record watch, a subscription, owning the record's current state, an @mention, an alert subscription, a direct message, a task or flow, or your role's default rules — and, per channel, the rule that picked it (the category rule, quiet hours, a critical bypass, daily summary) with the layer it came from: your own rules, the role default (named), or the system default. Unread-escalation steps that fired later are listed too. Links go to your subscriptions (for watches, subscriptions and alerts) and to Profile → Notification rules.</p>
+          <ul class="doc-ul">
+            <li>The answer is what happened, not a re-simulation: it is stored on the row (<code class="doc-code">nivaro_notifications.delivery_reason</code>) when the delivery decision runs. Rows written before that say "Sent before reasons were recorded" and show what the row itself still knows.</li>
+            <li>Profile → Notification rules → "Test my rules" runs the Notification Bench simulate for the signed-in person only — pick a category and "right now" or "tonight at 11 PM" to see each channel's outcome and the deciding rule. Nothing is sent.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET  /api/notifications/:id/why        → { recorded, reason: { path, category, critical, role, layers, channels, rules, escalation? }, why, delivery }
+                                           own notifications only (404 otherwise)
+POST /api/notifications/test-my-rules  { "category": "workflow", "email": true, "at": "&lt;ISO, optional&gt;" }
+                                         → { decision, layers, role, quiet_hours, push_subscriptions } for the caller</code></pre>
+          <h3 class="doc-h3" id="notification-changes">What changed, in the notification</h3>
+          <p class="doc-p">A notification about a change to a record shows the changed fields old → new when you open it — "What changed" (or "N changes") under the row in the bell and the inbox, and "See what changed" in its email, which opens the inbox on that notification. The values are read when you open it, as you: from the record revision the notification points at and the one before it, through your own read of the record, so a field you may not see never shows and a record you can no longer open shows nothing. The live push and the stored row carry ids and field names only.</p>
+          <ul class="doc-ul">
+            <li>Long text shows a short diff — only the part that moved, with a little context either side; rich text is compared as text.</li>
+            <li>Links to other records show their labels, read as you (a record you cannot open shows its collection's name, never its id).</li>
+            <li>A record that was just created has nothing earlier to compare; a notification with no revision from its time says the changes were not kept.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET /api/notifications/:id/changes   own notifications only (404 otherwise; 404 when you cannot open the record)
+→ { collection, item, revision_id, at, notified_at, first_revision,
+    changes: [{ field, label, type, old, new, old_label?, new_label?, diff?: { lead, removed, added, trail } }] }</code></pre>
           <h3 class="doc-h3">Record bundles in the bell</h3>
           <p class="doc-p">Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). <code class="doc-code">GET /api/notifications?bundle=record</code> returns <code class="doc-code">bundles</code> ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside <code class="doc-code">data</code>, which then holds only the rows that stayed single; a lone row about a record is never bundled. <code class="doc-code">total</code>, <code class="doc-code">/count</code> and <code class="doc-code">/unread-count</code> are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot's label with a "deleted" chip (<code class="doc-code">deleted: true</code>, no Open link), else "&lt;Singular&gt; #&lt;id&gt;"; <code class="doc-code">collection_label</code> carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").</p>
           <h3 class="doc-h3">As it was — what they saw when notified</h3>
@@ -17138,6 +17290,7 @@ POST /api/message-actions/callback
           <div class="doc-note">Privacy: only the name of a field is noted, never its value or what was typed, and nothing at all is noted inside an area marked nvr-no-record (the same mask session replay uses) — there the click keeps only its position. Window and whole-screen recordings keep positions only. Videos recorded before this have no walk.</div>
           <h3 class="doc-h3">Where a video shows</h3>
           <p class="doc-p">Details → Where it shows. Pick record forms (a collection) and, optionally, the pipeline steps a video applies to. Choosing steps limits the video to those steps — a video for the Manager Approval step shows on records in that step and nowhere else — and one with no steps picked shows at every step. Other pages appear in the list once they have been opened with a Videos button on them.</p>
+          <p class="doc-p">A screen lists its videos best first: the record’s step, then this exact screen, then the same screen for any record type (a page key with <code class="doc-code">:c</code> in place of the collection, such as <code class="doc-code">efp.records.:c</code>), then the record type, then the area the screen belongs to (a hub such as Jobs), then videos whose title or description mentions a glossary term of that collection or a term the screen passes. Within each, a video required for your role comes first, then one made for your role, then the most watched lately, then the newest. When one of the first four is a video you have not finished, a small “Watch: How to submit an IR (2:10)” chip appears above the page; × hides that video’s chip for good in this browser.</p>
           <h3 class="doc-h3">Publishing, versions and required viewing</h3>
           <p class="doc-p">Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. Opening the editor makes a draft, so Publish stays off, with "No changes since the last publish" beside it, while the draft is exactly what is published. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim, no intro or end card, no chapter banners, no crop and no callouts, steps or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples, spotlights and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.</p>
           <p class="doc-p">Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.</p>
@@ -17181,7 +17334,7 @@ POST /api/message-actions/callback
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Route</th><th>Who</th><th>What</th></tr></thead>
             <tbody><tr><tr><td>GET /help-videos</td><td>everyone</td><td>Library: search, category, status (authors), page; returns can_author</td></tr>
-              <tr><td>GET /help-videos/for?collection=&amp;item=&amp;page=</td><td>everyone</td><td>Videos for a screen; the server reads the record’s pipeline step itself</td></tr>
+              <tr><td>GET /help-videos/for?collection=&amp;item=&amp;page=&amp;path=&amp;app=&amp;terms=</td><td>everyone</td><td>Videos for a screen, best first; the server reads the record’s pipeline step itself. path (the route) gives the screen, screens like it, the record type and the area; terms is a comma list of glossary terms on the screen. Each video carries match {tier 0–5, reason}; best_id is the strong match (tier ≤ 3) this person has not finished, for the screen chip</td></tr>
               <tr><td>GET /help-videos/:id</td><td>viewers</td><td>One video; authors also get the draft, visibility and required roles. whats_new (kind updated | again, note, jump_ms, chapter, whole) says what changed since this person last watched; transcript_url is the ticketed transcript; stale ({kind: layout | state | label, detail, since}, or null) says the screen changed since it was published</td></tr>
               <tr><td>POST /help-videos/:id/stale/dismiss</td><td>authors</td><td>Dismiss "may be out of date" (publishing clears it by itself); 409 HELP_VIDEO_NOT_STALE when there is nothing to dismiss</td></tr>
               <tr><td>POST /help-videos/pages</td><td>authors</td><td>Register a page key with its label and app; <code class="doc-code">labels</code> (optional, ≤ 300) is the list of click targets seen on that page, kept with the time for the nightly out-of-date check</td></tr>
@@ -17345,7 +17498,7 @@ POST   /api/ideas/:id/link                 admin: { collection, id } → 'relate
           <!-- /SYNC:admin-navigation -->
         </div>
 
-        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"},{"id":"global-search-synonyms","label":"Synonyms"},{"id":"global-search-label-fields","label":"Label search fields"},{"id":"global-search-why","label":"Why can’t they find it?"},{"id":"global-search-fts","label":"Full-text indexes (optional)"}]'>
+        <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"},{"id":"global-search-analytics","label":"Search analytics"},{"id":"global-search-synonyms","label":"Synonyms"},{"id":"global-search-label-fields","label":"Label search fields"},{"id":"global-search-why","label":"Why can’t they find it?"},{"id":"global-search-fts","label":"Full-text indexes (optional)"},{"id":"global-search-config","label":"Finding configuration in plain words"}]'>
           <!-- SYNC:global-search -->
           <h1 class="doc-h1" id="global-search">Global Search (Cmd+K)</h1>
           <p class="doc-p">Press Cmd+K (Ctrl+K on Windows/Linux) anywhere in the admin UI to open the command palette. Search runs across every collection you have read access to, admin pages, and quick actions. Results are ranked by relevance and category as you type, with RBAC enforced on all item results.</p>
@@ -17497,6 +17650,15 @@ GET /api/global-search/records?q=acme&amp;collection=customers&amp;offset=0&amp;
             <li>Production databases that publish replication: full-text changes go to the DBA first.</li>
             <li>A full-text search matches the start of words (“budg” finds “budget”), not any part of a word, and a just-saved row can take a few seconds to be found. Number and code columns stay on the ordinary contains search.</li>
             <li>The server checks which indexes exist every 5 minutes (<code class="doc-code">ftsAvailable</code> in services/search-fts.ts) and ignores an index until its first population has finished.</li>
+          </ul>
+          <h3 class="doc-h3" id="global-search-config">Finding configuration in plain words</h3>
+          <p class="doc-p">Administrators can ask search where something is set up — “where is the Fusion push for IRs set up”, “which rule makes Zone required on POs” — and the **Settings &amp; config** results link to the exact screen: the field on the collection’s Fields tab, the layout open in the editor, the Rules tab, the flow, the payload template, the role. Question words are ignored, plurals fold (“IRs”, “POs”) and a collection answers to its initials (Inventory Request → IR).</p>
+          <ul class="doc-ul">
+            <li>What is found, by name and label only: collections, fields (label, note), required fields and validation rules, cascade filters, layouts (name, sections, placed fields, “required on this form”), pipelines (states, transitions), flows (name, trigger and its collections, step names, the external API endpoint a step calls), field rules, alerts, automation rules, queues, dashboards and reports, custom queries, external APIs and endpoints, payload templates, import definitions, webhooks, roles and their permissions, and the Settings sections. Never a secret, header, URL, SQL text, body or stored value.</li>
+            <li>Everything stored is for administrators only; other people find only their own screens (Profile notification rules, out of office, personal defaults, notification subscriptions).</li>
+            <li>On the full search page a question of three or more words also asks <code class="doc-code">GET /api/global-search/config?q=&amp;ai=1</code>. When its keywords find little and AI is set up, one AI call rewrites the question into keywords, kinds and a collection (it is sent the question and the collection names, nothing else; the answer is kept for 10 minutes) and the page says how it was read. With AI off, the keyword answer is all there is. Cmd+K never calls the AI.</li>
+            <li>Deep links: <code class="doc-code">/data-model/&lt;collection&gt;?tab=fields&amp;field=&lt;name&gt;</code>, <code class="doc-code">?tab=groups&amp;layout=&lt;id&gt;</code>, <code class="doc-code">?tab=rules</code>, <code class="doc-code">?tab=settings</code>, <code class="doc-code">/roles?role=&lt;id&gt;</code>, <code class="doc-code">/settings?section=&lt;id&gt;</code>, <code class="doc-code">/imports?definition=&lt;key&gt;</code>, <code class="doc-code">/external-apis/&lt;id&gt;/payloads/&lt;key&gt;</code>.</li>
+            <li>The index is rebuilt at most once a minute per instance, so a change made a moment ago may take a minute to be found.</li>
           </ul>
           <!-- /SYNC:global-search -->
         </div>
@@ -19513,7 +19675,7 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
           <!-- /SYNC:ops-assistant -->
         </div>
 
-        <div class="doc-section" id="s-deploys-versions" data-toc='[{"id":"deploys-versions","label":"Deploys and Versions"},{"id":"deploys-gate","label":"The post-deploy gate"},{"id":"deploys-stage-timing","label":"Release stage timing"},{"id":"deploys-env-presence","label":"Environment variables across environments"},{"id":"deploys-tab-versions","label":"Open tabs by version"},{"id":"deploys-sticky-refresh","label":"Force refresh reaches tabs that were offline"},{"id":"deploys-readiness-cache","label":"How fresh the readiness scorecard is"},{"id":"deploys-readiness","label":"Readiness checks for the deploy shape"},{"id":"deploys-config-changes","label":"Configuration changes on the incident timeline"},{"id":"deploys-dev-rows","label":"Development traffic in the shared request log"},{"id":"deploys-early-hints","label":"Early Hints (103) on the release image"},{"id":"page-speed-prefetch","label":"Prefetch on hover and intent"}]'>
+        <div class="doc-section" id="s-deploys-versions" data-toc='[{"id":"deploys-versions","label":"Deploys and Versions"},{"id":"deploys-gate","label":"The post-deploy gate"},{"id":"deploys-stage-timing","label":"Release stage timing"},{"id":"deploys-env-presence","label":"Environment variables across environments"},{"id":"deploys-tab-versions","label":"Open tabs by version"},{"id":"deploys-sticky-refresh","label":"Force refresh reaches tabs that were offline"},{"id":"deploys-idle-reload","label":"Old tabs reload by themselves when idle"},{"id":"deploys-readiness-cache","label":"How fresh the readiness scorecard is"},{"id":"deploys-readiness","label":"Readiness checks for the deploy shape"},{"id":"deploys-config-changes","label":"Configuration changes on the incident timeline"},{"id":"deploys-dev-rows","label":"Development traffic in the shared request log"},{"id":"deploys-early-hints","label":"Early Hints (103) on the release image"},{"id":"page-speed-prefetch","label":"Prefetch on hover and intent"}]'>
           <!-- SYNC:deploys-versions -->
           <h1 class="doc-h1" id="deploys-versions">Deploys and Versions</h1>
           <p class="doc-p">The checks that tell you a deploy really landed, which versions are running where, and what changed shortly before something went wrong.</p>
@@ -19550,6 +19712,13 @@ GET    /api/realtime/min-build                       → rules, open tabs below 
 GET    /api/realtime/min-build/preview?app=&amp;build=   → open tabs a value would reload now
 PUT    /api/realtime/min-build/:app {build, seconds?, message?}
 DELETE /api/realtime/min-build/:app                  → turn off</code></pre>
+          <h3 class="doc-h3" id="deploys-idle-reload">Old tabs reload by themselves when idle</h3>
+          <p class="doc-p">After a release, a tab still on an older build reloads by itself once nobody has typed or clicked in it for a minute — no banner, no countdown. It is left alone while it has unsaved changes (the same list as above), during a huddle and while a screen clip is being recorded. A hidden tab counts as idle only once the same time has passed without input. The scroll position comes back after the reload, and stored drafts stay where they are.</p>
+          <p class="doc-p">Whether a tab is old is judged exactly like Force refresh → Old versions: on every API replica, never while a deploy is still rolling (two builds loaded in the last 10 minutes, or two API versions serving), and never when another replica did not answer. Dev builds are never judged. A tab reloads at most once for one new build, so a cached old bundle never loops. An idle tab asks every 3 minutes (every 15 after an hour idle); a tab someone is using never asks.</p>
+          <p class="doc-p">Idle reload on /realtime (next to Minimum build) switches it per instance — on by default — and sets the idle time (30–3600 seconds, default 60). <code class="doc-code">AUTO_RELOAD_IDLE=on|off</code> on the server wins over the switch. Changes are in the activity log as <code class="doc-code">client-auto-reload</code>. The setting lives under <code class="doc-code">idle_reload</code> in this instance’s settings overrides. A custom front end gets it by mounting <code class="doc-code">ForceReloadBanner</code> (pass <code class="doc-code">idleReload={false}</code> to leave it out) or <code class="doc-code">IdleReloadWatcher</code>, and reports anything live a reload must not cut off with <code class="doc-code">registerReloadHold(label, () =&gt; active)</code>.</p>
+          <pre class="doc-pre"><code>GET    /api/realtime/build-status?app=&amp;build=&amp;api=&amp;tab=&amp;loaded=   → {older, target, id, reason, auto_reload} (signed in)
+GET    /api/realtime/auto-reload                     → {auto_reload_idle, idle_seconds, env}
+PATCH  /api/realtime/auto-reload {auto_reload_idle?, idle_seconds?}</code></pre>
           <h2 class="doc-h2" id="deploys-readiness-cache">How fresh the readiness scorecard is</h2>
           <p class="doc-p">A plain <code class="doc-code">GET /api/readiness</code> (the dashboard card, the Go-Live Readiness page) answers from the stored result of each check, at once. Every check carries <code class="doc-code">computed_at</code> (when it ran) and <code class="doc-code">stale</code>; the report carries <code class="doc-code">computed_at</code> (its oldest result), <code class="doc-code">stale</code>, <code class="doc-code">refreshing</code> and <code class="doc-code">fresh</code>. A result older than its window is shown as it was, flagged stale, and one background refresh re-runs it, six checks at a time (<code class="doc-code">READINESS_REFRESH_CONCURRENCY</code>) on one process per cluster (a Redis lock), and the finished scorecard reaches open pages over the live-ops socket.</p>
           <ul class="doc-ul">
