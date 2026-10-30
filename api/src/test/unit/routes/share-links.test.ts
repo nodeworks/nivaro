@@ -203,8 +203,49 @@ describe('share links refuse form preview links', () => {
     expect(pub.statusCode).toBe(404)
     expect(m.whereNot).toEqual([
       ['nivaro_share_links', 'item', '__form_preview__'],
-      ['nivaro_share_links', 'item', '__form_preview__']
+      ['nivaro_share_links', 'item', '__cc_kiosk__'],
+      ['nivaro_share_links', 'item', '__form_preview__'],
+      ['nivaro_share_links', 'item', '__cc_kiosk__']
     ])
+  })
+})
+
+// Command Center wallboard links (CC-23) share the table under item '__cc_kiosk__'; they are
+// made, listed and revoked only through /command-center/kiosk-links.
+describe('share links refuse Command Center wallboard links', () => {
+  const kioskRow = {
+    ...previewRow,
+    id: '22222222-2222-2222-2222-222222222222',
+    collection: 'nivaro_command_center',
+    item: '__cc_kiosk__',
+    token: 'ktok',
+    layout_id: null
+  }
+  it('will not create, list, revoke or render one, however the marker is cased', async () => {
+    const app = await build()
+    for (const item of ['__cc_kiosk__', '__CC_KIOSK__ ', ' __Cc_Kiosk__']) {
+      const made = await app.inject({
+        method: 'POST',
+        url: '/share-links',
+        payload: { collection: 'orders', item }
+      })
+      expect(made.statusCode).toBe(400)
+      m.rows = [kioskRow]
+      const list = await app.inject({
+        method: 'GET',
+        url: `/share-links/for/nivaro_command_center/${encodeURIComponent(item)}`
+      })
+      expect(list.statusCode).toBe(404)
+      expect(list.body).not.toContain('ktok')
+      m.rows = []
+    }
+    m.link = kioskRow
+    const del = await app.inject({ method: 'DELETE', url: `/share-links/${kioskRow.id}` })
+    expect(del.statusCode).toBe(404)
+    expect(m.deleted).toBe(0)
+    const pub = await app.inject({ method: 'GET', url: '/share/ktok' })
+    expect(pub.statusCode).toBe(404)
+    expect(m.inserted).toEqual([])
   })
 })
 
