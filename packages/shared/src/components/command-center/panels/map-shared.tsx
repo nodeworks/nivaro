@@ -54,8 +54,11 @@ export function CcSidePanel({
   children,
   footer,
   width = 400,
-  label
+  label,
+  peek = false
 }: {
+  /** The record peek (the shell's focus handling finds it by data-cc-peek). */
+  peek?: boolean
   open: boolean
   title: ReactNode
   subtitle?: ReactNode
@@ -91,6 +94,7 @@ export function CcSidePanel({
     <aside
       role='dialog'
       aria-label={label}
+      data-cc-peek={peek ? '' : undefined}
       data-cc-mode={mode}
       style={{ ...ccVars(mode), width: `min(${width}px, 100vw)` }}
       className='fixed inset-y-0 right-0 z-[90] flex flex-col border-l border-[var(--cc-border)] bg-[var(--cc-panel)] text-[var(--cc-text)] shadow-2xl motion-safe:animate-in motion-safe:slide-in-from-right-4'

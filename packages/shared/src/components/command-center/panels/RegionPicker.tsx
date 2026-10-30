@@ -37,6 +37,7 @@ export function RegionPicker() {
       <PopoverTrigger asChild>
         <button
           type='button'
+          data-cc-region-picker=''
           aria-label={`${noun} focus: ${current ? current.label : 'everywhere'}`}
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[12px]',

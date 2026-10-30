@@ -116,6 +116,22 @@ function FollowControl() {
   const { ready } = useTrafficMap()
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
+  // ?follow=<user id> (the Command Center's people pane links here): start following that
+  // person once, then drop the parameter so a reload doesn't fight a later choice.
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const id = url.searchParams.get('follow')
+    if (!id || !/^[0-9A-Fa-f-]{36}$/.test(id)) return
+    url.searchParams.delete('follow')
+    window.history.replaceState(window.history.state, '', url.toString())
+    void api
+      .get(`/users/${id}`)
+      .then((r) => {
+        const u = r.data?.data as UserRow | undefined
+        if (u?.id) following.set({ key: `u${u.id.toUpperCase()}`, name: personName(u) })
+      })
+      .catch(() => {})
+  }, [])
   const search = useQuery({
     queryKey: ['traffic-map', 'follow-search', q.trim()],
     queryFn: async () =>

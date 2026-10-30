@@ -33,6 +33,7 @@ export function PeekPanel() {
 
   return (
     <CcSidePanel
+      peek
       open={!!peek}
       label='Record preview'
       title={rec ? rec.title : notFound ? 'Not available' : 'Loading…'}
