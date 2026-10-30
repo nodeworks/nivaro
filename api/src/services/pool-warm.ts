@@ -22,13 +22,17 @@ export async function warmDbPool(opts: { max: number; timeMs?: number }): Promis
   }
   const held: unknown[] = []
   const deadline = Date.now() + (opts.timeMs ?? 30_000)
-  // Two at a time: a login storm is what this avoids, so the warm-up must not be one.
-  for (let i = 0; i < n && Date.now() < deadline; i += 2) {
-    const batch = await Promise.allSettled(
-      Array.from({ length: Math.min(2, n - i) }, () => client.acquireConnection())
-    )
-    for (const r of batch) if (r.status === 'fulfilled') held.push(r.value)
+  try {
+    // Two at a time: a login storm is what this avoids, so the warm-up must not be one.
+    for (let i = 0; i < n && Date.now() < deadline; i += 2) {
+      const batch = await Promise.allSettled(
+        // lint-traps-ok: every acquired connection goes into `held`, released in the finally below.
+        Array.from({ length: Math.min(2, n - i) }, () => client.acquireConnection())
+      )
+      for (const r of batch) if (r.status === 'fulfilled') held.push(r.value)
+    }
+  } finally {
+    await Promise.allSettled(held.map((c) => client.releaseConnection(c)))
   }
-  await Promise.allSettled(held.map((c) => client.releaseConnection(c)))
   return held.length
 }
