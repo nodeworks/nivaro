@@ -80,6 +80,7 @@ import { collectionsRoutes } from './collections.js'
 import { commandCenterRoutes } from './command-center.js'
 import { commandCenterTimeRoutes } from './command-center-time.js'
 import { commandCenterPlaceRoutes } from './command-center-place.js'
+import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
@@ -759,6 +760,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(commandCenterTimeRoutes, { prefix: '/command-center' })
   await app.register(commandCenterPlaceRoutes, { prefix: '/command-center' })
+  await app.register(commandCenterWorkRoutes, { prefix: '/command-center' })
   await app.register(featureFlagRoutes)
   await app.register(eventsStreamRoutes, { prefix: '/events' })
   // #1680 — the event stream narrowed to one saved view, judged as the caller.
