@@ -5,7 +5,7 @@ import { ccIsAdmin } from './auth.js'
 import { readCcScope } from './scope.js'
 import { tenantMemo, Viewer } from './work-access.js'
 import {
-  bucketByLocalHour,
+  bucketDaysByLocalHour,
   DAY_MS,
   expectedByHour,
   expectedSoFar,
@@ -157,7 +157,11 @@ export async function forecastForRequest(req: FastifyRequest): Promise<ForecastT
   )
   const narrow = async (rows: Row[]) => {
     const by = new Map<string, Row[]>()
-    for (const r of rows) by.set(r.collection, [...(by.get(r.collection) ?? []), r])
+    for (const r of rows) {
+      const list = by.get(r.collection)
+      if (list) list.push(r)
+      else by.set(r.collection, [r])
+    }
     const out: Row[] = []
     for (const [c, list] of by) out.push(...(await viewer.filter(c, list, (r) => r.item)))
     return out
@@ -165,22 +169,32 @@ export async function forecastForRequest(req: FastifyRequest): Promise<ForecastT
   const starts = await narrow(raw?.starts ?? [])
   const ends = await narrow(raw?.ends ?? [])
 
-  const bucket = (rows: Row[], ymd: string) =>
-    bucketByLocalHour(
-      rows.map((r) => r.at),
-      ymd,
-      tz
-    )
+  // One pass per side over all five days.
+  const ymds = days.map((d) => d.ymd)
+  const startsBy = bucketDaysByLocalHour(
+    starts.map((r) => r.at),
+    ymds,
+    tz
+  )
+  const endsBy = bucketDaysByLocalHour(
+    ends.map((r) => r.at),
+    ymds,
+    tz
+  )
   // A past day with nothing at all (before the pipeline existed, or a closed day) still counts:
   // it is what that weekday looked like.
   const past = days.slice(1).map((d) => ({
-    arrivals: bucket(starts, d.ymd),
-    completions: bucket(ends, d.ymd)
+    arrivals: startsBy.get(d.ymd) as number[],
+    completions: endsBy.get(d.ymd) as number[]
   }))
-  const hasHistory = [...starts, ...ends].some((r) => r.at < days[0].from)
+  const hasHistory =
+    starts.some((r) => r.at < days[0].from) || ends.some((r) => r.at < days[0].from)
   const p = localParts(now, tz)
   const out = assembleForecast({
-    today: { arrivals: bucket(starts, days[0].ymd), completions: bucket(ends, days[0].ymd) },
+    today: {
+      arrivals: startsBy.get(days[0].ymd) as number[],
+      completions: endsBy.get(days[0].ymd) as number[]
+    },
     past: hasHistory ? past : [],
     hour: p.hour,
     fraction: p.minute / 60

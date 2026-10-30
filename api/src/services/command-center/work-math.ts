@@ -119,12 +119,19 @@ export function isBehind(f: {
   return actualGap - usualGap > band
 }
 
-/** Local calendar parts of an instant in an IANA time zone (falls back to UTC). */
-export function localParts(
-  ms: number,
-  tz: string
-): { ymd: string; hour: number; minute: number; weekday: number } {
-  let fmt: Intl.DateTimeFormat
+/**
+ * One formatter per zone. Building an Intl.DateTimeFormat costs far more than formatting with
+ * one: the forecast buckets up to 100k instants, and a new formatter per instant held the event
+ * loop for ~50 s on staging (2026-10-30). Zones are validated names, so the map stays small; the
+ * cap only guards against a caller looping over odd zones.
+ */
+const ZONE_FORMATS = new Map<string, Intl.DateTimeFormat | null>()
+const ZONE_FORMATS_MAX = 200
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function zoneFormat(tz: string): Intl.DateTimeFormat | null {
+  let fmt = ZONE_FORMATS.get(tz)
+  if (fmt !== undefined) return fmt
   try {
     fmt = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
@@ -137,16 +144,27 @@ export function localParts(
       hourCycle: 'h23'
     })
   } catch {
-    return localParts(ms, 'UTC')
+    fmt = null
   }
+  if (ZONE_FORMATS.size >= ZONE_FORMATS_MAX) ZONE_FORMATS.clear()
+  ZONE_FORMATS.set(tz, fmt)
+  return fmt
+}
+
+/** Local calendar parts of an instant in an IANA time zone (falls back to UTC). */
+export function localParts(
+  ms: number,
+  tz: string
+): { ymd: string; hour: number; minute: number; weekday: number } {
+  const fmt = zoneFormat(tz)
+  if (!fmt) return localParts(ms, 'UTC')
   const p: Record<string, string> = {}
   for (const part of fmt.formatToParts(new Date(ms))) p[part.type] = part.value
-  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   return {
     ymd: `${p.year}-${p.month}-${p.day}`,
     hour: Number(p.hour) % 24,
     minute: Number(p.minute),
-    weekday: days.indexOf(p.weekday)
+    weekday: WEEKDAYS.indexOf(p.weekday)
   }
 }
 
@@ -177,10 +195,20 @@ export function validTimeZone(tz: unknown): string {
 
 /** Bucket instants into the 24 local hours of `ymd` (instants on other days are ignored). */
 export function bucketByLocalHour(instants: number[], ymd: string, tz: string): number[] {
-  const out = new Array(24).fill(0) as number[]
+  return bucketDaysByLocalHour(instants, [ymd], tz).get(ymd) as number[]
+}
+
+/** bucketByLocalHour for several days in one pass over the instants (each read once). */
+export function bucketDaysByLocalHour(
+  instants: number[],
+  ymds: string[],
+  tz: string
+): Map<string, number[]> {
+  const out = new Map(ymds.map((d) => [d, new Array(24).fill(0) as number[]]))
   for (const ms of instants) {
     const p = localParts(ms, tz)
-    if (p.ymd === ymd) out[p.hour] += 1
+    const day = out.get(p.ymd)
+    if (day) day[p.hour] += 1
   }
   return out
 }

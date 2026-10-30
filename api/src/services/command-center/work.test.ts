@@ -24,6 +24,7 @@ import { Viewer } from './work-access.js'
 import {
   ageStats,
   bucketByLocalHour,
+  bucketDaysByLocalHour,
   clearsInDays,
   DAY_MS,
   expectedByHour,
@@ -147,6 +148,21 @@ describe('forecast expectation', () => {
     )
     expect(b[9]).toBe(1)
     expect(b.reduce((a, x) => a + x, 0)).toBe(1)
+  })
+
+  it('buckets several days in one pass, quickly enough for 100k instants', () => {
+    const days = bucketDaysByLocalHour(
+      [Date.UTC(2026, 9, 30, 13), Date.UTC(2026, 9, 23, 14), Date.UTC(2026, 9, 1, 0)],
+      ['2026-10-30', '2026-10-23'],
+      'America/New_York'
+    )
+    expect(days.get('2026-10-30')?.[9]).toBe(1)
+    expect(days.get('2026-10-23')?.[10]).toBe(1)
+    const many = Array.from({ length: 100_000 }, (_, i) => Date.UTC(2026, 9, 30) + i * 1000)
+    const t0 = performance.now()
+    bucketDaysByLocalHour(many, ['2026-10-30'], 'America/New_York')
+    // A new Intl formatter per instant took tens of seconds here.
+    expect(performance.now() - t0).toBeLessThan(4000)
   })
 })
 
