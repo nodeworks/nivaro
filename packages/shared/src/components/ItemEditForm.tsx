@@ -71,6 +71,7 @@ import { entryConfigOf } from '../lib/entry-config'
 import { copyErrorDetails, describeError, type ErrorDescription } from '../lib/error-message'
 import { errorToastOptions } from '../lib/error-toast'
 import { setFormulaConstants } from '../lib/expression'
+import { parseFieldDeepLink } from '../lib/field-comments'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import {
   isEmptyValue,
@@ -95,7 +96,7 @@ import {
 } from '../lib/header-strip'
 import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
 import { formLocale, translateFieldRow, translateGroup } from '../lib/layout-i18n'
-import { currentViewport } from '../lib/layout-resolve'
+import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
@@ -172,6 +173,7 @@ import {
   FieldAffordancesContext,
   type RemoteFieldChange
 } from './item-edit/FieldAffordances'
+import { useFieldCommentsApi } from './item-edit/FieldComments'
 import { FieldRow } from './item-edit/FieldRow'
 import { fieldSourcesFor } from './item-edit/field-sources'
 import {
@@ -181,6 +183,7 @@ import {
   sectionKeysOnScreen,
   useFormTourSeen
 } from './item-edit/FormTour'
+import { type FieldCommentsApi, FieldCommentsContext } from './item-edit/field-comments-context'
 import { formDensityOf, useFormDensityCss } from './item-edit/form-density'
 import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
@@ -262,8 +265,10 @@ import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-e
 import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
+import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
 import { useStableFieldAffordances } from './item-edit/render-stability'
+import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
 import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
@@ -276,6 +281,7 @@ import {
 } from './item-edit/usePersonalDefaults'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
+import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
 import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
@@ -1649,18 +1655,22 @@ function FieldContexts({
   affordances,
   personalDefaults,
   sources,
+  fieldComments,
   children
 }: {
   affordances: FieldAffordances | null
   personalDefaults: PersonalDefaultsApi
   sources?: Record<string, FieldSource> | null
+  fieldComments: FieldCommentsApi | null
   children: ReactNode
 }) {
   return (
     <FieldAffordancesContext.Provider value={affordances}>
       <PersonalDefaultsContext.Provider value={personalDefaults}>
         <FieldSourcesContext.Provider value={sources ?? null}>
-          {children}
+          <FieldCommentsContext.Provider value={fieldComments}>
+            {children}
+          </FieldCommentsContext.Provider>
         </FieldSourcesContext.Provider>
       </PersonalDefaultsContext.Provider>
     </FieldAffordancesContext.Provider>
@@ -6005,17 +6015,38 @@ function ItemEditFormView({
     (g: { visible_when?: string | null }) => matchesVisibleWhen(g.visible_when, draft),
     [draft]
   )
+  // #3228: rule-hidden steps/tabs the person chose to see anyway (read-only).
+  const [revealedHidden, setRevealedHidden] = useState<ReadonlySet<string>>(() => new Set())
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per record
+  useEffect(() => {
+    setRevealedHidden(new Set())
+  }, [collection, itemId])
   const tabGroups = useMemo(
     () =>
       groups.filter(
         (g) =>
           g.type === 'tab' &&
           !g.container_id &&
-          (showHiddenDesign || stepVisible(g as { visible_when?: string | null }))
+          (showHiddenDesign ||
+            revealedHidden.has(g.key) ||
+            stepVisible(g as { visible_when?: string | null }))
       ),
-    [groups, stepVisible, showHiddenDesign]
+    [groups, stepVisible, showHiddenDesign, revealedHidden]
   )
-  // Tabs/steps kept only because the canvas shows hidden things.
+  // Revealed steps the rule still hides: shown read-only and faint.
+  const revealedStillHidden = useMemo(
+    () =>
+      new Set(
+        tabGroups
+          .filter(
+            (g) => revealedHidden.has(g.key) && !stepVisible(g as { visible_when?: string | null })
+          )
+          .map((g) => g.key)
+      ),
+    [tabGroups, revealedHidden, stepVisible]
+  )
+  // Tabs/steps kept only because the canvas shows hidden things (or, #3228, because the
+  // person asked to see a rule-hidden one anyway).
   const designHiddenTabs = useMemo(
     () =>
       showHiddenDesign
@@ -6024,8 +6055,10 @@ function ItemEditFormView({
               .filter((g) => !stepVisible(g as { visible_when?: string | null }))
               .map((g) => g.key)
           )
-        : undefined,
-    [showHiddenDesign, tabGroups, stepVisible]
+        : revealedStillHidden.size > 0
+          ? revealedStillHidden
+          : undefined,
+    [showHiddenDesign, tabGroups, stepVisible, revealedStillHidden]
   )
   // All tabs regardless of container — used for SummaryPanel coverage
   const allTabGroups = useMemo(
@@ -6041,6 +6074,40 @@ function ItemEditFormView({
   const hasTabs = tabGroups.length > 0
   const layoutMeta = activeLayoutData?.layout
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
+  // #3228: steps/tabs a show-when rule hides right now say why in one quiet line
+  // ("Unit Selection shows when Type is Capital"). Never a step whose fields the
+  // viewer may not read (role-hidden ones never reach the client), never one the
+  // layout keeps quiet (conditions.quiet_hidden_sections), never on the canvas's
+  // "show hidden" view (it already shows them faint).
+  const ruleHiddenSteps = useMemo(() => {
+    if (showHiddenDesign) return []
+    const describe = fieldConfig ?? []
+    return ruleHiddenGroups({
+      groups: groups.filter((g) => g.type === 'tab' && !g.container_id),
+      values: draft,
+      fields: describe,
+      choices: choiceLabelsFrom(describe),
+      quiet: quietHiddenSectionsOf(
+        (layoutMeta as { conditions?: unknown } | undefined)?.conditions
+      ),
+      readable: (key) =>
+        groupHasReadableField(
+          (groupedMap[key] ?? []).map((f) => f.field),
+          fetchedItemData,
+          isNew || !!designCtx
+        )
+    })
+  }, [
+    showHiddenDesign,
+    fieldConfig,
+    groups,
+    draft,
+    layoutMeta,
+    groupedMap,
+    fetchedItemData,
+    isNew,
+    designCtx
+  ])
   // Entry ergonomics (#2702-#2728): the layout's entry config, and the beginner / expert
   // mode of an adaptive form (guided steps for a person's first records, tabs after).
   const entryCfg = useMemo(() => entryConfigOf(layoutMeta), [layoutMeta])
@@ -6471,6 +6538,76 @@ function ItemEditFormView({
   const rowFocusDoneRef = useRef(false)
   const jumpToFieldRef = useRef<(key: string) => boolean>(() => false)
   jumpToFieldRef.current = jumpToField
+  // #3232: comments on single fields — the record's own comments tagged with a field
+  // (a hover button on each label, "on <Field>" in Comments). Off with comments.
+  const fieldCommentLabel = useCallback(
+    (f: string) => parentFieldLabels[f] || titleCase(f),
+    [parentFieldLabels]
+  )
+  const fieldCommentJump = useCallback((f: string) => {
+    try {
+      jumpToFieldRef.current(f)
+    } catch {
+      /* not on this layout */
+    }
+  }, [])
+  const fieldComments = useFieldCommentsApi({
+    collection,
+    itemId,
+    enabled: !isNew && !designOn && effectiveShowComments,
+    labelOf: fieldCommentLabel,
+    jump: fieldCommentJump
+  })
+  const fieldCommentsRef = useRef(fieldComments)
+  fieldCommentsRef.current = fieldComments
+  // `?field=<name>` (a field-comment notification, a copied field link): open the record
+  // on that field — its step/tab switched to, scrolled to and flashed — with the field's
+  // comments open. Summary mode flips to Edit first (Summary has no field rows).
+  const fieldLinkRef = useRef<{ done: boolean; timer: number | null }>({ done: false, timer: null })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new record may carry its own link
+  useEffect(() => {
+    fieldLinkRef.current.done = false
+  }, [collection, itemId])
+  useEffect(
+    () => () => {
+      if (fieldLinkRef.current.timer != null) window.clearInterval(fieldLinkRef.current.timer)
+    },
+    []
+  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs as the form settles; one jump per record
+  useEffect(() => {
+    const st = fieldLinkRef.current
+    if (st.done || isNew || designOn || typeof window === 'undefined') return
+    const f = parseFieldDeepLink(window.location.search)
+    if (!f || !summaryModeSettled) return
+    if (!fieldConfig?.some((x) => x.field === f)) return
+    st.done = true
+    if (readMode) setReadMode(false)
+    let tries = 0
+    const sel = `[data-field="${CSS.escape(f)}"]`
+    if (st.timer != null) window.clearInterval(st.timer)
+    st.timer = window.setInterval(() => {
+      tries++
+      const el = document.querySelector(sel)
+      if (el || tries === 3) {
+        try {
+          jumpToFieldRef.current(f)
+        } catch {
+          /* field not on this layout */
+        }
+      }
+      if (el) {
+        if (st.timer != null) window.clearInterval(st.timer)
+        st.timer = null
+        window.setTimeout(() => fieldCommentsRef.current?.setOpenField(f), 700)
+        return
+      }
+      if (tries > 30 && st.timer != null) {
+        window.clearInterval(st.timer)
+        st.timer = null
+      }
+    }, 400)
+  }, [fieldConfig, isNew, designOn, summaryModeSettled, readMode])
   // Bring one child row into view and open it in its grid: switch to the
   // step the grid lives on, unfold a folded Summary section, then ask the
   // grid to open the row. Shared by `?row=` links and by in-form jumps
@@ -9300,11 +9437,23 @@ function ItemEditFormView({
     }
   }
 
+  // #3228: a rule-hidden step shown anyway is read-only — its rule says it does not apply.
+  const revealedReadOnly = new Map<string, string>()
+  for (const h of ruleHiddenSteps) {
+    if (!revealedStillHidden.has(h.key)) continue
+    for (const f of groupedMap[h.key] ?? []) {
+      lockedFields.add(f.field)
+      if (!revealedReadOnly.has(f.field))
+        revealedReadOnly.set(f.field, `Hidden by a rule: ${h.label} shows when ${h.when}`)
+    }
+  }
+
   // Why is this input read-only? (#7) — one sentence per locked/readonly
   // field, rendered on the lock glyph + the input's hover tip.
   const lockReasons: Record<string, string> = {}
   for (const [f, label] of sectionLocked)
     lockReasons[f] = `The "${label}" section is locked for your role`
+  for (const [f, why] of revealedReadOnly) if (!lockReasons[f]) lockReasons[f] = why
   {
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
     const currentState = currentStateId
@@ -10896,6 +11045,31 @@ function ItemEditFormView({
     )
   }
 
+  // #3228: "Show anyway (read-only)" / "Hide again" on a rule-hidden step or tab.
+  const toggleRuleHidden = (key: string) => {
+    const opening = !revealedHidden.has(key)
+    setRevealedHidden((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    if (opening) setActiveTab(key)
+    else if (activeTab === key) {
+      const first = allSteps.find((st) => st.key !== key)
+      if (first) setActiveTab(first.key)
+    }
+  }
+  const ruleHiddenNotes = (noun: string) =>
+    ruleHiddenSteps.length > 0 ? (
+      <RuleHiddenNotes
+        items={ruleHiddenSteps}
+        revealed={revealedStillHidden}
+        onToggle={toggleRuleHidden}
+        noun={noun}
+      />
+    ) : null
+
   function renderTabMode() {
     const tabStripItems = [
       ...(sectionGroups.length > 0 ? [{ key: '__general__', label: 'General' }] : []),
@@ -10946,6 +11120,7 @@ function ItemEditFormView({
             />
           )}
         </div>
+        {ruleHiddenNotes('tab')}
         {designStackAll
           ? tabStripItems.map((t) => (
               <Fragment key={t.key}>
@@ -11123,6 +11298,7 @@ function ItemEditFormView({
           }
           onStepClick={setActiveTab}
         />
+        {ruleHiddenNotes('step')}
         {designStackAll
           ? allSteps.map((st) => (
               <Fragment key={st.key}>
@@ -11409,6 +11585,7 @@ function ItemEditFormView({
                               affordances={fieldAffordances}
                               personalDefaults={personalDefaults.context}
                               sources={fieldSources}
+                              fieldComments={fieldComments}
                             >
                               {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a

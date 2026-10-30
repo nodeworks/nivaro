@@ -12,6 +12,7 @@ import {
   type RowGroup,
   readGroupStructure
 } from '../lib/form-structure'
+import { quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { useLiveRecord } from '../lib/live'
 import {
   displayFormulaOf,
@@ -29,6 +30,8 @@ import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
 import { PersonalDefaultMark } from './item-edit/PersonalDefaultControl'
 import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
+import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
+import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
 import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
 import { DesignNode } from './layout-editor/DesignNode'
@@ -38,6 +41,7 @@ import {
   type LayoutDesignProp,
   revealGroupKey
 } from './layout-editor/design-context'
+import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { integrityByField, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 import { type InputBinding, WidgetSlot } from './WidgetSlot'
@@ -1416,6 +1420,36 @@ function RecordReadViewBody({
       </div>
     )
   }
+  // #3228: sections a show-when rule hides say why ("Unit Selection shows when Type is
+  // Capital") and may be shown anyway — this view is read-only already. Never a section
+  // whose fields the reader may not read (the record read leaves those out), never one
+  // the layout keeps quiet (conditions.quiet_hidden_sections).
+  const [shownAnyway, setShownAnyway] = useState<ReadonlySet<string>>(() => new Set())
+  const ruleHidden =
+    showAll || !record
+      ? []
+      : ruleHiddenGroups({
+          groups: layoutData.groups.filter(
+            (g) => g.type !== 'container' && g.visibility_mode !== 'new_only'
+          ),
+          values: record,
+          fields: [...fieldByName.values()],
+          choices: choiceLabelsFrom([...fieldByName.values()]),
+          quiet: quietHiddenSectionsOf((layoutData.layout as { conditions?: unknown }).conditions),
+          readable: (key) =>
+            groupHasReadableField(
+              layoutData.assignments.filter((a) => a.group_key === key).map((a) => a.field),
+              record,
+              !!design
+            )
+        })
+  const toggleShownAnyway = (key: string) =>
+    setShownAnyway((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   // Read mode has no wizard: a steps/tabs container is an INPUT pattern.
   // Every group renders as a card in layout order — a container expands into
   // its child steps in place, so the whole record reads top to bottom.
@@ -1426,7 +1460,10 @@ function RecordReadViewBody({
     .filter((g) => showAll || g.visibility_mode !== 'new_only')
     // …and a section whose visible_when rules the record fails (a Unit Selection step on a
     // Non-Unit request) — the same evaluator the form's conditional steps use.
-    .filter((g) => showAll || !record || matchesVisibleWhen(g.visible_when, record))
+    .filter(
+      (g) =>
+        showAll || !record || shownAnyway.has(g.key) || matchesVisibleWhen(g.visible_when, record)
+    )
   // Sections the layout collapses by default start collapsed here too — the
   // same first impression as the form; the header expands them.
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set())
@@ -2072,6 +2109,11 @@ function RecordReadViewBody({
           76/23); a grid with no template is one column anyway. Sections
           STRETCH to their row (no row where one element is shorter). */}
       <style>{READ_BOARD_CSS}</style>
+      {meta && ruleHidden.length > 0 && (
+        <div className='mb-3'>
+          <RuleHiddenNotes items={ruleHidden} revealed={shownAnyway} onToggle={toggleShownAnyway} />
+        </div>
+      )}
       {meta ? (
         <div className='grid items-stretch gap-4' data-read-board>
           {sectionGroups.map(renderSection)}

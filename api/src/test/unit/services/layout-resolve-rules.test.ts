@@ -119,6 +119,18 @@ describe('validateResolveConditions', () => {
       await validateResolveConditions(q, 1, 'c', { active_window: { from: '2027-01-01' } })
     ).toBeNull()
   })
+  it('takes quiet_hidden_sections as a list of section keys (#3228)', async () => {
+    const q = stubQ({})
+    expect(
+      await validateResolveConditions(q, 1, 'c', { quiet_hidden_sections: ['unit'] })
+    ).toBeNull()
+    expect(await validateResolveConditions(q, 1, 'c', { quiet_hidden_sections: 'unit' })).toMatch(
+      /quiet_hidden_sections/
+    )
+    expect(await validateResolveConditions(q, 1, 'c', { quiet_hidden_sections: [''] })).toMatch(
+      /quiet_hidden_sections/
+    )
+  })
   it('needs a freeze reason', async () => {
     const q = stubQ({})
     expect(

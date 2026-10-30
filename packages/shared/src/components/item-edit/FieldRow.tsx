@@ -34,6 +34,7 @@ import {
   useFieldContextMenu,
   usePresenceSoftLock
 } from './FieldAffordances'
+import { FieldCommentButton } from './FieldComments'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { FormHelpVideoButton } from './FormHelpVideoButton'
 import {
@@ -1105,6 +1106,9 @@ export const FieldRow = memo(function FieldRow({
           )}
           {!isCalc && itemId && itemId !== 'new' && (
             <FieldWatchButton collection={collection} itemId={itemId} field={field.field} />
+          )}
+          {!isCalc && itemId && itemId !== 'new' && (
+            <FieldCommentButton field={field.field} label={label || titleCase(field.field)} />
           )}
           {itemId && itemId !== 'new' && isActuallyComputed && (
             <FieldLineageButton collection={collection} itemId={itemId} field={field.field} />

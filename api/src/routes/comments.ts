@@ -6,6 +6,14 @@ import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
 import { findRecordInstance } from '../services/branch-instances.js'
+import {
+  cleanCommentField,
+  fieldCommentGate,
+  fieldCommentQuery,
+  fieldMayBeCommented,
+  hasFieldCommentColumns,
+  plainFieldLabel
+} from '../services/field-comments.js'
 import { agentBadgesForComments } from '../services/mcp-attribution.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
@@ -18,6 +26,7 @@ import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +40,10 @@ interface CommentRow {
   updated_at: Date
   deleted_at?: Date | null
   deleted_by?: string | null
+  /** #3232 (migration 521): the field the comment was left on; null = the whole record. */
+  field?: string | null
+  resolved_at?: Date | null
+  resolved_by?: string | null
 }
 
 interface MentionUserRow {
@@ -159,6 +172,30 @@ async function recordVisible(
   return canSeeRecordRoom(req.user!, collection, String(item), false)
 }
 
+/**
+ * Of the people a field comment mentions, those who may open the record and read the
+ * field: the field-watch gate (subscribersWhoMayRead), judged as each recipient.
+ * Lower-cased ids.
+ */
+async function fieldCommentListeners(
+  ids: string[],
+  collection: string,
+  item: string,
+  field: string
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  try {
+    const users = (await db('nivaro_users')
+      .whereIn('id', [...new Set(ids)])
+      .select('id', 'email', 'first_name', 'last_name', 'role', 'status')) as User[]
+    const { subscribersWhoMayRead } = await import('../hooks/field-watches.js')
+    const ok = await subscribersWhoMayRead(users, collection, item, field)
+    return new Set(ok.map((u) => String(u.id).toLowerCase()))
+  } catch {
+    return new Set()
+  }
+}
+
 // ─── Routes ─────────────────────────────────────────────────────────────────
 
 /** The 400 body when `text` links a file the writer cannot open (new links only). */
@@ -192,7 +229,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Not found' })
     }
 
-    const comments = (await db('nivaro_comments as c')
+    const fieldCols = await hasFieldCommentColumns()
+    const allComments = (await db('nivaro_comments as c')
       .leftJoin('nivaro_users as u', 'c.user', 'u.id')
       .where({ 'c.collection': collection, 'c.item': item })
       .orderBy('c.created_at', 'asc')
@@ -206,6 +244,7 @@ export async function commentsRoutes(app: FastifyInstance) {
         'c.updated_at',
         'c.deleted_at',
         'c.deleted_by',
+        ...(fieldCols ? ['c.field', 'c.resolved_at'] : []),
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -216,6 +255,11 @@ export async function commentsRoutes(app: FastifyInstance) {
         email: string | null
       }
     >
+    // A field comment shows only to people who may read that field (#3232).
+    const mayReadField = fieldCols
+      ? await fieldCommentGate(req.user!, !!req.isAdmin, collection)
+      : () => true
+    const comments = allComments.filter((c) => mayReadField(c.field))
 
     // Edit history: how many earlier versions each comment has (edited = at least one).
     const ids0 = comments.map((c) => c.id)
@@ -341,7 +385,10 @@ export async function commentsRoutes(app: FastifyInstance) {
         email: m.email,
         seen_at: receipts.get(receiptKey(c.id, m.user)) ?? null
       })),
-      reactions: reactionsByComment.get(c.id) ?? []
+      reactions: reactionsByComment.get(c.id) ?? [],
+      // #3232: a comment left on one field ("on Amount") and whether it was resolved.
+      field: c.field ?? null,
+      resolved_at: c.resolved_at ?? null
     }))
 
     return { data }
@@ -487,175 +534,272 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
   )
 
-  app.post<{ Body: { collection: string; item: string; text: string } }>(
-    '/',
-    async (req, reply) => {
-      const body = req.body
-      if (!body?.collection || !body?.item || !body?.text) {
-        return reply.code(400).send({ error: 'collection, item and text are required' })
-      }
+  app.post<{
+    Body: { collection: string; item: string; text: string; field?: string; field_label?: string }
+  }>('/', async (req, reply) => {
+    const body = req.body
+    if (!body?.collection || !body?.item || !body?.text) {
+      return reply.code(400).send({ error: 'collection, item and text are required' })
+    }
+    // #3232: a comment on one field of the record (`field`), else on the whole record.
+    const field = cleanCommentField(body.field)
+    if (field === 'invalid') {
+      return reply.code(400).send({ error: 'field must be a field name', code: 'BAD_FIELD' })
+    }
 
-      // Gate on create permission for the parent collection. History
-      // annotations (#372) comment ON a revision row — gated by READ access
-      // to the revision's own record collection instead (you can annotate
-      // history you're allowed to see).
-      if (body.collection === 'nivaro_revisions') {
-        const rev = (await db('nivaro_revisions')
-          .where({ id: Number(body.item) })
-          .first('collection')) as { collection?: string } | undefined
-        if (!rev) return reply.code(404).send({ error: 'Revision not found' })
-        if (!req.isAdmin && !(await can(req.user!, 'read', rev.collection ?? '')))
-          return reply.code(403).send({ error: 'Forbidden' })
-      } else if (!req.isAdmin && !(await can(req.user!, 'create', body.collection))) {
+    // Gate on create permission for the parent collection. History
+    // annotations (#372) comment ON a revision row — gated by READ access
+    // to the revision's own record collection instead (you can annotate
+    // history you're allowed to see).
+    if (body.collection === 'nivaro_revisions') {
+      const rev = (await db('nivaro_revisions')
+        .where({ id: Number(body.item) })
+        .first('collection')) as { collection?: string } | undefined
+      if (!rev) return reply.code(404).send({ error: 'Revision not found' })
+      if (!req.isAdmin && !(await can(req.user!, 'read', rev.collection ?? '')))
         return reply.code(403).send({ error: 'Forbidden' })
+    } else if (!req.isAdmin && !(await can(req.user!, 'create', body.collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    // …and on the record itself: no comment (and no @owners / @watchers
+    // fan-out naming its people) on a record the caller cannot open.
+    if (!(await recordVisible(req, body.collection, body.item))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    if (field) {
+      if (body.collection === 'nivaro_revisions' || !(await hasFieldCommentColumns())) {
+        return reply.code(409).send({
+          error: 'Comments on a single field are not available here yet',
+          code: 'FIELD_COMMENTS_UNAVAILABLE'
+        })
       }
-      // …and on the record itself: no comment (and no @owners / @watchers
-      // fan-out naming its people) on a record the caller cannot open.
-      if (!(await recordVisible(req, body.collection, body.item))) {
-        return reply.code(404).send({ error: 'Not found' })
+      // Only a field the writer may read (and that exists): a thread never confirms a
+      // field the caller cannot see.
+      if (!(await fieldMayBeCommented(req.user!, !!req.isAdmin, body.collection, field))) {
+        return reply.code(404).send({ error: 'Field not found', code: 'FIELD_NOT_FOUND' })
       }
-      // A comment may only link files its writer can open.
-      const unreadable = await fileIdsRefused(req, body.text)
-      if (unreadable) return reply.code(400).send(unreadable)
+    }
+    // A comment may only link files its writer can open.
+    const unreadable = await fileIdsRefused(req, body.text)
+    if (unreadable) return reply.code(400).send(unreadable)
 
-      const userId = req.user!.id
-      const id = randomUUID()
-      const now = new Date()
+    const userId = req.user!.id
+    const id = randomUUID()
+    const now = new Date()
 
-      await db('nivaro_comments').insert({
-        id,
+    await db('nivaro_comments').insert({
+      id,
+      collection: body.collection,
+      item: body.item,
+      user: userId,
+      text: body.text,
+      created_at: now,
+      updated_at: now,
+      ...(field ? { field } : {})
+    })
+    // Auto-watch (#400): commenting subscribes the commenter when their
+    // preference says so — fire-and-forget.
+    void ensureAutoWatch(userId, body.collection, body.item, 'commented')
+    // #1874: list/queue rows showing a comment count refresh it.
+    announceRecordAspect(body.collection, body.item, '$comments')
+    // Live comments (#280): co-viewers' threads update the moment this
+    // lands — record-room broadcast, clients invalidate the comments query.
+    // Cloud: the record room of this request's tenant (tenant-rooms.ts).
+    app.io
+      ?.to(tenantScopedRoom(`record:${body.collection}:${body.item}`))
+      .emit('record:comment', { collection: body.collection, item: body.item, user: userId })
+
+    // Resolve and persist mentions. "@owners" expands to the record's
+    // current pipeline owners (resolved server-side, so the set is always
+    // the live one — never a stale name list); resolution failures degrade
+    // to no extra recipients rather than blocking the comment.
+    const mentioned = await resolveMentions(body.text)
+    // @watchers (#374): one token notifying everyone watching the record —
+    // field-watch subscribers + notification subscribers on this collection.
+    if (/@\[?watchers\]?\b/i.test(body.text)) {
+      try {
+        const watcherRows = (await db('nivaro_field_watches as w')
+          .join('nivaro_field_watch_subscribers as ws', 'ws.watch', 'w.id')
+          .where('w.collection', body.collection)
+          .where((q) => q.where('w.item_id', body.item).orWhereNull('w.item_id'))
+          .distinct('ws.user')) as Array<{ user: string }>
+        const subRows = (await db('nivaro_notification_subscriptions')
+          .where({ collection: body.collection, is_active: true })
+          .where((q) =>
+            q
+              .whereNull('filter_field')
+              .orWhereNot('filter_field', 'id')
+              .orWhere('filter_value', String(body.item))
+          )
+          .distinct('user')) as Array<{ user: string }>
+        const seenW = new Set(mentioned.map((u) => u.id))
+        for (const r of [...watcherRows, ...subRows]) {
+          if (seenW.has(r.user)) continue
+          seenW.add(r.user)
+          mentioned.push({ id: r.user } as never)
+        }
+      } catch {
+        /* watcher expansion is best-effort */
+      }
+    }
+    if (OWNERS_MENTION_RE.test(body.text)) {
+      try {
+        const owners = await resolveOwnerMentions(body.collection, body.item)
+        const seen = new Set(mentioned.map((u) => u.id))
+        for (const o of owners) {
+          if (seen.has(o.id)) continue
+          seen.add(o.id)
+          mentioned.push(o)
+        }
+      } catch {
+        /* owners are extra recipients, never a reason the note fails */
+      }
+    }
+    // #3232: a field comment reaches only people who may open THIS record and read the
+    // field (judged as each recipient: row filter, User Scopes, field list). The mention is
+    // still stored for the others; they hear nothing about a record they cannot open.
+    const mayHear = field
+      ? await fieldCommentListeners(
+          mentioned.map((u) => u.id),
+          body.collection,
+          String(body.item),
+          field
+        )
+      : null
+    const fieldLabel = field ? plainFieldLabel(field, body.field_label) : null
+    for (const u of mentioned) {
+      await db('nivaro_comment_mentions').insert({ comment: id, user: u.id })
+
+      // Don't notify yourself.
+      if (u.id === userId) continue
+      if (mayHear && !mayHear.has(String(u.id).toLowerCase())) continue
+
+      // The record by its readable id, read as the person mentioned (#776).
+      const recordRef = await recordDisplayRef(body.collection, body.item, { recipient: u.id })
+      let subject = `You were mentioned on ${recordRef}`
+      let message = body.text.slice(0, 100)
+      const actorName =
+        [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
+        req.user?.email ||
+        'Someone'
+      // Notification templates: `notification:comment_mention` rewrites
+      // the wording; the hardcoded line stays the default.
+      if (fieldLabel) {
+        subject = `You were mentioned on ${fieldLabel} in ${recordRef}`
+        message = `On ${fieldLabel}: ${body.text}`.slice(0, 100)
+      }
+      const templated = await renderNotificationTemplate('comment_mention', {
+        actor: actorName,
+        collection: body.collection,
+        record: body.item,
+        record_ref: recordRef,
+        text: body.text.slice(0, 300),
+        field: field ?? '',
+        field_label: fieldLabel ?? ''
+      }).catch(() => null)
+      if (templated) {
+        subject = templated.subject
+        message = templated.message || message
+      }
+      // A mention is addressed to the person — it always lands (no record
+      // mute / presence suppression), and the row offers an inline reply
+      // straight back onto the record's thread.
+      await notifyUser(app, u.id, {
+        subject,
+        message,
+        sender: userId,
         collection: body.collection,
         item: body.item,
-        user: userId,
-        text: body.text,
-        created_at: now,
-        updated_at: now
-      })
-      // Auto-watch (#400): commenting subscribes the commenter when their
-      // preference says so — fire-and-forget.
-      void ensureAutoWatch(userId, body.collection, body.item, 'commented')
-      // #1874: list/queue rows showing a comment count refresh it.
-      announceRecordAspect(body.collection, body.item, '$comments')
-      // Live comments (#280): co-viewers' threads update the moment this
-      // lands — record-room broadcast, clients invalidate the comments query.
-      // Cloud: the record room of this request's tenant (tenant-rooms.ts).
+        category: 'mentions',
+        always_inbox: true,
+        // A field comment opens the record scrolled to and highlighting that field.
+        target: {
+          kind: 'record',
+          collection: body.collection,
+          id: body.item,
+          action: 'reply',
+          ...(field ? { query: fieldCommentQuery(field) } : {})
+        }
+      }).catch(() => undefined)
+
+      sendTeamsNotification({ title: subject, text: message }).catch(() => {})
+    }
+
+    // (No comment-text broadcast here: the record room's `record:comment` above — ids only —
+    // is how co-viewers learn of a new comment; they read it through the comments route.)
+
+    const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
+    await logActivity({
+      action: 'create',
+      collection: 'nivaro_comments',
+      item: id,
+      user: userId,
+      req,
+      comment: body.collection + ':' + body.item
+    })
+    return reply.code(201).send({
+      data: {
+        ...row,
+        mentions: mentioned.map((u) => ({
+          id: u.id,
+          first_name: u.first_name,
+          last_name: u.last_name,
+          email: u.email
+        }))
+      }
+    })
+  })
+
+  // #3232: resolve / reopen a field comment. Anyone who may comment on the record.
+  app.post<{ Params: { id: string }; Body: { resolved?: boolean } }>(
+    '/:id/resolve',
+    async (req, reply) => {
+      if (!(await hasFieldCommentColumns())) {
+        return reply.code(409).send({
+          error: 'Comments on a single field are not available here yet',
+          code: 'FIELD_COMMENTS_UNAVAILABLE'
+        })
+      }
+      const comment = (await db('nivaro_comments')
+        .where('id', req.params.id)
+        .first('id', 'collection', 'item', 'field', 'deleted_at')) as
+        | Pick<CommentRow, 'id' | 'collection' | 'item' | 'field' | 'deleted_at'>
+        | undefined
+      if (!comment || comment.deleted_at) return reply.code(404).send({ error: 'Not found' })
+      if (!(await recordVisible(req, comment.collection, comment.item))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
+      if (!comment.field) {
+        return reply.code(400).send({ error: 'Only field comments can be resolved' })
+      }
+      if (!req.isAdmin && !(await can(req.user!, 'create', comment.collection))) {
+        return reply.code(403).send({ error: 'Forbidden' })
+      }
+      const resolved = req.body?.resolved !== false
+      await db('nivaro_comments')
+        .where('id', comment.id)
+        .update(
+          resolved
+            ? { resolved_at: new Date(), resolved_by: req.user!.id }
+            : { resolved_at: null, resolved_by: null }
+        )
+      announceRecordAspect(comment.collection, comment.item, '$comments')
       app.io
-        ?.to(tenantScopedRoom(`record:${body.collection}:${body.item}`))
-        .emit('record:comment', { collection: body.collection, item: body.item, user: userId })
-
-      // Resolve and persist mentions. "@owners" expands to the record's
-      // current pipeline owners (resolved server-side, so the set is always
-      // the live one — never a stale name list); resolution failures degrade
-      // to no extra recipients rather than blocking the comment.
-      const mentioned = await resolveMentions(body.text)
-      // @watchers (#374): one token notifying everyone watching the record —
-      // field-watch subscribers + notification subscribers on this collection.
-      if (/@\[?watchers\]?\b/i.test(body.text)) {
-        try {
-          const watcherRows = (await db('nivaro_field_watches as w')
-            .join('nivaro_field_watch_subscribers as ws', 'ws.watch', 'w.id')
-            .where('w.collection', body.collection)
-            .where((q) => q.where('w.item_id', body.item).orWhereNull('w.item_id'))
-            .distinct('ws.user')) as Array<{ user: string }>
-          const subRows = (await db('nivaro_notification_subscriptions')
-            .where({ collection: body.collection, is_active: true })
-            .where((q) =>
-              q
-                .whereNull('filter_field')
-                .orWhereNot('filter_field', 'id')
-                .orWhere('filter_value', String(body.item))
-            )
-            .distinct('user')) as Array<{ user: string }>
-          const seenW = new Set(mentioned.map((u) => u.id))
-          for (const r of [...watcherRows, ...subRows]) {
-            if (seenW.has(r.user)) continue
-            seenW.add(r.user)
-            mentioned.push({ id: r.user } as never)
-          }
-        } catch {
-          /* watcher expansion is best-effort */
-        }
-      }
-      if (OWNERS_MENTION_RE.test(body.text)) {
-        try {
-          const owners = await resolveOwnerMentions(body.collection, body.item)
-          const seen = new Set(mentioned.map((u) => u.id))
-          for (const o of owners) {
-            if (seen.has(o.id)) continue
-            seen.add(o.id)
-            mentioned.push(o)
-          }
-        } catch {
-          /* owners are extra recipients, never a reason the note fails */
-        }
-      }
-      for (const u of mentioned) {
-        await db('nivaro_comment_mentions').insert({ comment: id, user: u.id })
-
-        // Don't notify yourself.
-        if (u.id === userId) continue
-
-        // The record by its readable id, read as the person mentioned (#776).
-        const recordRef = await recordDisplayRef(body.collection, body.item, { recipient: u.id })
-        let subject = `You were mentioned on ${recordRef}`
-        let message = body.text.slice(0, 100)
-        const actorName =
-          [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
-          req.user?.email ||
-          'Someone'
-        // Notification templates: `notification:comment_mention` rewrites
-        // the wording; the hardcoded line stays the default.
-        const templated = await renderNotificationTemplate('comment_mention', {
-          actor: actorName,
-          collection: body.collection,
-          record: body.item,
-          record_ref: recordRef,
-          text: body.text.slice(0, 300)
-        }).catch(() => null)
-        if (templated) {
-          subject = templated.subject
-          message = templated.message || message
-        }
-        // A mention is addressed to the person — it always lands (no record
-        // mute / presence suppression), and the row offers an inline reply
-        // straight back onto the record's thread.
-        await notifyUser(app, u.id, {
-          subject,
-          message,
-          sender: userId,
-          collection: body.collection,
-          item: body.item,
-          category: 'mentions',
-          always_inbox: true,
-          target: { kind: 'record', collection: body.collection, id: body.item, action: 'reply' }
-        }).catch(() => undefined)
-
-        sendTeamsNotification({ title: subject, text: message }).catch(() => {})
-      }
-
-      // (No comment-text broadcast here: the record room's `record:comment` above — ids only —
-      // is how co-viewers learn of a new comment; they read it through the comments route.)
-
-      const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
+        ?.to(tenantScopedRoom(`record:${comment.collection}:${comment.item}`))
+        .emit('record:comment', {
+          collection: comment.collection,
+          item: comment.item,
+          user: req.user!.id
+        })
       await logActivity({
-        action: 'create',
+        action: 'update',
         collection: 'nivaro_comments',
-        item: id,
-        user: userId,
+        item: comment.id,
+        user: req.user?.id,
         req,
-        comment: body.collection + ':' + body.item
+        comment: resolved ? 'resolved' : 'reopened'
       })
-      return reply.code(201).send({
-        data: {
-          ...row,
-          mentions: mentioned.map((u) => ({
-            id: u.id,
-            first_name: u.first_name,
-            last_name: u.last_name,
-            email: u.email
-          }))
-        }
-      })
+      return { data: { id: comment.id, resolved } }
     }
   )
 

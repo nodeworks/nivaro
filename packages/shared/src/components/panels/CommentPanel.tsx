@@ -23,10 +23,11 @@ import {
   useRecordSignalSender
 } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
-import { formatRelative } from '../../lib/utils'
+import { formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
+import { useFieldComments } from '../item-edit/field-comments-context'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -55,6 +56,9 @@ interface Comment {
   deleted?: boolean
   /** #3213 — posted by an AI assistant through MCP: the badge text ("via Claude"). */
   via_agent?: string | null
+  /** #3232 — left on one field of the record ("on Amount"); resolved from that field. */
+  field?: string | null
+  resolved_at?: string | null
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -98,6 +102,43 @@ function displayName(u: Comment['user']): string {
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
 }
 
+/** "on Amount" beside a comment left on one field (#3232); jumps to the field on the form. */
+function FieldTag({
+  field,
+  label,
+  resolved,
+  onJump
+}: {
+  field: string
+  label: string
+  resolved: boolean
+  onJump?: () => void
+}) {
+  const body = (
+    <>
+      on <span className='font-medium'>{label}</span>
+      {resolved && <span className='text-slate-400 dark:text-slate-500'> · resolved</span>}
+    </>
+  )
+  const cls =
+    'inline-flex min-w-0 max-w-[220px] items-center gap-1 truncate rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[10.5px] text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+  return onJump ? (
+    <button
+      type='button'
+      data-comment-field={field}
+      onClick={onJump}
+      data-tip={`Go to ${label}`}
+      className={`${cls} transition-colors hover:border-nvr-cyan/50 hover:text-[#0e7490] dark:hover:text-nvr-cyan`}
+    >
+      {body}
+    </button>
+  ) : (
+    <span data-comment-field={field} className={cls}>
+      {body}
+    </span>
+  )
+}
+
 // ─── Mention autocomplete ─────────────────────────────────────────────────────
 
 type MentionUser = {
@@ -126,7 +167,8 @@ function mentionHandle(u: MentionUser): string {
   return u.email.split('@')[0]
 }
 
-function MentionTextarea({
+/** The note composer's textarea with @mention autocomplete (also the field-comment popover, #3232). */
+export function MentionTextarea({
   value,
   onChange,
   ...textareaProps
@@ -295,6 +337,7 @@ function MentionTextarea({
         createPortal(
           <div
             ref={menuRef}
+            data-mention-menu=''
             className='fixed z-[110] max-h-60 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-popover'
             style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
             // Keep the textarea focused for any press inside the menu —
@@ -743,6 +786,8 @@ export function CommentPanel({
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
   const queryClient = useQueryClient()
+  // #3232: the record form's field-comment context — labels for "on <Field>" and the jump.
+  const fieldComments = useFieldComments()
   const [expanded, setExpanded] = useState(false)
   const syncedFromProp = useRef(false)
   useEffect(() => {
@@ -1178,6 +1223,16 @@ export function CommentPanel({
                             </span>
                             {c.updated_at && c.updated_at !== c.created_at && (
                               <span className='text-[10px] text-slate-300'>(edited)</span>
+                            )}
+                            {c.field && (
+                              <FieldTag
+                                field={c.field}
+                                label={fieldComments?.labelOf(c.field) ?? titleCase(c.field)}
+                                resolved={!!c.resolved_at}
+                                onJump={
+                                  fieldComments ? () => fieldComments.jump(c.field!) : undefined
+                                }
+                              />
                             )}
                             {!isEditing && (
                               <div

@@ -9,6 +9,7 @@
  *  - `tablet_of` (#3183): this form is the tablet version of that form.
  *  - `freeze` {until, reason, by?, by_name?, at?} (#2717): edits refused before `until`.
  *  - `lazy_sections` (#2713): sections whose pickers, grids and widgets wait until opened.
+ *  - `quiet_hidden_sections` (#3228): sections whose "Shows when …" line is turned off.
  */
 
 export interface ActiveWindow {
@@ -165,6 +166,24 @@ export function lazySectionPatch(conditions: unknown, key: string, on: boolean) 
   const cur = lazySectionsOf(conditions).filter((k) => k !== key)
   const next = on ? [...cur, key] : cur
   return { conditions: conditionsWithKey(conditions, 'lazy_sections', next.length ? next : null) }
+}
+
+/**
+ * #3228: sections/steps whose "Shows when …" line is turned off — they vanish
+ * quietly while their show-when rule hides them, as before. The line is on by default.
+ */
+export function quietHiddenSectionsOf(conditions: unknown): string[] {
+  const v = conditionsObject(conditions)?.quiet_hidden_sections
+  return Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === 'string'))] : []
+}
+
+/** The `conditions` patch that turns one section's hidden-rule line on (`say` true) or off. */
+export function quietHiddenSectionPatch(conditions: unknown, key: string, say: boolean) {
+  const cur = quietHiddenSectionsOf(conditions).filter((k) => k !== key)
+  const next = say ? cur : [...cur, key]
+  return {
+    conditions: conditionsWithKey(conditions, 'quiet_hidden_sections', next.length ? next : null)
+  }
 }
 
 /** The screen class the record page reports to /active: phones get a form's phone version. */

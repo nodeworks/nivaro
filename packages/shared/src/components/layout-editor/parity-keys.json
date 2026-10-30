@@ -1224,6 +1224,15 @@
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
+    "key": "group.rule_hint",
+    "label": "Say why a rule-hidden step is hidden (#3228)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum", "detail"]
+  },
+  {
     "key": "group.hidden_for_roles",
     "label": "Hidden for roles (role names)",
     "home": "inspector",
