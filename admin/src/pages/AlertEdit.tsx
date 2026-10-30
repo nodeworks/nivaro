@@ -10,7 +10,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Check, ChevronsUpDown, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   ActivityPatternBuilder,
@@ -232,6 +232,36 @@ export function AlertEditPage() {
     }
   }, [existing, initialized])
 
+  // CC-31 — "Alert me" from the Command Center (or any link) opens a NEW alert prefilled from the
+  // query string: name, category, collection, field, operator, threshold, unit and one
+  // `f.<column>=<value>` per record filter. Only known values are taken; the admin still saves.
+  const [searchParams] = useSearchParams()
+  const prefillFrom = isNew ? searchParams.get('from') : null
+  useEffect(() => {
+    if (!isNew || initialized) return
+    const p = searchParams
+    const prefillName = p.get('name')
+    if (prefillName) setName(prefillName.slice(0, 200))
+    const cat = p.get('category')
+    if (cat && CATEGORIES.some((c) => c.value === cat)) setCategory(cat)
+    const col = p.get('collection')
+    if (col && /^[A-Za-z0-9_]+$/.test(col)) setCollection(col)
+    const fld = p.get('field')
+    if (fld && /^[A-Za-z0-9_]+$/.test(fld)) setField(fld)
+    const op = p.get('operator')
+    if (op && OPERATORS.some((o) => o.value === op)) setOperator(op)
+    const th = Number(p.get('threshold'))
+    if (p.get('threshold') != null && Number.isFinite(th)) setThreshold(th)
+    const unit = p.get('unit')
+    if (unit && UNITS.some((u) => u.value === unit)) setUnit(unit)
+    const rows: FilterRow[] = []
+    for (const [k, v] of p.entries())
+      if (k.startsWith('f.') && /^[A-Za-z0-9_]+$/.test(k.slice(2)))
+        rows.push({ field: k.slice(2), value: v.slice(0, 200) })
+    if (rows.length) setFilterRows(rows.slice(0, 10))
+    setInitialized(true)
+  }, [isNew, initialized, searchParams])
+
   // #3080 — a save that turns this alert on for many subscribers asks first (inline panel).
   const [audienceAsk, setAudienceAsk] = useState<AudiencePreview | null>(null)
   const lastBody = useRef<Omit<AlertDefinition, 'id'> | null>(null)
@@ -398,6 +428,12 @@ export function AlertEditPage() {
           />
         )}
       </div>
+
+      {prefillFrom === 'command-center' && (
+        <p className='mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px] text-slate-600 dark:border-border dark:bg-white/[0.04] dark:text-slate-300'>
+          Started from the Command Center. Pick the field to watch and the threshold, then save.
+        </p>
+      )}
 
       {/* Form */}
       <form onSubmit={handleSubmit} className='space-y-5'>

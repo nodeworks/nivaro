@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { ccReadAuth } from '../services/command-center/auth.js'
+import { snapshotFlowBlock } from '../services/command-center/flow.js'
+import { snapshotRiskBlock } from '../services/command-center/risk.js'
 import { excludeStartRows } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 
@@ -73,82 +75,11 @@ export async function commandCenterRoutes(app: FastifyInstance) {
     }
 
     const [flow, risk, people, throughput, health, activity] = await Promise.all([
-      // Pipeline flow board: per bound collection, live state counts of OPEN
-      // instances. Gated per collection on read permission.
-      safe(
-        async () => {
-          const bindings = (await db('nivaro_workflow_bindings as b')
-            .join('nivaro_workflow_templates as t', 't.id', 'b.template')
-            .select('b.collection', 'b.template', 't.name as template_name')) as Array<{
-            collection: string
-            template: string
-            template_name: string
-          }>
-          const out: Array<{
-            collection: string
-            template_name: string
-            states: Array<{ key: string; label: string; color: string | null; count: number }>
-          }> = []
-          for (const b of bindings) {
-            if (!(await can(req.user!, 'read', b.collection))) continue
-            const counts = (await db('nivaro_workflow_instances as i')
-              .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-              .where('i.collection', b.collection)
-              .where('i.template', b.template)
-              .whereNull('i.completed_at')
-              .groupBy('s.key', 's.label', 's.color', 's.sort')
-              .orderBy('s.sort', 'asc')
-              .select('s.key', 's.label', 's.color')
-              .count('* as count')) as Array<{
-              key: string
-              label: string
-              color: string | null
-              count: number
-            }>
-            if (counts.length > 0) {
-              out.push({
-                collection: b.collection,
-                template_name: b.template_name,
-                states: counts.map((c) => ({ ...c, count: Number(c.count) }))
-              })
-            }
-          }
-          return out
-        },
-        [] as Array<{
-          collection: string
-          template_name: string
-          states: Array<{ key: string; label: string; color: string | null; count: number }>
-        }>
-      ),
-
-      // Risk strip: SLA warning/breached + at-risk + open issues, cheap counts.
-      safe(
-        async () => {
-          const since = new Date(Date.now() - 90 * 86_400_000)
-          // Materialized queue rows carry SLA verdicts already — the cheapest
-          // instance-wide read that exists. Fall back to zeros when no queue is
-          // materialized; the strip labels its source honestly.
-          const slaRow = (await db('nivaro_queue_items')
-            .select(
-              db.raw('SUM(CASE WHEN at_risk = 1 THEN 1 ELSE 0 END) as at_risk'),
-              db.raw("COUNT(DISTINCT CONCAT(collection, ':', item_id)) as tracked")
-            )
-            .first()
-            .catch(() => null)) as { at_risk: number; tracked: number } | null
-          const openIssues = (await db('nivaro_issues')
-            .where('status', 'open')
-            .where('last_seen_at', '>', since)
-            .count('* as n')
-            .first()) as { n: number }
-          return {
-            at_risk: Number(slaRow?.at_risk ?? 0),
-            tracked: Number(slaRow?.tracked ?? 0),
-            open_issues: Number(openIssues?.n ?? 0)
-          }
-        },
-        { at_risk: 0, tracked: 0, open_issues: 0 }
-      ),
+      // Flow + risk blocks: services/command-center/flow.ts + risk.ts (scoped, region, rewind).
+      safe(() => snapshotFlowBlock(req), [] as Awaited<ReturnType<typeof snapshotFlowBlock>>),
+      safe(() => snapshotRiskBlock(req), { at_risk: 0, tracked: 0, open_issues: 0 } as Awaited<
+        ReturnType<typeof snapshotRiskBlock>
+      >),
 
       // People: online users per region/zone scope value (ids — the geo route
       // resolves centroids; the pane also lists names).

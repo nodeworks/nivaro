@@ -124,6 +124,8 @@ export interface FlowDetail {
       oldest_age_s: number | null
       median_age_s: number | null
       stuck: number
+      /** Admins: /alerts/new prefilled for this state (CC-31). */
+      alert_href?: string | null
     }
   >
   open: number
@@ -132,7 +134,11 @@ export interface FlowDetail {
   completed_7d: number
   /** Days to clear today's open count at the 7-day completion pace; null = not clearing. */
   clears_in_days: number | null
+  /** Records that entered the pipeline in the 7 days. */
+  arrivals_7d?: number
   live_only?: boolean
+  /** Present with a region focus: false = this collection cannot be placed in regions. */
+  region_applies?: boolean
 }
 
 export type AttentionKind =
@@ -145,11 +151,13 @@ export type AttentionKind =
   | 'alert'
 
 export interface AttentionAction {
-  kind: 'open' | 'nudge' | 'reassign' | 'transition' | 'alert'
+  kind: 'open' | 'nudge' | 'reassign' | 'transition' | 'alert' | 'approve'
   label: string
   href?: string
-  /** For nudge / transition: the record the action applies to. */
-  target?: { collection: string; id: string; transition?: string }
+  /** For nudge / transition / approve: the record the action applies to. */
+  target?: { collection: string; id: string; transition?: string; approval_id?: number }
+  /** For reassign: every record the group hands on (capped). */
+  targets?: Array<{ collection: string; id: string }>
 }
 
 export interface AttentionItem {
@@ -161,6 +169,10 @@ export interface AttentionItem {
   count: number | null
   href: string | null
   record?: { collection: string; id: string } | null
+  /** When it started (entered the state, first seen, first fired) — ISO. */
+  since?: string | null
+  /** A group's list: the collection, filtered to a state and a minimum age. */
+  list?: { collection: string; state?: string; min_age_hours?: number } | null
   actions: AttentionAction[]
 }
 
@@ -171,6 +183,8 @@ export interface WorkloadRow {
   usual: number
   status: 'over' | 'normal' | 'idle'
   out: boolean
+  /** history = the person's own median; team = the median across the people listed. */
+  usual_source?: 'history' | 'team'
 }
 
 export interface ForecastToday {
@@ -186,6 +200,11 @@ export interface ForecastToday {
     expected_arrivals: number
     expected_completions: number
   }>
+  live_only?: boolean
+  region_applies?: boolean
+  /** Past same-weekdays averaged (0 = no history yet). */
+  history_days?: number
+  time_zone?: string
 }
 
 // ── /throughput, /activity, /partners, /brief (time & system) ─────────────────────────────────
