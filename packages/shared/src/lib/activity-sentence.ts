@@ -1058,6 +1058,8 @@ export function renderActivityGroupSentence(
   }
   if (action === 'create') return `${who} created ${what}`
   if (action === 'delete') return `${who} deleted ${what}`
+  if (action === 'picker-exclude') return `${who} hid ${what} from pickers${times}`
+  if (action === 'picker-include') return `${who} showed ${what} in pickers again${times}`
   const parts = actionParts(action)
   if (parts.past)
     return `${who} ${parts.past} ${what}${parts.noun && !midSentence(collectionNouns(collection, labels).plural).toLowerCase().includes(parts.noun) ? ` (${parts.noun})` : ''}${times}`
