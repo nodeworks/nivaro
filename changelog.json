@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-30T02:03:20.594Z",
+  "generated_at": "2026-10-30T03:11:55.789Z",
   "releases": [
+    {
+      "version": "0.3.59",
+      "tag": "v0.3.59",
+      "date": "2026-10-29T23:11:43-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "overview, activity",
+              "text": "staging walk-through fixes",
+              "hash": "48b7bb4b1"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.58",
       "tag": "v0.3.58",
-      "date": "2026-10-29T22:03:07-04:00",
+      "date": "2026-10-29T22:03:20-04:00",
       "sections": [
         {
           "label": "Added",
