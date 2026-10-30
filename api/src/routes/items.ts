@@ -27,6 +27,7 @@ import {
 import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { withChainStep } from '../services/chain.js'
+import { noteDbRefusal } from '../services/error-enrich.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
@@ -97,6 +98,8 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   const valueRefusal =
     (err as { statusCode?: unknown })?.statusCode == null ? describeValueRefusal(err) : null
   if (valueRefusal) {
+    // The answer names the field by its label (services/error-enrich.ts).
+    noteDbRefusal(reply.request, err)
     return reply
       .code(valueRefusal.status)
       .send({ error: valueRefusal.message, code: valueRefusal.code })

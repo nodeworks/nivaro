@@ -717,6 +717,16 @@ export {
   type StoredDraft,
   saveDraft
 } from './lib/draft-store'
+export { ERROR_HINTS, hintFor, STATUS_HINTS } from './lib/error-hints'
+export type { ErrorDescription } from './lib/error-message'
+export {
+  copyErrorDetails,
+  describeError,
+  errorDetailsText,
+  errorSentence,
+  rowErrorSentence
+} from './lib/error-message'
+export { errorToastOptions, toastError } from './lib/error-toast'
 export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
@@ -978,9 +988,12 @@ export { rumRouteChange, rumWidget, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export {
+  isBareStatusText,
   isCodeError,
   reportCodeError,
   SOMETHING_WENT_WRONG,
+  STATUS_TITLES,
+  statusTitle,
   userErrorMessage
 } from './lib/safe-error'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'

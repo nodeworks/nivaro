@@ -63,10 +63,54 @@ export function userErrorMessage(err: unknown, fallback = 'Failed'): string {
   const fromServer = serverText(err)
   if (fromServer) return fromServer
   if (isCodeError(err)) return SOMETHING_WENT_WRONG
-  if (err instanceof Error) return err.message || fallback
+  if (err instanceof Error) {
+    // "Request failed with status code 409" / a bare "Conflict" says nothing:
+    // what the status means, in plain words.
+    if (isBareStatusText(err.message)) return statusTitle(statusOf(err)) ?? fallback
+    return err.message || fallback
+  }
   if (typeof err === 'string' && err.trim()) return err
   return fallback
 }
+
+/** What a status means, when the answer carried no explanation of its own. */
+export const STATUS_TITLES: Readonly<Record<number, string>> = {
+  400: 'That request could not be completed',
+  401: 'You are signed out',
+  403: 'You do not have access to do this',
+  404: 'That could not be found',
+  408: 'The server took too long to answer',
+  409: 'This changed while you were working on it',
+  413: 'That is too large to send',
+  422: 'Some values need fixing',
+  423: 'Someone else is working on this',
+  429: 'Too many requests in a short time',
+  500: 'Something went wrong on the server',
+  502: 'The server is not answering right now',
+  503: 'The server is not answering right now',
+  504: 'The server took too long to answer'
+}
+
+export function statusTitle(status: number | null | undefined): string | null {
+  if (status == null) return null
+  return (
+    STATUS_TITLES[status] ??
+    (status >= 500 ? STATUS_TITLES[500] : status >= 400 ? STATUS_TITLES[400] : null)
+  )
+}
+
+/** An HTTP client's own status sentence (axios, fetch, the SDK's statusText). */
+export function isBareStatusText(text: unknown): boolean {
+  if (typeof text !== 'string') return false
+  const t = text.trim()
+  return (
+    /^request failed with status( code)? \d{3}$/i.test(t) ||
+    BARE_STATUS.test(t) ||
+    /^(payload too large|request entity too large|locked|request timeout)$/i.test(t)
+  )
+}
+
+export { statusOf as errorStatusOf }
 
 const reported = new WeakSet<object>()
 

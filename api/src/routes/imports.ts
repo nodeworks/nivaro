@@ -7,6 +7,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { importRowErrorText } from '../services/db-refusal-labels.js'
 import { createOne, updateOne } from '../services/items.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
@@ -302,9 +303,10 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     }
 
     for (let i = 0; i < dataLines.length; i++) {
+      // Outside the try: a refused row's error names the file's own values.
+      const rowData: Record<string, unknown> = {}
       try {
         const values = parseCSVLine(dataLines[i])
-        const rowData: Record<string, unknown> = {}
 
         for (const [csvCol, fieldName] of Object.entries(columnMap)) {
           if (!fieldName) continue
@@ -369,7 +371,12 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
         }
       } catch (err) {
         errorRows++
-        errors.push({ row: i + 2, error: (err as Error).message.slice(0, 200) })
+        // A plain sentence per row, in the collection's field labels and with the
+        // file's own value — never the statement or a constraint name.
+        const text = await importRowErrorText(err, job.collection as string, rowData).catch(() =>
+          String((err as Error)?.message ?? err)
+        )
+        errors.push({ row: i + 2, error: text.slice(0, 300) })
       }
 
       // Update progress every 10 rows or on last row

@@ -67,6 +67,8 @@ import {
   saveDraft
 } from '../lib/draft-store'
 import { entryConfigOf } from '../lib/entry-config'
+import { copyErrorDetails, describeError, type ErrorDescription } from '../lib/error-message'
+import { errorToastOptions } from '../lib/error-toast'
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import {
@@ -434,6 +436,10 @@ interface SaveStepItem {
   detail?: string
   progress?: { done: number; total: number }
   error?: string
+  /** What to do next, from the refusal (lib/error-message.ts). */
+  hint?: string
+  /** The refusal as read, for "Copy details" (request id included). */
+  details?: ErrorDescription
   /** The server refused on access (403) — the dialog offers "Why?" (#1867). */
   denied?: boolean
 }
@@ -577,6 +583,28 @@ function SaveProgressDialog({
                             </>
                           )}
                         </p>
+                      )}
+                      {step.error && step.hint && (
+                        <p className='text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 leading-snug'>
+                          {step.hint}
+                        </p>
+                      )}
+                      {step.error && step.details && (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            void copyErrorDetails(step.details, { action: step.label }).then(
+                              (ok) =>
+                                ok
+                                  ? toast.success('Details copied')
+                                  : toast.error('Could not copy the details')
+                            )
+                          }}
+                          className='mt-1 inline-flex items-center gap-1 text-[10.5px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                        >
+                          <Copy className='h-3 w-3' />
+                          Copy details
+                        </button>
                       )}
                       {step.status === 'running' && rowPct !== null && (
                         <div className='mt-1.5 h-1 rounded-full bg-slate-200 overflow-hidden'>
@@ -1196,7 +1224,7 @@ export function remoteChangedFields(
   return Object.keys(next).filter(
     (k) =>
       !k.startsWith('__') &&
-      Object.prototype.hasOwnProperty.call(prev, k) &&
+      Object.hasOwn(prev, k) &&
       prev[k] !== undefined &&
       !valuesEqual(prev[k], next[k])
   )
@@ -3267,7 +3295,11 @@ function ItemEditFormView({
       // (Edit taking the lock, focus, Summary → Edit after a reload) is not a
       // remote change.
       const live = liveRecordWrite(collection, String(itemId))
-      const noted = !live ? [] : live.fields ? changed.filter((k) => live.fields?.includes(k)) : changed
+      const noted = !live
+        ? []
+        : live.fields
+          ? changed.filter((k) => live.fields?.includes(k))
+          : changed
       if (changed.length > 0) {
         const lt = lastTouchRef.current
         const by = remoteChangeAuthor(lt, authUserId)
@@ -8285,15 +8317,34 @@ function ItemEditFormView({
           }
         }
         const msg = errMsg(err)
-        updateStep('main', { status: 'error', error: msg, denied: isAccessRefusal(err) })
+        // What happened, what to do and which fields (lib/error-message.ts).
+        const described = describeError(err)
+        updateStep('main', {
+          status: 'error',
+          error: msg,
+          hint: described.hint,
+          details: described,
+          denied: isAccessRefusal(err)
+        })
         // The refused field gets its error and the form moves to it — for a
         // child line ("workflow_lines[0]: Quantity can not be negative") that
         // is the lines grid, on whichever step holds it.
-        const bad = refusedFieldOf(err, new Set(allFields.map((f) => f.field)))
+        const formFields = new Set(allFields.map((f) => f.field))
+        const bad = refusedFieldOf(err, formFields)
         if (bad) {
           formUsage.markRefused({ [bad.field]: bad.message })
           setValidationErrors({ [bad.field]: bad.message })
           setTimeout(() => jumpToField(bad.field), 150)
+        } else {
+          // The answer named fields (a required value, a duplicate, a missing
+          // link): mark each on the form and move to the first.
+          const named = (described.fields ?? []).filter((f) => formFields.has(f))
+          if (named.length > 0) {
+            const marks = Object.fromEntries(named.map((f) => [f, msg]))
+            formUsage.markRefused(marks)
+            setValidationErrors(marks)
+            setTimeout(() => jumpToField(named[0]), 150)
+          }
         }
         throw err
       }
@@ -9138,9 +9189,9 @@ function ItemEditFormView({
       onDeleted?.()
     },
     onError: (err) =>
-      toast.error(
-        'Failed to delete',
-        isAccessRefusal(err) && itemId
+      toast.error(userErrorMessage(err, 'Failed to delete'), {
+        ...errorToastOptions(err, { action: 'Delete record' }),
+        ...(isAccessRefusal(err) && itemId
           ? {
               action: deniedToastAction(client, {
                 collection,
@@ -9148,8 +9199,8 @@ function ItemEditFormView({
                 action: 'delete'
               })
             }
-          : undefined
-      )
+          : {})
+      })
   })
 
   const [confirmDelete, setConfirmDelete] = useState(false)

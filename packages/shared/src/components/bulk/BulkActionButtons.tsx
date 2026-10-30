@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
+import { errorToastOptions } from '../../lib/error-toast'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn } from '../../lib/utils'
 import { invalidateRecordQueries } from '../item-edit/RecordLiveSync'
@@ -310,8 +311,11 @@ export function BulkActionButtons({
       setOpen(null)
       setReason('')
     } catch (err) {
-      const resp = (err as { response?: { error?: string } }).response
-      toast.error(resp?.error ?? userErrorMessage(err, `${a.label} failed`))
+      // The server's sentence, what to do next and Copy details (lib/error-toast.ts).
+      toast.error(
+        userErrorMessage(err, `${a.label} failed`),
+        errorToastOptions(err, { action: a.label })
+      )
     } finally {
       setRunning(null)
     }
