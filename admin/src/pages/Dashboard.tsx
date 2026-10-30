@@ -6,9 +6,11 @@ import {
 } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
 import {
+  ActivityFeed,
   LoadErrorNote,
   loadErrorText,
   serverErrorText,
+  useActivityLabels,
   useLiveRefetchInterval
 } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
@@ -28,11 +30,10 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type CMSField, type Collection } from '@/lib/api'
+import { type ActivityEntry, api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
 import { getSocket } from '@/lib/socket'
-import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,138 +45,8 @@ type HealthData = {
   redis: { status: 'connected' | 'disconnected'; url?: string }
 }
 
-type ActivityEntry = {
-  id: number
-  action: 'create' | 'update' | 'delete' | 'read' | string
-  user: string | null
-  first_name: string | null
-  last_name: string | null
-  user_email: string | null
-  collection: string
-  item: string | null
-  comment: string | null
-  timestamp: string
-}
-
-const PIPELINE_ACTIONS = new Set(['pipeline-transition', 'pipeline-start'])
-const ITEM_LABEL_FALLBACKS = ['name', 'title', 'label', 'display_name', 'subject', 'email', 'slug']
-
-function useActivityItemLabel(collection: string | null, item: string | null) {
-  const isSystem =
-    !collection || collection.startsWith('nivaro_') || collection.startsWith('directus_')
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem && !!collection,
-    retry: false
-  })
-  const displayTemplate: string | null = colMeta?.display_template ?? null
-  const actualFields: string[] = (colMeta?.fields ?? []).map((f: CMSField) => f.field)
-  const wantedFields = [
-    ...new Set(['id', ...extractTemplateFields(displayTemplate), ...ITEM_LABEL_FALLBACKS])
-  ]
-  const safeFields = actualFields.length
-    ? wantedFields.filter((f) => f === 'id' || actualFields.includes(f)).join(',')
-    : null
-  const { data: itemData } = useQuery({
-    queryKey: ['activity-item-label', collection, item, safeFields],
-    queryFn: () =>
-      api
-        .get(`/items/${collection}/${item}`, { params: { fields: safeFields } })
-        .then((r) => r.data.data),
-    staleTime: 120_000,
-    enabled: !isSystem && !!safeFields && !!item,
-    retry: false
-  })
-  const label = itemData ? renderDisplayTemplate(displayTemplate, itemData) : null
-  return label && label !== item && label.trim() !== '' ? label : null
-}
-
-function ActivityItemRow({
-  entry,
-  collections,
-  onClick
-}: {
-  entry: ActivityEntry
-  collections: Collection[]
-  onClick: () => void
-}) {
-  const itemLabel = useActivityItemLabel(entry.collection, entry.item)
-  const isPipeline = PIPELINE_ACTIONS.has(entry.action)
-
-  const colDisplay = (() => {
-    const found = collections.find((c) => c.collection === entry.collection)
-    if (found?.display_name) return found.display_name
-    return entry.collection
-      ? titleCase(entry.collection.replace(/^nivaro_/, '').replace(/_/g, ' '))
-      : 'System'
-  })()
-
-  return (
-    <button
-      type='button'
-      className='flex w-full cursor-pointer items-start gap-3 px-5 py-3 text-left transition-colors hover:bg-slate-50/70'
-      onClick={onClick}
-    >
-      <ActionBadge action={entry.action} />
-      <div className='min-w-0 flex-1'>
-        <div className='flex flex-wrap items-baseline gap-x-1.5'>
-          <span className='text-[12px] font-medium text-slate-700'>{colDisplay}</span>
-          {!isPipeline && entry.item && (
-            <span className='text-[11px] text-slate-500'>
-              {itemLabel ?? <span className='font-mono'>#{entry.item}</span>}
-            </span>
-          )}
-          {entryUserName(entry) && (
-            <span className='text-[11px] text-slate-400'>· {entryUserName(entry)}</span>
-          )}
-        </div>
-        {isPipeline && entry.comment && (
-          <p className='mt-0.5 truncate text-[11px] text-slate-500'>{entry.comment}</p>
-        )}
-      </div>
-      <span className='shrink-0 text-[11px] text-slate-400'>{formatDateTime(entry.timestamp)}</span>
-    </button>
-  )
-}
-
-function entryUserName(entry: ActivityEntry): string | null {
-  if (entry.first_name || entry.last_name)
-    return [entry.first_name, entry.last_name].filter(Boolean).join(' ')
-  if (entry.user_email) return entry.user_email
-  return null
-}
-
 type Extension = { id: string; name?: string }
 type Flow = { id: string; name?: string }
-
-// ─── Action badge ─────────────────────────────────────────────────────────────
-
-function formatAction(action: string): string {
-  return action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-const ACTION_CLS: Record<string, string> = {
-  create: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  update: 'bg-sky-50 text-sky-700 border-sky-200',
-  delete: 'bg-red-50 text-red-600 border-red-200',
-  read: 'bg-slate-50 text-slate-500 border-slate-200',
-  login: 'bg-violet-50 text-violet-700 border-violet-200'
-}
-
-function ActionBadge({ action }: { action: string }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-semibold',
-        ACTION_CLS[action] ?? 'bg-slate-50 text-slate-500 border-slate-200'
-      )}
-    >
-      {formatAction(action)}
-    </span>
-  )
-}
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
@@ -325,7 +196,12 @@ export function DashboardPage() {
     refetch: refetchActivity
   } = useQuery({
     queryKey: ['activity', 'recent'],
-    queryFn: () => api.get('/activity?limit=10&sort=-timestamp').then((r) => r.data)
+    queryFn: () =>
+      api
+        .get(
+          '/activity?limit=15&sort=-timestamp&exclude_actions=read&exclude_actions=config-epoch&exclude_actions=config-snapshot-store'
+        )
+        .then((r) => r.data)
   })
 
   const { data: extensionsData } = useQuery({
@@ -403,7 +279,7 @@ export function DashboardPage() {
       .filter(Boolean)
       .join(' ') || user?.email
 
-  const dateStr = new Date().toLocaleDateString('en-US', {
+  const _dateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
@@ -419,6 +295,7 @@ export function DashboardPage() {
   }
 
   const activityEntries: ActivityEntry[] = activityData?.data ?? []
+  const activityLabels = useActivityLabels(activityEntries)
   const extensions: Extension[] = extensionsData?.data ?? []
   const flows: Flow[] = flowsData?.data ?? []
 
@@ -558,33 +435,34 @@ export function DashboardPage() {
                 </button>
               </div>
 
-              <div className='overflow-hidden rounded-xl border border-slate-200 bg-white'>
+              <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]'>
                 {activityLoading ? (
-                  <div className='divide-y divide-slate-100'>
+                  <div className='divide-y divide-slate-100 dark:divide-white/[0.05]'>
                     {(['a', 'b', 'c', 'd', 'e', 'f'] as const).map((k) => (
                       <div key={k} className='flex items-center gap-3 px-5 py-3.5'>
-                        <Skeleton className='h-5 w-14 rounded' />
-                        <Skeleton className='h-4 w-40' />
+                        <Skeleton className='h-6 w-6 rounded-full' />
+                        <Skeleton className='h-4 w-64' />
                         <Skeleton className='ml-auto h-4 w-16' />
                       </div>
                     ))}
                   </div>
-                ) : activityEntries.length === 0 ? (
-                  <div className='py-16 text-center'>
-                    <Activity className='mx-auto h-8 w-8 text-slate-200' />
-                    <p className='mt-3 text-[13px] text-slate-400'>No activity yet.</p>
-                  </div>
                 ) : (
-                  <div className='divide-y divide-slate-100'>
-                    {activityEntries.map((entry) => (
-                      <ActivityItemRow
-                        key={entry.id}
-                        entry={entry}
-                        collections={collectionsData ?? []}
-                        onClick={() => navigate(`/activity/${entry.id}`)}
-                      />
-                    ))}
-                  </div>
+                  // Plain sentences ("Pat moved PO 4471 from Draft to Approved"), the real actor,
+                  // the reason, and bursts folded into one line — the same feed as /activity.
+                  <ActivityFeed
+                    className='px-2 py-1'
+                    entries={activityEntries}
+                    labels={activityLabels}
+                    onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
+                    empty={
+                      <div className='py-16 text-center'>
+                        <Activity className='mx-auto h-8 w-8 text-slate-200 dark:text-slate-700' />
+                        <p className='mt-3 text-[13px] text-slate-500 dark:text-slate-400'>
+                          Nothing has happened yet.
+                        </p>
+                      </div>
+                    }
+                  />
                 )}
               </div>
             </div>

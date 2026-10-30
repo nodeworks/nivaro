@@ -869,6 +869,18 @@ export function activityPredicate(
       return `had an import into ${midSentence(nouns.plural)} fail`
     case 'comment':
       return `commented${on}`
+    case 'picker-exclude':
+      return `hid ${record ?? aNoun} from pickers`
+    case 'picker-include':
+      return `showed ${record ?? aNoun} in pickers again`
+    case 'ai-brief':
+      return 'asked the assistant for a brief'
+    case 'config-epoch':
+      return 'changed the configuration'
+    case 'config-snapshot-store':
+      return 'saved a configuration restore point'
+    case 'config-snapshot-export':
+      return 'downloaded a configuration snapshot'
     default:
       break
   }

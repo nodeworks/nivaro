@@ -124,24 +124,23 @@ export async function logActivity(opts: {
     const liveReq = (opts.req ?? currentTraceRequestObject() ?? undefined) as
       | FastifyRequest
       | undefined
-    const rows = (await db('nivaro_activity')
-      .insert({
-        action: opts.action,
-        user: opts.user ?? null,
-        collection: opts.collection ?? null,
-        item: opts.item ?? null,
-        comment: opts.comment ?? null,
-        ...(await originColumn(opts.origin, opts.comment)),
-        ...(await chainFields('nivaro_activity')),
-        ...(await callerColumns(opts.req)),
-        // #3213: a write made through the hosted MCP endpoint names its connection + app.
-        ...(await attributionColumns(liveReq as Parameters<typeof attributionColumns>[0])),
-        ...(await readableColumns(opts, liveReq)),
-        ip: opts.req?.ip ?? null,
-        user_agent: opts.req?.headers['user-agent'] ?? null,
-        timestamp: new Date()
-      })
-      .returning('id')) as unknown[]
+    const record: Record<string, unknown> = {
+      action: opts.action,
+      user: opts.user ?? null,
+      collection: opts.collection ?? null,
+      item: opts.item ?? null,
+      comment: opts.comment ?? null,
+      ...(await originColumn(opts.origin, opts.comment)),
+      ...(await chainFields('nivaro_activity')),
+      ...(await callerColumns(opts.req)),
+      // #3213: a write made through the hosted MCP endpoint names its connection + app.
+      ...(await attributionColumns(liveReq as Parameters<typeof attributionColumns>[0])),
+      ...(await readableColumns(opts, liveReq)),
+      ip: opts.req?.ip ?? null,
+      user_agent: opts.req?.headers['user-agent'] ?? null,
+      timestamp: new Date()
+    }
+    const rows = (await db('nivaro_activity').insert(record).returning('id')) as unknown[]
     const row = rows[0] as { id: number } | number
     const id = typeof row === 'object' && row !== null ? row.id : (row as number)
     noteDerivedWrite('activity')
@@ -163,7 +162,9 @@ export async function logActivity(opts: {
         collection: opts.collection ?? null,
         item: opts.item ?? null,
         comment: opts.comment ? String(opts.comment).slice(0, 120) : null,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        // The admin-only pulse room renders the same readable sentence as the log: who, how, which burst.
+        ...pulseExtras(record)
       })
     } catch {
       /* pulse is best-effort */
@@ -174,6 +175,27 @@ export async function logActivity(opts: {
     console.error({ err, action: opts.action }, 'Failed to write activity log')
     return null
   }
+}
+
+const PULSE_EXTRA_KEYS = [
+  'user',
+  'origin',
+  'group_key',
+  'actor',
+  'auth_method',
+  'api_key_id',
+  'api_key_name',
+  'mcp_conn',
+  'via_app',
+  'via_agent',
+  'chain_parent'
+] as const
+
+/** The stored columns the Live tab's sentence needs (only those present on this row). */
+function pulseExtras(record: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of PULSE_EXTRA_KEYS) if (record[k] != null) out[k] = record[k]
+  return out
 }
 
 // ─── Throttled logging for hot paths ─────────────────────────────────────────
