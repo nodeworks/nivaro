@@ -59,9 +59,9 @@ function tonightEt(now = new Date()): string {
   return now.toISOString()
 }
 
-export function TestMyRules() {
+export function TestMyRules({ category: initialCategory = 'workflow' }: { category?: string }) {
   const client = useNivaroClient()
-  const [category, setCategory] = useState('workflow')
+  const [category, setCategory] = useState(initialCategory)
   const [when, setWhen] = useState('now')
   const run = useMutation({
     mutationFn: () =>
@@ -100,7 +100,8 @@ export function TestMyRules() {
         <button
           type='button'
           data-test-my-rules
-          className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11.5px] font-medium text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
+          data-tip='See what would happen to a notification for you right now, and which rule decides it'
+          className='inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 px-2 text-[11.5px] font-medium text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
         >
           <FlaskConical className='h-3.5 w-3.5' />
           Test my rules

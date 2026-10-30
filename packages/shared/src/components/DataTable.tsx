@@ -82,6 +82,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   isLoading?: boolean
   isError?: boolean
   errorMessage?: string
+  /** Shown as "Try again" on the error banner. */
+  onRetry?: () => void
   sort?: string
   onSortChange?: (sort: string) => void
   onPageChange: (page: number) => void
@@ -816,6 +818,7 @@ export function DataTable<T = Record<string, unknown>>({
   isLoading,
   isError,
   errorMessage,
+  onRetry,
   sort = '',
   onSortChange,
   onPageChange,
@@ -1054,8 +1057,23 @@ export function DataTable<T = Record<string, unknown>>({
       <CellCopyLayer />
       {/* Error banner */}
       {isError && errorMessage && (
-        <div className='mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700'>
-          {errorMessage}
+        <div
+          role='alert'
+          className='mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+        >
+          <span>
+            {errorMessage}
+            {rows.length > 0 && ' Showing the last list that loaded.'}
+          </span>
+          {onRetry && (
+            <button
+              type='button'
+              onClick={onRetry}
+              className='font-medium underline underline-offset-2 hover:text-red-900 dark:hover:text-red-200'
+            >
+              Try again
+            </button>
+          )}
         </div>
       )}
 

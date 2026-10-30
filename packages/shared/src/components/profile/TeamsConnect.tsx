@@ -29,7 +29,7 @@ export function TeamsConnect({ linked, linkedAt }: { linked: boolean; linkedAt?:
     return (
       <>
         <span
-          className='inline-flex flex-wrap items-center justify-center gap-1 text-[10.5px] font-normal normal-case tracking-normal text-emerald-700 dark:text-emerald-400'
+          className='inline-flex items-center justify-center gap-1 whitespace-nowrap text-[10.5px] font-normal normal-case tracking-normal text-emerald-700 dark:text-emerald-400'
           data-teams-connected=''
           title={linkedAt ? `Connected ${new Date(linkedAt).toLocaleString()}` : undefined}
         >
@@ -63,7 +63,7 @@ export function TeamsConnect({ linked, linkedAt }: { linked: boolean; linkedAt?:
         <button
           type='button'
           data-teams-connect=''
-          className='rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] font-medium normal-case tracking-normal text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
+          className='whitespace-nowrap rounded border border-slate-200 px-1.5 py-0.5 text-[10.5px] font-medium normal-case tracking-normal text-slate-600 hover:border-slate-400 hover:text-slate-800 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
         >
           Connect Teams
         </button>

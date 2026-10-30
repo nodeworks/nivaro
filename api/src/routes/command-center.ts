@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAuth } from '../middleware/authenticate.js'
+import { ccReadAuth } from '../services/command-center/auth.js'
 import { excludeStartRows } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 
@@ -58,7 +58,8 @@ async function regionCentroids(): Promise<
 }
 
 export async function commandCenterRoutes(app: FastifyInstance) {
-  app.addHook('preHandler', requireAuth)
+  // Every route here is a read; writes add ccWriteAuth on the route itself.
+  app.addHook('preHandler', ccReadAuth)
 
   // ── Snapshot: everything except map geometry, one round trip ─────────────
   app.get('/snapshot', async (req, reply) => {

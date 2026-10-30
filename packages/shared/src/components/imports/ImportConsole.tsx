@@ -746,6 +746,7 @@ export function ImportConsole({
                 isLoading={runsQuery.isLoading}
                 isError={runsQuery.isError}
                 errorMessage='Those runs could not be loaded.'
+                onRetry={() => void runsQuery.refetch()}
                 searchValue={search}
                 onSearchChange={setSearch}
                 searchPlaceholder='Search imports, files, run ids…'

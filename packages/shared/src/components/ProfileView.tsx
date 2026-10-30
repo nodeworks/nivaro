@@ -541,11 +541,11 @@ export function NotificationRulesCard() {
             header: (
               <>
                 Sound
-                <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above.' />
+                <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above. Test my rules shows what would happen to a notification for you in that category right now, and which rule decides it.' />
               </>
             ),
             cell: (cat, label) => (
-              <div className='inline-block'>
+              <div className='inline-flex items-center gap-1.5 whitespace-nowrap'>
                 <SimpleSelectXs
                   ariaLabel={`Sound for ${label}`}
                   value={catSounds[cat] ?? 'default'}
@@ -557,13 +557,7 @@ export function NotificationRulesCard() {
                   ]}
                   onChange={(v: string) => setCatSound(cat, v)}
                 />
-                <div className='flex flex-wrap items-center gap-2'>
-                  <TestMyRules />
-                  <span className='text-[11px] text-slate-400'>
-                    see what would happen to a notification for you right now, and which rule
-                    decides it
-                  </span>
-                </div>
+                <TestMyRules category={cat} />
               </div>
             )
           }}
