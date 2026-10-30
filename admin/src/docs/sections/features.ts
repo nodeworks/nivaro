@@ -643,6 +643,11 @@ item.status == "active" ? 1 : 0`
 const article = await nivaro.request(readItem('articles', '123'))
 // article.data.full_name   → computed read-time value (evaluated server-side)
 // article.data.total_price → computed write+store value`
+    },
+    { type: 'h2', id: 'computed-fields-where-from', text: 'Where does this value come from?' },
+    {
+      type: 'p',
+      text: 'On the record form, a calculated, rolled-up, looked-up or copied field has a small ⓘ beside its label. It opens the formula in words with its inputs — “Sum of Amount on Lines where Status is not Cancelled (or is empty).”, “Copied from the Project’s Zone when Project is set.”, “Filled from the Project’s Zone when Project is set, on the form or through the API.” (cross-record defaults). The layout editor’s field inspector shows the same text on the Rules tab. A config the app cannot put into words shows nothing.'
     }
   ]
 }

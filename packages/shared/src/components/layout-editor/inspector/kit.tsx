@@ -13,6 +13,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { describeFieldReach } from '../../../lib/config-sentences'
 import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
 import { cn } from '../../../lib/utils'
 import {
@@ -130,6 +131,21 @@ export function GlobalConfirm() {
     enabled: !!pending && !!w,
     staleTime: 60_000
   })
+  // #13: how many records hold a value — its own key (the list above is
+  // cached as a bare array under 'field-impact').
+  const { data: records } = useQuery({
+    queryKey: ['layout-editor', 'field-impact-counts', w?.collection, w?.field],
+    queryFn: () =>
+      client
+        .request<{ records?: { total: number; with_value: number } | null }>(
+          get(`/data-model/${w?.collection}/fields/${encodeURIComponent(w?.field ?? '')}/impact`, {
+            counts: '1'
+          })
+        )
+        .then((r) => r.records ?? null),
+    enabled: !!pending && !!w,
+    staleTime: 60_000
+  })
   if (!w || !pending) return null
   const layouts = [
     ...new Set((impacts ?? []).filter((i) => i.source === 'layout').map((i) => i.label))
@@ -138,6 +154,11 @@ export function GlobalConfirm() {
     ...new Set((impacts ?? []).filter((i) => i.source !== 'layout').map((i) => i.label))
   ]
   const shown = layouts.slice(0, 8)
+  const reach = describeFieldReach({
+    fieldLabel: w.fieldLabel,
+    forms: layouts.map((l) => l.replace(/^Layout '(.*)'$/, '$1')),
+    records
+  })
   return (
     <div
       data-setting='inspector.global_confirm'
@@ -153,6 +174,11 @@ export function GlobalConfirm() {
             <li key={l}>{l}</li>
           ))}
         </ul>
+      )}
+      {!isLoading && reach && (
+        <p data-global-reach='' className='text-[11px]'>
+          {reach}
+        </p>
       )}
       {isLoading ? (
         <p className='text-[11px] opacity-80'>Finding where {w.fieldLabel} is used…</p>

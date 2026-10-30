@@ -1,9 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Plus, Trash2, Wand2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
-import { FieldPicker, RelationPicker } from '@nivaro/shared'
+import {
+  ConfigReadBack,
+  describeFieldRule,
+  FieldPicker,
+  RelationPicker,
+  sentenceLabelsFromFields
+} from '@nivaro/shared'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -421,6 +427,12 @@ function RuleRow({
 }) {
   const active = rule.is_active === true || rule.is_active === 1
   const showTriggerValue = opNeedsValue(rule.trigger_op)
+  // #11: the rule read back in words.
+  const sentenceLabels = useMemo(
+    () => sentenceLabelsFromFields(fields, relations, collection),
+    [fields, relations, collection]
+  )
+  const readBack = describeFieldRule(rule, sentenceLabels)
 
   // Dynamic target types (set_lookup / set_from_trigger) need several
   // sub-fields filled in before the server will accept dynamic_config, so we
@@ -679,6 +691,7 @@ function RuleRow({
           {summary}
         </p>
       )}
+      <ConfigReadBack kind='field-rule' sentences={readBack} className='px-3 pb-2.5' />
     </div>
   )
 }

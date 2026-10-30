@@ -1,10 +1,18 @@
 import {
+  ChangeImpactStrip,
   Combobox,
+  ConfigReadBack,
   DataGuideCard,
+  describeFieldChangeImpact,
+  describeLockCondition,
+  describeValidationRules,
+  describeVisibilityRules,
+  type FieldChange,
   IconPicker,
   LayoutEditor,
   LayoutOverview,
   Term,
+  sentenceLabelsFromFields,
   TipLayer
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -2022,6 +2030,64 @@ function FieldMetaEditor({
     ? rollupColumnType(fieldType)
     : (fieldType as CreateColumnBody['type'])
 
+  // #13: before a save that hides, requires, locks or retypes the field, say
+  // in words what it touches (forms + records) and ask inline. Nothing
+  // touched, or the check itself fails: save as before.
+  const [impactCheck, setImpactCheck] = useState<{
+    loading: boolean
+    sentences: string[]
+  } | null>(null)
+  function pendingChanges(): FieldChange[] {
+    const out: FieldChange[] = []
+    if (hidden && !(fm?.hidden ?? false)) out.push({ kind: 'hide' })
+    if (required && !(fm?.required ?? false)) out.push({ kind: 'require' })
+    if (readonly && !(fm?.readonly ?? false)) out.push({ kind: 'readonly' })
+    if (fieldType !== abstractType) out.push({ kind: 'type', from: abstractType, to: fieldType })
+    return out
+  }
+  async function requestSave() {
+    if (impactCheck && !impactCheck.loading) {
+      setImpactCheck(null)
+      return handleSave()
+    }
+    const changes = pendingChanges()
+    if (!changes.length || col.is_virtual) return handleSave()
+    setImpactCheck({ loading: true, sentences: [] })
+    try {
+      const r = await api.get<{
+        data: Array<{ source: string; label: string }>
+        records?: { total: number; with_value: number } | null
+      }>(`/data-model/${tableName}/fields/${encodeURIComponent(col.name)}/impact`, {
+        params: { counts: '1' }
+      })
+      const impacts = r.data.data ?? []
+      const forms = [
+        ...new Set(
+          impacts
+            .filter((i) => i.source === 'layout')
+            .map((i) => i.label.replace(/^Layout '(.*)'$/, '$1'))
+        )
+      ]
+      const otherRefs = new Set(impacts.filter((i) => i.source !== 'layout').map((i) => i.label))
+        .size
+      const res = describeFieldChangeImpact({
+        fieldLabel: titleCase(col.name),
+        changes,
+        forms,
+        otherRefs,
+        records: r.data.records ?? null
+      })
+      if (!res.nonZero) {
+        setImpactCheck(null)
+        return handleSave()
+      }
+      setImpactCheck({ loading: false, sentences: res.sentences })
+    } catch {
+      setImpactCheck(null)
+      return handleSave()
+    }
+  }
+
   async function handleSave() {
     if (needsColumnProvisioning) {
       setProvisioning(true)
@@ -2717,8 +2783,8 @@ function FieldMetaEditor({
             type='button'
             size='sm'
             className='h-7 bg-nvr-cyan text-[12px] text-white hover:bg-nvr-cyan-dark'
-            disabled={saving || provisioning}
-            onClick={handleSave}
+            disabled={saving || provisioning || !!impactCheck}
+            onClick={() => void requestSave()}
           >
             {saving || provisioning ? (
               'Saving…'
@@ -2731,6 +2797,16 @@ function FieldMetaEditor({
           </Button>
         </div>
       </div>
+      {impactCheck && (
+        <ChangeImpactStrip
+          className='mt-2'
+          loading={impactCheck.loading}
+          saving={saving || provisioning}
+          sentences={impactCheck.sentences}
+          onConfirm={() => void requestSave()}
+          onCancel={() => setImpactCheck(null)}
+        />
+      )}
     </div>
   )
 }
@@ -9178,6 +9254,15 @@ function VisibilitySection({ tableName }: { tableName: string }) {
                   </button>
                 )}
               </div>
+              <ConfigReadBack
+                kind='visibility'
+                className='mt-1'
+                sentences={describeVisibilityRules(
+                  cfg?.visibility_rules ?? null,
+                  f.field,
+                  sentenceLabelsFromFields(fields)
+                )}
+              />
               {isEdit && (
                 <VisibilityRuleEditor
                   fieldName={f.field}
@@ -9329,6 +9414,15 @@ function FieldLockingSection({ tableName }: { tableName: string }) {
                   </button>
                 )}
               </div>
+              <ConfigReadBack
+                kind='lock'
+                className='mt-1'
+                sentences={describeLockCondition(
+                  cfg?.lock_condition ?? null,
+                  f.field,
+                  sentenceLabelsFromFields(fields)
+                )}
+              />
               {isEdit && (
                 <LockConditionEditor
                   current={cfg?.lock_condition ?? null}
@@ -9664,6 +9758,15 @@ function ValidationSection({ tableName }: { tableName: string }) {
                   </button>
                 )}
               </div>
+              <ConfigReadBack
+                kind='validation'
+                className='mt-1'
+                sentences={describeValidationRules(
+                  vRules,
+                  f.field,
+                  sentenceLabelsFromFields(fields)
+                )}
+              />
               {isEdit && (
                 <ValidationRulesEditor
                   current={vRules}

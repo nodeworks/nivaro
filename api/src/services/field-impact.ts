@@ -1,6 +1,34 @@
 import { db } from '../db/index.js'
 
 /**
+ * How many records a field change touches (#13): rows in the collection's
+ * table and how many hold a value in the column. Read-only, one statement;
+ * null when the collection is a system table, the column does not exist
+ * (alias / virtual fields) or the count fails — the caller then says nothing
+ * about records rather than a wrong number.
+ */
+export async function countFieldValues(
+  collection: string,
+  field: string
+): Promise<{ total: number; with_value: number } | null> {
+  const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+  if (!IDENT.test(collection) || !IDENT.test(field)) return null
+  if (/^(nivaro_|directus_)/i.test(collection)) return null
+  try {
+    if (!(await db.schema.hasColumn(collection, field))) return null
+    const rows = (await db.raw(
+      'SELECT COUNT_BIG(*) AS total, COUNT_BIG(??) AS with_value FROM ?? WITH (NOLOCK)',
+      [field, collection]
+    )) as unknown as Array<{ total: number | string; with_value: number | string }>
+    const r = Array.isArray(rows) ? rows[0] : null
+    if (!r) return null
+    return { total: Number(r.total) || 0, with_value: Number(r.with_value) || 0 }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Field impact analysis — "what references this field?"
  *
  * Scans every metadata surface that can hold a field reference: layout

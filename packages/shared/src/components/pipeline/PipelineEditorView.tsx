@@ -48,10 +48,13 @@ import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { describeTransition, sentenceLabelsFromFields } from '../../lib/config-sentences'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
-import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
 import { ConfigHistoryButton } from '../ConfigHistory'
+import { ConfigReadBack } from '../ConfigReadBack'
+import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
+import { useCollectionBody } from '../layout-editor/collection-meta'
 import { QueryErrorState } from '../QueryErrorState'
 import { Term } from '../Term'
 import { Badge } from '../ui/badge'
@@ -1929,6 +1932,20 @@ function TransitionForm({
     r.collection.trim() !== '' && r.fk_field.trim() !== '' && r.fields.length > 0
   const requirementsValid = (form.requirements ?? []).every(requirementComplete)
   const isValid = form.to_states.length > 0 && form.label.trim() && requirementsValid
+  // #11: the transition read back in words.
+  const { data: txFieldRows } = useCollectionBody(collection, {
+    select: (b) => (Array.isArray(b?.fields) ? b.fields : [])
+  })
+  const readBack = describeTransition(
+    {
+      ...form,
+      condition_rules: (form.condition_rules ?? []).filter((r) => r.field.trim()),
+      requirements: (form.requirements ?? []).filter(requirementComplete)
+    },
+    sentenceLabelsFromFields(txFieldRows ?? [], [], collection, {
+      states: Object.fromEntries(states.map((s) => [s.id, s.label]))
+    })
+  )
 
   return (
     <div className='space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4'>
@@ -2164,6 +2181,8 @@ function TransitionForm({
         </div>
         <Switch checked={form.to_previous} onCheckedChange={(v) => set('to_previous', v)} />
       </label>
+
+      <ConfigReadBack kind='transition' sentences={readBack} />
 
       <div className='flex gap-2 justify-end'>
         <Button type='button' variant='outline' size='sm' onClick={onCancel}>

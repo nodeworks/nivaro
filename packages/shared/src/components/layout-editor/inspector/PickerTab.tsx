@@ -340,6 +340,7 @@ export function PickerTab() {
             rules={rules}
             m2oFields={parents}
             relatedCollection={info.relatedCollection}
+            fieldLabel={name}
             onChange={(next) =>
               ctx.proposeGlobal(
                 'field.cascade_filters',

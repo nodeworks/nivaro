@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Bell, BellOff, Clock, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { ConfigReadBack, describeAlert } from '@nivaro/shared'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -27,6 +28,8 @@ interface AlertDefinition {
   cooldown_minutes: number
   is_active: boolean
   filters: Record<string, unknown> | null
+  detection_type?: string | null
+  sensitivity?: number | null
   subscriber_count: number
   last_triggered: string | null
 }
@@ -325,6 +328,11 @@ export function AlertsPage() {
                                   <span className='font-mono'>{formatCondition(def)}</span>
                                 </span>
                               </div>
+                              <ConfigReadBack
+                                kind='alert'
+                                sentences={describeAlert(def)?.[0]}
+                                className='mt-0.5 truncate'
+                              />
                             </div>
 
                             {/* Subscribers */}

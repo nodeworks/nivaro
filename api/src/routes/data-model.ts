@@ -1530,9 +1530,18 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.get('/:table/fields/:field/impact', async (req, reply) => {
     const { table, field } = req.params as { table: string; field: string }
-    const { analyzeFieldImpact } = await import('../services/field-impact.js')
-    const impacts = await analyzeFieldImpact(table, field)
-    return reply.send({ data: impacts, total: impacts.length })
+    const { analyzeFieldImpact, countFieldValues } = await import('../services/field-impact.js')
+    // ?counts=1 (#13): also how many records the change touches.
+    const wantCounts = (req.query as { counts?: string } | undefined)?.counts === '1'
+    const [impacts, records] = await Promise.all([
+      analyzeFieldImpact(table, field),
+      wantCounts ? countFieldValues(table, field) : Promise.resolve(undefined)
+    ])
+    return reply.send({
+      data: impacts,
+      total: impacts.length,
+      ...(wantCounts ? { records } : {})
+    })
   })
 
   // ─── GET /relations — list all CMS relations ─────────────────────────────

@@ -1,6 +1,8 @@
 import { Check, ChevronsUpDown, Pencil, Plus, X } from 'lucide-react'
 import { useState } from 'react'
+import { describeCascadeFilter } from '../../../lib/config-sentences'
 import { cn } from '../../../lib/utils'
+import { ConfigReadBack } from '../../ConfigReadBack'
 import { Button } from '../../ui/button'
 import {
   Command,
@@ -41,11 +43,14 @@ export function CascadeFiltersEditor({
   rules,
   m2oFields,
   relatedCollection,
+  fieldLabel,
   onChange
 }: {
   rules: CascadeFilterRule[]
   m2oFields: CascadeParentField[]
   relatedCollection?: string | null
+  /** The picker's own label, for the read-back sentence. */
+  fieldLabel?: string
   onChange: (rules: CascadeFilterRule[]) => void
 }) {
   const [adding, setAdding] = useState(false)
@@ -437,6 +442,32 @@ export function CascadeFiltersEditor({
                     className={SWITCH_CLS}
                   />
                 </div>
+                <ConfigReadBack
+                  kind='cascade-filter'
+                  sentences={describeCascadeFilter(
+                    rule,
+                    { field: '__picker', relatedCollection },
+                    {
+                      fields: {
+                        __picker: fieldLabel ?? 'This picker',
+                        ...Object.fromEntries(m2oFields.map((f) => [f.field, f.label]))
+                      },
+                      relatedFields: relatedCollection
+                        ? {
+                            [relatedCollection]: Object.fromEntries(
+                              (relColMeta?.fields ?? [])
+                                .filter((f: { label?: string | null }) => f.label)
+                                .map((f: { field: string; label: string }) => [f.field, f.label])
+                            )
+                          }
+                        : undefined,
+                      collections:
+                        relatedCollection && relColMeta?.display_name
+                          ? { [relatedCollection]: String(relColMeta.display_name) }
+                          : undefined
+                    }
+                  )}
+                />
               </div>
             )
           })}

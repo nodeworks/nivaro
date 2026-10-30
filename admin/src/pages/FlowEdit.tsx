@@ -2,7 +2,9 @@ import {
   AudienceConfirmPanel,
   type AudiencePreview,
   audienceConfirmFromError,
-  CronBuilder
+  ConfigReadBack,
+  CronBuilder,
+  describeFlow
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -74,9 +76,9 @@ const NOTIFY_CATEGORY_OPTIONS = [
   { value: 'other', label: 'Everything else' }
 ]
 
-import { Textarea } from '@/components/ui/textarea'
 import { FlowDiagram } from '@/components/diagram/DiagramPanels'
 import { DiagramTabs, type EditorView } from '@/components/diagram/DiagramTabs'
+import { Textarea } from '@/components/ui/textarea'
 import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
@@ -4665,6 +4667,14 @@ export function FlowEditPage() {
                   placeholder='What does this flow do?'
                   rows={2}
                   className='resize-none text-[13px]'
+                />
+                <ConfigReadBack
+                  kind='flow'
+                  sentences={describeFlow({
+                    trigger,
+                    trigger_options: triggerOptions,
+                    operations: flow?.operations ?? []
+                  })}
                 />
               </div>
               <div className='space-y-1.5'>

@@ -123,6 +123,12 @@ export {
   type ConfigHistoryEntry,
   configHistoryLine
 } from './components/ConfigHistory'
+export {
+  ChangeImpactStrip,
+  ConfigReadBack,
+  FieldSourceBody,
+  FieldSourceInfo
+} from './components/ConfigReadBack'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
 export { CronBuilder, describeCron } from './components/CronBuilder'
@@ -686,6 +692,37 @@ export {
   setClientBuild
 } from './lib/client-version'
 export * from './lib/commands'
+export {
+  andList,
+  collectionLabelOf,
+  cronInWords,
+  describeAlert,
+  describeCascadeFilter,
+  describeCondition,
+  describeConditionList,
+  describeFieldChangeImpact,
+  describeFieldReach,
+  describeFieldRule,
+  describeFieldSource,
+  describeFilterObject,
+  describeFlow,
+  describeFlowTrigger,
+  describeLockCondition,
+  describeOwnerGroup,
+  describeSectionShowWhen,
+  describeTransition,
+  describeValidationRule,
+  describeValidationRules,
+  describeVisibilityRules,
+  type FieldChange,
+  type FieldImpactInput,
+  type FieldSource,
+  fieldLabelOf,
+  formulaInWords,
+  type SentenceLabels,
+  sentenceLabelsFromFields,
+  valueTextOf
+} from './lib/config-sentences'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export {
   CORE_GLOSSARY,
