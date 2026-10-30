@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { whereInList } from './db-batch.js'
 import { cachedAccess, onPermissionCacheReset } from './permission-cache.js'
 import { timeAccess, timeAccessSync } from './request-trace.js'
 
@@ -455,7 +456,7 @@ export async function resolveRecordDimensionIds(
     for (const id of ids) out.set(String(id), [String(id)])
     return out
   }
-  let q = db(`${collection} as t0`).whereIn('t0.id', ids as never)
+  let q = whereInList(db(`${collection} as t0`), 't0.id', ids)
   let alias = 't0'
   let valueCol: string | null = null
   for (let i = 0; i < hops.length; i++) {

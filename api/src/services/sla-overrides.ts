@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * Per-record SLA overrides (#1239, migration 398). One record's clock in one
@@ -72,7 +72,9 @@ export async function loadActiveOverrides(
   const out = new Map<string, SlaOverrideRow[]>()
   if (items.length === 0 || !(await slaOverridesReady())) return out
   const rows = (await selectInChunks(items, 2000, (chunk) =>
-    db(SLA_OVERRIDES_TABLE).where({ collection }).whereIn('item', chunk).whereNull('cleared_at')
+    whereInList(db(SLA_OVERRIDES_TABLE).where({ collection }), 'item', chunk).whereNull(
+      'cleared_at'
+    )
   ).catch(() => [])) as SlaOverrideRow[]
   for (const r of rows) {
     const key = String(r.item)

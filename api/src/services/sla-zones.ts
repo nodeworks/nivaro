@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubjectsBatch } from './pipeline-subject.js'
 
 /**
@@ -196,9 +196,7 @@ export async function resolveRecordZones(
 
     if (route.kind === 'm2o') {
       const rows = (await selectInChunks(ids, 2000, (chunk) =>
-        db(collection)
-          .whereIn('id', chunk)
-          .select('id', db.raw('?? as src', [route.fk]))
+        whereInList(db(collection), 'id', chunk).select('id', db.raw('?? as src', [route.fk]))
       )) as Array<{ id: unknown; src: unknown }>
       for (const r of rows) {
         const tz = r.src != null ? cfg.zones[String(r.src)] : undefined
@@ -206,8 +204,7 @@ export async function resolveRecordZones(
       }
     } else {
       const rows = (await selectInChunks(ids, 2000, (chunk) =>
-        db(route.junction)
-          .whereIn(route.parentFk, chunk)
+        whereInList(db(route.junction), route.parentFk, chunk)
           .orderBy('id')
           .select(db.raw('?? as parent', [route.parentFk]), db.raw('?? as src', [route.sourceFk]))
       )) as Array<{ parent: unknown; src: unknown }>

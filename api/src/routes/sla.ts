@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { appDate } from '../services/chaos/clock.js'
-import { selectInChunks } from '../services/db-batch.js'
+import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
@@ -256,10 +256,10 @@ export async function computeStatusBatch(
   const instances: SlaInstanceRow[] =
     precomputedInstances ??
     ((await selectInChunks(ids, 2000, (chunk) =>
-      db('nivaro_workflow_instances')
-        .where({ collection })
-        .whereIn('item', chunk)
-        .orderBy('started_at', 'desc')
+      whereInList(db('nivaro_workflow_instances').where({ collection }), 'item', chunk).orderBy(
+        'started_at',
+        'desc'
+      )
     )) as SlaInstanceRow[])
 
   const latestByItem = new Map<string, (typeof instances)[number]>()
@@ -301,8 +301,7 @@ export async function computeStatusBatch(
     candidates.map((i) => i.id),
     2000,
     (chunk) =>
-      db('nivaro_workflow_history')
-        .whereIn('instance', chunk)
+      whereInList(db('nivaro_workflow_history'), 'instance', chunk)
         .orderBy('timestamp', 'desc')
         .select('instance', 'to_state', 'timestamp')
   )
