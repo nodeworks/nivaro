@@ -98,7 +98,11 @@ async function enrichRows(rows: Array<Record<string, unknown>>, hasVia: boolean)
   )
 }
 
-/** The listed rows with their user, in the order of `ids`. */
+/** The listed rows with their user, in the order of `ids`. Also the Overview's config changes. */
+export async function activityPageRows(ids: number[]): Promise<Array<Record<string, unknown>>> {
+  return pageRows(ids)
+}
+
 async function pageRows(ids: number[]): Promise<Array<Record<string, unknown>>> {
   if (ids.length === 0) return []
   const { q, hasVia } = await readableSelect(db('nivaro_activity as a'))

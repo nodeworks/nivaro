@@ -207,6 +207,7 @@ import { opsReadableRoutes } from './ops-readable.js'
 import { opsRedisRoutes } from './ops-redis.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
+import { overviewRoutes } from './overview.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { payloadTemplateRoutes } from './payload-templates.js'
@@ -472,6 +473,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(draftsRoutes, { prefix: '/drafts' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
+  await app.register(overviewRoutes, { prefix: '/overview' })
   await app.register(aiExplainRoutes, { prefix: '/ai-explain' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
