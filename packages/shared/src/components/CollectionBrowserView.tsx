@@ -58,6 +58,12 @@ import {
 import { errorSentence } from '../lib/error-message'
 import { errorToastOptions } from '../lib/error-toast'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
+import {
+  clauseFromCondition,
+  clauseFromControlValue,
+  type FilterClause,
+  filterSentence
+} from '../lib/filter-sentence'
 import { deliverLive, releaseLiveOwner } from '../lib/focus-mode'
 import {
   type ColumnFormatConfig,
@@ -88,6 +94,7 @@ import { isOwnWrite } from '../lib/own-writes'
 import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
+import { copyWhenReady, friendlyIdOf, shareableRecordId } from '../lib/record-ref'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
@@ -281,6 +288,9 @@ interface CollectionMeta {
   singleton?: boolean
   fields: CMSField[]
   relations: CMSRelation[]
+  /** #776 — the column that names a record to people (display only). */
+  friendly_id_field?: string | null
+  url_alias_fields?: string[] | null
 }
 interface PipelineInstancesMap {
   binding: { template: string } | null
@@ -687,6 +697,26 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
 }
 
 // ─── Cell renderer (admin CellValue port, same precedence) ────────────────────
+
+/**
+ * Copy a record's link — by its readable alias (#776) when that alias opens
+ * this very record, else by id. Meta comes from the list's own cache.
+ */
+function copyRecordLink(
+  client: ReturnType<typeof useNivaroClient>,
+  qc: QueryClient,
+  collection: string,
+  row: Record<string, unknown> | null | undefined,
+  id: string | number,
+  urlFor: (t: { collection: string; itemId: string }) => string
+): Promise<void> {
+  const meta = qc.getQueryData<CollectionMeta>(['cbv-collection-meta', collection])
+  return copyWhenReady(
+    shareableRecordId(client, collection, meta, row, id).then(
+      (itemId) => window.location.origin + urlFor({ collection, itemId })
+    )
+  ).catch(() => undefined)
+}
 
 /** Per-row Actions menu — labeled trigger (people know what "Actions" means),
  *  portal menu clamped to the viewport, with live pipeline transitions
@@ -1437,9 +1467,7 @@ export function RowActionsMenu({
                 })}
                 {item('Copy link', () => {
                   setOpen(false)
-                  void navigator.clipboard?.writeText(
-                    window.location.origin + urlFor({ collection, itemId: String(id) })
-                  )
+                  void copyRecordLink(client, qc, collection, row, id, urlFor)
                   toast.success('Link copied')
                 })}
                 {isAdmin && (
@@ -6716,6 +6744,215 @@ export function CollectionBrowserView({
     )
   }
 
+  // ── Filter sentence (#20) — one quiet line naming what the list shows, from
+  // labels the list already has (field labels, option lists in the query
+  // cache). Never a fetch per filter: an unlabelled pick reads "one of 2 picked".
+  const sentenceNarrowed = !!(appliedSearch || conditionsParam || activeViewId != null)
+  const { data: grandTotal } = useQuery({
+    queryKey: ['cbv-grand-total', collection],
+    queryFn: () =>
+      client
+        .request<{ total?: number | null }>(
+          get(`/items/${collection}`, { limit: 1, fields: 'id', count: 'approx' })
+        )
+        .then((r) => (typeof r.total === 'number' ? r.total : null)),
+    enabled: !!collection && scopeGateOpen && !aiResult && sentenceNarrowed,
+    staleTime: 5 * 60_000,
+    retry: false
+  })
+  // Option lists land after the list does: re-read the sentence when one the
+  // sentence is still missing a label from arrives (and only then).
+  const sentenceNeedsLabelsRef = useRef(false)
+  const [, setSentenceLabelTick] = useState(0)
+  useEffect(
+    () =>
+      qc.getQueryCache().subscribe((e) => {
+        if (!sentenceNeedsLabelsRef.current) return
+        if (e.type !== 'updated' || e.action.type !== 'success') return
+        const head = String(e.query.queryKey[0] ?? '')
+        if (
+          head === 'cbv-quick-options' ||
+          head === 'cbv-filter-options' ||
+          head === 'cbv-filter-selected-labels'
+        )
+          setSentenceLabelTick((t) => t + 1)
+      }),
+    [qc]
+  )
+  const cachedOptionLabel = (prefix: unknown[], value: unknown): string | undefined => {
+    for (const [, data] of qc.getQueriesData<Array<{ value?: unknown; label?: string }>>({
+      queryKey: prefix
+    })) {
+      if (!Array.isArray(data)) continue
+      const hit = data.find((o) => o && String(o.value) === String(value))
+      if (hit?.label) return hit.label
+    }
+    return undefined
+  }
+  const filterSentenceText = (() => {
+    if (aiResult) return null
+    let missing = false
+    const pick = (
+      field: string,
+      values: Array<string | number>,
+      label: (v: string | number) => string | undefined,
+      not = false
+    ): FilterClause => {
+      const labels = values.map(label)
+      if (labels.every((l): l is string => !!l)) return { kind: 'is', field, values: labels, not }
+      missing = true
+      return { kind: 'is', field, values: [], count: values.length, not }
+    }
+    const clauses: FilterClause[] = []
+    for (const f of filters) {
+      const field = f.pathLabels.join(' › ') || f.path.join('.')
+      if (
+        f.path[0]?.startsWith('$has_') ||
+        f.path[0] === '$missing_required' ||
+        f.path[0] === '$unseen'
+      ) {
+        clauses.push({ kind: 'phrase', text: `${f.not ? 'not ' : ''}${field.toLowerCase()}` })
+        continue
+      }
+      const t = f.fieldType ?? ''
+      const c = clauseFromCondition({
+        field,
+        op: f.op,
+        value: f.value,
+        valueLabels: f.valueLabels,
+        not: f.not,
+        kind:
+          t === 'boolean'
+            ? 'boolean'
+            : t === 'date' || t === 'datetime' || t === 'timestamp'
+              ? 'date'
+              : ['integer', 'decimal', 'float', 'bigInteger'].includes(t)
+                ? 'number'
+                : 'text'
+      })
+      if (c) clauses.push(c)
+    }
+    for (const qf of effQuickFilters) {
+      const vals = appliedQuick[qf.key] ?? []
+      if (vals.length === 0) continue
+      const prefix = ['cbv-quick-options', qf.collection, qf.value_field ?? 'id', qf.label_field]
+      clauses.push(pick(qf.label, vals, (v) => cachedOptionLabel(prefix, v)))
+    }
+    for (const [key, f] of Object.entries(debouncedColFilters)) {
+      if (!f) continue
+      const field =
+        key === '__state__'
+          ? 'State'
+          : key === '__fulfilment__'
+            ? (bcFulfilment?.label ?? 'Shipped')
+            : key === '__integrations__'
+              ? 'Integrations'
+              : key === '__aging__'
+                ? 'Time in state'
+                : columnLabel(key)
+      const fmtCfg = columnFormats[key]
+      const currency = fmtCfg?.type === 'number' && fmtCfg.prefix === '$'
+      if (f.kind === 'in' && f.value.length) {
+        const rel = findM2ORelation(relations, collection, key)
+        const target = rel?.one_collection ?? null
+        const alias = aliasTargetByField[key]
+        const relTarget = target ?? (alias?.kind === 'm2m' ? alias.target : null)
+        clauses.push(
+          relTarget
+            ? pick(
+                field,
+                f.value,
+                (v) =>
+                  cachedOptionLabel(['cbv-filter-options', relTarget], v) ??
+                  cachedOptionLabel(['cbv-filter-selected-labels', relTarget], v)
+              )
+            : { kind: 'is', field, values: f.value.map((v) => titleCase(String(v))) }
+        )
+      } else if (f.kind === 'state' && f.value.length) {
+        clauses.push({
+          kind: 'is',
+          field,
+          values: f.value.map(
+            (k) => pipelineTemplate?.states?.find((s) => s.key === k)?.label ?? titleCase(k)
+          )
+        })
+      } else if (f.kind === 'fulfilment' && bcFulfilment) {
+        const l = FULFILMENT_FILTER_OPTIONS.find((o) => o.value === f.value)?.label
+        if (l) clauses.push({ kind: 'phrase', text: l.toLowerCase() })
+      } else if (f.kind === 'integrations') {
+        const l = INTEGRATIONS_FILTER_OPTIONS.find((o) => o.value === f.value)?.label
+        if (l) clauses.push({ kind: 'is', field, values: [l.toLowerCase()] })
+      } else if (f.kind === 'tasks') {
+        clauses.push({
+          kind: 'phrase',
+          text:
+            f.value === 'none'
+              ? 'with no open tasks'
+              : f.value === 'overdue'
+                ? 'with overdue tasks'
+                : 'with open tasks'
+        })
+      } else if (f.kind === 'aging') {
+        const c = clauseFromControlValue({ field, type: 'range', value: f.value, rangeUnit: 'h' })
+        if (c) clauses.push(c)
+      } else if (f.kind === 'text' && f.value.trim()) {
+        clauses.push({ kind: 'text', field, text: f.value })
+      } else if (f.kind === 'num' && f.value !== '') {
+        const c = clauseFromCondition({
+          field,
+          op: f.op,
+          value: f.value,
+          kind: currency ? 'currency' : 'number'
+        })
+        if (c) clauses.push(c)
+      } else if (f.kind === 'bool') {
+        clauses.push({
+          kind: 'is',
+          field,
+          values: [
+            fmtCfg?.type === 'boolean'
+              ? f.value === 'true'
+                ? fmtCfg.true_label
+                : fmtCfg.false_label
+              : f.value === 'true'
+                ? 'yes'
+                : 'no'
+          ]
+        })
+      } else if (f.kind === 'date' && f.value) {
+        const parsed = parseDateFilter(f.value)
+        const c = parsed
+          ? ({ kind: 'date', field, op: parsed.op, from: parsed.from, to: parsed.to } as const)
+          : clauseFromCondition({ field, op: '_preset', value: f.value, kind: 'date' })
+        if (c) clauses.push(c)
+      }
+    }
+    for (const c of linkConds) {
+      const label = (c as { label?: string }).label
+      if (label) clauses.push({ kind: 'phrase', text: label })
+    }
+    for (const ex of cellExcludes) {
+      clauses.push({ kind: 'is', field: columnLabel(ex.field), values: [ex.label], not: true })
+    }
+    if (addendumsOnly) clauses.push({ kind: 'phrase', text: 'being amended' })
+    if (riskFilter.length > 0) {
+      const names = riskFilter
+        .map((id) => riskRules.find((r) => r.id === id)?.name)
+        .filter((n): n is string => !!n)
+      if (names.length > 0) clauses.push({ kind: 'phrase', text: `flagged ${names.join(' or ')}` })
+    }
+    sentenceNeedsLabelsRef.current = missing
+    return filterSentence({
+      noun: meta?.display_name || titleCase(collection),
+      viewName: views.find((v) => v.id === activeViewId)?.name ?? null,
+      search: appliedSearch,
+      clauses,
+      shown: totalUnknown ? null : total,
+      of: grandTotal ?? null,
+      approx: totalApprox
+    })
+  })()
+
   return (
     <div
       data-cbv
@@ -6869,8 +7106,13 @@ export function CollectionBrowserView({
                   {
                     label: 'Copy link',
                     run: () => {
-                      void navigator.clipboard?.writeText(
-                        `${window.location.origin}${urlFor({ collection, itemId: String(cellMenu.row.id) })}`
+                      void copyRecordLink(
+                        client,
+                        qc,
+                        collection,
+                        cellMenu.row,
+                        String(cellMenu.row.id),
+                        urlFor
                       )
                       toast.success('Link copied')
                     }
@@ -8256,6 +8498,16 @@ export function CollectionBrowserView({
             : 'flex min-h-0 flex-1 flex-col p-4 pt-3'
         }
       >
+        {filterSentenceText && (
+          <p
+            data-filter-sentence
+            data-tip={filterSentenceText}
+            aria-live='polite'
+            className='mb-1.5 shrink-0 truncate px-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'
+          >
+            {filterSentenceText}
+          </p>
+        )}
         <div
           ref={rowChanges.rootRef}
           className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'
@@ -9157,6 +9409,15 @@ export function CollectionBrowserView({
                                       id={row[key]}
                                     />
                                   </button>
+                                ) : key === 'id' && friendlyIdOf(meta, row) ? (
+                                  // #776 — the readable id; the internal one on hover.
+                                  <span
+                                    data-record-ref
+                                    data-tip={`#${String(row.id)}`}
+                                    className='font-mono text-[12px] text-slate-700 dark:text-slate-200'
+                                  >
+                                    {friendlyIdOf(meta, row)}
+                                  </span>
                                 ) : columnFormats[key] && row[key] != null ? (
                                   <span
                                     className={cn(

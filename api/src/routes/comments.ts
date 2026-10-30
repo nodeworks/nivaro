@@ -13,6 +13,7 @@ import { notifyUser } from '../services/notification-channels.js'
 import { renderNotificationTemplate } from '../services/notification-templates.js'
 import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
+import { recordDisplayRef } from '../services/record-display-ref.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
@@ -594,7 +595,9 @@ export async function commentsRoutes(app: FastifyInstance) {
         // Don't notify yourself.
         if (u.id === userId) continue
 
-        let subject = 'You were mentioned'
+        // The record by its readable id, read as the person mentioned (#776).
+        const recordRef = await recordDisplayRef(body.collection, body.item, { recipient: u.id })
+        let subject = `You were mentioned on ${recordRef}`
         let message = body.text.slice(0, 100)
         const actorName =
           [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ').trim() ||
@@ -606,6 +609,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           actor: actorName,
           collection: body.collection,
           record: body.item,
+          record_ref: recordRef,
           text: body.text.slice(0, 300)
         }).catch(() => null)
         if (templated) {

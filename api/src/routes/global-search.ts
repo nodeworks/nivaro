@@ -7,6 +7,7 @@ import { getCollection } from '../services/collections.js'
 import { readItems } from '../services/items.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
+import { fallbackDisplayRef, recordDisplayRefs } from '../services/record-display-ref.js'
 import { safeRecordLabel } from '../services/record-label-fallback.js'
 import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
 import { labelSearchFieldsOf } from '../services/search-fields.js'
@@ -345,6 +346,8 @@ export type RecordHit = {
   /** The caller created it, owns it, or opened it from search lately. */
   mine?: boolean
   updated_at?: string
+  /** The record's readable id (#776) as the caller reads it — absent when it has none. */
+  friendly_id?: string
 }
 
 /** A hit while it is being ranked. */
@@ -1000,6 +1003,27 @@ function readableMetas(
   return by
 }
 
+/**
+ * Readable ids (#776) for the hits, read as the caller (recordDisplayRefs);
+ * `collection:id` → value, only where one resolved (never the `#id` fallback).
+ * Collections with no friendly id field cost nothing.
+ */
+async function friendlyIdsAmong(
+  user: User,
+  byCollection: Map<string, string[]>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  await Promise.all(
+    [...byCollection].map(async ([collection, ids]) => {
+      const refs = await recordDisplayRefs(collection, ids, { recipient: user })
+      for (const [id, ref] of refs) {
+        if (ref !== fallbackDisplayRef(id)) out.set(`${collection}:${id}`, ref)
+      }
+    })
+  )
+  return out
+}
+
 /** Everything the record half of one search does. */
 async function searchRecords(
   user: User,
@@ -1061,12 +1085,18 @@ async function searchRecords(
     list.push(String(h.id))
     byCollection.set(h.collection, list)
   }
-  const [learned, recent, owned] = await Promise.all([
+  const [learned, recent, owned, friendly] = await Promise.all([
     learnedOpens(raw).catch(() => new Map<string, number>()),
     recentOpens(String(user.id)).catch(() => new Set<string>()),
-    ownedAmong(String(user.id), byCollection).catch(() => new Set<string>())
+    ownedAmong(String(user.id), byCollection).catch(() => new Set<string>()),
+    friendlyIdsAmong(user, byCollection).catch(() => new Map<string, string>())
   ])
-  const records = finishHits(found, { userId: String(user.id), learned, recent, owned })
+  const records = finishHits(found, { userId: String(user.id), learned, recent, owned }).map(
+    (r) => {
+      const f = friendly.get(`${r.collection}:${String(r.id)}`)
+      return f ? { ...r, friendly_id: f } : r
+    }
+  )
   const exactHits = records.filter((r) => r.exact)
   // "Did you mean": only when nothing but near spellings came back.
   const suggestions =

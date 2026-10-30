@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { recordDisplayRef } from '../services/record-display-ref.js'
 import type { User } from '../types.js'
 
 interface ApprovalChain {
@@ -104,9 +105,11 @@ async function notifyStepApprovers(
     () => null
   )
   for (const userId of approvers) {
+    // The record by its readable id, read as this approver (#776).
+    const ref = await recordDisplayRef(instance.collection, instance.item, { recipient: userId })
     await notifyUser(app, userId, {
       subject: `Approval requested: ${chain.name}`,
-      message: `Your approval (${stepLabel}) is requested for ${instance.collection}/${instance.item}.`,
+      message: `Your approval (${stepLabel}) is requested for ${instance.collection} ${ref}.`,
       collection: instance.collection,
       item: instance.item,
       target: {
