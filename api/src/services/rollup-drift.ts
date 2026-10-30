@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
-import { computeRollupTotal, parseRollupFormula } from './rollups.js'
+import { computeRollupTotal, matchesParentFilter, parseRollupFormula } from './rollups.js'
+
+const SAFE_COLUMN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /**
  * Stored-rollup drift detection.
@@ -72,13 +74,19 @@ export async function detectRollupDrift(): Promise<DriftReport> {
     if (!cfg) continue
     report.checked_fields++
 
+    // Rows outside the rollup's parent_filter are never written by it (another
+    // writer owns the column there), so recomputing them reports false drift.
+    const filterCols = Object.keys(cfg.parent_filter ?? {}).filter(
+      (c) => SAFE_COLUMN.test(c) && c !== 'id' && c !== fieldRow.field
+    )
+
     let sample: Array<Record<string, unknown>>
     try {
       // Newest rows first: recent writes are where hook regressions show up,
       // and old rows drift once then stay stably wrong — a rotating sample
       // window would re-report the same ancient drift forever.
       sample = (await db(fieldRow.collection)
-        .select('id', fieldRow.field)
+        .select('id', fieldRow.field, ...filterCols)
         .orderBy('id', 'desc')
         .limit(SAMPLE_PER_FIELD)) as Array<Record<string, unknown>>
     } catch {
@@ -88,6 +96,7 @@ export async function detectRollupDrift(): Promise<DriftReport> {
     let drifted = 0
     const examples: Array<[string, number | null, number | null]> = []
     for (const row of sample) {
+      if (cfg.parent_filter && !matchesParentFilter(row, cfg.parent_filter)) continue
       let computed: number | null
       try {
         computed = await computeRollupTotal(cfg, row.id, fieldRow.collection)
