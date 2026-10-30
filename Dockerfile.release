@@ -117,8 +117,10 @@ RUN pnpm --filter @nivaro/shared build
 RUN pnpm --filter @nivaro/react build
 # `vite build` alone: the admin's `build` script is `tsc -b && vite build`, and
 # the typecheck already gated the release (release-chain preflight) — the
-# image build only bundles.
-RUN pnpm --filter @nivaro/admin exec vite build && node scripts/precompress-dist.mjs admin/dist
+# image build only bundles. The bundle outgrew the 4 GB heap: two releases on
+# 2026-10-30 died here with "JavaScript heap out of memory" (GitHub runners
+# have 16 GB).
+RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm --filter @nivaro/admin exec vite build && node scripts/precompress-dist.mjs admin/dist
 
 
 # ─── Stage 4: production dependencies ───────────────────────────────────────
