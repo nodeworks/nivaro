@@ -59,14 +59,36 @@ export function summaryWindow(
   return { from: new Date(anchor.getTime() - SUMMARY_DEFAULT_DAYS * DAY_MS), to, defaulted: true }
 }
 
-/** The four summary aggregates, each over nivaro_activity alone (no join). */
-export function summaryQueries(k: Knex, win: Pick<ReportWindow, 'from' | 'to'>) {
+/**
+ * The summary aggregates, each over nivaro_activity alone (no join). `apply` narrows every one
+ * of them (the Audit report's filters); `groupKey` (migration 516's column exists) adds the
+ * largest burst — the most rows one bulk action / import / flow run / job wrote.
+ */
+export function summaryQueries(
+  k: Knex,
+  win: Pick<ReportWindow, 'from' | 'to'>,
+  opts: { apply?: (qb: Knex.QueryBuilder) => void; groupKey?: boolean } = {}
+) {
   const base = () => {
     const b = k('nivaro_activity as a').where('a.timestamp', '>=', win.from)
     if (win.to) b.where('a.timestamp', '<=', win.to)
+    opts.apply?.(b)
     return b
   }
   return {
+    largestBurst: opts.groupKey
+      ? base()
+          .select('a.group_key')
+          .min('a.action as action')
+          .max('a.action as action_max')
+          .min('a.collection as collection')
+          .max('a.collection as collection_max')
+          .count('a.id as count')
+          .whereNotNull('a.group_key')
+          .groupBy('a.group_key')
+          .orderBy('count', 'desc')
+          .limit(1)
+      : null,
     byAction: base()
       .select('a.action')
       .count('a.id as count')
@@ -115,4 +137,27 @@ export function mergeUserNames(
       count: Number(r.count)
     }
   })
+}
+
+export interface LargestBurst {
+  group_key: string
+  count: number
+  /** The one action / collection every row shares, else null (a mixed burst). */
+  action: string | null
+  collection: string | null
+}
+
+/** The largest-burst row → its answer; bursts of one are not bursts. */
+export function largestBurstOf(rows: unknown[] | null | undefined): LargestBurst | null {
+  const r = (rows?.[0] ?? null) as Record<string, unknown> | null
+  if (!r) return null
+  const count = Number(r.count)
+  if (!Number.isFinite(count) || count < 2) return null
+  const same = (a: unknown, b: unknown) => (a != null && a === b ? String(a) : null)
+  return {
+    group_key: String(r.group_key ?? ''),
+    count,
+    action: same(r.action, r.action_max),
+    collection: same(r.collection, r.collection_max)
+  }
 }
