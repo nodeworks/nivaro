@@ -206,6 +206,9 @@ export async function updateCollection(
   await db('nivaro_collections')
     .where({ collection: name })
     .update({ ...data, updated_at: new Date() })
+  // Read back the row just written, not the cached copy (it answered every PATCH with the
+  // value from before the edit for up to 30 s).
+  clearMetadataCache(name)
   return getCollection(name)
 }
 

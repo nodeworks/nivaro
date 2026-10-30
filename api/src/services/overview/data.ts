@@ -10,6 +10,7 @@ import { isMachineAccount } from '../machine-accounts.js'
 import { poolPressure } from '../pool-attribution.js'
 import { readGateStats, sharedGatedRead, withReadGate } from '../read-gate.js'
 import { readReadiness } from '../readiness.js'
+import { collectionTitle } from '../record-label-fallback.js'
 import {
   type AdminNeedsFacts,
   adminNeedsYou,
@@ -922,7 +923,8 @@ export async function loadUsage() {
       return {
         busiest_collections: busiest.map((b) => ({
           collection: b.collection,
-          label: display.get(b.collection)?.trim() || null,
+          // A collection without a display name reads as words (warehouse_forecast → Warehouse Forecast).
+          label: collectionTitle(b.collection, display.get(b.collection)),
           changes: Number(b.n) || 0
         })),
         screens: usedScreens,
