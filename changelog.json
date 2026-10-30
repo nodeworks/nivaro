@@ -1,10 +1,111 @@
 {
-  "generated_at": "2026-10-30T15:31:22.823Z",
+  "generated_at": "2026-10-30T18:28:16.974Z",
   "releases": [
+    {
+      "version": "0.3.63",
+      "tag": "v0.3.63",
+      "date": "2026-10-30T14:27:53-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "the New item button's text is a collection setting",
+              "hash": "f8a697e09"
+            },
+            {
+              "section": "Added",
+              "scope": "nav",
+              "text": "people and roles can hide and reorder the main sections",
+              "hash": "6178bb6e3"
+            },
+            {
+              "section": "Added",
+              "scope": "errors",
+              "text": "every error says what happened, what to do, and offers one action",
+              "hash": "f8bab9c90"
+            },
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "embed feeds update live (push) without a reload",
+              "hash": "6de908bac"
+            },
+            {
+              "section": "Added",
+              "scope": "widgets",
+              "text": "live previews for embed feeds and internal widgets",
+              "hash": "164438f39"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "boot",
+              "text": "pool warm-up releases its connections in a finally",
+              "hash": "60914570a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "drop the collection colour chip from the list toolbar",
+              "hash": "c3ca7849a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "API deploys and passes its gate before frontends; warm the DB pool at boot",
+              "hash": "06edc22c1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "widgets",
+              "text": "live feed signals only real feed changes; stream cap reserved up front",
+              "hash": "2b3720d76"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "search",
+              "text": "search tabs use the cheap contains match",
+              "hash": "3194e158e"
+            },
+            {
+              "section": "Performance",
+              "scope": "sla",
+              "text": "long id lists bind one OPENJSON array",
+              "hash": "e004d46fb"
+            },
+            {
+              "section": "Performance",
+              "scope": "search",
+              "text": "exact ids seek first, budgeted parallel fan-out, one scan per searched list",
+              "hash": "95bc588b3"
+            },
+            {
+              "section": "Performance",
+              "scope": "reports",
+              "text": "load report widgets as they near the viewport",
+              "hash": "c0d6f45d7"
+            }
+          ]
+        }
+      ],
+      "count": 13
+    },
     {
       "version": "0.3.62",
       "tag": "v0.3.62",
-      "date": "2026-10-30T11:31:03-04:00",
+      "date": "2026-10-30T11:31:22-04:00",
       "sections": [
         {
           "label": "Added",
