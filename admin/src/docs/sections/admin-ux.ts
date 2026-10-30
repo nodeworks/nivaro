@@ -219,6 +219,21 @@ GET /api/global-search/records?q=acme&collection=customers&offset=0&limit=25
         'A full-text search matches the start of words (“budg” finds “budget”), not any part of a word, and a just-saved row can take a few seconds to be found. Number and code columns stay on the ordinary contains search.',
         'The server checks which indexes exist every 5 minutes (`ftsAvailable` in services/search-fts.ts) and ignores an index until its first population has finished.'
       ]
+    },
+    { type: 'h3', id: 'global-search-config', text: 'Finding configuration in plain words' },
+    {
+      type: 'p',
+      text: 'Administrators can ask search where something is set up — “where is the Fusion push for IRs set up”, “which rule makes Zone required on POs” — and the **Settings & config** results link to the exact screen: the field on the collection’s Fields tab, the layout open in the editor, the Rules tab, the flow, the payload template, the role. Question words are ignored, plurals fold (“IRs”, “POs”) and a collection answers to its initials (Inventory Request → IR).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'What is found, by name and label only: collections, fields (label, note), required fields and validation rules, cascade filters, layouts (name, sections, placed fields, “required on this form”), pipelines (states, transitions), flows (name, trigger and its collections, step names, the external API endpoint a step calls), field rules, alerts, automation rules, queues, dashboards and reports, custom queries, external APIs and endpoints, payload templates, import definitions, webhooks, roles and their permissions, and the Settings sections. Never a secret, header, URL, SQL text, body or stored value.',
+        'Everything stored is for administrators only; other people find only their own screens (Profile notification rules, out of office, personal defaults, notification subscriptions).',
+        'On the full search page a question of three or more words also asks `GET /api/global-search/config?q=&ai=1`. When its keywords find little and AI is set up, one AI call rewrites the question into keywords, kinds and a collection (it is sent the question and the collection names, nothing else; the answer is kept for 10 minutes) and the page says how it was read. With AI off, the keyword answer is all there is. Cmd+K never calls the AI.',
+        'Deep links: `/data-model/<collection>?tab=fields&field=<name>`, `?tab=groups&layout=<id>`, `?tab=rules`, `?tab=settings`, `/roles?role=<id>`, `/settings?section=<id>`, `/imports?definition=<key>`, `/external-apis/<id>/payloads/<key>`.',
+        'The index is rebuilt at most once a minute per instance, so a change made a moment ago may take a minute to be found.'
+      ]
     }
   ]
 }

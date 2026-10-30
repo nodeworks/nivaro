@@ -21,7 +21,8 @@ import { safeRecordLabel } from './record-label-fallback.js'
  * - docs: the docs index audience (admin sections for admins only).
  * - chat: canSeeRoom on the channel's room; channel NAMES only (never message
  *   text, never DMs or group DMs).
- * - config: administrators only.
+ * - config: admin-only config for administrators only (services/config-search);
+ *   personal screens (Profile, subscriptions) for everyone.
  *
  * Bounded: each kind is a TOP-N query, gates run once per collection / per
  * batch, each kind is capped at EXTRA_CAP, and a failing kind is left out.
@@ -107,7 +108,8 @@ export interface ExtraDeps {
     cap: number
   ): Promise<Array<{ key: string; name: string | null; topic: string | null }>>
   canSeeRoom(user: User, room: string): Promise<boolean>
-  configHits(phrase: string, cap: number): Promise<ExtraHit[]>
+  /** Admin-only config reaches administrators only (personal screens reach everyone). */
+  configHits(phrase: string, cap: number, isAdmin: boolean): Promise<ExtraHit[]>
 }
 
 async function commentRows(phrase: string, cap: number): Promise<TextRow[]> {
@@ -302,63 +304,15 @@ async function channelRows(phrase: string, cap: number) {
   return (await qb) as Array<{ key: string; name: string | null; topic: string | null }>
 }
 
-const CONFIG_SOURCES: Array<{
-  table: string
-  kind: string
-  cols: string[]
-  href: (r: Record<string, unknown>) => string
-}> = [
-  {
-    table: 'nivaro_collection_layouts',
-    kind: 'layout',
-    cols: ['id', 'name', 'collection'],
-    href: (r) =>
-      `/data-model/${encodeURIComponent(String(r.collection))}?tab=groups&layout=${encodeURIComponent(String(r.id))}`
-  },
-  {
-    table: 'nivaro_custom_queries',
-    kind: 'custom_query',
-    cols: ['id', 'name'],
-    href: (r) => `/custom-queries/${encodeURIComponent(String(r.id))}`
-  },
-  {
-    table: 'nivaro_flows',
-    kind: 'flow',
-    cols: ['id', 'name'],
-    href: (r) => `/flows/${encodeURIComponent(String(r.id))}`
-  },
-  {
-    table: 'nivaro_workflow_templates',
-    kind: 'pipeline',
-    cols: ['id', 'name'],
-    href: (r) => `/pipelines/${encodeURIComponent(String(r.id))}`
-  }
-]
-
-async function configHits(phrase: string, cap: number): Promise<ExtraHit[]> {
-  const per = Math.max(2, Math.ceil(cap / 2))
-  const settled = await Promise.allSettled(
-    CONFIG_SOURCES.map(async (s) => {
-      const rows = (await db(s.table)
-        .whereRaw(`[name] ${LIKE}`, [likeOf(phrase)])
-        .limit(per)
-        .select(s.cols)) as Array<Record<string, unknown>>
-      return rows.map((r) => {
-        const href = s.href(r)
-        return {
-          kind: s.kind,
-          id: String(r.id),
-          label: String(r.name ?? r.id),
-          ...(r.collection
-            ? { snippet: String(r.collection), collection: String(r.collection) }
-            : {}),
-          href,
-          admin_href: href
-        } as ExtraHit
-      })
-    })
-  )
-  return settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+/** Config by name (services/config-search): collections, fields, validation,
+ *  cascades, layouts, pipelines, flows, field rules, alerts, rules, queues,
+ *  dashboards, reports, custom queries, external APIs, payload templates,
+ *  imports, webhooks, roles and settings sections, each linked to the exact
+ *  screen. Keyword-only here; the plain-words AI rewrite is the /search
+ *  page's own call (GET /global-search/config). */
+async function configHits(phrase: string, cap: number, isAdmin: boolean): Promise<ExtraHit[]> {
+  const { configKeywordHits } = await import('./config-search/index.js')
+  return configKeywordHits(phrase, { isAdmin, limit: cap })
 }
 
 export const defaultExtraDeps: ExtraDeps = {
@@ -596,7 +550,7 @@ export async function searchExtra(
     deps.videos(user, phrase, 5),
     deps.docs(phrase, opts.isAdmin, 5),
     searchChatHits(user, phrase, deps),
-    opts.isAdmin ? deps.configHits(phrase, EXTRA_CAP) : Promise.resolve([] as ExtraHit[])
+    deps.configHits(phrase, EXTRA_CAP, opts.isAdmin)
   ])
   const out: SearchExtra = {}
   const put = (key: keyof SearchExtra, r: PromiseSettledResult<ExtraHit[]>) => {

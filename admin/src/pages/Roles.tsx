@@ -1533,7 +1533,10 @@ function NoRoleSelected({ onCreate }: { onCreate: () => void }) {
 
 export function RolesPage() {
   const queryClient = useQueryClient()
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // ?role=<id> (config search's deep link, search item 24) opens that role.
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('role') || null
+  )
   const [isCreating, setIsCreating] = useState(false)
   const [isDesigning, setIsDesigning] = useState(false)
   const [search, setSearch] = useState('')

@@ -78,6 +78,7 @@ import {
   defaultItemUrl,
   ErrorSurface,
   focusPopoutOpener,
+  HelpVideoMatchChip,
   HelpVideoRecordingProvider,
   HuddleCallLayer,
   IncidentBanner,
@@ -860,6 +861,12 @@ export function AppLayout() {
             {/* ─── Main area ───────────────────────────────────────────── */}
             <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
               <HelpVideoHost>
+                {/* #18: the screen's best help video ("Watch: … (2:10)") when a
+                    strong match is unwatched; renders nothing otherwise. */}
+                <HelpVideoMatchChip
+                  path={location.pathname}
+                  className='flex shrink-0 justify-end px-4 pt-2'
+                />
                 <PageErrorBoundary key={pageKey}>
                   <Suspense fallback={null}>
                     {isPathDisabled(location.pathname, disabledPaths) ? (

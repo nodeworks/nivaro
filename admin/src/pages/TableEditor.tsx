@@ -1117,8 +1117,11 @@ function FieldsTab({
   })
 
   // Field filter (#228): search over the column list — 100-column tables
-  // made "where is vendor" a scroll hunt.
-  const [fieldFilter, setFieldFilter] = useState('')
+  // made "where is vendor" a scroll hunt. ?field=<name> (config search's deep
+  // link, search item 24) opens the tab filtered to that field.
+  const [fieldFilter, setFieldFilter] = useState(
+    () => new URLSearchParams(window.location.search).get('field') ?? ''
+  )
   const columns = fieldFilter.trim()
     ? tableData.columns.filter((c) => {
         const q = fieldFilter.trim().toLowerCase()

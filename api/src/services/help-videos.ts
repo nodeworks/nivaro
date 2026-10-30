@@ -27,6 +27,13 @@ import {
 import { extrasMigrated, parsePeaks, parseSprite, type SpriteSheet } from './help-video-extras.js'
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { announceHelpVideoChanged } from './help-video-live.js'
+import {
+  bestUnwatched,
+  type ContextRow,
+  rankScreenVideos,
+  screenKeys,
+  type VideoFacts
+} from './help-video-match.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
 import { normalizeScript, withScriptChapters } from './help-video-script.js'
@@ -1614,22 +1621,108 @@ export function rankForContext(
     .map(([id]) => id.toUpperCase())
 }
 
+export interface ScreenQuery {
+  collection?: string
+  item?: string
+  state?: string
+  page?: string
+  /** #18: the route the person is on (`/collections/purchase_orders/12`). */
+  path?: string
+  /** Which app the path belongs to (`admin` default, `efp` …). */
+  app?: string
+  /** Comma list of glossary terms the screen shows (capped). */
+  terms?: string
+}
+
+const MAX_SCREEN_TERMS = 12
+const TERM_CANDIDATES = 10
+const POPULAR_DAYS = 90
+
+/** How many people watched each video lately (popularity tie-break). */
+async function recentViewers(ids: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (!ids.length) return out
+  try {
+    const since = new Date(Date.now() - POPULAR_DAYS * 86_400_000)
+    const rows = (await db('nivaro_help_video_views')
+      .whereIn('video_id', ids)
+      .where('last_viewed', '>=', since)
+      .groupBy('video_id')
+      .select('video_id')
+      .count({ n: '*' })) as Array<{ video_id: string; n: number | string }>
+    for (const r of rows ?? []) out.set(low(r.video_id), Number(r.n) || 0)
+  } catch {
+    /* no counts — popularity sits out */
+  }
+  return out
+}
+
+/** Glossary terms on the screen: the ones the client saw, plus the glossary
+ *  entries of the screen's collection (term + aliases). */
+async function screenTerms(raw: string | undefined, collection: string | null): Promise<string[]> {
+  const fromClient = String(raw ?? '')
+    .split(',')
+    .map((t) => t.trim().slice(0, 60))
+    .filter((t) => t.length >= 2)
+  const out = new Set(fromClient.slice(0, MAX_SCREEN_TERMS))
+  if (collection) {
+    try {
+      const { listGlossary } = await import('./ai-knowledge.js')
+      for (const e of await listGlossary()) {
+        if (low(e.collection) !== low(collection)) continue
+        out.add(e.term)
+        for (const a of e.aliases) out.add(a)
+      }
+    } catch {
+      /* no glossary */
+    }
+  }
+  return [...out].slice(0, MAX_SCREEN_TERMS * 2)
+}
+
+/** Published videos mentioning a term (title / description). */
+async function termCandidates(terms: string[]): Promise<VideoRow[]> {
+  if (!terms.length) return []
+  try {
+    const qb = db('nivaro_help_videos').where({ status: 'published' })
+    qb.where((w) => {
+      for (const t of terms) {
+        const like = `%${t.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+        w.orWhere('title', 'like', like).orWhere('description', 'like', like)
+      }
+    })
+    return ((await qb.limit(TERM_CANDIDATES * 3)) as VideoRow[]) ?? []
+  } catch {
+    return []
+  }
+}
+
+export type ScreenVideoDto = HelpVideoDto & { match?: { tier: number; reason: string } }
+
 export async function videosForContext(
   req: FastifyRequest,
-  q: { collection?: string; item?: string; state?: string; page?: string }
-): Promise<{ data: HelpVideoDto[]; can_author: boolean; state: string | null }> {
+  q: ScreenQuery
+): Promise<{
+  data: ScreenVideoDto[]
+  can_author: boolean
+  state: string | null
+  /** #18: the strong match the person has not finished (the screen chip). */
+  best_id: string | null
+}> {
   const author = await isAuthor(req.user!, !!req.isAdmin)
   // A screen's videos are the person's own view (an admin masquerading sees
   // what they see), but the Record offer follows the admin behind them.
   const canAuthor = author || !!(await masqueradeAuthor(req))
+  const keys = screenKeys(q)
+  const collection = keys.collection
   let state = q.state ?? null
-  if (!state && q.collection && q.item) {
+  if (!state && collection && keys.item) {
     // A record's pipeline state is record data: read the record AS THE CALLER
     // first (RBAC, row filter, user scopes). readOne answers null — not an
     // error — for a row the caller cannot see; unreadable = no state, so only
     // the collection-wide and page videos match.
     const { readOne } = await import('./items.js')
-    const visible = await readOne(req.user!, q.collection, q.item, req.workspaceId ?? undefined, [
+    const visible = await readOne(req.user!, collection, keys.item, req.workspaceId ?? undefined, [
       'id'
     ]).catch(() => null)
     if (visible) {
@@ -1638,32 +1731,39 @@ export async function videosForContext(
       // The row's own id: the caller may have named the record by an alias
       // (auto id, slug) that readOne resolves but the instance table never holds.
       const recordId = String((visible as { id: unknown }).id)
-      const inst = await findRecordInstance<WithState>(q.collection, recordId).catch(
-        () => undefined
-      )
+      const inst = await findRecordInstance<WithState>(collection, recordId).catch(() => undefined)
       if (inst?.current_state) {
         const s = await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key')
         state = s?.key ?? null
       }
     }
   }
-  if (!q.collection && !q.page) return { data: [], can_author: canAuthor, state }
+  const empty = { data: [], can_author: canAuthor, state, best_id: null }
+  const pageKeys = [...keys.exact, ...keys.patterns]
+  if (!collection && !pageKeys.length && !keys.areas.length) return empty
   const qb = db('nivaro_help_video_contexts').select('video_id', 'kind', 'key', 'state_key')
   qb.where((w) => {
-    if (q.collection) w.orWhere((x) => x.where({ kind: 'collection', key: q.collection }))
-    if (q.page) w.orWhere((x) => x.where({ kind: 'page', key: q.page }))
+    if (collection) w.orWhere((x) => x.where({ kind: 'collection', key: collection }))
+    if (pageKeys.length) w.orWhere((x) => x.where({ kind: 'page' }).whereIn('key', pageKeys))
+    for (const area of keys.areas) {
+      w.orWhere((x) =>
+        x
+          .where({ kind: 'page' })
+          .where((y) => y.where({ key: area }).orWhere('key', 'like', `${area}.%`))
+      )
+    }
   })
-  const ids = rankForContext(await qb, { collection: q.collection, state, page: q.page })
-  if (!ids.length) return { data: [], can_author: canAuthor, state }
-  const videos = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
-  const byId = new Map(videos.map((v) => [up(v.id), v]))
-  const shown = ids
-    .map((id) => byId.get(id))
-    .filter(
-      (v): v is VideoRow =>
-        !!v && v.status === 'published' && viewerMaySee(v, req.user!.role, false)
-    )
-  const data = await Promise.all(
+  const rows = ((await qb) ?? []) as ContextRow[]
+  const terms = await screenTerms(q.terms, collection)
+  const byTerm = await termCandidates(terms)
+  const ids = [...new Set([...rows.map((r) => up(r.video_id)), ...byTerm.map((v) => up(v.id))])]
+  if (!ids.length) return empty
+  const videos = ((await db('nivaro_help_videos').whereIn('id', ids)) ?? []) as VideoRow[]
+  const shown = videos.filter(
+    (v): v is VideoRow => !!v && v.status === 'published' && viewerMaySee(v, req.user!.role, false)
+  )
+  if (!shown.length) return empty
+  const dtos = await Promise.all(
     shown.map((v) =>
       // The caller's real author flag (as the library does): an author sees
       // `playable` and draft details exactly as on the video's own page.
@@ -1675,7 +1775,41 @@ export async function videosForContext(
       })
     )
   )
-  return { data, can_author: canAuthor, state }
+  const viewers = await recentViewers(shown.map((v) => String(v.id)))
+  const role = req.user!.role ? up(req.user!.role) : null
+  const facts = new Map<string, VideoFacts>(
+    shown.map((v, i) => {
+      const vis = parseVisibility(v.visibility)
+      return [
+        low(v.id),
+        {
+          id: up(v.id),
+          title: String(v.title ?? ''),
+          description: (v.description as string | null) ?? null,
+          category: (v.category as string | null) ?? null,
+          required: !!dtos[i].required,
+          forMyRole: vis.mode === 'roles' && !!role && vis.role_ids.includes(role),
+          viewers: viewers.get(low(v.id)) ?? 0,
+          updatedAt: new Date(String(v.updated_at ?? 0)).getTime() || 0
+        }
+      ]
+    })
+  )
+  const ranked = rankScreenVideos(rows, keys, { state, terms }, facts)
+  const dtoById = new Map(dtos.map((d) => [low(d.id), d]))
+  const data: ScreenVideoDto[] = []
+  for (const m of ranked) {
+    const d = dtoById.get(low(m.id))
+    if (d) data.push({ ...d, match: { tier: m.tier, reason: m.reason } })
+  }
+  const best = bestUnwatched(ranked, (id) => {
+    const d = dtoById.get(low(id))
+    return d
+      ? { completed: !!d.my_progress?.completed, ready: d.published?.playable !== false }
+      : undefined
+  })
+  const bestId = best ? (dtoById.get(low(best.id))?.id ?? null) : null
+  return { data, can_author: canAuthor, state, best_id: bestId }
 }
 
 export async function listVideos(

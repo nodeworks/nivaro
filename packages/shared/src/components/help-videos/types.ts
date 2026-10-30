@@ -433,6 +433,10 @@ export interface HelpVideoDto {
    *  the page. Null when nothing was found or an author dismissed it;
    *  publishing clears it. Optional: older servers. */
   stale?: HelpVideoStale | null
+  /** #18, GET /help-videos/for only: how the video matched the screen — tier
+   *  0 step, 1 screen, 2 screens like it, 3 record type, 4 area, 5 a term on
+   *  the screen. Optional: older servers. */
+  match?: { tier: number; reason: string }
 }
 
 /** Why a video may be out of date (#1495). */

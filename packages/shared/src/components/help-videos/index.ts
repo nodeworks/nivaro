@@ -75,6 +75,7 @@ export type {
   WalkStep
 } from './types'
 export { HelpVideoButton } from './viewer/HelpVideoButton'
+export { HelpVideoMatchChip } from './viewer/HelpVideoMatchChip'
 export { HelpVideoSheet } from './viewer/HelpVideoSheet'
 export { LearningPathCard } from './viewer/LearningPathCard'
 export { RequiredVideosCard } from './viewer/RequiredVideosCard'

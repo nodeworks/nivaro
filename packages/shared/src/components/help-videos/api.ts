@@ -109,7 +109,19 @@ export function useHelpVideo(id: string | null) {
 }
 
 export function useHelpVideosFor(
-  ctx: { collection?: string; item?: string | number; state?: string; page?: string },
+  ctx: {
+    collection?: string
+    item?: string | number
+    state?: string
+    page?: string
+    /** #18: the route (`/collections/purchase_orders/12`); the server derives
+     *  the screen, screens like it, the record type and the area from it. */
+    path?: string
+    /** #18: which app `path` belongs to (default `admin`). */
+    app?: string
+    /** #18: comma list of glossary terms the screen shows. */
+    terms?: string
+  },
   enabled = true
 ) {
   const client = useNivaroClient()
@@ -117,14 +129,17 @@ export function useHelpVideosFor(
   useHelpVideoLive([['help-videos', 'for']])
   return useQuery({
     queryKey: helpVideoKeys.forCtx(ctx),
-    enabled: enabled && !!(ctx.collection || ctx.page),
+    enabled: enabled && !!(ctx.collection || ctx.page || ctx.path),
     staleTime: 60_000,
     queryFn: () =>
       client.request(
-        get<{ data: HelpVideoDto[]; can_author: boolean; state: string | null }>(
-          '/help-videos/for',
-          ctx as Record<string, unknown>
-        )
+        get<{
+          data: HelpVideoDto[]
+          can_author: boolean
+          state: string | null
+          /** #18: the strong match this person has not finished. Older servers: absent. */
+          best_id?: string | null
+        }>('/help-videos/for', ctx as Record<string, unknown>)
       )
   })
 }
