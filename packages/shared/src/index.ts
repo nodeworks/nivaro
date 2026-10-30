@@ -131,13 +131,6 @@ export {
 } from './components/ConfigReadBack'
 export * from './components/ConformanceView'
 export { CopyAsButton } from './components/CopyAsButton'
-export { CopyListLinkButton } from './components/list/CopyListLinkButton'
-export {
-  type InlineCommit,
-  InlineEditCell,
-  type InlineEditController,
-  useInlineEdit
-} from './components/list/InlineEdit'
 export { CronBuilder, describeCron } from './components/CronBuilder'
 export type { CustomStatus } from './components/CustomStatusEditor'
 export {
@@ -361,6 +354,13 @@ export { ListLoadError } from './components/ListLoadError'
 export { LiveRowMark } from './components/LiveRowMark'
 export { LoadErrorNote } from './components/LoadErrorNote'
 export * from './components/layout-editor'
+export { CopyListLinkButton } from './components/list/CopyListLinkButton'
+export {
+  type InlineCommit,
+  InlineEditCell,
+  type InlineEditController,
+  useInlineEdit
+} from './components/list/InlineEdit'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export {
@@ -613,6 +613,12 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type SlowReadRequest,
+  type SlowReason,
+  type UseSlowReasonOptions,
+  useSlowReason
+} from './hooks/useSlowReason'
 export type {
   ActionParts,
   ActivityActor,
@@ -644,19 +650,15 @@ export {
   HIDDEN_RECORD,
   parseActor,
   parseTransitionComment,
+  ROUTINE_READ_ACTIONS,
   readableTitle,
   recordPhrase,
   renderActivityGroupSentence,
   renderActivitySentence,
   valueShowable,
-  valueText
+  valueText,
+  withRoutineReads
 } from './lib/activity-sentence'
-export {
-  type SlowReadRequest,
-  type SlowReason,
-  type UseSlowReasonOptions,
-  useSlowReason
-} from './hooks/useSlowReason'
 export {
   type DrillSource,
   defaultQuestionFor,
@@ -823,6 +825,8 @@ export { type LayoutGrantFlags, layoutGrantedTools } from './lib/layout-grants'
 export { currentViewport } from './lib/layout-resolve'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export * from './lib/list-inline-edit'
+export * from './lib/list-link'
 export * from './lib/live'
 export * from './lib/live-list'
 export * from './lib/live-ops'
@@ -1172,8 +1176,6 @@ export {
   type UserSyncOptions,
   useUserSync
 } from './lib/user-sync'
-export * from './lib/list-inline-edit'
-export * from './lib/list-link'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

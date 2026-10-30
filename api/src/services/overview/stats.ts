@@ -73,6 +73,20 @@ function recordChanges(w: Window): Knex.QueryBuilder {
 
 const countOf = (rows: unknown) => Number((rows as Array<{ n?: number | string }>)[0]?.n ?? 0) || 0
 
+/** Collections with the most record changes in a window — the same changes the stat counts. */
+export async function busiestCollections(
+  w: Window,
+  limit = 5
+): Promise<Array<{ collection: string; n: number }>> {
+  const rows = (await recordChanges(w)
+    .groupBy('a.collection')
+    .select('a.collection')
+    .count({ n: '*' })
+    .orderBy('n', 'desc')
+    .limit(limit)) as Array<{ collection: string; n: number | string }>
+  return rows.map((r) => ({ collection: r.collection, n: Number(r.n) || 0 }))
+}
+
 /** Distinct records changed inside a window, every collection (administrators). */
 async function distinctRecordsAll(w: Window): Promise<number> {
   const inner = recordChanges(w).groupBy('a.collection', 'a.item').select('a.collection', 'a.item')

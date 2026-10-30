@@ -313,6 +313,27 @@ export async function loadFollowing(user: User, isAdmin: boolean): Promise<Follo
     queue?: string | null
     label?: string | null
   }
+  // A subscription saved as "Workflow state: waiting_on_po" names the state by its key; show the
+  // state's label ("Workflow state: Waiting on PO") — pipeline state labels, else the key in words.
+  const keyed = (subs as Array<Record<string, unknown>>).filter(
+    (s) => typeof s.label === 'string' && /: [a-z0-9]+(?:_[a-z0-9]+)+$/.test(s.label as string)
+  )
+  const stateLabel = new Map<string, string>()
+  if (keyed.length > 0) {
+    const keys = [...new Set(keyed.map((s) => String(s.label).split(': ').pop() as string))]
+    const rows = (await db('nivaro_workflow_states')
+      .whereIn('key', keys)
+      .select('key', 'label')
+      .catch(() => [])) as Array<{ key: string; label: string | null }>
+    for (const r of rows) if (r.label && !stateLabel.has(r.key)) stateLabel.set(r.key, r.label)
+  }
+  const plainLabel = (label: unknown): string | null => {
+    if (typeof label !== 'string') return null
+    const m = /^(.*): ([a-z0-9]+(?:_[a-z0-9]+)+)$/.exec(label)
+    if (!m) return label
+    const words = m[2].replace(/_/g, ' ')
+    return `${m[1]}: ${stateLabel.get(m[2]) ?? words.charAt(0).toUpperCase() + words.slice(1)}`
+  }
   const raw: Raw[] = []
   for (const s of subs as Array<Record<string, unknown>>) {
     if (s.queue_id) {
@@ -322,7 +343,7 @@ export async function loadFollowing(user: User, isAdmin: boolean): Promise<Follo
         collection: null,
         item: null,
         queue: String(s.queue_id),
-        label: (s.label as string) ?? null
+        label: plainLabel(s.label)
       })
     } else if (s.collection && s.filter_field === 'id' && s.filter_value != null) {
       raw.push({
@@ -330,7 +351,7 @@ export async function loadFollowing(user: User, isAdmin: boolean): Promise<Follo
         key: `record:${s.collection}:${s.filter_value}`,
         collection: String(s.collection),
         item: String(s.filter_value),
-        label: (s.label as string) ?? null
+        label: plainLabel(s.label)
       })
     } else if (s.collection) {
       raw.push({
@@ -338,7 +359,7 @@ export async function loadFollowing(user: User, isAdmin: boolean): Promise<Follo
         key: `collection:${s.collection}:${s.id}`,
         collection: String(s.collection),
         item: null,
-        label: (s.label as string) ?? null
+        label: plainLabel(s.label)
       })
     }
   }
@@ -838,18 +859,13 @@ export async function loadUsage() {
     sharedGatedRead('overview:usage', 'overview', async () => {
       const since = new Date(Date.now() - DAY_MS)
       const [busiest, screens, rum] = await Promise.all([
-        db('nivaro_activity')
-          .where('timestamp', '>=', since)
-          .whereIn('action', ['create', 'update', 'delete'])
-          .whereNotNull('collection')
-          .whereNot('collection', 'like', 'nivaro[_]%')
-          .whereNot('collection', 'like', 'directus[_]%')
-          .groupBy('collection')
-          .select('collection')
-          .count({ n: '*' })
-          .orderBy('n', 'desc')
-          .limit(5)
-          .catch(() => []) as Promise<Array<{ collection: string; n: number | string }>>,
+        // The same record changes the "Records changed today" stat counts (overview/stats.ts).
+        import('./stats.js')
+          .then((m) => m.busiestCollections({ from: since, to: new Date() }, 5))
+          .catch((err) => {
+            console.warn('[overview] busiest collections failed', (err as Error)?.message)
+            return []
+          }) as Promise<Array<{ collection: string; n: number | string }>>,
         hasTable('nivaro_page_views').then((ok) =>
           ok
             ? (db('nivaro_page_views')

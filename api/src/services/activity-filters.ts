@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { parseReportDate } from './activity-report.js'
+import { withRoutineReads } from './activity-sentence.js'
 
 /**
  * One filter shape for the audit log (#10/#11): GET /api/activity's params, the natural-language
@@ -214,7 +215,8 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
   const a = opts.alias ?? 'a'
   if (f.user) qb.where(`${a}.user`, f.user)
   if (f.actions?.length) qb.whereIn(`${a}.action`, f.actions)
-  if (f.exclude_actions?.length) qb.whereNotIn(`${a}.action`, f.exclude_actions)
+  // Hiding `read` hides every routine read (notification, report, saved view) with it.
+  if (f.exclude_actions?.length) qb.whereNotIn(`${a}.action`, withRoutineReads(f.exclude_actions))
   if (f.collections?.length === 1) qb.where(`${a}.collection`, f.collections[0])
   else if (f.collections?.length) qb.whereIn(`${a}.collection`, f.collections)
   if (f.item) qb.where(`${a}.item`, f.item)

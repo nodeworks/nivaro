@@ -566,6 +566,18 @@ export function parseTransitionComment(comment: string | null | undefined): Pars
 
 // ─── Action vocabulary ──────────────────────────────────────────────────────
 
+/**
+ * Routine reads hidden together with `read` ("Hide record views" / "Show reads"): opening a
+ * record, a notification, a report or a saved view. Compliance reads (an admin reading a DM,
+ * a person's day, an assistant's memory) are NOT routine and always show.
+ */
+export const ROUTINE_READ_ACTIONS = ['read', 'notification-read', 'report-view', 'saved-view-open']
+
+/** `exclude_actions` with every routine read added when it names `read`. */
+export function withRoutineReads(excluded: string[]): string[] {
+  return excluded.includes('read') ? [...new Set([...excluded, ...ROUTINE_READ_ACTIONS])] : excluded
+}
+
 const VERBS: Record<string, string> = {
   ack: 'acknowledged',
   acknowledge: 'acknowledged',

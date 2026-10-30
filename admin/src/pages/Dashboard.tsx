@@ -24,6 +24,7 @@ import { availableSectionKeys, overviewSections } from './overview/registry'
 import { SectionBoundary } from './overview/SectionBoundary'
 import { SinceLastVisit } from './overview/SinceLastVisit'
 import { StatLine } from './overview/StatLine'
+import { useNeedsYou } from './overview/sections/needs-you'
 import { SECTION_META } from './overview/sections-meta'
 import { firstName, greetingSentence } from './overview/text'
 
@@ -123,10 +124,12 @@ export function DashboardPage() {
   }
 
   // ── Greeting ─────────────────────────────────────────────────────────────
+  const needsYou = useNeedsYou()
   const { greeting, detail } = greetingSentence({
     hour: new Date().getHours(),
     name: firstName(user ?? null),
-    needsYou: needsYouCount(myWork.data),
+    // The same count the Needs you strip shows (it includes admin items); My Work until it loads.
+    needsYou: needsYou.data?.items ? needsYou.data.items.length : needsYouCount(myWork.data),
     myRecordsChanged: since.data?.my_records_changed ?? null
   })
 

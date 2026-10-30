@@ -1,3 +1,4 @@
+import { ROUTINE_READ_ACTIONS } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { getSocket } from '@/lib/socket'
 
@@ -22,7 +23,7 @@ export interface PulseEvent {
 }
 
 /** Entries the Overview never shows: record views and config housekeeping. */
-export const HIDDEN_ACTIONS = ['read', 'config-epoch', 'config-snapshot-store']
+export const HIDDEN_ACTIONS = [...ROUTINE_READ_ACTIONS, 'config-epoch', 'config-snapshot-store']
 export const isShownEvent = (e: { action: string | null }) =>
   !!e.action && !HIDDEN_ACTIONS.includes(e.action)
 

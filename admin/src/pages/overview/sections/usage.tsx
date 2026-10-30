@@ -77,7 +77,7 @@ export function UsageSection({ hideTitle }: SectionProps = {}) {
   return (
     <Section id='usage' title='Usage today' hideTitle={hideTitle}>
       {isLoading ? (
-        <Surface className='grid gap-px bg-slate-200 sm:grid-cols-3 dark:bg-border'>
+        <Surface className='grid gap-px bg-slate-200 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))] dark:bg-border'>
           {[0, 1, 2].map((i) => (
             <div key={i} className='space-y-2 bg-white px-3 py-3 dark:bg-card'>
               <Skeleton className='h-3 w-24' />
@@ -89,7 +89,7 @@ export function UsageSection({ hideTitle }: SectionProps = {}) {
       ) : isError || !data ? (
         <SectionError error={error} what='usage' onRetry={() => void refetch()} />
       ) : (
-        <Surface className='grid gap-px bg-slate-200 sm:grid-cols-3 dark:bg-border'>
+        <Surface className='grid gap-px bg-slate-200 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))] dark:bg-border'>
           <div className='bg-white dark:bg-card'>
             <Column title='Busiest collections' to='/activity' toLabel='Activity'>
               {(data.busiest_collections ?? []).length === 0 ? (

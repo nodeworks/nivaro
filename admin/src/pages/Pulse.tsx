@@ -1,4 +1,9 @@
-import { ActivityEntry, groupActivity, useActivityLabels } from '@nivaro/shared'
+import {
+  ActivityEntry,
+  groupActivity,
+  ROUTINE_READ_ACTIONS,
+  useActivityLabels
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { Activity, Eye, Pause, Play, Radio } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -32,7 +37,7 @@ interface PulseEvent {
 }
 
 /** Reads ("Pat opened PO 4471") outnumber every other entry many times over; off by default. */
-const isRead = (e: PulseEvent) => e.action === 'read'
+const isRead = (e: PulseEvent) => ROUTINE_READ_ACTIONS.includes(e.action)
 
 const MAX_EVENTS = 150
 const BUCKETS = 30
