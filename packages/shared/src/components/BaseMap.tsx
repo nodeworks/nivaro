@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
 import { Minus, Plus } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 /**
  * BaseMap — the hand-rolled OSM slippy-map core (tile math, drag,
@@ -16,7 +16,8 @@ import { Minus, Plus } from 'lucide-react'
  */
 
 const TILE = 256
-const TILE_URL = (z: number, x: number, y: number) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+const TILE_URL = (z: number, x: number, y: number) =>
+  `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
 
 function lon2x(lon: number, z: number): number {
   return ((lon + 180) / 360) * 2 ** z
@@ -44,6 +45,17 @@ export interface BaseMapPin {
   pulse?: boolean
 }
 
+/** A light point layer (heat / activity / people out) — never clustered, drawn under pins. */
+export interface BaseMapDot {
+  id: string
+  lat: number
+  lng: number
+  label: string
+  color: string
+  /** 0..1 — size and opacity. */
+  weight?: number
+}
+
 export interface BaseMapBubble {
   id: string
   lat: number
@@ -60,7 +72,10 @@ export function BaseMap({
   onPinClick,
   onBubbleClick,
   minHeight = 420,
-  focus = null
+  focus = null,
+  clusterColor,
+  dots = [],
+  onDotClick
 }: {
   pins: BaseMapPin[]
   bubbles?: BaseMapBubble[]
@@ -72,6 +87,12 @@ export function BaseMap({
   /** Fly the view somewhere (People-pane region click). Nonce forces re-focus
    *  on repeat clicks of the same target. */
   focus?: { lat: number; lng: number; zoom?: number; nonce: number } | null
+  /** Colour of a cluster disc from its pins (e.g. the worst child's); default: red when any
+   *  pin pulses, else the first pin's colour. */
+  clusterColor?: (pins: BaseMapPin[]) => string
+  /** Extra point layer (see BaseMapDot). */
+  dots?: BaseMapDot[]
+  onDotClick?: (id: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
@@ -109,6 +130,7 @@ export function BaseMap({
     setView({ ...center, zoom })
   }, [pins, bubbles, size])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-focus only when the nonce changes
   useEffect(() => {
     if (!focus) return
     setView({ lat: focus.lat, lng: focus.lng, zoom: focus.zoom ?? 8 })
@@ -144,6 +166,7 @@ export function BaseMap({
   })
 
   // Grid clustering for PINS only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `project` reads v/cx/cy/size, listed
   const clusters = useMemo(() => {
     const CELL = 44
     const byCell = new Map<string, { pins: BaseMapPin[]; sx: number; sy: number }>()
@@ -211,7 +234,10 @@ export function BaseMap({
       onWheel={(e) => {
         e.preventDefault()
         const rect = containerRef.current?.getBoundingClientRect()
-        zoomBy(e.deltaY < 0 ? 1 : -1, rect ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : undefined)
+        zoomBy(
+          e.deltaY < 0 ? 1 : -1,
+          rect ? { x: e.clientX - rect.left, y: e.clientY - rect.top } : undefined
+        )
       }}
     >
       {tiles.map((t) => (
@@ -243,6 +269,7 @@ export function BaseMap({
             className='absolute z-[1] -translate-x-1/2 -translate-y-1/2'
             style={{ left: x, top: y }}
             data-tip={`${b.label} — ${b.count} online`}
+            aria-label={`${b.label}: ${b.count} online`}
           >
             <span
               className='flex items-center justify-center gap-0.5 rounded-full font-bold text-white'
@@ -256,7 +283,13 @@ export function BaseMap({
                 textShadow: '0 1px 2px rgba(0,0,0,0.55)'
               }}
             >
-              <svg width='12' height='12' viewBox='0 0 24 24' fill='currentColor' aria-hidden='true'>
+              <svg
+                width='12'
+                height='12'
+                viewBox='0 0 24 24'
+                fill='currentColor'
+                aria-hidden='true'
+              >
                 <path d='M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z' />
               </svg>
               {b.count}
@@ -268,6 +301,37 @@ export function BaseMap({
               {b.label}
             </span>
           </button>
+        )
+      })}
+
+      {dots.map((d) => {
+        const { x, y } = project(d.lat, d.lng)
+        if (x < -40 || x > size.w + 40 || y < -40 || y > size.h + 40) return null
+        const w = Math.max(0.15, Math.min(1, d.weight ?? 0.6))
+        const r = 6 + w * 10
+        return (
+          <button
+            key={`dot-${d.id}`}
+            type='button'
+            onClick={(e) => {
+              e.stopPropagation()
+              onDotClick?.(d.id)
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className='absolute z-[1] -translate-x-1/2 -translate-y-1/2 rounded-full'
+            style={{
+              left: x,
+              top: y,
+              width: r * 2,
+              height: r * 2,
+              background: `${d.color}${Math.round(40 + w * 100)
+                .toString(16)
+                .padStart(2, '0')}`,
+              border: `1.5px solid ${d.color}`
+            }}
+            data-tip={d.label}
+            aria-label={d.label}
+          />
         )
       })}
 
@@ -284,10 +348,11 @@ export function BaseMap({
             className='group absolute z-[2] -translate-x-1/2 -translate-y-full'
             style={{ left: c.x, top: c.y }}
             data-tip={c.pins[0].label}
+            aria-label={c.pins[0].label}
           >
             {c.pins[0].pulse && (
               <span
-                className='absolute left-1/2 top-[10px] h-6 w-6 -translate-x-1/2 -translate-y-1/2 animate-ping rounded-full'
+                className='absolute left-1/2 top-[10px] h-6 w-6 -translate-x-1/2 -translate-y-1/2 motion-safe:animate-ping rounded-full'
                 style={{ background: `${c.pins[0].color ?? '#ef4444'}66` }}
               />
             )}
@@ -318,9 +383,14 @@ export function BaseMap({
             style={{
               left: c.x,
               top: c.y,
-              background: c.pins.some((p) => p.pulse) ? '#ef4444' : (c.pins[0].color ?? '#00a5cc')
+              background: clusterColor
+                ? clusterColor(c.pins)
+                : c.pins.some((p) => p.pulse)
+                  ? '#ef4444'
+                  : (c.pins[0].color ?? '#00a5cc')
             }}
             data-tip={`${c.pins.length} records — click to zoom`}
+            aria-label={`${c.pins.length} records here — zoom in`}
           >
             {c.pins.length}
           </button>

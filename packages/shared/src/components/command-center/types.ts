@@ -29,6 +29,8 @@ export interface Snapshot {
     names: string[]
     by_region: Array<{ region_id: number | string; count: number }>
     offices?: Array<{ lat: number; lng: number; label: string; count: number; names: string[] }>
+    /** false = a region focus was asked but people cannot be placed (shown for everywhere). */
+    region_applies?: boolean
     regions: Array<{
       region_id: number | string | null
       label: string
@@ -73,6 +75,40 @@ export interface CcPublicConfig {
   regions: Array<{ id: string; label: string; lat: number | null; lng: number | null }>
   region_label: string | null
   stuck_days: number
+  /** The caller may change the board settings (administrators). */
+  can_configure?: boolean
+}
+
+/** GET /config/candidates (admin): what detection found, for Board settings. */
+export interface CcRegionSourceConfig {
+  collection: string
+  label_field: string | null
+  via:
+    | {
+        kind: 'junction'
+        junction: string
+        region_field: string
+        item_field: string
+        item_collection: string
+      }
+    | { kind: 'field'; item_collection: string; field: string }
+  scope_dimension: string | null
+}
+
+export interface CcConfigCandidates {
+  config: {
+    geo_collections: string[]
+    /** null = work it out; false = no regions. */
+    region: CcRegionSourceConfig | null | false
+    stuck_days: number
+  }
+  geo: Array<{ key: string; label: string; lat_field: string; lng_field: string }>
+  regions: Array<{
+    source: CcRegionSourceConfig
+    label: string
+    description: string
+    suggested: boolean
+  }>
 }
 
 // ── /geo, /layers, /peek (map & place) ────────────────────────────────────────────────────────
@@ -86,6 +122,27 @@ export interface GeoPin {
   state_color: string | null
   sla: 'ok' | 'warning' | 'breached' | null
   owner?: string | null
+  /** Current-step owners (first = `owner`). */
+  owners?: Array<{ id: string; name: string }>
+}
+
+/** GET /geo answer (inside `data`). */
+export interface GeoAnswer {
+  pins: GeoPin[]
+  /** More records matched than the map shows. */
+  truncated: boolean
+  /** false = a region focus was asked but this collection cannot be placed in regions. */
+  region_applies: boolean
+  no_geo?: boolean
+  live_only?: boolean
+}
+
+/** GET /layers answer (inside `data`). */
+export interface MapLayerAnswer {
+  kind: MapLayerKind
+  points: MapLayerPoint[]
+  region_applies: boolean
+  live_only?: boolean
 }
 
 export interface MapLayerPoint {
@@ -96,6 +153,8 @@ export interface MapLayerPoint {
   /** 0..1 — drives size/opacity for heat-like layers. */
   weight?: number
   href?: string | null
+  /** The record the point stands for (click → peek). */
+  collection?: string
 }
 
 export type MapLayerKind = 'sla_heat' | 'activity' | 'out_today'
