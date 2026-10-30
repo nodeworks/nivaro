@@ -5,6 +5,8 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import type { QueueRow } from '../services/queues.js'
 import { fetchQueueItems } from '../services/queues.js'
+import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 import { canReadQueue } from './queues.js'
 
@@ -148,50 +150,118 @@ export function buildWidgetScript(): string {
   root.appendChild(el('div', p + '-mut', 'Loading\\u2026'));
 
   // ── LIST MODE ──
+  // data-live="true": the server PUSHES a bare "changed" signal (server-sent events) whenever
+  // the feed's data is written, and the list re-reads at once. If push is unavailable the list
+  // falls back to re-reading every 60 s (or data-refresh).
+  // data-refresh="<seconds>" (30–3600) re-reads on a timer instead.
+  // Either way the list is swapped only when it changed (no flicker), a failed refresh keeps
+  // the last list, and nothing runs while the tab is hidden (a returning visitor catches up).
   if (mode === 'list') {
     var url = origin + '/api/widget/public/feed/' + encodeURIComponent(token);
     if (limit) url += '?limit=' + encodeURIComponent(limit);
-    fetch(url)
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function (res) {
-        clear(root);
-        var rows = (res && res.data) || [];
-        var flds = (res && res.fields) || [];
-        if (!rows.length) { root.appendChild(el('div', p + '-mut', 'No items.')); return; }
-        var tf = titleField && flds.indexOf(titleField) !== -1 ? titleField : flds[0];
-        var secondary = [];
-        for (var i = 0; i < flds.length && secondary.length < 2; i++) {
-          if (flds[i] !== tf && flds[i] !== 'id') secondary.push(flds[i]);
-        }
-        var ul = el('ul', p + '-list');
-        rows.forEach(function (row) {
-          var li = el('li', p + '-item');
-          var titleText = fmt(row[tf]) || '(untitled)';
-          var t;
-          if (linkTemplate) {
-            t = el('a', p + '-title', titleText);
-            var href = linkTemplate.replace(/\\{([a-zA-Z0-9_]+)\\}/g, function (_, k) {
-              return encodeURIComponent(fmt(row[k]));
-            });
-            t.setAttribute('href', href);
-            t.setAttribute('target', '_blank');
-            t.setAttribute('rel', 'noopener noreferrer');
-          } else {
-            t = el('div', p + '-title', titleText);
-          }
-          li.appendChild(t);
-          secondary.forEach(function (sf) {
-            var v = fmt(row[sf]);
-            if (v) li.appendChild(el('div', p + '-sub', v));
+    var live = (sc.getAttribute('data-live') || '').toLowerCase();
+    live = live !== '' && live !== 'false' && live !== '0' && typeof EventSource !== 'undefined';
+    var every = parseInt(sc.getAttribute('data-refresh') || '', 10);
+    every = isFinite(every) && every > 0 ? Math.min(Math.max(every, 30), 3600) * 1000 : 0;
+    var dirty = false;
+    var lastSig = null, lastAt = 0, timer = null, shown = false;
+    function render(res) {
+      var rows = (res && res.data) || [];
+      var flds = (res && res.fields) || [];
+      if (!rows.length) return el('div', p + '-mut', 'No items.');
+      var tf = titleField && flds.indexOf(titleField) !== -1 ? titleField : flds[0];
+      var secondary = [];
+      for (var i = 0; i < flds.length && secondary.length < 2; i++) {
+        if (flds[i] !== tf && flds[i] !== 'id') secondary.push(flds[i]);
+      }
+      var ul = el('ul', p + '-list');
+      rows.forEach(function (row) {
+        var li = el('li', p + '-item');
+        var titleText = fmt(row[tf]) || '(untitled)';
+        var t;
+        if (linkTemplate) {
+          t = el('a', p + '-title', titleText);
+          var href = linkTemplate.replace(/\\{([a-zA-Z0-9_]+)\\}/g, function (_, k) {
+            return encodeURIComponent(fmt(row[k]));
           });
-          ul.appendChild(li);
+          t.setAttribute('href', href);
+          t.setAttribute('target', '_blank');
+          t.setAttribute('rel', 'noopener noreferrer');
+        } else {
+          t = el('div', p + '-title', titleText);
+        }
+        li.appendChild(t);
+        secondary.forEach(function (sf) {
+          var v = fmt(row[sf]);
+          if (v) li.appendChild(el('div', p + '-sub', v));
         });
-        root.appendChild(ul);
-      })
-      .catch(function () {
-        clear(root);
-        root.appendChild(el('div', p + '-err', 'Unable to load content.'));
+        ul.appendChild(li);
       });
+      return ul;
+    }
+    function schedule() {
+      if (!every) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        timer = null;
+        if (document.hidden) return; // resumed by visibilitychange
+        load();
+      }, every);
+    }
+    function load() {
+      lastAt = Date.now();
+      // A refresh revalidates past the browser cache; the first read may use it.
+      fetch(url, shown ? { cache: 'no-cache' } : undefined)
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (res) {
+          var sig;
+          try { sig = JSON.stringify([res && res.fields, res && res.data]); } catch (e) { sig = null; }
+          if (!shown || sig === null || sig !== lastSig) {
+            var node = render(res);
+            clear(root);
+            root.appendChild(node);
+          }
+          lastSig = sig;
+          shown = true;
+        })
+        .catch(function () {
+          // Keep what is on screen; only a first load with nothing to show says so.
+          if (!shown) {
+            clear(root);
+            root.appendChild(el('div', p + '-err', 'Unable to load content.'));
+          }
+        })
+        .then(schedule);
+    }
+    function startPolling() {
+      if (!every) every = 60000;
+      schedule();
+    }
+    if (live) {
+      var es = new EventSource(origin + '/api/widget/public/feed/' + encodeURIComponent(token) + '/stream');
+      var opened = false;
+      es.addEventListener('changed', function () {
+        if (document.hidden) { dirty = true; return; }
+        load();
+      });
+      es.addEventListener('gone', function () { es.close(); });
+      es.onopen = function () {
+        // A reconnect may have missed signals: catch up once.
+        if (opened) load();
+        opened = true;
+      };
+      es.onerror = function () {
+        // EventSource retries by itself; a stream the server refused stays CLOSED → poll.
+        if (es.readyState === 2 && !timer) startPolling();
+      };
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) return;
+      if (dirty) { dirty = false; load(); return; }
+      if (every && Date.now() - lastAt >= every) load();
+      else if (every && !timer) schedule();
+    });
+    load();
     return;
   }
 
@@ -346,6 +416,33 @@ export async function activeFeedCreator(createdBy: unknown): Promise<User | null
   return creator
 }
 
+/** Push stream limits: a wall of embeds on one page shares an IP, an abuser doesn't get more. */
+const FEED_STREAM_PER_IP = 20
+const FEED_STREAM_HEARTBEAT_MS = 25_000
+/** Writes within this window collapse into one "changed" signal. */
+const FEED_STREAM_COALESCE_MS = 2_000
+
+/** Collections whose writes can change what a feed shows. */
+export async function feedWatchCollections(feed: {
+  collection?: string | null
+  queue_id?: string | null
+}): Promise<Set<string>> {
+  if (!feed.queue_id) return new Set(feed.collection ? [String(feed.collection)] : [])
+  const rows = (await db('nivaro_queue_sources')
+    .where({ queue_id: feed.queue_id })
+    .select('collection')) as Array<{ collection: string | null }>
+  return new Set(rows.map((r) => r.collection).filter((c): c is string => !!c))
+}
+
+/** Whether a token still serves (active feed, creator still able to sign in). */
+async function feedStillServes(token: string): Promise<Record<string, unknown> | null> {
+  const feed = await db('nivaro_widget_feeds').where({ token }).first()
+  if (!feed?.is_active) return null
+  const creator = await activeFeedCreator(feed.created_by)
+  const legacy = feed.created_by == null && !feed.queue_id
+  return creator || legacy ? feed : null
+}
+
 export async function widgetRoutes(app: FastifyInstance) {
   // ── GET /widget.js — the embeddable script (no auth, cached 1h) ────────────
   // Lands at /api/widget/widget.js; a root-level alias in routes/index.ts is
@@ -356,6 +453,103 @@ export async function widgetRoutes(app: FastifyInstance) {
       .header('Cache-Control', 'public, max-age=3600')
     return reply.send(buildWidgetScript())
   })
+
+  // ── GET /public/feed/:token/stream — push "changed" signals (no auth) ──────
+  // Server-sent events for embeds with data-live: one bare `changed` event (no ids, no fields,
+  // no values — the data still comes only from the feed route) whenever a write lands on a
+  // collection the feed reads, coalesced to one per 2 s. The feed is re-checked every heartbeat
+  // (deactivated / creator gone → `gone`, then closed). Capped per IP; closed in preClose.
+  const feedStreams = new Set<() => void>()
+  const streamsByIp = new Map<string, number>()
+  app.addHook('preClose', async () => {
+    for (const end of [...feedStreams]) end()
+  })
+  app.get<{ Params: { token: string } }>(
+    '/public/feed/:token/stream',
+    { compress: false },
+    async (req, reply) => {
+      const { token } = req.params
+      if (!token || !/^[a-f0-9]{32}$/i.test(token)) {
+        return reply.code(404).send({ error: 'Feed not found' })
+      }
+      const feed = await feedStillServes(token)
+      if (!feed) return reply.code(404).send({ error: 'Feed not found' })
+      const ip = req.ip || 'unknown'
+      if ((streamsByIp.get(ip) ?? 0) >= FEED_STREAM_PER_IP) {
+        return reply
+          .code(429)
+          .header('Retry-After', '60')
+          .send({ error: 'Too many live feeds from this address' })
+      }
+      const watch = await feedWatchCollections(feed)
+      const tenant = currentTenantKey()
+
+      reply.hijack()
+      const raw = reply.raw
+      raw.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+        'access-control-allow-origin': '*'
+      })
+      raw.write('retry: 5000\n: connected\n\n')
+      streamsByIp.set(ip, (streamsByIp.get(ip) ?? 0) + 1)
+
+      let closed = false
+      let pending: ReturnType<typeof setTimeout> | null = null
+      const send = (frame: string) => {
+        if (closed) return
+        // A slow reader past 64 KB unwritten just misses signals; the next one refetches anyway.
+        if ((raw.writableLength ?? 0) > 64 * 1024) return
+        try {
+          raw.write(frame)
+        } catch {
+          end()
+        }
+      }
+      const unsubscribe = subscribeSse((ev: SseEvent) => {
+        if (closed || pending) return
+        if (!sseEventForTenant(ev, tenant) || !watch.has(ev.collection)) return
+        pending = setTimeout(() => {
+          pending = null
+          send('event: changed\ndata: {}\n\n')
+        }, FEED_STREAM_COALESCE_MS)
+      })
+      const heartbeat = setInterval(() => {
+        void feedStillServes(token)
+          .then((still) => {
+            if (closed) return
+            if (still) send(': hb\n\n')
+            else {
+              send('event: gone\ndata: {}\n\n')
+              end()
+            }
+          })
+          .catch(() => send(': hb\n\n'))
+      }, FEED_STREAM_HEARTBEAT_MS)
+      heartbeat.unref()
+
+      function end(): void {
+        if (closed) return
+        closed = true
+        clearInterval(heartbeat)
+        if (pending) clearTimeout(pending)
+        unsubscribe()
+        feedStreams.delete(end)
+        const n = (streamsByIp.get(ip) ?? 1) - 1
+        if (n > 0) streamsByIp.set(ip, n)
+        else streamsByIp.delete(ip)
+        try {
+          raw.end()
+        } catch {
+          /* already gone */
+        }
+      }
+      feedStreams.add(end)
+      req.raw.on('close', end)
+    }
+  )
 
   // ── GET /public/feed/:token — public feed data (no auth) ──────────────────
   app.get<{ Params: { token: string }; Querystring: { limit?: string } }>(

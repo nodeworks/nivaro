@@ -695,6 +695,8 @@ function TokenCard({ feed }: { feed: WidgetFeed }) {
 function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
   const origin = window.location.origin
   const [formId, setFormId] = useState('')
+  // Live updates: the page hears each change pushed from the server and re-reads at once.
+  const [live, setLive] = useState(true)
 
   const { data: forms = [] } = useQuery<SubmissionForm[]>({
     queryKey: ['submission-forms-for-widgets'],
@@ -710,6 +712,7 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
     `  data-nivaro-widget="list"`,
     `  data-token="${feed.token}"`,
     `  data-title-field="${feed.fields[0] ?? ''}"`,
+    ...(live ? ['  data-live="true"'] : []),
     `  data-theme="light"></script>`
   ].join('\n')
 
@@ -729,15 +732,32 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
         <h3 className='text-[13px] font-semibold'>Embed snippets</h3>
       </div>
 
+      <div className='flex items-center gap-2'>
+        <Switch id={`live-${feed.id}`} checked={live} onCheckedChange={setLive} />
+        <Label htmlFor={`live-${feed.id}`} className='text-[12px]'>
+          Live updates
+        </Label>
+        <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+          {live
+            ? 'changes are pushed to the page as they happen — no reload'
+            : 'the list loads once; add data-refresh="60" to re-read on a timer'}
+        </span>
+      </div>
       <SnippetBlock label='List widget (this feed)' code={listSnippet} />
       <EmbedPreview
+        key={live ? 'live' : 'once'}
         title='Preview — list widget'
         attrs={{
           'data-nivaro-widget': 'list',
           'data-token': feed.token,
-          'data-title-field': feed.fields[0] ?? ''
+          'data-title-field': feed.fields[0] ?? '',
+          ...(live ? { 'data-live': 'true' } : {})
         }}
-        note='What a site shows with this snippet, from the live feed.'
+        note={
+          live
+            ? 'What a site shows with this snippet, from the live feed — edit a record and watch it update.'
+            : 'What a site shows with this snippet, from the live feed.'
+        }
       />
 
       <div className='space-y-2'>
@@ -770,7 +790,9 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
       </div>
 
       <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
-        Optional attributes: <code>data-target</code> (CSS selector), <code>data-limit</code>,{' '}
+        Optional attributes: <code>data-live="true"</code> (push updates),{' '}
+        <code>data-refresh</code> (seconds, 30–3600, re-read on a timer),{' '}
+        <code>data-target</code> (CSS selector), <code>data-limit</code>,{' '}
         <code>data-link-template</code> (e.g. <code>https://site.com/news/{'{id}'}</code>),{' '}
         <code>data-theme="dark"</code>.
       </p>
