@@ -12,6 +12,7 @@ import {
   markSerializeStart,
   setWideTables
 } from '../services/request-trace.js'
+import { maskUrlQuery } from '../services/secret-mask.js'
 import { flushTraceExport, setTraceExportInstance } from '../services/trace-export.js'
 import {
   attachInflightQueries,
@@ -134,7 +135,8 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
         // routerPath collapses ids into the pattern (/api/items/:collection/:id),
         // so traces for the same endpoint group instead of fragmenting per record.
         route: (req as { routeOptions?: { url?: string } }).routeOptions?.url ?? path,
-        url: (req.raw.url ?? req.url).slice(0, 500),
+        // Credentials riding the query (?kiosk=, ?token=…) never reach the trace ring.
+        url: maskUrlQuery(req.raw.url ?? req.url).slice(0, 500),
         status: reply.statusCode,
         user: req.user?.id ?? null
       })

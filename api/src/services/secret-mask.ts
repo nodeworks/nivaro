@@ -116,6 +116,15 @@ export function sameLoggedBody(logged: string | null | undefined, sent: unknown)
 export const QUERY_CAP = 500
 
 /**
+ * Query parameter names that carry a credential although their name does not say so: the
+ * Command Center wallboard link token rides `?kiosk=` (CC-23).
+ */
+export const SENSITIVE_QUERY_NAMES = new Set(['kiosk'])
+
+const isSensitiveQueryName = (name: string) =>
+  isSensitiveKey(name) || SENSITIVE_QUERY_NAMES.has(name.toLowerCase())
+
+/**
  * A request's query string for the log: values under credential-looking names
  * become `••••••`, the rest is kept as sent. Cut at QUERY_CAP with a trailing
  * `…`. Returns null for no query.
@@ -137,10 +146,18 @@ export function maskQueryString(raw: string | null | undefined): string | null {
       } catch {
         /* keep the raw name */
       }
-      return isSensitiveKey(plain) && part.length > eq + 1 ? `${name}=${MASK}` : part
+      return isSensitiveQueryName(plain) && part.length > eq + 1 ? `${name}=${MASK}` : part
     })
     .join('&')
   return out.length > QUERY_CAP ? `${out.slice(0, QUERY_CAP - 1)}…` : out
+}
+
+/** A URL (path + query) with its query string masked like maskQueryString — for traces. */
+export function maskUrlQuery(url: string): string {
+  const mark = url.indexOf('?')
+  if (mark < 0) return url
+  const q = maskQueryString(url.slice(mark + 1))
+  return q ? `${url.slice(0, mark)}?${q}` : url.slice(0, mark)
 }
 
 /** Whether a stored query string can be sent again as it is. */

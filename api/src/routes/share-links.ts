@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { CC_KIOSK_ITEM, isKioskItem } from '../services/command-center/kiosk.js'
 import { loadFormLayout } from '../services/form-layout.js'
 import { readOne } from '../services/items.js'
 import { FORM_PREVIEW_ITEM } from '../services/layout-preview.js'
@@ -19,6 +20,8 @@ import type { User } from '../types.js'
  *
  * Form preview links (#2666) share this table under item FORM_PREVIEW_ITEM; they are made,
  * listed and revoked only through /layout-collab (admin), so every route here refuses them.
+ * Command Center wallboard links (CC-23) live here too under item CC_KIOSK_ITEM, managed only
+ * through /command-center/kiosk-links (admin): every route here refuses them the same way.
  */
 
 // SQL Server compares item case-insensitively and ignores trailing spaces, so
@@ -28,6 +31,9 @@ export const isPreviewItem = (item: unknown) =>
   String(item ?? '')
     .trim()
     .toLowerCase() === FORM_PREVIEW_ITEM
+
+/** An item marker this table reserves for another feature (form previews, wallboard links). */
+export const isReservedItem = (item: unknown) => isPreviewItem(item) || isKioskItem(item)
 
 function esc(v: unknown): string {
   return String(v ?? '')
@@ -81,7 +87,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     if (!b.collection || b.item == null) {
       return reply.code(400).send({ error: 'collection and item are required' })
     }
-    if (isPreviewItem(b.item)) {
+    if (isReservedItem(b.item)) {
       return reply.code(400).send({ error: 'That record cannot be shared' })
     }
     if (b.collection.startsWith('nivaro_')) {
@@ -130,7 +136,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
 
   app.get('/for/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
-    if (isPreviewItem(item)) return reply.code(404).send({ error: 'Not found' })
+    if (isReservedItem(item)) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
@@ -141,6 +147,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
     const q = db('nivaro_share_links')
       .where({ collection, item })
       .whereNot('item', FORM_PREVIEW_ITEM)
+      .whereNot('item', CC_KIOSK_ITEM)
     if (!req.isAdmin) void q.where({ created_by: req.user!.id })
     const rows = await q.orderBy('created_at', 'desc')
     return reply.send({
@@ -155,7 +162,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
   app.delete('/:id', { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const row = await db('nivaro_share_links').where({ id }).first()
-    if (!row || isPreviewItem(row.item)) return reply.code(404).send({ error: 'Not found' })
+    if (!row || isReservedItem(row.item)) return reply.code(404).send({ error: 'Not found' })
     if (!req.isAdmin && row.created_by !== req.user?.id) {
       return reply.code(403).send({ error: 'Only the creator can revoke this link' })
     }
@@ -177,6 +184,7 @@ export async function sharePublicRoutes(app: FastifyInstance) {
     const link = await db('nivaro_share_links')
       .where({ token: req.params.token })
       .whereNot('item', FORM_PREVIEW_ITEM)
+      .whereNot('item', CC_KIOSK_ITEM)
       .first()
       .catch(() => null)
 
@@ -188,7 +196,7 @@ export async function sharePublicRoutes(app: FastifyInstance) {
           `<!doctype html><html><body style="font-family:sans-serif;padding:60px;text-align:center;color:#334155"><h2>${esc(title)}</h2><p>${esc(msg)}</p></body></html>`
         )
 
-    if (!link?.is_active || isPreviewItem(link.item))
+    if (!link?.is_active || isReservedItem(link.item))
       return gone('Link not found', 'This share link does not exist or was revoked.')
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
       return gone('Link expired', 'This share link is no longer available.')

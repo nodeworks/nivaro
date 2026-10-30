@@ -75,7 +75,9 @@ api.interceptors.response.use(
     if (
       status === 401 &&
       window.location.pathname !== '/login' &&
-      !window.location.pathname.startsWith('/setup')
+      !window.location.pathname.startsWith('/setup') &&
+      // A Command Center wallboard link is shown with nobody signed in (CC-23).
+      !window.location.pathname.startsWith('/command/kiosk/')
     ) {
       localStorage.removeItem('control_token')
       localStorage.removeItem('control_email')
