@@ -122,8 +122,8 @@ export const SETTINGS: SettingDef[] = [
     section: 'who',
     label: 'Phone version',
     effect:
-      'A lighter copy of a form that opens instead of it on small screens; it never opens on its own.',
-    types: ['grouped'],
+      'A lighter copy of a form (or Summary layout) that opens instead of it on small screens; it never opens on its own.',
+    types: ['grouped', 'summary'],
     keywords: 'mobile small screen variant device lighter'
   },
   {
@@ -131,8 +131,8 @@ export const SETTINGS: SettingDef[] = [
     section: 'who',
     label: 'Tablet version',
     effect:
-      'A copy of a form arranged for tablet-width screens that opens instead of it there (and on a phone without a phone version); it never opens on its own.',
-    types: ['grouped'],
+      'A copy of a form (or Summary layout) arranged for tablet-width screens that opens instead of it there (and on a phone without a phone version); it never opens on its own.',
+    types: ['grouped', 'summary'],
     keywords: 'ipad tablet medium screen variant device touch'
   },
 

@@ -450,6 +450,26 @@ function screenVersionFor(
   return null
 }
 
+/**
+ * The Summary layout a person gets (candidates in `is_active desc, sort asc` order):
+ * the first desktop summary their role may open, swapped for its phone or tablet
+ * version (#2715 / #3183) on a smaller screen. A screen version never wins on its
+ * own, so a desktop never gets the phone Summary.
+ */
+export function pickSummaryLayout(
+  candidates: Record<string, unknown>[],
+  roleId: string | null,
+  isAdmin: boolean,
+  viewport: Viewport
+): Record<string, unknown> | null {
+  const allowed = candidates.filter((l) => roleAllows(l, roleId, isAdmin))
+  const desktop = allowed.find((l) => screenVersionOf(l.conditions) == null)
+  if (!desktop) return null
+  if (!viewport) return desktop
+  const openable = allowed.filter((l) => l.is_active !== false && l.is_active !== 0)
+  return screenVersionFor(openable, Number(desktop.id), viewport)?.row ?? desktop
+}
+
 /** The PickReason fields for a screen version standing in for `desktop`. */
 function screenReason(
   key: ScreenKey,
@@ -1344,12 +1364,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // grouped layout read-only, which is what it did before summary layouts.
   app.get('/summary/:collection', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
+    const { viewport } = req.query as { viewport?: string }
     const roleId = req.user?.role ?? null
     const isAdmin = !!req.isAdmin
     const candidates = (await db('nivaro_collection_layouts')
       .where({ collection, layout_type: 'summary' })
       .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
-    const layout = candidates.find((l) => roleAllows(l, roleId, isAdmin))
+    const layout = pickSummaryLayout(candidates, roleId, isAdmin, parseViewport(viewport))
     if (!layout) return reply.send({ data: null })
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
@@ -2375,20 +2396,24 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .where({ layout_id: Number(id) })
       .orderBy('sort', 'asc')
       .select('*')) as Array<Record<string, unknown>>
+    // Two passes: a step or tab often sorts BEFORE its container (sort is per
+    // parent), so its parent is mapped only once every group exists.
     const groupIdMap = new Map<number, number>()
     for (const g of groups) {
-      const { id: oldId, container_id, layout_id: _l, ...rest } = g
-      const row = {
-        ...rest,
-        layout_id: newId,
-        container_id: container_id != null ? (groupIdMap.get(Number(container_id)) ?? null) : null
-      }
-      await db('nivaro_field_groups').insert(row)
+      const { id: oldId, container_id: _c, layout_id: _l, ...rest } = g
+      await db('nivaro_field_groups').insert({ ...rest, layout_id: newId, container_id: null })
       const inserted = await db('nivaro_field_groups')
         .where({ layout_id: newId, key: g.key as string })
         .orderBy('id', 'desc')
         .first('id')
       if (inserted) groupIdMap.set(Number(oldId), Number(inserted.id))
+    }
+    for (const g of groups) {
+      if (g.container_id == null) continue
+      const child = groupIdMap.get(Number(g.id))
+      const parent = groupIdMap.get(Number(g.container_id))
+      if (child != null && parent != null)
+        await db('nivaro_field_groups').where({ id: child }).update({ container_id: parent })
     }
 
     // Clone field assignments WITH their overrides/visibility/widget wiring.

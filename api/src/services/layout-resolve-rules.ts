@@ -281,8 +281,17 @@ async function validateScreenVersion(
     | { id: number; collection: string; layout_type: string | null; conditions: unknown }
     | undefined
   if (!row || row.collection !== collection) return 'The desktop form is not in this collection'
-  if (row.layout_type && row.layout_type !== 'grouped')
-    return `Only a record form can have a ${word} version`
+  // A record form's screen version is a record form; a Summary layout's is a Summary layout.
+  const targetKind = row.layout_type || 'grouped'
+  if (targetKind !== 'grouped' && targetKind !== 'summary')
+    return `Only a record form or a Summary layout can have a ${word} version`
+  const self = (await q('nivaro_collection_layouts')
+    .where({ id: Number(id) })
+    .first('layout_type')) as { layout_type: string | null } | undefined
+  if ((self?.layout_type || 'grouped') !== targetKind)
+    return targetKind === 'summary'
+      ? `Only a Summary layout can be the ${word} version of a Summary layout`
+      : `Only a record form can be the ${word} version of a record form`
   if (phoneOf(row.conditions) != null) return 'That form is itself a phone version'
   if (tabletOf(row.conditions) != null) return 'That form is itself a tablet version'
   const others = (await q('nivaro_collection_layouts')

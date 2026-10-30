@@ -175,7 +175,9 @@ function ScreenVersionSetting(props: SectionProps & { screen: Screen }) {
   const invalidate = useInvalidateLayouts(collection)
   const layouts = useCollectionLayoutList(collection)
   const [busy, setBusy] = useState(false)
-  const forms = layouts.filter((l) => layoutKindOf(l) === 'grouped')
+  // A form's screen versions are forms; a Summary layout's are Summary layouts.
+  const kind = layoutKindOf(layout) === 'summary' ? 'summary' : 'grouped'
+  const forms = layouts.filter((l) => layoutKindOf(l) === kind)
   const of = cfg.of(layout.conditions)
   // This form is the OTHER screen's version: it cannot be this one's too.
   const otherOf = other.of(layout.conditions)

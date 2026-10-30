@@ -70,6 +70,10 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (`viewport=phone` on `/collection-layouts/active`): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.'
     },
+    {
+      type: 'p',
+      text: 'A Summary layout can have a phone (or tablet) version too: open the Summary layout and use the same setting. Summary mode then asks for it (`viewport=phone` on `/collection-layouts/summary/:collection`) and shows it in place of the desktop Summary on a small screen, so a record reads and edits from phone layouts in both modes. A Summary layout’s screen version must itself be a Summary layout, and a record form’s must be a record form. A desktop never gets a screen version, even an active one sorted first.'
+    },
     { type: 'h3', id: 'layout-editor-tablet-version', text: 'Tablet version' },
     {
       type: 'p',
