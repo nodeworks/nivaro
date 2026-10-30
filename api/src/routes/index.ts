@@ -191,6 +191,7 @@ import { metricAlertsRoutes } from './metric-alerts.js'
 import { monitorRoutes } from './monitors.js'
 import { myJobsRoutes } from './my-jobs.js'
 import { myWorkRoutes } from './my-work.js'
+import { navLayoutRoutes } from './nav-layout.js'
 import { notificationBenchRoutes } from './notification-bench.js'
 import { notificationRoleDefaultsRoutes } from './notification-role-defaults.js'
 import { notificationSelfRoutes } from './notification-self.js'
@@ -494,6 +495,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
   await app.register(recordViewRoutes)
+  // #3227 — role starter sidebar layouts (a person's own rides preferences.nav_layout)
+  await app.register(navLayoutRoutes, { prefix: '/nav-layout' })
   await app.register(meNotificationRoutes)
   await app.register(recordLinkRoutes)
   await app.register(fieldHistoryRoutes)

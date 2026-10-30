@@ -52,6 +52,7 @@ import { navCategories } from '@/layouts/AppLayout'
 import { api } from '@/lib/api'
 import { hubAtBase, tabPermissionKey } from '@/lib/hubs'
 import { cn } from '@/lib/utils'
+import { RoleSidebarStarter } from '@/pages/roles/RoleSidebarStarter'
 
 type User = {
   id: string
@@ -82,6 +83,7 @@ type ActiveTab =
   | 'words'
   | 'members'
   | 'ui'
+  | 'sidebar'
   | 'simulate'
   | 'compare'
   | 'views'
@@ -1147,6 +1149,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
             'words',
             'members',
             'ui',
+            'sidebar',
             'simulate',
             'compare',
             'views',
@@ -1168,15 +1171,17 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               ? 'UI Access'
               : tab === 'words'
                 ? 'In words'
-                : tab === 'simulate'
-                  ? 'Simulator'
-                  : tab === 'compare'
-                    ? 'Compare'
-                    : tab === 'views'
-                      ? 'Suggested views'
-                      : tab === 'notifications'
-                        ? 'Notification defaults'
-                        : tab}
+                : tab === 'sidebar'
+                  ? 'Sidebar'
+                  : tab === 'simulate'
+                    ? 'Simulator'
+                    : tab === 'compare'
+                      ? 'Compare'
+                      : tab === 'views'
+                        ? 'Suggested views'
+                        : tab === 'notifications'
+                          ? 'Notification defaults'
+                          : tab}
           </button>
         ))}
       </div>
@@ -1217,6 +1222,15 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           <UiPermissionsTab
             roleId={role.id}
             isAdmin={role.admin_access}
+            disabled={
+              (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
+                ?.ui_permissions ?? []
+            }
+          />
+        ) : activeTab === 'sidebar' ? (
+          <RoleSidebarStarter
+            roleId={role.id}
+            isAdminRole={role.admin_access}
             disabled={
               (roleDetail as (typeof roleDetail & { ui_permissions?: string[] }) | undefined)
                 ?.ui_permissions ?? []

@@ -155,4 +155,50 @@ describe('command palette with the new search answer', () => {
     expect(document.querySelector('[data-palette-chips]')).toBeNull()
     expect(document.querySelector('[data-palette-see-all]')).not.toBeNull()
   })
+
+  it('lists recently viewed records first, with state and a changed dot, before typing', async () => {
+    get.mockImplementation((url: string, cfg?: { params?: Record<string, unknown> }) => {
+      if (url === '/record-views/recent') {
+        expect(cfg?.params?.changed).toBe(1)
+        return Promise.resolve({
+          data: {
+            data: [
+              {
+                collection: 'purchase_orders',
+                item_id: '4471',
+                label: 'PO 4471',
+                state: { key: 'pending', label: 'Pending approval', color: '#f59e0b' },
+                last_viewed_at: new Date().toISOString(),
+                changed: true,
+                changed_at: new Date().toISOString()
+              },
+              {
+                collection: 'purchase_orders',
+                item_id: '12',
+                label: 'PO 12',
+                state: null,
+                last_viewed_at: new Date().toISOString(),
+                changed: false,
+                changed_at: null
+              }
+            ]
+          }
+        })
+      }
+      if (url === '/global-search/saved') return Promise.reject({ response: { status: 404 } })
+      return Promise.resolve({ data: { data: [] } })
+    })
+    await openAndType('')
+    const group = await screen.findByText('Recently viewed')
+    expect(group).toBeInTheDocument()
+    const row = await screen.findByText('PO 4471')
+    const item = row.closest('[data-palette-recent-view]') as HTMLElement
+    expect(item.getAttribute('data-palette-recent-view')).toBe('purchase_orders:4471')
+    expect(within(item).getByText('Pending approval')).toBeInTheDocument()
+    expect(within(item).getByText('(changed since you looked)')).toBeInTheDocument()
+    const other = (await screen.findByText('PO 12')).closest(
+      '[data-palette-recent-view]'
+    ) as HTMLElement
+    expect(within(other).queryByText('(changed since you looked)')).toBeNull()
+  })
 })

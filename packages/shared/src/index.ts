@@ -834,6 +834,27 @@ export {
   wipeMetadataCache
 } from './lib/metadata-persist'
 export {
+  displayTrail,
+  elementAtScrollPath,
+  getNavTrail,
+  NAV_TRAIL_KEY,
+  recordNavigation,
+  reduceTrail,
+  restoreTrailScroll,
+  scrollPathOf,
+  setTrailLabel,
+  setTrailScroll,
+  subscribeNavTrail,
+  type TrailAction,
+  type TrailCrumb,
+  type TrailEntry,
+  type TrailEvent,
+  type TrailScroll,
+  type TrailState,
+  trailChain,
+  useNavTrail
+} from './lib/nav-trail'
+export {
   type NotificationSound,
   playNotificationSound,
   soundForCategory

@@ -107,6 +107,59 @@ export async function unseenChangesFor(
 }
 
 /**
+ * #3226 — of these records, which have an edit by someone else since the
+ * viewer's last open that touched a field the viewer may READ. A change the
+ * viewer could not see on the record is no news to them, so the "changed
+ * since you looked" dot must not light up for it. `allowed` is the viewer's
+ * read field list (null = every field). Bounded: the newest 200 edits per call.
+ */
+export async function editsTouchingReadable(
+  userId: string,
+  collection: string,
+  ids: Array<string | number>,
+  allowed: string[] | null
+): Promise<Set<string>> {
+  const keys = [...new Set(ids.map(String))].filter(Boolean)
+  const out = new Set<string>()
+  if (keys.length === 0) return out
+  if (allowed === null) {
+    for (const k of keys) out.add(k)
+    return out
+  }
+  const readable = new Set(allowed)
+  const rows = (await db('nivaro_activity as a')
+    .join('nivaro_record_views as v', function () {
+      this.on('v.collection', '=', 'a.collection').andOn('v.item_id', '=', 'a.item')
+    })
+    .join('nivaro_revisions as r', 'r.activity', 'a.id')
+    .where('v.user', userId)
+    .where('a.collection', collection)
+    .whereIn('a.item', keys)
+    .whereIn('a.action', ['create', 'update'])
+    .whereRaw('a.[timestamp] > v.last_viewed_at')
+    .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
+    .orderBy('a.id', 'desc')
+    .limit(200)
+    .select('a.item', 'r.delta')) as Array<{ item: string; delta: unknown }>
+  for (const row of rows) {
+    if (out.has(String(row.item))) continue
+    let delta: unknown = row.delta
+    if (typeof delta === 'string') {
+      try {
+        delta = JSON.parse(delta)
+      } catch {
+        delta = null
+      }
+    }
+    if (!delta || typeof delta !== 'object') continue
+    if (Object.keys(delta as Record<string, unknown>).some((f) => readable.has(f))) {
+      out.add(String(row.item))
+    }
+  }
+  return out
+}
+
+/**
  * The same rule as a SQL predicate on `<alias>.id`, for the "Unseen changes"
  * filter: EXISTS over the three sources, each against the viewer's watermark.
  * Callers pass the query builder they are narrowing.

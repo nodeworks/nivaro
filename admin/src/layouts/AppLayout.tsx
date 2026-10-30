@@ -28,6 +28,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
+  SlidersHorizontal,
   Star,
   Unplug,
   UserRound
@@ -39,11 +40,12 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore
 } from 'react'
-import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
+import { Link, Navigate, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router'
 import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
@@ -92,7 +94,11 @@ import {
   RealtimeContext,
   RealtimeStatusBanner,
   RecordOutboxHost,
+  recordNavigation,
+  restoreTrailScroll,
   SOMETHING_WENT_WRONG,
+  scrollPathOf,
+  setTrailScroll,
   TipLayer,
   useClientChaosGate,
   useLiveQueryBridge
@@ -111,7 +117,7 @@ import { useCloudPlugins, useExtensionPlugins } from '@/extensions/store'
 import type { NavSidebarSlot } from '@/extensions/types'
 import { api, WORKSPACE_KEY, type Workspace } from '@/lib/api'
 import { logout, useAuth } from '@/lib/auth'
-import { allowedHubTabs, hubAtBase, hubForPath, hubTabPath, isPathDisabled } from '@/lib/hubs'
+import { hubForPath, isPathDisabled } from '@/lib/hubs'
 import { useT } from '@/lib/i18n'
 import { openViewAsTab, readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { usePagePresence } from '@/lib/use-page-presence'
@@ -120,6 +126,7 @@ import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
 import { FavoritePinButton, FavoritesPanel, PanelLink, useNavFavorites } from './FavoritesNav'
+import { NavCustomizePanel } from './NavCustomize'
 import { NavFind } from './NavFind'
 import {
   findCategoryForPath,
@@ -129,6 +136,9 @@ import {
   type NavItem,
   navCategories
 } from './nav-config'
+import { applyNavLayout, permittedCategories } from './nav-layout'
+import { RecentNav } from './RecentNav'
+import { useNavLayout } from './useNavLayout'
 
 const announcementsClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
 
@@ -393,6 +403,50 @@ export function AppLayout() {
     applyThemeSettings(settings as Record<string, unknown> | undefined)
   }, [settings?.project_color, workspaceColor, settings, accentPick])
 
+  // #3225 — the per-tab navigation trail behind PageTrail breadcrumbs. A layout
+  // effect, so the entry exists before any page's own effects name it.
+  const navigationType = useNavigationType()
+  const mainRef = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+    const entry = recordNavigation({
+      action: navigationType,
+      key: location.key,
+      idx,
+      path: location.pathname + location.search + location.hash
+    })
+    // Back / forward onto an entry with a remembered scroll: put it back.
+    if (navigationType === 'POP' && entry?.scroll?.length && mainRef.current) {
+      return restoreTrailScroll(mainRef.current, entry.scroll)
+    }
+  }, [location.key, location.pathname, location.search, location.hash, navigationType])
+  // Remember where the page was scrolled (the outlet and the inner list the
+  // person scrolled), so a crumb or Back returns to the same spot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per history entry
+  useEffect(() => {
+    const root = mainRef.current
+    if (!root) return
+    const seen = new Map<string, number>()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onScroll = (e: Event) => {
+      const el = e.target instanceof Element ? e.target : null
+      if (!el || !root.contains(el)) return
+      const path = scrollPathOf(root, el)
+      if (path === null) return
+      seen.delete(path)
+      seen.set(path, (el as HTMLElement).scrollTop)
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        setTrailScroll([...seen].slice(-4).map(([p, top]) => ({ path: p, top })))
+      }, 200)
+    }
+    root.addEventListener('scroll', onScroll, { capture: true, passive: true })
+    return () => {
+      if (timer) clearTimeout(timer)
+      root.removeEventListener('scroll', onScroll, { capture: true })
+    }
+  }, [location.key])
+
   useEffect(() => {
     // Following a favorite keeps you in Favorites. The panel otherwise jumps
     // to whichever category owns the destination, which throws away the list
@@ -407,6 +461,7 @@ export function AppLayout() {
 
   function handleCategoryClick(catId: string) {
     if (catId !== 'favorites') setOrganizing(false)
+    if (catId !== activeCategory) setCustomizing(false)
     setFindQuery('')
     if (catId === activeCategory && !collapsed) {
       // clicking active category while panel is open → collapse
@@ -467,19 +522,15 @@ export function AppLayout() {
     setOrganizing(true)
   }
 
-  const visibleCategories = navCategories
-    .map((cat) => ({
-      ...cat,
-      // A hub entry shows while any of its tabs is allowed, and opens the first
-      // allowed one (a role's ui_permissions key hub tabs by their old paths).
-      items: cat.items.flatMap((item) => {
-        const hub = hubAtBase(item.to)
-        if (!hub) return disabledPaths.has(item.to) ? [] : [item]
-        const tabs = allowedHubTabs(hub, disabledPaths)
-        return tabs.length === 0 ? [] : [{ ...item, to: hubTabPath(hub, tabs[0]) }]
-      })
-    }))
-    .filter((cat) => cat.items.length > 0)
+  // A hub entry shows while any of its tabs is allowed, and opens the first
+  // allowed one (a role's ui_permissions key hub tabs by their old paths).
+  // Then the person's own sidebar layout (#3227: pin / hide / order), else their
+  // role's starter — applied AFTER the permission cut, so it only ever
+  // rearranges what the role may open.
+  const navLayout = useNavLayout()
+  const [customizing, setCustomizing] = useState(false)
+  const permitted = permittedCategories(navCategories, disabledPaths)
+  const visibleCategories = applyNavLayout(permitted, navLayout.effective)
 
   const railCategories = [favoritesCategory, ...visibleCategories]
   const activeCat =
@@ -505,6 +556,9 @@ export function AppLayout() {
             }))
           ]
         : activeCat.items
+
+  const customizeCategory =
+    activeCategory === 'favorites' ? null : (permitted.find((c) => c.id === activeCat.id) ?? null)
 
   const displayName = cleanRecording
     ? DEMO_USER.name
@@ -807,11 +861,34 @@ export function AppLayout() {
                             Organize
                           </button>
                         )}
+                      {customizeCategory && !customizing && (
+                        <button
+                          type='button'
+                          onClick={() => {
+                            setFindQuery('')
+                            setCustomizing(true)
+                          }}
+                          aria-label='Customize this panel'
+                          data-tip='Customize this panel'
+                          data-nav-customize-open
+                          className='flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
+                        >
+                          <SlidersHorizontal className='h-3.5 w-3.5' />
+                        </button>
+                      )}
                       <FavoritePinButton {...favoritesApi} onOrganize={openOrganize} />
                     </div>
                   </div>
 
-                  {!organizing && (
+                  {customizing && customizeCategory && (
+                    <NavCustomizePanel
+                      category={customizeCategory}
+                      layoutApi={navLayout}
+                      onDone={() => setCustomizing(false)}
+                    />
+                  )}
+
+                  {!organizing && !(customizing && customizeCategory) && (
                     <NavFind
                       query={findQuery}
                       onQuery={setFindQuery}
@@ -822,7 +899,7 @@ export function AppLayout() {
                   )}
 
                   {/* Nav items — no horizontal padding so active rows span full width */}
-                  {!findQuery.trim() && (
+                  {!findQuery.trim() && !(customizing && customizeCategory) && (
                     <nav
                       className='min-h-0 flex-1 overflow-y-auto pb-4 pt-1'
                       aria-label={`${activeCat.label} navigation`}
@@ -850,8 +927,14 @@ export function AppLayout() {
                               <PanelLink icon={item.icon} label={item.label} to={item.to} />
                             </div>
                           ))}
+                          {panelItems.length === 0 && (
+                            <p className='px-4 py-2 text-[12px] leading-snug text-slate-500'>
+                              Everything here is hidden. Use Customize to bring pages back.
+                            </p>
+                          )}
                         </div>
                       )}
+                      {!organizing && <RecentNav />}
                     </nav>
                   )}
                 </div>
@@ -859,7 +942,11 @@ export function AppLayout() {
             </aside>
 
             {/* ─── Main area ───────────────────────────────────────────── */}
-            <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
+            <main
+              id='main-content'
+              ref={mainRef}
+              className='flex flex-1 flex-col overflow-hidden bg-secondary'
+            >
               <HelpVideoHost>
                 {/* #18: the screen's best help video ("Watch: … (2:10)") when a
                     strong match is unwatched; renders nothing otherwise. */}

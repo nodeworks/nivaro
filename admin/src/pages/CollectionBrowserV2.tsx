@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { CollectionCalendar } from '@/components/collection-calendar'
 import { CollectionGantt } from '@/components/collection-gantt'
+import { PageTrail } from '@/components/page-trail'
 import { SpreadsheetView } from '@/components/spreadsheet-view'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -120,16 +121,8 @@ export function CollectionBrowserV2Page() {
         >
           <ArrowLeft className='h-4 w-4' />
         </button>
-        <nav aria-label='Breadcrumb' className='flex min-w-0 items-center gap-1.5'>
-          <Link
-            to='/collections'
-            className='text-slate-500 transition-colors hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
-          >
-            Collections
-          </Link>
-          <span className='text-slate-300 dark:text-slate-600'>/</span>
-          <h1 className='truncate font-semibold text-slate-900 dark:text-slate-100'>{title}</h1>
-        </nav>
+        {/* #3225 — how you got here (a record, a queue, search); Collections on a cold load. */}
+        <PageTrail currentLabel={title} currentAs='h1' className='text-[13px]' />
         {isAdmin && (
           <Link
             to={`/data-model/${encodeURIComponent(collection)}`}
