@@ -1,139 +1,52 @@
-import {
-  FirstLoginChecklist,
-  NavigationContext,
-  NivaroProvider,
-  RecentRecordsRail
-} from '@nivaro/react'
+import { FirstLoginChecklist, NavigationContext, NivaroProvider } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
-import {
-  ActivityFeed,
-  LoadErrorNote,
-  loadErrorText,
-  serverErrorText,
-  useActivityLabels,
-  useLiveRefetchInterval
-} from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
-import {
-  Activity,
-  ArrowRight,
-  Database,
-  FileImage,
-  GitBranch,
-  LayoutGrid,
-  PuzzleIcon,
-  Radio,
-  TrendingUp,
-  Users,
-  Zap
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { SlidersHorizontal } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { Skeleton } from '@/components/ui/skeleton'
-import { type ActivityEntry, api } from '@/lib/api'
+import { Button } from '@/components/ui/button'
 import { useAuth } from '@/lib/auth'
-import { getSocket } from '@/lib/socket'
-import { cn, formatNumber } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import {
+  localDayStart,
+  needsYouCount,
+  useMyWork,
+  useOverviewPrefs,
+  useOverviewStats,
+  useSinceDigest,
+  useUpdateOverviewPrefs
+} from './overview/api'
+import { CustomizePanel } from './overview/Customize'
+import { layoutOf, type ResolvedSection, resolveSections } from './overview/layout'
+import { isShownEvent, usePulse, useThrottledCall } from './overview/live'
+import { RecentActivitySection } from './overview/RecentActivity'
+import { availableSectionKeys, overviewSections } from './overview/registry'
+import { SectionBoundary } from './overview/SectionBoundary'
+import { SinceLastVisit } from './overview/SinceLastVisit'
+import { StatLine } from './overview/StatLine'
+import { SECTION_META } from './overview/sections-meta'
+import { firstName, greetingSentence } from './overview/text'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+/**
+ * Overview (route `/`) — where a person starts: a greeting that says what needs them, what
+ * changed since their last visit, today's figures against yesterday, their quick actions,
+ * recent records and activity, and on the side their own work (plus, for administrators, this
+ * instance's facts). Sections come from the registry (pages/overview/registry.ts), in the
+ * person's own order — or their role's starter layout until they customise it.
+ *
+ * Everything is computed AS THE VIEWER. Administrators get live updates from the activity
+ * pulse; everyone else a gentle refresh.
+ */
 
-type HealthData = {
-  status: 'ok' | 'degraded'
-  version: string
-  environment: string
-  db: { status: 'connected' | 'disconnected'; database?: string; host?: string }
-  redis: { status: 'connected' | 'disconnected'; url?: string }
-}
-
-type Extension = { id: string; name?: string }
-type Flow = { id: string; name?: string }
-
-// ─── Stat card ────────────────────────────────────────────────────────────────
-
-function StatCard({
-  label,
-  value,
-  sub,
-  icon: Icon,
-  iconCls,
-  loading
-}: {
-  label: string
-  value: React.ReactNode
-  sub?: string
-  icon: React.ElementType
-  iconCls: string
-  loading?: boolean
-}) {
-  return (
-    <div className='rounded-xl border border-slate-200 bg-white p-5'>
-      <div className='flex items-start justify-between'>
-        <div className={cn('flex h-9 w-9 items-center justify-center rounded-lg', iconCls)}>
-          <Icon className='h-4 w-4' />
-        </div>
-        <TrendingUp className='h-3.5 w-3.5 text-slate-300' />
-      </div>
-      <div className='mt-4'>
-        {loading ? (
-          <Skeleton className='h-8 w-14 rounded' />
-        ) : (
-          <p className='text-[30px] font-semibold tabular-nums leading-none tracking-tight text-slate-900'>
-            {value}
-          </p>
-        )}
-        <p className='mt-1.5 text-[11px] font-medium text-slate-500'>{label}</p>
-        {sub && <p className='mt-0.5 text-[11px] text-slate-400'>{sub}</p>}
-      </div>
-    </div>
-  )
-}
-
-// ─── Quick action card ────────────────────────────────────────────────────────
-
-function QuickAction({
-  label,
-  description,
-  icon: Icon,
-  iconCls,
-  onClick
-}: {
-  label: string
-  description: string
-  icon: React.ElementType
-  iconCls: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type='button'
-      onClick={onClick}
-      className='group flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-nvr-cyan/40 hover:shadow-sm hover:shadow-nvr-cyan/10'
-    >
-      <div
-        className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', iconCls)}
-      >
-        <Icon className='h-5 w-5' />
-      </div>
-      <div className='min-w-0 flex-1'>
-        <p className='text-[13px] font-semibold text-slate-800'>{label}</p>
-        <p className='text-[11px] text-slate-400'>{description}</p>
-      </div>
-      <ArrowRight className='h-3.5 w-3.5 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-nvr-cyan' />
-    </button>
-  )
-}
-
-// ─── Main page ────────────────────────────────────────────────────────────────
-
-// Shared FirstLoginChecklist needs a Nivaro client + navigation context; the
-// dashboard otherwise talks axios, so a small host wraps just the card.
+// Shared FirstLoginChecklist needs a Nivaro client + navigation context; the page otherwise
+// talks axios, so a small host wraps just the card.
 const checklistClient = createNivaro(window.location.origin, { timeoutMs: 90_000 })
-function DashboardChecklistHost() {
+function ChecklistHost() {
   const navigate = useNavigate()
   return (
     <NivaroProvider client={checklistClient}>
       <NavigationContext.Provider value={{ navigate: (p: string) => navigate(p) }}>
-        <div className='mb-6'>
+        <div className='empty:hidden [&:has(>*)]:mb-5'>
           <FirstLoginChecklist profileUrl='/profile' />
         </div>
       </NavigationContext.Provider>
@@ -141,513 +54,195 @@ function DashboardChecklistHost() {
   )
 }
 
-/** #43 — the records this person opened last, with state pills. Shares the
- *  checklist's provider; item links use the admin route shape. */
-function RecentRail() {
-  const navigate = useNavigate()
-  return (
-    <NivaroProvider client={checklistClient}>
-      <NavigationContext.Provider value={{ navigate: (p: string) => navigate(p) }}>
-        <div className='mb-6'>
-          <RecentRecordsRail limit={8} />
-        </div>
-      </NavigationContext.Provider>
-    </NivaroProvider>
-  )
+/** The viewer's day start; moves on at local midnight while the page stays open. */
+function useLocalDayStart(): string {
+  const [day, setDay] = useState(localDayStart)
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = localDayStart()
+      setDay((d) => (d === now ? d : now))
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [])
+  return day
 }
 
 export function DashboardPage() {
   const { user } = useAuth()
-  const navigate = useNavigate()
+  const qc = useQueryClient()
+  const isAdmin = !!user?.is_admin
+  const userId = user?.id ?? ''
+  const dayStart = useLocalDayStart()
 
-  const {
-    data: collectionsData,
-    isLoading: collectionsLoading,
-    error: collectionsError,
-    refetch: refetchCollections
-  } = useQuery({
-    queryKey: ['dashboard-stats', 'collections'],
-    queryFn: () => api.get('/collections').then((r) => r.data.data)
-  })
+  const stats = useOverviewStats(dayStart, isAdmin ? 5 * 60_000 : 60_000)
+  const myWork = useMyWork()
+  const since = useSinceDigest()
+  const prefs = useOverviewPrefs()
+  const update = useUpdateOverviewPrefs()
 
-  const {
-    data: usersData,
-    isLoading: usersLoading,
-    error: usersError,
-    refetch: refetchUsers
-  } = useQuery({
-    queryKey: ['dashboard-stats', 'users'],
-    queryFn: () => api.get('/users?limit=1').then((r) => r.data)
-  })
+  // Live figures: a burst of writes is one re-read, at most every 15 s.
+  const refreshStats = useThrottledCall(
+    () => void qc.invalidateQueries({ queryKey: ['overview', 'stats'] }),
+    15_000
+  )
+  usePulse(isAdmin, (e) => isShownEvent(e) && refreshStats(), userId)
 
-  const { data: filesData, isLoading: filesLoading } = useQuery({
-    queryKey: ['dashboard-stats', 'files'],
-    queryFn: () =>
-      api
-        .get('/files?limit=1')
-        .then((r) => r.data)
-        .catch(() => null)
-  })
-
-  const {
-    data: activityData,
-    isLoading: activityLoading,
-    error: activityError,
-    refetch: refetchActivity
-  } = useQuery({
-    queryKey: ['activity', 'recent'],
-    queryFn: () =>
-      api
-        .get(
-          '/activity?limit=15&sort=-timestamp&exclude_actions=read&exclude_actions=config-epoch&exclude_actions=config-snapshot-store'
-        )
-        .then((r) => r.data)
-  })
-
-  const { data: extensionsData } = useQuery({
-    queryKey: ['dashboard-stats', 'extensions'],
-    queryFn: () =>
-      api
-        .get('/extensions')
-        .then((r) => r.data)
-        .catch(() => ({ data: [] }))
-  })
-
-  const { data: flowsData } = useQuery({
-    queryKey: ['dashboard-stats', 'flows'],
-    queryFn: () =>
-      api
-        .get('/flows')
-        .then((r) => r.data)
-        .catch(() => ({ data: [] }))
-  })
-
-  // #2450 — the socket's presence:update (joined below) carries the live count; while the socket
-  // is up this read is only the first figure and a 5-minute safety net.
-  const presencePoll = useLiveRefetchInterval(10_000)
-  const { data: presenceData } = useQuery({
-    queryKey: ['presence-sessions'],
-    queryFn: () =>
-      api
-        .get<{ data: unknown[]; total: number }>('/presence/sessions')
-        .then((r) => r.data)
-        .catch(() => null),
-    refetchInterval: presencePoll
-  })
-
-  const [onlineCount, setOnlineCount] = useState<number | null>(null)
-  const liveCount = onlineCount ?? presenceData?.total ?? null
-
-  useEffect(() => {
-    // The shared authenticated socket — `presence:admin` refuses anonymous connections.
-    const socket = getSocket()
-    const join = () => socket.emit('presence:join', 'admin')
-    const onUpdate = (p: unknown) => {
-      const payload = p as { sessions: unknown[] }
-      setOnlineCount(payload.sessions.length)
-    }
-    if (socket.connected) join()
-    socket.on('auth:ok', join)
-    socket.on('presence:update', onUpdate)
-    return () => {
-      socket.emit('presence:leave', 'admin')
-      socket.off('auth:ok', join)
-      socket.off('presence:update', onUpdate)
-    }
-  }, [])
-
-  const { data: health } = useQuery({
-    queryKey: ['health'],
-    queryFn: () =>
-      api
-        .get<HealthData>('/health')
-        .then((r) => r.data)
-        .catch(() => null),
-    refetchInterval: 30_000
-  })
-
-  const greeting = (() => {
-    const h = new Date().getHours()
-    if (h < 12) return 'Good morning'
-    if (h < 17) return 'Good afternoon'
-    return 'Good evening'
-  })()
-
-  const displayName =
-    [user?.first_name, user?.last_name]
-      .map((s) => s?.trim())
-      .filter(Boolean)
-      .join(' ') || user?.email
-
-  const _dateStr = new Date().toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric'
-  })
-
-  // The three reads the page opens with; one failing says so instead of showing zeros.
-  const loadError = collectionsError ?? usersError ?? activityError
-  const retryAll = () => {
-    if (collectionsError) void refetchCollections()
-    if (usersError) void refetchUsers()
-    if (activityError) void refetchActivity()
+  // ── Sections ─────────────────────────────────────────────────────────────
+  const defs = useMemo(() => new Map(overviewSections().map((d) => [d.key, d])), [])
+  const available = useMemo(() => availableSectionKeys(), [])
+  const resolved = useMemo(
+    () =>
+      resolveSections({
+        meta: SECTION_META,
+        roleDefault: prefs.data?.role_default ?? null,
+        personal: prefs.data?.layout ?? null,
+        isAdmin,
+        available
+      }),
+    [prefs.data?.role_default, prefs.data?.layout, isAdmin, available]
+  )
+  const [customizing, setCustomizing] = useState(false)
+  const [draft, setDraft] = useState<ResolvedSection[] | null>(null)
+  const sections = draft ?? resolved
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+    },
+    []
+  )
+  const changeLayout = (next: ResolvedSection[]) => {
+    setDraft(next)
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => update.mutate({ layout: layoutOf(next) }), 500)
+  }
+  const resetLayout = () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    setDraft(null)
+    update.mutate({ layout: null })
   }
 
-  const activityEntries: ActivityEntry[] = activityData?.data ?? []
-  const activityLabels = useActivityLabels(activityEntries)
-  const extensions: Extension[] = extensionsData?.data ?? []
-  const flows: Flow[] = flowsData?.data ?? []
+  // ── Greeting ─────────────────────────────────────────────────────────────
+  const { greeting, detail } = greetingSentence({
+    hour: new Date().getHours(),
+    name: firstName(user ?? null),
+    needsYou: needsYouCount(myWork.data),
+    myRecordsChanged: since.data?.my_records_changed ?? null
+  })
 
-  // Count activity in last 24h
-  const yesterday = Date.now() - 86_400_000
-  const recentCount = activityEntries.filter(
-    (a) => new Date(a.timestamp).getTime() > yesterday
-  ).length
+  const renderSection = (s: ResolvedSection) => {
+    if (!s.visible) return null
+    const wrap = (node: React.ReactNode, extra?: string) => (
+      <div key={s.key} className={cn('min-w-0', s.meta.phoneFirst && 'max-lg:order-first', extra)}>
+        <SectionBoundary title={s.meta.title}>{node}</SectionBoundary>
+      </div>
+    )
+    if (s.key === 'stats')
+      return wrap(
+        <StatLine
+          stats={stats.data}
+          isLoading={stats.isLoading}
+          error={stats.error}
+          onRetry={() => void stats.refetch()}
+          isAdmin={isAdmin}
+        />
+      )
+    if (s.key === 'activity')
+      return wrap(
+        <RecentActivitySection
+          userId={userId}
+          isAdmin={isAdmin}
+          className='flex flex-1 flex-col'
+        />,
+        'flex flex-1 flex-col'
+      )
+    const Comp = defs.get(s.key)?.component
+    return Comp ? wrap(<Comp userId={userId} isAdmin={isAdmin} />) : null
+  }
+
+  const main = sections.filter((s) => s.column === 'main')
+  const side = sections.filter((s) => s.column === 'side' && s.visible)
 
   return (
-    <>
-      {/* ── Page header ──────────────────────────────────────────── */}
-      <div className='sticky top-0 z-10 border-b border-slate-200 bg-white px-8 py-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between'>
-          <div>
-            <h1 className='text-[18px] font-semibold tracking-[-0.01em] text-slate-900'>
-              {greeting}, {displayName}
-            </h1>
-          </div>
-          {health && (
-            <div
-              className={cn(
-                'flex items-center gap-1.5 text-[12px] font-medium',
-                health.status === 'ok' ? 'text-emerald-600' : 'text-amber-600'
+    <div className='flex flex-1 flex-col bg-slate-50 dark:bg-background'>
+      {/* ── Header: greeting + since your last visit ───────────────────── */}
+      <header className='sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-4 sm:px-6 lg:px-8 dark:border-border dark:bg-card'>
+        <div className='flex items-start justify-between gap-3'>
+          <div className='min-w-0'>
+            <h1 className='text-[18px] font-semibold leading-snug tracking-[-0.01em] text-slate-900 dark:text-slate-50'>
+              {greeting}
+              {detail && (
+                <span className='font-normal text-slate-600 dark:text-slate-300'> — {detail}</span>
               )}
-            >
-              <span
-                className={cn(
-                  'inline-block h-1.5 w-1.5 rounded-full',
-                  health.status === 'ok' ? 'animate-pulse bg-emerald-500' : 'bg-amber-500'
-                )}
-              />
-              {health.status === 'ok' ? 'All systems operational' : 'System degraded'}
-            </div>
-          )}
+            </h1>
+            {!since.firstVisit && (
+              <SinceLastVisit digest={since.data} isLoading={since.isLoading} isAdmin={isAdmin} />
+            )}
+          </div>
+          <Button
+            variant='ghost'
+            size='sm'
+            className='h-8 shrink-0 gap-1.5 text-[12px]'
+            aria-pressed={customizing}
+            aria-expanded={customizing}
+            onClick={() => {
+              setCustomizing((v) => !v)
+              setDraft(null)
+            }}
+          >
+            <SlidersHorizontal className='h-3.5 w-3.5' aria-hidden />
+            <span className='max-sm:sr-only'>Customize</span>
+          </Button>
         </div>
-      </div>
+      </header>
 
-      {/* ── Content ──────────────────────────────────────────────── */}
-      <div className='p-8'>
-        {/* First-login checklist (#134) — self-hides once dismissed */}
-        <DashboardChecklistHost />
-        {loadError != null && (
-          <div className='mb-6 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
-            <LoadErrorNote
-              message={serverErrorText(loadError) ?? loadErrorText(loadError, 'the overview')}
-              onRetry={retryAll}
-            />
-          </div>
-        )}
-        <div className='grid grid-cols-1 gap-8 lg:grid-cols-[1fr_280px]'>
-          {/* ── Left column ──────────────────────────────────── */}
-          <div className='space-y-6'>
-            {/* Stats row */}
-            <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
-              <StatCard
-                label='Users'
-                value={formatNumber(usersData?.total)}
-                sub='Registered accounts'
-                icon={Users}
-                iconCls='bg-nvr-cyan/[0.1] text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
-                loading={usersLoading}
-              />
-              <StatCard
-                label='Collections'
-                value={formatNumber(collectionsData?.length)}
-                sub='Metadata registry'
-                icon={Database}
-                iconCls='bg-nvr-cyan/[0.1] text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
-                loading={collectionsLoading}
-              />
-              <StatCard
-                label='Files'
-                value={formatNumber(filesData?.total)}
-                sub='Stored assets'
-                icon={FileImage}
-                iconCls='bg-amber-50 text-amber-600'
-                loading={filesLoading}
-              />
-              <StatCard
-                label='Activity (24h)'
-                value={activityLoading ? undefined : formatNumber(recentCount)}
-                sub='Events recorded'
-                icon={Activity}
-                iconCls='bg-emerald-50 text-emerald-600'
-                loading={activityLoading}
-              />
-            </div>
+      {customizing && (
+        <CustomizePanel
+          sections={sections}
+          onChange={changeLayout}
+          onDone={() => {
+            setCustomizing(false)
+            setDraft(null)
+          }}
+          onReset={resetLayout}
+          canReset={!!prefs.data?.layout || !!draft}
+          hasRoleDefault={!!prefs.data?.role_default}
+          isAdmin={isAdmin}
+        />
+      )}
 
-            {/* Quick actions */}
-            <div>
-              <h2 className='mb-3 text-[11px] font-medium text-slate-500'>Quick Actions</h2>
-              <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
-                <QuickAction
-                  label='Browse Collections'
-                  description='View and manage data registries'
-                  icon={LayoutGrid}
-                  iconCls='bg-nvr-cyan/[0.1] text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
-                  onClick={() => navigate('/collections')}
-                />
-                <QuickAction
-                  label='Manage Users'
-                  description='Add, edit, or suspend accounts'
-                  icon={Users}
-                  iconCls='bg-slate-100 text-slate-600'
-                  onClick={() => navigate('/users')}
-                />
-                <QuickAction
-                  label='Upload Files'
-                  description='Add assets to the file library'
-                  icon={FileImage}
-                  iconCls='bg-amber-50 text-amber-600'
-                  onClick={() => navigate('/files')}
-                />
-                <QuickAction
-                  label='View Activity Log'
-                  description='Full audit trail of all events'
-                  icon={Activity}
-                  iconCls='bg-emerald-50 text-emerald-600'
-                  onClick={() => navigate('/activity')}
-                />
-              </div>
-            </div>
-
-            <RecentRail />
-
-            {/* Recent activity feed */}
-            <div>
-              <div className='mb-3 flex items-center justify-between'>
-                <h2 className='text-[11px] font-medium text-slate-500'>Recent Activity</h2>
-                <button
-                  type='button'
-                  onClick={() => navigate('/activity')}
-                  className='flex items-center gap-1 text-[11px] font-medium text-nvr-cyan hover:underline'
-                >
-                  View all <ArrowRight className='h-3 w-3' />
-                </button>
-              </div>
-
-              <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]'>
-                {activityLoading ? (
-                  <div className='divide-y divide-slate-100 dark:divide-white/[0.05]'>
-                    {(['a', 'b', 'c', 'd', 'e', 'f'] as const).map((k) => (
-                      <div key={k} className='flex items-center gap-3 px-5 py-3.5'>
-                        <Skeleton className='h-6 w-6 rounded-full' />
-                        <Skeleton className='h-4 w-64' />
-                        <Skeleton className='ml-auto h-4 w-16' />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  // Plain sentences ("Pat moved PO 4471 from Draft to Approved"), the real actor,
-                  // the reason, and bursts folded into one line — the same feed as /activity.
-                  <ActivityFeed
-                    className='px-2 py-1'
-                    entries={activityEntries}
-                    labels={activityLabels}
-                    onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
-                    empty={
-                      <div className='py-16 text-center'>
-                        <Activity className='mx-auto h-8 w-8 text-slate-200 dark:text-slate-700' />
-                        <p className='mt-3 text-[13px] text-slate-500 dark:text-slate-400'>
-                          Nothing has happened yet.
-                        </p>
-                      </div>
-                    }
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ── Right sidebar ─────────────────────────────────── */}
-          <div className='space-y-4'>
-            {/* Version / env panel */}
-            <div className='rounded-xl border border-slate-200 bg-white p-5'>
-              <div className='mb-4 flex items-center gap-2.5'>
-                <div className='flex h-8 w-8 items-center justify-center rounded-lg bg-nvr-navy'>
-                  <svg width='18' height='18' viewBox='0 0 24 24' fill='none' aria-hidden='true'>
-                    <polyline
-                      points='4,20 4,4 20,20 20,4'
-                      fill='none'
-                      stroke='#00ceff'
-                      strokeWidth='3.5'
-                      strokeLinecap='round'
-                      strokeLinejoin='miter'
-                    />
-                  </svg>
-                </div>
-                <div>
-                  <p className='text-[13px] font-semibold text-slate-900'>Nivaro</p>
-                  <p className='text-[11px] text-slate-400'>Headless CMS</p>
-                </div>
-              </div>
-              <div className='space-y-2.5'>
-                <InfoRow label='Version' value={health?.version ?? '—'} />
-                <InfoRow
-                  label='Environment'
-                  value={health?.environment ?? '—'}
-                  highlight={health?.environment === 'production'}
-                />
-                <InfoRow
-                  label='Database'
-                  value={
-                    health?.db.database ? `${health.db.database} (MSSQL)` : health ? 'MSSQL' : '—'
-                  }
-                  ok={health?.db.status === 'connected'}
-                  err={health?.db.status === 'disconnected'}
-                />
-                <InfoRow
-                  label='Session store'
-                  value={health ? 'Redis' : '—'}
-                  ok={health?.redis.status === 'connected'}
-                  err={health?.redis.status === 'disconnected'}
-                />
-              </div>
-            </div>
-
-            {/* Extensions */}
-            <div className='rounded-xl border border-slate-200 bg-white p-5'>
-              <div className='mb-3 flex items-center justify-between'>
-                <div className='flex items-center gap-2'>
-                  <PuzzleIcon className='h-3.5 w-3.5 text-slate-400' />
-                  <p className='text-[12px] font-semibold text-slate-700'>Extensions</p>
-                </div>
-                <button
-                  type='button'
-                  onClick={() => navigate('/extensions')}
-                  className='text-[11px] text-nvr-cyan hover:underline'
-                >
-                  View all
-                </button>
-              </div>
-              <p className='text-[28px] font-semibold tabular-nums leading-none text-slate-900'>
-                {formatNumber(extensions.length)}
-              </p>
-              <p className='mt-1 text-[11px] text-slate-400'>
-                {extensions.length === 1 ? 'plugin active' : 'plugins active'}
-              </p>
-            </div>
-
-            {/* Flows */}
-            <div className='rounded-xl border border-slate-200 bg-white p-5'>
-              <div className='mb-3 flex items-center justify-between'>
-                <div className='flex items-center gap-2'>
-                  <GitBranch className='h-3.5 w-3.5 text-slate-400' />
-                  <p className='text-[12px] font-semibold text-slate-700'>Flows</p>
-                </div>
-                <button
-                  type='button'
-                  onClick={() => navigate('/flows')}
-                  className='text-[11px] text-nvr-cyan hover:underline'
-                >
-                  View all
-                </button>
-              </div>
-              <p className='text-[28px] font-semibold tabular-nums leading-none text-slate-900'>
-                {formatNumber(flows.length)}
-              </p>
-              <p className='mt-1 text-[11px] text-slate-400'>
-                {flows.length === 1 ? 'automation flow' : 'automation flows'}
-              </p>
-            </div>
-
-            {/* Online users */}
-            <div className='rounded-xl border border-slate-200 bg-white p-5'>
-              <div className='mb-3 flex items-center justify-between'>
-                <div className='flex items-center gap-2'>
-                  <Radio className='h-3.5 w-3.5 text-slate-400' />
-                  <p className='text-[12px] font-semibold text-slate-700'>Online Now</p>
-                </div>
-                <div className='flex items-center gap-2'>
-                  <span className='relative flex h-2 w-2'>
-                    <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-                    <span className='relative inline-flex h-2 w-2 rounded-full bg-emerald-500' />
-                  </span>
-                  <button
-                    type='button'
-                    onClick={() => navigate('/security-center/presence')}
-                    className='text-[11px] text-nvr-cyan hover:underline'
-                  >
-                    View all
-                  </button>
-                </div>
-              </div>
-              <p className='text-[28px] font-semibold tabular-nums leading-none text-slate-900'>
-                {liveCount ?? '—'}
-              </p>
-              <p className='mt-1 text-[11px] text-slate-400'>
-                {liveCount === 1 ? 'active session' : 'active sessions'}
-              </p>
-            </div>
-
-            {/* Quick links */}
-            <div className='rounded-xl border border-slate-200 bg-white p-5'>
-              <div className='mb-3 flex items-center gap-2'>
-                <Zap className='h-3.5 w-3.5 text-slate-400' />
-                <p className='text-[12px] font-semibold text-slate-700'>Quick Links</p>
-              </div>
-              <div className='space-y-1'>
-                {[
-                  { label: 'Roles & Permissions', to: '/roles' },
-                  { label: 'Settings', to: '/settings' },
-                  { label: 'Extensions', to: '/extensions' },
-                  { label: 'Flows', to: '/flows' }
-                ].map((link) => (
-                  <button
-                    key={link.to}
-                    type='button'
-                    onClick={() => navigate(link.to)}
-                    className='flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[12px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
-                  >
-                    {link.label}
-                    <ArrowRight className='h-3 w-3 text-slate-300' />
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
-  )
-}
-
-function InfoRow({
-  label,
-  value,
-  highlight,
-  ok,
-  err
-}: {
-  label: string
-  value: string
-  highlight?: boolean
-  ok?: boolean
-  err?: boolean
-}) {
-  return (
-    <div className='flex items-center justify-between'>
-      <span className='text-[11px] text-slate-400'>{label}</span>
-      <div className='flex items-center gap-1.5'>
-        {ok && <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />}
-        {err && <span className='h-1.5 w-1.5 rounded-full bg-red-500' />}
-        <span
+      {/* ── Content ────────────────────────────────────────────────────── */}
+      <div className='flex flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8'>
+        <ChecklistHost />
+        <div
           className={cn(
-            'text-[11px] font-medium',
-            err ? 'text-red-600' : highlight ? 'text-emerald-600' : 'text-slate-700'
+            'grid flex-1 grid-cols-1 gap-6',
+            side.length > 0 &&
+              'lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_340px]'
           )}
         >
-          {value}
-        </span>
+          <div className='flex min-w-0 flex-col gap-6'>
+            {main.some((s) => s.visible) ? (
+              main.map(renderSection)
+            ) : (
+              <p className='rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-[12.5px] text-slate-600 dark:border-border dark:text-slate-300'>
+                Every section is hidden.{' '}
+                <button
+                  type='button'
+                  className='font-medium text-slate-900 underline underline-offset-2 dark:text-white'
+                  onClick={() => setCustomizing(true)}
+                >
+                  Choose what to show
+                </button>
+              </p>
+            )}
+          </div>
+          {side.length > 0 && (
+            <aside aria-label='Your work and this instance' className='flex min-w-0 flex-col gap-6'>
+              {side.map(renderSection)}
+            </aside>
+          )}
+        </div>
       </div>
     </div>
   )

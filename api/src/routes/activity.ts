@@ -1,8 +1,8 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   activityWindow,
@@ -20,6 +20,9 @@ import {
 import { markConfigRead } from '../services/config-live.js'
 import { agentBadgesForActivity } from '../services/mcp-attribution.js'
 import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
+import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
+import { getAllowedFields } from '../services/permissions.js'
+import type { User } from '../types.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
 
 const countOf = (rows: unknown[]) => Number((rows[0] as { count?: string | number })?.count ?? 0)
@@ -130,8 +133,11 @@ export async function activityRoutes(app: FastifyInstance) {
   // IP) and on which record, across all collections and outside any User Scope. Writes below
   // (export-log, a manual entry) record the caller's own action and stay open to anyone signed in.
 
-  app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
+  app.get('/', { preHandler: activityListGate }, async (req, reply) => {
     const q = req.query as Record<string, string>
+    // The Overview's scopes (`scope=mine` | `scope=my_records`) are open to anyone signed in;
+    // the whole log stays with administrators (activityListGate).
+    const scope = personalScope(q.scope)
     // Negative, fractional or non-numeric paging reads the first page (never a knex 500).
     const asked = Math.floor(Number(q.limit))
     const limit = Math.min(Number.isFinite(asked) && asked > 0 ? asked : 25, 200)
@@ -171,11 +177,24 @@ export async function activityRoutes(app: FastifyInstance) {
     }
     const window = activityWindow(parsed.filters)
 
-    const filtered = hasActivityFilter(parsed.filters) || !!groupKey
-    const [data, total] = await Promise.all([
+    if (scope === 'mine') {
+      // Own entries only, whatever `user` asked for.
+      pageIds.where('a.user', req.user!.id)
+      countQuery.where('a.user', req.user!.id)
+    } else if (scope === 'my_records') {
+      // Records the caller owns, created or starred — each judged AS THE CALLER first, so the
+      // scope never names a record they cannot read (services/overview/my-records.ts).
+      const set = await myRecordSet(req.user as User, { isAdmin: !!req.isAdmin })
+      whereInRecordSet(pageIds, set)
+      whereInRecordSet(countQuery, set)
+    }
+
+    const filtered = hasActivityFilter(parsed.filters) || !!groupKey || !!scope
+    const [rows, total] = await Promise.all([
       pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
       filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
     ])
+    const data = req.isAdmin ? rows : await forNonAdmin(req.user as User, rows)
     return reply.send({
       data,
       total,
@@ -289,6 +308,59 @@ export async function activityRoutes(app: FastifyInstance) {
       req
     })
     return reply.code(201).send({ ok: true })
+  })
+}
+
+type PersonalScope = 'mine' | 'my_records'
+
+function personalScope(v: unknown): PersonalScope | null {
+  return v === 'mine' || v === 'my_records' ? v : null
+}
+
+/**
+ * GET /activity: administrators read the whole log; anyone signed in may read their own entries
+ * (`scope=mine`) or the entries on their own records (`scope=my_records`). A scoped API key or a
+ * connected app (MCP / OAuth) gets neither personal path: those cross every collection.
+ */
+async function activityListGate(req: FastifyRequest, reply: FastifyReply) {
+  const scope = personalScope((req.query as Record<string, unknown> | undefined)?.scope)
+  if (!scope) return requireAdmin(req, reply)
+  await requireAuth(req, reply)
+  const user = req.user as User | undefined
+  const delegated =
+    !!user?.api_key_scopes || !!(req as FastifyRequest & { mcpInner?: unknown }).mcpInner
+  if (delegated) {
+    return reply
+      .code(403)
+      .send({ error: 'This key or connected app cannot read activity trails', code: 'FORBIDDEN' })
+  }
+}
+
+/**
+ * What a non-administrator sees of a page: no IP address or user agent, and an update's
+ * changed fields only where their role may read the field (a value they could not open on the
+ * record never shows in its history either).
+ */
+async function forNonAdmin(
+  user: User,
+  rows: Array<Record<string, unknown>>
+): Promise<Array<Record<string, unknown>>> {
+  const allowed = new Map<string, string[] | null>()
+  for (const c of new Set(rows.map((r) => String(r.collection ?? '')))) {
+    if (!c) continue
+    allowed.set(c, await getAllowedFields(user, 'read', c).catch(() => []))
+  }
+  return rows.map((r) => {
+    const { ip: _ip, user_agent: _ua, ...rest } = r
+    const fields = allowed.get(String(r.collection ?? ''))
+    if (Array.isArray(rest.changes) && fields !== null) {
+      const ok = new Set(fields ?? [])
+      const all = ok.has('*')
+      rest.changes = (rest.changes as Array<{ field?: string }>).filter(
+        (ch) => all || (!!ch.field && ok.has(ch.field))
+      )
+    }
+    return rest
   })
 }
 

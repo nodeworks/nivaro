@@ -209,6 +209,7 @@ import { opsRedisRoutes } from './ops-redis.js'
 import { opsRuntimeRoutes } from './ops-runtime.js'
 import { opsTaskRoutes } from './ops-tasks.js'
 import { overviewRoutes } from './overview.js'
+import { overviewPageRoutes } from './overview-page.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { payloadTemplateRoutes } from './payload-templates.js'
@@ -490,6 +491,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // /delegation/:userId/remind, /access-requests/:id/vouch.
   await app.register(teamMiscRoutes)
   await app.register(myWorkRoutes)
+  // The admin Overview page (route `/`): figures, last-visit digest, layout + pins.
+  await app.register(overviewPageRoutes, { prefix: '/overview' })
   await app.register(roleChecklistRoutes)
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)

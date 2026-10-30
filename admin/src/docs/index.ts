@@ -520,6 +520,7 @@ import { formHiddenAndFieldComments } from './sections/form-explain-comment'
 import { listEditing } from './sections/list-editing'
 import { loadingFeelDocs } from './sections/loading-feel'
 import { navigationPersonal } from './sections/navigation-personal'
+import { overviewPageDocs } from './sections/overview-page'
 import { overviewSectionsDocs } from './sections/overview-sections'
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
@@ -541,6 +542,7 @@ export const navSections: NavGroup[] = [
     label: 'User Guide',
     items: [
       userDashboard,
+      overviewPageDocs,
       overviewSectionsDocs,
       userCollections,
       columnPresets,

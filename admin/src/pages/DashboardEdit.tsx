@@ -24,6 +24,7 @@ import {
   Filter,
   LineChart,
   Loader2,
+  Pin,
   Plus,
   Trash2,
   TrendingUp,
@@ -63,6 +64,7 @@ import { api, type Collection, type Dashboard, type DashboardWidget } from '@/li
 import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatNumber } from '@/lib/utils'
+import { usePinToOverview } from '@/pages/overview/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -247,16 +249,23 @@ const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
 
 // ─── Widget card ──────────────────────────────────────────────────────────────
 
-function WidgetCard({
+export function WidgetCard({
   widget,
   globalFilters,
   onDelete,
-  onDrill
+  onDrill,
+  pin,
+  fill
 }: {
   widget: DashboardWidget
   globalFilters: GlobalFilter[]
-  onDelete: () => void
+  /** No delete button when absent (the Overview's pinned copy). */
+  onDelete?: () => void
   onDrill: (segment: DrillSegment | null) => void
+  /** "Pin to Overview": shown when given. */
+  pin?: { pinned: boolean; onToggle: () => void }
+  /** Fill the parent instead of spanning the dashboard's 12-column grid. */
+  fill?: boolean
 }) {
   const qc = useQueryClient()
   const filtersKey = JSON.stringify(globalFilters)
@@ -308,11 +317,18 @@ function WidgetCard({
 
   return (
     <div
-      className='flex flex-col rounded-xl border border-slate-200 dark:border-white/[0.07] bg-white dark:bg-[#161b22] p-4 shadow-sm'
-      style={{
-        gridColumn: `span ${widget.width}`,
-        gridRow: `span ${widget.height}`
-      }}
+      className={cn(
+        'flex flex-col rounded-xl border border-slate-200 dark:border-white/[0.07] bg-white dark:bg-[#161b22] p-4 shadow-sm',
+        fill && 'h-full min-h-[200px] rounded-lg shadow-none'
+      )}
+      style={
+        fill
+          ? undefined
+          : {
+              gridColumn: `span ${widget.width}`,
+              gridRow: `span ${widget.height}`
+            }
+      }
     >
       {/* Header */}
       <div className='mb-3 flex items-start justify-between gap-2'>
@@ -344,14 +360,31 @@ function WidgetCard({
           <Badge variant='outline' className={cn('h-5 px-1.5 text-[10px]', cfg.color)}>
             {cfg.label}
           </Badge>
-          <button
-            type='button'
-            onClick={onDelete}
-            className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10'
-            aria-label='Delete widget'
-          >
-            <Trash2 className='h-3.5 w-3.5' />
-          </button>
+          {pin && (
+            <button
+              type='button'
+              onClick={pin.onToggle}
+              aria-pressed={pin.pinned}
+              aria-label={pin.pinned ? 'Unpin from Overview' : 'Pin to Overview'}
+              data-tip={pin.pinned ? 'Unpin from your Overview' : 'Pin to your Overview'}
+              className={cn(
+                'rounded p-1 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/[0.06] dark:hover:text-slate-200',
+                pin.pinned ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400'
+              )}
+            >
+              <Pin className={cn('h-3.5 w-3.5', pin.pinned && 'fill-current')} />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type='button'
+              onClick={onDelete}
+              className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10'
+              aria-label='Delete widget'
+            >
+              <Trash2 className='h-3.5 w-3.5' />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1215,6 +1248,8 @@ function DrillSheet({
 const PRETEND_SCOPE = 'dashboard-edit'
 
 export function DashboardEditPage() {
+  // Each widget can be pinned onto the person's Overview page (stored per person).
+  const pinToOverview = usePinToOverview()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const goBack = useGoBack('/dashboards')
@@ -1449,6 +1484,14 @@ export function DashboardEditPage() {
                 widget={widget}
                 globalFilters={globalFilters}
                 onDelete={() => deleteWidget.mutate(widget.id)}
+                pin={
+                  pinToOverview.ready
+                    ? {
+                        pinned: pinToOverview.isPinned(widget.id),
+                        onToggle: () => pinToOverview.toggle(widget.id)
+                      }
+                    : undefined
+                }
                 onDrill={(segment) =>
                   widget.collection &&
                   setDrill({ widgetId: widget.id, title: widget.title, segment })
