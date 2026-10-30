@@ -1,5 +1,6 @@
 import { AlertCircle, Loader2, Timer } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useSlowReason } from '../hooks/useSlowReason'
 import {
   clock,
   runProgress,
@@ -7,6 +8,7 @@ import {
   useBackgroundRun
 } from '../lib/background-runs'
 import { cn } from '../lib/utils'
+import { SlowNoticeView } from './SlowNotice'
 
 /**
  * The "Run in background" strip for a slow read (#2759). Render it inside the loading state of
@@ -15,12 +17,20 @@ import { cn } from '../lib/utils'
  * then offers to hand the read to the server. While the server runs it, the strip shows elapsed
  * time against the usual time; when the result is ready it fills the page's own query and the
  * strip goes away. Every state is inline — no dialog.
+ *
+ * #3231 — from ~3 s it also says what the read is waiting on ("Waiting for a free slot — busy
+ * right now", "Running PUB health — not cached yet"), before and beside the offer.
  */
 export function BackgroundRunOffer({
   className,
   ...opts
 }: UseBackgroundRunOptions & { className?: string }) {
   const bg = useBackgroundRun(opts)
+  const slow = useSlowReason({
+    pending: opts.pending && bg.phase !== 'running' && bg.phase !== 'done',
+    request: opts.request,
+    label: opts.label
+  })
   const startedAt = bg.run?.started_at ? Date.parse(bg.run.started_at) : null
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -30,7 +40,9 @@ export function BackgroundRunOffer({
     return () => clearInterval(t)
   }, [bg.phase])
 
-  if (bg.phase === 'idle' || bg.phase === 'done') return null
+  if (bg.phase === 'done') return null
+  if (bg.phase === 'idle')
+    return slow.slow ? <SlowNoticeView reason={slow} className={className} /> : null
 
   if (bg.phase === 'error') {
     return (
@@ -109,6 +121,11 @@ export function BackgroundRunOffer({
         {typical && typical >= 1000
           ? `This usually takes about ${clock(typical)}.`
           : 'This is taking a while.'}
+        {slow.text && (
+          <span data-slow-reason className='text-slate-500 dark:text-slate-400'>
+            {slow.text}.
+          </span>
+        )}
       </span>
       <button
         type='button'

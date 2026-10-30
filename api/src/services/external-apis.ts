@@ -16,6 +16,7 @@ import {
 import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
 import { isSensitiveHeaderName, maskBodySecrets, maskQueryString } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
+import { inflightNoteWait } from './traffic-inflight.js'
 import { noteOutbound } from './traffic-map.js'
 
 export type { CallOptions, CallResult } from '@nivaro/extension-kit'
@@ -578,6 +579,23 @@ export async function callExternalApi(
   nameOrId: string | number,
   options: CallOptions = {}
 ): Promise<CallResult> {
+  // #3231 — a request waiting on a partner can say so ("Waiting for fusion"). Only the
+  // config's name is noted, never the URL, body or credentials.
+  const endWait = inflightNoteWait({
+    kind: 'external',
+    subject: typeof nameOrId === 'string' && !/^\d+$/.test(nameOrId) ? nameOrId : null
+  })
+  try {
+    return await callExternalApiInner(nameOrId, options)
+  } finally {
+    endWait()
+  }
+}
+
+async function callExternalApiInner(
+  nameOrId: string | number,
+  options: CallOptions
+): Promise<CallResult> {
   const stored: ExternalApiRow | undefined =
     typeof nameOrId === 'number' || /^\d+$/.test(String(nameOrId))
       ? await db('nivaro_external_apis')
@@ -587,6 +605,9 @@ export async function callExternalApi(
 
   if (!stored) throw new Error(`External API not found: ${nameOrId}`)
   if (!stored.enabled) throw new Error(`External API is disabled: ${stored.name}`)
+  // The id form only knows its name now (replaces the first note of this kind).
+  if (typeof nameOrId !== 'string' || /^\d+$/.test(nameOrId))
+    inflightNoteWait({ kind: 'external', subject: stored.name })
   // #89 — this instance's base_url / credentials / headers, when it has any.
   const row = resolveInstanceRow(stored)
 

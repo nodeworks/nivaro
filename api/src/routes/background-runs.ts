@@ -12,6 +12,7 @@ import {
   slowThresholdMs,
   startBackgroundRun
 } from '../services/background-runs.js'
+import { findWait, startWaitBeat, waitPath } from '../services/wait-reasons.js'
 
 /**
  * /api/background-runs — slow reads handed to the server (#2759).
@@ -21,11 +22,36 @@ import {
  *   GET  /                       the caller's runs (newest first)
  *   GET  /:id                    one of the caller's runs
  *   GET  /:id/result             the finished response, exactly as the route answered it
+ *   GET  /waiting?method=&url=   what the caller's own unfinished read is waiting on (#3231)
  *
  * Every run belongs to the person who started it: another person's id answers 404. The read
  * itself is replayed AS the caller, so its own route decides access and scope.
  */
 export async function backgroundRunsRoutes(app: FastifyInstance): Promise<void> {
+  // #3231 — replicas publish their slow requests only while somebody asks (2 s beat).
+  const stopWaitBeat = startWaitBeat(app.redis ?? null)
+  app.addHook('onClose', async () => stopWaitBeat())
+
+  // Any read, not only the replayable ones: lists and record pages ask too. Only the caller's
+  // own requests match, and the answer carries kinds, counts and names, never SQL or values.
+  app.get('/waiting', { preHandler: requireAuth }, async (req, reply) => {
+    const q = req.query as { method?: string; url?: string }
+    const method = String(q.method ?? 'GET').toUpperCase()
+    const path = waitPath(String(q.url ?? ''))
+    if (!path || !/^(GET|POST)$/.test(method))
+      return reply.code(400).send({ error: 'Name the read: method and url' })
+    reply.header('Cache-Control', 'no-store')
+    const data = await findWait({
+      redis: app.redis ?? null,
+      userId: String(req.user!.id),
+      method,
+      path,
+      exclude: req.requestId ?? null,
+      isAdmin: !!req.isAdmin
+    })
+    return { data }
+  })
+
   app.get('/estimate', { preHandler: requireAuth }, async (req, reply) => {
     const q = req.query as { method?: string; url?: string }
     const target = matchReplayable(String(q.method ?? 'POST'), String(q.url ?? ''))

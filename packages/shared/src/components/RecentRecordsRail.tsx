@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Clock } from 'lucide-react'
 import { useItemNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
+import { usePrefetchIntent } from '../lib/prefetch'
 import { cn, formatRelative, titleCase } from '../lib/utils'
+import { ListSkeleton } from './Skeletons'
 
 /**
  * #43 — the records this person opened most recently, with each one's
@@ -29,6 +31,8 @@ export function RecentRecordsRail({
 }) {
   const client = useNivaroClient()
   const nav = useItemNavigation()
+  // #3230 — resting on a row warms the record it opens.
+  const intent = usePrefetchIntent()
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ['recent-records', limit],
     queryFn: () =>
@@ -45,7 +49,17 @@ export function RecentRecordsRail({
       </div>
       <div className='overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-border dark:bg-card'>
         {isLoading ? (
-          <p className='px-4 py-3 text-[12px] text-slate-400'>Loading…</p>
+          // #3229 — rows at the real row height (label + collection line, state pill, time).
+          <ListSkeleton
+            header={false}
+            rows={Math.min(limit, 5)}
+            rowClassName='h-[49px] px-4'
+            columns={[
+              { key: 'label', grow: 6 },
+              { key: 'state', width: 64, shape: 'badge' },
+              { key: 'when', width: 40, shape: 'short' }
+            ]}
+          />
         ) : rows.length === 0 ? (
           <p className='px-4 py-3 text-[12px] text-slate-400'>
             Records you open will show up here.
@@ -57,6 +71,7 @@ export function RecentRecordsRail({
                 <button
                   type='button'
                   onClick={() => nav.open({ collection: r.collection, itemId: r.item_id })}
+                  {...intent.record(r.collection, r.item_id)}
                   className='flex w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-muted'
                   data-recent-record={`${r.collection}:${r.item_id}`}
                 >

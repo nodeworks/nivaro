@@ -27,6 +27,7 @@ import {
   validateReviewListConfig
 } from '../services/review-list.js'
 import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
+import { inflightNoteWait } from '../services/traffic-inflight.js'
 import { markCacheHit } from '../services/traffic-map.js'
 import {
   assertHostReadable,
@@ -602,6 +603,8 @@ async function renderWidget(
     let rows: unknown[]
     if (cachedRows) rows = cachedRows
     else {
+      // #3231 — the caller's status read can say "working out this widget (not cached)".
+      const endWait = inflightNoteWait({ kind: 'widget', subject: cq.slug })
       const out = await sharedGatedRead(
         widgetFlightKey(cacheKey),
         user?.id,
@@ -624,7 +627,7 @@ async function renderWidget(
           return { rows: ran, cachedAt: at }
         },
         { signal: gate.signal, label: `widget:${String(widget.id)}` }
-      )
+      ).finally(endWait)
       if (out.shared) recordSharedRun(cq.slug)
       gate.onGate?.(out)
       rows = out.value.rows

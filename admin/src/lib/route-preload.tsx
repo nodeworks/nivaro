@@ -88,3 +88,14 @@ export function adminRecordTarget(path: string): { collection: string; id: strin
     return null
   }
 }
+
+/** Admin list pages: /collections/:collection (#3230) — a hover warms the list's metadata. */
+export function adminListTarget(path: string): string | null {
+  const m = path.match(/^\/collections\/([^/]+)$/)
+  if (!m) return null
+  try {
+    return decodeURIComponent(m[1])
+  } catch {
+    return null
+  }
+}

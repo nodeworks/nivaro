@@ -9,6 +9,7 @@ import {
   resolveNotificationTarget,
   runNotificationTarget
 } from '../lib/notification-target'
+import { usePrefetchIntent } from '../lib/prefetch'
 import { useOptionalRealtime } from '../lib/realtime'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
@@ -20,6 +21,7 @@ import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
 import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
 import { RequiredVideosCard } from './help-videos/viewer/RequiredVideosCard'
+import { ListSkeleton, SkeletonBar } from './Skeletons'
 import { TickerNumber } from './TickerNumber'
 import { UserAvatar } from './UserAvatar'
 
@@ -155,6 +157,94 @@ function StateChip({ state, color }: { state: string | null; color: string | nul
   )
 }
 
+/**
+ * #3229 — My Work's loading placeholder in My Work's own shape: the four tiles with their real
+ * labels, the toolbar buttons, then the person's sections in their saved order (the records
+ * list full width, the card sections paired), each with its real title and list-row height.
+ * Sections that only appear with data (team, waiting on others) are left out.
+ */
+function MyWorkSkeleton({ order, hidden }: { order: string[]; hidden: string[] }) {
+  const shown = order.filter(
+    (k) => !hidden.includes(k) && (k === 'records' || k === 'tasks' || k === 'notifications')
+  )
+  const section = (k: string, rows: number) => (
+    <section
+      key={k}
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+    >
+      <div className='border-b border-slate-200 px-4 py-2.5 dark:border-border'>
+        <h2 className='text-[13px] font-medium text-slate-400 dark:text-slate-500'>
+          {SECTION_LABEL[k] ?? k}
+        </h2>
+        {k === 'records' && (
+          <p className='text-[11px] text-muted-foreground'>
+            Records whose current step resolves you as an owner — most urgent first.
+          </p>
+        )}
+      </div>
+      <ListSkeleton
+        header={false}
+        rows={rows}
+        rowClassName='h-[37px] px-4'
+        columns={
+          k === 'records'
+            ? [
+                { key: 'label', grow: 6 },
+                { key: 'where', width: 90, shape: 'short' },
+                { key: 'state', width: 72, shape: 'badge' },
+                { key: 'sla', width: 56, shape: 'badge' }
+              ]
+            : [
+                { key: 'label', grow: 5 },
+                { key: 'when', width: 64, shape: 'date' }
+              ]
+        }
+      />
+    </section>
+  )
+  const blocks: React.ReactNode[] = []
+  for (let i = 0; i < shown.length; ) {
+    if (shown[i] === 'records') {
+      blocks.push(section('records', 5))
+      i++
+      continue
+    }
+    const pair = shown.slice(i, i + 2).filter((k) => k !== 'records')
+    blocks.push(
+      <div key={pair.join('+')} className='grid gap-5 lg:grid-cols-2'>
+        {pair.map((k) => section(k, 4))}
+      </div>
+    )
+    i += pair.length
+  }
+  return (
+    <div className='space-y-5 p-6' data-my-work-loading aria-busy='true'>
+      <div className='flex items-start justify-between'>
+        <div className='grid flex-1 grid-cols-2 gap-3 lg:grid-cols-4'>
+          {['Waiting on you', 'SLA breached', 'Open tasks', 'Unread notifications'].map((label) => (
+            <div
+              key={label}
+              className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'
+            >
+              <p className='text-[10.5px] uppercase tracking-wide text-muted-foreground'>{label}</p>
+              <p className='mt-0.5 flex h-[27px] items-center'>
+                <SkeletonBar width={34} className='h-[18px] rounded-md' />
+              </p>
+            </div>
+          ))}
+        </div>
+        <span className='ml-3 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] text-slate-400 dark:border-border dark:text-slate-500'>
+          Refresh
+        </span>
+        <span className='ml-2 rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] text-slate-400 dark:border-border dark:text-slate-500'>
+          Customize
+        </span>
+      </div>
+      {blocks}
+    </div>
+  )
+}
+
 function Tile({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
@@ -179,6 +269,8 @@ export function MyWorkView({
   const { open: openItem } = useItemNavigation()
   const nav = useNavigation()
   const qc = useQueryClient()
+  // #3230 — resting on a row warms the record it opens.
+  const intent = usePrefetchIntent()
   // A support ticket opens its own page (/support?ticket=), in whichever app.
   const openTicket = (id: number) => {
     const path =
@@ -375,15 +467,8 @@ export function MyWorkView({
     })
   }
 
-  if (isLoading || !data) {
-    return (
-      <div className='grid grid-cols-4 gap-3 p-6'>
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className='h-16 animate-pulse rounded-lg bg-[hsl(var(--nvr-skeleton))]' />
-        ))}
-      </div>
-    )
-  }
+  if (isLoading || !data)
+    return <MyWorkSkeleton order={sectionPrefs.order} hidden={sectionPrefs.hidden} />
 
   return (
     <div className='space-y-5 p-6' data-my-work>
@@ -576,6 +661,7 @@ export function MyWorkView({
                         <button
                           type='button'
                           onClick={() => open(o.collection, o.item)}
+                          {...intent.record(o.collection, o.item)}
                           className='flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-muted'
                         >
                           <span className='min-w-0 flex-1 truncate text-[12.5px] font-medium'>

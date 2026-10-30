@@ -40,6 +40,7 @@ import {
 } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
+import { useSlowReason } from '../hooks/useSlowReason'
 import {
   endBulkProgress,
   newBulkProgressId,
@@ -83,12 +84,14 @@ import {
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
-import { prefetchRecord, useIdleNextPage } from '../lib/prefetch'
+import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
+import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
+import { knownTotalFrom } from '../lib/slow-reason'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -159,6 +162,8 @@ import { RecordCompareDialog } from './RecordCompare'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
+import { TableSkeletonRows } from './Skeletons'
+import { SlowNoticeView } from './SlowNotice'
 import { TipLayer } from './TipLayer'
 import { UnseenDot } from './UnseenDot'
 import { SimpleSelect, SimpleSelectXs } from './ui/SimpleSelect'
@@ -4149,6 +4154,20 @@ function BulkBar({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+/** #3229 — loading-row shape of each synthetic column. */
+const CBV_KIND_SHAPE: Partial<Record<string, CellShape>> = {
+  state: 'badge',
+  entered: 'date',
+  aging: 'short',
+  owners: 'avatar',
+  actions: 'bool',
+  formula: 'number',
+  fulfilment: 'badge',
+  integrations: 'badge',
+  tasks: 'short',
+  addendums: 'short'
+}
+
 export function CollectionBrowserView({
   collection,
   quickFilters = [],
@@ -5087,6 +5106,16 @@ export function CollectionBrowserView({
   // "N updates · Refresh" pill. Focus mode holds the whole feed back.
   // Long-request honesty (#370): after 3s the loading pill starts counting.
   const loadElapsed = useElapsedLoading(isFetching)
+  // #3231 — past ~3 s the list says what it is waiting on (a free slot, the rows themselves).
+  const listSlow = useSlowReason({
+    pending: isFetching,
+    request: collection ? { method: 'GET', url: `/items/${collection}` } : null,
+    noun: (meta?.display_name ?? collection ?? '').replace(/_/g, ' ').toLowerCase() || null,
+    // Only a total this person has already been shown (never a raw table count).
+    knownRows: isFetching
+      ? knownTotalFrom(qc.getQueriesData({ queryKey: ['cbv-items', collection] }))
+      : null
+  })
   const realtime = useOptionalRealtime()
   const { userId: selfUserId } = useItemEditAuth()
   const rowChanges = useRowChanges()
@@ -6351,15 +6380,13 @@ export function CollectionBrowserView({
     }
   }
 
-  // Hover prefetch (#210, #2448): warm the record page's readOne AND its layout so opening
-  // the row paints instantly. 250ms debounce so sweeping the cursor down the table doesn't
-  // fire a request per row; the shared per-minute budget caps the rest.
-  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prefetchRow = (id: unknown) => {
-    if (prefetchTimer.current) clearTimeout(prefetchTimer.current)
-    prefetchTimer.current = setTimeout(() => {
-      prefetchRecord(qc, client, collection, String(id))
-    }, 250)
+  // Hover prefetch (#210, #2448, #3230): resting on a row (or focusing it) warms the record
+  // page's readOne AND its layout so opening it paints instantly; leaving the row before
+  // pressing it cancels what has not been picked up. The shared limiter keeps at most two in
+  // flight and the per-minute budget caps a sweeping cursor.
+  const rowIntent = (id: unknown) => {
+    const group = `record:${collection}:${String(id)}`
+    return intentProps(group, () => prefetchRecord(qc, client, collection, String(id), { group }))
   }
   const openRow = (id: string | number) => {
     if (searchLogRef.current?.key === `${collection}\u0000${appliedSearch}`) {
@@ -6502,6 +6529,14 @@ export function CollectionBrowserView({
     ...baseColDescs.filter((c) => !pinOf(c.key)),
     ...baseColDescs.filter((c) => pinOf(c.key) === 'right')
   ]
+  // #3229 — the loading rows take the real columns' shapes (dates date-wide, numbers right).
+  const skeletonCols: SkeletonColumn[] = orderedCols.map((c) => {
+    if (c.kind === 'data') {
+      const f = fieldByName.get(c.key.split('.')[0])
+      return { key: c.key, shape: shapeForField(f?.type, f?.interface) }
+    }
+    return { key: c.key, shape: CBV_KIND_SHAPE[c.kind] ?? 'short' }
+  })
   // Which columns make sense as group headers: the State pill, resolved
   // relation columns (already display labels), and plain non-FK data columns.
   // Raw M2O FK columns are excluded — the header would show an internal id;
@@ -8261,10 +8296,18 @@ export function CollectionBrowserView({
               <div className='cbv-overlay nvr-fade-in pointer-events-none absolute inset-0 z-[5] flex items-start justify-center bg-white/40 pt-24 dark:bg-slate-950/35'>
                 <span className='nvr-pop-in flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'>
                   <RotateCw aria-hidden className='h-3.5 w-3.5 animate-spin text-[#00a5cc]' />
-                  {loadElapsed != null ? `Still working — ${loadElapsed}s` : 'Loading…'}
+                  {loadElapsed != null
+                    ? `${listSlow.text ?? 'Still working'} — ${loadElapsed}s`
+                    : 'Loading…'}
                 </span>
               </div>
             </>
+          )}
+          {/* #3231 — a first load that is slow says why, floating (no layout shift). */}
+          {isLoading && listSlow.slow && (
+            <div className='pointer-events-none absolute inset-x-0 top-12 z-[6] flex justify-center px-4'>
+              <SlowNoticeView reason={listSlow} variant='pill' />
+            </div>
           )}
           <div
             ref={tableScrollRef}
@@ -8602,16 +8645,17 @@ export function CollectionBrowserView({
                   inheriting the table's 13px and reading a step larger than the rest. */}
                 <tbody key={dataUpdatedAt} className='text-[12px] tabular-nums'>
                   {isLoading ? (
-                    Array.from({ length: 12 }, (_, i) => (
-                      <tr key={i} className='border-b border-slate-100 dark:border-slate-800'>
-                        <td className='px-3 py-2' colSpan={effectiveColumns.length + extraCols}>
-                          <span
-                            className='cbv-shimmer block h-3.5 rounded'
-                            style={{ width: `${55 + ((i * 17) % 40)}%` }}
-                          />
-                        </td>
-                      </tr>
-                    ))
+                    // #3229 — one placeholder per real column, real row height (h-8, or the
+                    // table's comfortable h-11), real pins/widths: nothing moves on arrival.
+                    <TableSkeletonRows
+                      columns={skeletonCols}
+                      rows={Math.min(effPageSize, 20)}
+                      rowClassName='h-8'
+                      cellClassName='px-3 py-1.5'
+                      leadingCells={enableCheckboxes ? 1 : 0}
+                      cellStyle={(k) => ({ ...widthStyle(k), ...pinStyle(k) })}
+                      barClassName='cbv-shimmer'
+                    />
                   ) : rows.length === 0 ? (
                     <tr>
                       <td
@@ -8772,7 +8816,7 @@ export function CollectionBrowserView({
                           key={String(id)}
                           {...askDrag({ collection, id: String(id) })}
                           onClick={() => openRow(id)}
-                          onMouseEnter={() => prefetchRow(id)}
+                          {...rowIntent(id)}
                           data-row-key={String(id)}
                           title={
                             rowChanges.titleFor(String(id)) ??

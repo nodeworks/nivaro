@@ -84,6 +84,7 @@ import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } f
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { LoadErrorNote } from './LoadErrorNote'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
+import { CardSkeleton } from './Skeletons'
 import { Button } from './ui/button'
 import {
   DropdownMenu,
@@ -1664,13 +1665,18 @@ export function WidgetSlot({
 
   // Body-height skeleton while a widget resolves — a bare "Loading…" line was
   // ~16px tall, so the real body arriving shoved everything below it down.
-  const bodySkeleton = (
-    <div className='space-y-2 py-0.5'>
-      <div className='animate-pulse h-4 w-2/3 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-      <div className='animate-pulse h-4 w-full rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-      <div className='animate-pulse h-4 w-5/6 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
-    </div>
-  )
+  // #3229 — shaped like the widget that is coming: a figure for stats, rows for lists.
+  const skeletonType = widget?.widget_type
+  const bodySkeleton =
+    skeletonType === 'stat' ? (
+      <CardSkeleton framed={false} title={false} kpi className='py-0.5' />
+    ) : skeletonType === 'list' ||
+      skeletonType === 'review_list' ||
+      skeletonType === 'custom-query' ? (
+      <CardSkeleton framed={false} title={false} lines={4} className='py-0.5' />
+    ) : (
+      <CardSkeleton framed={false} title={false} lines={3} className='py-0.5' />
+    )
 
   // #2759 — a known-slow render offers to finish on the server (only with a client: the
   // run is started and read back through it).

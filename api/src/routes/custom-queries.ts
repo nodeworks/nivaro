@@ -30,6 +30,7 @@ import {
 import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { markSpan } from '../services/request-trace.js'
+import { inflightNoteWait } from '../services/traffic-inflight.js'
 import { markCacheHit } from '../services/traffic-map.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -271,6 +272,8 @@ async function runSharedQuery(
     label: string
   }
 ) {
+  // #3231 — the caller's status read can say "running <query> (not cached)".
+  const endWait = inflightNoteWait({ kind: 'query', subject: query.slug })
   return sharedGatedRead(
     opts.cacheKey,
     opts.who,
@@ -302,7 +305,7 @@ async function runSharedQuery(
       return { rows: ran, cachedAt: at }
     },
     { signal: opts.signal, label: opts.label }
-  )
+  ).finally(endWait)
 }
 
 export async function resolveQueryIdParam(raw: string): Promise<string | null> {

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { getTenantId, TENANT_POOL_MAX } from '../db/tenant-context.js'
 import { markSpan } from './request-trace.js'
 import { abortError, singleFlight } from './single-flight.js'
+import { inflightNoteWait } from './traffic-inflight.js'
 
 /**
  * Per-process "heavy read" gate (#2452).
@@ -114,6 +115,8 @@ interface Waiter {
   timer: ReturnType<typeof setTimeout> | null
   signal?: AbortSignal
   onAbort?: () => void
+  /** #3231 — withdraws the request's "waiting for a free slot" note. */
+  endWait?: () => void
 }
 
 const gates = new Map<string, TenantGate>()
@@ -164,6 +167,10 @@ function detach(w: Waiter): void {
   if (w.timer) clearTimeout(w.timer)
   w.timer = null
   if (w.onAbort) w.signal?.removeEventListener('abort', w.onAbort)
+  if (w.endWait) {
+    w.endWait()
+    w.endWait = undefined
+  }
 }
 
 function grant(w: Waiter, overflow: boolean): void {
@@ -272,6 +279,16 @@ function addWaiter(t: Ticket, who: string, signal?: AbortSignal): void {
     signal.addEventListener('abort', w.onAbort, { once: true })
   }
   pump(g)
+  // #3231 — still queued: the request's status read can say "waiting for a free slot" and
+  // where it stands. Noted in the caller's own context; withdrawn when it leaves the queue.
+  if (!t.done && g.queue.includes(w))
+    w.endWait = inflightNoteWait({
+      kind: 'slot',
+      position: () => {
+        const i = g.queue.indexOf(w)
+        return i < 0 ? null : { position: i + 1, of: g.queue.length }
+      }
+    })
 }
 
 /** Take a slot (or fail open after the max wait). Rejects with AbortError
