@@ -1,13 +1,17 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { type FeedRow, snapshotFeed } from '../services/command-center/activity.js'
-import { ccReadAuth } from '../services/command-center/auth.js'
+import { ccIsAdmin, ccReadAuth } from '../services/command-center/auth.js'
+import { snapshotFlowBlock } from '../services/command-center/flow.js'
+import {
+  countsOnlyPeople,
+  EMPTY_PEOPLE,
+  snapshotPeople
+} from '../services/command-center/people.js'
+import { snapshotRiskBlock } from '../services/command-center/risk.js'
+import { readCcScope } from '../services/command-center/scope.js'
 import { readSystemHealth } from '../services/command-center/system.js'
 import { snapshotThroughput } from '../services/command-center/throughput.js'
-import { EMPTY_PEOPLE, snapshotPeople } from '../services/command-center/people.js'
-import { readCcScope } from '../services/command-center/scope.js'
-import { snapshotFlowBlock } from '../services/command-center/flow.js'
-import { snapshotRiskBlock } from '../services/command-center/risk.js'
 import { can } from '../services/permissions.js'
 import { geoRoute, peopleGeoRoute } from './command-center-place.js'
 
@@ -28,7 +32,7 @@ export async function commandCenterRoutes(app: FastifyInstance) {
 
   // ── Snapshot: everything except map geometry, one round trip ─────────────
   app.get('/snapshot', async (req, reply) => {
-    const isAdmin = !!req.isAdmin
+    const isAdmin = ccIsAdmin(req)
     const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
       try {
         return await fn()
@@ -40,12 +44,18 @@ export async function commandCenterRoutes(app: FastifyInstance) {
     const [flow, risk, people, throughput, health, activity] = await Promise.all([
       // Flow + risk blocks: services/command-center/flow.ts + risk.ts (scoped, region, rewind).
       safe(() => snapshotFlowBlock(req), [] as Awaited<ReturnType<typeof snapshotFlowBlock>>),
-      safe(() => snapshotRiskBlock(req), { at_risk: 0, tracked: 0, open_issues: 0 } as Awaited<
-        ReturnType<typeof snapshotRiskBlock>
-      >),
+      safe(() => snapshotRiskBlock(req), {
+        at_risk: 0,
+        tracked: 0,
+        open_issues: isAdmin ? 0 : null
+      } as Awaited<ReturnType<typeof snapshotRiskBlock>>),
 
       // People on now (slice 1: services/command-center/people.ts).
-      safe(() => snapshotPeople(app, req, readCcScope(req.query)), EMPTY_PEOPLE),
+      // A wallboard gets counts only (no names, pages or records).
+      safe(async () => {
+        const block = await snapshotPeople(app, req, readCcScope(req.query))
+        return req.ccKiosk ? countsOnlyPeople(block) : block
+      }, EMPTY_PEOPLE),
 
       // Throughput: transitions today vs same time yesterday, the person's day (slice 3 service).
       safe(() => snapshotThroughput(req), {
@@ -56,8 +66,11 @@ export async function commandCenterRoutes(app: FastifyInstance) {
       // System rail — ADMIN ONLY (names internal jobs and error details).
       isAdmin ? safe(() => readSystemHealth(app.redis), null) : Promise.resolve(null),
 
-      // Feed seed: the newest readable entries with sentences (slice 3 service).
-      safe(() => snapshotFeed(req), [] as FeedRow[])
+      // Feed seed: the newest readable entries with sentences (slice 3 service). Comment text and
+      // who-did-what stay off a wallboard.
+      req.ccKiosk
+        ? Promise.resolve([] as FeedRow[])
+        : safe(() => snapshotFeed(req), [] as FeedRow[])
     ])
 
     return reply.send({ data: { flow, risk, people, throughput, health, activity } })

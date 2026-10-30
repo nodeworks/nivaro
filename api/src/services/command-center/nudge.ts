@@ -12,6 +12,11 @@ import { currentTenantKey } from '../tenant-rooms.js'
  */
 export const NUDGE_WINDOW_S = 30 * 60
 export const NUDGE_MESSAGE_MAX = 500
+/** One person may send at most this many nudges an hour, across all records. */
+export const NUDGE_SENDER_PER_HOUR = 20
+export const NUDGE_SENDER_WINDOW_S = 3600
+/** At most this many owners are notified by one nudge. */
+export const NUDGE_MAX_OWNERS = 25
 
 export interface NudgeStore {
   /** Set `key` for `ttlS` unless present; true = it was free (now taken). */
@@ -19,6 +24,8 @@ export interface NudgeStore {
   /** Seconds left on `key`, 0 = free. */
   ttl(key: string): Promise<number>
   release(key: string): Promise<void>
+  /** Count one use of `key` (window of `ttlS` from the first); returns the count so far. */
+  bump(key: string, ttlS: number): Promise<number>
 }
 
 /** Redis-backed when the app has Redis, else a process-local map (single process dev). */
@@ -27,9 +34,16 @@ export function nudgeStore(redis: unknown): NudgeStore {
     set?: (...a: unknown[]) => Promise<unknown>
     ttl?: (k: string) => Promise<number>
     del?: (k: string) => Promise<unknown>
+    incr?: (k: string) => Promise<number>
+    expire?: (k: string, s: number) => Promise<unknown>
   } | null
-  if (r?.set && r.ttl && r.del) {
+  if (r?.set && r.ttl && r.del && r.incr && r.expire) {
     return {
+      bump: async (k, ttl) => {
+        const n = Number(await r.incr!(k))
+        if (n === 1) await r.expire!(k, ttl)
+        return n
+      },
       claim: async (k, ttl) => (await r.set!(k, '1', 'EX', ttl, 'NX')) === 'OK',
       ttl: async (k) => Math.max(0, Number(await r.ttl!(k))),
       release: async (k) => {
@@ -42,8 +56,19 @@ export function nudgeStore(redis: unknown): NudgeStore {
 
 export function memoryNudgeStore(now: () => number = Date.now): NudgeStore {
   const m = new Map<string, number>()
-  const left = (k: string) => Math.max(0, Math.ceil(((m.get(k) ?? 0) - now()) / 1000))
+  const counts = new Map<string, { n: number; until: number }>()
+  const left = (k: string) =>
+    Math.max(0, Math.ceil((Math.max(m.get(k) ?? 0, counts.get(k)?.until ?? 0) - now()) / 1000))
   return {
+    bump: async (k, ttl) => {
+      const c = counts.get(k)
+      if (!c || c.until <= now()) {
+        counts.set(k, { n: 1, until: now() + ttl * 1000 })
+        return 1
+      }
+      c.n++
+      return c.n
+    },
     claim: async (k, ttl) => {
       if (left(k) > 0) return false
       m.set(k, now() + ttl * 1000)
@@ -81,6 +106,10 @@ export function nudgeKey(tenant: string, userId: string, collection: string, id:
   return `nvr:cc:nudge:${tenant || '-'}:${userId.toUpperCase()}:${collection}:${id.toUpperCase()}`
 }
 
+export function nudgeSenderKey(tenant: string, userId: string): string {
+  return `nvr:cc:nudge-sender:${tenant || '-'}:${userId.toUpperCase()}`
+}
+
 const displayName = (u: User) =>
   [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || 'Someone'
 
@@ -113,12 +142,26 @@ export async function runNudge(
     }
   }
   try {
-    const owners = (await deps.owners(collection, id)).filter(
-      (o) => o.id.toUpperCase() !== String(user.id).toUpperCase()
-    )
+    const owners = (await deps.owners(collection, id))
+      .filter((o) => o.id.toUpperCase() !== String(user.id).toUpperCase())
+      .slice(0, NUDGE_MAX_OWNERS)
     if (owners.length === 0) {
       await deps.store.release(key)
       return { status: 409, body: { error: 'Nobody else owns this step right now' } }
+    }
+    // A person's own hourly allowance, whatever the records (a script cannot flood inboxes).
+    const senderKey = nudgeSenderKey(deps.tenant ?? '', String(user.id))
+    const sent = await deps.store.bump(senderKey, NUDGE_SENDER_WINDOW_S)
+    if (sent > NUDGE_SENDER_PER_HOUR) {
+      await deps.store.release(key)
+      const wait = await deps.store.ttl(senderKey)
+      return {
+        status: 429,
+        body: {
+          error: `You have sent ${NUDGE_SENDER_PER_HOUR} nudges in the last hour. Please wait before sending more.`,
+          retry_after_s: wait
+        }
+      }
     }
     const label = await deps.label(collection, id)
     const who = displayName(user)

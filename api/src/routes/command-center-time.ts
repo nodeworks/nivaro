@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { parseFeedFilter, readFeed } from '../services/command-center/activity.js'
-import { ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
+import { ccCredKey, ccIsAdmin, ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
 import { readBanner } from '../services/command-center/banner.js'
 import { buildBrief } from '../services/command-center/brief.js'
 import { readPartners } from '../services/command-center/partners.js'
@@ -29,12 +29,13 @@ import { userTimeZone } from '../services/user-time.js'
 export async function commandCenterTimeRoutes(app: FastifyInstance) {
   app.addHook('preHandler', ccReadAuth)
 
-  app.get('/activity', async (req) => {
+  // Comment text and who-did-what: the board's own screen only, never a wallboard link.
+  app.get('/activity', { config: { ccNoKiosk: true } }, async (req) => {
     const q = (req.query ?? {}) as Record<string, unknown>
     const scope = readCcScope(q)
     const before = Number(q.before)
     const limit = Number(q.limit)
-    const feed = await readFeed(req.user!, !!req.isAdmin, scope, {
+    const feed = await readFeed(req.user!, ccIsAdmin(req), scope, {
       filter: parseFeedFilter(q.filter),
       before: Number.isFinite(before) && before > 0 ? Math.floor(before) : null,
       limit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 40
@@ -48,9 +49,9 @@ export async function commandCenterTimeRoutes(app: FastifyInstance) {
   app.get('/throughput', async (req) => {
     const scope = readCcScope(req.query)
     const tz = await userTimeZone(req.user ?? null)
-    const t = await readThroughput(req.user!, scope, tz)
+    const t = await readThroughput(req.user!, scope, tz, Date.now(), ccCredKey(req))
     const cut = scope.at ? scope.at.getTime() : Date.now()
-    const markers = req.isAdmin ? await readMarkers(startOfLocalDay(cut, tz), cut) : []
+    const markers = ccIsAdmin(req) ? await readMarkers(startOfLocalDay(cut, tz), cut) : []
     return {
       data: {
         hours: t.hours,
@@ -70,7 +71,7 @@ export async function commandCenterTimeRoutes(app: FastifyInstance) {
     return { data, ...(scope.at ? { live_only: true } : {}) }
   })
 
-  app.get('/banner', async (req) => ({ data: await readBanner(!!req.isAdmin) }))
+  app.get('/banner', async (req) => ({ data: await readBanner(ccIsAdmin(req)) }))
 
   app.post('/brief', { preHandler: ccWriteAuth }, async (req) => {
     const body = (req.body ?? {}) as Record<string, unknown>
@@ -80,7 +81,7 @@ export async function commandCenterTimeRoutes(app: FastifyInstance) {
       app,
       req,
       user: req.user!,
-      isAdmin: !!req.isAdmin,
+      isAdmin: ccIsAdmin(req),
       scope,
       tz,
       fresh: body.fresh === true,

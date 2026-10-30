@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { selectInChunks } from '../db-batch.js'
+import { ccIsAdmin } from './auth.js'
 import {
   readableRegions,
   regionCentroids,
@@ -49,6 +50,19 @@ export interface PeopleBlock {
   region_applies?: boolean
 }
 
+/**
+ * The people block a wallboard (kiosk) may show: counts only. No person is named, and no page or
+ * record anyone has open leaves the server.
+ */
+export function countsOnlyPeople(block: PeopleBlock): PeopleBlock {
+  return {
+    ...block,
+    names: [],
+    offices: block.offices.map((o) => ({ ...o, names: [] })),
+    regions: block.regions.map((r) => ({ ...r, names: [], people: [] }))
+  }
+}
+
 export const EMPTY_PEOPLE: PeopleBlock = {
   online_count: 0,
   idle_count: 0,
@@ -87,7 +101,7 @@ export async function visibleOnline(
   req: FastifyRequest
 ): Promise<OnlineRow[]> {
   const { presenceOnlineFor } = await import('../../routes/presence.js')
-  const answer = await presenceOnlineFor(app, req.user!, !!req.isAdmin)
+  const answer = await presenceOnlineFor(app, req.user!, ccIsAdmin(req))
   return answer.data
     .filter((r) => r.user_id)
     .map((r) => ({

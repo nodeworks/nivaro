@@ -18,7 +18,8 @@ export interface Snapshot {
   risk: {
     at_risk: number
     tracked: number
-    open_issues: number
+    /** Administrators only; null for everyone else. */
+    open_issues: number | null
     /** Open records whose SLA is in warning / breached (materialized queues). */
     sla_warning?: number
     sla_breached?: number

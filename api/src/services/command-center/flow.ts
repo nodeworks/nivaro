@@ -2,6 +2,7 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { collectionTitle } from '../record-label-fallback.js'
 import { alertPrefillHref, regionAlertFilter } from './alert-href.js'
+import { ccIsAdmin } from './auth.js'
 import { readCcConfig } from './config.js'
 import {
   type OpenInstance,
@@ -175,14 +176,14 @@ export function toSnapshotFlow(flow: FlowDetail[]): Array<{
 /** GET /command-center/flow for one request (scoped, region, rewind). */
 export async function flowForRequest(req: FastifyRequest): Promise<FlowDetail[]> {
   const scope = readCcScope(req.query)
-  const viewer = new Viewer(req.user!, !!req.isAdmin, scope.region)
+  const viewer = new Viewer(req.user!, ccIsAdmin(req), scope.region)
   const { index, liveOnly } = await openWorkFor(scope.at, String(req.user!.id))
   if (!index) return []
   const cfg = await readCcConfig()
   return computeFlow(viewer, index, {
     stuckDays: cfg.stuck_days,
     liveOnly,
-    alerts: !!req.isAdmin
+    alerts: ccIsAdmin(req)
   })
 }
 
@@ -191,7 +192,7 @@ export async function snapshotFlowBlock(
   req: FastifyRequest
 ): Promise<ReturnType<typeof toSnapshotFlow>> {
   const scope = readCcScope(req.query)
-  const viewer = new Viewer(req.user!, !!req.isAdmin, scope.region)
+  const viewer = new Viewer(req.user!, ccIsAdmin(req), scope.region)
   // A cold index never holds the whole snapshot for long; the flow panel's own read waits.
   const { index } = await openWorkFor(scope.at, String(req.user!.id), 5000)
   if (!index) return []

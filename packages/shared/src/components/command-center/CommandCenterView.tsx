@@ -151,7 +151,8 @@ export function CommandCenterView({
       filters,
       setFilters,
       peek,
-      setPeek,
+      // A wallboard opens no record (the server refuses /peek for a link as well).
+      setPeek: kiosk ? NO_PEEK : setPeek,
       focusMap: (p) => setMapFocus({ ...p, nonce: Date.now() }),
       mapFocus,
       tv,
@@ -197,6 +198,10 @@ export function CommandCenterView({
     </CcContext.Provider>
   )
 }
+
+/** Panels a wallboard never shows: the server refuses their reads for a link. */
+const KIOSK_HIDDEN = new Set(['feed', 'workload'])
+const NO_PEEK = () => undefined
 
 function KioskGone() {
   return (
@@ -275,8 +280,10 @@ function Board({
   const zoom = tv ? TV_ZOOM : 1
   const size = boardSizeFor(width / zoom)
   const canSee = useCallback(
-    (p: PanelDef) => !p.adminOnly || state.isAdmin || !!state.snapshot?.health,
-    [state.isAdmin, state.snapshot?.health]
+    (p: PanelDef) =>
+      !(state.kiosk && KIOSK_HIDDEN.has(p.key)) &&
+      (!p.adminOnly || state.isAdmin || !!state.snapshot?.health),
+    [state.isAdmin, state.kiosk, state.snapshot?.health]
   )
   const panels = useMemo(() => CC_PANELS.filter(canSee), [canSee])
   const layout = effectiveLayout(state.prefs?.layout, state.prefs?.role_default)
@@ -297,7 +304,8 @@ function Board({
 
   // ── TV: cycle regions while nobody is using the board ───────────────────────────────────
   useRegionCycle({
-    enabled: tv && !kioskRegionPinned,
+    // A wallboard stays on the board its link opens on (the server pins it too).
+    enabled: tv && !kiosk && !kioskRegionPinned,
     regionIds: config.regions.map((r) => r.id),
     current: region,
     setRegion,
@@ -341,6 +349,7 @@ function Board({
           s.refresh()
           return
         case 'focus-region': {
+          if (s.kiosk) return
           e.preventDefault()
           window.dispatchEvent(new CustomEvent(FOCUS_REGION_EVENT))
           const el = document.querySelector<HTMLElement>(`[${REGION_PICKER_ATTR}]`)
@@ -348,6 +357,7 @@ function Board({
           return
         }
         case 'region': {
+          if (s.kiosk) return
           const id = regionForIndex(s.config?.regions ?? [], a.index)
           if (id === undefined) return
           e.preventDefault()

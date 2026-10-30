@@ -5,6 +5,8 @@
  * only real failures (a deploy's unauthenticated stream probe logged a stack per call on the
  * realtime tier, 2026-10-24).
  */
+import { maskUrlQuery } from './secret-mask.js'
+
 interface LevelLogger {
   error(obj: unknown, msg?: string): void
   info(obj: unknown, msg?: string): void
@@ -17,5 +19,5 @@ export function logRouteError(
   url: string
 ): void {
   if (status >= 500) log.error(err)
-  else log.info({ statusCode: status, code: err.code, url }, err.message)
+  else log.info({ statusCode: status, code: err.code, url: maskUrlQuery(url) }, err.message)
 }

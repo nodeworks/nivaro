@@ -99,6 +99,11 @@ interface MemoEntry<T> {
   value: T | undefined
   building: Promise<T> | null
 }
+/** The shared (viewer-independent) entries: a fixed set of names per tenant, never evicted. */
+const PINNED = new Set(['cc:open-work', 'cc:coverage-gaps', 'cc:workload-owners'])
+const pinnedMemos = new Map<string, MemoEntry<unknown>>()
+/** Request-keyed entries (viewer, region, instant…): a small LRU of their own. */
+const REQUEST_MEMO_CAP = 500
 const memos = new Map<string, MemoEntry<unknown>>()
 
 export async function tenantMemo<T>(
@@ -109,11 +114,18 @@ export async function tenantMemo<T>(
 ): Promise<T | undefined> {
   const now = opts.now ?? Date.now
   const key = `${currentTenantKey() || '-'}|${name}`
-  let entry = memos.get(key) as MemoEntry<T> | undefined
+  const store = PINNED.has(name) ? pinnedMemos : memos
+  let entry = store.get(key) as MemoEntry<T> | undefined
+  if (entry && store === memos) {
+    // LRU: a hit moves to the back, so request-keyed churn evicts the least recently used.
+    memos.delete(key)
+    memos.set(key, entry as MemoEntry<unknown>)
+  }
   if (!entry) {
     entry = { at: 0, value: undefined, building: null }
-    memos.set(key, entry as MemoEntry<unknown>)
-    if (memos.size > 500) memos.delete(memos.keys().next().value as string)
+    store.set(key, entry as MemoEntry<unknown>)
+    if (store === memos && memos.size > REQUEST_MEMO_CAP)
+      memos.delete(memos.keys().next().value as string)
   }
   const fresh = entry.value !== undefined && now() - entry.at < ttlMs
   if (fresh) return entry.value
@@ -157,4 +169,10 @@ export async function tenantMemo<T>(
 /** Tests only. */
 export function resetTenantMemos(): void {
   memos.clear()
+  pinnedMemos.clear()
+}
+
+/** Tests only. */
+export function memoSizes(): { pinned: number; requests: number } {
+  return { pinned: pinnedMemos.size, requests: memos.size }
 }

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { adminRefusal } from '../middleware/authenticate.js'
+import { adminRefusal, credentialMintRefusal } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
 import {
@@ -28,7 +28,7 @@ import {
  *   GET  /role-defaults         (admin) every role's starting layout
  *   PUT  /role-defaults         (admin) {role_id, layout|null} — set or clear one role's
  *   GET  /kiosk-links           (admin) wallboard links, newest first (tokens are never shown again)
- *   POST /kiosk-links           (admin) {label, expires_in_days 1–90, region?, map_collection?} → url once
+ *   POST /kiosk-links           (admin) {label, expires_in_days 1–90, region?, map_collection?} → url once (the token rides the URL fragment, which no server ever sees)
  *   DELETE /kiosk-links/:id     (admin) revoke
  *   GET  /kiosk                 (wallboard link only) what the link opens: label, region, map, expiry
  *
@@ -99,6 +99,9 @@ export async function commandCenterShellRoutes(app: FastifyInstance) {
   })
 
   app.post('/kiosk-links', { ...NO_KIOSK, preHandler: ccWriteAuth }, async (req, reply) => {
+    // A link is a lasting credential: only a person signed in as themselves may make one.
+    const mint = credentialMintRefusal(req)
+    if (mint) return reply.code(403).send(mint)
     if (!adminOnly(req, reply)) return reply
     const input = cleanKioskInput(req.body)
     if ('error' in input) return reply.code(400).send({ error: input.error })
@@ -111,7 +114,7 @@ export async function commandCenterShellRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
-    return reply.code(201).send({ data: { ...link, url: `/command/kiosk/${token}` } })
+    return reply.code(201).send({ data: { ...link, url: `/command/kiosk#${token}` } })
   })
 
   app.delete('/kiosk-links/:id', { ...NO_KIOSK, preHandler: ccWriteAuth }, async (req, reply) => {

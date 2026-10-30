@@ -51,7 +51,11 @@ export const commandCenterDocs: DocSection = {
       type: 'p',
       text: 'Regions come from the data model, never from fixed table names: the board looks for a collection the map’s records link to (directly or through a junction) and for a User Scope dimension that names it, so people can be placed too. Administrators can confirm or change the source, the map collections and the stuck threshold in Board settings (stored in nivaro_settings.command_center, migration 523).'
     },
-    { type: 'h2', id: 'command-center-panels', text: 'Flow, throughput, forecast, workload and people' },
+    {
+      type: 'h2',
+      id: 'command-center-panels',
+      text: 'Flow, throughput, forecast, workload and people'
+    },
     {
       type: 'ul',
       items: [
@@ -89,7 +93,7 @@ export const commandCenterDocs: DocSection = {
     { type: 'h3', text: 'Wallboard links (administrators)' },
     {
       type: 'p',
-      text: 'A wallboard link shows the board on a screen nobody signs in to, at /command/kiosk/<token>, always in TV mode and read-only (no moves, nudges or messages). It reads the board as the administrator who made it, so a wall screen shows what that person would see — including the administrator-only panels. The link expires after 1–90 days, can be revoked in Customise, and stops working when its maker is suspended, removed or no longer an administrator. Only a fingerprint of the token is stored, so the address is shown once, when the link is made; it is masked in request logs.'
+      text: 'A wallboard link shows the board on a screen nobody signs in to, at /command/kiosk#<token> (the token sits after the #, which browsers never send to a server, so it cannot reach a log), always in TV mode and read-only (no moves, nudges or messages). It is a business board, not an admin console: it shows record counts, the flow, the map and throughput the administrator who made it can see, but never the system, traffic or partner panels, deploy or incident markers, integration problems, open issues, names of people, the live feed, workload or record peeks. It stays on the region and map collection chosen when the link was made. The link expires after 1–90 days, can be revoked in Customise, and stops working when its maker is suspended, removed or no longer an administrator. Only a fingerprint of the token is stored, so the address is shown once, when the link is made; it is masked in request logs.'
     },
     { type: 'h2', id: 'command-center-profile-capture', text: 'Where office locations come from' },
     {

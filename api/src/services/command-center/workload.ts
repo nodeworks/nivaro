@@ -3,6 +3,7 @@ import { db } from '../../db/index.js'
 import { selectInChunks } from '../db-batch.js'
 import { sharedGatedRead } from '../read-gate.js'
 import { currentTenantKey } from '../tenant-rooms.js'
+import { ccIsAdmin } from './auth.js'
 import { liveOpenWork } from './open-work.js'
 import { readCcScope } from './scope.js'
 import { tenantMemo, Viewer } from './work-access.js'
@@ -24,8 +25,8 @@ import { DAY_MS, median, workloadStatus } from './work-math.js'
  * map is built, today's open-owned count per person is written to Redis
  * (nvr:cc:wl:<tenant>:<yyyy-mm-dd>, kept 35 days). With five or more sampled days the usual is
  * that person's median; before that it is the median across the people listed (usual_source
- * 'team'). For a manager the usual is scaled by the share of that person's records the manager can
- * see today, so a narrowed count is compared with a narrowed usual.
+ * 'team'). For a manager the history and full totals include records the manager cannot open, so
+ * the usual is the median of the visible counts of the people listed ('team').
  */
 export interface WorkloadRow {
   user_id: string
@@ -163,7 +164,7 @@ export async function workloadForRequest(
   app: FastifyInstance,
   req: FastifyRequest
 ): Promise<{ rows: WorkloadRow[]; region_applies: boolean | null; truncated: boolean }> {
-  const isAdmin = !!req.isAdmin
+  const isAdmin = ccIsAdmin(req)
   const me = String(req.user!.id)
   const { hasReports, reportsOf } = await import('../team.js')
   let allowedIds: Set<string> | null = null
@@ -252,9 +253,12 @@ export async function workloadForRequest(
       id: String(u.id),
       name: [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? 'Unknown'),
       open,
-      fullOpen: list.length,
+      // A manager's figures stay inside what the manager can open: the sampled history and the
+      // full totals count records they cannot see, so their "usual" is the median of the
+      // visible counts of the people listed (never scaled from unseen totals).
+      fullOpen: isAdmin ? list.length : open,
       out,
-      history: byPerson.get(id) ?? []
+      history: isAdmin ? (byPerson.get(id) ?? []) : []
     })
   }
   const rows = assembleWorkload(people)

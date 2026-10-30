@@ -6,7 +6,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
-import { MASK, maskBodySecrets, maskQueryString } from '../services/secret-mask.js'
+import { MASK, maskBodySecrets, maskQueryString, maskUrlPath } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
 import { accessLogEnabled, accessLogLine, noteAccessLine } from '../services/telemetry-store.js'
@@ -383,7 +383,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
   app.addHook('onResponse', async (req, reply) => {
     const rawUrl = req.raw.url ?? req.url
     const mark = rawUrl.indexOf('?')
-    const path = mark < 0 ? rawUrl : rawUrl.slice(0, mark)
+    const path = maskUrlPath(mark < 0 ? rawUrl : rawUrl.slice(0, mark))
     if (PUBLIC_PAGE_RE.test(path)) {
       const ua = req.headers['user-agent']
       notePublicHit({

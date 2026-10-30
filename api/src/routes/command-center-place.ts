@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
+import { ccIsAdmin, ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
 import { type CcConfig, readCcConfig, writeCcConfig } from '../services/command-center/config.js'
 import { geoPins, readGeoFilters, validGeoCollection } from '../services/command-center/geo.js'
 import {
@@ -29,6 +29,22 @@ import { can } from '../services/permissions.js'
  * same services (services/command-center/geo.ts, regions.ts).
  */
 
+const NO_KIOSK = { config: { ccNoKiosk: true } }
+
+/**
+ * The one map collection a wallboard link may read: the link's own map collection when it is a
+ * configured geo collection, else the first configured one. Null = none configured.
+ */
+export async function kioskMapCollection(
+  meta: { map_collection: string | null },
+  geo?: Array<{ key: string }>
+): Promise<string | null> {
+  const list = geo ?? (await resolveGeoCollections().catch(() => []))
+  if (meta.map_collection && list.some((g) => g.key === meta.map_collection))
+    return meta.map_collection
+  return list[0]?.key ?? null
+}
+
 export const MESSAGE_MAX_PEOPLE = 50
 const MESSAGE_MAX_CHARS = 1000
 
@@ -38,20 +54,27 @@ export async function commandCenterPlaceRoutes(app: FastifyInstance) {
   // ── Board config the caller may use ──────────────────────────────────────
   app.get('/config', async (req, reply) => {
     const user = req.user!
-    const isAdmin = !!req.isAdmin
+    const isAdmin = ccIsAdmin(req)
     const [cfg, geo, source] = await Promise.all([
       readCcConfig(),
       resolveGeoCollections().catch(() => []),
       resolveRegionSource().catch(() => null)
     ])
     const readableGeo: Array<{ key: string; label: string }> = []
-    for (const g of geo)
+    const kioskMap = req.ccKiosk ? await kioskMapCollection(req.ccKiosk.meta, geo) : null
+    for (const g of geo) {
+      if (req.ccKiosk && g.key !== kioskMap) continue
       if (await can(user, 'read', g.key)) readableGeo.push({ key: g.key, label: g.label })
+    }
     const [regions, centroids] = await Promise.all([
       readableRegions(user, source).catch(() => []),
       regionCentroids(source).catch(() => [])
     ])
     const centroidOf = new Map(centroids.map((c) => [c.id, c]))
+    // A wallboard sees only the region its link opens on (read-only), never the whole list.
+    const shownRegions = req.ccKiosk
+      ? regions.filter((r) => r.id.toUpperCase() === (req.ccKiosk?.meta.region ?? '').toUpperCase())
+      : regions
     let regionLabel: string | null = null
     if (source) {
       const det = await detectPlacement().catch(() => null)
@@ -62,13 +85,13 @@ export async function commandCenterPlaceRoutes(app: FastifyInstance) {
     return reply.send({
       data: {
         geo_collections: readableGeo,
-        regions: regions.map((r) => ({
+        regions: shownRegions.map((r) => ({
           id: r.id,
           label: r.label,
           lat: centroidOf.get(r.id)?.lat ?? null,
           lng: centroidOf.get(r.id)?.lng ?? null
         })),
-        region_label: regions.length > 0 ? regionLabel : null,
+        region_label: shownRegions.length > 0 ? regionLabel : null,
         stuck_days: cfg.stuck_days,
         can_configure: isAdmin
       }
@@ -132,18 +155,22 @@ export async function commandCenterPlaceRoutes(app: FastifyInstance) {
   })
 
   // ── Peek: one record, read as the caller ─────────────────────────────────
-  app.get<{ Querystring: { collection?: string; id?: string } }>('/peek', async (req, reply) => {
-    const { collection, id } = req.query
-    if (
-      !validGeoCollection(collection) ||
-      typeof id !== 'string' ||
-      !/^[A-Za-z0-9_.:-]{1,64}$/.test(id)
-    )
-      return reply.code(400).send({ error: 'Name a record to peek at' })
-    const out = await peekRecord(req.user!, !!req.isAdmin, collection, id)
-    if (!out) return reply.code(404).send({ error: 'Record not found' })
-    return reply.send({ data: out })
-  })
+  app.get<{ Querystring: { collection?: string; id?: string } }>(
+    '/peek',
+    NO_KIOSK,
+    async (req, reply) => {
+      const { collection, id } = req.query
+      if (
+        !validGeoCollection(collection) ||
+        typeof id !== 'string' ||
+        !/^[A-Za-z0-9_.:-]{1,64}$/.test(id)
+      )
+        return reply.code(400).send({ error: 'Name a record to peek at' })
+      const out = await peekRecord(req.user!, ccIsAdmin(req), collection, id)
+      if (!out) return reply.code(404).send({ error: 'Record not found' })
+      return reply.send({ data: out })
+    }
+  )
 
   // ── Map layers ───────────────────────────────────────────────────────────
   app.get<{ Querystring: { kind?: string; collection?: string } }>(
@@ -151,17 +178,31 @@ export async function commandCenterPlaceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const kind = String(req.query.kind ?? '') as LayerKind
       if (!LAYER_KINDS.includes(kind)) return reply.code(400).send({ error: 'Unknown layer' })
+      // Who is out names people: not for a wallboard.
+      if (kind === 'out_today' && req.ccKiosk)
+        return reply
+          .code(403)
+          .send({ error: 'A wallboard link cannot open this', code: 'KIOSK_NOT_ALLOWED' })
       let collection: string | null = null
       if (kind !== 'out_today') {
         const asked = req.query.collection
         if (asked !== undefined && !validGeoCollection(asked))
           return reply.code(400).send({ error: 'Invalid collection' })
-        collection = asked ?? (await resolveGeoCollections())[0]?.key ?? null
+        if (req.ccKiosk) {
+          const only = await kioskMapCollection(req.ccKiosk.meta)
+          if (asked !== undefined && asked !== only)
+            return reply
+              .code(403)
+              .send({ error: 'A wallboard link cannot open this', code: 'KIOSK_NOT_ALLOWED' })
+          collection = only
+        } else collection = asked ?? (await resolveGeoCollections())[0]?.key ?? null
         if (collection && !(await can(req.user!, 'read', collection)))
           return reply.code(403).send({ error: 'No read access to that collection' })
       }
       const scope = readCcScope(req.query)
-      return reply.send({ data: await mapLayer(req.user!, !!req.isAdmin, kind, collection, scope) })
+      return reply.send({
+        data: await mapLayer(req.user!, ccIsAdmin(req), kind, collection, scope)
+      })
     }
   )
 
@@ -221,10 +262,17 @@ export async function geoRoute(
   reply: import('fastify').FastifyReply
 ) {
   const q = (req.query ?? {}) as Record<string, unknown>
-  const collection =
-    typeof q.collection === 'string' && q.collection
-      ? q.collection
-      : ((await resolveGeoCollections())[0]?.key ?? null)
+  const asked = typeof q.collection === 'string' && q.collection ? q.collection : null
+  let collection: string | null
+  if (req.ccKiosk) {
+    // A wallboard reads its link's map collection and nothing else.
+    const only = await kioskMapCollection(req.ccKiosk.meta)
+    if (asked !== null && asked !== only)
+      return reply
+        .code(403)
+        .send({ error: 'A wallboard link cannot open this', code: 'KIOSK_NOT_ALLOWED' })
+    collection = only
+  } else collection = asked ?? (await resolveGeoCollections())[0]?.key ?? null
   if (!collection)
     return reply.send({ data: { pins: [], truncated: false, region_applies: false, no_geo: true } })
   if (!validGeoCollection(collection)) return reply.code(400).send({ error: 'Invalid collection' })

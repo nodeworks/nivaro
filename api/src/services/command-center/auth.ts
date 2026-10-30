@@ -1,7 +1,8 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { requireAuth } from '../../middleware/authenticate.js'
+import { adminRefusal, requireAuth } from '../../middleware/authenticate.js'
 import { notePrincipalKind } from '../permission-cache.js'
 import { type KioskPrincipal, resolveKiosk } from './kiosk.js'
+import { readableRegionIds } from './scope-guard.js'
 
 const httpError = (statusCode: number, message: string, code: string) =>
   Object.assign(new Error(message), { statusCode, code })
@@ -49,9 +50,45 @@ export function kioskRefusal(req: FastifyRequest): string | null {
   return null
 }
 
+/**
+ * Whether this request may use administrator-only Command Center blocks (system health, deploy
+ * and incident markers, integration problems, partners, everyone's workload…). Honours API key
+ * scopes (a scoped key is never an administrator here) and is never true for a wallboard link.
+ */
+export function ccIsAdmin(req: FastifyRequest): boolean {
+  if (req.ccKiosk) return false
+  return !adminRefusal(req)
+}
+
+/** What a cache key must carry so one credential never reads another's cached answer. */
+export function ccCredKey(req: FastifyRequest): string {
+  if (req.ccKiosk) return `k${req.ccKiosk.linkId}`
+  const key = req.apiKeyId ?? req.apiKeySimulatedId
+  if (key != null) return `a${key}`
+  return req.authMethod === 'masquerade' ? 'm' : 's'
+}
+
+/**
+ * A `region` the caller cannot read is dropped (no region = everywhere) so a free-form value can
+ * never fan out into per-region work. Runs after sign-in on every Command Center read and write.
+ */
+async function limitRegion(req: FastifyRequest): Promise<void> {
+  for (const bag of [req.query, req.body]) {
+    if (!bag || typeof bag !== 'object') continue
+    const o = bag as Record<string, unknown>
+    if (typeof o.region !== 'string' || !o.region) continue
+    const readable = await readableRegionIds(req.user!)
+    if (!readable.has(o.region.toUpperCase())) delete o.region
+  }
+}
+
 export async function ccReadAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const kiosk = kioskParam(req)
-  if (kiosk === null) return requireAuth(req, reply)
+  if (kiosk === null) {
+    await requireAuth(req, reply)
+    if (req.user) await limitRegion(req)
+    return
+  }
   const refusal = kioskRefusal(req)
   if (refusal) throw httpError(403, refusal, 'KIOSK_NOT_ALLOWED')
   const p = await resolveKiosk(kiosk)
@@ -64,10 +101,18 @@ export async function ccReadAuth(req: FastifyRequest, reply: FastifyReply): Prom
   }
   req.user = p.user
   req.userRole = p.role
-  req.isAdmin = p.isAdmin
+  // A wallboard is a BUSINESS board, never an admin console: the link reads as its creator for
+  // record permissions, but every administrator-only block stays off (ccIsAdmin is false).
+  req.isAdmin = false
   req.ccKiosk = { linkId: p.linkId, meta: p.meta, expires_at: p.expires_at }
+  // The board the link opens on is the link's, whatever the query says.
+  if (!req.query || typeof req.query !== 'object') (req as { query: unknown }).query = {}
+  const q = req.query as Record<string, unknown>
+  if (p.meta.region) q.region = p.meta.region
+  else delete q.region
   // The compiled permission cache keys entries by how the request signed in.
   notePrincipalKind(p.user, `kiosk:${p.linkId}`)
+  await limitRegion(req)
 }
 
 export async function ccWriteAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {

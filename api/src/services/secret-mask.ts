@@ -152,12 +152,24 @@ export function maskQueryString(raw: string | null | undefined): string | null {
   return out.length > QUERY_CAP ? `${out.slice(0, QUERY_CAP - 1)}…` : out
 }
 
-/** A URL (path + query) with its query string masked like maskQueryString — for traces. */
+/**
+ * A credential that rides the URL PATH: the old Command Center wallboard page address
+ * `/command/kiosk/<token>` (current links keep the token in the #fragment, which no server
+ * ever receives). The segment after /command/kiosk/ is masked wherever a path is logged.
+ */
+const KIOSK_PATH_RE = /(\/command\/kiosk\/)[^/?#]+/gi
+
+export function maskUrlPath(path: string): string {
+  return path.replace(KIOSK_PATH_RE, `$1${MASK}`)
+}
+
+/** A URL (path + query) with its path credential and query string masked — for logs and traces. */
 export function maskUrlQuery(url: string): string {
   const mark = url.indexOf('?')
-  if (mark < 0) return url
+  if (mark < 0) return maskUrlPath(url)
   const q = maskQueryString(url.slice(mark + 1))
-  return q ? `${url.slice(0, mark)}?${q}` : url.slice(0, mark)
+  const path = maskUrlPath(url.slice(0, mark))
+  return q ? `${path}?${q}` : path
 }
 
 /** Whether a stored query string can be sent again as it is. */

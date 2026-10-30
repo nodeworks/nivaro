@@ -1,9 +1,11 @@
+import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { excludeStartRows } from '../instance-start.js'
 import { memo } from '../overview/data.js'
 import { can } from '../permissions.js'
-import { sharedGatedRead } from '../read-gate.js'
+import { sharedGatedRead, withReadGate } from '../read-gate.js'
+import { type AccessGates, compileAccessGates, visibleIds } from '../record-access.js'
 import { recordIdsInRegion } from './regions.js'
 import type { CcScope } from './scope.js'
 
@@ -193,12 +195,82 @@ export interface ThroughputAnswer extends ThroughputHours {
   live_only?: boolean
 }
 
-/** Transitions per hour for `user`, honoring the region and rewind lenses. */
+const NARROW_CANDIDATE_CAP = 20_000
+
+/** Distinct records of one collection with transitions in the window (candidates for a gate check). */
+async function transitionedItems(collection: string, from: Date, to: Date): Promise<string[]> {
+  const q = db('nivaro_workflow_history as h')
+    .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+    .where('h.timestamp', '>=', from)
+    .where('h.timestamp', '<', to)
+    .where('i.collection', collection)
+  excludeStartRows(q, 'h')
+  const rows = (await q.distinct('i.item').limit(NARROW_CANDIDATE_CAP)) as Array<{ item: unknown }>
+  return rows.map((r) => String(r.item))
+}
+
+/**
+ * Hour buckets for the collections that need narrowing — a region focus and/or the caller's own
+ * row filter / User Scopes — counted only over records the caller can open (the same gates
+ * /flow applies through the work index's Viewer). Collections that need neither come from the
+ * shared rows.
+ */
+async function narrowedBuckets(
+  user: User,
+  readable: Map<string, boolean>,
+  gates: Map<string, AccessGates | null>,
+  scope: CcScope,
+  fromD: Date,
+  toD: Date,
+  rows: RawRow[]
+): Promise<{ buckets: HourBucket[]; regionApplies: boolean }> {
+  let regionApplies = !!scope.region
+  const buckets: HourBucket[] = []
+  const shared = (collection: string) => {
+    for (const r of rows)
+      if (r.collection === collection) buckets.push({ at: toMs(r.bucket), n: Number(r.n) })
+  }
+  for (const [collection, ok] of readable) {
+    if (!ok) continue
+    const g = gates.get(collection)
+    // Gates that could not be compiled fail closed: nothing of this collection is counted.
+    if (g === null) continue
+    const restricted = !!g && (!!g.strict || !!g.rowFilter || g.scopes.length > 0)
+    let allowed: Set<string> | null = null
+    if (scope.region) {
+      const ids = await recordIdsInRegion(collection, scope.region).catch(() => null)
+      if (ids == null) regionApplies = false
+      else allowed = ids
+    }
+    if (restricted && g) {
+      const candidates = allowed ? [...allowed] : await transitionedItems(collection, fromD, toD)
+      allowed = await visibleIds(g, candidates).catch(() => new Set<string>())
+    }
+    if (allowed == null) {
+      // Unplaceable and unrestricted: counted everywhere (and the region lens says so).
+      shared(collection)
+      continue
+    }
+    const list = [...allowed]
+    for (let i = 0; i < list.length; i += 1000) {
+      const part = await historyHours(fromD, toD, { collection, ids: list.slice(i, i + 1000) })
+      for (const r of part) buckets.push({ at: toMs(r.bucket), n: Number(r.n) })
+    }
+  }
+  return { buckets, regionApplies }
+}
+
+/**
+ * Transitions per hour for `user`, honoring the region and rewind lenses and the records the
+ * caller can open. `cred` names the credential (session / API key / wallboard link) so a narrowed
+ * answer is never shared across credentials.
+ */
 export async function readThroughput(
   user: User,
   scope: CcScope,
   tz: string,
-  now = Date.now()
+  now = Date.now(),
+  cred = 's'
 ): Promise<ThroughputAnswer> {
   const cut = scope.at ? scope.at.getTime() : now
   const today0 = startOfLocalDay(cut, tz)
@@ -208,56 +280,62 @@ export async function readThroughput(
   const toD = new Date(cut)
   const rows = await allHours(fromD, toD, String(user.id))
   const readable = new Map<string, boolean>()
+  const gates = new Map<string, AccessGates | null>()
   for (const r of rows)
-    if (!readable.has(r.collection))
-      readable.set(r.collection, await can(user, 'read', r.collection).catch(() => false))
+    if (!readable.has(r.collection)) {
+      const ok = await can(user, 'read', r.collection).catch(() => false)
+      readable.set(r.collection, ok)
+      if (ok)
+        gates.set(r.collection, await compileAccessGates(user, r.collection).catch(() => null))
+    }
+  const narrowing =
+    !!scope.region ||
+    [...gates.values()].some((g) => g === null || g.strict || g.rowFilter || g.scopes.length > 0)
   let regionApplies = !!scope.region
   let buckets: HourBucket[] = []
-  if (!scope.region) {
+  if (!narrowing) {
     buckets = rows
       .filter((r) => readable.get(r.collection))
       .map((r) => ({ at: toMs(r.bucket), n: Number(r.n) }))
   } else {
-    for (const [collection, ok] of readable) {
-      if (!ok) continue
-      const ids = await recordIdsInRegion(collection, scope.region).catch(() => null)
-      if (ids == null) {
-        // This collection cannot be placed: count it everywhere and say so.
-        regionApplies = false
-        for (const r of rows)
-          if (r.collection === collection) buckets.push({ at: toMs(r.bucket), n: Number(r.n) })
-        continue
-      }
-      const list = [...ids]
-      for (let i = 0; i < list.length; i += 1000) {
-        const part = await historyHours(fromD, toD, {
-          collection,
-          ids: list.slice(i, i + 1000)
-        })
-        for (const r of part) buckets.push({ at: toMs(r.bucket), n: Number(r.n) })
-      }
-    }
+    // Per record work: one gated, briefly cached read per (person, credential, region, window).
+    const key = `cc:tp-narrow:${String(user.id).toUpperCase()}:${cred}:${scope.region ?? '-'}:${from}:${Math.floor(cut / 300_000)}`
+    const out = await memo(key, 60_000, () =>
+      withReadGate(
+        String(user.id),
+        () => narrowedBuckets(user, readable, gates, scope, fromD, toD, rows),
+        { label: 'cc:throughput-narrow' }
+      )
+    )
+    buckets = out.buckets
+    regionApplies = out.regionApplies
   }
-  // Yesterday's same-time total stops mid-hour: count that partial hour exactly.
+  // Yesterday's same-time total stops mid-hour: count that partial hour exactly (only when the
+  // buckets are the shared, unnarrowed ones; a narrowed answer estimates with the whole hour).
   const ySameCut = previousLocalDay(today0, tz) + (cut - today0)
   const partialFrom = new Date(Math.floor(ySameCut / 3600_000) * 3600_000)
   let partial = 0
-  try {
-    const q = db('nivaro_workflow_history as h')
-      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
-      .where('h.timestamp', '>=', partialFrom)
-      .where('h.timestamp', '<', new Date(ySameCut))
-    excludeStartRows(q, 'h')
-    const per = (await q.groupBy('i.collection').select('i.collection').count('* as n')) as Array<{
-      collection: string
-      n: number | string
-    }>
-    for (const r of per) if (readable.get(r.collection)) partial += Number(r.n)
-  } catch {
-    partial = 0
+  if (!narrowing) {
+    try {
+      const q = db('nivaro_workflow_history as h')
+        .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+        .where('h.timestamp', '>=', partialFrom)
+        .where('h.timestamp', '<', new Date(ySameCut))
+      excludeStartRows(q, 'h')
+      const per = (await q
+        .groupBy('i.collection')
+        .select('i.collection')
+        .count('* as n')) as Array<{
+        collection: string
+        n: number | string
+      }>
+      for (const r of per) if (readable.get(r.collection)) partial += Number(r.n)
+    } catch {
+      partial = 0
+    }
   }
   return {
-    ...foldHours(buckets, cut, tz, scope.region ? null : partial),
+    ...foldHours(buckets, cut, tz, narrowing ? null : partial),
     time_zone: tz,
     region_applies: regionApplies
   }
@@ -267,9 +345,10 @@ export async function readThroughput(
 export async function readThroughputHeadline(
   user: User,
   scope: CcScope,
-  tz: string
+  tz: string,
+  cred = 's'
 ): Promise<{ transitions_today: number; transitions_yesterday_same_time: number }> {
-  const t = await readThroughput(user, scope, tz)
+  const t = await readThroughput(user, scope, tz, Date.now(), cred)
   return {
     transitions_today: t.today_total,
     transitions_yesterday_same_time: t.yesterday_same_time
@@ -367,12 +446,12 @@ export function foldConfigMarkers(
 }
 
 /** The /snapshot headline block (one call from routes/command-center.ts). */
-export async function snapshotThroughput(req: {
-  user?: User | null
-  query?: unknown
-}): Promise<{ transitions_today: number; transitions_yesterday_same_time: number }> {
+export async function snapshotThroughput(
+  req: FastifyRequest
+): Promise<{ transitions_today: number; transitions_yesterday_same_time: number }> {
   const { userTimeZone } = await import('../user-time.js')
   const { readCcScope } = await import('./scope.js')
   const tz = await userTimeZone(req.user ?? null)
-  return readThroughputHeadline(req.user as User, readCcScope(req.query), tz)
+  const { ccCredKey } = await import('./auth.js')
+  return readThroughputHeadline(req.user as User, readCcScope(req.query), tz, ccCredKey(req))
 }

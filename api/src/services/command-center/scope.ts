@@ -11,6 +11,8 @@ export interface CcScope {
 }
 
 const MAX_REWIND_MS = 31 * 86_400_000
+/** A rewind instant is rounded down to this step, so free-form `at` values share cache entries. */
+export const REWIND_STEP_MS = 5 * 60_000
 
 export function readCcScope(query: unknown): CcScope {
   const q = (query ?? {}) as Record<string, unknown>
@@ -21,7 +23,7 @@ export function readCcScope(query: unknown): CcScope {
     const d = new Date(q.at)
     const now = Date.now()
     if (Number.isFinite(d.getTime()) && d.getTime() < now && now - d.getTime() <= MAX_REWIND_MS)
-      at = d
+      at = new Date(Math.floor(d.getTime() / REWIND_STEP_MS) * REWIND_STEP_MS)
   }
   return { region, at }
 }

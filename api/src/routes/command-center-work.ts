@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { attentionForRequest } from '../services/command-center/attention.js'
-import { ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
+import { ccCredKey, ccIsAdmin, ccReadAuth, ccWriteAuth } from '../services/command-center/auth.js'
 import { flowForRequest } from '../services/command-center/flow.js'
 import { forecastForRequest } from '../services/command-center/forecast.js'
 import { liveNudgeDeps, runNudge } from '../services/command-center/nudge.js'
@@ -23,7 +23,7 @@ export async function commandCenterWorkRoutes(app: FastifyInstance) {
 
   const viewerKey = (req: import('fastify').FastifyRequest, name: string) => {
     const s = readCcScope(req.query)
-    return `${name}:${String(req.user!.id).toUpperCase()}:${req.isAdmin ? 'a' : 'u'}:${s.region ?? ''}:${
+    return `${name}:${String(req.user!.id).toUpperCase()}:${ccCredKey(req)}:${ccIsAdmin(req) ? 'a' : 'u'}:${s.region ?? ''}:${
       s.at ? Math.floor(s.at.getTime() / 60_000) : 'live'
     }`
   }
@@ -43,7 +43,7 @@ export async function commandCenterWorkRoutes(app: FastifyInstance) {
     })
   })
 
-  app.get('/workload', async (req, reply) => {
+  app.get('/workload', { config: { ccNoKiosk: true } }, async (req, reply) => {
     try {
       const out = await workloadForRequest(app, req)
       return reply.send({
@@ -61,7 +61,7 @@ export async function commandCenterWorkRoutes(app: FastifyInstance) {
   })
 
   app.post('/nudge', { preHandler: ccWriteAuth }, async (req, reply) => {
-    const r = await runNudge(req.user!, !!req.isAdmin, req.body, liveNudgeDeps(app, req))
+    const r = await runNudge(req.user!, ccIsAdmin(req), req.body, liveNudgeDeps(app, req))
     return reply.code(r.status).send(r.body)
   })
 }

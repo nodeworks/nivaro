@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { withReadGate } from '../read-gate.js'
+import { ccIsAdmin } from './auth.js'
 import { readCcScope } from './scope.js'
 import { tenantMemo, Viewer } from './work-access.js'
 import {
@@ -126,7 +127,7 @@ export function assembleForecast(input: {
 export async function forecastForRequest(req: FastifyRequest): Promise<ForecastToday> {
   const scope = readCcScope(req.query)
   const tz = validTimeZone((req.query as Record<string, unknown>)?.tz)
-  const viewer = new Viewer(req.user!, !!req.isAdmin, scope.region)
+  const viewer = new Viewer(req.user!, ccIsAdmin(req), scope.region)
   const now = scope.at ? scope.at.getTime() : Date.now()
   const days = forecastDays(now, tz)
 

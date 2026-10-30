@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   tables: {} as Record<string, Row[]>,
   session: null as Row | null,
   sessionAdmin: false,
+  mintRefusal: false,
   principals: [] as string[],
   activity: [] as Row[]
 }))
@@ -69,7 +70,9 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.isAdmin = m.sessionAdmin
   }),
   adminRefusal: (req: { isAdmin?: boolean }) =>
-    req.isAdmin ? null : { error: 'Forbidden', code: 'ADMIN_ONLY' }
+    req.isAdmin ? null : { error: 'Forbidden', code: 'ADMIN_ONLY' },
+  credentialMintRefusal: () =>
+    m.mintRefusal ? { error: 'Sign in as yourself', code: 'CREDENTIAL_MINT_REFUSED' } : null
 }))
 vi.mock('../../../services/permission-cache.js', () => ({
   notePrincipalKind: (_u: unknown, kind: string) => m.principals.push(kind)
@@ -161,6 +164,7 @@ beforeEach(() => {
   seed()
   m.session = null
   m.sessionAdmin = false
+  m.mintRefusal = false
   m.principals = []
   m.activity = []
 })
@@ -173,7 +177,8 @@ describe('wallboard links read as their creator, for Command Center GETs only', 
       url: `/api/command-center/snapshot?kiosk=${TOKEN}`
     })
     expect(r.statusCode).toBe(200)
-    expect(r.json()).toEqual({ user: CREATOR, admin: true })
+    // A wallboard is a business board: the creator's data, never an administrator console.
+    expect(r.json()).toEqual({ user: CREATOR, admin: false })
     expect(m.principals).toEqual([`kiosk:${LINK_ID}`])
   })
 
@@ -307,6 +312,21 @@ describe('wallboard links read as their creator, for Command Center GETs only', 
 })
 
 describe('managing wallboard links', () => {
+  it('only a person signed in as themselves may make a link (credentialMintRefusal)', async () => {
+    m.session = { id: CREATOR, role: ADMIN_ROLE }
+    m.sessionAdmin = true
+    m.mintRefusal = true
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/command-center/kiosk-links',
+      payload: { label: 'Wall', expires_in_days: 7 }
+    })
+    expect(r.statusCode).toBe(403)
+    expect(r.json().code).toBe('CREDENTIAL_MINT_REFUSED')
+    expect(m.tables.nivaro_share_links).toHaveLength(1)
+  })
+
   it('is for administrators only', async () => {
     m.session = { id: 'paul', role: PLAIN_ROLE }
     const app = await build()
@@ -339,8 +359,9 @@ describe('managing wallboard links', () => {
     })
     expect(r.statusCode).toBe(201)
     const url = r.json().data.url as string
-    const token = url.split('/').pop() as string
-    expect(url).toMatch(/^\/command\/kiosk\/[0-9a-f]{48}$/)
+    const token = url.split('#').pop() as string
+    // The token rides the URL fragment: no server or access log ever sees it.
+    expect(url).toMatch(/^\/command\/kiosk#[0-9a-f]{48}$/)
     const stored = m.tables.nivaro_share_links.at(-1) as Row
     expect(stored.token).toBe(hashKioskToken(token))
     expect(stored.item).toBe('__cc_kiosk__')

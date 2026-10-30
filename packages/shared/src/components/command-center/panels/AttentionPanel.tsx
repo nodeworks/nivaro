@@ -94,7 +94,8 @@ function RiskSummary() {
     })
   if (r.tracked > 0)
     parts.push({ key: 'r', text: `${r.at_risk} at risk of ${r.tracked} tracked`, tone: MUTED })
-  if (r.open_issues > 0) parts.push({ key: 'i', text: `${r.open_issues} open issues`, tone: MUTED })
+  if ((r.open_issues ?? 0) > 0)
+    parts.push({ key: 'i', text: `${r.open_issues} open issues`, tone: MUTED })
   if (parts.length === 0) return null
   return (
     <p className='flex flex-wrap gap-x-3 gap-y-1 border-b border-[var(--cc-border)] px-3 py-2 text-[11.5px]'>

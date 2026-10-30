@@ -410,6 +410,17 @@ export default function App() {
                   }
                 />
                 {/* Command Center wallboard link (CC-23): no sign-in, no app chrome. */}
+                {/* The token rides the URL fragment (#<token>), which no server or log ever sees.
+                    The old /command/kiosk/:token form still opens: the page moves the token
+                    into the fragment. */}
+                <Route
+                  path='/command/kiosk'
+                  element={
+                    <Suspense fallback={<AppShell />}>
+                      <CommandCenterKioskPage />
+                    </Suspense>
+                  }
+                />
                 <Route
                   path='/command/kiosk/:token'
                   element={

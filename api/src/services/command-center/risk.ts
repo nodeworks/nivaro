@@ -1,5 +1,6 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
+import { ccCredKey, ccIsAdmin } from './auth.js'
 import { liveOpenWork } from './open-work.js'
 import { readCcScope } from './scope.js'
 import { tenantMemo, Viewer } from './work-access.js'
@@ -15,7 +16,8 @@ import { tenantMemo, Viewer } from './work-access.js'
 export interface SnapshotRisk {
   at_risk: number
   tracked: number
-  open_issues: number
+  /** Open issues are an administrator figure: null for everyone else. */
+  open_issues: number | null
   sla_warning?: number
   sla_breached?: number
 }
@@ -75,18 +77,21 @@ export async function computeSnapshotRisk(viewer: Viewer): Promise<SnapshotRisk>
   const since = new Date(Date.now() - 90 * 86_400_000)
   const [queue, issues, sla] = await Promise.all([
     queueRisk(viewer).catch(() => ({ at_risk: 0, tracked: 0 })),
-    db('nivaro_issues')
-      .where('status', 'open')
-      .where('last_seen_at', '>', since)
-      .count('* as n')
-      .first()
-      .catch(() => null) as Promise<{ n: number } | null | undefined>,
+    // Instance-wide error issues name internal failures: administrators only.
+    viewer.isAdmin
+      ? (db('nivaro_issues')
+          .where('status', 'open')
+          .where('last_seen_at', '>', since)
+          .count('* as n')
+          .first()
+          .catch(() => null) as Promise<{ n: number } | null | undefined>)
+      : Promise.resolve(undefined),
     slaCounts(viewer).catch(() => null)
   ])
   return {
     at_risk: queue.at_risk,
     tracked: queue.tracked,
-    open_issues: Number(issues?.n ?? 0),
+    open_issues: viewer.isAdmin ? Number(issues?.n ?? 0) : null,
     ...(sla ? { sla_warning: sla.warning, sla_breached: sla.breached } : {})
   }
 }
@@ -94,11 +99,12 @@ export async function computeSnapshotRisk(viewer: Viewer): Promise<SnapshotRisk>
 /** The snapshot's risk block for one request (per person + region, memoised ~30 s). */
 export async function snapshotRiskBlock(req: FastifyRequest): Promise<SnapshotRisk> {
   const scope = readCcScope(req.query)
-  const viewer = new Viewer(req.user!, !!req.isAdmin, scope.region)
+  const isAdmin = ccIsAdmin(req)
+  const viewer = new Viewer(req.user!, isAdmin, scope.region)
   const out = await tenantMemo(
-    `cc:risk:${String(req.user!.id).toUpperCase()}:${req.isAdmin ? 'a' : 'u'}:${scope.region ?? ''}`,
+    `cc:risk:${String(req.user!.id).toUpperCase()}:${ccCredKey(req)}:${isAdmin ? 'a' : 'u'}:${scope.region ?? ''}`,
     30_000,
     () => computeSnapshotRisk(viewer)
   )
-  return out ?? { at_risk: 0, tracked: 0, open_issues: 0 }
+  return out ?? { at_risk: 0, tracked: 0, open_issues: isAdmin ? 0 : null }
 }

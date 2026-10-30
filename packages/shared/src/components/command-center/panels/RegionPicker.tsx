@@ -18,6 +18,17 @@ export function RegionPicker() {
   if (regions.length === 0) return null
   const noun = cc.config?.region_label ?? 'Region'
   const current = cc.region ? regions.find((r) => r.id === cc.region) : null
+  // A wallboard shows the region its link opens on, read-only, and offers no other choice.
+  if (cc.kiosk) {
+    if (!current) return null
+    return (
+      <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan bg-nvr-cyan/15 px-2.5 py-0.5 text-[12px] font-medium text-[var(--cc-strong)]'>
+        <MapPin className='h-3.5 w-3.5' aria-hidden='true' />
+        <span className='sr-only'>{noun}: </span>
+        {current.label}
+      </span>
+    )
+  }
   const pick = (id: string | null) => {
     cc.setRegion(id)
     setOpen(false)

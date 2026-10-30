@@ -1,7 +1,9 @@
+import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import type { ActivityEntryInput, ActivityLabels } from '../activity-sentence.js'
 import { can } from '../permissions.js'
+import { ccIsAdmin } from './auth.js'
 import { recordIdsInRegion } from './regions.js'
 import type { CcScope } from './scope.js'
 
@@ -231,13 +233,9 @@ export async function readFeed(
 }
 
 /** The /snapshot feed seed (one call from routes/command-center.ts): 25 newest, as the caller. */
-export async function snapshotFeed(req: {
-  user?: User | null
-  isAdmin?: boolean
-  query?: unknown
-}): Promise<FeedRow[]> {
+export async function snapshotFeed(req: FastifyRequest): Promise<FeedRow[]> {
   const { readCcScope } = await import('./scope.js')
-  const feed = await readFeed(req.user as User, !!req.isAdmin, readCcScope(req.query), {
+  const feed = await readFeed(req.user as User, ccIsAdmin(req), readCcScope(req.query), {
     limit: 25
   })
   return feed.entries

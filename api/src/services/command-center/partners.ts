@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { memo } from '../overview/data.js'
+import { ccIsAdmin } from './auth.js'
 
 /**
  * Command Center partners strip (CC-14) — administrators only. One row per enabled external
@@ -87,7 +88,7 @@ export async function readPartners(
   app: FastifyInstance,
   req: FastifyRequest
 ): Promise<PartnerHealthRow[]> {
-  if (!req.isAdmin) return []
+  if (!ccIsAdmin(req)) return []
   // The same for every administrator of this tenant: one read per minute.
   return memo('cc:partners', 60_000, async () => {
     const headers: Record<string, string> = {}

@@ -65,6 +65,7 @@ import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
+import { maskUrlQuery } from './services/secret-mask.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
@@ -106,7 +107,8 @@ export async function buildServer() {
           socket?: { remotePort?: number }
         }) => ({
           method: req.method,
-          url: String(req.url ?? '').split('?')[0],
+          // The path can carry a credential too (/command/kiosk/<token>): masked.
+          url: maskUrlQuery(String(req.url ?? '').split('?')[0]),
           host: req.host,
           remoteAddress: req.ip,
           remotePort: req.socket?.remotePort
@@ -628,7 +630,10 @@ export async function buildServer() {
       // No free connection within DB_ACQUIRE_TIMEOUT_MS: busy, not broken. A short
       // honest 503 the client may retry, not an issue and not a 60 s hang.
       if (err.statusCode == null && isPoolBusy(err)) {
-        req.log.warn({ url: req.url }, 'request pool busy: no connection within the wait limit')
+        req.log.warn(
+          { url: maskUrlQuery(req.url) },
+          'request pool busy: no connection within the wait limit'
+        )
         return reply.code(503).header('Retry-After', '5').send({
           statusCode: 503,
           error: 'Service Unavailable',
@@ -638,7 +643,7 @@ export async function buildServer() {
       }
       const refusal = err.statusCode == null ? describeDbRefusal(err) : null
       if (refusal) {
-        req.log.info({ code: refusal.code, url: req.url }, refusal.message)
+        req.log.info({ code: refusal.code, url: maskUrlQuery(req.url) }, refusal.message)
         noteDbRefusal(req, err)
         return reply.code(refusal.status).send({
           statusCode: refusal.status,
@@ -652,7 +657,7 @@ export async function buildServer() {
         // #300 — every 5th 500 per route also captures a REDACTED request
         // sketch (query keys + body shape, never values) onto the issue, so a
         // recurring 500 carries a reproducible request without leaking data.
-        const routeKey = `${req.method} ${req.routeOptions?.url ?? req.url}`
+        const routeKey = `${req.method} ${req.routeOptions?.url ?? maskUrlQuery(req.url)}`
         const n = (errorContextCounters.get(routeKey) ?? 0) + 1
         errorContextCounters.set(routeKey, n)
         let requestContext: string | null = null
@@ -672,7 +677,7 @@ export async function buildServer() {
           }
           try {
             requestContext = JSON.stringify({
-              url: req.url.slice(0, 300),
+              url: maskUrlQuery(req.url).slice(0, 300),
               query_keys: Object.keys((req.query as Record<string, unknown>) ?? {}),
               body_shape: shape(req.body, 0)
             })
@@ -689,7 +694,7 @@ export async function buildServer() {
           requestContext
         }).catch(() => {})
       }
-      logRouteError(req.log, err, status, req.url)
+      logRouteError(req.log, err, status, maskUrlQuery(req.url))
       // LIST_TIMEOUT is ours, not a driver code: clients show "took too long, Retry" on it.
       const coded =
         !!err.code &&

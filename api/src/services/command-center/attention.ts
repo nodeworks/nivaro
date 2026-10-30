@@ -1,8 +1,10 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
+import type { User } from '../../types.js'
 import { selectInChunks } from '../db-batch.js'
 import { sharedGatedRead } from '../read-gate.js'
 import { alertPrefillHref } from './alert-href.js'
+import { ccIsAdmin } from './auth.js'
 import { readCcConfig } from './config.js'
 import { collectionLabels, viewerSlice } from './flow.js'
 import { type OpenInstance, type OpenWorkIndex, openWorkFor } from './open-work.js'
@@ -74,14 +76,16 @@ export function spanWords(ms: number): string {
   return plural(Math.round(h / 24), 'day')
 }
 
-async function recordLabels(keys: Array<{ collection: string; id: string }>) {
+async function recordLabels(user: User, keys: Array<{ collection: string; id: string }>) {
   const by = new Map<string, Set<string>>()
   for (const k of keys) by.set(k.collection, (by.get(k.collection) ?? new Set()).add(k.id))
   const out = new Map<string, string>()
   if (by.size === 0) return out
   try {
-    const { getLabels } = await import('../queues.js')
-    const labels = await getLabels(by)
+    // As the caller: a display template renders only fields the caller may read (a record they
+    // cannot read at all has no label and falls back to its id).
+    const { linkLabelsAsUser } = await import('../ai-link-labels.js')
+    const labels = await linkLabelsAsUser(user, by)
     for (const [k, v] of Object.entries(labels)) out.set(U(k), v)
   } catch {
     /* labels fall back to the id */
@@ -90,6 +94,7 @@ async function recordLabels(keys: Array<{ collection: string; id: string }>) {
 }
 
 interface Ctx {
+  user: User
   viewer: Viewer
   index: OpenWorkIndex
   stuckDays: number
@@ -147,6 +152,7 @@ async function workItems(ctx: Ctx): Promise<AttentionItem[]> {
     (list) => list.reduce((a, b) => (b.entered_at < a.entered_at ? b : a)) as OpenInstance
   )
   const labels = await recordLabels(
+    ctx.user,
     [...shownBreached, ...shownWarning, ...oldestStuck].map((o) => ({
       collection: o.collection,
       id: o.item
@@ -356,6 +362,7 @@ async function approvalItems(ctx: Ctx): Promise<AttentionItem[]> {
   }
   const shown = blocked.slice(0, RECORD_ITEMS_PER_KIND * 2)
   const labels = await recordLabels(
+    ctx.user,
     shown.map((b) => ({ collection: b.p.collection, id: String(b.p.item) }))
   )
   return shown.map(({ p, reason, mine, step }) => {
@@ -516,21 +523,25 @@ export async function attentionForRequest(
   req: FastifyRequest
 ): Promise<{ items: AttentionItem[]; live_only: boolean; region_applies: boolean | null }> {
   const scope = readCcScope(req.query)
-  const viewer = new Viewer(req.user!, !!req.isAdmin, scope.region)
+  const viewer = new Viewer(req.user!, ccIsAdmin(req), scope.region)
   // Attention is about now: a rewound board still gets the live list, marked live_only.
   const { index } = await openWorkFor(null, String(req.user!.id))
   const cfg = await readCcConfig()
   if (!index) return { items: [], live_only: !!scope.at, region_applies: null }
   const items = await computeAttention({
+    user: req.user!,
     viewer,
     index,
     stuckDays: cfg.stuck_days,
-    isAdmin: !!req.isAdmin,
+    isAdmin: ccIsAdmin(req),
     userId: String(req.user!.id),
     collectionLabel: await collectionLabels([...new Set(index.bindings.map((b) => b.collection))])
   })
   return {
-    items,
+    // A wallboard only shows the list: its rows carry no actions and no way into a record.
+    items: req.ccKiosk
+      ? items.map((i) => ({ ...i, href: null, record: null, list: null, actions: [] }))
+      : items,
     live_only: !!scope.at,
     region_applies: scope.region ? viewer.regionApplied : null
   }

@@ -224,7 +224,7 @@ export function MapPanel() {
               </button>
             ))}
           <span className='mx-1 h-4 w-px bg-[var(--cc-border)]' aria-hidden='true' />
-          {LAYERS.map((l) => {
+          {LAYERS.filter((l) => !(cc.kiosk && l.kind === 'out_today')).map((l) => {
             const on = layers.includes(l.kind)
             return (
               <button

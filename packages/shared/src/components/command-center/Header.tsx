@@ -92,7 +92,7 @@ export function Header({
           <span className={`${SKELETON} h-4 w-40`} aria-hidden />
         ) : null}
         {snap && <DeadlineChips risk={snap.risk} />}
-        {snap && snap.risk.open_issues > 0 && (
+        {snap && (snap.risk.open_issues ?? 0) > 0 && (
           <button
             type='button'
             disabled={kiosk}

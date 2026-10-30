@@ -1,5 +1,6 @@
 import { createNivaro } from '@nivaro/sdk'
 import { CommandCenterView, NavigationContext, NivaroProvider } from '@nivaro/shared'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useAuth } from '@/lib/auth'
 
@@ -25,12 +26,22 @@ export function CommandCenterPage() {
 }
 
 /**
- * /command/kiosk/:token — a wallboard link (CC-23): the board read-only, in TV mode, with no
+ * /command/kiosk#<token> — a wallboard link (CC-23): the board read-only, in TV mode, with no
  * app chrome and nobody signed in. Every read carries the token; the API answers as the
  * link's maker for Command Center reads only.
  */
 export function CommandCenterKioskPage() {
-  const { token = '' } = useParams<{ token: string }>()
+  const { token: legacyToken = '' } = useParams<{ token: string }>()
+  // The token lives in the URL fragment (#<token>): it is never sent to a server, so it cannot
+  // reach an access log. An old /command/kiosk/<token> address is rewritten to that form here.
+  const [token] = useState(() => {
+    const fromHash = window.location.hash.replace(/^#/, '')
+    const t = fromHash || legacyToken
+    if (t && (legacyToken || !fromHash)) {
+      window.history.replaceState(null, '', `/command/kiosk#${t}`)
+    }
+    return t
+  })
   return (
     <NivaroProvider client={client}>
       <NavigationContext.Provider value={{ navigate: () => undefined }}>

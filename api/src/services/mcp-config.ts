@@ -69,7 +69,7 @@ export async function markMcpInnerRequest(req: FastifyRequest): Promise<void> {
 // point one at itself. agent-questions/:id/answer: an agent never answers its own ask_human
 // question (#3220; the route also refuses every non-session caller).
 const OAUTH_NO_WRITE =
-  /^\/api\/(auth|api-keys|oauth|graphql|mcp-connections|agent-triggers)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/agent-questions\/[^/]+\/answer(\/|$)/i
+  /^\/api\/(auth|api-keys|oauth|graphql|mcp-connections|agent-triggers|command-center\/kiosk-links)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/agent-questions\/[^/]+\/answer(\/|$)/i
 
 /**
  * The path as the router will see it: percent-decoded (to a fixed point),
