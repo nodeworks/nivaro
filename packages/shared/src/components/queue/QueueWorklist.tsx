@@ -3275,7 +3275,9 @@ export function QueueWorklist({
       if (!meta.target_collection || !meta.display_field) return []
       const params: Record<string, string | number> = {
         limit: 25,
-        sort: meta.display_field
+        sort: meta.display_field,
+        // Records hidden from pickers (a retired zone) are not offered.
+        picker: '1'
       }
       // The other facets' picks cascade in (Zone 1 → only Zone 1's regions).
       const narrow = context?.narrowBy.length

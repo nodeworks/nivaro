@@ -1891,6 +1891,9 @@ function RelationColFilter({
       }
       if (search) params.search = search
       else if (hasPage) params.filter = JSON.stringify({ id: { _in: preferIds.slice(0, 500) } })
+      // Values already on the page are real data and stay offered; the rest of
+      // the list hides records excluded from pickers.
+      if (!hasPage || search) params.picker = '1'
       return client
         .request<{ data: Array<Record<string, unknown>> }>(get(`/items/${target}`, params))
         .then((r) =>
@@ -2191,7 +2194,8 @@ function QuickFilterSelect({
       valueField,
       def.label_field,
       def.sort ?? '',
-      narrowKey
+      narrowKey,
+      selected.map(String).sort().join(',')
     ],
     queryFn: async () => {
       const narrow =
@@ -2202,31 +2206,34 @@ function QuickFilterSelect({
               narrowBy
             )
           : null
-      // Picks already made stay offered even when the cascade would drop them,
-      // so a chip never loses its label.
-      const filter = narrow
-        ? selected.length > 0
-          ? { _or: [narrow, { [valueField]: { _in: selected } }] }
-          : narrow
-        : null
-      return client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${def.collection}`, {
-            limit: 1000,
-            ...(def.sort ? { sort: def.sort } : {}),
-            ...(filter ? { filter: JSON.stringify(filter) } : {}),
-            fields: [...new Set(['id', valueField, def.label_field])].join(',')
-          })
-        )
-        .then((r) =>
-          (r.data ?? [])
-            .map((row) => ({
-              value: row[valueField] as string | number,
-              label: String(row[def.label_field] ?? row[valueField] ?? ''),
-              id: row.id as string | number
-            }))
-            .filter((o) => o.value != null && o.label !== '')
-        )
+      const rows = (filter: Record<string, unknown> | null, picker: boolean) =>
+        client
+          .request<{ data: Array<Record<string, unknown>> }>(
+            get(`/items/${def.collection}`, {
+              limit: 1000,
+              // Records hidden from pickers (a retired zone) are not offered.
+              ...(picker ? { picker: '1' } : {}),
+              ...(def.sort ? { sort: def.sort } : {}),
+              ...(filter ? { filter: JSON.stringify(filter) } : {}),
+              fields: [...new Set(['id', valueField, def.label_field])].join(',')
+            })
+          )
+          .then((r) =>
+            (r.data ?? [])
+              .map((row) => ({
+                value: row[valueField] as string | number,
+                label: String(row[def.label_field] ?? row[valueField] ?? ''),
+                id: row.id as string | number
+              }))
+              .filter((o) => o.value != null && o.label !== '')
+          )
+      const offered = await rows(narrow, true)
+      // Picks already made stay offered (and labelled) even when the cascade or
+      // a picker exclusion would drop them — a saved view or default may hold one.
+      const have = new Set(offered.map((o) => String(o.value)))
+      const missing = selected.filter((v) => !have.has(String(v)))
+      if (missing.length === 0) return offered
+      return [...offered, ...(await rows({ [valueField]: { _in: missing } }, false))]
     },
     staleTime: 10 * 60_000,
     enabled: armed || selected.length > 0,
@@ -2872,7 +2879,12 @@ function RelationValueList({
       const fields = optionFieldsFor(template, labelField)
       return client
         .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${target}`, { limit: 500, sort: labelField, ...(fields ? { fields } : {}) })
+          get(`/items/${target}`, {
+            limit: 500,
+            sort: labelField,
+            picker: '1',
+            ...(fields ? { fields } : {})
+          })
         )
         .then((r) =>
           (r.data ?? [])
