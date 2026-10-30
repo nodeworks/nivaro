@@ -75,10 +75,17 @@ export function Header({
           <span>
             <b className='font-semibold tabular-nums'>{t.transitions_today}</b> moves today{' '}
             <span
-              className={delta >= 0 ? 'text-[var(--cc-good-text)]' : 'text-[var(--cc-warn-text)]'}
+              className={
+                delta === 0
+                  ? 'text-[var(--cc-muted)]'
+                  : delta > 0
+                    ? 'text-[var(--cc-good-text)]'
+                    : 'text-[var(--cc-warn-text)]'
+              }
             >
-              ({delta >= 0 ? '+' : '−'}
-              {Math.abs(delta)} on yesterday)
+              {delta === 0
+                ? '(same as yesterday by now)'
+                : `(${delta > 0 ? '+' : '−'}${Math.abs(delta)} vs yesterday by now)`}
             </span>
           </span>
         ) : cc.snapshotLoading ? (

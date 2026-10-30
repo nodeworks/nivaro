@@ -21,10 +21,18 @@ const SEVERITY = {
   info: { Icon: Info, word: 'Info', tone: 'text-[var(--cc-muted)]' }
 } as const
 
+/** Rows shown before the rest fold behind "Show all". */
+const ATTENTION_FOLD = 8
+
 export function AttentionPanel() {
   const cc = useCc()
   const q = useCcQuery<AttentionItem[]>('/attention', undefined, { refetchInterval: 60_000 })
   const items = q.data ?? []
+  // The list is ranked, so the top few are what matters; the rest folds away so the
+  // panels under it stay in view (a wall screen nobody scrolls never sees them otherwise).
+  const [expanded, setExpanded] = useState(false)
+  const shown = expanded ? items : items.slice(0, ATTENTION_FOLD)
+  const hidden = items.length - shown.length
   return (
     <section className={PANEL} data-cc-panel='attention' aria-busy={q.isLoading}>
       <div className={PANEL_HEAD}>
@@ -35,10 +43,26 @@ export function AttentionPanel() {
       </div>
       <RiskSummary />
       <ul className='divide-y divide-[var(--cc-border)]'>
-        {items.map((it) => (
+        {shown.map((it) => (
           <AttentionRow key={it.id} item={it} />
         ))}
       </ul>
+      {(hidden > 0 || expanded) && items.length > ATTENTION_FOLD && (
+        <div className='border-t border-[var(--cc-border)] px-3 py-2'>
+          {cc.kiosk || cc.tv ? (
+            <span className={`text-[11.5px] ${FAINT}`}>+{hidden} more</span>
+          ) : (
+            <button
+              type='button'
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className={`text-[11.5px] font-medium text-[var(--cc-text)] underline-offset-2 hover:underline ${FOCUS}`}
+            >
+              {expanded ? 'Show fewer' : `Show all ${items.length}`}
+            </button>
+          )}
+        </div>
+      )}
       {!q.isLoading && items.length === 0 && (
         <p className={`px-3 py-3 text-[12px] ${FAINT}`}>
           {q.isError ? 'Could not load this list.' : 'Nothing needs attention right now.'}

@@ -161,10 +161,13 @@ function historyHours(from: Date, to: Date, items?: { collection: string; ids: s
     .where('h.timestamp', '<', to)
   excludeStartRows(q, 'h')
   if (items) q.where('i.collection', items.collection).whereIn('i.item', items.ids)
-  return q
-    .select(db.raw(`${HOUR_SQL} as bucket`), 'i.collection')
-    .count('* as n')
-    .groupBy(db.raw(HOUR_SQL), 'i.collection') as unknown as Promise<RawRow[]>
+  return (
+    q
+      .select(db.raw(`${HOUR_SQL} as bucket`), 'i.collection')
+      .count('* as n')
+      // One raw GROUP BY: knex drops the plain column after a raw first argument.
+      .groupByRaw(`${HOUR_SQL}, i.collection`) as unknown as Promise<RawRow[]>
+  )
 }
 
 const toMs = (v: Date | string) => (v instanceof Date ? v.getTime() : Date.parse(String(v)))

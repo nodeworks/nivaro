@@ -34,7 +34,9 @@ export function CommandCenterKioskPage() {
   return (
     <NivaroProvider client={client}>
       <NavigationContext.Provider value={{ navigate: () => undefined }}>
-        <div className='flex min-h-screen flex-col'>
+        {/* Bounded to the screen like the admin outlet: the board scrolls its own rail, and
+            the map keeps the screen's height instead of growing with the rail. */}
+        <div className='flex h-screen flex-col overflow-hidden'>
           <CommandCenterView kiosk={token} />
         </div>
       </NavigationContext.Provider>
