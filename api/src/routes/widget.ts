@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -416,11 +416,81 @@ export async function activeFeedCreator(createdBy: unknown): Promise<User | null
   return creator
 }
 
+/** What a feed serves (the public feed route's answer); null = the feed has no fields to serve. */
+export async function readFeedAnswer(
+  feed: Record<string, unknown>,
+  creator: User | null,
+  requestedLimit?: string | number
+): Promise<{ data: Array<Record<string, unknown>>; fields: string[]; total: number } | null> {
+  const stored = Number(feed.limit_count) || 20
+  const qLimit = requestedLimit != null && requestedLimit !== '' ? Number(requestedLimit) : NaN
+  const limit = Math.min(
+    100,
+    Math.max(1, Number.isFinite(qLimit) && qLimit > 0 ? Math.min(qLimit, stored) : stored)
+  )
+  if (feed.queue_id) {
+    // Queue-backed feed: resolved using the FEED CREATOR's identity, not the anonymous public
+    // viewer's — there is no viewer to check permissions against on a public route. The creator
+    // configured the feed once (canReadQueue gated there) and it is then served identically to
+    // every public viewer. Resolution is capped at the rows this route returns.
+    const { items } = await fetchQueueItems(String(feed.queue_id), creator!, 'all', {
+      ceiling: limit
+    })
+    const fields = ['id', 'label', 'state', 'sla_status', 'aging_hours']
+    const rows = items.slice(0, limit).map((it) => ({
+      id: it.item_id,
+      label: it.label,
+      state: it.state ?? '',
+      sla_status: it.sla_status ?? '',
+      aging_hours: it.aging_hours ?? ''
+    }))
+    return { data: rows, fields, total: rows.length }
+  }
+  const fields = (parseJson<string[]>(feed.fields as string) ?? []).filter((f) =>
+    FIELD_NAME_RE.test(f)
+  )
+  if (fields.length === 0) return null
+  // SELECT only the whitelisted fields — other columns are never exposed
+  let q = db(String(feed.collection)).select(fields).limit(limit)
+  const filters = parseJson<Record<string, unknown>>(feed.filters as string)
+  if (filters) {
+    for (const [key, value] of Object.entries(filters)) {
+      if (FIELD_NAME_RE.test(key)) q = q.where(key, value as string)
+    }
+  }
+  if (feed.sort && typeof feed.sort === 'string') {
+    const desc = feed.sort.startsWith('-')
+    const sortField = desc ? feed.sort.slice(1) : feed.sort
+    if (FIELD_NAME_RE.test(sortField)) q = q.orderBy(sortField, desc ? 'desc' : 'asc')
+  }
+  const rows = (await q) as Array<Record<string, unknown>>
+  return { data: rows, fields, total: rows.length }
+}
+
 /** Push stream limits: a wall of embeds on one page shares an IP, an abuser doesn't get more. */
 const FEED_STREAM_PER_IP = 20
 const FEED_STREAM_HEARTBEAT_MS = 25_000
 /** Writes within this window collapse into one "changed" signal. */
 const FEED_STREAM_COALESCE_MS = 2_000
+
+/**
+ * The fingerprint of what a feed serves right now, shared by every open stream of one token for
+ * a moment (one read per token per burst, however many pages listen). A stream signals only when
+ * this changes, so it never says more than a reload of the public feed would.
+ */
+const feedSigs = new Map<string, { at: number; sig: Promise<string | null> }>()
+function feedSignature(token: string, feed: Record<string, unknown>): Promise<string | null> {
+  const hit = feedSigs.get(token)
+  if (hit && Date.now() - hit.at < 1_500) return hit.sig
+  const sig = (async () => {
+    const creator = await activeFeedCreator(feed.created_by)
+    const answer = await readFeedAnswer(feed, creator)
+    return answer ? createHash('sha256').update(JSON.stringify(answer.data)).digest('hex') : null
+  })().catch(() => null)
+  feedSigs.set(token, { at: Date.now(), sig })
+  if (feedSigs.size > 2_000) feedSigs.delete(feedSigs.keys().next().value as string)
+  return sig
+}
 
 /** Collections whose writes can change what a feed shows. */
 export async function feedWatchCollections(feed: {
@@ -472,16 +542,49 @@ export async function widgetRoutes(app: FastifyInstance) {
       if (!token || !/^[a-f0-9]{32}$/i.test(token)) {
         return reply.code(404).send({ error: 'Feed not found' })
       }
-      const feed = await feedStillServes(token)
-      if (!feed) return reply.code(404).send({ error: 'Feed not found' })
       const ip = req.ip || 'unknown'
+      // Reserve the slot before any await, so concurrent opens can't overrun the cap; every
+      // exit below gives it back exactly once.
       if ((streamsByIp.get(ip) ?? 0) >= FEED_STREAM_PER_IP) {
         return reply
           .code(429)
           .header('Retry-After', '60')
           .send({ error: 'Too many live feeds from this address' })
       }
-      const watch = await feedWatchCollections(feed)
+      streamsByIp.set(ip, (streamsByIp.get(ip) ?? 0) + 1)
+      let released = false
+      const release = () => {
+        if (released) return
+        released = true
+        const n = (streamsByIp.get(ip) ?? 1) - 1
+        if (n > 0) streamsByIp.set(ip, n)
+        else streamsByIp.delete(ip)
+      }
+      let gone = false
+      req.raw.once('close', () => {
+        gone = true
+        release()
+      })
+
+      let feed: Record<string, unknown> | null
+      let watch: Set<string>
+      let lastSig: string | null
+      try {
+        feed = await feedStillServes(token)
+        if (!feed) {
+          release()
+          return reply.code(404).send({ error: 'Feed not found' })
+        }
+        watch = await feedWatchCollections(feed)
+        lastSig = await feedSignature(token, feed)
+      } catch {
+        release()
+        return reply.code(503).send({ error: 'Feed unavailable' })
+      }
+      if (gone || req.raw.destroyed) {
+        release()
+        return
+      }
       const tenant = currentTenantKey()
 
       reply.hijack()
@@ -494,7 +597,6 @@ export async function widgetRoutes(app: FastifyInstance) {
         'access-control-allow-origin': '*'
       })
       raw.write('retry: 5000\n: connected\n\n')
-      streamsByIp.set(ip, (streamsByIp.get(ip) ?? 0) + 1)
 
       let closed = false
       let pending: ReturnType<typeof setTimeout> | null = null
@@ -508,12 +610,18 @@ export async function widgetRoutes(app: FastifyInstance) {
           end()
         }
       }
+      // A write on a watched collection only PROMPTS a check: the stream signals when what the
+      // feed serves actually changed, so it reveals nothing a reload of the feed wouldn't.
       const unsubscribe = subscribeSse((ev: SseEvent) => {
         if (closed || pending) return
         if (!sseEventForTenant(ev, tenant) || !watch.has(ev.collection)) return
         pending = setTimeout(() => {
           pending = null
-          send('event: changed\ndata: {}\n\n')
+          void feedSignature(token, feed!).then((sig) => {
+            if (closed || sig === null || sig === lastSig) return
+            lastSig = sig
+            send('event: changed\ndata: {}\n\n')
+          })
         }, FEED_STREAM_COALESCE_MS)
       })
       const heartbeat = setInterval(() => {
@@ -537,9 +645,7 @@ export async function widgetRoutes(app: FastifyInstance) {
         if (pending) clearTimeout(pending)
         unsubscribe()
         feedStreams.delete(end)
-        const n = (streamsByIp.get(ip) ?? 1) - 1
-        if (n > 0) streamsByIp.set(ip, n)
-        else streamsByIp.delete(ip)
+        release()
         try {
           raw.end()
         } catch {
@@ -573,73 +679,10 @@ export async function widgetRoutes(app: FastifyInstance) {
       const legacy = feed.created_by == null && !feed.queue_id
       if (!creator && !legacy) return reply.code(404).send({ error: 'Feed not found' })
 
-      if (feed.queue_id) {
-        // Queue-backed feed: resolved using the FEED CREATOR's identity, not
-        // the anonymous public viewer's — there is no viewer to check
-        // permissions against on a public route. This matches how
-        // collection-backed feeds already work: the creator configures the
-        // feed once at creation time (canReadQueue gated there), and it is
-        // then served identically to every public viewer forever after, with
-        // zero per-request RBAC re-check.
-        try {
-          const stored = Number(feed.limit_count) || 20
-          const qLimit = req.query.limit ? Number(req.query.limit) : NaN
-          const limit = Math.min(
-            100,
-            Math.max(1, Number.isFinite(qLimit) && qLimit > 0 ? Math.min(qLimit, stored) : stored)
-          )
-          // Cap resolution at the small number of rows this public route will
-          // actually return, instead of resolving the full QUEUE_SANITY_CEILING
-          // (up to 20,000 rows/source) only to discard everything past `limit`.
-          const { items } = await fetchQueueItems(feed.queue_id, creator!, 'all', {
-            ceiling: limit
-          })
-          const fields = ['id', 'label', 'state', 'sla_status', 'aging_hours']
-          const rows = items.slice(0, limit).map((it) => ({
-            id: it.item_id,
-            label: it.label,
-            state: it.state ?? '',
-            sla_status: it.sla_status ?? '',
-            aging_hours: it.aging_hours ?? ''
-          }))
-          return reply.send({ data: rows, fields, total: rows.length })
-        } catch (err) {
-          app.log.error({ err, feed: feed.id }, 'widget queue feed failed')
-          return reply.code(500).send({ error: 'Feed unavailable' })
-        }
-      }
-
-      const fields = (parseJson<string[]>(feed.fields) ?? []).filter((f) => FIELD_NAME_RE.test(f))
-      if (fields.length === 0) return reply.code(404).send({ error: 'Feed not found' })
-
-      const stored = Number(feed.limit_count) || 20
-      const qLimit = req.query.limit ? Number(req.query.limit) : NaN
-      const limit = Math.min(
-        100,
-        Math.max(1, Number.isFinite(qLimit) && qLimit > 0 ? Math.min(qLimit, stored) : stored)
-      )
-
       try {
-        // SELECT only the whitelisted fields — other columns are never exposed
-        let q = db(feed.collection).select(fields).limit(limit)
-
-        const filters = parseJson<Record<string, unknown>>(feed.filters)
-        if (filters) {
-          for (const [key, value] of Object.entries(filters)) {
-            if (FIELD_NAME_RE.test(key)) q = q.where(key, value as string)
-          }
-        }
-
-        if (feed.sort && typeof feed.sort === 'string') {
-          const desc = feed.sort.startsWith('-')
-          const sortField = desc ? feed.sort.slice(1) : feed.sort
-          if (FIELD_NAME_RE.test(sortField)) {
-            q = q.orderBy(sortField, desc ? 'desc' : 'asc')
-          }
-        }
-
-        const rows = await q
-        return reply.send({ data: rows, fields, total: rows.length })
+        const answer = await readFeedAnswer(feed, creator, req.query.limit)
+        if (!answer) return reply.code(404).send({ error: 'Feed not found' })
+        return reply.send(answer)
       } catch (err) {
         app.log.error({ err, feed: feed.id }, 'widget feed query failed')
         return reply.code(500).send({ error: 'Feed unavailable' })

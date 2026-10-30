@@ -10,15 +10,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const TOKEN = 'a'.repeat(32)
 const m = vi.hoisted(() => ({
   feed: null as Record<string, unknown> | null,
-  creator: { id: 'u1', status: 'active' } as Record<string, unknown> | null
+  creator: { id: 'u1', status: 'active' } as Record<string, unknown> | null,
+  rows: [{ id: 1, title: 'A' }] as Array<Record<string, unknown>>
 }))
 
 vi.mock('../../../db/index.js', () => {
   const db = (table: string) => {
-    const chain = {
+    const chain: Record<string, unknown> = {
       where: () => chain,
-      select: async () => [],
-      first: async () => (table === 'nivaro_widget_feeds' ? m.feed : m.creator)
+      select: () => chain,
+      limit: () => chain,
+      orderBy: () => chain,
+      first: async () => (table === 'nivaro_widget_feeds' ? m.feed : m.creator),
+      // biome-ignore lint/suspicious/noThenProperty: a thenable stands in for the knex builder
+      then: (ok: (v: unknown) => unknown) => Promise.resolve(m.rows).then(ok)
     }
     return chain
   }
@@ -77,8 +82,16 @@ describe('widget.js', () => {
 describe('GET /widget/public/feed/:token/stream', () => {
   let app: FastifyInstance
   beforeEach(async () => {
-    m.feed = { id: 1, token: TOKEN, is_active: true, collection: 'news', created_by: 'u1' }
+    m.feed = {
+      id: 1,
+      token: TOKEN,
+      is_active: true,
+      collection: 'news',
+      created_by: 'u1',
+      fields: '["id","title"]'
+    }
     m.creator = { id: 'u1', status: 'active' }
+    m.rows = [{ id: 1, title: 'A' }]
     app = Fastify()
     await app.register(widgetRoutes, { prefix: '/widget' })
     await app.listen({ port: 0, host: '127.0.0.1' })
@@ -98,20 +111,41 @@ describe('GET /widget/public/feed/:token/stream', () => {
     expect((await app.inject(`/widget/public/feed/${TOKEN}/stream`)).statusCode).toBe(404)
   })
 
-  it('pushes one bare changed signal for writes on the feed collection only', async () => {
-    const pending = readStream(app, `/widget/public/feed/${TOKEN}/stream`, 2_800)
-    await new Promise((r) => setTimeout(r, 150))
+  it('signals once when what the feed serves changes — never for other writes', async () => {
+    const pending = readStream(app, `/widget/public/feed/${TOKEN}/stream`, 5_500)
+    await new Promise((r) => setTimeout(r, 200))
+    // A write on the feed's collection that leaves the feed's answer unchanged: no signal.
+    publishSseEvent({ collection: 'news', item: 99, action: 'update', changed_fields: ['secret'] })
+    await new Promise((r) => setTimeout(r, 2_400))
+    // Another collection: ignored. Then a real change of the feed's rows: one signal.
     publishSseEvent({ collection: 'other', item: 1, action: 'update' })
-    publishSseEvent({ collection: 'news', item: 7, action: 'update', changed_fields: ['title'] })
-    publishSseEvent({ collection: 'news', item: 8, action: 'create' })
+    m.rows = [{ id: 1, title: 'B' }]
+    publishSseEvent({ collection: 'news', item: 1, action: 'update', changed_fields: ['title'] })
+    publishSseEvent({ collection: 'news', item: 2, action: 'create' })
     const { status, body } = await pending
     expect(status).toBe(200)
     expect(body).toContain(': connected')
-    // Coalesced: three writes, two on the feed's collection → exactly one signal.
     expect(body.match(/event: changed/g)?.length).toBe(1)
     // Never record data: no ids, fields or collection names in the stream.
     expect(body).not.toContain('news')
     expect(body).not.toContain('title')
     expect(body).not.toMatch(/"item"/)
-  }, 10_000)
+  }, 15_000)
+
+  it('gives the per-address slot back when the feed is refused', async () => {
+    m.feed = null
+    for (let i = 0; i < 25; i++) {
+      expect((await app.inject(`/widget/public/feed/${TOKEN}/stream`)).statusCode).toBe(404)
+    }
+    m.feed = {
+      id: 1,
+      token: TOKEN,
+      is_active: true,
+      collection: 'news',
+      created_by: 'u1',
+      fields: '["id"]'
+    }
+    const { status } = await readStream(app, `/widget/public/feed/${TOKEN}/stream`, 300)
+    expect(status).toBe(200)
+  })
 })
