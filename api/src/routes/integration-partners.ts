@@ -336,14 +336,18 @@ async function callExplanation(
 ) {
   const ok = row.response_status != null && row.response_status >= 200 && row.response_status < 300
   if (ok && !row.error) return null
-  const api = (await db('nivaro_external_apis')
-    .where({ id: apiId })
-    .first('name')
-    .catch(() => null)) as { name?: string } | null | undefined
-  return explainCallDetail(row, maskBodySecrets(row.response_body ?? null), {
-    id: apiId,
-    name: api?.name ?? null
-  })
+  // The explanation is a nicety: a failed lookup or rule never costs the caller the call detail.
+  try {
+    const api = (await db('nivaro_external_apis').where({ id: apiId }).first('name')) as
+      | { name?: string }
+      | undefined
+    return explainCallDetail(row, maskBodySecrets(row.response_body ?? null), {
+      id: apiId,
+      name: api?.name ?? null
+    })
+  } catch {
+    return null
+  }
 }
 
 interface CallLogFullRow {
