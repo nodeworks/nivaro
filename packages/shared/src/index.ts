@@ -649,6 +649,7 @@ export * from './lib/expression'
 export { formulaConstant, networkdaysBetween, setFormulaConstants } from './lib/expression'
 export { useFeatureFlag, useFeatureFlags } from './lib/feature-flags'
 export * from './lib/field-interfaces'
+export * from './lib/filter-sentence'
 export {
   fiscalPeriodOf,
   fiscalQuarterOf,
@@ -803,6 +804,7 @@ export {
   POPOUT_PARAM,
   recordPopoutHref
 } from './lib/record-popout'
+export * from './lib/record-ref'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
 export {
   captureReplayClip,

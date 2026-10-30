@@ -4,6 +4,7 @@ import {
   currentViewport,
   DrilldownContext,
   type DrilldownTarget,
+  friendlyIdOf,
   ItemActionChoiceList,
   type ItemActionChoiceOption,
   type ItemActionChooseMeta,
@@ -480,7 +481,10 @@ export function ItemEditPage() {
                     colMeta?.display_template,
                     itemData as Record<string, unknown>
                   )
-                : '') || `${colMeta?.display_name || collection} ${id}`
+                : '') ||
+              `${colMeta?.display_name || collection} ${
+                friendlyIdOf(colMeta, itemData as Record<string, unknown> | undefined) ?? id
+              }`
           }
         }
       : null
@@ -837,11 +841,24 @@ export function ItemEditPage() {
                       <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>
                         {displayName}
                       </h1>
-                      {id && (
-                        <span className='font-mono text-[12px] bg-slate-100 text-slate-500 rounded px-2 py-0.5 dark:bg-muted dark:text-slate-400'>
-                          #{id}
-                        </span>
-                      )}
+                      {id &&
+                        (() => {
+                          // The readable id (#776) when the record names one; the
+                          // internal id stays on hover.
+                          const friendly = isNew
+                            ? null
+                            : friendlyIdOf(colMeta, itemData as Record<string, unknown> | undefined)
+                          const key = itemData?.id != null ? String(itemData.id) : id
+                          return (
+                            <span
+                              data-record-ref
+                              data-tip={friendly ? `#${key}` : undefined}
+                              className='font-mono text-[12px] bg-slate-100 text-slate-500 rounded px-2 py-0.5 dark:bg-muted dark:text-slate-400'
+                            >
+                              {friendly ?? `#${id}`}
+                            </span>
+                          )
+                        })()}
                       <span className='text-[12px] text-slate-400 font-mono'>{collection}</span>
                     </div>
                     {ancestors && ancestors.length > 1 && (

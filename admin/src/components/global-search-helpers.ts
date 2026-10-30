@@ -23,6 +23,8 @@ export interface SearchRecord {
   score?: number
   mine?: boolean
   updated_at?: string
+  /** The record's readable id (#776), as the caller reads it. */
+  friendly_id?: string
 }
 
 export interface ExtraHit {
@@ -127,11 +129,27 @@ export function recordLabel(r: {
   label?: string | null
   display_name?: string | null
   kind?: string | null
+  friendly_id?: string | null
 }): string {
   const name = String(r.display_name || r.kind || '').trim() || titleWords(r.collection) || 'Record'
+  // A label that is only the key reads as the collection plus its readable id (#776).
+  const friendly = String(r.friendly_id ?? '').trim()
   return isPkLabel(r.label, r.id, [r.collection, r.display_name, r.kind])
-    ? name
+    ? friendly
+      ? `${name} ${friendly}`
+      : name
     : String(r.label).trim()
+}
+
+/** The readable id worth showing beside a hit — not when the label already says it. */
+export function friendlyIdChip(r: { friendly_id?: string | null; label?: string | null }): string {
+  const f = String(r.friendly_id ?? '').trim()
+  if (!f) return ''
+  return String(r.label ?? '')
+    .toLowerCase()
+    .includes(f.toLowerCase())
+    ? ''
+    : f
 }
 
 /** Recent records whose stored label is missing or pk-only — resolved again on display. */

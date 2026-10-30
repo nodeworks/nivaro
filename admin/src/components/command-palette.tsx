@@ -55,6 +55,7 @@ import {
   type ExtraKind,
   extraHref,
   extraTabs,
+  friendlyIdChip,
   isExtraTab,
   isNewTabEnter,
   nextRecall,
@@ -314,6 +315,21 @@ function RecordLine({ r, q }: { r: SearchRecord; q: string }) {
   if (r.snippet && r.snippet !== r.label)
     return <div className='truncate text-[11px] text-muted-foreground'>{r.snippet}</div>
   return null
+}
+
+/** A hit's readable id (#776), when its label does not already say it. */
+function FriendlyIdChip({ r }: { r: SearchRecord }) {
+  const f = friendlyIdChip(r)
+  if (!f) return null
+  return (
+    <span
+      data-search-friendly-id
+      data-tip={`#${String(r.id)}`}
+      className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'
+    >
+      {f}
+    </span>
+  )
 }
 
 function ExactChip() {
@@ -960,6 +976,7 @@ export function CommandPalette() {
                             </div>
                             <RecordLine r={r} q={q} />
                           </div>
+                          <FriendlyIdChip r={r} />
                           {r.exact && <ExactChip />}
                         </CommandItem>
                       ))}
@@ -1255,6 +1272,7 @@ export function CommandPalette() {
                               </div>
                               <RecordLine r={r} q={q} />
                             </div>
+                            <FriendlyIdChip r={r} />
                             {r.exact && <ExactChip />}
                             <span className='ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground'>
                               {collectionLabel(r)}

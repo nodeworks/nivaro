@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { recordLink } from './app-links.js'
 import { emailSummaryFields } from './layout-email-section.js'
 import { getLabels, resolvePathValues } from './queues.js'
+import { recordDisplayRef } from './record-display-ref.js'
 
 /**
  * The "record card" every detailed email opens with: the record's title
@@ -116,12 +117,19 @@ export async function buildRecordCard(
     .catch(() => undefined)) as { singular: string | null; display_name: string | null } | undefined
   const collectionLabel = meta?.singular || meta?.display_name || titleCase(collection)
 
-  let title = itemId
+  let title = ''
   try {
     const labels = await getLabels(new Map([[collection, new Set([itemId])]]))
-    title = labels[`${collection}:${itemId}`] || itemId
+    title = labels[`${collection}:${itemId}`] || ''
   } catch {
-    /* title stays the id */
+    /* title falls back to the readable id */
+  }
+  // No display label: name the record by its friendly id as the recipient
+  // reads it (#776), never a bare internal id.
+  if (!title) {
+    title = await recordDisplayRef(collection, itemId, {
+      recipient: opts.recipientUserId ?? undefined
+    }).catch(() => `#${itemId}`)
   }
 
   const fields: RecordCardField[] = []

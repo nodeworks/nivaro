@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { recordDisplayRef } from './record-display-ref.js'
 
 /**
  * The in-app notification EVENT registry: every event whose wording can be
@@ -153,13 +154,18 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
     tokens: [
       { name: 'actor', description: 'Who wrote the note' },
       { name: 'record', description: 'The record id' },
+      {
+        name: 'record_ref',
+        description: 'The record as people read it: its friendly id (CM26-79811), else #id'
+      },
       { name: 'collection', description: 'Collection name' },
       { name: 'text', description: 'The note text (first 300 characters)' }
     ],
-    default_template: 'You were mentioned\n{{ text }}',
+    default_template: 'You were mentioned on {{ record_ref }}\n{{ text }}',
     fallback: {
       actor: 'Robert Lee',
       record: '371393',
+      record_ref: 'CM26-79811',
       collection: 'workflows',
       text: '@Beth can you check the allocation on line 3?'
     },
@@ -174,6 +180,7 @@ export const NOTIFICATION_EVENTS: NotificationEventDef[] = [
       return {
         actor: await userName(c.user),
         record: await friendlyLabel(c.collection, String(c.item)),
+        record_ref: await recordDisplayRef(c.collection, String(c.item)),
         collection: c.collection,
         text: String(c.text ?? '')
           .replace(/<[^>]+>/g, '')

@@ -55,6 +55,11 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
+import {
+  clauseFromControlValue,
+  type FilterClause,
+  filterSentence
+} from '../../lib/filter-sentence'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
 import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
@@ -3280,6 +3285,43 @@ export function QueueWorklist({
       .replace(/^Search\s+/, '')
       .replace(/…$/, '')
 
+  // Filter sentence (#20): one quiet line naming what the worklist shows, from
+  // the option labels the filter controls already carry — never a fetch.
+  const filterSentenceText = (() => {
+    const clauses: FilterClause[] = []
+    for (const [key, value] of Object.entries(debouncedFilterValues)) {
+      if (!value || (Array.isArray(value) && value.length === 0)) continue
+      const def = allFilterDefs.find((d) => d.key === key)
+      const path = key.startsWith('extra.') ? key.slice('extra.'.length) : null
+      const fmt = path ? formatConfigFor(path) : null
+      const c = clauseFromControlValue({
+        field: labelOfFilter(key),
+        type: def?.type ?? 'select',
+        value,
+        optionLabel: (v) => def?.options?.find((o) => o.value === v)?.label,
+        currency: fmt?.type === 'number' && fmt.prefix === '$',
+        rangeUnit: def?.range_unit
+      })
+      if (c) clauses.push(c)
+    }
+    const shown = data?.total
+    return filterSentence({
+      noun: 'items',
+      scope:
+        scope === 'mine'
+          ? 'you own'
+          : scope === 'unowned'
+            ? 'with no owners'
+            : scope === 'claimed'
+              ? 'you claimed'
+              : null,
+      viewName: views?.data?.find((v) => v.id === activeViewId)?.name ?? null,
+      clauses,
+      shown: typeof shown === 'number' ? shown : null,
+      of: stats?.total ?? null
+    })
+  })()
+
   // Quick filters — the facets people narrow a queue by, in the collection
   // browser's bar: scope-seeded facets first (Zone, Funding Year), then the
   // other pick-from-a-list columns in column order, six at most. Every column
@@ -4387,6 +4429,16 @@ export function QueueWorklist({
             the table — never "Nothing in this queue" for a list that did not load. */}
         {itemsFailed && (
           <ListLoadError error={itemsError} onRetry={() => void refetchItems()} className='mb-3' />
+        )}
+        {filterSentenceText && (
+          <p
+            data-filter-sentence
+            data-tip={filterSentenceText}
+            aria-live='polite'
+            className='mb-1.5 shrink-0 truncate px-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'
+          >
+            {filterSentenceText}
+          </p>
         )}
         {view === 'table' ? (
           <>

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { chainFields } from '../services/chain-columns.js'
+import { recordDisplayRef } from '../services/record-display-ref.js'
 import { deferEffect } from '../services/unit-of-work.js'
 import type { User } from '../types.js'
 import { hooks } from './registry.js'
@@ -119,11 +120,13 @@ export function registerFieldWatchHooks() {
       if (subs.length === 0) continue
 
       const message = `${field} changed from "${String(oldVal ?? '(empty)')}" to "${String(newVal ?? '(empty)')}"`
-      const subject = `Field changed: ${field} on ${collection}`
 
       for (const sub of subs) {
         // Skip the user who made the change
         if (ctx.user?.id && sub.id === ctx.user.id) continue
+        // The record by its readable id, read as THIS subscriber (#776).
+        const ref = await recordDisplayRef(collection, item, { recipient: sub })
+        const subject = `Field changed: ${field} on ${collection} ${ref}`
 
         try {
           const [notif] = (await db('nivaro_notifications')
