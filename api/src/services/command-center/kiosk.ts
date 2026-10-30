@@ -267,7 +267,7 @@ export async function resolveKiosk(raw: unknown): Promise<KioskPrincipal | null>
   }
 }
 
-/** Count a board load (the info route — not every poll). */
+/** Note a screen checking in (the info route: on load and every few minutes, never per poll). */
 export function countKioskView(linkId: string): void {
   void db('nivaro_share_links')
     .where({ id: linkId, item: CC_KIOSK_ITEM })

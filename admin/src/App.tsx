@@ -213,6 +213,9 @@ const OpsConsolePage = lazy(() =>
 const CommandCenterPage = lazy(() =>
   import('@/pages/CommandCenter').then((m) => ({ default: m.CommandCenterPage }))
 )
+const CommandCenterKioskPage = lazy(() =>
+  import('@/pages/CommandCenter').then((m) => ({ default: m.CommandCenterKioskPage }))
+)
 
 const IssuesPage = lazy(() => import('@/pages/Issues').then((m) => ({ default: m.IssuesPage })))
 
@@ -403,6 +406,15 @@ export default function App() {
                   element={
                     <Suspense fallback={<AppShell />}>
                       <PublicDashboardPage />
+                    </Suspense>
+                  }
+                />
+                {/* Command Center wallboard link (CC-23): no sign-in, no app chrome. */}
+                <Route
+                  path='/command/kiosk/:token'
+                  element={
+                    <Suspense fallback={<AppShell />}>
+                      <CommandCenterKioskPage />
                     </Suspense>
                   }
                 />

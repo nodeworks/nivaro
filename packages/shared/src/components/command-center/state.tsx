@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
-import type { CcFilters, CcPublicConfig, Snapshot } from './types'
+import type { CcMode } from './theme'
+import type { CcFilters, CcPrefs, CcPublicConfig, Snapshot } from './types'
 
 /**
  * One board-wide state every panel reads: the lenses (region focus, rewind instant), the map's
@@ -15,6 +16,16 @@ export interface CcState {
   snapshotError: boolean
   /** When the snapshot last arrived (ms epoch) — freshness. */
   updatedAt: number | null
+  /** No snapshot yet (first load) — panels show skeletons, not "–". */
+  snapshotLoading: boolean
+  /** Snapshot polls that failed since the last one that worked (2+ = stale banner). */
+  snapshotFailures: number
+  /** Refetch every board read now (the header's Refresh, `r`). */
+  refresh: () => void
+  /** The person's board prefs (null on a wallboard link or before they load). */
+  prefs: CcPrefs | null
+  /** Palette in use ('dark' in TV mode, on wallboard links and with "Always dark"). */
+  mode: CcMode
 
   region: string | null
   setRegion: (id: string | null) => void
@@ -27,6 +38,8 @@ export interface CcState {
   filters: CcFilters
   setFilters: (f: CcFilters) => void
 
+  /** The record open in the peek panel. setPeek STORES it (the shell renders <PeekPanel/>,
+   *  Esc closes it, focus returns to whatever opened it); it never navigates. */
   peek: { collection: string; id: string } | null
   setPeek: (p: { collection: string; id: string } | null) => void
   /** Fly the map to a point (people pane, region picker, attention rows). */
@@ -35,6 +48,11 @@ export interface CcState {
 
   tv: boolean
   setTv: (on: boolean) => void
+  /** The board fills the screen (Fullscreen API when allowed, else a full-window overlay). */
+  fullscreen: boolean
+  toggleFullscreen: () => void
+  /** Open the Customise sheet (panels, saved views, theme). */
+  openCustomize: () => void
 
   navigate: (path: string) => void
   recordUrl: (collection: string, id: string) => string

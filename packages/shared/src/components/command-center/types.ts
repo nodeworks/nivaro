@@ -248,6 +248,8 @@ export interface CcPrefs {
   theme: 'app' | 'dark'
   saved_views: CcSavedView[]
   role_default?: CcLayout | null
+  /** Seconds between regions while TV mode cycles through them (10–600, default 30). */
+  tv_cycle_seconds?: number
 }
 
 export interface CcFilters {
@@ -259,8 +261,23 @@ export interface CcFilters {
 export interface KioskLink {
   id: string
   label: string
+  /** Only on the create answer — the token is stored hashed, so a listed link has url ''. */
   url: string
   created_at: string
   expires_at: string | null
   created_by_name: string | null
+  /** The board the link opens on (null = everywhere / the first map collection). */
+  region?: string | null
+  map_collection?: string | null
+  expired?: boolean
+  view_count?: number
+  last_viewed_at?: string | null
+}
+
+/** GET /kiosk — what a wallboard link opens (only answers through a link). */
+export interface KioskInfo {
+  label: string
+  region: string | null
+  map_collection: string | null
+  expires_at: string
 }
