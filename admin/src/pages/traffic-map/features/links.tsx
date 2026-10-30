@@ -12,7 +12,7 @@ import { Link } from 'react-router'
 import { useTrafficMap } from '../context'
 import { entityLabel } from '../EventTicker'
 import { openInspect } from '../inspect/stack'
-import { callerLinks, entityUrl, recordUrl, requestUrl } from '../links'
+import { callerLinks, commandCenterUrl, entityUrl, recordUrl, requestUrl } from '../links'
 import { eventActions } from '../registry/eventActions'
 import { hotColumns } from '../registry/hotColumns'
 import { inspectableFor } from '../registry/inspectables'
@@ -167,6 +167,8 @@ function NodeLinks({ sel }: { sel: import('../types').Selection }) {
         url: `/analytics/api?req_path=${encodeURIComponent(e.lane === 'items' || e.lane === 'system' ? `/api/items/${e.entity}` : e.entity)}`,
         id: 'tm-entity-requests'
       })
+    const board = e ? commandCenterUrl(e.lane, e.entity) : null
+    if (board) links.push({ label: 'See on Command Center', url: board, id: 'tm-entity-command' })
   } else if (sel.kind === 'down') {
     const m = sel.id.match(/^ext:(\d+)$/)
     if (m) links.push({ label: 'External API', url: `/external-apis/${m[1]}`, id: 'tm-down-api' })

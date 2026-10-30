@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { type FeedRow, snapshotFeed } from '../services/command-center/activity.js'
 import { ccReadAuth } from '../services/command-center/auth.js'
-import { excludeStartRows } from '../services/instance-start.js'
+import { readSystemHealth } from '../services/command-center/system.js'
+import { snapshotThroughput } from '../services/command-center/throughput.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -377,114 +379,17 @@ export async function commandCenterRoutes(app: FastifyInstance) {
         }
       ),
 
-      // Throughput: transitions today vs same window yesterday.
-      safe(
-        async () => {
-          const now = new Date()
-          const todayStart = new Date(now)
-          todayStart.setUTCHours(0, 0, 0, 0)
-          const yStart = new Date(todayStart.getTime() - 86_400_000)
-          const yCut = new Date(now.getTime() - 86_400_000)
-          const [today, yesterday] = await Promise.all([
-            // #1219: a pipeline start is history, not a transition.
-            excludeStartRows(db('nivaro_workflow_history').where('timestamp', '>', todayStart))
-              .count('* as n')
-              .first(),
-            excludeStartRows(
-              db('nivaro_workflow_history').whereBetween('timestamp', [yStart, yCut])
-            )
-              .count('* as n')
-              .first()
-          ])
-          return {
-            transitions_today: Number((today as { n: number })?.n ?? 0),
-            transitions_yesterday_same_time: Number((yesterday as { n: number })?.n ?? 0)
-          }
-        },
-        { transitions_today: 0, transitions_yesterday_same_time: 0 }
-      ),
+      // Throughput: transitions today vs same time yesterday, the person's day (slice 3 service).
+      safe(() => snapshotThroughput(req), {
+        transitions_today: 0,
+        transitions_yesterday_same_time: 0
+      }),
 
       // System rail — ADMIN ONLY (names internal jobs and error details).
-      isAdmin
-        ? safe(async () => {
-            const hourAgo = new Date(Date.now() - 3600_000)
-            const [errRow, reqRow, running, failedJobs] = await Promise.all([
-              db('nivaro_api_logs')
-                .where('created_at', '>', hourAgo)
-                .where('status', '>=', 500)
-                .count('* as n')
-                .first(),
-              db('nivaro_api_logs').where('created_at', '>', hourAgo).count('* as n').first(),
-              db('nivaro_job_runs').where('status', 'running').count('* as n').first(),
-              db('nivaro_job_runs')
-                .where('status', 'error')
-                .where('started_at', '>', hourAgo)
-                .count('* as n')
-                .first()
-            ])
-            let dbOk = true
-            try {
-              await db.raw('SELECT 1')
-            } catch {
-              dbOk = false
-            }
-            let redisOk = false
-            try {
-              const redis = (app as unknown as { redis?: { ping: () => Promise<string> } }).redis
-              if (redis) {
-                await redis.ping()
-                redisOk = true
-              }
-            } catch {
-              redisOk = false
-            }
-            const { runtimeStats } = await import('../services/runtime-monitor.js')
-            const { listInstances } = await import('../services/instance-roster.js')
-            return {
-              db_ok: dbOk,
-              redis_ok: redisOk,
-              errors_1h: Number((errRow as { n: number })?.n ?? 0),
-              requests_1h: Number((reqRow as { n: number })?.n ?? 0),
-              jobs_running: Number((running as { n: number })?.n ?? 0),
-              jobs_failed_1h: Number((failedJobs as { n: number })?.n ?? 0),
-              runtime: runtimeStats(),
-              instances: (await listInstances()).length
-            }
-          }, null)
-        : Promise.resolve(null),
+      isAdmin ? safe(() => readSystemHealth(app.redis), null) : Promise.resolve(null),
 
-      // Ticker seed: the last 25 business-collection writes with friendly text.
-      // Live updates ride the pulse socket (admins) or this poll (everyone).
-      safe(
-        async () => {
-          const rows = (await db('nivaro_activity as a')
-            .leftJoin('nivaro_users as u', 'u.id', 'a.user')
-            .whereNot('a.collection', 'like', 'nivaro\\_%')
-            .whereIn('a.action', ['create', 'update', 'delete', 'pipeline-transition'])
-            .orderBy('a.id', 'desc')
-            .limit(25)
-            .select(
-              'a.id',
-              'a.action',
-              'a.collection',
-              'a.item',
-              'a.comment',
-              'a.timestamp',
-              db.raw(
-                "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
-              )
-            )) as Array<Record<string, unknown>>
-          const readable: Array<Record<string, unknown>> = []
-          const checked = new Map<string, boolean>()
-          for (const r of rows) {
-            const col = String(r.collection ?? '')
-            if (!checked.has(col)) checked.set(col, await can(req.user!, 'read', col))
-            if (checked.get(col)) readable.push(r)
-          }
-          return readable
-        },
-        [] as Array<Record<string, unknown>>
-      )
+      // Feed seed: the newest readable entries with sentences (slice 3 service).
+      safe(() => snapshotFeed(req), [] as FeedRow[])
     ])
 
     return reply.send({ data: { flow, risk, people, throughput, health, activity } })

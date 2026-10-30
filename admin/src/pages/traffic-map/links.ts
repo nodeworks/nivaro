@@ -16,6 +16,17 @@ export function recordUrl(
   return `/collections/${encodeURIComponent(entity)}/${encodeURIComponent(record)}`
 }
 
+/**
+ * The Command Center focused on a collection node (#CC-17): `/command?map=<collection>`
+ * (the board's URL parameters: region, at, map, peek=collection:id). Business collections only
+ * — system tables and folded entities have no place on the board. Pure.
+ */
+export function commandCenterUrl(lane: string, entity: string): string | null {
+  if (lane !== 'items' || entity.startsWith('__')) return null
+  if (!/^[A-Za-z0-9_]{1,128}$/.test(entity) || /^(nivaro|directus)_/i.test(entity)) return null
+  return `/command?map=${encodeURIComponent(entity)}`
+}
+
 /** The console page an entity is configured on (collection list, page, widget, query…). */
 export function entityUrl(lane: string, entity: string): string | null {
   if (entity.startsWith('__')) return null

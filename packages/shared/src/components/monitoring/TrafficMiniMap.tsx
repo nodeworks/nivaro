@@ -114,6 +114,29 @@ function Spark({ data, className }: { data: number[]; className?: string }) {
   )
 }
 
+/**
+ * The instant a sparkline point stands for: the series spans the snapshot window ending when it
+ * was read, oldest point first. Rounded down to the minute (the Command Center rewinds to
+ * minutes). Pure.
+ */
+export function sparkPointTime(
+  index: number,
+  points: number,
+  windowS: number,
+  endMs: number
+): number {
+  const step = (windowS * 1000) / Math.max(1, points)
+  const t = endMs - windowS * 1000 + (index + 0.5) * step
+  return Math.floor(t / 60_000) * 60_000
+}
+
+/** Index of the largest value (the spike); ties go to the latest. Pure. */
+export function spikeIndex(series: number[]): number {
+  let best = 0
+  for (let i = 0; i < series.length; i++) if (series[i] >= series[best]) best = i
+  return best
+}
+
 const n0 = (n: number) => Math.round(n).toLocaleString()
 const rate = (n: number) => (n < 10 ? n.toFixed(1) : n0(n))
 const ms = (n: number) =>
@@ -145,7 +168,8 @@ export function TrafficMiniMap({
   tone = 'auto',
   href,
   refreshMs = 15_000,
-  className
+  className,
+  onPickTime
 }: {
   window?: 60 | 300 | 900
   tone?: 'auto' | 'dark'
@@ -154,6 +178,9 @@ export function TrafficMiniMap({
   href?: string
   refreshMs?: number
   className?: string
+  /** When set, each lane's sparkline is a button: clicking a point (or Enter = the lane's
+   *  spike) hands back that minute — the Command Center rewinds to it. */
+  onPickTime?: (ms: number) => void
 }) {
   const client = useNivaroClient()
   const { navigate } = useNavigation()
@@ -170,6 +197,7 @@ export function TrafficMiniMap({
   })
   if (!q.data) return null
   const s = miniMapSummary(q.data)
+  const windowS = q.data.window_s
   const target = href ?? '/traffic-map'
   const external = /^https?:\/\//.test(target)
   const span = win === 60 ? 'last minute' : `last ${win / 60} min`
@@ -225,7 +253,44 @@ export function TrafficMiniMap({
           {s.lanes.map((l) => (
             <li key={l.lane} className='flex items-center gap-2' data-traffic-mini-lane={l.lane}>
               <span className='w-[84px] shrink-0 truncate'>{l.label}</span>
-              <Spark data={l.series} className={`min-w-0 flex-1 ${t.spark}`} />
+              {onPickTime ? (
+                <button
+                  type='button'
+                  className={`min-w-0 flex-1 rounded ${t.link}`}
+                  aria-label={`Rewind to the busiest minute for ${l.label} (${new Date(
+                    sparkPointTime(
+                      spikeIndex(l.series),
+                      l.series.length,
+                      windowS,
+                      q.dataUpdatedAt || Date.now()
+                    )
+                  ).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`}
+                  data-tip='Click a point to rewind the board to that minute'
+                  data-traffic-mini-pick={l.lane}
+                  onClick={(e) => {
+                    const end = q.dataUpdatedAt || Date.now()
+                    const box = e.currentTarget.getBoundingClientRect()
+                    // A keyboard press has no pointer position: take the lane's spike.
+                    const idx =
+                      e.detail === 0 || box.width === 0
+                        ? spikeIndex(l.series)
+                        : Math.max(
+                            0,
+                            Math.min(
+                              l.series.length - 1,
+                              Math.round(
+                                ((e.clientX - box.left) / box.width) * (l.series.length - 1)
+                              )
+                            )
+                          )
+                    onPickTime(sparkPointTime(idx, l.series.length, windowS, end))
+                  }}
+                >
+                  <Spark data={l.series} className={`w-full ${t.spark}`} />
+                </button>
+              ) : (
+                <Spark data={l.series} className={`min-w-0 flex-1 ${t.spark}`} />
+              )}
               <span className={`w-[52px] shrink-0 text-right tabular-nums ${t.muted}`}>
                 {n0(l.req)}
               </span>
