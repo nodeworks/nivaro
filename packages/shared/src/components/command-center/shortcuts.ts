@@ -16,7 +16,7 @@ export const SHORTCUTS: Array<{ keys: string; label: string }> = [
   { keys: 'F', label: 'Full screen' },
   { keys: 'T', label: 'TV mode (larger type, cycles regions)' },
   { keys: 'R', label: 'Refresh now' },
-  { keys: '/', label: 'Choose a region' },
+  { keys: 'g', label: 'Choose a region' },
   { keys: '1–9', label: 'Jump to region 1–9' },
   { keys: '0', label: 'Everywhere' },
   { keys: 'Esc', label: 'Close the record panel, then leave TV mode' },
@@ -59,7 +59,8 @@ export function shortcutFor(e: KeyLike): ShortcutAction | null {
   if (k === 'f' || k === 'F') return { kind: 'fullscreen' }
   if (k === 't' || k === 'T') return { kind: 'tv' }
   if (k === 'r' || k === 'R') return { kind: 'refresh' }
-  if (k === '/') return { kind: 'focus-region' }
+  // Not '/': that is the app-wide "focus search" key (lib/useKeyboardShortcuts.ts).
+  if (k === 'g' || k === 'G') return { kind: 'focus-region' }
   if (k === '?') return { kind: 'help' }
   if (/^[0-9]$/.test(k)) return { kind: 'region', index: Number(k) }
   return null
