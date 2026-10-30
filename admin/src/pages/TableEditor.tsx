@@ -7298,6 +7298,8 @@ interface BrowserConfig {
   checkbox_selection?: boolean
   show_actions?: boolean
   allow_create?: boolean
+  /** The New item button's text (absent = "New item"). */
+  create_label?: string
   copy_as?: boolean
   page_size?: number
   quick_filters?: unknown[]
@@ -7599,6 +7601,7 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'checkbox_selection',
       'show_actions',
       'allow_create',
+      'create_label',
       'copy_as',
       'page_size',
       'quick_filters',
@@ -7615,6 +7618,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
     if (next.checkbox_selection === false) clean.checkbox_selection = false
     if (next.show_actions === false) clean.show_actions = false
     if (next.allow_create === false) clean.allow_create = false
+    const label = next.create_label
+      ?.trim()
+      .replace(/^\+\s*/, '')
+      .slice(0, 40)
+    if (label && label.toLowerCase() !== 'new item') clean.create_label = label
     if (next.copy_as === false) clean.copy_as = false
     if (next.page_size && next.page_size > 0) clean.page_size = next.page_size
     if (next.quick_filters?.length) clean.quick_filters = next.quick_filters
@@ -7681,6 +7689,12 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
           'show_actions'
         )}
         {row('New item button', 'Allow creating records from the browser', 'allow_create')}
+        {cfg.allow_create !== false && (
+          <CreateLabelSetting
+            value={cfg.create_label ?? ''}
+            onSave={(v) => void patch({ create_label: v })}
+          />
+        )}
         {row(
           'Copy as… button',
           'Copy the list or a record as curl / SDK / GraphQL. Administrators only; off hides it for them too',
@@ -11039,6 +11053,40 @@ function QuickRelationBuilder({
           {busy ? 'Creating…' : 'Create'}
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** The New item button's text: saved when the box loses focus or on Enter; empty = "New item". */
+function CreateLabelSetting({ value, onSave }: { value: string; onSave: (next: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => {
+    const next = draft.trim()
+    if (next !== value.trim()) onSave(next)
+  }
+  return (
+    <div className='ml-4 flex items-center justify-between gap-4 border-l-2 border-slate-100 pl-3'>
+      <div>
+        <label htmlFor='cbv-create-label' className='text-[12px] font-medium text-slate-600'>
+          Button text
+        </label>
+        <p className='text-[11.5px] text-slate-500'>
+          What the button says, e.g. “New request”. Empty = “New item”.
+        </p>
+      </div>
+      <Input
+        id='cbv-create-label'
+        value={draft}
+        maxLength={40}
+        placeholder='New item'
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+        className='h-8 w-48 text-[12.5px]'
+      />
     </div>
   )
 }

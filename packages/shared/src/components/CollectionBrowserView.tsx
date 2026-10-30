@@ -234,6 +234,8 @@ export interface CollectionBrowserConfig {
   show_actions?: boolean
   /** "+ New item" button (default true; the host's showCreate prop also gates it). */
   allow_create?: boolean
+  /** The New item button's text (absent = "New item"). */
+  create_label?: string
   /** The "Copy as…" (curl / SDK / GraphQL) button on the list and the record
    *  header. Administrators only; this switch removes it for them too
    *  (default true). */
@@ -4600,6 +4602,9 @@ export function CollectionBrowserView({
     setBulkMode(!bulkMode)
   }
   const canCreate = showCreate && bc.allow_create !== false
+  // Collection setting (browser_config.create_label): "New request" instead of "New item".
+  const createLabel =
+    (typeof bc.create_label === 'string' && bc.create_label.trim().slice(0, 40)) || 'New item'
   // Layout choices for the New-item button (slug-opt-in, same rules as the
   // classic admin browser) — plain button when none exist.
   const newItemLayouts = useNewItemLayouts(canCreate && !meta?.singleton ? collection : null)
@@ -8242,7 +8247,7 @@ export function CollectionBrowserView({
                 onClick={() => setNewItemMenuOpen((v) => !v)}
                 className='flex h-8 items-center gap-1 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white hover:brightness-105'
               >
-                + New item
+                + {createLabel}
                 <ChevronDown className='h-3.5 w-3.5' />
               </button>
               {newItemMenuOpen && (
@@ -8339,7 +8344,7 @@ export function CollectionBrowserView({
                     : 'rounded-md'
                 )}
               >
-                + New item
+                + {createLabel}
               </button>
               {defaultQuickSteps.length > 0 && (
                 <button
