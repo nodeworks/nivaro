@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-30T03:11:55.789Z",
+  "generated_at": "2026-10-30T03:48:26.790Z",
   "releases": [
+    {
+      "version": "0.3.60",
+      "tag": "v0.3.60",
+      "date": "2026-10-29T23:48:13-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "collections, overview",
+              "text": "readable collection names and fresh PATCH answers",
+              "hash": "19598544e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.59",
       "tag": "v0.3.59",
-      "date": "2026-10-29T23:11:43-04:00",
+      "date": "2026-10-29T23:11:55-04:00",
       "sections": [
         {
           "label": "Fixed",
