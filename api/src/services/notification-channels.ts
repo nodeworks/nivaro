@@ -44,60 +44,21 @@ export type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@niv
  * TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM. No-op + warn when unset.
  */
 
-interface TwilioConfig {
-  accountSid: string
-  authToken: string
-  from: string
-}
-
-async function getTwilioConfig(): Promise<TwilioConfig | null> {
-  let settings: Record<string, unknown> | null = null
-  try {
-    settings = (await db('nivaro_settings').where({ id: 1 }).first()) ?? null
-  } catch {
-    settings = null
-  }
-
-  const accountSid =
-    (settings?.twilio_account_sid as string | undefined) || process.env.TWILIO_ACCOUNT_SID || ''
-  const authToken =
-    (settings?.twilio_auth_token as string | undefined) || process.env.TWILIO_AUTH_TOKEN || ''
-  const from = (settings?.twilio_from as string | undefined) || process.env.TWILIO_FROM || ''
-
-  if (!accountSid || !authToken || !from) return null
-  return { accountSid, authToken, from }
-}
-
-/** Send an SMS via the Twilio REST API. No-op (with warning) when unconfigured. */
+/**
+ * Notification SMS goes through the one SMS service (services/sms.ts): the provider
+ * chosen in Settings → SMS (Twilio, SNS, Vonage, Sinch, MessageBird), SMS test mode and
+ * masked numbers in the log. This used to be its own Twilio-only sender that ignored
+ * both and logged full phone numbers (logging audit 2026-10-29). True = handed to the
+ * provider; false = not configured or refused.
+ */
 export async function sendSms(to: string, body: string): Promise<boolean> {
-  const cfg = await getTwilioConfig()
-  if (!cfg) {
-    console.warn('[notification-channels] Twilio not configured, skipping SMS to', to)
-    return false
-  }
-
+  const sms = await import('./sms.js')
+  const cfg = await sms.getSmsConfig().catch(() => null)
+  if (!cfg?.provider || !cfg.accountSid || !cfg.authToken) return false
   try {
-    const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(cfg.accountSid)}/Messages.json`
-    const auth = Buffer.from(`${cfg.accountSid}:${cfg.authToken}`).toString('base64')
-    const params = new URLSearchParams({ To: to, From: cfg.from, Body: body })
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: params.toString(),
-      signal: AbortSignal.timeout(15_000)
-    })
-
-    if (!res.ok) {
-      console.warn('[notification-channels] Twilio SMS failed with status', res.status)
-      return false
-    }
+    await sms.sendSms(to, body)
     return true
-  } catch (err) {
-    console.warn('[notification-channels] Twilio SMS error:', err)
+  } catch {
     return false
   }
 }

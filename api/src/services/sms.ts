@@ -15,7 +15,7 @@ interface SmsConfig {
   testAllowlist: string[]
 }
 
-async function getSmsConfig(): Promise<SmsConfig> {
+export async function getSmsConfig(): Promise<SmsConfig> {
   try {
     const row = await overlaySettings(
       (await db('nivaro_settings')
