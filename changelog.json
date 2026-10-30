@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-10-30T03:48:26.790Z",
+  "generated_at": "2026-10-30T14:17:14.818Z",
   "releases": [
+    {
+      "version": "0.3.61",
+      "tag": "v0.3.61",
+      "date": "2026-10-30T10:16:49-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "region placement helpers (stubs) for the panel slices",
+              "hash": "0d907bdd4"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "header filters skip records hidden from pickers",
+              "hash": "668679e88"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "header filters cascade (Zone narrows Region) on lists and queues",
+              "hash": "7cbb08d8d"
+            }
+          ]
+        },
+        {
+          "label": "Changed",
+          "entries": [
+            {
+              "section": "Changed",
+              "scope": "command-center",
+              "text": "split the board into panels with a shared contract",
+              "hash": "a464f3e60"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.60",
       "tag": "v0.3.60",
-      "date": "2026-10-29T23:48:13-04:00",
+      "date": "2026-10-29T23:48:26-04:00",
       "sections": [
         {
           "label": "Fixed",
