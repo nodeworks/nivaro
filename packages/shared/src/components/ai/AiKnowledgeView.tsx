@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { CORE_GLOSSARY, mergeGlossary } from '../../lib/core-glossary'
 import { type GlossaryTerm, invalidateGlossary } from '../../lib/glossary'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
@@ -224,6 +225,7 @@ function GlossaryTab({ isAdmin, focusTerm }: { isAdmin: boolean; focusTerm?: str
   const qc = useQueryClient()
   const [filter, setFilter] = useState('')
   const [creating, setCreating] = useState(false)
+  const [createFrom, setCreateFrom] = useState<TermDraft | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
   const q = useQuery({
@@ -238,6 +240,7 @@ function GlossaryTab({ isAdmin, focusTerm }: { isAdmin: boolean; focusTerm?: str
     mutationFn: (d: TermDraft) => client.request(post('/ai-knowledge/glossary', fromDraft(d))),
     onSuccess: () => {
       setCreating(false)
+      setCreateFrom(null)
       refresh()
     },
     onError: (e) => toast.error(errMsg(e, 'Could not add the term'))
@@ -292,7 +295,10 @@ function GlossaryTab({ isAdmin, focusTerm }: { isAdmin: boolean; focusTerm?: str
           <Button
             size='sm'
             className='h-8 gap-1 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-            onClick={() => setCreating(true)}
+            onClick={() => {
+              setCreateFrom(null)
+              setCreating(true)
+            }}
           >
             <Plus className='h-3.5 w-3.5' /> New term
           </Button>
@@ -303,10 +309,14 @@ function GlossaryTab({ isAdmin, focusTerm }: { isAdmin: boolean; focusTerm?: str
       </div>
       {creating && (
         <TermForm
-          initial={blankDraft}
+          key={createFrom?.term ?? ''}
+          initial={createFrom ?? blankDraft}
           busy={create.isPending}
           onSave={(d) => create.mutate(d)}
-          onCancel={() => setCreating(false)}
+          onCancel={() => {
+            setCreating(false)
+            setCreateFrom(null)
+          }}
         />
       )}
       {q.isLoading ? (
@@ -422,6 +432,89 @@ function GlossaryTab({ isAdmin, focusTerm }: { isAdmin: boolean; focusTerm?: str
               </li>
             )
           )}
+        </ul>
+      )}
+      <BuiltInTerms
+        terms={terms}
+        isAdmin={isAdmin}
+        onOverride={(t) => {
+          setCreateFrom({ ...blankDraft, term: t.term, definition: t.definition })
+          setCreating(true)
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * The built-in app terms (#2) the dotted-underline hints use where this
+ * instance has no wording of its own. An entry above with the same term or
+ * alias replaces the built-in one everywhere.
+ */
+function BuiltInTerms({
+  terms,
+  isAdmin,
+  onOverride
+}: {
+  terms: GlossaryTerm[]
+  isAdmin: boolean
+  onOverride: (t: GlossaryTerm) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const merged = useMemo(() => mergeGlossary(CORE_GLOSSARY, terms), [terms])
+  const replaced = new Set(merged.map((t) => t.overrides).filter(Boolean))
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      data-builtin-terms
+    >
+      <button
+        type='button'
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className='flex w-full items-center gap-2 px-4 py-2.5 text-left text-[12.5px] font-medium text-slate-700 hover:bg-muted dark:text-slate-200'
+      >
+        <BookOpen className='h-3.5 w-3.5 text-muted-foreground' />
+        Built-in app terms
+        <span className='text-[11.5px] font-normal text-muted-foreground'>
+          {CORE_GLOSSARY.length} terms · {replaced.size} replaced by yours · shown on hover across
+          the app
+        </span>
+      </button>
+      {open && (
+        <ul className='divide-y divide-slate-100 border-t border-slate-100 dark:divide-border dark:border-border'>
+          {CORE_GLOSSARY.map((t) => (
+            <li
+              key={t.slug}
+              className='flex items-baseline gap-3 px-4 py-2'
+              data-builtin-term={t.slug}
+            >
+              <span className='w-[150px] shrink-0 text-[12.5px] font-semibold'>{t.term}</span>
+              <span
+                className={cn(
+                  'min-w-0 flex-1 text-[12px]',
+                  replaced.has(t.slug)
+                    ? 'text-muted-foreground line-through'
+                    : 'text-slate-700 dark:text-slate-300'
+                )}
+              >
+                {t.definition}
+              </span>
+              {replaced.has(t.slug) ? (
+                <span className='shrink-0 text-[11px] text-muted-foreground'>Yours is used</span>
+              ) : (
+                isAdmin && (
+                  <button
+                    type='button'
+                    onClick={() => onOverride(t)}
+                    className='shrink-0 rounded px-1.5 py-0.5 text-[11.5px] font-medium text-nvr-navy hover:bg-muted dark:text-nvr-cyan'
+                  >
+                    Use our wording
+                  </button>
+                )
+              )}
+            </li>
+          ))}
         </ul>
       )}
     </div>

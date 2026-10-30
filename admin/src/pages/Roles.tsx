@@ -1,4 +1,10 @@
-import { NotificationRulesEditor, type NotifyRulesValue, UserAvatar } from '@nivaro/shared'
+import {
+  NotificationRulesEditor,
+  type NotifyRulesValue,
+  PermissionSummaryBody,
+  Term,
+  UserAvatar
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -73,6 +79,7 @@ type Policy = {
 type Collection = { collection: string; display_name: string | null }
 type ActiveTab =
   | 'permissions'
+  | 'words'
   | 'members'
   | 'ui'
   | 'simulate'
@@ -93,6 +100,7 @@ const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
     }))
   })
 )
+const navLabelFor = (path: string) => ALL_NAV_ITEMS.find((i) => i.to === path)?.label ?? null
 
 const ACTIONS = ['create', 'read', 'update', 'delete'] as const
 type Action = (typeof ACTIONS)[number]
@@ -412,7 +420,7 @@ function RowFilterSection({ roleId, policies }: { roleId: string; policies: Poli
         )}
         <Filter className='h-3.5 w-3.5 text-slate-400' />
         <span className='text-[13px] font-medium text-slate-700 dark:text-foreground'>
-          Row-level security
+          <Term id='row-filter'>Row-level security</Term>
         </span>
         <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>optional</span>
         {filteredCount > 0 && (
@@ -1136,6 +1144,7 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
         {(
           [
             'permissions',
+            'words',
             'members',
             'ui',
             'simulate',
@@ -1157,15 +1166,17 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           >
             {tab === 'ui'
               ? 'UI Access'
-              : tab === 'simulate'
-                ? 'Simulator'
-                : tab === 'compare'
-                  ? 'Compare'
-                  : tab === 'views'
-                    ? 'Suggested views'
-                    : tab === 'notifications'
-                      ? 'Notification defaults'
-                      : tab}
+              : tab === 'words'
+                ? 'In words'
+                : tab === 'simulate'
+                  ? 'Simulator'
+                  : tab === 'compare'
+                    ? 'Compare'
+                    : tab === 'views'
+                      ? 'Suggested views'
+                      : tab === 'notifications'
+                        ? 'Notification defaults'
+                        : tab}
           </button>
         ))}
       </div>
@@ -1191,6 +1202,15 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
               />
             </>
           )
+        ) : activeTab === 'words' ? (
+          <div className='space-y-3' data-role-words>
+            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+              What this role can do, from its <Term id='policy'>policies</Term>, field lists,{' '}
+              <Term id='row-filter'>row filters</Term> and the <Term id='scope'>User Scopes</Term>{' '}
+              its people hold — the same checks the API runs.
+            </p>
+            <PermissionSummaryBody roleId={role.id} pageLabel={navLabelFor} />
+          </div>
         ) : activeTab === 'compare' ? (
           <CompareTab roleId={role.id} policies={policies} />
         ) : activeTab === 'ui' ? (
