@@ -25,6 +25,7 @@
  * caller) is placed in the SQL.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { isMssql } from '../db/index.js'
 
 export const BINARY_COLLATION = 'Latin1_General_100_BIN2'
@@ -105,4 +106,32 @@ export function typedEquals(
       bindings: [value.toUpperCase()]
     }
   return { sql: `${colSql} = ?`, bindings: [value] }
+}
+
+/**
+ * Search-only `_contains`: inside `withFastContains`, the items service compiles a
+ * `_contains` filter on a column named here through `fastLike` instead of the plain
+ * LIKE. Global search's tab endpoints (/counts, /records) read through the general
+ * filter path; this gives them the cheap match without changing `_contains` for any
+ * other caller (a list filter, a policy, a rule). Keys are collection → column → kind
+ * (the search plan's own column types); a column not named keeps the plain LIKE.
+ */
+const fastContainsStore = new AsyncLocalStorage<Map<string, Record<string, TextKind>>>()
+
+export function withFastContains<T>(
+  kinds: Map<string, Record<string, TextKind>>,
+  fn: () => Promise<T>
+): Promise<T> {
+  return fastContainsStore.run(kinds, fn)
+}
+
+/** The text kind of `column` on `collection` when a search asked for the fast form, else null. */
+export function fastContainsKind(collection: string | null, column: string): TextKind | null {
+  if (!collection) return null
+  const kinds = fastContainsStore.getStore()?.get(collection)
+  if (!kinds) return null
+  const bare = column.startsWith(`${collection}.`) ? column.slice(collection.length + 1) : column
+  if (bare.includes('.')) return null
+  const kind = kinds[bare]
+  return kind === 'unicode' || kind === 'ansi' ? kind : null
 }

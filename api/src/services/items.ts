@@ -109,7 +109,7 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
-import { BINARY_COLLATION, textKindOf } from './search-like.js'
+import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -2246,9 +2246,17 @@ function applyOneFilterOp(
       q.whereNotNull(ref as unknown as string)
       break
     // The value is text to find, never a pattern (lib/filter-like.ts).
-    case '_contains':
-      q.where(ref, 'like', likeContains(val))
+    case '_contains': {
+      // Global search's tab reads ask for the cheaper match (services/search-like.ts).
+      const kind = fastContainsKind(collection, key)
+      const bare =
+        collection && key.startsWith(`${collection}.`) ? key.slice(collection.length + 1) : key
+      if (kind && !peekVirtualSql(collection!)?.has(bare)) {
+        const like = fastLike('??', likeContains(val), kind, { mssql: isMssql() })
+        q.whereRaw(like.sql, [key, ...like.bindings])
+      } else q.where(ref, 'like', likeContains(val))
       break
+    }
     case '_ncontains':
       q.where(ref, 'not like', likeContains(val))
       break

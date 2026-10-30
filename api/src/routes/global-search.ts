@@ -18,7 +18,8 @@ import {
   onMssql,
   type TextKind,
   textKindOf,
-  typedEquals
+  typedEquals,
+  withFastContains
 } from '../services/search-like.js'
 import { buildSearchPreview } from '../services/search-preview.js'
 import {
@@ -1506,6 +1507,10 @@ async function tabFilter(
   return { filter: combinedFilter(textFilter, clauses), cols, text }
 }
 
+/** The tab reads' text match runs in the cheap form on the plan's own column types. */
+const fastKinds = (p: Pick<PlanEntry, 'collection' | 'kinds'>) =>
+  new Map([[p.collection, p.kinds ?? {}]])
+
 /** How many records of each collection match, counted AS THE CALLER (RBAC, row filters,
  *  User Scopes). A collection whose count fails is left out. Exported for tests. */
 export async function countMatches(
@@ -1532,11 +1537,13 @@ export async function countMatches(
           const f = await tabFilter(p, parsed, labelsOnly, allowed.get(p.collection) ?? null)
           // A text-only search never scans a table over the row budget.
           if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return
-          const r = await readItems(user, p.collection, {
-            filter: f.filter,
-            fields: ['id'],
-            limit: 1
-          })
+          const r = await withFastContains(fastKinds(p), () =>
+            readItems(user, p.collection, {
+              filter: f.filter,
+              fields: ['id'],
+              limit: 1
+            })
+          )
           if (typeof r.total === 'number' && r.total > 0)
             out.push({ collection: p.collection, display_name: p.display_name, count: r.total })
         } catch {
@@ -1566,12 +1573,14 @@ export async function searchCollectionPage(
   const allowed = await getAllowedFields(user, 'read', collection).catch(() => [])
   const f = await tabFilter(p, parsed, labelsOnly, allowed)
   if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return { data: [], total: 0 }
-  const r = await readItems(user, collection, {
-    filter: f.filter,
-    sort: ['-id'],
-    offset,
-    limit
-  })
+  const r = await withFastContains(fastKinds(p), () =>
+    readItems(user, collection, {
+      filter: f.filter,
+      sort: ['-id'],
+      offset,
+      limit
+    })
+  )
   const fieldRows = await readableFieldMetas(collection, allowed)
   const labelOf = fieldLabelMap(fieldRows)
   const forms = f.text.length >= 2 ? await searchPhrases(f.text).catch(() => [f.text]) : []

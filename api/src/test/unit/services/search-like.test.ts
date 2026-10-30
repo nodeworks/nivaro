@@ -76,3 +76,22 @@ describe('typedEquals', () => {
     expect(typedEquals('[x]', 'a', 'ansi', { mssql: false }).sql).toBe('[x] = ?')
   })
 })
+
+describe('withFastContains', () => {
+  it('names a column only inside the search context, and only text kinds', async () => {
+    const { withFastContains, fastContainsKind } = await import('../../../services/search-like.js')
+    expect(fastContainsKind('workflows', 'title')).toBeNull()
+    const kinds = new Map([
+      ['workflows', { title: 'unicode' as const, code: 'ansi' as const, amount: 'other' as const }]
+    ])
+    await withFastContains(kinds, async () => {
+      expect(fastContainsKind('workflows', 'title')).toBe('unicode')
+      expect(fastContainsKind('workflows', 'workflows.code')).toBe('ansi')
+      expect(fastContainsKind('workflows', 'amount')).toBeNull()
+      expect(fastContainsKind('workflows', 'project.name')).toBeNull()
+      expect(fastContainsKind('projects', 'title')).toBeNull()
+      expect(fastContainsKind(null, 'title')).toBeNull()
+    })
+    expect(fastContainsKind('workflows', 'title')).toBeNull()
+  })
+})
