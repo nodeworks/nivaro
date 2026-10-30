@@ -11,12 +11,20 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.user = { id: 'U-1', role: 'R' }
     req.isAdmin = who.admin
   },
+  requireAuth: async (req: { user?: unknown; isAdmin?: boolean }) => {
+    req.user = { id: 'U-1', role: 'R' }
+    req.isAdmin = who.admin
+  },
   requireAdmin: async (
     _req: unknown,
     reply: { code: (n: number) => { send: (b: unknown) => unknown } }
   ) => {
     if (!who.admin) return reply.code(403).send({ error: 'Forbidden' })
   }
+}))
+vi.mock('../../../services/permissions.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  getAllowedFields: vi.fn(async () => null)
 }))
 const logActivity = vi.hoisted(() => vi.fn(async () => 1))
 vi.mock('../../../services/activity.js', () => ({ logActivity }))
@@ -109,6 +117,20 @@ describe('GET /api/activity', () => {
     for (const url of ['/api/activity?limit=10', '/api/activity/actions', '/api/activity/7'])
       expect((await a.inject({ method: 'GET', url })).statusCode).toBe(403)
     expect(calls.list).toEqual([])
+  })
+
+  it('opens scope=mine to anyone signed in: own entries only, no IP address', async () => {
+    who.admin = false
+    const a = await app()
+    const r = await a.inject({ method: 'GET', url: '/api/activity?limit=10&scope=mine' })
+    expect(r.statusCode).toBe(200)
+    const rows = r.json().data as Array<Record<string, unknown>>
+    expect(rows.length).toBe(3)
+    for (const row of rows) expect('ip' in row).toBe(false)
+    // An unknown scope is still the administrators' whole log.
+    expect(
+      (await a.inject({ method: 'GET', url: '/api/activity?limit=10&scope=everyone' })).statusCode
+    ).toBe(403)
   })
 
   it('keeps the writes open to anyone signed in (their own export / entry)', async () => {
