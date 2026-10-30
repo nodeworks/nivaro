@@ -55,25 +55,32 @@ const { NavigationContext, NivaroProvider } = await import('../../context')
 const navigate = vi.fn()
 const requests: Array<{ path: string; params?: Record<string, unknown> }> = []
 const client = {
-  request: vi.fn(async (cmd: { _path: string; _params?: Record<string, unknown> }) => {
-    requests.push({ path: cmd._path, params: cmd._params })
-    if (cmd._path === '/command-center/config')
-      return {
-        data: {
-          geo_collections: [{ key: 'locations', label: 'Locations' }],
-          regions: [
-            { id: 'n', label: 'North', lat: null, lng: null },
-            { id: 's', label: 'South', lat: null, lng: null }
-          ],
-          region_label: 'Region',
-          stuck_days: 7
+  request: vi.fn(
+    async (cmd: {
+      _path: string
+      _params?: Record<string, unknown>
+    }): Promise<{
+      data: unknown
+    }> => {
+      requests.push({ path: cmd._path, params: cmd._params })
+      if (cmd._path === '/command-center/config')
+        return {
+          data: {
+            geo_collections: [{ key: 'locations', label: 'Locations' }],
+            regions: [
+              { id: 'n', label: 'North', lat: null, lng: null },
+              { id: 's', label: 'South', lat: null, lng: null }
+            ],
+            region_label: 'Region',
+            stuck_days: 7
+          }
         }
-      }
-    if (cmd._path === '/command-center/prefs')
-      return { data: { layout: null, theme: 'app', saved_views: [], role_default: null } }
-    if (cmd._path === '/command-center/snapshot') return { data: null }
-    return { data: null }
-  })
+      if (cmd._path === '/command-center/prefs')
+        return { data: { layout: null, theme: 'app', saved_views: [], role_default: null } }
+      if (cmd._path === '/command-center/snapshot') return { data: null }
+      return { data: null }
+    }
+  )
 }
 
 let host: HTMLDivElement
@@ -193,6 +200,35 @@ describe('Command Center shell', () => {
     expect(new URLSearchParams(window.location.search).get('tv')).toBe('1')
     key('Escape')
     expect(new URLSearchParams(window.location.search).get('tv')).toBeNull()
+  })
+
+  it('deadline chips: words + icon, hidden when the count is unknown, and lead to attention', async () => {
+    const snapshot = {
+      flow: [],
+      risk: { at_risk: 0, tracked: 0, open_issues: 0, sla_breached: 3 },
+      people: { online_count: 2, idle_count: 0, names: [], by_region: [], regions: [] },
+      throughput: { transitions_today: 4, transitions_yesterday_same_time: 2 },
+      health: null,
+      activity: []
+    }
+    const base = client.request.getMockImplementation()!
+    client.request.mockImplementation(async (cmd) =>
+      cmd._path === '/command-center/snapshot' ? { data: snapshot } : base(cmd)
+    )
+    Element.prototype.scrollIntoView = vi.fn()
+    try {
+      mount(1440)
+      await flush()
+      const buttons = Array.from(host.querySelectorAll('header button'))
+      const past = buttons.find((b) => b.textContent?.includes('past deadline'))
+      expect(past?.textContent).toBe('3 past deadline')
+      expect(past?.querySelector('svg')).toBeTruthy()
+      expect(buttons.some((b) => b.textContent?.includes('near deadline'))).toBe(false)
+      act(() => (past as HTMLButtonElement).click())
+      expect(document.activeElement?.getAttribute('data-cc-slot')).toBe('attention')
+    } finally {
+      client.request.mockImplementation(base)
+    }
   })
 
   it('shows skeletons, not dashes, while the first snapshot loads', async () => {

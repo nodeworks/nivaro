@@ -1,6 +1,8 @@
 import {
+  AlertOctagon,
   Bookmark,
   Check,
+  Clock,
   Keyboard,
   Link2,
   Maximize2,
@@ -82,6 +84,7 @@ export function Header({
         ) : cc.snapshotLoading ? (
           <span className={`${SKELETON} h-4 w-40`} aria-hidden />
         ) : null}
+        {snap && <DeadlineChips risk={snap.risk} />}
         {snap && snap.risk.open_issues > 0 && (
           <button
             type='button'
@@ -149,6 +152,52 @@ export function Header({
         </div>
       </div>
     </header>
+  )
+}
+
+/** Move to the Needs attention panel (scrolled into view and focused, for keyboards too). */
+export function goToAttention() {
+  // The panel's own root, else the shell's slot around it.
+  const el = document.querySelector<HTMLElement>(
+    "[data-cc-panel='attention'], [data-cc-slot='attention']"
+  )
+  if (!el) return
+  const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  el.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' })
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1')
+  el.focus({ preventScroll: true })
+}
+
+/**
+ * "N past deadline" (red) / "N near deadline" (amber) — icon + words, never colour alone. An
+ * undefined count means the server could not say: the chip is hidden, not shown as zero.
+ */
+export function DeadlineChips({ risk }: { risk: { sla_breached?: number; sla_warning?: number } }) {
+  const chip =
+    'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] font-medium enabled:hover:brightness-95'
+  return (
+    <>
+      {risk.sla_breached !== undefined && risk.sla_breached > 0 && (
+        <button
+          type='button'
+          onClick={goToAttention}
+          className={`${chip} bg-[var(--cc-bad-bg)] text-[var(--cc-bad-text)] ${FOCUS}`}
+        >
+          <AlertOctagon className='h-3.5 w-3.5' aria-hidden />
+          <span className='tabular-nums'>{risk.sla_breached}</span> past deadline
+        </button>
+      )}
+      {risk.sla_warning !== undefined && risk.sla_warning > 0 && (
+        <button
+          type='button'
+          onClick={goToAttention}
+          className={`${chip} bg-[var(--cc-warn-bg)] text-[var(--cc-warn-text)] ${FOCUS}`}
+        >
+          <Clock className='h-3.5 w-3.5' aria-hidden />
+          <span className='tabular-nums'>{risk.sla_warning}</span> near deadline
+        </button>
+      )}
+    </>
   )
 }
 
