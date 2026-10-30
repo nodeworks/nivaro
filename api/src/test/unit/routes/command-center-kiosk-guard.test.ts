@@ -307,6 +307,23 @@ describe('a wallboard link is a business board', () => {
     expect(spies.flow.mock.calls[0][0].query.region).toBeUndefined()
   })
 
+  it('refuses — never widens — when the link’s region cannot be confirmed', async () => {
+    const app = await build()
+    const before = m.readable
+    m.readable = ['R1'] // the link's region '7' is no longer readable
+    resetTenantMemos()
+    const gone = await get(app, `/flow?${K}`)
+    expect(gone.statusCode).toBe(403)
+    expect(JSON.parse(gone.body).code ?? JSON.parse(gone.body).error).toBeTruthy()
+    const { readableRegions } = await import('../../../services/command-center/regions.js')
+    vi.mocked(readableRegions).mockRejectedValueOnce(new Error('db down'))
+    m.readable = before
+    resetTenantMemos()
+    const failed = await get(app, `/flow?${K}`)
+    expect(failed.statusCode).toBe(403)
+    spies.flow.mockClear()
+  })
+
   it('serves only the link’s map collection', async () => {
     m.geo = [
       { key: 'locations', label: 'Locations' },

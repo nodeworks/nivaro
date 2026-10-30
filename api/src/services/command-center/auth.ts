@@ -72,13 +72,24 @@ export function ccCredKey(req: FastifyRequest): string {
  * A `region` the caller cannot read is dropped (no region = everywhere) so a free-form value can
  * never fan out into per-region work. Runs after sign-in on every Command Center read and write.
  */
-async function limitRegion(req: FastifyRequest): Promise<void> {
+async function limitRegion(req: FastifyRequest, pinned = false): Promise<void> {
   for (const bag of [req.query, req.body]) {
     if (!bag || typeof bag !== 'object') continue
     const o = bag as Record<string, unknown>
     if (typeof o.region !== 'string' || !o.region) continue
     const readable = await readableRegionIds(req.user!)
-    if (!readable.has(o.region.toUpperCase())) delete o.region
+    if (readable?.has(o.region.toUpperCase())) continue
+    // A signed-in person's region is only a narrowing lens: dropping one we cannot confirm
+    // answers for everywhere they may read anyway. A wallboard pinned to a region must never
+    // widen to everywhere — refuse instead (the region is gone or the lookup failed).
+    if (pinned) {
+      throw httpError(
+        403,
+        'This wallboard link shows a region that is no longer available. Ask an administrator for a new link.',
+        'KIOSK_REGION_UNAVAILABLE'
+      )
+    }
+    delete o.region
   }
 }
 
@@ -112,7 +123,7 @@ export async function ccReadAuth(req: FastifyRequest, reply: FastifyReply): Prom
   else delete q.region
   // The compiled permission cache keys entries by how the request signed in.
   notePrincipalKind(p.user, `kiosk:${p.linkId}`)
-  await limitRegion(req)
+  await limitRegion(req, !!p.meta.region)
 }
 
 export async function ccWriteAuth(req: FastifyRequest, reply: FastifyReply): Promise<void> {
