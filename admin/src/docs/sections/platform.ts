@@ -575,6 +575,10 @@ export const widgetSdk: DocSection = {
     {
       type: 'note',
       text: '`/api/widget.js` is also aliased at the server root, so embeds keep working when the API is mounted behind a path prefix.'
+    },
+    {
+      type: 'p',
+      text: 'Previews: each feed on the Widgets page shows its list widget (and the form widget for a picked submission form) live, in light or dark, exactly as a site would — the real script in a sandboxed frame. Trying the form there is a dry run; nothing is submitted. Internal widgets get a Preview too: type values for the widget’s inputs, optionally pick a sample record, and it renders through the same widget slot records and dashboards use. Buttons and in-place edits show but do nothing in the preview.'
     }
   ]
 }

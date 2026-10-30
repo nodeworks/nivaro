@@ -1,21 +1,22 @@
+import { type InputBinding, WidgetSlot } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   ArrowUpRight,
-  Activity,
-  AlertCircle,
-  AlertTriangle,
   Bell,
   Bookmark,
   Calendar,
   Check,
   CheckCircle,
-  ChevronsUpDown,
   ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
   Clipboard,
   Clock,
   Code2,
@@ -37,6 +38,7 @@ import {
   LayoutPanelTop,
   Link,
   Lock,
+  type LucideIcon,
   Mail,
   MessageSquare,
   Minus,
@@ -48,6 +50,7 @@ import {
   Play,
   Plus,
   Power,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Save,
@@ -66,12 +69,9 @@ import {
   Users,
   X,
   XCircle,
-  Zap,
-  Puzzle,
-  type LucideIcon
+  Zap
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -86,6 +86,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -729,6 +730,15 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
       </div>
 
       <SnippetBlock label='List widget (this feed)' code={listSnippet} />
+      <EmbedPreview
+        title='Preview — list widget'
+        attrs={{
+          'data-nivaro-widget': 'list',
+          'data-token': feed.token,
+          'data-title-field': feed.fields[0] ?? ''
+        }}
+        note='What a site shows with this snippet, from the live feed.'
+      />
 
       <div className='space-y-2'>
         <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -747,8 +757,15 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
             widthClass='w-[300px]'
           />
         </div>
-        {formSnippet && (
-          <SnippetBlock label={`Form widget (${selectedForm?.name})`} code={formSnippet} />
+        {formSnippet && selectedForm && (
+          <>
+            <SnippetBlock label={`Form widget (${selectedForm.name})`} code={formSnippet} />
+            <EmbedPreview
+              title={`Preview — ${selectedForm.name}`}
+              attrs={{ 'data-nivaro-widget': 'form', 'data-token': selectedForm.token }}
+              note='Sending the form here is a dry run: nothing is submitted.'
+            />
+          </>
         )}
       </div>
 
@@ -757,6 +774,81 @@ function EmbedSnippets({ feed }: { feed: WidgetFeed }) {
         <code>data-link-template</code> (e.g. <code>https://site.com/news/{'{id}'}</code>),{' '}
         <code>data-theme="dark"</code>.
       </p>
+    </div>
+  )
+}
+
+// ─── Live preview ─────────────────────────────────────────────────────────────
+
+/**
+ * The embed exactly as a site shows it: the real widget.js in a sandboxed frame (its own opaque
+ * origin, so it reads the public feed like any other site would). The frame's fetch answers
+ * every non-GET itself, so trying the form here never creates a submission.
+ */
+function embedPreviewDoc(origin: string, attrs: Record<string, string>, dark: boolean): string {
+  const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+  const dataAttrs = Object.entries(attrs)
+    .map(([k, v]) => ` ${k}="${esc(v)}"`)
+    .join('')
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;padding:16px;background:${dark ? '#0f172a' : '#ffffff'};color:${dark ? '#e2e8f0' : '#0f172a'};font-family:system-ui,sans-serif}</style><script>(function(){var f=window.fetch.bind(window);window.fetch=function(u,o){var m=((o&&o.method)||'GET').toUpperCase();if(m!=='GET'&&m!=='HEAD'){return Promise.resolve(new Response(JSON.stringify({data:{id:'preview'},preview:true}),{status:200,headers:{'Content-Type':'application/json'}}))}return f(u,o)}})()</script></head><body><script src="${esc(origin)}/api/widget/widget.js"${dataAttrs}></script></body></html>`
+}
+
+function EmbedPreview({
+  title,
+  attrs,
+  note
+}: {
+  title: string
+  attrs: Record<string, string>
+  note?: string
+}) {
+  const [dark, setDark] = useState(false)
+  const [nonce, setNonce] = useState(0)
+  const doc = embedPreviewDoc(
+    window.location.origin,
+    { ...attrs, 'data-theme': dark ? 'dark' : 'light' },
+    dark
+  )
+  return (
+    <div className='space-y-2'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <Eye className='h-3.5 w-3.5 text-slate-400 dark:text-muted-foreground' />
+        <span className='text-[12px] font-medium'>{title}</span>
+        <div className='ml-auto flex items-center gap-1'>
+          {(['light', 'dark'] as const).map((t) => (
+            <button
+              key={t}
+              type='button'
+              aria-pressed={dark === (t === 'dark')}
+              onClick={() => setDark(t === 'dark')}
+              className={cn(
+                'rounded px-2 py-0.5 text-[11px]',
+                dark === (t === 'dark')
+                  ? 'bg-accent font-medium text-foreground'
+                  : 'text-slate-500 hover:bg-muted dark:text-muted-foreground'
+              )}
+            >
+              {t === 'light' ? 'Light' : 'Dark'}
+            </button>
+          ))}
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-6 px-2 text-[11px]'
+            onClick={() => setNonce((n) => n + 1)}
+          >
+            Reload
+          </Button>
+        </div>
+      </div>
+      <iframe
+        key={`${nonce}:${dark ? 'd' : 'l'}`}
+        title={title}
+        sandbox='allow-scripts'
+        srcDoc={doc}
+        className='h-[360px] w-full rounded-md border border-slate-200 dark:border-border'
+      />
+      {note && <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>{note}</p>}
     </div>
   )
 }
@@ -3354,6 +3446,148 @@ function InternalWidgetForm({
   )
 }
 
+/** Widget types whose controls change records or run actions — previewed but not clickable. */
+const ACTING_WIDGET_TYPES = new Set(['action-buttons', 'button-group', 'review_list'])
+
+/**
+ * Internal widget preview: the widget rendered by the same WidgetSlot records and dashboards
+ * use, fed by values typed here for its inputs and, optionally, a sample record for widgets
+ * that read the record they sit on. Buttons and in-place edits are shown but switched off.
+ */
+function InternalWidgetPreview({ widget }: { widget: InternalWidget }) {
+  const inputs = (Array.isArray(widget.inputs) ? widget.inputs : []) as Array<{
+    key: string
+    label?: string
+    required?: boolean
+  }>
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [collection, setCollection] = useState('')
+  const [recordId, setRecordId] = useState('')
+  const [applied, setApplied] = useState<{
+    values: Record<string, string>
+    collection: string
+    recordId: string
+    n: number
+  }>({ values: {}, collection: '', recordId: '', n: 0 })
+  const colOpts = useCollectionOptions()
+  const record = useQuery({
+    queryKey: ['widget-preview-record', applied.collection, applied.recordId],
+    queryFn: () =>
+      api
+        .get<{ data: Record<string, unknown> }>(
+          `/items/${applied.collection}/${encodeURIComponent(applied.recordId)}`
+        )
+        .then((r) => r.data.data),
+    enabled: !!applied.collection && !!applied.recordId,
+    retry: false
+  })
+  const draft = record.data ?? {}
+  // A typed value wins; otherwise an input named like a field of the sample record reads it.
+  const bindings: InputBinding[] = inputs.map((i) =>
+    applied.values[i.key]?.trim()
+      ? ({
+          key: i.key,
+          binding_type: 'static',
+          binding_value: applied.values[i.key]
+        } as InputBinding)
+      : ({ key: i.key, binding_type: 'item_field', binding_value: i.key } as InputBinding)
+  )
+  const missing = inputs.filter(
+    (i) => i.required && !applied.values[i.key]?.trim() && draft[i.key] == null
+  )
+  const acting = ACTING_WIDGET_TYPES.has(widget.widget_type)
+  const run = () => setApplied((a) => ({ values, collection, recordId, n: a.n + 1 }))
+  return (
+    <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex items-center gap-2'>
+        <Eye className='h-4 w-4 text-slate-400 dark:text-muted-foreground' />
+        <h3 className='text-[13px] font-semibold'>Preview</h3>
+        {!widget.is_active && (
+          <span className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            (inactive — previewed anyway)
+          </span>
+        )}
+      </div>
+      <div className='flex flex-wrap items-end gap-3'>
+        {inputs.map((i) => (
+          <div key={i.key} className='space-y-1'>
+            <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+              {i.label || i.key}
+              {i.required ? ' *' : ''}
+            </Label>
+            <Input
+              value={values[i.key] ?? ''}
+              onChange={(e) => setValues((v) => ({ ...v, [i.key]: e.target.value }))}
+              onKeyDown={(e) => e.key === 'Enter' && run()}
+              className='h-8 w-[180px] text-[12px]'
+              placeholder={i.key}
+            />
+          </div>
+        ))}
+        <div className='space-y-1'>
+          <Label className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            Sample record (optional)
+          </Label>
+          <div className='flex items-center gap-1.5'>
+            <PickCombobox
+              value={collection}
+              onChange={setCollection}
+              options={colOpts}
+              placeholder='Collection…'
+              widthClass='w-[200px]'
+            />
+            <Input
+              value={recordId}
+              onChange={(e) => setRecordId(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && run()}
+              className='h-8 w-[120px] text-[12px]'
+              placeholder='Record id'
+              aria-label='Sample record id'
+            />
+          </div>
+        </div>
+        <Button size='sm' className='h-8 text-[12px]' onClick={run}>
+          {applied.n === 0 ? 'Show preview' : 'Refresh preview'}
+        </Button>
+      </div>
+      {record.isError && (
+        <p className='text-[11.5px] text-red-600 dark:text-red-400'>
+          That record could not be opened — check the collection and id.
+        </p>
+      )}
+      {applied.n > 0 && missing.length > 0 && (
+        <p className='text-[11.5px] text-amber-700 dark:text-amber-400'>
+          Needs a value for {missing.map((i) => i.label || i.key).join(', ')}.
+        </p>
+      )}
+      {applied.n > 0 && (
+        <div className='rounded-md border border-dashed border-slate-200 p-3 dark:border-border'>
+          {acting && (
+            <p className='mb-2 text-[11px] text-slate-400 dark:text-muted-foreground'>
+              Buttons and edits are shown but do nothing in the preview.
+            </p>
+          )}
+          <div
+            // inert: a preview never runs an action or edits a record
+            inert={acting || undefined}
+            className={acting ? 'select-none opacity-90' : undefined}
+          >
+            <WidgetSlot
+              key={applied.n}
+              widgetId={widget.id}
+              inputBindings={bindings}
+              itemDraft={draft}
+              itemCollection={applied.collection || undefined}
+              ready={!applied.recordId || !!record.data || record.isError}
+              label={widget.name}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function InternalWidgetDetail({
   widget,
   onDeleted
@@ -3419,6 +3653,8 @@ function InternalWidgetDetail({
       <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
         <InternalWidgetForm widget={widget} onSaved={() => undefined} />
       </div>
+
+      <InternalWidgetPreview key={widget.id} widget={widget} />
     </div>
   )
 }
