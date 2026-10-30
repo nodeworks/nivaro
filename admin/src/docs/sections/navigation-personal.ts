@@ -53,7 +53,7 @@ export const navigationPersonal: DocSection = {
     { type: 'h2', id: 'navigation-sidebar', text: 'Your own sidebar' },
     {
       type: 'p',
-      text: 'Click the sliders button at the top of any sidebar panel to customise it. For each page you can pin it to the top of the panel, hide it, or move it up and down inside its section. Changes save straight away and follow you to any computer. **Reset to default** puts every panel back.'
+      text: 'Click the sliders button at the top of any sidebar panel to customise it. **This panel**: for each page you can pin it to the top of the panel, hide it, or move it up and down inside its section. **Main sections**: hide whole sections from the icon rail down the left edge and put the rest in your order (sections move within their own group, and at least one always stays). Changes save straight away and follow you to any computer. **Reset to default** puts every panel and the main sections back.'
     },
     {
       type: 'ul',
@@ -67,7 +67,7 @@ export const navigationPersonal: DocSection = {
     { type: 'h2', id: 'navigation-role-starter', text: 'Starter sidebars per role (admins)' },
     {
       type: 'p',
-      text: 'In **Roles → <role> → Sidebar** an administrator sets the sidebar people with that role start from: the same pin, hide and order controls, listing only the pages the role may open. Anyone with the role who has not customised their own sidebar sees it, and Reset to default brings people back to it. **Clear starter** returns the role to the standard sidebar.'
+      text: 'In **Roles → <role> → Sidebar** an administrator sets the sidebar people with that role start from: the main sections (hide and order) and the same pin, hide and order controls for each panel, listing only the sections and pages the role may open. Anyone with the role who has not customised their own sidebar sees it, and Reset to default brings people back to it. **Clear starter** returns the role to the standard sidebar.'
     },
 
     { type: 'h3', id: 'navigation-api', text: 'API' },

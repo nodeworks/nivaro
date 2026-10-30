@@ -5,6 +5,24 @@ import {
   starterForRole
 } from '../../../services/nav-layout.js'
 
+describe('normalizeNavLayout — rail of main sections', () => {
+  it('keeps a rail-only layout: order and hidden by section id', () => {
+    const n = normalizeNavLayout({ v: 1, rail: { order: ['data', 'home', 'data'], hidden: ['ops', 'bad id!'] } })
+    expect(n.layout).toEqual({ v: 1, categories: {}, rail: { order: ['data', 'home'], hidden: ['ops'] } })
+  })
+
+  it('drops an empty rail and refuses a malformed one', () => {
+    expect(normalizeNavLayout({ v: 1, rail: { order: [], hidden: [] } }).layout).toBeNull()
+    expect(normalizeNavLayout({ v: 1, rail: 'home' }).error).toMatch(/rail/)
+    expect(normalizeNavLayout({ v: 1, rail: { order: 'home' } }).error).toMatch(/rail/)
+  })
+
+  it('keeps categories and rail together', () => {
+    const n = normalizeNavLayout({ v: 1, categories: { home: { hidden: ['/x'] } }, rail: { hidden: ['data'] } })
+    expect(n.layout).toEqual({ v: 1, categories: { home: { hidden: ['/x'] } }, rail: { hidden: ['data'] } })
+  })
+})
+
 describe('normalizeNavLayout', () => {
   it('treats null / empty as no layout', () => {
     expect(normalizeNavLayout(null)).toEqual({ layout: null })

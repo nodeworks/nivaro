@@ -136,7 +136,7 @@ import {
   type NavItem,
   navCategories
 } from './nav-config'
-import { applyNavLayout, permittedCategories } from './nav-layout'
+import { applyNavLayout, applyRail, permittedCategories } from './nav-layout'
 import { RecentNav } from './RecentNav'
 import { useNavLayout } from './useNavLayout'
 
@@ -530,7 +530,11 @@ export function AppLayout() {
   const navLayout = useNavLayout()
   const [customizing, setCustomizing] = useState(false)
   const permitted = permittedCategories(navCategories, disabledPaths)
-  const visibleCategories = applyNavLayout(permitted, navLayout.effective)
+  // Main sections: the person's order, minus the ones they hid (never all of them).
+  const visibleCategories = applyRail(
+    applyNavLayout(permitted, navLayout.effective),
+    navLayout.effective
+  )
 
   const railCategories = [favoritesCategory, ...visibleCategories]
   const activeCat =
@@ -883,6 +887,7 @@ export function AppLayout() {
                   {customizing && customizeCategory && (
                     <NavCustomizePanel
                       category={customizeCategory}
+                      sections={permitted}
                       layoutApi={navLayout}
                       onDone={() => setCustomizing(false)}
                     />

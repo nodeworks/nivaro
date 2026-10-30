@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, Pin, PinOff, RotateCcw } from 'luc
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { navCategories } from '@/layouts/nav-config'
+import { RailSectionsEditor } from '@/layouts/RailSectionsEditor'
 import {
   applyNavLayout,
   MAX_PINNED,
@@ -109,6 +110,30 @@ export function RoleSidebarStarter({
           <RotateCcw className='h-3.5 w-3.5' />
           Clear starter
         </button>
+      </div>
+
+      <div
+        className='rounded-lg border border-slate-200 bg-white py-2 dark:border-border dark:bg-card'
+        data-role-rail-starter
+      >
+        <p className='px-4 pb-1.5 text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+          Main sections
+          <span className='ml-2 font-normal text-slate-500 dark:text-slate-400'>
+            the icons down the left edge — hide the ones this role never uses and set their order
+          </span>
+        </p>
+        <RailSectionsEditor
+          sections={permitted.map((c) => ({
+            id: c.id,
+            label: c.label,
+            zone: c.zone,
+            icon: c.icon
+          }))}
+          layout={layout}
+          onChange={(next) => save.mutate(next)}
+          tone='card'
+          disabled={save.isPending}
+        />
       </div>
 
       <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>

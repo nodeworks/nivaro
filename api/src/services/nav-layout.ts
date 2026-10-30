@@ -3,7 +3,8 @@
  *
  * A layout only REARRANGES the admin's own nav map (layouts/nav-config.ts):
  * per category, which items are pinned to the top, which are hidden, and the
- * order inside each section. It never names a page the map does not already
+ * order inside each section; and for the rail of main sections (`rail`), their
+ * order and which are hidden. It never names a page the map does not already
  * have, and the client applies it AFTER the role's ui_permissions filter, so a
  * layout can never surface a page the person's role cannot open.
  *
@@ -22,9 +23,16 @@ export interface NavLayoutCategory {
   pinned?: string[]
 }
 
+/** The main sections (the icon rail): their order and the ones hidden, by category id. */
+export interface NavLayoutRail {
+  order?: string[]
+  hidden?: string[]
+}
+
 export interface NavLayout {
   v: 1
   categories: Record<string, NavLayoutCategory>
+  rail?: NavLayoutRail
 }
 
 const CATEGORY_ID = /^[a-z0-9_-]{1,40}$/i
@@ -34,6 +42,18 @@ const MAX_ORDER = 120
 const MAX_HIDDEN = 120
 const MAX_PINNED = 20
 const ROLE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function cleanIds(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) return null
+  const out: string[] = []
+  for (const v of raw) {
+    if (typeof v !== 'string' || !CATEGORY_ID.test(v) || out.includes(v)) continue
+    out.push(v)
+    if (out.length >= MAX_CATEGORIES) break
+  }
+  return out
+}
 
 function cleanPaths(raw: unknown, max: number): string[] | null {
   if (raw === undefined || raw === null) return []
@@ -66,8 +86,22 @@ export function normalizeNavLayout(raw: unknown): { layout: NavLayout | null; er
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { layout: null, error: 'nav_layout must be an object' }
   }
-  const cats = (value as { categories?: unknown }).categories
-  if (cats === undefined || cats === null) return { layout: null }
+  let rail: NavLayoutRail | undefined
+  const rawRail = (value as { rail?: unknown }).rail
+  if (rawRail !== undefined && rawRail !== null) {
+    if (typeof rawRail !== 'object' || Array.isArray(rawRail)) {
+      return { layout: null, error: 'nav_layout.rail must be an object' }
+    }
+    const order = cleanIds((rawRail as Record<string, unknown>).order)
+    const hidden = cleanIds((rawRail as Record<string, unknown>).hidden)
+    if (!order || !hidden) {
+      return { layout: null, error: 'nav_layout.rail: order and hidden are lists of section ids' }
+    }
+    if (order.length || hidden.length) {
+      rail = { ...(order.length ? { order } : {}), ...(hidden.length ? { hidden } : {}) }
+    }
+  }
+  const cats = (value as { categories?: unknown }).categories ?? {}
   if (typeof cats !== 'object' || Array.isArray(cats)) {
     return { layout: null, error: 'nav_layout.categories must be an object' }
   }
@@ -96,8 +130,8 @@ export function normalizeNavLayout(raw: unknown): { layout: NavLayout | null; er
     }
     if (++count >= MAX_CATEGORIES) break
   }
-  if (Object.keys(categories).length === 0) return { layout: null }
-  return { layout: { v: 1, categories } }
+  if (Object.keys(categories).length === 0 && !rail) return { layout: null }
+  return { layout: { v: 1, categories, ...(rail ? { rail } : {}) } }
 }
 
 /** `nivaro_settings.nav_role_defaults` as a map keyed by UPPER-CASE role uuid. */

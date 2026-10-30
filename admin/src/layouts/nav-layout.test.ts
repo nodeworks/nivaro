@@ -2,15 +2,19 @@ import { describe, expect, it } from 'vitest'
 import type { NavCategory } from './nav-config'
 import {
   applyNavLayout,
+  applyRail,
   effectiveNavLayout,
   moveItem,
+  moveSection,
   type NavLayout,
   PINNED_SECTION,
   parseNavLayout,
   permittedCategories,
   resetCategory,
+  resetRail,
   toggleHidden,
-  togglePinned
+  togglePinned,
+  toggleSectionHidden
 } from './nav-layout'
 
 const Icon = () => null
@@ -173,5 +177,54 @@ describe('editing', () => {
     })
     expect(parseNavLayout('nope')).toBeNull()
     expect(parseNavLayout({ v: 1, categories: {} })).toBeNull()
+  })
+})
+
+describe('main sections (rail)', () => {
+  const secs = [
+    { id: 'home', zone: 'work' },
+    { id: 'data', zone: 'work' },
+    { id: 'automation', zone: 'work' },
+    { id: 'ops', zone: 'platform' },
+    { id: 'system', zone: 'platform' }
+  ]
+  const ids = (xs: Array<{ id: string }>) => xs.map((x) => x.id)
+
+  it('leaves the rail alone without a rail layout', () => {
+    expect(ids(applyRail(secs, null))).toEqual(['home', 'data', 'automation', 'ops', 'system'])
+  })
+
+  it('orders inside each zone and hides by id; unnamed sections keep their place after', () => {
+    const layout = parseNavLayout({
+      v: 1,
+      rail: { order: ['automation', 'home', 'system'], hidden: ['ops'] }
+    })
+    expect(ids(applyRail(secs, layout))).toEqual(['automation', 'home', 'data', 'system'])
+    const all = applyRail(secs, layout, { includeHidden: true })
+    expect(all.find((s) => s.id === 'ops')?.railHidden).toBe(true)
+  })
+
+  it('never hides every section', () => {
+    const layout = parseNavLayout({ v: 1, rail: { hidden: secs.map((s) => s.id) } })
+    expect(applyRail(secs, layout)).toHaveLength(5)
+    let l = null as ReturnType<typeof parseNavLayout>
+    for (const s of secs) l = toggleSectionHidden(l, secs, s.id)
+    expect(l?.rail?.hidden).toHaveLength(4)
+  })
+
+  it('moves a section only inside its zone and keeps panel layouts', () => {
+    const base = parseNavLayout({ v: 1, categories: { home: { hidden: ['/x'] } } })
+    const shown = applyRail(secs, base, { includeHidden: true })
+    const up = moveSection(base, shown, 'data', -1)
+    expect(ids(applyRail(secs, up))).toEqual(['data', 'home', 'automation', 'ops', 'system'])
+    expect(up?.categories.home).toEqual({ hidden: ['/x'] })
+    // ops is first in its zone: moving it up does nothing.
+    expect(moveSection(up, applyRail(secs, up, { includeHidden: true }), 'ops', -1)).toBe(up)
+  })
+
+  it('round-trips a rail-only layout and resets it', () => {
+    const l = toggleSectionHidden(null, secs, 'ops')
+    expect(parseNavLayout(JSON.parse(JSON.stringify(l)))).toEqual(l)
+    expect(resetRail(l)).toBeNull()
   })
 })
