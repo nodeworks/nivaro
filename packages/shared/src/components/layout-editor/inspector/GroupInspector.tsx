@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { readGroupStructure } from '../../../lib/form-structure'
 import type { GroupPatch, GroupRow } from '../../../lib/layout-ops'
-import { lazySectionPatch, lazySectionsOf } from '../../../lib/layout-resolve'
+import {
+  lazySectionPatch,
+  lazySectionsOf,
+  quietHiddenSectionPatch,
+  quietHiddenSectionsOf
+} from '../../../lib/layout-resolve'
 import { titleCase } from '../../../lib/utils'
 import { RuleWriter } from '../ai-rules/RuleWriter'
 import { RoleConditionRow } from '../editors/lock-conditions'
@@ -83,6 +88,8 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
   const sectionLike = type === 'section' || type === 'metadata' || type === 'tab'
   // #2713: kept in the layout's conditions.lazy_sections, by section key.
   const lazy = lazySectionsOf(env.bundle.layout.conditions).includes(group.key)
+  // #3228: kept in conditions.quiet_hidden_sections (keys with the hint OFF; on by default).
+  const ruleHint = !quietHiddenSectionsOf(env.bundle.layout.conditions).includes(group.key)
   const accordion = !!env.bundle.layout.accordion_mode
   const structure = readGroupStructure(group.swap_config)
 
@@ -460,6 +467,23 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
               disabled={readOnly}
             />
           </Setting>
+          <Toggle
+            k='group.rule_hint'
+            label='Say why it is hidden'
+            effect={`While its conditions hide it, the form shows one quiet line ("${name} shows when …") with a read-only Show anyway. Off: it vanishes without a word.`}
+            checked={ruleHint}
+            onChange={(v) =>
+              env.apply(
+                [
+                  {
+                    op: 'layout_update',
+                    patch: quietHiddenSectionPatch(env.bundle.layout.conditions, group.key, v)
+                  }
+                ],
+                { label: v ? `Say why ${name} is hidden` : `Hide ${name} without a word` }
+              )
+            }
+          />
         </Section>
       )}
 

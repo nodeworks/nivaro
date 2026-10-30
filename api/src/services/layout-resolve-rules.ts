@@ -19,6 +19,8 @@ import { currentTimezone, dayInZone } from './liquid-dates.js'
  *    save carries an administrator's override note.
  *  - `lazy_sections` (#2713) — section keys whose pickers, grids and
  *    widgets wait until someone opens the section (the record page reads it).
+ *  - `quiet_hidden_sections` (#3228) — section/step keys that vanish without the
+ *    "Shows when …" line while their show-when rule hides them (the hint is on by default).
  */
 
 export interface ActiveWindow {
@@ -234,6 +236,11 @@ export async function validateResolveConditions(
     if (typeof f.reason !== 'string' || f.reason.trim().length < OVERRIDE_MIN)
       return 'A freeze needs a reason people will read'
     if (f.reason.length > REASON_MAX) return `A freeze reason is at most ${REASON_MAX} characters`
+  }
+  if (c.quiet_hidden_sections != null) {
+    const v = c.quiet_hidden_sections
+    if (!Array.isArray(v) || v.length > LAZY_MAX || v.some((k) => typeof k !== 'string' || !k))
+      return 'conditions.quiet_hidden_sections must be a list of section keys'
   }
   if (c.lazy_sections != null) {
     if (
