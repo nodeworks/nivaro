@@ -359,8 +359,17 @@ export async function queuesRoutes(app: FastifyInstance) {
     }
     if (body.display_config !== undefined) {
       // Normalize before write so the stored JSON is always valid/complete.
-      update.display_config =
-        body.display_config === null ? null : toJsonStr(normalizeDisplayConfig(body.display_config))
+      if (body.display_config === null) {
+        update.display_config = null
+      } else {
+        const next = normalizeDisplayConfig(body.display_config)
+        // #3224 — which columns a queue edits in place is an administrator's call:
+        // an owner's save keeps whatever is stored.
+        if (!req.isAdmin) {
+          next.inline_edit = normalizeDisplayConfig(parseJson(queue.display_config)).inline_edit
+        }
+        update.display_config = toJsonStr(next)
+      }
     }
 
     await db('nivaro_queues').where({ id }).update(update)

@@ -59,6 +59,22 @@ import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
 import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
+import {
+  type InlineEditorKind,
+  type InlineFieldMeta,
+  type InlineRelationMeta,
+  inlineChoices,
+  inlineEditFor,
+  inlineM2oTarget,
+  nextInlineKey,
+  normalizeInlineEdit
+} from '../../lib/list-inline-edit'
+import {
+  dropListLinkParam,
+  type QueueLinkState,
+  readListLinkFromLocation,
+  sanitizeQueueLinkState
+} from '../../lib/list-link'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -81,7 +97,7 @@ import {
 import { useAskRecordDrag, usePublishAskContext } from '../ai/ask-context'
 import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { BulkRowMark } from '../bulk/BulkRowMark'
-import { RowActionsMenu } from '../CollectionBrowserView'
+import { RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
@@ -91,6 +107,8 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
+import { CopyListLinkButton } from '../list/CopyListLinkButton'
+import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
 import { LiveRowMark } from '../LiveRowMark'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
@@ -305,6 +323,8 @@ interface QueueMeta {
       formula: string
       format?: 'currency' | 'number' | null
     }> | null
+    /** #3224 — edit in the list: `{enabled, fields}` (plain extra-field paths); off by default. */
+    inline_edit?: unknown
   }
 }
 
@@ -2250,6 +2270,36 @@ export function QueueWorklist({
     setActiveViewId(null)
     setPage(1)
   }, [displayReady])
+  // #3233 — a shared queue link (`?lv=`): the view exactly as the sender saw it,
+  // applied once over the default view. Settings only — the reader's own access applies.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on ready
+  useEffect(() => {
+    if (!displayReady) return
+    const shared = sanitizeQueueLinkState(readListLinkFromLocation(`queue:${queueId}`))
+    if (!shared) return
+    dropListLinkParam()
+    applyView({
+      id: -1,
+      name: '',
+      user: '',
+      is_shared: false,
+      // Saved views type filters loosely as strings; multi-selects ride as arrays there too.
+      state: shared as QueueView['state']
+    })
+    setActiveViewId(null)
+    if (shared.page) setPage(shared.page)
+  }, [displayReady])
+  /** What "Copy link" puts in the URL — the worklist as on screen. */
+  const listLinkState = (): QueueLinkState => ({
+    scope,
+    filters: filterValues,
+    sort,
+    group_by: groupBy,
+    view,
+    columns: visibleColumns,
+    pins: columnPins,
+    ...(page > 1 ? { page } : {})
+  })
   useEffect(() => {
     if (pendingScrollRef.current == null || items.length === 0 || !scrollRef.current) return
     scrollRef.current.scrollTop = pendingScrollRef.current
@@ -2778,11 +2828,160 @@ export function QueueWorklist({
     return { text: display, title: display }
   }
 
+  // ── #3224 Edit in the list (display_config.inline_edit; off by default) ───
+  // Plain extra fields of the row's own collection only (no dotted paths); the
+  // commit is the record form's PATCH, so the server judges every rule.
+  const inlineCfg = normalizeInlineEdit(displayConfig?.inline_edit)
+  const inlineCollections = inlineCfg.enabled
+    ? [
+        ...new Set(
+          (queue?.sources ?? [])
+            .filter((sr) => sr.type === 'collection' && sr.collection)
+            .map((sr) => sr.collection as string)
+        )
+      ]
+    : []
+  // Same key + cached shape as the collection browser's metadata read.
+  const inlineMetaQueries = useQueries({
+    queries: inlineCollections.map((c) => ({
+      queryKey: ['cbv-collection-meta', c],
+      queryFn: () =>
+        client
+          .request<{
+            data: { fields?: InlineFieldMeta[]; relations?: InlineRelationMeta[] }
+          }>(get(`/collections/${c}`))
+          .then((r) => r.data),
+      staleTime: 10 * 60_000,
+      retry: false
+    }))
+  })
+  const inlineMeta = new Map<
+    string,
+    { fields: Map<string, InlineFieldMeta>; relations: InlineRelationMeta[] }
+  >()
+  inlineCollections.forEach((c, i) => {
+    const d = inlineMetaQueries[i]?.data as
+      | { fields?: InlineFieldMeta[]; relations?: InlineRelationMeta[] }
+      | undefined
+    if (d)
+      inlineMeta.set(c, {
+        fields: new Map((d.fields ?? []).map((f) => [f.field, f])),
+        relations: d.relations ?? []
+      })
+  })
+  const { data: inlinePerms } = useQuery<{
+    is_admin?: boolean
+    collections?: Array<{ collection: string; actions: string[] }>
+  }>({
+    queryKey: ['my-permissions'],
+    queryFn: () =>
+      client
+        .request<{
+          data: {
+            is_admin?: boolean
+            collections?: Array<{ collection: string; actions: string[] }>
+          }
+        }>(get('/security/my/permissions'))
+        .then((r) => r.data),
+    enabled: inlineCfg.enabled && !isAdmin,
+    staleTime: 5 * 60_000
+  })
+  const inlineEdit = useInlineEdit()
+  const inlineKindFor = (row: QueueItemRow, field: string): InlineEditorKind | null => {
+    if (field.includes('.')) return null
+    const m = inlineMeta.get(row.collection)
+    if (!m) return null
+    const lock = rowLocks.get(rowId(row))
+    if (lock && !lock.is_mine) return null
+    return inlineEditFor({
+      config: inlineCfg,
+      key: field,
+      field: m.fields.get(field),
+      collection: row.collection,
+      relations: m.relations,
+      mayUpdate: isAdmin || roleMayUpdate(inlinePerms, row.collection)
+    })
+  }
+  const inlineValueOf = (row: QueueItemRow, field: string, kind: InlineEditorKind) =>
+    kind === 'm2o' ? (row.extra_ids?.[field]?.[0] ?? null) : (row.extra?.[field] ?? null)
+  const commitQueueCell = (
+    row: QueueItemRow,
+    field: string,
+    kind: InlineEditorKind,
+    value: unknown,
+    dir: 0 | 1 | -1
+  ) => {
+    const cellOf = (f: string) => `${rowId(row)}|${f}`
+    const order = [...effectiveVisible]
+      .filter((k) => k.startsWith('extra.'))
+      .map((k) => k.slice('extra.'.length))
+      .filter((f) => !!inlineKindFor(row, f))
+    const nextField = dir === 0 ? null : nextInlineKey(order, field, dir)
+    const same = (r: QueueItemRow) => r.collection === row.collection && r.item_id === row.item_id
+    const patchRow = (r: QueueItemRow): QueueItemRow =>
+      !same(r)
+        ? r
+        : kind === 'm2o'
+          ? {
+              ...r,
+              extra_ids: { ...(r.extra_ids ?? {}), [field]: value == null ? [] : [String(value)] }
+            }
+          : { ...r, extra: { ...(r.extra ?? {}), [field]: value } }
+    inlineEdit.commit({
+      cellKey: cellOf(field),
+      collection: row.collection,
+      id: row.item_id,
+      field,
+      kind,
+      before: inlineValueOf(row, field, kind),
+      value,
+      next: nextField ? cellOf(nextField) : null,
+      optimistic: () => {
+        const snaps = qc.getQueriesData({ queryKey: ['queue-items', queueId] })
+        qc.setQueriesData({ queryKey: ['queue-items', queueId] }, (old: unknown) => {
+          const o = old as { data?: QueueItemRow[]; rows?: QueueItemRow[] } | undefined
+          if (Array.isArray(o?.data)) return { ...o, data: o.data.map(patchRow) }
+          if (Array.isArray(o?.rows)) return { ...o, rows: o.rows.map(patchRow) }
+          return old
+        })
+        return () => {
+          for (const [k, d] of snaps) qc.setQueryData(k, d)
+        }
+      },
+      // Labels, rollups and the row's place in the queue follow the server.
+      onSaved: () => void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+    })
+  }
+  const wrapQueueInline = (row: QueueItemRow, field: string, node: React.ReactNode) => {
+    const kind = inlineKindFor(row, field)
+    if (!kind) return node
+    const m = inlineMeta.get(row.collection)
+    const f = m?.fields.get(field)
+    return (
+      <InlineEditCell
+        controller={inlineEdit}
+        cellKey={`${rowId(row)}|${field}`}
+        kind={kind}
+        value={inlineValueOf(row, field, kind)}
+        label={aliasFor(`extra.${field}`, formatColumnHeader(field))}
+        choices={f ? inlineChoices(f) : undefined}
+        target={kind === 'm2o' && m ? inlineM2oTarget(m.relations, row.collection, field) : null}
+        onCommit={(v, dir) => commitQueueCell(row, field, kind, v, dir)}
+      >
+        {node}
+      </InlineEditCell>
+    )
+  }
+
   const extraColumns: Column<QueueItemRow>[] = extraFieldKeys.map((field) => ({
     key: `extra.${field}`,
     header: aliasFor(`extra.${field}`, formatColumnHeader(field)),
     sortable: true,
-    render: (row) => {
+    render: (row) => wrapQueueInline(row, field, renderExtraCell(row, field))
+  }))
+
+  function renderExtraCell(row: QueueItemRow, field: string): React.ReactNode {
+    {
       const value = row.extra?.[field]
       if (value == null || value === '') return <span className='text-slate-300'>—</span>
       const fmt = formatConfigFor(field)
@@ -2839,7 +3038,7 @@ export function QueueWorklist({
         </span>
       )
     }
-  }))
+  }
 
   const TOGGLEABLE_KEYS = [
     ...(multiCollection ? ['collection'] : []),
@@ -3750,6 +3949,7 @@ export function QueueWorklist({
                 Ask about this queue
               </button>
             )}
+            <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
             <button
               type='button'
               onClick={() => setInsightsOpen((o) => !o)}

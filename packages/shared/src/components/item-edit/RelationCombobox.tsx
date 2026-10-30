@@ -88,9 +88,15 @@ export function RelationCombobox({
   fieldKey,
   narrowedBy,
   pinned,
-  missPlacement
+  missPlacement,
+  defaultOpen,
+  onClose
 }: {
   collection: string
+  /** Open the options panel on mount (a list cell's inline editor, #3224). */
+  defaultOpen?: boolean
+  /** Called when the options panel closes (picked, clicked away or Escape). */
+  onClose?: () => void
   /** The record-form placement this picker sits on: searches that find
    *  nothing are counted there (#2726). Absent = not reported. */
   missPlacement?: PickerMissPlacement | null
@@ -125,8 +131,15 @@ export function RelationCombobox({
 }) {
   const client = useNivaroClient()
   const readRow = useRecordReader()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen ?? false)
   const [query, setQuery] = useState('')
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const wasOpenRef = useRef(open)
+  useEffect(() => {
+    if (wasOpenRef.current && !open) onCloseRef.current?.()
+    wasOpenRef.current = open
+  }, [open])
   // One server search at a time (picker-search.ts): typing while a search is
   // in flight waits for it, then only the newest text goes out.
   const [searchBusy, setSearchBusy] = useState(false)

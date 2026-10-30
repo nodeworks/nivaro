@@ -2,8 +2,14 @@ import {
   Combobox,
   DataGuideCard,
   IconPicker,
+  type InlineEditConfig,
+  type InlineFieldMeta,
+  type InlineRelationMeta,
+  inlineEditCandidates,
+  inlineEditForStorage,
   LayoutEditor,
   LayoutOverview,
+  normalizeInlineEdit,
   TipLayer
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -32,6 +38,7 @@ import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
+import { InlineEditSetting } from '@/components/inline-edit-setting'
 import { LabelSearchFieldsSetting } from '@/components/label-search-fields-setting'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
@@ -7226,6 +7233,8 @@ interface BrowserConfig {
   search_fields?: string[]
   /** Search item 23 — extra text fields a labels-only global search also matches. */
   label_search_fields?: string[]
+  /** #3224 — edit in the list: {enabled, fields}; absent = off. */
+  inline_edit?: InlineEditConfig | null
   /** Keys edited elsewhere (export_filename, fulfilment, …) ride along untouched. */
   [key: string]: unknown
 }
@@ -7477,7 +7486,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             browser_config: BrowserConfig | null
             color?: string | null
             display_template?: string | null
-            fields?: Array<{ field: string; type: string }>
+            fields?: Array<{ field: string; type: string } & InlineFieldMeta>
+            relations?: InlineRelationMeta[]
           }
         }>(`/collections/${tableName}`)
         .then((r) => r.data.data),
@@ -7517,7 +7527,8 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       'bulk_actions',
       'live_events',
       'search_fields',
-      'label_search_fields'
+      'label_search_fields',
+      'inline_edit'
     ])
     const clean: BrowserConfig = {}
     for (const [k, v] of Object.entries(next)) if (!OWN.has(k) && v !== undefined) clean[k] = v
@@ -7534,6 +7545,10 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
       clean.live_events = next.live_events
     if (next.search_fields?.length) clean.search_fields = next.search_fields
     if (next.label_search_fields?.length) clean.label_search_fields = next.label_search_fields
+    if (next.inline_edit) {
+      const ie = inlineEditForStorage(next.inline_edit)
+      if (ie) clean.inline_edit = ie
+    }
     await api.patch(`/collections/${tableName}`, {
       browser_config: Object.keys(clean).length > 0 ? clean : null
     })
@@ -7603,6 +7618,11 @@ function BrowserSettingsSection({ tableName }: { tableName: string }) {
             onCheckedChange={(v) => void patch({ record_tabs: v })}
           />
         </div>
+        <InlineEditSetting
+          value={normalizeInlineEdit(cfg.inline_edit)}
+          candidates={inlineEditCandidates(col?.fields ?? [], tableName, col?.relations ?? [])}
+          onChange={(v) => void patch({ inline_edit: v })}
+        />
         <LiveEventsSetting
           value={cfg.live_events ?? 'on'}
           onChange={(v) => void patch({ live_events: v })}

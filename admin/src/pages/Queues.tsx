@@ -13,7 +13,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   ChevronsUpDown,
@@ -30,7 +30,17 @@ import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
-import { CollectionFieldPicker, type PickedField } from '@nivaro/shared'
+import { type InlineEditCandidate, InlineEditSetting } from '@/components/inline-edit-setting'
+import {
+  CollectionFieldPicker,
+  type InlineEditConfig,
+  type InlineFieldMeta,
+  type InlineRelationMeta,
+  inlineEditCandidates,
+  inlineEditForStorage,
+  normalizeInlineEdit,
+  type PickedField
+} from '@nivaro/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -128,6 +138,70 @@ interface QueueDisplayConfig {
     formula: string
     format?: 'currency' | 'number' | null
   }> | null
+  /** #3224 — edit in the list (admin-only): plain extra-field columns people may change in a row. */
+  inline_edit?: InlineEditConfig | null
+}
+
+/** #3224 — the queue's plain extra fields that a row could edit in place, per source collection. */
+function QueueInlineEditSetting({
+  sources,
+  value,
+  disabled,
+  onChange
+}: {
+  sources: QueueSource[]
+  value: InlineEditConfig | null | undefined
+  disabled?: boolean
+  onChange: (next: InlineEditConfig | null) => void
+}) {
+  const bySource = sources
+    .filter((sc) => sc.type === 'collection' && sc.collection)
+    .map((sc) => ({
+      collection: sc.collection as string,
+      paths: (sc.extra_fields ?? []).filter((p) => !p.includes('.'))
+    }))
+    .filter((sc) => sc.paths.length > 0)
+  const metas = useQueries({
+    queries: bySource.map((sc) => ({
+      queryKey: ['queue-inline-edit-meta', sc.collection],
+      queryFn: () =>
+        api
+          .get<{ data: { fields?: InlineFieldMeta[]; relations?: InlineRelationMeta[] } }>(
+            `/collections/${sc.collection}`
+          )
+          .then((r) => r.data.data),
+      staleTime: 5 * 60_000
+    }))
+  })
+  const multi = bySource.length > 1
+  const candidates: InlineEditCandidate[] = []
+  const seen = new Set<string>()
+  bySource.forEach((sc, i) => {
+    const meta = metas[i]?.data
+    if (!meta) return
+    const ok = new Map(
+      inlineEditCandidates(meta.fields ?? [], sc.collection, meta.relations ?? []).map((c) => [
+        c.field,
+        c
+      ])
+    )
+    for (const path of sc.paths) {
+      const c = ok.get(path)
+      // One column key covers every source that carries the field.
+      if (!c || seen.has(path)) continue
+      seen.add(path)
+      candidates.push({ ...c, note: multi ? sc.collection : undefined })
+    }
+  })
+  return (
+    <InlineEditSetting
+      listNoun='queue'
+      value={normalizeInlineEdit(value)}
+      candidates={candidates}
+      disabled={disabled}
+      onChange={(next) => onChange(inlineEditForStorage(next))}
+    />
+  )
 }
 
 // Preview sidebar width presets — mirror the drill-down sheet's options.
@@ -2281,6 +2355,18 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     disabled={!canEdit}
                     onChange={(next) =>
                       setDisplayConfig((prev) => ({ ...prev, bulk_action_keys: next }))
+                    }
+                  />
+                </div>
+              )}
+              {isAdmin && (
+                <div className='border-t border-slate-100 pt-3 dark:border-border'>
+                  <QueueInlineEditSetting
+                    sources={sources}
+                    value={displayConfig.inline_edit}
+                    disabled={!canEdit}
+                    onChange={(next) =>
+                      setDisplayConfig((prev) => ({ ...prev, inline_edit: next }))
                     }
                   />
                 </div>
