@@ -1,10 +1,99 @@
 {
-  "generated_at": "2026-10-30T14:17:14.818Z",
+  "generated_at": "2026-10-30T15:31:22.823Z",
   "releases": [
+    {
+      "version": "0.3.62",
+      "tag": "v0.3.62",
+      "date": "2026-10-30T11:31:03-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "past / near deadline chips in the board header",
+              "hash": "9d3b049b6"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "shell & UX — layout, URL state, TV, wallboard, customise",
+              "hash": "9eb90333f"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "work & actions — flow depth, needs attention, nudge, workload, forecast",
+              "hash": "9bbe44915"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "map & place — region config, peek, layers, people pane",
+              "hash": "e154f5094"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "time, feed & system slice (CC-4/8/14/15/16/17/18/20)",
+              "hash": "08c2ae40c"
+            },
+            {
+              "section": "Added",
+              "scope": "command-center",
+              "text": "shell API — wallboard links, board prefs, role layouts",
+              "hash": "a39034dde"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "command-center",
+              "text": "a wallboard pinned to a region refuses instead of widening",
+              "hash": "2e71e3ada"
+            },
+            {
+              "section": "Fixed",
+              "scope": "command-center",
+              "text": "security pass — wallboard is a business board, scoped keys, log masking",
+              "hash": "6507f6794"
+            },
+            {
+              "section": "Fixed",
+              "scope": "command-center",
+              "text": "review fixes — map height, throughput query, attention fold",
+              "hash": "e0cb0aa5a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "command-center",
+              "text": "wire peek focus, region shortcut and Traffic Map follow links",
+              "hash": "e125d2e85"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "command-center",
+              "text": "document the new board; region shortcut is g",
+              "hash": "61eee15e1"
+            }
+          ]
+        }
+      ],
+      "count": 11
+    },
     {
       "version": "0.3.61",
       "tag": "v0.3.61",
-      "date": "2026-10-30T10:16:49-04:00",
+      "date": "2026-10-30T10:17:14-04:00",
       "sections": [
         {
           "label": "Added",
