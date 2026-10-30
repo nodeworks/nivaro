@@ -499,6 +499,9 @@ export function NotificationRulesCard() {
           <span className='text-[11px] text-slate-400'>
             plays when a notification or a direct message arrives
           </span>
+          <span className='ml-auto'>
+            <TestMyRules />
+          </span>
         </div>
         <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           <Toggle
@@ -541,11 +544,11 @@ export function NotificationRulesCard() {
             header: (
               <>
                 Sound
-                <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above. Test my rules shows what would happen to a notification for you in that category right now, and which rule decides it.' />
+                <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above.' />
               </>
             ),
             cell: (cat, label) => (
-              <div className='inline-flex items-center gap-1.5 whitespace-nowrap'>
+              <div className='inline-block'>
                 <SimpleSelectXs
                   ariaLabel={`Sound for ${label}`}
                   value={catSounds[cat] ?? 'default'}
@@ -557,7 +560,6 @@ export function NotificationRulesCard() {
                   ]}
                   onChange={(v: string) => setCatSound(cat, v)}
                 />
-                <TestMyRules category={cat} />
               </div>
             )
           }}

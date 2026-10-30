@@ -24,6 +24,7 @@ import {
   type NumberFilterOp,
   parseNumberFilter
 } from '../lib/number-filter'
+import type { CascadeSelection } from '../lib/quick-filter-cascade'
 import { fitPins } from '../lib/table-pins'
 import { cn, formatNumber } from '../lib/utils'
 import { CellCopyLayer } from './CellCopyLayer'
@@ -63,7 +64,13 @@ export interface FilterDef {
   options?: { label: string; value: string; count?: number }[]
   /** 'combobox' only: server-backed autocomplete. Called (debounced) with the search
    *  text; overrides `options` when provided. */
-  loadOptions?: (search: string) => Promise<{ label: string; value: string }[]>
+  loadOptions?: (
+    search: string,
+    context?: { narrowBy: CascadeSelection[] }
+  ) => Promise<{ label: string; value: string }[]>
+  /** What this facet's values are (rows of `collection` by `field`): other facets' options
+   *  cascade from its picks (Zone → its Regions). */
+  cascade?: { collection: string; field: string }
   /** 'combobox' only: allow selecting multiple values (filter matches ANY of them). */
   multi?: boolean
   /** Options are narrowed to the viewer's restricted scope — renders an amber badge. */

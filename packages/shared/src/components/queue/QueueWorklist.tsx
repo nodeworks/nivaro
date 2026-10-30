@@ -64,7 +64,6 @@ import {
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
 import { createCursorBook, noteNextCursor, pageRequest } from '../../lib/keyset-pager'
-import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import {
   type InlineEditorKind,
   type InlineFieldMeta,
@@ -81,12 +80,18 @@ import {
   readListLinkFromLocation,
   sanitizeQueueLinkState
 } from '../../lib/list-link'
+import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
 import { usePrefetchIntent } from '../../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../../lib/presence-hooks'
 import { buildGroups } from '../../lib/queue-grouping'
+import {
+  type CascadeSelection,
+  cascadeFilter,
+  fetchCascadeRelations
+} from '../../lib/quick-filter-cascade'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
@@ -114,9 +119,9 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
+import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
 import { InlineEditCell, useInlineEdit } from '../list/InlineEdit'
-import { LiveRowMark } from '../LiveRowMark'
 import {
   PICKER_EXCLUDED_ROW_CLASS,
   PICKER_EXCLUDED_TITLE,
@@ -3263,14 +3268,29 @@ export function QueueWorklist({
   // usable. The selected display value feeds the existing contains-match filter.
   const makeRelationLoader =
     (meta: ExtraFieldMeta) =>
-    async (search: string): Promise<{ label: string; value: string }[]> => {
+    async (
+      search: string,
+      context?: { narrowBy: CascadeSelection[] }
+    ): Promise<{ label: string; value: string }[]> => {
       if (!meta.target_collection || !meta.display_field) return []
       const params: Record<string, string | number> = {
         limit: 25,
         sort: meta.display_field
       }
-      if (search.trim()) {
-        params.filter = JSON.stringify({ [meta.display_field]: { _contains: search.trim() } })
+      // The other facets' picks cascade in (Zone 1 → only Zone 1's regions).
+      const narrow = context?.narrowBy.length
+        ? cascadeFilter(
+            meta.target_collection,
+            await fetchCascadeRelations(client, qc, meta.target_collection),
+            context.narrowBy
+          )
+        : null
+      const clauses = [
+        ...(search.trim() ? [{ [meta.display_field]: { _contains: search.trim() } }] : []),
+        ...(narrow ? [narrow] : [])
+      ]
+      if (clauses.length > 0) {
+        params.filter = JSON.stringify(clauses.length === 1 ? clauses[0] : { _and: clauses })
       }
       const res = await client.request<{ data: Record<string, unknown>[] }>(
         get(`/items/${meta.target_collection}`, params)
@@ -3561,12 +3581,18 @@ export function QueueWorklist({
         const fmt = formatConfigFor(path)
         const present = data?.available_values.extra?.[path]
         const label = d.placeholder.replace(/^Search (.*)…$/, '$1')
+        // Picks are display values of the relation's target: other facets cascade from them.
+        const cascade =
+          meta?.kind === 'relation' && meta.target_collection && meta.display_field
+            ? { collection: meta.target_collection, field: meta.display_field }
+            : undefined
         if (present?.length)
           return {
             key: d.key,
             placeholder: label,
             type: 'combobox',
             multi: true,
+            cascade,
             restricted: Boolean(allowedValuesByPath[path]?.length),
             options: present.map((v) => ({
               label: fmt && fmt.type !== 'number' ? formatMultiValue(v, fmt) : v,
@@ -3579,6 +3605,7 @@ export function QueueWorklist({
             placeholder: label,
             type: 'combobox',
             multi: true,
+            cascade,
             restricted: Boolean(allowedValuesByPath[path]?.length),
             loadOptions: makeRelationLoader(meta)
           }

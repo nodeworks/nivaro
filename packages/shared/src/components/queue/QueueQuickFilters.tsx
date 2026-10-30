@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import type { CascadeSelection } from '../../lib/quick-filter-cascade'
 import { MultiPick } from '../CollectionBrowserView'
 import type { FilterDef } from '../DataTable'
 
@@ -18,19 +19,23 @@ function AsyncFacet({
   def,
   selected,
   onChange,
-  badge
+  badge,
+  narrowBy
 }: {
   def: FilterDef
   selected: string[]
   onChange: (vals: string[]) => void
   badge: { label: string; cls: string; title: string } | null
+  /** The other facets' picks — they cascade into this facet's options. */
+  narrowBy: CascadeSelection[]
 }) {
   const [armed, setArmed] = useState(false)
   const [q, setQ] = useState('')
   const load = def.loadOptions
+  const narrowKey = JSON.stringify(narrowBy)
   const { data = [], isLoading } = useQuery({
-    queryKey: ['queue-quick-facet', def.key, q],
-    queryFn: () => (load ? load(q) : Promise.resolve([])),
+    queryKey: ['queue-quick-facet', def.key, q, narrowKey],
+    queryFn: () => (load ? load(q, { narrowBy }) : Promise.resolve([])),
     enabled: !!load && (armed || selected.length > 0),
     staleTime: 60_000
   })
@@ -117,8 +122,24 @@ export function QueueQuickFilters({
           if (vals.length === 0 && asList(values[def.key]).length > 0)
             onApply({ [def.key]: def.multi || def.type === 'combobox' ? [] : '' })
         }
+        // Picks staged in the other facets narrow this one at once (before Apply),
+        // the way a record form's pickers cascade.
+        const narrowBy: CascadeSelection[] = defs
+          .filter((o) => o.key !== def.key && o.cascade && (draft[o.key]?.length ?? 0) > 0)
+          .map((o) => ({
+            collection: o.cascade!.collection,
+            field: o.cascade!.field,
+            values: draft[o.key] ?? []
+          }))
         return def.loadOptions ? (
-          <AsyncFacet key={def.key} def={def} selected={selected} onChange={set} badge={badge} />
+          <AsyncFacet
+            key={def.key}
+            def={def}
+            selected={selected}
+            onChange={set}
+            badge={badge}
+            narrowBy={narrowBy}
+          />
         ) : (
           <MultiPick
             key={def.key}

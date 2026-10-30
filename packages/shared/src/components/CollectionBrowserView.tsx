@@ -108,6 +108,11 @@ import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-
 import { isOwnWrite } from '../lib/own-writes'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
+import {
+  type CascadeSelection,
+  cascadeFilter,
+  fetchCascadeRelations
+} from '../lib/quick-filter-cascade'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { copyWhenReady, friendlyIdOf, shareableRecordId } from '../lib/record-ref'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
@@ -2158,7 +2163,8 @@ function QuickFilterSelect({
   selected,
   onChange,
   allowedIds,
-  scopeDefault
+  scopeDefault,
+  narrowBy = []
 }: {
   def: QuickFilterDef
   selected: Array<string | number>
@@ -2166,20 +2172,49 @@ function QuickFilterSelect({
   allowedIds?: Array<string | number>
   /** True when this chip's selection was seeded from the user's default scopes. */
   scopeDefault?: boolean
+  /** The other filters' picks — they cascade into this one's options (Zone → its Regions). */
+  narrowBy?: CascadeSelection[]
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const valueField = def.value_field ?? 'id'
   // Deferred like the column filters, but a scope-seeded selection needs its
   // labels immediately — an unlabelled chip would read as a raw id.
   const [armed, setArmed] = useState(false)
+  const narrowKey = JSON.stringify(narrowBy.filter((n) => n.values.length > 0))
   const { data: options = [], isLoading } = useQuery({
-    queryKey: ['cbv-quick-options', def.collection, valueField, def.label_field, def.sort ?? ''],
-    queryFn: () =>
-      client
+    // The cascade rides at the END of the key so label lookups by the prefix
+    // (the filter sentence) still find every option list.
+    queryKey: [
+      'cbv-quick-options',
+      def.collection,
+      valueField,
+      def.label_field,
+      def.sort ?? '',
+      narrowKey
+    ],
+    queryFn: async () => {
+      const narrow =
+        narrowKey !== '[]'
+          ? cascadeFilter(
+              def.collection,
+              await fetchCascadeRelations(client, qc, def.collection),
+              narrowBy
+            )
+          : null
+      // Picks already made stay offered even when the cascade would drop them,
+      // so a chip never loses its label.
+      const filter = narrow
+        ? selected.length > 0
+          ? { _or: [narrow, { [valueField]: { _in: selected } }] }
+          : narrow
+        : null
+      return client
         .request<{ data: Array<Record<string, unknown>> }>(
           get(`/items/${def.collection}`, {
             limit: 1000,
             ...(def.sort ? { sort: def.sort } : {}),
+            ...(filter ? { filter: JSON.stringify(filter) } : {}),
             fields: [...new Set(['id', valueField, def.label_field])].join(',')
           })
         )
@@ -2191,7 +2226,8 @@ function QuickFilterSelect({
               id: row.id as string | number
             }))
             .filter((o) => o.value != null && o.label !== '')
-        ),
+        )
+    },
     staleTime: 10 * 60_000,
     enabled: armed || selected.length > 0,
     retry: false
@@ -8400,6 +8436,13 @@ export function CollectionBrowserView({
               def={qf}
               allowedIds={restrictedIdsFor(qf)}
               scopeDefault={scopeSeededKeys.has(qf.key)}
+              narrowBy={effQuickFilters
+                .filter((o) => o.key !== qf.key && o.collection)
+                .map((o) => ({
+                  collection: o.collection,
+                  field: o.value_field ?? 'id',
+                  values: quickSel[o.key] ?? []
+                }))}
               selected={quickSel[qf.key] ?? []}
               onChange={(vals) => {
                 setQuickSel((sel) => ({ ...sel, [qf.key]: vals }))
