@@ -516,6 +516,11 @@ import {
   userWorkflows,
   workflowsApi
 } from './sections/workflows-pipelines.js'
+import { formHiddenAndFieldComments } from './sections/form-explain-comment'
+import { listEditing } from './sections/list-editing'
+import { loadingFeelDocs } from './sections/loading-feel'
+import { navigationPersonal } from './sections/navigation-personal'
+import { overviewSectionsDocs } from './sections/overview-sections'
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
 
@@ -536,6 +541,7 @@ export const navSections: NavGroup[] = [
     label: 'User Guide',
     items: [
       userDashboard,
+      overviewSectionsDocs,
       userCollections,
       columnPresets,
       userUsersRoles,
@@ -902,6 +908,10 @@ export const navSections: NavGroup[] = [
       adminOpsAdditions,
       adminI18nDocs,
       adminUxNavigation,
+      navigationPersonal,
+      listEditing,
+      formHiddenAndFieldComments,
+      loadingFeelDocs,
       adminUxGlobalSearch,
       adminUxSavedViews,
       adminUxFormCollaboration,
