@@ -16,6 +16,9 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *  GET    /push/phones        — the current user's phones
  *  POST   /push/phones        — register this phone {token, platform?, app?, device_name?}
  *  DELETE /push/phones        — remove this phone {token} (sign-out)
+ *  POST   /push/phones/forget — remove this phone {token} WITHOUT a sign-in: holding the token
+ *                               proves it is this phone, so a sign-out that lost its session
+ *                               (expired token, offline) can still stop the alerts later
  *  POST   /push/phones/test   — send a test alert to the current user's phones
  */
 
@@ -194,6 +197,18 @@ export async function pushRoutes(app: FastifyInstance) {
       return reply.send({ data: { removed: Number(removed) > 0 } })
     }
   )
+
+  app.post<{ Body: { token?: string } }>('/phones/forget', async (req, reply) => {
+    const token = req.body?.token
+    if (!isExpoPushToken(token)) {
+      return reply.code(400).send({ error: 'token must be an Expo push token' })
+    }
+    // Same answer whether or not it was registered: the route says nothing about tokens.
+    await db('nivaro_push_subscriptions')
+      .where({ endpoint_hash: endpointHash(`${PHONE_PREFIX}${token}`) })
+      .del()
+    return reply.send({ data: { removed: true } })
+  })
 
   app.post('/phones/test', { preHandler: requireAuth }, async (req, reply) => {
     const sent = await sendPhonePush(req.user!.id, {

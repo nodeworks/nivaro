@@ -14,6 +14,7 @@ const m = vi.hoisted(() => ({
   raw: [] as Array<Record<string, unknown>>,
   updates: [] as Array<{ table: string; patch: unknown }>,
   inserts: [] as Array<{ table: string; row: unknown }>,
+  deletes: [] as Array<{ table: string; rows: Array<Record<string, unknown>> }>,
   whereIns: [] as Array<{ table: string; n: number }>,
   readItems: vi.fn(),
   aggregateItems: vi.fn()
@@ -90,6 +91,11 @@ vi.mock('../../../db/index.js', () => {
         m.inserts.push({ table, row })
         return [1]
       },
+      del: async () => {
+        const rows = hits()
+        m.deletes.push({ table, rows })
+        return rows.length
+      },
       // biome-ignore lint/suspicious/noThenProperty: a knex builder is awaitable
       then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
         Promise.resolve(hits()).then(res, rej)
@@ -127,6 +133,7 @@ beforeEach(() => {
   m.raw = []
   m.updates = []
   m.inserts = []
+  m.deletes = []
   m.whereIns = []
   m.readItems.mockReset()
   m.aggregateItems.mockReset()
@@ -267,6 +274,35 @@ describe('push subscriptions', () => {
     const r = await app.inject({ method: 'POST', url: '/push/subscribe', payload: body })
     expect(r.statusCode).toBe(200)
     expect(m.updates[0]).toMatchObject({ table: 'nivaro_push_subscriptions' })
+  })
+})
+
+describe('phone push', () => {
+  const token = 'ExponentPushToken[abc]'
+  const row = (user: string) => ({ endpoint_hash: `h:expo:${token}`, user })
+  it('refuses anything that is not an Expo push token', async () => {
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/push/phones',
+      payload: { token: 'https://push.example/x' }
+    })
+    expect(r.statusCode).toBe(400)
+    expect(m.inserts).toEqual([])
+  })
+  it("sign-out (DELETE) removes only the caller's own phone", async () => {
+    m.tables.nivaro_push_subscriptions = [row('SOMEONE-ELSE')]
+    const app = await build()
+    const r = await app.inject({ method: 'DELETE', url: '/push/phones', payload: { token } })
+    expect(r.json().data.removed).toBe(false)
+    expect(m.deletes[0]?.rows).toEqual([])
+  })
+  it('forget removes the phone by its token alone (an expired sign-in can still stop alerts)', async () => {
+    m.tables.nivaro_push_subscriptions = [row('PREVIOUS')]
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones/forget', payload: { token } })
+    expect(r.statusCode).toBe(200)
+    expect(m.deletes[0]?.rows).toEqual([row('PREVIOUS')])
   })
 })
 
