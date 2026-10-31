@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boundsChanged, fitScale, viewportBounds } from './viewport'
+import { boundsChanged, fitScale, replayDevice, viewportBounds } from './viewport'
 
 const meta = (width: number, height: number) => ({ type: 4, timestamp: 1, data: { width, height } })
 const resize = (width: number, height: number) => ({
@@ -71,5 +71,33 @@ describe('fitScale', () => {
     const box = viewportBounds([meta(1920, 911), resize(1280, 551)])
     expect(box).not.toBeNull()
     if (box) expect(fitScale(box, 898, 690)).toBeCloseTo(898 / 1920)
+  })
+})
+
+describe('replayDevice', () => {
+  const metaAt = (href: string, width: number, height: number) => ({
+    type: 4,
+    timestamp: 1,
+    data: { href, width, height }
+  })
+
+  it('frames a native app recording as a phone', () => {
+    expect(replayDevice([metaAt('efp-mobile://app/collections/workflows/12', 393, 852)])).toBe(
+      'phone'
+    )
+  })
+
+  it('frames a native app on a large screen as a tablet', () => {
+    expect(replayDevice([metaAt('efp-mobile://app/', 820, 1180)])).toBe('tablet')
+  })
+
+  it('leaves a browser recording unframed, even on a phone-sized window', () => {
+    expect(replayDevice([metaAt('https://efp.example.com/', 390, 844)])).toBeNull()
+    expect(replayDevice([metaAt('http://localhost:3056/', 1280, 800)])).toBeNull()
+  })
+
+  it('leaves a recording with no Meta href unframed', () => {
+    expect(replayDevice([{ type: 4, timestamp: 1, data: { width: 393, height: 852 } }])).toBeNull()
+    expect(replayDevice([{ type: 2, timestamp: 1, data: {} }])).toBeNull()
   })
 })

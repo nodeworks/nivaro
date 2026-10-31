@@ -210,6 +210,10 @@ export const sessionReplayDocs: DocSection = {
         'The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.'
       ]
     },
+    {
+      type: 'p',
+      text: 'A native app can record too: it sends screen images instead of a page, under its own app name, and does its own masking. Its recordings play inside a phone frame (a tablet frame on a large screen) wherever replays play.'
+    },
     { type: 'h2', id: 'session-replay-cost', text: 'Recording cost' },
     {
       type: 'p',

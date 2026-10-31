@@ -18992,6 +18992,7 @@ GET /api/journeys/days/:id?app=                     # which of the last 30 days 
             <li>Passwords are never shown. Text in attributes (a tooltip, an image’s alt text) is not masked; keep sensitive values out of them or mark the element nvr-no-record.</li>
             <li>The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.</li>
           </ul>
+          <p class="doc-p">A native app can record too: it sends screen images instead of a page, under its own app name, and does its own masking. Its recordings play inside a phone frame (a tablet frame on a large screen) wherever replays play.</p>
           <h2 class="doc-h2" id="session-replay-cost">Recording cost</h2>
           <p class="doc-p">Every uploaded chunk names the page (route pattern) it was recorded on and the frontend build that recorded it. DB Health → Session replay shows what recording stored per page and per build over the last 7 days, day by day, and the recordings’ share of the storage runway.</p>
           <ul class="doc-ul">

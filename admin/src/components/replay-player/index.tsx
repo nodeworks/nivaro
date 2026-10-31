@@ -36,7 +36,16 @@ import { RangeActions, RangeTrack } from './RangeBar'
 import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
 import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
-import { boundsChanged, fitScale, type ViewportSize, viewportBounds } from './viewport'
+import {
+  boundsChanged,
+  DEVICE_BEZEL_PX,
+  DEVICE_CORNER,
+  fitScale,
+  type ReplayDevice,
+  replayDevice,
+  type ViewportSize,
+  viewportBounds
+} from './viewport'
 import { WatchTogetherBar } from './WatchTogether'
 
 const SPEEDS = [1, 2, 4, 8]
@@ -174,6 +183,10 @@ export function ReplayPlayer({
   const rescaleRef = useRef<(() => void) | null>(null)
   // The largest viewport the recording has: one steady scale for all of it (./viewport).
   const viewportRef = useRef<ViewportSize | null>(null)
+  // A native app's recording plays inside a phone / tablet frame (./viewport replayDevice).
+  const [device, setDevice] = useState<ReplayDevice | null>(null)
+  const deviceRef = useRef<ReplayDevice | null>(null)
+  const deviceBoxRef = useRef<HTMLDivElement>(null)
   // #1356 event rail: the person's requests / errors / page changes /
   // transitions from the server, placed against the first event's clock.
   const [rail, setRail] = useState<{
@@ -201,6 +214,8 @@ export function ReplayPlayer({
     prevTimeRef.current = 0
     setGaps([])
     viewportRef.current = null
+    deviceRef.current = null
+    setDevice(null)
 
     function rescale() {
       const rep = replayerRef.current
@@ -215,14 +230,27 @@ export function ReplayPlayer({
       // Width budget from the sheet itself — the host div can be mid-animation
       // (or grown by the giant iframe), so never trust host.clientWidth alone.
       // The Console / Network column, when it sits beside the frame, comes off.
+      // A device frame's bezel comes off both; its box hugs the screen, so the
+      // width budget is read from the box's own parent.
+      const dev = deviceRef.current
+      const bezel = dev ? DEVICE_BEZEL_PX[dev] * 2 : 0
+      const outer = dev ? deviceBoxRef.current?.parentElement : host.parentElement
       const sheetW = window.innerWidth * 0.85 - 56 - sideReserveRef.current
-      const budget = Math.min(host.parentElement?.clientWidth || sheetW, sheetW)
+      const budget = Math.min(outer?.clientWidth || sheetW, sheetW) - bezel
       // Fill the sheet: scale up as well as down, bounded by width and viewport height
-      const scale = fitScale({ width: w, height: h }, budget, window.innerHeight - 170)
+      const scale = fitScale({ width: w, height: h }, budget, window.innerHeight - 170 - bezel)
       rep.wrapper.style.transform = `scale(${scale})`
       rep.wrapper.style.transformOrigin = 'top left'
-      host.style.width = `${Math.ceil(w * scale)}px`
+      const screenW = Math.ceil(w * scale)
+      host.style.width = `${screenW}px`
       host.style.height = `${Math.ceil(h * scale)}px`
+      const radius = dev ? Math.round(screenW * DEVICE_CORNER[dev]) : 0
+      host.style.borderRadius = dev ? `${radius}px` : ''
+      const deviceBox = deviceBoxRef.current
+      if (deviceBox) {
+        deviceBox.style.borderRadius = dev ? `${radius + bezel / 2}px` : ''
+        deviceBox.style.setProperty('--nvr-screen-w', `${screenW}px`)
+      }
     }
     rescaleRef.current = rescale
 
@@ -252,6 +280,8 @@ export function ReplayPlayer({
         const events = loaded.events
         lastSeqRef.current = loaded.last_seq ?? -1
         viewportRef.current = viewportBounds(events)
+        deviceRef.current = replayDevice(events)
+        setDevice(deviceRef.current)
         {
           const first = Number(
             (events as Array<{ timestamp?: unknown } | null>).find(
@@ -556,11 +586,65 @@ export function ReplayPlayer({
       <div className={side ? 'flex items-stretch gap-3' : ''}>
         <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
           <SkippingBadge gap={skip.current} />
+          {/* A phone / tablet recording plays inside a device frame; the same
+              elements are there for every recording so the frame never remounts. */}
           <div
-            ref={frameRef}
-            className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
-            style={{ minHeight }}
-          />
+            ref={deviceBoxRef}
+            data-replay-device={device ?? undefined}
+            className={
+              device
+                ? 'relative mx-auto w-fit bg-[#0b0d12] shadow-[0_0_0_1px_#4a5262,inset_0_0_0_1px_rgba(255,255,255,0.06),0_20px_44px_-16px_rgba(15,23,42,0.5)] dark:shadow-[0_0_0_1px_#4a5262,inset_0_0_0_1px_rgba(255,255,255,0.06),0_20px_44px_-16px_rgba(0,0,0,0.7)]'
+                : ''
+            }
+            style={device ? { padding: DEVICE_BEZEL_PX[device] } : undefined}
+          >
+            <span
+              aria-hidden
+              className={
+                device === 'phone'
+                  ? 'pointer-events-none absolute left-1/2 z-[5] -translate-x-1/2 rounded-full bg-[#0b0d12]'
+                  : 'hidden'
+              }
+              style={
+                device === 'phone'
+                  ? {
+                      top: `calc(${DEVICE_BEZEL_PX.phone}px + var(--nvr-screen-w, 0px) * 0.022)`,
+                      width: 'calc(var(--nvr-screen-w, 0px) * 0.34)',
+                      height: 'calc(var(--nvr-screen-w, 0px) * 0.094)'
+                    }
+                  : undefined
+              }
+            />
+            {/* Side buttons: action + volume on the left, power on the right. */}
+            {(['l1', 'l2', 'l3', 'r1'] as const).map((b) => (
+              <span
+                key={b}
+                aria-hidden
+                className={
+                  device === 'phone'
+                    ? `pointer-events-none absolute w-[3px] bg-[#4a5262] ${b[0] === 'l' ? '-left-[4px] rounded-l-sm' : '-right-[4px] rounded-r-sm'}`
+                    : 'hidden'
+                }
+                style={
+                  device === 'phone'
+                    ? {
+                        top: { l1: '17%', l2: '25%', l3: '33%', r1: '27%' }[b],
+                        height: b === 'l1' ? '4%' : '6.5%'
+                      }
+                    : undefined
+                }
+              />
+            ))}
+            <div
+              ref={frameRef}
+              className={
+                device
+                  ? 'overflow-hidden bg-black [&_iframe]:border-0 [&_iframe]:bg-white'
+                  : 'w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
+              }
+              style={device ? undefined : { minHeight }}
+            />
+          </div>
           {/* #1372 — click an element of the paused replay to inspect it. */}
           <ReplayInspector
             getReplayer={getInspectable}

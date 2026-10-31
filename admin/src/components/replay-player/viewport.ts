@@ -65,3 +65,30 @@ export function boundsChanged(prev: ViewportSize | null, next: ViewportSize | nu
 export function fitScale(box: ViewportSize, budgetW: number, budgetH: number): number {
   return Math.min(budgetW / box.width, budgetH / box.height)
 }
+
+/** A recording made by a native app: shown inside a phone or tablet frame. */
+export type ReplayDevice = 'phone' | 'tablet'
+
+/**
+ * Which device frame a recording plays in, or null for a browser one. A native
+ * app's recorder (the EFP phone app) sends a Meta href on its own scheme
+ * (`efp-mobile://app/...`), never http(s); its shorter side says phone or tablet.
+ */
+export function replayDevice(events: unknown[]): ReplayDevice | null {
+  for (const e of events) {
+    const ev = e as { type?: unknown; data?: Record<string, unknown> | null } | null
+    if (ev?.type !== 4 || !ev.data) continue
+    const href = String(ev.data.href ?? '')
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
+    if (!scheme || ['http', 'https', 'file', 'about', 'blob', 'data'].includes(scheme)) return null
+    const s = sizeOf(ev)
+    return s && Math.min(s.width, s.height) >= 600 ? 'tablet' : 'phone'
+  }
+  return null
+}
+
+/** Bezel around a device frame, in screen px (it does not scale with the recording). */
+export const DEVICE_BEZEL_PX: Record<ReplayDevice, number> = { phone: 10, tablet: 14 }
+
+/** Screen corner radius as a share of the rendered screen width (iPhone ~55 pt on 393). */
+export const DEVICE_CORNER: Record<ReplayDevice, number> = { phone: 0.14, tablet: 0.045 }
