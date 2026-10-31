@@ -61,7 +61,10 @@ vi.mock('../../../plugins/socketio.js', () => ({
 vi.mock('../../../services/teams-bot/config.js', () => ({
   getTeamsBotConfig: async () => ({ enabled: false })
 }))
-vi.mock('../../../services/web-push.js', () => ({ sendWebPush: vi.fn(async () => 0) }))
+vi.mock('../../../services/web-push.js', () => ({
+  sendWebPush: vi.fn(async () => 0),
+  sendDevicePush: vi.fn(async () => 0)
+}))
 vi.mock('../../../services/chain.js', () => ({
   withChainStep: async (_n: string, fn: () => unknown) => fn()
 }))

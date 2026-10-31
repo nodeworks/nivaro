@@ -225,7 +225,13 @@ interface Sources {
     last_run_at?: string | null
   }>
   chat_rooms: Array<{ room: string; is_muted: boolean | number; notify_mode: string | null }>
-  push_devices: Array<{ id: number; user_agent: string | null; last_used_at: string | null }>
+  push_devices: Array<{
+    id: number
+    user_agent: string | null
+    last_used_at: string | null
+    /** 'phone' = a phone app (Expo); absent on older servers = browser. */
+    kind?: 'browser' | 'phone'
+  }>
   implicit: {
     owner_group_memberships: Array<{ trigger?: SourceTrigger; template: string; groups: number }>
     sla_escalations: Array<{
@@ -1172,12 +1178,21 @@ export function NotificationSourcesCard({ only, bare }: NotificationSourcesCardP
                     }
                   />
                 ))}
-                {s.push_devices.length > 0 && (
-                  <Row
-                    title={`Browser push — ${s.push_devices.length} device${s.push_devices.length === 1 ? '' : 's'}`}
-                    description='Push notifications mirror your in-app notifications'
-                  />
-                )}
+                {(['browser', 'phone'] as const).map((kind) => {
+                  const n = s.push_devices.filter((d) => (d.kind ?? 'browser') === kind).length
+                  if (n === 0) return null
+                  return (
+                    <Row
+                      key={kind}
+                      title={
+                        kind === 'phone'
+                          ? `Phone alerts — ${n} phone${n === 1 ? '' : 's'}`
+                          : `Browser push — ${n} device${n === 1 ? '' : 's'}`
+                      }
+                      description='Push notifications mirror your in-app notifications'
+                    />
+                  )
+                })}
               </Section>
             )}
 

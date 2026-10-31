@@ -17,7 +17,7 @@ import {
 import { layerOf } from './notification-layers.js'
 import { appendEscalationReason } from './notification-reason.js'
 import { parseStoredTarget, resolveTargetUrl } from './notification-target.js'
-import { sendWebPush } from './web-push.js'
+import { sendDevicePush } from './web-push.js'
 
 /**
  * Channel fallback chain: a notification that stays UNREAD climbs channels
@@ -108,6 +108,8 @@ async function runChannelEscalation(
       timestamp: Date
       delivery: string | null
       target: string | null
+      collection: string | null
+      item: string | number | null
     }>
     if (rows.length === 0) continue
     let user: { email: string | null; first_name: string | null } | undefined
@@ -131,10 +133,15 @@ async function runChannelEscalation(
         const url =
           (await resolveTargetUrl(target, { recipientUserId: userId }).catch(() => null)) ??
           '/notifications'
-        const sent = await sendWebPush(userId, {
+        const sent = await sendDevicePush(userId, {
           title: `Still unread: ${row.subject}`.slice(0, 120),
           body: (row.message ?? '').slice(0, 300),
-          url
+          url,
+          phone: {
+            id: row.id,
+            collection: row.collection ?? null,
+            item: row.item != null ? String(row.item) : null
+          }
         }).catch(() => 0)
         stamps.push_at = now.toISOString()
         changed = true
@@ -277,10 +284,15 @@ export async function runAckEscalation(
         (await resolveTargetUrl(parseStoredTarget(row.target), {
           recipientUserId: row.recipient
         }).catch(() => null)) ?? '/notifications'
-      await sendWebPush(row.recipient, {
+      await sendDevicePush(row.recipient, {
         title: `Needs your acknowledgement: ${row.subject}`.slice(0, 120),
         body: (row.message ?? '').slice(0, 300),
-        url
+        url,
+        phone: {
+          id: row.id,
+          collection: row.collection ?? null,
+          item: row.item != null ? String(row.item) : null
+        }
       }).catch(() => 0)
       stamps.ack_remind_at = now.toISOString()
       changed = true

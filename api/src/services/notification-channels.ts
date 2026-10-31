@@ -26,7 +26,7 @@ import {
   resolveTargetUrl
 } from './notification-target.js'
 import { currentTenantKey } from './tenant-rooms.js'
-import { sendWebPush } from './web-push.js'
+import { sendDevicePush } from './web-push.js'
 
 export type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
 
@@ -1116,17 +1116,26 @@ export async function notifyUser(
           (opts.collection && opts.item
             ? `/collections/${opts.collection}/${opts.item}`
             : '/notifications')
-        void sendWebPush(userId, {
+        void sendDevicePush(userId, {
           title: opts.subject.slice(0, 120),
           body: opts.message.slice(0, 300),
-          url
+          url,
+          // The phone app opens the record itself (and marks this row read).
+          phone: {
+            id: notifId,
+            collection: opts.collection ?? null,
+            item: opts.item != null ? String(opts.item) : null
+          }
         }).then(
           (sent) =>
             stampDelivery(notifId, {
               push:
                 sent > 0
                   ? { status: 'sent', at: new Date().toISOString() }
-                  : { status: 'no_subscription', reason: 'No browser registered for push.' }
+                  : {
+                      status: 'no_subscription',
+                      reason: 'No browser or phone registered for push.'
+                    }
             }),
           () => stampDelivery(notifId, { push: { status: 'failed' } })
         )

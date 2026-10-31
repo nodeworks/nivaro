@@ -144,6 +144,28 @@ POST /api/push/test               # sends a test push to your browsers`
         'Dead subscriptions (404/410 from the push service) are pruned automatically on send.',
         'Clicking a push focuses the admin and navigates to the related record or the Notifications Center.'
       ]
+    },
+    { type: 'h2', id: 'phone-push', text: 'Phone alerts (mobile apps)' },
+    {
+      type: 'p',
+      text: "A phone app built with Expo registers its push token, and every notification that would go to the person's browsers also goes to their phones through the Expo push service — the same Push column in Profile → Notification rules, the same quiet hours, escalation reminders and test mode. A phone is stored as a push subscription whose endpoint is `expo:<token>`, so it counts as a push device everywhere (delivery chips, Notification Bench, Test my rules); no migration."
+    },
+    {
+      type: 'pre',
+      code: `GET    /api/push/phones        # your phones: platform, app, device name, last used
+POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? }
+DELETE /api/push/phones        # { token } — the app calls this on sign-out
+POST   /api/push/phones/test   # sends a test alert to your phones
+GET    /api/push/status        # { subscriptions: <browsers>, phones: <phones> }`
+    },
+    {
+      type: 'ul',
+      items: [
+        'The alert carries the notification id, collection and item, so tapping it opens the record and marks the notification read; the app icon badge is set to the unread count.',
+        "A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts.",
+        'Phones Expo reports as gone (DeviceNotRegistered, on the send or on the receipt read back 30 seconds later) are removed.',
+        '`MOBILE_PUSH=off` stops phone alerts; `EXPO_ACCESS_TOKEN` is sent when the Expo project requires push security. The API needs outbound HTTPS to exp.host.'
+      ]
     }
   ]
 }

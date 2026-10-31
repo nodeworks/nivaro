@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { routePush } from './channel-test-mode.js'
 import webpush from 'web-push'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { routePush } from './channel-test-mode.js'
+import { PHONE_PREFIX, type PhonePushPayload, sendPhonePush } from './phone-push.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -112,7 +113,10 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
         stop_token: undefined
       }
     }
-    const subs = (await db('nivaro_push_subscriptions').where({ user: userId })) as Array<{
+    // Phones share the table (services/phone-push.ts) and go out through Expo.
+    const subs = (await db('nivaro_push_subscriptions')
+      .where({ user: userId })
+      .where('endpoint', 'not like', `${PHONE_PREFIX}%`)) as Array<{
       id: number
       endpoint: string
       keys_p256dh: string
@@ -173,4 +177,24 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
     console.warn('[web-push] sendWebPush error:', err)
     return 0
   }
+}
+
+/**
+ * A notification's push: every browser (web push) and every phone (Expo) the
+ * person signed in on. Returns how many devices took it. Never throws.
+ */
+export async function sendDevicePush(
+  userId: string,
+  payload: PushPayload & { phone?: PhonePushPayload['data'] }
+): Promise<number> {
+  const { phone, ...web } = payload
+  const [browsers, phones] = await Promise.all([
+    sendWebPush(userId, web),
+    sendPhonePush(userId, {
+      title: web.title,
+      body: web.body,
+      data: { url: web.url ?? null, ...phone }
+    })
+  ])
+  return browsers + phones
 }

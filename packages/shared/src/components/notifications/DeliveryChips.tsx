@@ -49,7 +49,7 @@ function describe(delivery: NotificationDeliveryRecord | null | undefined): Arra
         s === 'sent'
           ? `Browser push sent${d.push.at ? ` · ${new Date(d.push.at).toLocaleString()}` : ''}`
           : s === 'no_subscription'
-            ? 'No browser registered for push'
+            ? 'No browser or phone registered for push'
             : s === 'failed'
               ? 'Push failed'
               : (d.push.reason ?? 'Push skipped')

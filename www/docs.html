@@ -10833,6 +10833,7 @@ useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
           <p class="doc-p">Form settings → Who gets this form → Active dates limits a form to the days between From and Until (both included, in the instance time zone). Outside them the form takes no part in choosing a form: records open with the next form that fits, as if the form were restricted to other roles. A link that names the form falls through the same way. The overview shows the dates beside the form and warns when they have not started or have passed. Scheduled changes publish edits to a form; active dates decide when the form is used at all.</p>
           <h3 class="doc-h3" id="layout-editor-phone-version">Phone version</h3>
           <p class="doc-p">Form settings → Who gets this form → Phone version → Make a phone version copies the form as a lighter one for small screens (remove what a phone does not need). Record pages on a screen narrower than 640 px ask for the phone version (<code class="doc-code">viewport=phone</code> on <code class="doc-code">/collection-layouts/active</code>): after the usual rules pick a form, its phone version opens in its place. A phone version never opens on its own and needs no rules of its own; its roles and active dates still apply. On the overview it sits under the form it stands in for.</p>
+          <p class="doc-p">A Summary layout can have a phone (or tablet) version too: open the Summary layout and use the same setting. Summary mode then asks for it (<code class="doc-code">viewport=phone</code> on <code class="doc-code">/collection-layouts/summary/:collection</code>) and shows it in place of the desktop Summary on a small screen, so a record reads and edits from phone layouts in both modes. A Summary layout’s screen version must itself be a Summary layout, and a record form’s must be a record form. A desktop never gets a screen version, even an active one sorted first.</p>
           <h3 class="doc-h3" id="layout-editor-tablet-version">Tablet version</h3>
           <p class="doc-p">Form settings → Who gets this form → Tablet version → Make a tablet version copies the form for tablet-width screens (for example two columns where the desktop form has three). Record pages ask for it (<code class="doc-code">viewport=tablet</code> on <code class="doc-code">/collection-layouts/active</code>) on a screen 640–1023 px wide, or on a touch screen (no hover, coarse pointer) up to 1366 px — an iPad in landscape. After the usual rules pick a form, its tablet version opens in its place. On a phone, a form with no phone version opens its tablet version when it has one. Like a phone version, a tablet version never opens on its own, needs no rules of its own, keeps its own roles and active dates, and sits under its form on the overview. A form is a phone version or a tablet version, never both, and a version cannot have versions of its own. The screen is read once when the record opens, so turning the device never swaps the form under someone's edits.</p>
           <h3 class="doc-h3" id="layout-editor-coverage">Check coverage and health</h3>
@@ -17136,7 +17137,7 @@ TWILIO_FROM=+15551234567</code></pre>
           <!-- /SYNC:sms-push-channels -->
         </div>
 
-        <div class="doc-section" id="s-web-push" data-toc='[{"id":"web-push","label":"Browser Push Notifications"}]'>
+        <div class="doc-section" id="s-web-push" data-toc='[{"id":"web-push","label":"Browser Push Notifications"},{"id":"phone-push","label":"Phone alerts (mobile apps)"}]'>
           <!-- SYNC:web-push -->
           <h1 class="doc-h1" id="web-push">Browser Push Notifications</h1>
           <p class="doc-p">Native browser push (Web Push / VAPID) delivers notifications even when the admin tab is closed. Every in-app notification also fans out to each browser the user enabled push on.</p>
@@ -17150,6 +17151,19 @@ POST /api/push/test               # sends a test push to your browsers</code></p
             <li>VAPID keys resolve from VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY env vars first, then nivaro_settings; with neither set a keypair is generated once and stored — zero setup.</li>
             <li>Dead subscriptions (404/410 from the push service) are pruned automatically on send.</li>
             <li>Clicking a push focuses the admin and navigates to the related record or the Notifications Center.</li>
+          </ul>
+          <h2 class="doc-h2" id="phone-push">Phone alerts (mobile apps)</h2>
+          <p class="doc-p">A phone app built with Expo registers its push token, and every notification that would go to the person's browsers also goes to their phones through the Expo push service — the same Push column in Profile → Notification rules, the same quiet hours, escalation reminders and test mode. A phone is stored as a push subscription whose endpoint is <code class="doc-code">expo:&lt;token&gt;</code>, so it counts as a push device everywhere (delivery chips, Notification Bench, Test my rules); no migration.</p>
+          <pre class="doc-pre"><code>GET    /api/push/phones        # your phones: platform, app, device name, last used
+POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? }
+DELETE /api/push/phones        # { token } — the app calls this on sign-out
+POST   /api/push/phones/test   # sends a test alert to your phones
+GET    /api/push/status        # { subscriptions: &lt;browsers&gt;, phones: &lt;phones&gt; }</code></pre>
+          <ul class="doc-ul">
+            <li>The alert carries the notification id, collection and item, so tapping it opens the record and marks the notification read; the app icon badge is set to the unread count.</li>
+            <li>A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts.</li>
+            <li>Phones Expo reports as gone (DeviceNotRegistered, on the send or on the receipt read back 30 seconds later) are removed.</li>
+            <li><code class="doc-code">MOBILE_PUSH=off</code> stops phone alerts; <code class="doc-code">EXPO_ACCESS_TOKEN</code> is sent when the Expo project requires push security. The API needs outbound HTTPS to exp.host.</li>
           </ul>
           <!-- /SYNC:web-push -->
         </div>

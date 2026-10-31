@@ -71,7 +71,10 @@ vi.mock('../../../services/app-links.js', () => ({
 vi.mock('../../../services/teams-bot/notification-card.js', () => ({
   buildTeamsNotificationCard: state.build
 }))
-vi.mock('../../../services/web-push.js', () => ({ sendWebPush: vi.fn(async () => 0) }))
+vi.mock('../../../services/web-push.js', () => ({
+  sendWebPush: vi.fn(async () => 0),
+  sendDevicePush: vi.fn(async () => 0)
+}))
 vi.mock('../../../services/chain.js', () => ({
   withChainStep: async (_n: string, fn: () => unknown) => fn()
 }))
