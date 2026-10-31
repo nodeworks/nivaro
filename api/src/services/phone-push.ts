@@ -7,7 +7,7 @@ import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
  * through the Expo push service.
  *
  * No table of its own: a phone is a `nivaro_push_subscriptions` row whose
- * endpoint is `expo:<Expo push token>` (keys_p256dh = 'expo', keys_auth =
+ * endpoint is `expo:<Expo push token>` (keys_p256dh = 'expo:<sha256 of the sign-out forget key>', keys_auth =
  * '<platform>:<app id>'). Browser endpoints are always https://, so the two
  * never collide, and every count of "push devices" already includes phones.
  * `sendWebPush` skips these rows; `sendPhonePush` reads only them.

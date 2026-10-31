@@ -153,9 +153,9 @@ POST /api/push/test               # sends a test push to your browsers`
     {
       type: 'pre',
       code: `GET    /api/push/phones        # your phones: platform, app, device name, last used
-POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? }
+POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? } → { forget_key }
 DELETE /api/push/phones        # { token } — remove one of your phones
-POST   /api/push/phones/forget # { token } — no sign-in needed: the token proves it is this phone (sign-out)
+POST   /api/push/phones/forget # { token, forget_key } — no sign-in needed: the key from registration proves it is this phone (sign-out)
 POST   /api/push/phones/test   # sends a test alert to your phones
 GET    /api/push/status        # { subscriptions: <browsers>, phones: <phones> }`
     },
@@ -163,7 +163,7 @@ GET    /api/push/status        # { subscriptions: <browsers>, phones: <phones> }
       type: 'ul',
       items: [
         'The alert carries the notification id, collection and item, so tapping it opens the record and marks the notification read; the app icon badge is set to the unread count.',
-        "A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts. Signing out calls /phones/forget, which needs no sign-in, so an expired or revoked sign-in can still stop the alerts; an app that could not reach the server retries on its next start.",
+        "A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts. Signing out calls /phones/forget with the one-time key the registration answered (only its hash is stored; a new registration replaces it), which needs no sign-in, so an expired or revoked sign-in can still stop the alerts; an app that could not reach the server retries on its next start.",
         'Phones Expo reports as gone (DeviceNotRegistered, on the send or on the receipt read back 30 seconds later) are removed.',
         '`MOBILE_PUSH=off` stops phone alerts; `EXPO_ACCESS_TOKEN` is sent when the Expo project requires push security. The API needs outbound HTTPS to exp.host.'
       ]

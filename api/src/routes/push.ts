@@ -1,3 +1,4 @@
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
@@ -14,11 +15,13 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *
  * Phones (Expo apps; stored as `expo:<token>` rows, services/phone-push.ts):
  *  GET    /push/phones        — the current user's phones
- *  POST   /push/phones        — register this phone {token, platform?, app?, device_name?}
- *  DELETE /push/phones        — remove this phone {token} (sign-out)
- *  POST   /push/phones/forget — remove this phone {token} WITHOUT a sign-in: holding the token
- *                               proves it is this phone, so a sign-out that lost its session
- *                               (expired token, offline) can still stop the alerts later
+ *  POST   /push/phones        — register this phone {token, platform?, app?, device_name?};
+ *                               answers a one-time `forget_key` (only its hash is stored)
+ *  DELETE /push/phones        — remove one of the caller's phones {token}
+ *  POST   /push/phones/forget — remove this phone {token, forget_key} WITHOUT a sign-in: the key
+ *                               from its registration proves it is the phone that registered, so
+ *                               a sign-out that lost its session (expired token, offline) can
+ *                               still stop the alerts later; the token alone is not enough
  *  POST   /push/phones/test   — send a test alert to the current user's phones
  */
 
@@ -156,9 +159,12 @@ export async function pushRoutes(app: FastifyInstance) {
       String(appId ?? '')
         .replace(/[^\w.-]/g, '')
         .slice(0, 100) || 'app'
+    // A fresh secret per registration: the app keeps it to stop the alerts on sign-out without
+    // a working sign-in. Stored hashed; a new registration (another person) replaces it.
+    const forgetKey = randomBytes(24).toString('base64url')
     const fields = {
       user: req.user!.id,
-      keys_p256dh: 'expo',
+      keys_p256dh: `expo:${forgetKeyHash(forgetKey)}`,
       keys_auth: `${plat}:${appKey}`.slice(0, 255),
       user_agent: (typeof device_name === 'string' && device_name.trim()
         ? device_name.trim()
@@ -180,7 +186,7 @@ export async function pushRoutes(app: FastifyInstance) {
         created_at: new Date()
       })
     }
-    return reply.send({ data: { registered: true } })
+    return reply.send({ data: { registered: true, forget_key: forgetKey } })
   })
 
   app.delete<{ Body: { token?: string } }>(
@@ -198,17 +204,27 @@ export async function pushRoutes(app: FastifyInstance) {
     }
   )
 
-  app.post<{ Body: { token?: string } }>('/phones/forget', async (req, reply) => {
-    const token = req.body?.token
-    if (!isExpoPushToken(token)) {
-      return reply.code(400).send({ error: 'token must be an Expo push token' })
+  app.post<{ Body: { token?: string; forget_key?: string } }>(
+    '/phones/forget',
+    async (req, reply) => {
+      const { token, forget_key } = req.body ?? {}
+      if (!isExpoPushToken(token) || typeof forget_key !== 'string' || forget_key.length > 100) {
+        return reply.code(400).send({ error: 'token and forget_key are required' })
+      }
+      const hash = endpointHash(`${PHONE_PREFIX}${token}`)
+      const row = (await db('nivaro_push_subscriptions')
+        .where({ endpoint_hash: hash })
+        .first('id', 'keys_p256dh')) as { id: number; keys_p256dh: string } | undefined
+      const want = Buffer.from(String(row?.keys_p256dh ?? ''))
+      const got = Buffer.from(`expo:${forgetKeyHash(forget_key)}`)
+      // Same answer either way: the route says nothing about which phones are registered.
+      if (row && want.length === got.length && timingSafeEqual(want, got)) {
+        await db('nivaro_push_subscriptions').where({ id: row.id }).del()
+        req.log.info({ phone: row.id }, 'phone push: forgotten on sign-out')
+      }
+      return reply.send({ data: { removed: true } })
     }
-    // Same answer whether or not it was registered: the route says nothing about tokens.
-    await db('nivaro_push_subscriptions')
-      .where({ endpoint_hash: endpointHash(`${PHONE_PREFIX}${token}`) })
-      .del()
-    return reply.send({ data: { removed: true } })
-  })
+  )
 
   app.post('/phones/test', { preHandler: requireAuth }, async (req, reply) => {
     const sent = await sendPhonePush(req.user!.id, {
@@ -218,4 +234,8 @@ export async function pushRoutes(app: FastifyInstance) {
     })
     return reply.send({ data: { sent } })
   })
+}
+
+function forgetKeyHash(key: string): string {
+  return createHash('sha256').update(key).digest('hex')
 }

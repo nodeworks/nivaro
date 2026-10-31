@@ -297,12 +297,35 @@ describe('phone push', () => {
     expect(r.json().data.removed).toBe(false)
     expect(m.deletes[0]?.rows).toEqual([])
   })
-  it('forget removes the phone by its token alone (an expired sign-in can still stop alerts)', async () => {
-    m.tables.nivaro_push_subscriptions = [row('PREVIOUS')]
+  it('forget needs the key from the registration, not just the token', async () => {
     const app = await build()
-    const r = await app.inject({ method: 'POST', url: '/push/phones/forget', payload: { token } })
-    expect(r.statusCode).toBe(200)
-    expect(m.deletes[0]?.rows).toEqual([row('PREVIOUS')])
+    const reg = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    const key = reg.json().data.forget_key as string
+    const stored = (m.inserts[0]?.row as { keys_p256dh: string }).keys_p256dh
+    expect(stored).not.toContain(key)
+    m.tables.nivaro_push_subscriptions = [{ ...row('PREVIOUS'), id: 9, keys_p256dh: stored }]
+
+    const bare = await app.inject({
+      method: 'POST',
+      url: '/push/phones/forget',
+      payload: { token }
+    })
+    expect(bare.statusCode).toBe(400)
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/push/phones/forget',
+      payload: { token, forget_key: 'guess' }
+    })
+    expect(wrong.statusCode).toBe(200)
+    expect(m.deletes).toEqual([])
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/push/phones/forget',
+      payload: { token, forget_key: key }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(m.deletes[0]?.rows.map((r) => r.id)).toEqual([9])
   })
 })
 

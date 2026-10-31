@@ -17155,14 +17155,14 @@ POST /api/push/test               # sends a test push to your browsers</code></p
           <h2 class="doc-h2" id="phone-push">Phone alerts (mobile apps)</h2>
           <p class="doc-p">A phone app built with Expo registers its push token, and every notification that would go to the person's browsers also goes to their phones through the Expo push service — the same Push column in Profile → Notification rules, the same quiet hours, escalation reminders and test mode. A phone is stored as a push subscription whose endpoint is <code class="doc-code">expo:&lt;token&gt;</code>, so it counts as a push device everywhere (delivery chips, Notification Bench, Test my rules); no migration.</p>
           <pre class="doc-pre"><code>GET    /api/push/phones        # your phones: platform, app, device name, last used
-POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? }
+POST   /api/push/phones        # { token: "ExponentPushToken[...]", platform?, app?, device_name? } → { forget_key }
 DELETE /api/push/phones        # { token } — remove one of your phones
-POST   /api/push/phones/forget # { token } — no sign-in needed: the token proves it is this phone (sign-out)
+POST   /api/push/phones/forget # { token, forget_key } — no sign-in needed: the key from registration proves it is this phone (sign-out)
 POST   /api/push/phones/test   # sends a test alert to your phones
 GET    /api/push/status        # { subscriptions: &lt;browsers&gt;, phones: &lt;phones&gt; }</code></pre>
           <ul class="doc-ul">
             <li>The alert carries the notification id, collection and item, so tapping it opens the record and marks the notification read; the app icon badge is set to the unread count.</li>
-            <li>A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts. Signing out calls /phones/forget, which needs no sign-in, so an expired or revoked sign-in can still stop the alerts; an app that could not reach the server retries on its next start.</li>
+            <li>A phone belongs to whoever signed in on it last: registering a token another person had moves it, so a shared phone never shows the previous person's alerts. Signing out calls /phones/forget with the one-time key the registration answered (only its hash is stored; a new registration replaces it), which needs no sign-in, so an expired or revoked sign-in can still stop the alerts; an app that could not reach the server retries on its next start.</li>
             <li>Phones Expo reports as gone (DeviceNotRegistered, on the send or on the receipt read back 30 seconds later) are removed.</li>
             <li><code class="doc-code">MOBILE_PUSH=off</code> stops phone alerts; <code class="doc-code">EXPO_ACCESS_TOKEN</code> is sent when the Expo project requires push security. The API needs outbound HTTPS to exp.host.</li>
           </ul>
