@@ -19,6 +19,7 @@ import {
   Send,
   Server,
   Settings2,
+  Smartphone,
   Trash2,
   UserRound,
   Video,
@@ -54,6 +55,7 @@ import { ADMIN_LOCALES, useLocale } from '@/lib/i18n'
 import { applyThemeSettings, THEME_RADIUS_PRESETS } from '@/lib/theme-settings'
 import { useSettings } from '@/lib/useSettings'
 import { cn } from '@/lib/utils'
+import { MobileAppCard } from '@/pages/settings/MobileAppCard'
 import { TeamsBotCard } from '@/pages/settings/TeamsBotCard'
 
 const LANGUAGES = [
@@ -183,6 +185,7 @@ type Section =
   | 'storage'
   | 'session-replay'
   | 'huddles'
+  | 'mobile-app'
   | 'backups'
   | 'instance'
 
@@ -203,6 +206,7 @@ const NAV: { id: Section; label: string; icon: React.ReactNode }[] = [
   { id: 'storage', label: 'File storage', icon: <HardDrive className='h-3.5 w-3.5' /> },
   { id: 'session-replay', label: 'Session replay', icon: <Video className='h-3.5 w-3.5' /> },
   { id: 'huddles', label: 'Huddles', icon: <Headphones className='h-3.5 w-3.5' /> },
+  { id: 'mobile-app', label: 'Mobile app', icon: <Smartphone className='h-3.5 w-3.5' /> },
   { id: 'backups', label: 'Backups', icon: <Download className='h-3.5 w-3.5' /> },
   { id: 'instance', label: 'This Instance', icon: <Server className='h-3.5 w-3.5' /> }
 ]
@@ -4072,6 +4076,8 @@ export function SettingsPage() {
               {activeSection === 'session-replay' && <SessionReplaySettingsSection />}
 
               {activeSection === 'huddles' && <HuddleSettingsSection />}
+
+              {activeSection === 'mobile-app' && <MobileAppCard />}
 
               {activeSection === 'backups' && <BackupsSection />}
 

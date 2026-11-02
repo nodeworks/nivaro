@@ -29,6 +29,7 @@ import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
 import { PersonWeekCard } from './PersonWeek'
+import { SignedInDevices } from './SignedInDevices'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
 export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'did' | 'tools'
@@ -172,6 +173,7 @@ export function PersonProfile({
               <div className='space-y-4'>
                 <UserDirectoryCard profile={profile} />
                 <SessionsCard userId={profile.id} />
+                <SignedInDevices userId={profile.id} name={profile.first_name ?? profile.name} />
                 <ApiTokenCard profile={profile} />
               </div>
             </div>

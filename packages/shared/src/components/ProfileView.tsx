@@ -60,6 +60,7 @@ import { MyDefaultsCard } from './profile/MyDefaultsCard'
 import { UserScopesCard } from './profile/PersonAccess'
 import { PersonProfile } from './profile/PersonProfile'
 import { ConfirmButton, Field, SectionCard, Toggle } from './profile/primitives'
+import { SignedInDevices } from './profile/SignedInDevices'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 
 /**
@@ -1749,6 +1750,7 @@ function OwnProfile({
           <NotificationSourcesCard />
           {pushServiceWorker !== false && <BrowserPushCard serviceWorkerPath={pushServiceWorker} />}
           <MySecurityCard />
+          <SignedInDevices />
           <SecurityCard />
           <MyPermissionsCard />
           <MyMatrixSeatsCard />

@@ -530,6 +530,10 @@ export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'
 export {
+  type SignedInDevice,
+  SignedInDevices
+} from './components/profile/SignedInDevices'
+export {
   type PersonProfile as PersonProfileData,
   usePersonProfile
 } from './components/profile/types'

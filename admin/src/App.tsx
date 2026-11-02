@@ -393,6 +393,9 @@ export default function App() {
                     </Suspense>
                   }
                 />
+                {/* Universal links (`https://<host>/app/open`) open the phone app; without it
+                    installed the browser lands here and goes on to the app's home. */}
+                <Route path='/app/open' element={<Navigate to='/' replace />} />
                 <Route
                   path='/wallboard'
                   element={
