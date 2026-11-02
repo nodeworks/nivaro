@@ -107,6 +107,10 @@ function fakeRedis() {
           ops.push(() => r.srem(k, v))
           return m
         },
+        smembers(k: string) {
+          ops.push(() => r.smembers(k))
+          return m
+        },
         del(k: string) {
           ops.push(() => r.del(k))
           return m
@@ -411,7 +415,8 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     }
   })
 
-  it('a replayed refresh is bound to the install_id the first refresh sent, and logged', async () => {
+  /** A phone signed in whose first refresh sent `install_id: inst-1`; `refresh(extra)` retries. */
+  async function rotatedWithInstall() {
     signIn()
     const tok = (await exchange(codeOf(await signInCode(params())))).json()
     const refresh = (extra: Record<string, string> = {}) =>
@@ -427,21 +432,36 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       })
     const first = await refresh({ install_id: 'inst-1' })
     expect(first.statusCode).toBe(200)
+    const rec = await resolveAccessToken(redis as never, first.json().access_token, 'device')
     vi.mocked(logActivity).mockClear()
-    expect((await refresh()).statusCode).toBe(400)
-    expect((await refresh({ install_id: 'inst-2' })).statusCode).toBe(400)
+    return { refresh, first, grantId: rec?.grant_id as string }
+  }
+
+  it('a replay from the same install gets the same pair, logged as oauth-refresh-replayed', async () => {
+    const { refresh, first, grantId } = await rotatedWithInstall()
     const again = await refresh({ install_id: 'inst-1' })
     expect(again.statusCode).toBe(200)
     expect(again.json().refresh_token).toBe(first.json().refresh_token)
-    const rec = await resolveAccessToken(redis as never, again.json().access_token, 'device')
     expect(logActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'oauth-refresh-replayed',
-        user: 'U1',
-        comment: rec?.grant_id
-      })
+      expect.objectContaining({ action: 'oauth-refresh-replayed', user: 'U1', comment: grantId })
     )
   })
+
+  for (const extra of [{}, { install_id: 'inst-2' }]) {
+    it(`a replay ${extra.install_id ? 'from another install' : 'without the install_id'} ends the sign-in`, async () => {
+      const { refresh, first, grantId } = await rotatedWithInstall()
+      const theft = await refresh(extra)
+      expect(theft.statusCode).toBe(400)
+      expect(theft.json().error).toBe('invalid_grant')
+      expect(logActivity).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'oauth-refresh-reuse', user: 'U1', comment: grantId })
+      )
+      // The pair the real phone got is dead too.
+      expect(
+        await resolveAccessToken(redis as never, first.json().access_token, 'device')
+      ).toBeNull()
+    })
+  }
 
   it('refresh_expires_in on a refresh is what is left of the sign-in (role max age)', async () => {
     signIn()

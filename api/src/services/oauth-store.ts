@@ -336,6 +336,18 @@ export async function consumeRefreshChecked(
     const replay = refresh.startsWith(DEVICE_REFRESH_PREFIX)
       ? await replayDeviceRotation(redis, refresh, spent.grant_id, opts.installId).catch(() => null)
       : null
+    if (replay === 'other-install') {
+      // The spent token itself (it decrypted the answer), but not from the install that spent
+      // it: a stolen copy. Treated as reuse — the whole sign-in ends.
+      const grant = await takeGrant(redis, spent.user_id, spent.grant_id).catch(() => null)
+      return {
+        ok: false,
+        reason: 'reused',
+        user_id: spent.user_id,
+        grant_id: spent.grant_id,
+        grant
+      }
+    }
     if (replay) return { ok: true, rec: replay.rec, replayed: replay.tokens }
     return { ok: false, reason: 'unknown' }
   }
@@ -424,14 +436,15 @@ export async function rememberDeviceRotation(
 /**
  * The answer a spent phone refresh token was given, when it is still inside the grace window, of
  * this tenant and grant (`grantId` = what the spent stamp names), its grant still stands and its
- * refresh token has not been used since — else null.
+ * refresh token has not been used since — else null. 'other-install': the answer was bound to an
+ * install and this retry names none or another (the caller ends the grant).
  */
 async function replayDeviceRotation(
   redis: Redis,
   refresh: string,
   grantId: string,
   installId?: string
-): Promise<{ tokens: IssuedTokens; rec: TokenRecord } | null> {
+): Promise<{ tokens: IssuedTokens; rec: TokenRecord } | 'other-install' | null> {
   const blob = await read<ReplayBlob>(redis, replayKey(hashToken(refresh)))
   if (!blob || !sameTenant(blob) || blob.g !== grantId) return null
   const age = Date.now() - Number(blob.at)
@@ -452,10 +465,9 @@ async function replayDeviceRotation(
   if (out?.rec?.grant_id !== grantId || typeof out.tokens?.refresh_token !== 'string') return null
   // Bound to the install the first refresh came from, when it named one.
   if (out.ih) {
-    if (!installId) return null
     const want = Buffer.from(out.ih, 'base64url')
-    const got = installHash(installId)
-    if (want.length !== got.length || !timingSafeEqual(want, got)) return null
+    const got = installId ? installHash(installId) : Buffer.alloc(0)
+    if (want.length !== got.length || !timingSafeEqual(want, got)) return 'other-install'
   }
   const [grant, next] = await Promise.all([
     redis.exists(`${P}grant:${grantId}`),

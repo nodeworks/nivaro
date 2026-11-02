@@ -170,19 +170,27 @@ describe('a phone refresh retried inside the grace window', () => {
     expect(await getGrant(redis as never, grant.id)).not.toBe(null)
   })
 
-  it('bound to the install: a replay needs the same install_id the first refresh sent', async () => {
+  it('bound to the install: the same install_id gets the pair', async () => {
     const redis = memRedis()
     const { first, next } = await rotated(redis, 'U1', 'install-AAA')
-    const refuse = { ok: false, reason: 'unknown' }
-    expect(await consumeRefreshChecked(redis as never, first.refresh_token)).toEqual(refuse)
-    expect(
-      await consumeRefreshChecked(redis as never, first.refresh_token, { installId: 'install-BBB' })
-    ).toEqual(refuse)
     const same = await consumeRefreshChecked(redis as never, first.refresh_token, {
       installId: 'install-AAA'
     })
     expect(same.ok && same.replayed?.refresh_token).toBe(next.refresh_token)
   })
+
+  for (const [label, installId] of [
+    ['no install_id', undefined],
+    ['another install_id', 'install-BBB']
+  ] as const) {
+    it(`a replay with ${label} (the original sent one) is token theft: the grant ends`, async () => {
+      const redis = memRedis()
+      const { grant, first } = await rotated(redis, 'U1', 'install-AAA')
+      const out = await consumeRefreshChecked(redis as never, first.refresh_token, { installId })
+      expect(out).toMatchObject({ ok: false, reason: 'reused', user_id: 'U1', grant_id: grant.id })
+      expect(await getGrant(redis as never, grant.id)).toBe(null)
+    })
+  }
 
   it('reuse after the grace window keeps today’s rule: refused, connection ended', async () => {
     const redis = memRedis()
