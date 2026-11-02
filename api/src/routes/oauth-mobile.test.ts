@@ -468,6 +468,10 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     const tok = (await exchange(codeOf(await signInCode(params())))).json()
     expect(tok.refresh_expires_in).toBe(30 * 86_400)
     policy.value = { max_age_hours: 48 }
+    // The code exchange already respects the role's max age.
+    const fresh = (await exchange(codeOf(await signInCode(params())))).json()
+    expect(fresh.refresh_expires_in).toBeLessThanOrEqual(48 * 3600)
+    expect(fresh.refresh_expires_in).toBeGreaterThan(48 * 3600 - 60)
     const r = await app.inject({
       method: 'POST',
       url: '/oauth/token',

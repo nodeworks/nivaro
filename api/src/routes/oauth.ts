@@ -828,7 +828,18 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         },
         kind
       )
-      return tokenAnswer(tokens, kind, grantId)
+      if (kind !== 'device') return tokenAnswer(tokens, kind, grantId)
+      // A new phone sign-in: its refresh token's life, cut short by the role's max age.
+      const who = (await db('nivaro_users')
+        .where({ id: rec.user_id })
+        .first('role')
+        .catch(() => null)) as { role?: string | null } | null | undefined
+      return tokenAnswer(
+        tokens,
+        kind,
+        grantId,
+        await deviceRefreshLife(app, grantId, who?.role ?? null)
+      )
     }
 
     if (grantType === 'refresh_token') {
