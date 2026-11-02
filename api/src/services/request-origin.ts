@@ -1,22 +1,57 @@
 import type { FastifyRequest } from 'fastify'
+import { config } from '../config.js'
 import { tenantOrigin } from '../db/tenant-context.js'
+import { mcpPublicOrigin } from './mcp-config.js'
+
+/** This instance's configured addresses: PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS. */
+function configuredOrigins(): string[] {
+  const raw = [
+    config.PUBLIC_URL,
+    config.ADMIN_URL,
+    process.env.MCP_PUBLIC_URL,
+    ...String(config.APP_URLS ?? '').split(',')
+  ]
+  const out: string[] = []
+  for (const r of raw) {
+    const v = r?.trim()
+    if (!v) continue
+    try {
+      const o = new URL(v).origin
+      if (o !== 'null' && !out.includes(o)) out.push(o)
+    } catch {
+      // not a URL: not an address
+    }
+  }
+  return out
+}
+
+/** `host` (a request's Host, maybe with a port) is `origin`'s host, default ports aside. */
+function hostIs(origin: string, host: string): boolean {
+  try {
+    const u = new URL(origin)
+    return new URL(`${u.protocol}//${host}`).host === u.host
+  } catch {
+    return false
+  }
+}
 
 /**
- * The origin a request arrived on. Cloud: the tenant's (its subdomain or custom domain, as the
- * tenant middleware resolved it). Self-hosted: the request's protocol + host as Fastify reads
- * them — X-Forwarded-Proto / X-Forwarded-Host count only from a proxy TRUST_PROXY trusts
- * (lib/trust-proxy.ts). Default ports are dropped (`http://a:80` → `http://a`).
+ * The issuer for a request — the OAuth `iss` a first-party phone app checks, and the discovery
+ * document's `issuer` on that host, so the two always agree.
+ *
+ *  - Cloud: the tenant's verified origin (its own subdomain or active custom domain), else its
+ *    canonical origin (db/tenant-context.ts).
+ *  - Self-hosted: the configured address (PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS) whose
+ *    host is the request's host — as Fastify reads it, so a forwarded host counts only from a
+ *    proxy TRUST_PROXY trusts — else MCP_PUBLIC_URL's origin (mcpPublicOrigin). An internal host
+ *    behind an untrusted proxy is never named.
  */
-export function requestOrigin(req: FastifyRequest): string {
-  const tenant = tenantOrigin()
-  if (tenant) return tenant
-  const proto = req.protocol === 'https' ? 'https' : 'http'
+export function requestIssuer(req: FastifyRequest): string {
+  if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? mcpPublicOrigin()
   const host = String(req.host ?? '')
     .split(',')[0]
     .trim()
-  try {
-    return new URL(`${proto}://${host}`).origin
-  } catch {
-    return `${proto}://localhost`
-  }
+    .toLowerCase()
+  if (host) for (const o of configuredOrigins()) if (hostIs(o, host)) return o
+  return mcpPublicOrigin()
 }

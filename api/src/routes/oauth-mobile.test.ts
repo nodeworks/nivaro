@@ -3,6 +3,9 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
+// Two more configured addresses of this instance (APP_URLS): a phone signing in on one of them
+// gets that origin as its issuer.
+process.env.APP_URLS = 'https://tenant-a.example,https://tenant-b.example'
 
 vi.mock('../db/index.js', () => {
   const users: Record<string, { id: string; status: string }> = {
@@ -247,8 +250,8 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     expect(back.startsWith(`${REDIRECT}?`)).toBe(true)
     const q = new URL(back).searchParams
     expect(q.get('state')).toBe('st-m')
-    // The origin the sign-in arrived on (inject's default host), not MCP_PUBLIC_URL.
-    expect(q.get('iss')).toBe('http://localhost')
+    // inject's default host is no configured address: MCP_PUBLIC_URL's origin.
+    expect(q.get('iss')).toBe('https://nivaro.example')
     // Nothing is connected until the app exchanges the code.
     expect(logActivity).not.toHaveBeenCalled()
 
@@ -323,15 +326,15 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     expect(await resolveAccessToken(redis as never, r2.access_token, 'device')).not.toBeNull()
   })
 
-  it('iss is the host the sign-in arrived on; the code is exchanged only there', async () => {
+  it('iss is the configured address the sign-in arrived on; the code is exchanged only there', async () => {
     signIn()
     const allow = await signInCode(params(), 'tenant-a.example')
     const q = new URL(String(allow.headers.location)).searchParams
-    expect(q.get('iss')).toBe('http://tenant-a.example')
+    expect(q.get('iss')).toBe('https://tenant-a.example')
     const deny = await signInCode(params(), 'tenant-a.example', 'deny')
     const dq = new URL(String(deny.headers.location)).searchParams
     expect(dq.get('error')).toBe('access_denied')
-    expect(dq.get('iss')).toBe('http://tenant-a.example')
+    expect(dq.get('iss')).toBe('https://tenant-a.example')
     // Another host never takes this code (an issuer mix-up): refused, and the code is spent.
     const other = await exchange(q.get('code') as string, {}, 'tenant-b.example')
     expect(other.statusCode).toBe(400)
@@ -339,6 +342,42 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     const again = await signInCode(params(), 'tenant-a.example')
     const ok = await exchange(codeOf(again), {}, 'tenant-a.example')
     expect(ok.statusCode).toBe(200)
+  })
+
+  it('behind a proxy nobody trusts, an internal host gets MCP_PUBLIC_URL, never itself', async () => {
+    signIn()
+    const allow = await signInCode(params(), 'nivaro:3055')
+    expect(new URL(String(allow.headers.location)).searchParams.get('iss')).toBe(
+      'https://nivaro.example'
+    )
+    // A forwarded host is not believed without TRUST_PROXY.
+    await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams(params())}`,
+      headers: { host: 'nivaro:3055', 'x-forwarded-host': 'tenant-a.example' }
+    })
+    const f = form({ ...params(), csrf: session.oauthCsrf as string, decision: 'allow' })
+    const fwd = await app.inject({
+      method: 'POST',
+      url: '/oauth/authorize',
+      ...f,
+      headers: { ...f.headers, host: 'nivaro:3055', 'x-forwarded-host': 'tenant-a.example' }
+    })
+    expect(new URL(String(fwd.headers.location)).searchParams.get('iss')).toBe(
+      'https://nivaro.example'
+    )
+  })
+
+  it('discovery names the same issuer as the authorize answer, per host', async () => {
+    signIn()
+    for (const host of ['tenant-a.example', 'nivaro:3055', 'nivaro.example']) {
+      const doc = (
+        await app.inject({ url: '/.well-known/oauth-authorization-server', headers: { host } })
+      ).json()
+      const allow = await signInCode(params(), host)
+      const iss = new URL(String(allow.headers.location)).searchParams.get('iss')
+      expect(doc.issuer).toBe(iss)
+      expect(doc.token_endpoint).toBe(`${iss}/oauth/token`)
+    }
   })
 
   it('each phone sign-in is its own connection', async () => {

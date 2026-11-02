@@ -58,7 +58,7 @@ import {
   type TokenRecord,
   upsertGrant
 } from '../services/oauth-store.js'
-import { requestOrigin } from '../services/request-origin.js'
+import { requestIssuer } from '../services/request-origin.js'
 import { getSessionPolicy, judgeDeviceGrant, limitsFor } from '../services/session-policy.js'
 import type { User } from '../types.js'
 
@@ -111,12 +111,13 @@ const redirectSchemes = (uris: string[]) => [
 
 /**
  * The `iss` an authorize answer names. A first-party phone app signs in to whichever address the
- * person typed — a tenant host or custom domain in cloud — so its issuer is the origin the
- * request arrived on (requestOrigin: the tenant's, or protocol + host under the trusted-proxy
- * rules), and the app checks it against that address. Every other client: MCP_PUBLIC_URL's.
+ * person typed — a tenant host or custom domain in cloud — so its issuer is requestIssuer(req):
+ * the tenant's verified origin, or the configured address the request's host names (else
+ * MCP_PUBLIC_URL's) — the same issuer discovery answers on that host. Every other client:
+ * MCP_PUBLIC_URL's.
  */
 const authorizeIssuer = (req: FastifyRequest, mobile: boolean) =>
-  mobile ? requestOrigin(req) : mcpPublicOrigin()
+  mobile ? requestIssuer(req) : mcpPublicOrigin()
 
 const oauthError = (reply: FastifyReply, status: number, error: string, description: string) =>
   reply
@@ -135,8 +136,10 @@ function protectedResourceDoc() {
   }
 }
 
-function authorizationServerDoc() {
-  const o = mcpPublicOrigin()
+/** RFC 8414 metadata on this host: its issuer is requestIssuer(req), the `iss` a phone app gets
+ *  here (on the MCP host that is MCP_PUBLIC_URL's origin, as before). */
+function authorizationServerDoc(req: FastifyRequest) {
+  const o = requestIssuer(req)
   return {
     issuer: o,
     authorization_endpoint: `${o}/oauth/authorize`,
@@ -561,9 +564,13 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     '/.well-known/oauth-authorization-server',
     '/.well-known/openid-configuration'
   ]) {
-    app.get(path, async (_req, reply) => {
+    app.get(path, async (req, reply) => {
       if (!anyEnabled(reply)) return
-      return reply.header('Cache-Control', 'max-age=300').send(authorizationServerDoc())
+      // The issuer is per host: a cache keyed on the URL alone must not hand one host's to another.
+      return reply
+        .header('Cache-Control', 'max-age=300')
+        .header('Vary', 'Host, X-Forwarded-Host, X-Tenant-Host')
+        .send(authorizationServerDoc(req))
     })
   }
 
@@ -755,7 +762,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         return oauthError(reply, 400, 'invalid_grant', 'The code was issued to another client')
       // A phone's code is good only on the origin its sign-in named as `iss`: the tokens then
       // belong to the issuer the app checked.
-      if (rec.iss && rec.iss !== requestOrigin(req))
+      if (rec.iss && rec.iss !== requestIssuer(req))
         return oauthError(reply, 400, 'invalid_grant', 'The code was issued on another address')
       if (rec.redirect_uri !== str(b.redirect_uri))
         return oauthError(
