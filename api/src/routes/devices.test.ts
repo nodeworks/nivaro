@@ -136,7 +136,20 @@ function fakeRedis() {
     },
     del: async (...ks: string[]) => ks.filter((k) => kv.delete(k) || sets.delete(k)).length,
     exists: async (k: string) => (kv.has(k) ? 1 : 0),
-    expire: async () => 1,
+    /** Expiries in ms (expire / pexpire), read back by pttl like Redis. */
+    ttls: new Map<string, number>(),
+    expire: async (k?: string, sec?: number) => {
+      if (k === undefined) return 1
+      if (!kv.has(k) && !sets.has(k)) return 0
+      r.ttls.set(k, Number(sec) * 1000)
+      return 1
+    },
+    pexpire: async (k: string, ms: number) => {
+      if (!kv.has(k) && !sets.has(k)) return 0
+      r.ttls.set(k, Number(ms))
+      return 1
+    },
+    pttl: async (k: string) => (!kv.has(k) && !sets.has(k) ? -2 : (r.ttls.get(k) ?? -1)),
     incr: async (k: string) => {
       const n = Number(kv.get(k) ?? 0) + 1
       kv.set(k, String(n))
@@ -916,6 +929,15 @@ describe('a phone sign-in that ends with no action (credential lifecycle)', () =
     expect(res.statusCode).toBe(400)
     expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
     expect(pushDeletes().flatMap((d) => d.bindings)).toContain(68)
+  })
+
+  it('a push id noted later gets the grant’s REMAINING life, not a fixed one', async () => {
+    const g = await store.createDeviceGrant(redis as never, PAT, mobile, { device_name: 'P' })
+    await store.setDeviceGrantLife(redis as never, g.id, 3600)
+    await store.addGrantPushId(redis as never, g.id, 70)
+    const grantTtl = redis.ttls.get(`nvr:oauth:grant:${g.id}`)
+    expect(grantTtl).toBe((3600 + store.DEVICE_GRANT_MARGIN_S) * 1000)
+    expect(redis.ttls.get(`nvr:oauth:grant-push:${g.id}`)).toBe(grantTtl)
   })
 
   it('grant keys live as long as the refresh token (plus a margin), renewed on refresh', async () => {

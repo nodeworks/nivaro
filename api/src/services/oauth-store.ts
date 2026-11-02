@@ -729,8 +729,11 @@ export async function addGrantPushId(
   for (const id of others) tx.srem(pushKey(id), String(pushId))
   await tx.sadd(pushKey(grantId), String(pushId)).exec()
   if (await redis.exists(`${P}grant:${grantId}`)) {
-    // The set never outlives the grant (renewed with it on refresh: setDeviceGrantLife).
-    await redis.expire(pushKey(grantId), REFRESH_TTL_S + DEVICE_GRANT_MARGIN_S)
+    // The set lives exactly as long as the grant has left (renewed with it on refresh:
+    // setDeviceGrantLife). A grant without an expiry (made before grants had one) gives the set
+    // none either.
+    const left = await redis.pttl(`${P}grant:${grantId}`)
+    if (left > 0) await redis.pexpire(pushKey(grantId), left)
     return true
   }
   // Ended between the read and the SADD: nothing will ever read this set again.
