@@ -20,9 +20,9 @@ import {
   mcpHttpEnabled,
   mcpInnerHeaderValue,
   mcpOAuthEnabled,
-  mcpPublicOrigin,
-  protectedResourceMetadataUrl
+  mcpPublicOrigin
 } from '../services/mcp-config.js'
+import { requestIssuer } from '../services/request-origin.js'
 import { mcpLiveRoutes, resolveLiveSession, subscriptionHost } from './mcp-live.js'
 
 /**
@@ -71,8 +71,10 @@ function rateLimited(
 }
 
 function unauthorized(reply: FastifyReply, message: string, invalid: boolean) {
+  // Same host as the protected-resource document this request would discover (per host, see oauth.ts).
+  const metadata = `${requestIssuer(reply.request)}/.well-known/oauth-protected-resource`
   const challenge = mcpOAuthEnabled()
-    ? `Bearer resource_metadata="${protectedResourceMetadataUrl()}"${invalid ? ', error="invalid_token"' : ''}`
+    ? `Bearer resource_metadata="${metadata}"${invalid ? ', error="invalid_token"' : ''}`
     : 'Bearer'
   return reply
     .code(401)

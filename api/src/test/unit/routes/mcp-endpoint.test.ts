@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
+process.env.ADMIN_URL = 'https://admin.nivaro.example'
 
 // The endpoint authenticates like any route; here a fixed token stands for a person.
 const costs = vi.hoisted(() => [] as number[])
@@ -98,6 +99,19 @@ describe('POST /api/mcp', () => {
     expect(res.statusCode).toBe(401)
     expect(res.headers['www-authenticate']).toBe(
       'Bearer resource_metadata="https://nivaro.example/.well-known/oauth-protected-resource"'
+    )
+  })
+
+  it('points the challenge at the document of the host the client called', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp',
+      headers: { host: 'admin.nivaro.example' },
+      payload: {}
+    })
+    expect(res.statusCode).toBe(401)
+    expect(res.headers['www-authenticate']).toBe(
+      'Bearer resource_metadata="https://admin.nivaro.example/.well-known/oauth-protected-resource"'
     )
   })
 
