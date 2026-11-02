@@ -302,6 +302,7 @@ describe('#1174 DB time', () => {
   it('buckets requests by how they authenticated', () => {
     expect(requestCategory('session')).toBe('people')
     expect(requestCategory('masquerade')).toBe('people')
+    expect(requestCategory('device')).toBe('people')
     expect(requestCategory('api_key')).toBe('integrations')
     expect(requestCategory('token')).toBe('integrations')
     expect(requestCategory(null)).toBe('other')

@@ -27,6 +27,7 @@ const KEYS = [
   'NIVARO_ENVIRONMENT',
   'MOBILE_SIGNIN',
   'MOBILE_PUSH',
+  'MOBILE_PUSH_RELAY_KEY',
   'MOBILE_MIN_APP_VERSION',
   'CLOUD_META_DB_URL'
 ]
@@ -87,6 +88,14 @@ describe('buildAppInfo', () => {
     expect(info.min_app_version).toBe('1.2.0')
   })
 
+  it('push mode: direct by default, relay once a relay key is set', async () => {
+    expect((await buildAppInfo()).push.mode).toBe('direct')
+    process.env.MOBILE_PUSH_RELAY_KEY = 'relay-test-key'
+    expect((await buildAppInfo()).push.mode).toBe('relay')
+    process.env.MOBILE_PUSH = 'off'
+    expect((await buildAppInfo()).push.mode).toBe('off')
+  })
+
   it('still answers with defaults when the settings read fails', async () => {
     state.fail = true
     const info = await buildAppInfo()
@@ -99,6 +108,7 @@ describe('buildAppInfo', () => {
     const info = await buildAppInfo({ block: { kind: 'suspended', name: 'Acme' } })
     expect(info.name).toBe('Acme')
     expect(info.blocked).toBe('suspended')
+    expect(info.push.mode).toBe('off')
   })
 
   it('reports maintenance', async () => {

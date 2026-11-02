@@ -23,8 +23,8 @@ export const AUTH_METHODS = [
 ] as const
 
 export function authSlot(method: string | null | undefined): number {
-  // A connected AI app (OAuth) is a person signed in through it — their slot.
-  const m = method === 'oauth' ? 'session' : (method ?? 'none')
+  // A connected AI app (OAuth) or a phone app is a person signed in through it — their slot.
+  const m = method === 'oauth' || method === 'device' ? 'session' : (method ?? 'none')
   const i = AUTH_METHODS.indexOf(m as (typeof AUTH_METHODS)[number])
   return i < 0 ? AUTH_METHODS.length - 1 : i
 }

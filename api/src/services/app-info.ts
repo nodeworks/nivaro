@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
 import { chaosAllowed } from './chaos/gate.js'
-import { phonePushEnabled } from './phone-push.js'
+import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 
 export interface AppInfo {
@@ -32,11 +32,6 @@ export function appEnvironment(): AppInfo['environment'] {
       : 'other'
   }
   return process.env.NODE_ENV === 'production' ? 'production' : 'development'
-}
-
-// Replaced by phonePushMode() from services/phone-push.ts once Task 5 merges.
-async function pushMode(): Promise<AppInfo['push']['mode']> {
-  return phonePushEnabled() ? 'direct' : 'off'
 }
 
 /** Areas the phone app may show, from the switches the admin already uses. */
@@ -94,7 +89,8 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
       mobile: mobileSignInEnabled(),
       client_ids: mobileClients().map((c) => c.client_id)
     },
-    push: { mode: await pushMode() },
+    // The relay key may live in the tenant's settings; a blocked tenant sends nothing anyway.
+    push: { mode: block ? 'off' : await phonePushMode() },
     features: enabledFeatures(),
     blocked: block ? block.kind : (await maintenanceOn()) ? 'maintenance' : null
   }

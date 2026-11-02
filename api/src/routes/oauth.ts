@@ -26,6 +26,7 @@ import {
 } from '../lib/oauth.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appNowForAuth } from '../services/chaos/clock.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
 import { listKits, type ToolKit } from '../services/mcp-kits.js'
 import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/mcp-scope.js'
@@ -34,6 +35,7 @@ import {
   consumeRefreshChecked,
   createDeviceGrant,
   getClient,
+  getGrant,
   grantScope,
   issueCode,
   issueTokens,
@@ -42,8 +44,10 @@ import {
   registerClient,
   revokeGrant,
   revokeToken,
+  type TokenRecord,
   upsertGrant
 } from '../services/oauth-store.js'
+import { getSessionPolicy, judgeSession, limitsFor } from '../services/session-policy.js'
 import type { User } from '../types.js'
 
 /**
@@ -455,6 +459,26 @@ async function limited(
   return true
 }
 
+/**
+ * Has a phone's sign-in outlived the session policy (#665) of the person's role? A device grant
+ * is judged like a browser session: max age from when the phone signed in, idle time from its
+ * last use (sign-in, when never used). The refresh token's own 30-day life stays the outer idle
+ * bound. Only judged on refresh — an access token lives an hour at most.
+ */
+async function deviceSignInExpired(app: FastifyInstance, rec: TokenRecord): Promise<boolean> {
+  const policy = await getSessionPolicy()
+  if (!policy) return false
+  const grant = await getGrant(app.redis, rec.grant_id)
+  if (!grant) return true
+  const user = (await db('nivaro_users').where({ id: rec.user_id }).first('role')) as
+    | { role?: string | null }
+    | undefined
+  const loginAt = Date.parse(grant.created_at)
+  const lastSeenAt = grant.last_used_at ? Date.parse(grant.last_used_at) : loginAt
+  // The application clock, as the session check uses (a clock-skew drill may only judge stricter).
+  return !judgeSession(limitsFor(policy, user?.role), { loginAt, lastSeenAt }, appNowForAuth()).ok
+}
+
 const equalStrings = (a: string, b: string) => {
   const x = Buffer.from(a)
   const y = Buffer.from(b)
@@ -750,6 +774,11 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       if (!(await activeUser(rec.user_id)))
         return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
       const kind = kindOf(rec)
+      if (kind === 'device' && (await deviceSignInExpired(app, rec))) {
+        // Over: the phone signs in again (and appears again as a new sign-in).
+        await revokeGrant(app.redis, rec.user_id, rec.grant_id).catch(() => false)
+        return oauthError(reply, 400, 'invalid_grant', 'Your sign-in has expired. Sign in again.')
+      }
       return tokenAnswer(await issueTokens(app.redis, rec, kind), kind, rec.grant_id)
     }
 

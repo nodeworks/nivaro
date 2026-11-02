@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { roleAllowsSignIn } from '../auth/role-sign-in.js'
 import { db } from '../db/index.js'
-import { ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
+import { mobileSignInEnabled } from '../lib/mobile-clients.js'
+import { ACCESS_PREFIX, DEVICE_ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
@@ -47,8 +48,21 @@ declare module 'fastify' {
      * How this request authenticated — stamped by `authenticate` so the API
      * logger can tell an integration's token call from a person's session.
      * 'teams' = a Bot Connector call (/api/teams/messages) acting as the linked person.
+     * 'device' = a first-party phone app's token (nvd_), the person signed in like a session.
      */
-    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim' | 'oauth' | 'teams'
+    authMethod?:
+      | 'session'
+      | 'token'
+      | 'api_key'
+      | 'masquerade'
+      | 'key_sim'
+      | 'oauth'
+      | 'teams'
+      | 'device'
+    /** Set when the request authenticated with a phone app's token (nvd_): its sign-in (grant)… */
+    deviceGrantId?: string
+    /** …and the phone's name as the app gave it, when it did. */
+    deviceName?: string
     /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
     oauthClientId?: string
     oauthGrantId?: string
@@ -597,10 +611,11 @@ export function resetAdminRecheckCache(): void {
 
 // ─── Main authenticate middleware ─────────────────────────────────────────────
 
-/** Sign-in kind + the credential behind it (key, issuing admin, connected app). */
+/** Sign-in kind + the credential behind it (key, issuing admin, connected app). A phone is the
+ *  person signed in like a session, so it shares the session's entries. */
 function principalKind(req: FastifyRequest): string {
   return [
-    req.authMethod ?? '-',
+    req.authMethod === 'device' ? 'session' : (req.authMethod ?? '-'),
     req.apiKeyId ?? req.apiKeySimulatedId ?? '',
     req.masqueradeAdminId ?? '',
     req.oauthClientId ?? '',
@@ -694,6 +709,26 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         const refusal = delegatedWriteRefusal(req)
         if (refusal) throw httpError(403, refusal, 'NOT_WHILE_MASQUERADING')
         touchMasqueradeMarker(req.server.redis, String(user.id), payload.admin_id)
+        return
+      }
+      // Phone app token (nvd_*) — the official app (or an operator's build) signed in as the
+      // person, like a session: none of the OAuth MCP-only gates apply. Checked against its grant,
+      // so a phone signed out or removed ends at once; the account must still be active.
+      if (token.startsWith(DEVICE_ACCESS_PREFIX)) {
+        req.authMethod = 'device'
+        const rec = mobileSignInEnabled()
+          ? await withAuthDeadline(
+              resolveAccessToken(req.server.redis, token, 'device'),
+              'the token store'
+            )
+          : null
+        if (!rec) throw httpError(401, 'The access token is invalid or expired', 'TOKEN_INVALID')
+        const user = await activeUserById(rec.user_id)
+        if (!user)
+          throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
+        await hydrateRole(req, user)
+        req.deviceGrantId = rec.grant_id
+        req.deviceName = rec.device_name
         return
       }
       // OAuth access token (nvo_*) — a connected app (ChatGPT, claude.ai, Claude Code, Codex)

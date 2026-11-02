@@ -271,6 +271,7 @@ describe('#1137 auth mix', () => {
     expect(s.lanes.items[authSlot('session')]).toBe(1)
     expect(s.lanes.items[authSlot('token')]).toBe(2)
     expect(s.lanes.items[authSlot('none')]).toBe(1)
+    expect(authSlot('device')).toBe(authSlot('session'))
     expect(ent('items/workflows')?.ext?.[AUTH_MIX_TAP]).toEqual([1, 2, 0, 0, 0, 1])
   })
 })
