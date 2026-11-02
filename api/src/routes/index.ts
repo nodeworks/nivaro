@@ -45,6 +45,7 @@ import { announcementRoutes } from './announcements.js'
 import { apiAnalyticsRoutes } from './api-analytics.js'
 import { apiKeyUsageRoutes } from './api-key-usage.js'
 import { apiKeysRoutes } from './api-keys.js'
+import { appInfoRoutes } from './app-info.js'
 import { approvalsRoutes } from './approvals.js'
 import { atRiskRoutes } from './at-risk.js'
 import { attributesRoutes } from './attributes.js'
@@ -463,6 +464,7 @@ export async function registerRoutes(app: FastifyInstance) {
   })
 
   await app.register(healthRoutes)
+  await app.register(appInfoRoutes)
   await app.register(preflightRoutes)
   // #2789 — render peer: mounted only where RENDER_TOKEN is set (bearer-only).
   await app.register(internalRenderRoutes)

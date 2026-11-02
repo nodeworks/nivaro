@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import knex, { type Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
+import { isAppInfoPath } from '../lib/app-info-path.js'
 
 // Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).
 // Created lazily on first request. Never used in self-hosted mode.
@@ -908,6 +909,16 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
         // Unknown subdomain — redirect to marketing start page
         const target = `${process.env.CLOUD_MARKETING_URL ?? 'https://nivaro.dev'}/start`
         reply.redirect(target, 302)
+        return
+      }
+
+      // The phone app's probe answers on a blocked tenant (name + why) instead of a 503.
+      if ((result.suspended || result.provisioning) && isAppInfoPath(req.url)) {
+        req.nvrTenantBlock = {
+          kind: result.suspended ? 'suspended' : 'provisioning',
+          name: result.row.name
+        }
+        done()
         return
       }
 
