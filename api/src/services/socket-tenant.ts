@@ -84,7 +84,8 @@ export function inSocketTenant<A extends unknown[]>(
             .catch(() => {})
             .finally(resolve)
         },
-        t.tenantId
+        t.tenantId,
+        socketTenantHost(socket) ?? undefined
       )
     })
   }

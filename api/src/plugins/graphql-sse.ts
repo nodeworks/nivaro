@@ -16,7 +16,13 @@ import {
   subscribe,
   validate
 } from 'graphql'
-import { getTenantDb, getTenantId, getTenantSlug, runWithTenantDb } from '../db/tenant-context.js'
+import {
+  getTenantDb,
+  getTenantHost,
+  getTenantId,
+  getTenantSlug,
+  runWithTenantDb
+} from '../db/tenant-context.js'
 import { itemMutatedFilter } from '../graphql/resolvers.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { replaySince } from '../services/event-journal.js'
@@ -161,9 +167,10 @@ function captureTenant(): (<T>(fn: () => Promise<T>) => Promise<T>) | undefined 
   if (!tdb) return undefined
   const slug = getTenantSlug() ?? ''
   const id = getTenantId() ?? ''
+  const host = getTenantHost()
   return <T>(fn: () => Promise<T>) =>
     new Promise<T>((resolve, reject) => {
-      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id)
+      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, host)
     })
 }
 

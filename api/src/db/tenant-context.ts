@@ -7,6 +7,9 @@ export interface TenantStore {
   db: Knex
   slug: string
   tenantId: string // immutable UUID — used as R2 prefix so slug changes never cause collisions
+  /** The host the tenant was resolved from (its subdomain or custom domain, cleaned by
+   *  cleanTenantHost) — what `tenantOrigin()` answers. Unset for work entered without one. */
+  host?: string
 }
 
 const store = new AsyncLocalStorage<TenantStore>()
@@ -34,9 +37,10 @@ export function runWithTenantDb(
   tenantDb: Knex,
   slug: string,
   done: () => void,
-  tenantId = ''
+  tenantId = '',
+  host?: string
 ): void {
-  store.run({ db: tenantDb, slug, tenantId }, done)
+  store.run({ db: tenantDb, slug, tenantId, ...(host ? { host } : {}) }, done)
 }
 
 /** Returns the tenant Knex instance for the current request, or undefined in self-hosted mode. */
@@ -52,6 +56,38 @@ export function getTenantSlug(): string | undefined {
 /** Returns the tenant UUID for the current request — used as R2 key prefix (immutable, slug-change-safe). */
 export function getTenantId(): string | undefined {
   return store.getStore()?.tenantId || store.getStore()?.slug // fallback to slug for backwards compat
+}
+
+/** The host the current tenant's request arrived on (cloud), or undefined. */
+export function getTenantHost(): string | undefined {
+  return store.getStore()?.host
+}
+
+/**
+ * A request's tenant host as the tenant middleware reads it (X-Tenant-Host, X-Forwarded-Host,
+ * Host — any of them may be a list): the first entry, lower case, a bare host name with an
+ * optional port. Anything else is null.
+ */
+export function cleanTenantHost(raw: string | string[] | undefined | null): string | null {
+  const v = (Array.isArray(raw) ? raw[0] : raw)?.split(',')[0]?.trim().toLowerCase()
+  if (!v || v.length > 255) return null
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/.test(v)
+    ? v
+    : null
+}
+
+/** A local development host: served over plain http. */
+const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9.-]+\.localhost)(:\d+)?$/
+
+/**
+ * The origin the current tenant is served on — its subdomain or custom domain — or null outside
+ * a tenant request. Tenants are served over https (a local `*.localhost` stack over http).
+ * Cloud code that names "this instance" uses this, never PUBLIC_URL (the shared process's own).
+ */
+export function tenantOrigin(): string | null {
+  const host = getTenantHost()
+  if (!host) return null
+  return `${LOCAL_HOST.test(host) ? 'http' : 'https'}://${host}`
 }
 
 /** Run `fn` outside any tenant context — work flushed from a timer an earlier

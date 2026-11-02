@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { routePush } from './channel-test-mode.js'
 import {
   EXPO_PREFIX,
@@ -251,7 +252,13 @@ export async function instanceName(): Promise<string> {
   }
 }
 
+/**
+ * The address this instance is reached on, for the relay's `instance` field and its registration.
+ * Cloud: the current tenant's origin (its host or custom domain) — never PUBLIC_URL, the shared
+ * process's own address; '' when the work has no tenant host (nothing better to name).
+ */
 export async function instanceOrigin(): Promise<string> {
+  if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? ''
   try {
     const { adminBaseUrl } = await import('../admin-base.js')
     return adminBaseUrl() ?? ''

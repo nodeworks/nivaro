@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import knex, { type Knex } from 'knex'
-import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
+import { cleanTenantHost, getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 
 // Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).
@@ -957,7 +957,13 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
       // The Traffic Map records a finished request into its tenant's store (#1132); onResponse
       // can run outside this AsyncLocalStorage context, so the tenant rides on the request.
       ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = result.tenantId || result.slug
-      runWithTenantDb(result.db, result.slug, done, result.tenantId)
+      runWithTenantDb(
+        result.db,
+        result.slug,
+        done,
+        result.tenantId,
+        cleanTenantHost(hostname) ?? undefined
+      )
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
 }

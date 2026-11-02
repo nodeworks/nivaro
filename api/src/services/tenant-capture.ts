@@ -1,4 +1,10 @@
-import { getTenantDb, getTenantId, getTenantSlug, runWithTenantDb } from '../db/tenant-context.js'
+import {
+  getTenantDb,
+  getTenantHost,
+  getTenantId,
+  getTenantSlug,
+  runWithTenantDb
+} from '../db/tenant-context.js'
 
 /**
  * Capture the current tenant context (cloud) so later work — a stream's heartbeat timer, a
@@ -10,8 +16,9 @@ export function captureTenant(): <T>(fn: () => Promise<T>) => Promise<T> {
   if (!tdb) return <T>(fn: () => Promise<T>) => fn()
   const slug = getTenantSlug() ?? ''
   const id = getTenantId() ?? ''
+  const host = getTenantHost()
   return <T>(fn: () => Promise<T>) =>
     new Promise<T>((resolve, reject) => {
-      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id)
+      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, host)
     })
 }
