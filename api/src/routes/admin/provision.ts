@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import knex from 'knex'
 import { migrationSource } from '../../db/index.js'
+import { cleanRelayUrl, RELAY_KEY_MASK, storeTenantRelay } from '../../services/push-relay.js'
 
 /**
  * The control plane's shared secret, compared in constant time (security audit Low: a plain
@@ -178,6 +179,48 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     } catch (err: any) {
       app.log.error({ err, slug }, 'Tenant provisioning failed')
       return reply.code(500).send({ error: err.message })
+    } finally {
+      await db.destroy()
+    }
+  })
+
+  // Store a tenant's push relay key + url (the official phone app's alerts) in its own
+  // nivaro_settings_overrides row (`mobile_push`). The tenant then sends with exactly this key —
+  // cloud mode never reads MOBILE_PUSH_RELAY_KEY — and this url beats MOBILE_PUSH_RELAY_URL.
+  // The key is never echoed or logged.
+  app.post('/admin/push-relay', async (req, reply) => {
+    if (!provisionSecretMatches(req.headers['x-provision-secret'])) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+
+    const { connectionString, dbClient, slug, relay_key, relay_url } = (req.body ?? {}) as {
+      connectionString?: string
+      dbClient?: 'pg' | 'mssql' | 'mysql2'
+      slug?: string
+      relay_key?: unknown
+      relay_url?: unknown
+    }
+
+    if (!connectionString || !dbClient) {
+      return reply.code(400).send({ error: 'connectionString and dbClient required' })
+    }
+    const key = typeof relay_key === 'string' ? relay_key.trim() : ''
+    if (!key || key.length > 500 || key === RELAY_KEY_MASK) {
+      return reply.code(400).send({ error: 'relay_key required' })
+    }
+    const url = cleanRelayUrl(relay_url)
+    if (!url) return reply.code(400).send({ error: 'relay_url must be an https URL' })
+
+    const db = knex({ client: dbClient, connection: connectionString, pool: { min: 0, max: 1 } })
+    try {
+      await storeTenantRelay(db, { relay_key: key, relay_url: url })
+      app.log.info({ slug, relay_url: url }, 'Push relay stored for tenant')
+      return { ok: true, relay_url: url }
+    } catch (err) {
+      // The error's name/code only: a driver message may quote the statement's values.
+      const e = err as { name?: string; code?: string }
+      app.log.error({ slug, err: { name: e?.name, code: e?.code } }, 'push-relay store failed')
+      return reply.code(500).send({ error: 'Could not store the push relay settings' })
     } finally {
       await db.destroy()
     }

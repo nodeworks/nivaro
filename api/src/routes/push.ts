@@ -20,6 +20,7 @@ import {
 import {
   clearRelayKey,
   connectPushRelay,
+  envRelayKey,
   PHONE_ENDPOINT_SQL,
   pushRelayConfig,
   RELAY_KEY_MASK,
@@ -341,10 +342,7 @@ export async function pushRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
     }
-    if (
-      (connect || typeof relay_key === 'string' || disconnect) &&
-      process.env.MOBILE_PUSH_RELAY_KEY?.trim()
-    ) {
+    if ((connect || typeof relay_key === 'string' || disconnect) && envRelayKey()) {
       return reply.code(409).send({
         error: 'The relay key comes from the environment (MOBILE_PUSH_RELAY_KEY) here.',
         code: 'RELAY_KEY_FROM_ENV'

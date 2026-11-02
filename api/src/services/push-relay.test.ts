@@ -31,12 +31,15 @@ vi.mock('../db/index.js', () => ({
 vi.mock('../lib/ssrf.js', () => ({ safeFetch: h.safeFetch }))
 
 import {
+  cleanRelayUrl,
   connectPushRelay,
+  envRelayKey,
   isPhoneEndpoint,
   pushRelayConfig,
   RELAY_KEY_MASK,
   relaySend,
   setRelayKey,
+  storeTenantRelay,
   wherePhoneEndpoint
 } from './push-relay.js'
 
@@ -47,6 +50,7 @@ beforeEach(() => {
   h.safeFetch.mockReset()
   delete process.env.MOBILE_PUSH_RELAY_URL
   delete process.env.MOBILE_PUSH_RELAY_KEY
+  delete process.env.CLOUD_META_DB_URL
 })
 afterEach(() => vi.restoreAllMocks())
 
@@ -80,6 +84,62 @@ describe('pushRelayConfig', () => {
     process.env.MOBILE_PUSH_RELAY_KEY = 'envkey'
     process.env.MOBILE_PUSH_RELAY_URL = 'https://relay.example/'
     expect(await pushRelayConfig()).toMatchObject({ key: 'envkey', url: 'https://relay.example' })
+  })
+
+  it('a stored relay_url (cloud provisioning) beats the env url', async () => {
+    h.overrides = JSON.stringify({
+      mobile_push: { relay_key: 'stored', relay_url: 'https://relay.cloud.example/' }
+    })
+    process.env.MOBILE_PUSH_RELAY_URL = 'https://relay.env.example'
+    expect(await pushRelayConfig()).toMatchObject({ url: 'https://relay.cloud.example' })
+  })
+
+  it('a stored relay_url that is not https is ignored', async () => {
+    h.overrides = JSON.stringify({ mobile_push: { relay_url: 'http://relay.example' } })
+    expect((await pushRelayConfig()).url).toBe('https://push.nivaro.dev')
+  })
+
+  it('cloud mode never uses the env key: only the stored one', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    process.env.MOBILE_PUSH_RELAY_KEY = 'envkey'
+    expect((await pushRelayConfig()).key).toBeNull()
+    expect(envRelayKey()).toBeNull()
+    h.overrides = JSON.stringify({ mobile_push: { relay_key: 'tenant-key' } })
+    expect((await pushRelayConfig()).key).toBe('tenant-key')
+  })
+
+  it('storeTenantRelay writes key + url into that database, keeping other keys', async () => {
+    const writes: Array<{ op: string; v: Record<string, unknown> }> = []
+    const conn = ((table: string) => {
+      const b: Record<string, unknown> = {
+        where: () => b,
+        first: async () =>
+          table === 'nivaro_settings_overrides'
+            ? { id: 4, data: JSON.stringify({ chaos: { a: 1 }, mobile_push: { content: 'minimal' } }) }
+            : undefined,
+        update: async (v: Record<string, unknown>) => writes.push({ op: 'update', v }),
+        insert: async (v: Record<string, unknown>) => writes.push({ op: 'insert', v })
+      }
+      return b
+    }) as never
+    await storeTenantRelay(conn, { relay_key: 'k1', relay_url: 'https://relay.cloud.example' })
+    expect(writes).toHaveLength(1)
+    expect(JSON.parse(String(writes[0].v.data))).toEqual({
+      chaos: { a: 1 },
+      mobile_push: {
+        content: 'minimal',
+        relay_key: 'k1',
+        relay_url: 'https://relay.cloud.example'
+      }
+    })
+    // Nothing went to the process's own database.
+    expect(h.updates).toEqual([])
+  })
+
+  it('cleanRelayUrl takes https origins (with a path) only', () => {
+    expect(cleanRelayUrl('https://relay.example/x/')).toBe('https://relay.example/x')
+    for (const bad of ['http://relay.example', 'ftp://x', 'https://u:p@relay.example', 'nope', 7])
+      expect(cleanRelayUrl(bad)).toBeNull()
   })
 
   it('a masked key re-sent from a form leaves the stored key alone', async () => {

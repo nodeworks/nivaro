@@ -12,9 +12,13 @@ import { instanceKey } from './instance-key.js'
  * Phone rows in `nivaro_push_subscriptions`: `expo:<token>` (direct, own Expo app) or
  * `relay:<device id>` (relay). `wherePhoneEndpoint` / `isPhoneEndpoint` match both.
  *
- *   MOBILE_PUSH_RELAY_URL=   default https://push.nivaro.dev
- *   MOBILE_PUSH_RELAY_KEY=   the instance key (`_FILE` works); beats the stored one
- *   nivaro_settings_overrides key `mobile_push` {relay_key, content: 'full'|'minimal'}
+ *   MOBILE_PUSH_RELAY_URL=   default https://push.nivaro.dev; a stored `relay_url` beats it
+ *   MOBILE_PUSH_RELAY_KEY=   the instance key (`_FILE` works); beats the stored one. NEVER read in
+ *                            cloud mode: a tenant sends only with the key cloud stored for it
+ *   nivaro_settings_overrides key `mobile_push` {relay_key, relay_url?, content: 'full'|'minimal'}
+ *
+ * Cloud provisioning stores a tenant's key + url with POST /admin/push-relay (routes/admin/
+ * provision.ts → `storeTenantRelay`). The key is never echoed, logged or put in a config snapshot.
  */
 
 export const EXPO_PREFIX = 'expo:'
@@ -62,18 +66,47 @@ async function storedConfig(): Promise<Record<string, unknown>> {
   }
 }
 
+const cloudMode = () => !!process.env.CLOUD_META_DB_URL
+
+/** The env relay key, or null. Never in cloud mode: one process serves many tenants, and each
+ *  sends only with the key cloud provisioning stored for it. */
+export function envRelayKey(): string | null {
+  if (cloudMode()) return null
+  return process.env.MOBILE_PUSH_RELAY_KEY?.trim() || null
+}
+
+/** A relay URL we may send the key to: https, no credentials, ≤ 500 characters (trailing `/`
+ *  dropped), else null. */
+export function cleanRelayUrl(v: unknown): string | null {
+  if (typeof v !== 'string' || !v.trim() || v.length > 500) return null
+  try {
+    const u = new URL(v.trim())
+    if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null
+    return `${u.origin}${u.pathname}`.replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
 export async function pushRelayConfig(): Promise<PushRelayConfig> {
   const stored = await storedConfig()
-  const url = (process.env.MOBILE_PUSH_RELAY_URL || DEFAULT_RELAY_URL).replace(/\/+$/, '')
-  const envKey = process.env.MOBILE_PUSH_RELAY_KEY?.trim()
-  const key = envKey || (typeof stored.relay_key === 'string' && stored.relay_key) || null
+  const url = (
+    cleanRelayUrl(stored.relay_url) ||
+    process.env.MOBILE_PUSH_RELAY_URL ||
+    DEFAULT_RELAY_URL
+  ).replace(/\/+$/, '')
+  const key =
+    envRelayKey() || (typeof stored.relay_key === 'string' && stored.relay_key) || null
   return { url, key, content: stored.content === 'minimal' ? 'minimal' : 'full' }
 }
 
-/** Merge a patch into the `mobile_push` key, keeping the rest of the instance's override row. */
-async function saveStored(patch: Record<string, unknown>): Promise<void> {
+/**
+ * Merge a patch into the `mobile_push` key, keeping the rest of the instance's override row.
+ * `conn` = the database to write (default: this request's); provisioning passes a tenant's.
+ */
+async function saveStored(patch: Record<string, unknown>, conn: Knex = db): Promise<void> {
   const k = instanceKey()
-  const row = (await db('nivaro_settings_overrides')
+  const row = (await conn('nivaro_settings_overrides')
     .where({ instance_key: k })
     .first('id', 'data')) as { id: number; data?: string | null } | undefined
   let data: Record<string, unknown> = {}
@@ -85,11 +118,11 @@ async function saveStored(patch: Record<string, unknown>): Promise<void> {
   const prev = (data.mobile_push as Record<string, unknown> | undefined) ?? {}
   data.mobile_push = { ...prev, ...patch }
   if (row) {
-    await db('nivaro_settings_overrides')
+    await conn('nivaro_settings_overrides')
       .where({ instance_key: k })
       .update({ data: JSON.stringify(data), updated_at: new Date() })
   } else {
-    await db('nivaro_settings_overrides').insert({
+    await conn('nivaro_settings_overrides').insert({
       instance_key: k,
       data: JSON.stringify(data),
       updated_at: new Date()
@@ -110,6 +143,17 @@ export async function clearRelayKey(): Promise<void> {
 export async function setRelayKey(key: string): Promise<void> {
   if (!key || key === RELAY_KEY_MASK) return
   await saveStored({ relay_key: key })
+}
+
+/**
+ * Cloud provisioning (POST /admin/push-relay): store a tenant's relay key and url in THAT tenant's
+ * database. The caller validates both; the key is never returned or logged.
+ */
+export async function storeTenantRelay(
+  conn: Knex,
+  cfg: { relay_key: string; relay_url: string }
+): Promise<void> {
+  await saveStored({ relay_key: cfg.relay_key, relay_url: cfg.relay_url }, conn)
 }
 
 /** Register this instance with the relay and store the key it answers (shown once). */

@@ -30,6 +30,7 @@ const TENANT_FREE_PATHS = [
   '/admin/migrate',
   '/admin/migration-status',
   '/admin/configure-storage',
+  '/admin/push-relay',
   '/admin/traffic-tenants'
 ]
 

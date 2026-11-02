@@ -85,7 +85,7 @@ function graphqlColumns(req: { __nvrGql?: GraphQLStampLike }): Partial<ApiLogRow
  * fields that merely contain "key" (item_key, sort_key) must survive.
  */
 const LOGGED_BODY_SECRET_KEY =
-  /password|passwd|passphrase|^pass$|secret|token|api[_-]?key|private[_-]?key|authorization|cookie|credential/i
+  /password|passwd|passphrase|^pass$|secret|token|api[_-]?key|private[_-]?key|relay[_-]?key|authorization|cookie|credential/i
 
 /** A JSON request body with every credential-named value (any depth) replaced by `••••••`;
  *  anything that is not JSON — or JSON already cut off — goes through the shared masker. */
