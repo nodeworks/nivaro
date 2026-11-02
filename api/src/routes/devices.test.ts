@@ -511,6 +511,42 @@ describe('signing a person out on every phone', () => {
     expect(deleted).toContain(7)
     expect(deleted).not.toContain(8)
   })
+
+  it('a row stamped after the sweep by a session that was revoked since goes', async () => {
+    const { notePhoneRegistered, retryLeftoverPushRows } = await import(
+      '../services/device-grants.js'
+    )
+    state.pushRows = [11]
+    // The session still has its row, but `sess:revoked:` is set: it is signed out.
+    redis.kv.set('sess:sR', JSON.stringify({ userId: PAT }))
+    redis.kv.set('sess:revoked:sR', '1')
+    const at = Date.now()
+    const t = vi.spyOn(Date, 'now').mockReturnValue(at + 5000)
+    await notePhoneRegistered(redis as never, 11, 'sid:sR')
+    t.mockRestore()
+    await redis.sadd('nvr:device-push-leftover:', JSON.stringify({ u: PAT, at }))
+    await retryLeftoverPushRows(redis as never)
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(11)
+  })
+
+  it('a kept credential keeps its row only while it is still signed in', async () => {
+    const { notePhoneRegistered, retryLeftoverPushRows } = await import(
+      '../services/device-grants.js'
+    )
+    state.pushRows = [12, 13]
+    redis.kv.set('sess:sLive', JSON.stringify({ userId: PAT }))
+    await notePhoneRegistered(redis as never, 12, 'sid:sLive')
+    await notePhoneRegistered(redis as never, 13, 'sid:sGone') // no session any more
+    const at = Date.now() + 5000
+    await redis.sadd(
+      'nvr:device-push-leftover:',
+      JSON.stringify({ u: PAT, at, keep: ['sid:sLive', 'sid:sGone'] })
+    )
+    await retryLeftoverPushRows(redis as never)
+    const deleted = pushDeletes().flatMap((d) => d.bindings)
+    expect(deleted).toContain(13)
+    expect(deleted).not.toContain(12)
+  })
 })
 
 describe('the app signing out (POST /oauth/revoke)', () => {

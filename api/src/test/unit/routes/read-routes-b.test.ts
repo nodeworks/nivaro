@@ -29,7 +29,13 @@ const m = vi.hoisted(() => ({
   credLive: true,
   stamps: [] as Array<[number, string | null]>,
   /** The caller signed in with a session (authMethod 'session', this session id). */
-  sid: null as string | null
+  sid: null as string | null,
+  /** Redis failing under the credential re-check / the grant's push-id note. */
+  credThrows: false,
+  grantThrows: false,
+  /** The database refusing a DELETE; and what was kept in Redis for a retry. */
+  delFails: false,
+  leftovers: [] as Array<[string, string]>
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
@@ -50,11 +56,15 @@ vi.mock('../../../services/device-grants.js', async (orig) => ({
   notePhoneRegistered: vi.fn(async (_r: unknown, row: number, by: string | null) => {
     m.stamps.push([row, by])
   }),
-  credentialLive: vi.fn(async () => m.credLive)
+  credentialLive: vi.fn(async () => {
+    if (m.credThrows) throw new Error('redis down')
+    return m.credLive
+  })
 }))
 vi.mock('../../../services/oauth-store.js', async (orig) => ({
   ...(await orig<object>()),
   addGrantPushId: vi.fn(async (_r: unknown, grant: string, id: number) => {
+    if (m.grantThrows) throw new Error('redis down')
     m.pushIds.push([grant, id])
     return m.grantLive
   })
@@ -128,6 +138,7 @@ vi.mock('../../../db/index.js', () => {
         return [1]
       },
       del: async () => {
+        if (m.delFails) throw new Error('database refused')
         const rows = hits()
         m.deletes.push({ table, rows })
         return rows.length
@@ -151,6 +162,14 @@ const { pickerExclusionRoutes, BATCH_STATUS_MAX } = await import(
 
 async function build() {
   const app = Fastify()
+  app.decorate('redis', {
+    sadd: async (k: string, v: string) => {
+      m.leftovers.push([k, v])
+      return 1
+    },
+    smembers: async () => [],
+    srem: async () => 0
+  } as never)
   await app.register(pagesRoutes, { prefix: '/pages' })
   await app.register(semanticSearchRoutes, { prefix: '/search' })
   await app.register(virtualCollectionsRoutes, { prefix: '/virtual-collections' })
@@ -180,6 +199,10 @@ beforeEach(() => {
   m.credLive = true
   m.stamps = []
   m.sid = null
+  m.credThrows = false
+  m.grantThrows = false
+  m.delFails = false
+  m.leftovers = []
 })
 
 const page = (widgets: unknown[]) => ({
@@ -429,6 +452,38 @@ describe('phone push', () => {
     expect(r.statusCode).toBe(401)
     expect(r.json().code).toBe('SESSION_EXPIRED')
     expect(m.deletes[0]?.rows.map((x) => x.id)).toEqual([70])
+  })
+  it('the credential re-check failing (Redis) fails closed: 503 PUSH_RETRY, row deleted', async () => {
+    m.storeInserts = true
+    m.sid = 'web-sid'
+    m.credThrows = true
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(r.statusCode).toBe(503)
+    expect(r.json().code).toBe('PUSH_RETRY')
+    expect(m.deletes[0]?.rows.map((x) => x.id)).toEqual([70])
+  })
+  it('the sign-in’s push note failing (Redis) fails closed too', async () => {
+    m.storeInserts = true
+    m.deviceGrant = '99999999-0000-4000-8000-000000000009'
+    m.grantThrows = true
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(r.statusCode).toBe(503)
+    expect(r.json().code).toBe('PUSH_RETRY')
+    expect(m.deletes[0]?.rows.map((x) => x.id)).toEqual([70])
+  })
+  it('a dead credential’s row the database will not delete is kept for a retry', async () => {
+    m.storeInserts = true
+    m.sid = 'web-sid'
+    m.credLive = false
+    m.delFails = true
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(r.statusCode).toBe(401)
+    expect(m.leftovers).toHaveLength(1)
+    expect(m.leftovers[0][0]).toMatch(/^nvr:device-push-leftover:/)
+    expect(JSON.parse(m.leftovers[0][1])).toMatchObject({ u: 'U1', ids: [70] })
   })
   it('a browser session registering a phone notes nothing', async () => {
     m.storeInserts = true

@@ -141,7 +141,8 @@ async function livePushIds(redis: Redis, userId: string): Promise<Set<number>> {
 
 /**
  * Delete the person's phone push rows as they stood at `l.at` — `l.ids`, or all of them. Kept:
- * a row a live sign-in of the person holds; a row registered by a credential in `l.keep`; a row
+ * a row a live sign-in of the person holds; a row registered by a credential in `l.keep` that is
+ * still signed in; a row
  * registered at or after `l.at` by a credential STILL signed in (the person signed in again on
  * that install since). A row whose credential is gone goes whatever its stamp says.
  */
@@ -159,7 +160,8 @@ async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
   const stale: number[] = []
   for (const [i, id] of ids.entries()) {
     const st = stamps[i]
-    if (st?.by && keep.has(st.by)) continue
+    // A kept credential keeps its row only while it is still signed in.
+    if (st?.by && keep.has(st.by) && (await credentialLive(redis, st.by))) continue
     if (st?.by && st.at >= l.at && (await credentialLive(redis, st.by))) continue
     stale.push(id)
   }
@@ -186,6 +188,20 @@ async function deleteOrKeep(redis: Redis, l: Leftover, req?: FastifyRequest): Pr
       // Redis too: logged above, nothing more to do
     }
   }
+}
+
+/**
+ * Delete these phone push rows of one person now — or, the database refusing, keep them for this
+ * tenant's next phone sign-out to delete (POST /push/phones taking back a row whose credential
+ * ended, or could not be checked, while it registered).
+ */
+export async function deletePushRowsOrKeep(
+  redis: Redis,
+  userId: string,
+  ids: number[],
+  req?: FastifyRequest
+): Promise<void> {
+  await deleteOrKeep(redis, { u: String(userId), ids, at: Date.now() }, req)
 }
 
 const isLeftover = (v: unknown): v is Leftover => {

@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   credentialLive,
+  deletePushRowsOrKeep,
   notePhoneRegistered,
   type PushCredential
 } from '../services/device-grants.js'
@@ -45,7 +46,9 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *  POST   /push/phones        — register this phone {token | relay_device, platform?, app?,
  *                               device_name?}; `relay_device` is the Nivaro app's id at the
  *                               push relay (`relay:<id>` row); answers a one-time
- *                               `forget_key` (only its hash is stored)
+ *                               `forget_key` (only its hash is stored); 401 SESSION_EXPIRED when
+ *                               the sign-in ended meanwhile, 503 PUSH_RETRY when it could not be
+ *                               checked (the row is taken back either way; the app retries)
  *  DELETE /push/phones        — remove one of the caller's phones {token}
  *  POST   /push/phones/forget — remove this phone {token, forget_key} WITHOUT a sign-in: the key
  *                               from its registration proves it is the phone that registered, so
@@ -258,24 +261,35 @@ export async function pushRoutes(app: FastifyInstance) {
         ? `sid:${sid}`
         : null
     if (rowId) {
-      // Registered from a signed-in phone: the row ends with that sign-in.
-      const noted = req.deviceGrantId
-        ? await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch((err) => {
-            req.log.warn({ err }, 'phone push: row not noted on its sign-in')
-            return true
-          })
-        : true
-      await notePhoneRegistered(app.redis, Number(rowId), by).catch((err) =>
-        req.log.warn({ err }, 'phone push: registration not stamped')
-      )
-      // Re-checked AFTER the stamp: a sign-out that ended this credential meanwhile may have
-      // swept before the row existed — the row goes with it, as the sweep would have taken it.
-      const live = noted && (by ? await credentialLive(app.redis, by).catch(() => true) : true)
-      if (!live) {
-        await db('nivaro_push_subscriptions').where({ id: rowId, user: req.user!.id }).del()
-        return reply
-          .code(401)
-          .send({ error: 'Your sign-in has ended. Sign in again.', code: 'SESSION_EXPIRED' })
+      const id = Number(rowId)
+      /** Take the row back (a refused delete is kept for a retry, services/device-grants.ts). */
+      const takeBack = () => deletePushRowsOrKeep(app.redis, req.user!.id, [id], req)
+      try {
+        // Registered from a signed-in phone: the row ends with that sign-in.
+        const noted = req.deviceGrantId
+          ? await addGrantPushId(app.redis, req.deviceGrantId, id)
+          : true
+        await notePhoneRegistered(app.redis, id, by).catch((err) =>
+          req.log.warn({ err }, 'phone push: registration not stamped')
+        )
+        // Re-checked AFTER the stamp: a sign-out that ended this credential meanwhile may have
+        // swept before the row existed — the row goes with it, as the sweep would have taken it.
+        const live = noted && (by ? await credentialLive(app.redis, by) : true)
+        if (!live) {
+          await takeBack()
+          return reply
+            .code(401)
+            .send({ error: 'Your sign-in has ended. Sign in again.', code: 'SESSION_EXPIRED' })
+        }
+      } catch (err) {
+        // The note or the re-check could not run (Redis): fail closed — a row nobody can tie to a
+        // live sign-in never stays. The app registers again.
+        req.log.warn({ err }, 'phone push: registration not confirmed, row taken back')
+        await takeBack()
+        return reply.code(503).send({
+          error: 'Phone alerts could not be set up just now. Try again.',
+          code: 'PUSH_RETRY'
+        })
       }
     }
     return reply.send({ data: { registered: true, forget_key: forgetKey } })
