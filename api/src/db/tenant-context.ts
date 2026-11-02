@@ -7,9 +7,10 @@ export interface TenantStore {
   db: Knex
   slug: string
   tenantId: string // immutable UUID — used as R2 prefix so slug changes never cause collisions
-  /** The host the tenant was resolved from (its subdomain or custom domain, cleaned by
-   *  cleanTenantHost) — what `tenantOrigin()` answers. Unset for work entered without one. */
-  host?: string
+  /** The tenant's VERIFIED origin (verifiedTenantOrigin): its own subdomain host or active
+   *  custom domain when the request came on one, else its canonical origin. What
+   *  `tenantOrigin()` answers; unset for work entered without a request (then: canonical). */
+  origin?: string
 }
 
 const store = new AsyncLocalStorage<TenantStore>()
@@ -38,9 +39,9 @@ export function runWithTenantDb(
   slug: string,
   done: () => void,
   tenantId = '',
-  host?: string
+  origin?: string
 ): void {
-  store.run({ db: tenantDb, slug, tenantId, ...(host ? { host } : {}) }, done)
+  store.run({ db: tenantDb, slug, tenantId, ...(origin ? { origin } : {}) }, done)
 }
 
 /** Returns the tenant Knex instance for the current request, or undefined in self-hosted mode. */
@@ -58,9 +59,9 @@ export function getTenantId(): string | undefined {
   return store.getStore()?.tenantId || store.getStore()?.slug // fallback to slug for backwards compat
 }
 
-/** The host the current tenant's request arrived on (cloud), or undefined. */
-export function getTenantHost(): string | undefined {
-  return store.getStore()?.host
+/** The verified origin the current tenant's request carries (cloud), or undefined. */
+export function getTenantOrigin(): string | undefined {
+  return store.getStore()?.origin
 }
 
 /**
@@ -79,15 +80,55 @@ export function cleanTenantHost(raw: string | string[] | undefined | null): stri
 /** A local development host: served over plain http. */
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|[a-z0-9.-]+\.localhost)(:\d+)?$/
 
+/** The domain tenant subdomains live under (`<subdomain>.<base>`): CLOUD_BASE_DOMAIN, default
+ *  nivaro.dev. */
+export function cloudBaseDomain(): string {
+  return (process.env.CLOUD_BASE_DOMAIN || 'nivaro.dev').trim().toLowerCase().replace(/^\.+/, '')
+}
+
+const originOf = (host: string) => `${LOCAL_HOST.test(host) ? 'http' : 'https'}://${host}`
+
+/** A tenant's canonical origin: `https://<subdomain>.<CLOUD_BASE_DOMAIN>`. */
+export function canonicalTenantOrigin(subdomain: string): string {
+  return originOf(`${subdomain.toLowerCase()}.${cloudBaseDomain()}`)
+}
+
 /**
- * The origin the current tenant is served on — its subdomain or custom domain — or null outside
- * a tenant request. Tenants are served over https (a local `*.localhost` stack over http).
- * Cloud code that names "this instance" uses this, never PUBLIC_URL (the shared process's own).
+ * The origin to name for a tenant a request resolved: the request host only when it is the
+ * tenant's own `<subdomain>.<base>` or its ACTIVE custom domain (meta row), else the canonical
+ * origin. A made-up host that happens to resolve to the tenant (`acme.attacker.example`) is
+ * never echoed.
+ */
+export function verifiedTenantOrigin(
+  rawHost: string | string[] | undefined | null,
+  row: {
+    slug: string
+    subdomain?: string | null
+    custom_domain?: string | null
+    custom_domain_status?: string | null
+  }
+): string {
+  const sub = String(row.subdomain || row.slug)
+  const canonical = canonicalTenantOrigin(sub)
+  const host = cleanTenantHost(rawHost)
+  if (!host) return canonical
+  if (host === `${sub.toLowerCase()}.${cloudBaseDomain()}`) return originOf(host)
+  const custom = cleanTenantHost(row.custom_domain)
+  if (custom && row.custom_domain_status === 'active' && host === custom) return originOf(host)
+  return canonical
+}
+
+/**
+ * The origin the current tenant is served on — its verified origin, else (work outside a
+ * request: crons, flows, timers) its canonical origin from the slug — or null outside any
+ * tenant. Cloud code that names "this instance" uses this, never PUBLIC_URL (the shared
+ * process's own).
  */
 export function tenantOrigin(): string | null {
-  const host = getTenantHost()
-  if (!host) return null
-  return `${LOCAL_HOST.test(host) ? 'http' : 'https'}://${host}`
+  const st = store.getStore()
+  if (!st) return null
+  if (st.origin) return st.origin
+  return st.slug ? canonicalTenantOrigin(st.slug) : null
 }
 
 /** Run `fn` outside any tenant context — work flushed from a timer an earlier

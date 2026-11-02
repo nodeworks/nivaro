@@ -1,7 +1,7 @@
 import {
   getTenantDb,
-  getTenantHost,
   getTenantId,
+  getTenantOrigin,
   getTenantSlug,
   runWithTenantDb
 } from '../db/tenant-context.js'
@@ -16,9 +16,9 @@ export function captureTenant(): <T>(fn: () => Promise<T>) => Promise<T> {
   if (!tdb) return <T>(fn: () => Promise<T>) => fn()
   const slug = getTenantSlug() ?? ''
   const id = getTenantId() ?? ''
-  const host = getTenantHost()
+  const origin = getTenantOrigin()
   return <T>(fn: () => Promise<T>) =>
     new Promise<T>((resolve, reject) => {
-      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, host)
+      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, origin)
     })
 }

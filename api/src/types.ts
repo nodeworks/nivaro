@@ -232,6 +232,6 @@ declare module 'fastify' {
     /** The request id (= its trace id), stamped by plugins/request-trace.ts on /api requests. */
     requestId?: string
     /** Cloud: set by the tenant hook when /api/app-info is let through a suspended or provisioning tenant. */
-    nvrTenantBlock?: { kind: 'suspended' | 'provisioning'; name: string }
+    nvrTenantBlock?: { kind: 'suspended' | 'provisioning'; name: string; origin?: string }
   }
 }

@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
 import { chaosAllowed } from './chaos/gate.js'
@@ -10,6 +11,9 @@ import { currentTenantKey } from './tenant-rooms.js'
 
 export interface AppInfo {
   name: string
+  /** Where this instance is reached: adminBaseUrl() self-hosted, the tenant's canonical (or
+   *  verified) origin in cloud. */
+  origin: string
   color: string | null
   logo_url: string | null
   version: string
@@ -98,8 +102,10 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // A blocked tenant has no database to read: the hook hands over its name.
   const brand = block ? { name: block.name, color: null, logo: null } : await readBranding()
   const base = adminBaseUrl() ?? ''
+  const origin = process.env.CLOUD_META_DB_URL ? (block?.origin ?? tenantOrigin() ?? '') : base
   return {
     name: brand.name ?? 'Nivaro',
+    origin,
     color: brand.color,
     logo_url: brand.logo ? `${base}/api/files/${brand.logo}` : null,
     version: NIVARO_VERSION,

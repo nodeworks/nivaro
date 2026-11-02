@@ -122,6 +122,20 @@ describe('buildAppInfo', () => {
     expect(info.push.mode).toBe('off')
   })
 
+  it('origin: the admin base url self-hosted; in cloud the tenant’s canonical origin', async () => {
+    expect((await buildAppInfo()).origin).toBe('https://x.test')
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    const { runWithTenantDb } = await import('../db/tenant-context.js')
+    const inCloud = await new Promise<string>((resolve) =>
+      runWithTenantDb({} as never, 'acme', () => void buildAppInfo().then((i) => resolve(i.origin)))
+    )
+    expect(inCloud).toBe('https://acme.nivaro.dev')
+    const blocked = await buildAppInfo({
+      block: { kind: 'suspended', name: 'Acme', origin: 'https://acme.nivaro.dev' }
+    })
+    expect(blocked.origin).toBe('https://acme.nivaro.dev')
+  })
+
   it('reports maintenance', async () => {
     state.maint = true
     expect((await buildAppInfo()).blocked).toBe('maintenance')
@@ -139,6 +153,7 @@ describe('buildAppInfo', () => {
         'logo_url',
         'min_app_version',
         'name',
+        'origin',
         'push',
         'sign_in',
         'version'

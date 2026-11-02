@@ -18,8 +18,8 @@ import {
 } from 'graphql'
 import {
   getTenantDb,
-  getTenantHost,
   getTenantId,
+  getTenantOrigin,
   getTenantSlug,
   runWithTenantDb
 } from '../db/tenant-context.js'
@@ -167,10 +167,10 @@ function captureTenant(): (<T>(fn: () => Promise<T>) => Promise<T>) | undefined 
   if (!tdb) return undefined
   const slug = getTenantSlug() ?? ''
   const id = getTenantId() ?? ''
-  const host = getTenantHost()
+  const origin = getTenantOrigin()
   return <T>(fn: () => Promise<T>) =>
     new Promise<T>((resolve, reject) => {
-      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, host)
+      runWithTenantDb(tdb, slug, () => void fn().then(resolve, reject), id, origin)
     })
 }
 

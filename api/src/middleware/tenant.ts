@@ -1,6 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import knex, { type Knex } from 'knex'
-import { cleanTenantHost, getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
+import {
+  getOrCreateTenantPool,
+  runWithTenantDb,
+  verifiedTenantOrigin
+} from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 
 // Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).
@@ -818,11 +822,31 @@ function escapeHtml(str: string): string {
 // Tenant resolution — discriminated union result
 // ---------------------------------------------------------------------------
 
+// `origin` = the tenant's verified origin for the host it was resolved from (verifiedTenantOrigin).
 type TenantResult =
   | { found: false }
-  | { found: true; suspended: true; row: { name: string; slug: string; status: string } }
-  | { found: true; suspended: false; provisioning: true; row: { name: string; slug: string } }
-  | { found: true; suspended: false; provisioning: false; db: Knex; slug: string; tenantId: string }
+  | {
+      found: true
+      suspended: true
+      origin: string
+      row: { name: string; slug: string; status: string }
+    }
+  | {
+      found: true
+      suspended: false
+      provisioning: true
+      origin: string
+      row: { name: string; slug: string }
+    }
+  | {
+      found: true
+      suspended: false
+      provisioning: false
+      db: Knex
+      slug: string
+      tenantId: string
+      origin: string
+    }
 
 /**
  * The ready tenant behind a hostname, or null (unknown, suspended or provisioning). Sockets use it:
@@ -830,10 +854,10 @@ type TenantResult =
  */
 export async function resolveReadyTenant(
   hostname: string
-): Promise<{ db: Knex; slug: string; tenantId: string } | null> {
+): Promise<{ db: Knex; slug: string; tenantId: string; origin: string } | null> {
   const r = await resolveTenant(hostname)
   if (!r.found || r.suspended || r.provisioning) return null
-  return { db: r.db, slug: r.slug, tenantId: r.tenantId }
+  return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
 /** Resolves the tenant from the request hostname.
@@ -843,18 +867,27 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
   const sub = hostname.split('.')[0]
   if (!sub || RESERVED.has(sub)) return { found: false }
 
+  // Every column: the custom-domain ones (meta migration 013) verify the origin, and a meta DB
+  // without them still resolves.
   const row = await getMetaDb()('cloud_tenants')
     .where({ subdomain: sub })
-    .first('id', 'slug', 'name', 'status', 'db_client', 'db_connection_string')
+    .first()
     .catch(() => null)
 
   if (!row) return { found: false }
+  const origin = verifiedTenantOrigin(hostname, {
+    slug: String(row.slug),
+    subdomain: row.subdomain ?? sub,
+    custom_domain: row.custom_domain ?? null,
+    custom_domain_status: row.custom_domain_status ?? null
+  })
 
   if (row.status === 'provisioning') {
     return {
       found: true,
       suspended: false,
       provisioning: true,
+      origin,
       row: { name: row.name as string, slug: row.slug as string }
     }
   }
@@ -863,6 +896,7 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
     return {
       found: true,
       suspended: true,
+      origin,
       row: { name: row.name as string, slug: row.slug as string, status: row.status as string }
     }
   }
@@ -873,7 +907,8 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
     provisioning: false,
     db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
     slug: row.slug as string,
-    tenantId: row.id as string
+    tenantId: row.id as string,
+    origin
   }
 }
 
@@ -917,7 +952,8 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
       if ((result.suspended || result.provisioning) && isAppInfoPath(req.url)) {
         req.nvrTenantBlock = {
           kind: result.suspended ? 'suspended' : 'provisioning',
-          name: result.row.name
+          name: result.row.name,
+          origin: result.origin
         }
         done()
         return
@@ -957,13 +993,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
       // The Traffic Map records a finished request into its tenant's store (#1132); onResponse
       // can run outside this AsyncLocalStorage context, so the tenant rides on the request.
       ;(req as unknown as { nvrTenantId?: string }).nvrTenantId = result.tenantId || result.slug
-      runWithTenantDb(
-        result.db,
-        result.slug,
-        done,
-        result.tenantId,
-        cleanTenantHost(hostname) ?? undefined
-      )
+      runWithTenantDb(result.db, result.slug, done, result.tenantId, result.origin)
     })
     .catch((err: unknown) => done(err instanceof Error ? err : new Error(String(err))))
 }

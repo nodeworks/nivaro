@@ -12,7 +12,8 @@ vi.mock('knex', () => ({
     where: () => ({ first: () => ({ catch: async () => state.row }) })
   })
 }))
-vi.mock('../db/tenant-context.js', () => ({
+vi.mock('../db/tenant-context.js', async (orig) => ({
+  ...(await orig<object>()),
   getOrCreateTenantPool: () => ({}),
   runWithTenantDb: (_db: unknown, _slug: string, done: () => void) => done()
 }))
@@ -62,7 +63,11 @@ describe('tenantHook + /api/app-info on a blocked tenant', () => {
       })
       expect(res.statusCode).toBe(200)
       expect(res.headers['cache-control']).toBe('public, max-age=60')
-      expect(res.json()).toMatchObject({ name: 'Acme Co', blocked })
+      expect(res.json()).toMatchObject({
+        name: 'Acme Co',
+        blocked,
+        origin: 'https://acme.nivaro.dev'
+      })
       expect(state.dbReads).toBe(0)
     })
 

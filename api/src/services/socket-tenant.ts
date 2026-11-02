@@ -6,7 +6,7 @@
  * handshake host (the same headers the hook reads) and run a handler inside that tenant's
  * AsyncLocalStorage context. Self-hosted: a straight pass-through.
  */
-import { getTenantId, runWithTenantDb } from '../db/tenant-context.js'
+import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
@@ -17,6 +17,8 @@ interface ReadyTenant {
   db: import('knex').Knex
   slug: string
   tenantId: string
+  /** Verified origin (db/tenant-context.ts verifiedTenantOrigin); absent from older resolvers. */
+  origin?: string
 }
 
 function inCloud(): boolean {
@@ -34,8 +36,7 @@ export function socketTenantHost(socket: SocketLike): string | null {
     headerOf(socket, 'x-tenant-host') ??
     headerOf(socket, 'x-forwarded-host') ??
     headerOf(socket, 'host')
-  if (!raw) return null
-  return raw.split(',')[0].trim().replace(/:\d+$/, '') || null
+  return cleanTenantHost(raw)?.replace(/:\d+$/, '') || null
 }
 
 /** The socket's ready tenant (resolved once, cached on socket.data), or null. */
@@ -85,7 +86,7 @@ export function inSocketTenant<A extends unknown[]>(
             .finally(resolve)
         },
         t.tenantId,
-        socketTenantHost(socket) ?? undefined
+        t.origin
       )
     })
   }
