@@ -21,6 +21,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Background Jobs** — scheduled jobs, backfills and remediations run in-process, recorded with outcome and history; one process fires scheduled jobs (Redis lease) so replicas never double-run them
 - **AI Features** — field generation and record summarization via Claude, fill a new record from a document (SOW, quote, spreadsheet → fields, lines, schedule, reviewed before save)
 - **AI Assistants (MCP)** — ChatGPT, Claude (claude.ai, Desktop, Code), Codex and Cursor work with your data through a hosted MCP endpoint (`/api/mcp`, sign-in via OAuth or an API key) or the `@nivaro/mcp` npm server; the assistant acts as you, under your permissions
+- **Mobile app support** — the Nivaro phone app signs in through the OAuth server (device tokens, per-phone sign-out, `/api/app-info`) and gets push alerts through the Nivaro push relay; Settings → Mobile app has the QR code and Connect push
 - **Dashboards & KPI Builder** — drag-and-drop widget grid
 - **Audit Log & Revisions** — full snapshot + delta per mutation
 - **Bulk Actions** — delete, field update, workflow transition across selections
