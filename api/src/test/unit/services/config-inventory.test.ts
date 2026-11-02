@@ -8,7 +8,8 @@ import {
   hashRow,
   RUNTIME_TABLES,
   redactRow,
-  restoreInstanceOverrides
+  restoreInstanceOverrides,
+  restoreRedactedValue
 } from '../../../services/config-inventory.js'
 
 function snapshot(
@@ -300,5 +301,45 @@ describe('diffSnapshots', () => {
     expect(diff.mine.database).toBe('A')
     expect(diff.theirs.database).toBe('B')
     expect(diff.theirs.label).toBe('staging')
+  })
+})
+
+describe('nivaro_settings_overrides.data keeps the push relay key out of snapshots', () => {
+  const live = JSON.stringify({
+    smtp_host: 'live.example',
+    mobile_push: { relay_key: 'LIVE-KEY', content: 'full' }
+  })
+
+  it('redact drops mobile_push.relay_key and keeps the rest', () => {
+    const row = redactRow('nivaro_settings_overrides', { instance_key: 'p', data: live })
+    expect(JSON.parse(String(row.data))).toEqual({
+      smtp_host: 'live.example',
+      mobile_push: { content: 'full' }
+    })
+    expect(JSON.stringify(row)).not.toContain('LIVE-KEY')
+    expect(redactRow('nivaro_settings_overrides', { data: 'not json' })).toEqual({ data: null })
+  })
+
+  it('restore takes the key from the live row, never the snapshot', () => {
+    const snap = JSON.stringify({
+      smtp_host: 'other.example',
+      mobile_push: { relay_key: 'FROM-FILE', content: 'minimal' }
+    })
+    const out = JSON.parse(
+      String(restoreRedactedValue('nivaro_settings_overrides', 'data', snap, live))
+    )
+    expect(out).toEqual({
+      smtp_host: 'other.example',
+      mobile_push: { content: 'minimal', relay_key: 'LIVE-KEY' }
+    })
+    // No live key: none appears. Snapshot without mobile_push, live with a key: key survives.
+    const none = JSON.parse(
+      String(restoreRedactedValue('nivaro_settings_overrides', 'data', snap, '{}'))
+    )
+    expect(none.mobile_push).toEqual({ content: 'minimal' })
+    const bare = JSON.parse(
+      String(restoreRedactedValue('nivaro_settings_overrides', 'data', '{"a":1}', live))
+    )
+    expect(bare).toEqual({ a: 1, mobile_push: { relay_key: 'LIVE-KEY' } })
   })
 })

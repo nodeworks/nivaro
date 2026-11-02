@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { routePush } from './channel-test-mode.js'
 import { PHONE_PREFIX, type PhonePushPayload, sendPhonePush } from './phone-push.js'
+import { RELAY_PREFIX } from './push-relay.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -113,10 +114,11 @@ export async function sendWebPush(userId: string, payload: PushPayload): Promise
         stop_token: undefined
       }
     }
-    // Phones share the table (services/phone-push.ts) and go out through Expo.
+    // Phones share the table (services/phone-push.ts) and go out through Expo or the push relay.
     const subs = (await db('nivaro_push_subscriptions')
       .where({ user: userId })
-      .where('endpoint', 'not like', `${PHONE_PREFIX}%`)) as Array<{
+      .where('endpoint', 'not like', `${PHONE_PREFIX}%`)
+      .where('endpoint', 'not like', `${RELAY_PREFIX}%`)) as Array<{
       id: number
       endpoint: string
       keys_p256dh: string

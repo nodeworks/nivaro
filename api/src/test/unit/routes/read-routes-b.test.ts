@@ -290,6 +290,54 @@ describe('phone push', () => {
     expect(r.statusCode).toBe(400)
     expect(m.inserts).toEqual([])
   })
+  it('refuses a malformed relay_device and stores a valid one as relay:<id>', async () => {
+    const app = await build()
+    for (const bad of ['short', 'has space has space', 'x'.repeat(65), 42]) {
+      const r = await app.inject({
+        method: 'POST',
+        url: '/push/phones',
+        payload: { relay_device: bad }
+      })
+      expect(r.statusCode).toBe(400)
+    }
+    expect(m.inserts).toEqual([])
+    const id = 'AbCd-efGh_12345678'
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/push/phones',
+      payload: { relay_device: id, platform: 'ios' }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(m.inserts[0]?.row).toMatchObject({
+      endpoint: `relay:${id}`,
+      endpoint_hash: `h:relay:${id}`
+    })
+  })
+  it('relay admin route: bad content and env-held key answer coded errors', async () => {
+    const app = await build()
+    const bad = await app.inject({ method: 'POST', url: '/push/relay', payload: { content: 'x' } })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json().code).toBe('RELAY_CONTENT_INVALID')
+    process.env.MOBILE_PUSH_RELAY_KEY = 'envkey'
+    try {
+      for (const payload of [{ connect: true }, { disconnect: true }]) {
+        const r = await app.inject({ method: 'POST', url: '/push/relay', payload })
+        expect(r.statusCode).toBe(409)
+        expect(r.json().code).toBe('RELAY_KEY_FROM_ENV')
+      }
+    } finally {
+      delete process.env.MOBILE_PUSH_RELAY_KEY
+    }
+  })
+  it('malformed relay_device carries a code', async () => {
+    const app = await build()
+    const r = await app.inject({
+      method: 'POST',
+      url: '/push/phones',
+      payload: { relay_device: 'x' }
+    })
+    expect(r.json().code).toBe('RELAY_DEVICE_INVALID')
+  })
   it("sign-out (DELETE) removes only the caller's own phone", async () => {
     m.tables.nivaro_push_subscriptions = [row('SOMEONE-ELSE')]
     const app = await build()

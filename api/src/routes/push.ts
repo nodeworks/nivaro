@@ -1,8 +1,28 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAuth } from '../middleware/authenticate.js'
-import { isExpoPushToken, PHONE_PREFIX, sendPhonePush } from '../services/phone-push.js'
+import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
+import {
+  instanceName,
+  instanceOrigin,
+  isExpoPushToken,
+  PHONE_PREFIX,
+  phonePushMode,
+  sendPhonePush
+} from '../services/phone-push.js'
+import {
+  clearRelayKey,
+  connectPushRelay,
+  PHONE_ENDPOINT_SQL,
+  pushRelayConfig,
+  RELAY_KEY_MASK,
+  RELAY_PREFIX,
+  RelayError,
+  setRelayContent,
+  setRelayKey,
+  wherePhoneEndpoint
+} from '../services/push-relay.js'
 import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js'
 
 /**
@@ -15,15 +35,36 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *
  * Phones (Expo apps; stored as `expo:<token>` rows, services/phone-push.ts):
  *  GET    /push/phones        — the current user's phones
- *  POST   /push/phones        — register this phone {token, platform?, app?, device_name?};
- *                               answers a one-time `forget_key` (only its hash is stored)
+ *  POST   /push/phones        — register this phone {token | relay_device, platform?, app?,
+ *                               device_name?}; `relay_device` is the Nivaro app's id at the
+ *                               push relay (`relay:<id>` row); answers a one-time
+ *                               `forget_key` (only its hash is stored)
  *  DELETE /push/phones        — remove one of the caller's phones {token}
  *  POST   /push/phones/forget — remove this phone {token, forget_key} WITHOUT a sign-in: the key
  *                               from its registration proves it is the phone that registered, so
  *                               a sign-out that lost its session (expired token, offline) can
  *                               still stop the alerts later; the token alone is not enough
  *  POST   /push/phones/test   — send a test alert to the current user's phones
+ *  GET    /push/relay         — (admin) push relay status {connected, url, content, mode}
+ *  POST   /push/relay         — (admin) {connect: true} registers this instance with the relay;
+ *                               {relay_key?} stores a key by hand; {content?: 'full'|'minimal'}
  */
+
+const PHONE_ID_ERROR = 'token must be an Expo push token, or relay_device a valid device id'
+const PHONE_ID_CODE = 'RELAY_DEVICE_INVALID'
+const RELAY_DEVICE = /^[A-Za-z0-9_-]{16,64}$/
+
+/** The subscription endpoint a phone request names: an Expo token or a relay device id. */
+function phoneEndpoint(
+  body: { token?: unknown; relay_device?: unknown } | undefined
+): string | null {
+  if (body?.relay_device !== undefined) {
+    return typeof body.relay_device === 'string' && RELAY_DEVICE.test(body.relay_device)
+      ? `${RELAY_PREFIX}${body.relay_device}`
+      : null
+  }
+  return isExpoPushToken(body?.token) ? `${PHONE_PREFIX}${body?.token}` : null
+}
 
 interface SubscriptionBody {
   endpoint?: string
@@ -98,9 +139,9 @@ export async function pushRoutes(app: FastifyInstance) {
   app.get('/status', { preHandler: requireAuth }, async (req, reply) => {
     const rows = (await db('nivaro_push_subscriptions')
       .where({ user: req.user!.id })
-      .select(db.raw(`CASE WHEN endpoint LIKE '${PHONE_PREFIX}%' THEN 1 ELSE 0 END as phone`))
+      .select(db.raw(`CASE WHEN ${PHONE_ENDPOINT_SQL} THEN 1 ELSE 0 END as phone`))
       .count({ c: '*' })
-      .groupBy(db.raw(`CASE WHEN endpoint LIKE '${PHONE_PREFIX}%' THEN 1 ELSE 0 END`))) as Array<{
+      .groupBy(db.raw(`CASE WHEN ${PHONE_ENDPOINT_SQL} THEN 1 ELSE 0 END`))) as Array<{
       phone: number | string
       c: number | string
     }>
@@ -119,9 +160,9 @@ export async function pushRoutes(app: FastifyInstance) {
   })
 
   app.get('/phones', { preHandler: requireAuth }, async (req, reply) => {
-    const rows = (await db('nivaro_push_subscriptions')
-      .where({ user: req.user!.id })
-      .where('endpoint', 'like', `${PHONE_PREFIX}%`)
+    const rows = (await wherePhoneEndpoint(
+      db('nivaro_push_subscriptions').where({ user: req.user!.id })
+    )
       .orderBy('created_at', 'desc')
       .select('id', 'keys_auth', 'user_agent', 'created_at', 'last_used_at')) as Array<{
       id: number
@@ -146,13 +187,19 @@ export async function pushRoutes(app: FastifyInstance) {
   })
 
   app.post<{
-    Body: { token?: string; platform?: string; app?: string; device_name?: string }
-  }>('/phones', { preHandler: requireAuth }, async (req, reply) => {
-    const { token, platform, app: appId, device_name } = req.body ?? {}
-    if (!isExpoPushToken(token)) {
-      return reply.code(400).send({ error: 'token must be an Expo push token' })
+    Body: {
+      token?: string
+      relay_device?: string
+      platform?: string
+      app?: string
+      device_name?: string
     }
-    const endpoint = `${PHONE_PREFIX}${token}`
+  }>('/phones', { preHandler: requireAuth }, async (req, reply) => {
+    const { platform, app: appId, device_name } = req.body ?? {}
+    const endpoint = phoneEndpoint(req.body)
+    if (!endpoint) {
+      return reply.code(400).send({ error: PHONE_ID_ERROR, code: PHONE_ID_CODE })
+    }
     const hash = endpointHash(endpoint)
     const plat = ['ios', 'android'].includes(String(platform)) ? String(platform) : 'unknown'
     const appKey =
@@ -189,29 +236,32 @@ export async function pushRoutes(app: FastifyInstance) {
     return reply.send({ data: { registered: true, forget_key: forgetKey } })
   })
 
-  app.delete<{ Body: { token?: string } }>(
+  app.delete<{ Body: { token?: string; relay_device?: string } }>(
     '/phones',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const token = req.body?.token
-      if (!isExpoPushToken(token)) {
-        return reply.code(400).send({ error: 'token must be an Expo push token' })
+      const endpoint = phoneEndpoint(req.body)
+      if (!endpoint) {
+        return reply.code(400).send({ error: PHONE_ID_ERROR, code: PHONE_ID_CODE })
       }
       const removed = await db('nivaro_push_subscriptions')
-        .where({ endpoint_hash: endpointHash(`${PHONE_PREFIX}${token}`), user: req.user!.id })
+        .where({ endpoint_hash: endpointHash(endpoint), user: req.user!.id })
         .del()
       return reply.send({ data: { removed: Number(removed) > 0 } })
     }
   )
 
-  app.post<{ Body: { token?: string; forget_key?: string } }>(
+  app.post<{ Body: { token?: string; relay_device?: string; forget_key?: string } }>(
     '/phones/forget',
     async (req, reply) => {
-      const { token, forget_key } = req.body ?? {}
-      if (!isExpoPushToken(token) || typeof forget_key !== 'string' || forget_key.length > 100) {
-        return reply.code(400).send({ error: 'token and forget_key are required' })
+      const { forget_key } = req.body ?? {}
+      const endpoint = phoneEndpoint(req.body)
+      if (!endpoint || typeof forget_key !== 'string' || forget_key.length > 100) {
+        return reply
+          .code(400)
+          .send({ error: 'token (or relay_device) and forget_key are required' })
       }
-      const hash = endpointHash(`${PHONE_PREFIX}${token}`)
+      const hash = endpointHash(endpoint)
       const row = (await db('nivaro_push_subscriptions')
         .where({ endpoint_hash: hash })
         .first('id', 'keys_p256dh')) as { id: number; keys_p256dh: string } | undefined
@@ -225,6 +275,84 @@ export async function pushRoutes(app: FastifyInstance) {
       return reply.send({ data: { removed: true } })
     }
   )
+
+  app.get('/relay', { preHandler: requireAdmin }, async (_req, reply) => {
+    const cfg = await pushRelayConfig()
+    return reply.send({
+      data: {
+        connected: !!cfg.key,
+        url: cfg.url,
+        content: cfg.content,
+        mode: await phonePushMode()
+      }
+    })
+  })
+
+  app.post<{
+    Body: { connect?: boolean; disconnect?: boolean; relay_key?: string; content?: string }
+  }>('/relay', { preHandler: requireAdmin }, async (req, reply) => {
+    const { connect, disconnect, relay_key, content } = req.body ?? {}
+    if (content !== undefined && content !== 'full' && content !== 'minimal') {
+      return reply
+        .code(400)
+        .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
+    }
+    if (
+      (connect || typeof relay_key === 'string' || disconnect) &&
+      process.env.MOBILE_PUSH_RELAY_KEY?.trim()
+    ) {
+      return reply.code(409).send({
+        error: 'The relay key comes from the environment (MOBILE_PUSH_RELAY_KEY) here.',
+        code: 'RELAY_KEY_FROM_ENV'
+      })
+    }
+    const changes: string[] = []
+    if (content) {
+      await setRelayContent(content)
+      changes.push(`content=${content}`)
+    }
+    // The key is never sent back or logged; a masked value re-sent from a form leaves it alone.
+    if (typeof relay_key === 'string' && relay_key.trim() && relay_key.trim() !== RELAY_KEY_MASK) {
+      await setRelayKey(relay_key.trim())
+      changes.push('key set')
+    }
+    if (disconnect) {
+      await clearRelayKey()
+      changes.push('disconnected')
+    }
+    if (connect) {
+      try {
+        await connectPushRelay(await instanceOrigin(), await instanceName())
+        changes.push('connected')
+      } catch (err) {
+        if (err instanceof RelayError) {
+          return reply.code(400).send({ error: err.message, code: err.code })
+        }
+        req.log.warn({ err }, 'push relay: connect failed')
+        return reply
+          .code(502)
+          .send({ error: 'Could not connect to the push relay.', code: 'RELAY_UNAVAILABLE' })
+      }
+    }
+    if (changes.length) {
+      await logActivity({
+        action: 'push-relay-update',
+        user: req.user?.id,
+        collection: 'nivaro_settings',
+        comment: `push relay: ${changes.join(', ')}`,
+        req
+      })
+    }
+    const cfg = await pushRelayConfig()
+    return reply.send({
+      data: {
+        connected: !!cfg.key,
+        url: cfg.url,
+        content: cfg.content,
+        mode: await phonePushMode()
+      }
+    })
+  })
 
   app.post('/phones/test', { preHandler: requireAuth }, async (req, reply) => {
     const sent = await sendPhonePush(req.user!.id, {

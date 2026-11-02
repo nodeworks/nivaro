@@ -542,6 +542,46 @@ export function restoreInstanceOverrides(snapshotValue: unknown, currentValue: u
   return Object.keys(out).length ? JSON.stringify(out) : null
 }
 
+/**
+ * `nivaro_settings_overrides.data` without the push relay key (`mobile_push.relay_key`, a bearer
+ * credential for THIS instance at the relay). Everything else in the row stays. A value that is
+ * not a JSON object is dropped whole. Text in, text out; an object stays an object.
+ */
+export function redactSettingsOverrides(v: unknown): unknown {
+  if (v === null || v === undefined) return v
+  const all = jsonObject(v)
+  if (!all) return null
+  const out: Record<string, unknown> = { ...all }
+  if (isObj(out.mobile_push)) {
+    const mp: Record<string, unknown> = { ...out.mobile_push }
+    delete mp.relay_key
+    out.mobile_push = mp
+  }
+  return typeof v === 'string' ? JSON.stringify(out) : out
+}
+
+/**
+ * What a restore writes for `nivaro_settings_overrides.data`: the snapshot's plain parts with
+ * `mobile_push.relay_key` taken from the CURRENT live row (never from the snapshot, even if an
+ * uploaded file carries one). Always JSON text, or null.
+ */
+export function restoreSettingsOverrides(snapshotValue: unknown, currentValue: unknown): unknown {
+  if (snapshotValue === null || snapshotValue === undefined) return null
+  const snap = jsonObject(snapshotValue)
+  if (!snap) return null
+  const out: Record<string, unknown> = { ...snap }
+  const mp: Record<string, unknown> = isObj(out.mobile_push) ? { ...out.mobile_push } : {}
+  delete mp.relay_key
+  const cur = jsonObject(currentValue)
+  const liveKey = isObj(cur?.mobile_push)
+    ? (cur?.mobile_push as Record<string, unknown>).relay_key
+    : null
+  if (typeof liveKey === 'string' && liveKey) mp.relay_key = liveKey
+  if (Object.keys(mp).length) out.mobile_push = mp
+  else delete out.mobile_push
+  return JSON.stringify(out)
+}
+
 const VALUE_REDACTED: Record<
   string,
   Record<
@@ -551,6 +591,9 @@ const VALUE_REDACTED: Record<
 > = {
   nivaro_external_apis: {
     instance_overrides: { redact: redactInstanceOverrides, restore: restoreInstanceOverrides }
+  },
+  nivaro_settings_overrides: {
+    data: { redact: redactSettingsOverrides, restore: restoreSettingsOverrides }
   }
 }
 
