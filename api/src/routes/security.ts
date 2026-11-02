@@ -292,7 +292,11 @@ export async function securitySelfRoutes(app: FastifyInstance) {
     const currentSid = (req.session as unknown as { sessionId?: string })?.sessionId ?? null
     let revoked = 0
     try {
-      revoked = await revokeUserSessions(app.redis, String(req.user!.id), { except: currentSid })
+      // A phone keeps its own sign-in, as a browser keeps its session.
+      revoked = await revokeUserSessions(app.redis, String(req.user!.id), {
+        except: currentSid,
+        exceptDeviceGrant: req.deviceGrantId ?? null
+      })
     } catch (e) {
       // Redis down or a scan that did not finish: say so, never "0 signed out".
       req.log.warn({ err: e }, 'sign-out-others did not reach every session')

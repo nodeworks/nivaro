@@ -16,7 +16,7 @@ import {
   oauthScopeRefusal
 } from '../services/mcp-config.js'
 import { applyMcpConnectionScope } from '../services/mcp-scope.js'
-import { resolveAccessToken, revokeGrant } from '../services/oauth-store.js'
+import { resolveAccessToken } from '../services/oauth-store.js'
 import { notePrincipalKind, onPermissionCacheReset } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
@@ -738,9 +738,14 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
             appNowForAuth()
           )
           if (!verdict.ok) {
-            // The phone's sign-in is over: its grant goes, so its refresh token stops too.
-            // TODO(Task 3): Task 3's end-device-grant helper (also deletes the push rows).
-            await revokeGrant(req.server.redis, rec.user_id, rec.grant_id).catch(() => false)
+            // The phone's sign-in is over: its grant goes, so its refresh token stops too, and
+            // its push rows (services/device-grants.ts). A failure leaves the grant: the next
+            // use is judged, and ended, again.
+            const { endDeviceGrant } = await import('../services/device-grants.js')
+            await endDeviceGrant(req.server.redis, rec.grant_id, 'expired', {
+              userId: rec.user_id,
+              req
+            }).catch(() => null)
             throw httpError(
               401,
               verdict.reason === 'idle'

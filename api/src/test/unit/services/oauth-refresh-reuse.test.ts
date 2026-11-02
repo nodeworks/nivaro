@@ -83,7 +83,14 @@ describe('refresh-token reuse detection', () => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.now() + (REFRESH_REUSE_GRACE_S + 5) * 1000)
     const replay = await consumeRefreshChecked(redis as never, pair.refresh_token)
-    expect(replay).toEqual({ ok: false, reason: 'reused', user_id: 'U1', grant_id: grant.id })
+    expect(replay).toEqual({
+      ok: false,
+      reason: 'reused',
+      user_id: 'U1',
+      grant_id: grant.id,
+      // What was stored, so a phone's push rows can go with it.
+      grant: expect.objectContaining({ id: grant.id, kind: 'mcp' })
+    })
     expect(await getGrant(redis as never, grant.id)).toBe(null)
   })
 

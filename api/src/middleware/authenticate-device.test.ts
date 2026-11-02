@@ -14,7 +14,9 @@ const state = vi.hoisted(() => ({
   users: {} as Record<string, { id: string; status: string; role: string | null }>,
   roles: {} as Record<string, { id: string; admin_access: boolean; app_access: boolean }>,
   /** The users table answers with an error (a database blip). */
-  usersDown: false
+  usersDown: false,
+  /** Push rows deleted: the ids each delete named. */
+  pushDeletes: [] as unknown[][]
 }))
 
 vi.mock('../db/index.js', () => {
@@ -40,6 +42,15 @@ vi.mock('../db/index.js', () => {
     }
     q.update = () => ({ catch: () => undefined })
     q.insert = async () => [7]
+    let ids: unknown[] = []
+    q.whereIn = (_c: string, v: unknown[]) => {
+      ids = v
+      return q
+    }
+    q.del = async () => {
+      if (table === 'nivaro_push_subscriptions') state.pushDeletes.push(ids)
+      return ids.length
+    }
     // The key list (`db('nivaro_api_keys').orderBy(…)`) answers no rows.
     if (table === 'nivaro_api_keys') q.orderBy = async () => []
     return q
@@ -58,6 +69,7 @@ vi.mock('../services/session-policy.js', async (orig) => ({
 }))
 
 const { authenticate } = await import('./authenticate.js')
+const { deviceRoutes } = await import('../routes/devices.js')
 const { oauthPublicRoutes } = await import('../routes/oauth.js')
 const { apiKeysRoutes } = await import('../routes/api-keys.js')
 const store = await import('../services/oauth-store.js')
@@ -169,6 +181,7 @@ beforeAll(async () => {
     tag: sessionTag(req)
   }))
   await app.register(oauthPublicRoutes)
+  await app.register(deviceRoutes, { prefix: '/api' })
   await app.ready()
 })
 afterAll(() => app.close())
@@ -176,6 +189,7 @@ beforeEach(() => {
   state.users = { U1: { id: 'U1', status: 'active', role: ROLE } }
   state.roles = { [ROLE]: { id: ROLE, admin_access: true, app_access: true } }
   state.usersDown = false
+  state.pushDeletes = []
   policy.value = null
 })
 afterEach(() => {
@@ -331,6 +345,53 @@ function ageGrant(id: string, patch: { created_ms?: number; used_ms?: number | n
 
 const HOUR = 3_600_000
 
+/** The push rows a phone registered from this sign-in (as POST /api/push/phones notes them). */
+function withPushIds(id: string, push_ids: number[]) {
+  const key = `nvr:oauth:grant:${id}`
+  redis.kv.set(key, JSON.stringify({ ...JSON.parse(redis.kv.get(key) as string), push_ids }))
+}
+
+describe('Signed-in phones, as the phone itself', () => {
+  it('lists this phone as current; signing it out ends the token at once (next call 401)', async () => {
+    const { grant, access_token } = await phone()
+    const other = await phone('Old phone')
+    withPushIds(other.grant.id, [8])
+    const list = await app.inject({ url: '/api/auth/devices', headers: bearer(access_token) })
+    expect(list.statusCode).toBe(200)
+    const rows = list.json().data as Array<{ id: string; current: boolean }>
+    expect(rows.find((r) => r.id === grant.id)?.current).toBe(true)
+    expect(rows.find((r) => r.id === other.grant.id)?.current).toBe(false)
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: `/api/auth/devices/${other.grant.id}`,
+      headers: bearer(access_token)
+    })
+    expect(del.json()).toEqual({ ok: true })
+    expect(state.pushDeletes).toEqual([[8]])
+    const after = await app.inject({ url: '/api/auth/me', headers: bearer(other.access_token) })
+    expect(after.statusCode).toBe(401)
+    expect(after.json().code).toBe('TOKEN_INVALID')
+    // This phone carries on.
+    expect(
+      (await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })).statusCode
+    ).toBe(200)
+  })
+})
+
+describe('a phone refresh past the policy', () => {
+  it('ends the sign-in with its push rows', async () => {
+    policy.value = { max_age_hours: 8 }
+    const { grant, refresh_token } = await phone()
+    withPushIds(grant.id, [6])
+    ageGrant(grant.id, { created_ms: 9 * HOUR, used_ms: 60_000 })
+    const res = await refresh(refresh_token)
+    expect(res.statusCode).toBe(400)
+    expect(await store.getGrant(redis as never, grant.id)).toBeNull()
+    expect(state.pushDeletes).toEqual([[6]])
+  })
+})
+
 describe('a phone is a session everywhere but minting credentials', () => {
   it('opens a live connection bound to its grant (no WS_UNBINDABLE)', async () => {
     const { grant, access_token } = await phone()
@@ -415,6 +476,16 @@ describe('every phone request judges the session policy', () => {
     expect(res.statusCode).toBe(401)
     expect(res.json().code).toBe('SESSION_EXPIRED')
     expect(await store.getGrant(redis as never, grant.id)).toBeNull()
+  })
+
+  it('an ended sign-in takes its push rows with it', async () => {
+    policy.value = { idle_minutes: 15 }
+    const { grant, access_token } = await phone()
+    withPushIds(grant.id, [4, 5])
+    ageGrant(grant.id, { created_ms: 25 * 60_000, used_ms: 20 * 60_000 })
+    const res = await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })
+    expect(res.json().code).toBe('SESSION_EXPIRED')
+    expect(state.pushDeletes).toEqual([[4, 5]])
   })
 
   it('in use inside the idle limit → through', async () => {

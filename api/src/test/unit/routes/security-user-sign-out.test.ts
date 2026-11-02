@@ -8,7 +8,8 @@ const state = vi.hoisted(() => ({
     last_name: 'Roe'
   } as Record<string, unknown> | null,
   activity: [] as Array<Record<string, unknown>>,
-  ended: [] as string[][]
+  ended: [] as string[][],
+  self: null as { id: string; deviceGrantId?: string } | null
 }))
 vi.mock('../../../db/index.js', () => ({
   db: () => ({ where: () => ({ first: async () => state.user }) })
@@ -27,18 +28,34 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.user = { id: 'ADMIN000-0000-4000-8000-000000000001' }
     req.isAdmin = true
   },
-  authenticate: async () => {}
+  authenticate: async (req: { user?: unknown; deviceGrantId?: string }) => {
+    if (state.self) {
+      req.user = { id: state.self.id }
+      req.deviceGrantId = state.self.deviceGrantId
+    }
+  }
 }))
 
 import { REVOKED_PREFIX, revokeUserSessions, sessionIdsForUser } from '../../../auth/session.js'
-import { securityRoutes } from '../../../routes/security.js'
+import { securityRoutes, securitySelfRoutes } from '../../../routes/security.js'
 
 const JANE = 'aaaaaaaa-0000-4000-8000-000000000002'
 
 function fakeRedis(seed: Record<string, string>) {
   const kv = new Map(Object.entries(seed))
+  const sets = new Map<string, Set<string>>()
   return {
     kv,
+    sets,
+    async get(k: string) {
+      return kv.get(k) ?? null
+    },
+    async smembers(k: string) {
+      return [...(sets.get(k) ?? [])]
+    },
+    async srem(k: string, m: string) {
+      return sets.get(k)?.delete(m) ? 1 : 0
+    },
     async scan(cursor: string, _m: string, pattern: string) {
       const re = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`)
       const keys = [...kv.keys()].filter((k) => re.test(k))
@@ -54,6 +71,10 @@ function fakeRedis(seed: Record<string, string>) {
       const m = {
         del: (k: string) => {
           ops.push(() => kv.delete(k))
+          return m
+        },
+        srem: (k: string, v: string) => {
+          ops.push(() => sets.get(k)?.delete(v))
           return m
         },
         setex: (k: string, _t: number, v: string) => {
@@ -82,6 +103,7 @@ describe('signing one person out everywhere', () => {
   beforeEach(() => {
     state.activity = []
     state.ended = []
+    state.self = null
     state.user = { id: JANE.toUpperCase(), first_name: 'Jane', last_name: 'Roe' }
   })
 
@@ -123,6 +145,74 @@ describe('signing one person out everywhere', () => {
     expect((await app.inject({ method: 'POST', url: `/users/${JANE}/sign-out` })).statusCode).toBe(
       404
     )
+  })
+
+  /** A signed-in phone of `userId` (a device grant, as services/oauth-store.ts files it). */
+  const addPhone = (r: ReturnType<typeof fakeRedis>, userId: string, id: string) => {
+    r.kv.set(
+      `nvr:oauth:grant:${id}`,
+      JSON.stringify({
+        id,
+        user_id: userId,
+        client_id: 'nivaro-mobile',
+        client_name: 'Nivaro',
+        kind: 'device',
+        device_name: 'Phone',
+        created_at: new Date().toISOString(),
+        last_used_at: null,
+        t: ''
+      })
+    )
+    const key = `nvr:oauth:user:${userId}`
+    r.sets.set(key, (r.sets.get(key) ?? new Set()).add(id))
+  }
+  const PHONE_1 = '11111111-0000-4000-8000-000000000001'
+  const PHONE_2 = '22222222-0000-4000-8000-000000000002'
+  const SAMS = '33333333-0000-4000-8000-000000000003'
+
+  it("signs the person out on their phones too (any id case), and leaves others' phones", async () => {
+    const r = fakeRedis(seed())
+    addPhone(r, JANE.toUpperCase(), PHONE_1)
+    addPhone(r, JANE.toUpperCase(), PHONE_2)
+    addPhone(r, 'BBBBBBBB-0000-4000-8000-000000000003', SAMS)
+    expect(await revokeUserSessions(r as never, JANE)).toBe(4)
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(false)
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
+    expect(r.kv.has(`nvr:oauth:grant:${SAMS}`)).toBe(true)
+  })
+
+  it('an administrator signing someone out reaches their phones', async () => {
+    const r = fakeRedis(seed())
+    addPhone(r, JANE.toUpperCase(), PHONE_1)
+    const app = Fastify()
+    app.decorate('redis', r as never)
+    await app.register(securityRoutes)
+    const res = await app.inject({ method: 'POST', url: `/users/${JANE}/sign-out` })
+    expect(res.json()).toEqual({ data: { revoked: 3 } })
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(false)
+  })
+
+  it('sign out everywhere else from a phone keeps that phone and ends the rest', async () => {
+    const r = fakeRedis(seed())
+    addPhone(r, JANE.toUpperCase(), PHONE_1)
+    addPhone(r, JANE.toUpperCase(), PHONE_2)
+    expect(await revokeUserSessions(r as never, JANE, { exceptDeviceGrant: PHONE_1 })).toBe(3)
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(true)
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
+  })
+
+  it('POST /my/sessions/sign-out-others passes the calling phone through', async () => {
+    const r = fakeRedis(seed())
+    addPhone(r, JANE.toUpperCase(), PHONE_1)
+    addPhone(r, JANE.toUpperCase(), PHONE_2)
+    state.self = { id: JANE.toUpperCase(), deviceGrantId: PHONE_2 }
+    const app = Fastify()
+    app.decorate('redis', r as never)
+    await app.register(securitySelfRoutes)
+    const res = await app.inject({ method: 'POST', url: '/my/sessions/sign-out-others' })
+    expect(res.json()).toEqual({ data: { revoked: 3 } })
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(true)
+    expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(false)
   })
 
   it('fails closed when the session scan never finishes', async () => {

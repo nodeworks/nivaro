@@ -62,7 +62,7 @@ const asThemselves = (req: FastifyRequest) =>
 /** Who owns a connection, or null when it does not exist (here, on this tenant). */
 async function ownerOf(app: FastifyInstance, conn: string): Promise<string | null> {
   if (conn.startsWith('o')) {
-    const g = await getGrant(app.redis, conn.slice(1))
+    const g = await getGrant(app.redis, conn.slice(1), 'mcp')
     return g ? String(g.user_id) : null
   }
   const key = (await db('nivaro_api_keys')

@@ -79,7 +79,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'before must be a timestamp' })
       const userId = String(req.user!.id)
       // The apps' registered names (the log keeps a caller-key slug of each).
-      const grants = await listGrants(app.redis, userId)
+      const grants = await listGrants(app.redis, userId, 'mcp')
       const names = new Map(grants.map((g) => [`o${g.id.toLowerCase()}`, g.client_name]))
       const page = await readAgentActivity(userId, {
         conn: conn ?? null,
@@ -116,7 +116,7 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
         return reply.code(400).send({
           error: 'API keys and personal tokens are managed by an administrator'
         })
-      const ok = await revokeGrant(app.redis, String(req.user!.id), conn.slice(1))
+      const ok = await revokeGrant(app.redis, String(req.user!.id), conn.slice(1), 'mcp')
       if (!ok) return reply.code(404).send({ error: 'Connection not found' })
       await deleteScope(conn).catch(() => false)
       await logActivity({ action: 'oauth-revoke', user: req.user!.id, comment: conn.slice(1), req })
@@ -222,8 +222,8 @@ export async function mcpConnectionRoutes(app: FastifyInstance) {
       const { conn } = req.params
       if (!CONN_RE.test(conn)) return reply.code(400).send({ error: 'conn is not valid' })
       if (conn.startsWith('o')) {
-        const g = await getGrant(app.redis, conn.slice(1))
-        if (!g || !(await revokeGrant(app.redis, g.user_id, g.id)))
+        const g = await getGrant(app.redis, conn.slice(1), 'mcp')
+        if (!g || !(await revokeGrant(app.redis, g.user_id, g.id, 'mcp')))
           return reply.code(404).send({ error: 'Connection not found' })
         await deleteScope(conn).catch(() => false)
         await logActivity({

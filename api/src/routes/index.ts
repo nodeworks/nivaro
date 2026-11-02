@@ -79,10 +79,10 @@ import { collectionPresetsRoutes } from './collection-presets.js'
 import { collectionSnapshotRoutes } from './collection-snapshots.js'
 import { collectionsRoutes } from './collections.js'
 import { commandCenterRoutes } from './command-center.js'
-import { commandCenterTimeRoutes } from './command-center-time.js'
 import { commandCenterPlaceRoutes } from './command-center-place.js'
-import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commandCenterShellRoutes } from './command-center-shell.js'
+import { commandCenterTimeRoutes } from './command-center-time.js'
+import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
@@ -108,6 +108,7 @@ import { dbTuningRoutes } from './db-tuning.js'
 import { deadLettersRoutes } from './dead-letters.js'
 import { delegationRoutes } from './delegation.js'
 import { devToolsRoutes } from './dev-tools.js'
+import { deviceRoutes } from './devices.js'
 import { directoryRoutes } from './directory.js'
 import { dossierRoutes } from './dossier.js'
 import { draftPublishRoutes } from './draft-publish.js'
@@ -828,6 +829,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // #2464 / #2465 — the instance's own MCP tools (extension + named query/flow tools).
   await app.register(mcpToolRoutes, { prefix: '/mcp-tools' })
   await app.register(oauthConnectionRoutes)
+  // Signed-in phones (device grants): list + sign out, own and admin.
+  await app.register(deviceRoutes)
   await app.register(mcpConnectionRoutes, { prefix: '/mcp-connections' })
   // #3205 / #3214 connection limits + tool kits, #3206 composite tool suggestions,
   // #3215 tool contract tests.

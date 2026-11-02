@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { addGrantPushId } from '../services/oauth-store.js'
 import {
   instanceName,
   instanceOrigin,
@@ -220,9 +221,10 @@ export async function pushRoutes(app: FastifyInstance) {
     }
     // A phone belongs to whoever signed in on it last: a token is the app install, not the
     // person, so a second person signing in on a shared phone takes its alerts over.
-    const existing = await db('nivaro_push_subscriptions')
+    const existing = (await db('nivaro_push_subscriptions')
       .where({ endpoint_hash: hash })
-      .first('id')
+      .first('id')) as { id: number } | undefined
+    let rowId = existing?.id
     if (existing) {
       await db('nivaro_push_subscriptions').where({ endpoint_hash: hash }).update(fields)
     } else {
@@ -232,7 +234,18 @@ export async function pushRoutes(app: FastifyInstance) {
         endpoint_hash: hash,
         created_at: new Date()
       })
+      if (req.deviceGrantId)
+        rowId = (
+          (await db('nivaro_push_subscriptions').where({ endpoint_hash: hash }).first('id')) as
+            | { id: number }
+            | undefined
+        )?.id
     }
+    // Registered from a signed-in phone: the row ends with that sign-in (services/device-grants.ts).
+    if (req.deviceGrantId && rowId)
+      await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch((err) =>
+        req.log.warn({ err }, 'phone push: row not noted on its sign-in')
+      )
     return reply.send({ data: { registered: true, forget_key: forgetKey } })
   })
 

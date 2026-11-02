@@ -86,15 +86,20 @@ export async function sessionIdsForUser(
 }
 
 /** Sign one person out of every session (but `except`), on every app and tab:
- *  revoked, never a bare DEL, and their sockets close (`revokeSessions`). */
+ *  revoked, never a bare DEL, and their sockets close (`revokeSessions`). Their phones too
+ *  (but `exceptDeviceGrant`, the calling phone's own sign-in): each device grant ends with its
+ *  push rows (services/device-grants.ts). Returns sessions + phones signed out. */
 export async function revokeUserSessions(
   redis: Redis,
   userId: string,
-  opts: { except?: string | null } = {}
+  opts: { except?: string | null; exceptDeviceGrant?: string | null } = {}
 ): Promise<number> {
   const sids = await sessionIdsForUser(redis, userId, opts)
   await revokeSessions(redis, sids)
-  return sids.length
+  // Loaded on use: this module sits under every request, the device-grant service on the db.
+  const { endUserDeviceGrants } = await import('../services/device-grants.js')
+  const phones = await endUserDeviceGrants(redis, userId, { except: opts.exceptDeviceGrant })
+  return sids.length + phones
 }
 
 export function buildRedisStore(redis: Redis) {

@@ -272,8 +272,9 @@ const spentKey = (hash: string) => `${P}rt-spent:${hash}`
 export type ConsumeRefreshResult =
   | { ok: true; rec: TokenRecord }
   | { ok: false; reason: 'unknown' | 'revoked' }
-  /** A replayed refresh token: the grant it belonged to has been ended (who + which, for the log). */
-  | { ok: false; reason: 'reused'; user_id: string; grant_id: string }
+  /** A replayed refresh token: the grant it belonged to has been ended (who + which, for the log;
+   *  `grant` = what was stored, so a phone's push rows can go too). */
+  | { ok: false; reason: 'reused'; user_id: string; grant_id: string; grant: OAuthGrant | null }
 
 /**
  * Rotate: the refresh token is spent; the caller issues a new pair. A spent token stays
@@ -294,8 +295,14 @@ export async function consumeRefreshChecked(
     )
     if (!spent || !sameTenant(spent)) return { ok: false, reason: 'unknown' }
     if (Date.now() - spent.at > REFRESH_REUSE_GRACE_S * 1000) {
-      await revokeGrant(redis, spent.user_id, spent.grant_id).catch(() => false)
-      return { ok: false, reason: 'reused', user_id: spent.user_id, grant_id: spent.grant_id }
+      const grant = await takeGrant(redis, spent.user_id, spent.grant_id).catch(() => null)
+      return {
+        ok: false,
+        reason: 'reused',
+        user_id: spent.user_id,
+        grant_id: spent.grant_id,
+        grant
+      }
     }
     return { ok: false, reason: 'unknown' }
   }
@@ -328,6 +335,13 @@ export async function peekRefresh(redis: Redis, refresh: string): Promise<TokenR
   if (!refresh) return null
   const rec = await read<TokenRecord>(redis, `${P}rt:${hashToken(refresh)}`)
   return rec && sameTenant(rec) ? { ...rec, kind: kindOf(rec) } : null
+}
+
+/** A device access token's record WITHOUT using it (no last-use touch), this tenant's, or null. */
+export async function peekDeviceAccess(redis: Redis, token: string): Promise<TokenRecord | null> {
+  if (!token.startsWith(DEVICE_ACCESS_PREFIX)) return null
+  const rec = await read<TokenRecord>(redis, `${P}at:${hashToken(token)}`)
+  return rec && sameTenant(rec) && kindOf(rec) === 'device' ? { ...rec, kind: 'device' } : null
 }
 
 /** Rotate (the record, or null when the token cannot be used — see consumeRefreshChecked). */
@@ -396,38 +410,87 @@ export async function revokeToken(redis: Redis, token: string): Promise<void> {
   await redis.del(`${P}at:${h}`, `${P}rt:${h}`)
 }
 
-export async function listGrants(redis: Redis, userId: string): Promise<OAuthGrant[]> {
+/**
+ * The person's grants (newest first). `kind` keeps one kind: 'mcp' = connected apps (what every
+ * MCP list, review and notice means — never a phone), 'device' = signed-in phones.
+ */
+export async function listGrants(
+  redis: Redis,
+  userId: string,
+  kind?: TokenKind
+): Promise<OAuthGrant[]> {
   const ids = await redis.smembers(`${P}user:${userId}`)
   const out: OAuthGrant[] = []
   for (const id of ids) {
     const g = await read<OAuthGrant>(redis, `${P}grant:${id}`)
     if (!g) await redis.srem(`${P}user:${userId}`, id)
-    else if (sameTenant(g)) out.push(g)
+    else if (sameTenant(g) && (!kind || kindOf(g) === kind)) out.push(g)
   }
   return (await withIdleStamps(redis, out)).sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
-/** End a connection: its tokens stop working at once (each checks its grant). */
-export async function revokeGrant(redis: Redis, userId: string, grantId: string): Promise<boolean> {
+const sameUser = (a: string, b: string) => String(a).toUpperCase() === String(b).toUpperCase()
+
+/**
+ * End a grant of this person (any id case) and hand back what was stored, or null when there is
+ * none of `kind` here. Its tokens stop working at once (each checks its grant).
+ */
+export async function takeGrant(
+  redis: Redis,
+  userId: string,
+  grantId: string,
+  kind?: TokenKind
+): Promise<OAuthGrant | null> {
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
-  if (!g || g.user_id !== userId || !sameTenant(g)) return false
+  if (!g || !sameUser(g.user_id, userId) || !sameTenant(g)) return null
+  if (kind && kindOf(g) !== kind) return null
   await redis
     .multi()
     .del(`${P}grant:${grantId}`)
     .del(idleKey(grantId))
-    .srem(`${P}user:${userId}`, grantId)
+    .srem(`${P}user:${g.user_id}`, grantId)
     .exec()
-  return true
+  return { ...g, kind: kindOf(g) }
+}
+
+/** End a connection: its tokens stop working at once (each checks its grant). */
+export async function revokeGrant(
+  redis: Redis,
+  userId: string,
+  grantId: string,
+  kind?: TokenKind
+): Promise<boolean> {
+  return !!(await takeGrant(redis, userId, grantId, kind))
+}
+
+/**
+ * Note a phone push row (nivaro_push_subscriptions id) on the device grant that registered it,
+ * so ending that sign-in stops the phone's alerts too. A grant revoked meanwhile is never
+ * recreated (XX), and a non-device grant is left alone.
+ */
+export async function addGrantPushId(redis: Redis, grantId: string, pushId: number): Promise<void> {
+  if (!Number.isInteger(pushId) || pushId <= 0) return
+  const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
+  if (!g || !sameTenant(g) || kindOf(g) !== 'device') return
+  const ids = g.push_ids ?? []
+  if (ids.includes(pushId)) return
+  g.push_ids = [...ids, pushId].slice(-20)
+  await redis.set(`${P}grant:${grantId}`, JSON.stringify(g), 'KEEPTTL', 'XX')
 }
 
 /** The Redis key a grant is stored under (a socket bound to a phone reads it on every sweep). */
 export const grantKey = (grantId: string) => `${P}grant:${grantId}`
 
-/** One grant by id (this tenant's), or null. */
-export async function getGrant(redis: Redis, grantId: string): Promise<OAuthGrant | null> {
+/** One grant by id (this tenant's, of `kind` when given), or null. */
+export async function getGrant(
+  redis: Redis,
+  grantId: string,
+  kind?: TokenKind
+): Promise<OAuthGrant | null> {
   if (!/^[0-9a-f-]{36}$/i.test(grantId)) return null
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
   if (!g || !sameTenant(g)) return null
+  if (kind && kindOf(g) !== kind) return null
   return (await withIdleStamps(redis, [g]))[0]
 }
 
@@ -481,8 +544,15 @@ export async function setGrantIdleStamps(
   if (!(await redis.exists(`${P}grant:${grantId}`))) await redis.del(idleKey(grantId))
 }
 
-/** Every connection on this tenant, across people (admin view, idle review). SCAN, never KEYS. */
-export async function listAllGrants(redis: Redis, cap = 20_000): Promise<OAuthGrant[]> {
+/**
+ * Every grant on this tenant, across people (admin view, idle review), of `kind` when given.
+ * SCAN, never KEYS.
+ */
+export async function listAllGrants(
+  redis: Redis,
+  cap = 20_000,
+  kind?: TokenKind
+): Promise<OAuthGrant[]> {
   const out: OAuthGrant[] = []
   let cursor = '0'
   do {
@@ -494,7 +564,7 @@ export async function listAllGrants(redis: Redis, cap = 20_000): Promise<OAuthGr
         if (!raw) continue
         try {
           const g = JSON.parse(raw) as OAuthGrant
-          if (sameTenant(g)) out.push(g)
+          if (sameTenant(g) && (!kind || kindOf(g) === kind)) out.push(g)
         } catch {
           // skip a damaged record
         }

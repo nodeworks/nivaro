@@ -13,6 +13,8 @@ import {
 } from '../lib/mobile-clients.js'
 import {
   cleanClientName,
+  DEVICE_ACCESS_PREFIX,
+  DEVICE_REFRESH_PREFIX,
   escapeHtml,
   grantedScope,
   isAllowedRedirectUri,
@@ -28,6 +30,11 @@ import {
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
+import {
+  type DeviceEndReason,
+  deleteGrantPushRows,
+  endDeviceGrant
+} from '../services/device-grants.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
 import { listKits, type ToolKit } from '../services/mcp-kits.js'
 import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/mcp-scope.js'
@@ -42,6 +49,7 @@ import {
   issueTokens,
   kindOf,
   listGrants,
+  peekDeviceAccess,
   peekRefresh,
   registerClient,
   revokeGrant,
@@ -355,7 +363,7 @@ async function consentKits(
 ): Promise<ConsentKits | null> {
   if (!(await scopesReady())) return null
   const kits = await listKits()
-  const prior = (await listGrants(app.redis, userId)).find((g) => g.client_id === clientId)
+  const prior = (await listGrants(app.redis, userId, 'mcp')).find((g) => g.client_id === clientId)
   const row = prior ? await readScopeRow(`o${prior.id.toLowerCase()}`) : null
   return {
     kits,
@@ -713,10 +721,17 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     const activeUser = async (id: string) =>
       !!(await db('nivaro_users').where({ id, status: 'active' }).first('id'))
     /** End a phone's sign-in and tell the app to sign in again. */
-    const endDeviceSignIn = async (rec: TokenRecord, description: string) => {
-      // TODO(Task 3): use Task 3's end-device-grant helper here, which also deletes the
-      // grant's push rows (nivaro_push_subscriptions, grant.push_ids).
-      await revokeGrant(app.redis, rec.user_id, rec.grant_id).catch(() => false)
+    const endDeviceSignIn = async (
+      rec: TokenRecord,
+      reason: DeviceEndReason,
+      description: string
+    ) => {
+      await endDeviceGrant(app.redis, rec.grant_id, reason, { userId: rec.user_id, req }).catch(
+        (err) => {
+          req.log.warn({ err, grant_id: rec.grant_id }, 'oauth: phone sign-in not ended')
+          return null
+        }
+      )
       return oauthError(reply, 400, 'invalid_grant', description)
     }
 
@@ -783,6 +798,12 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         // A spent refresh token came back: a leaked token or a stolen copy. The connection is
         // already ended; the person's history and the server log say so (ids only).
         req.log.warn({ grant_id: out.grant_id }, 'oauth: refresh token replayed, connection ended')
+        // A phone's alerts stop with it (the grant itself is already gone).
+        if (out.grant?.kind === 'device')
+          await deleteGrantPushRows(out.grant).catch((err) => {
+            req.log.warn({ err, grant_id: out.grant_id }, 'oauth: replayed phone push rows kept')
+            return 0
+          })
         await logActivity({
           action: 'oauth-refresh-reuse',
           user: out.user_id,
@@ -814,10 +835,11 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         if (!acct.signInAllowed)
           return endDeviceSignIn(
             rec,
+            'sign-in-off',
             'Sign-in is turned off for your role. Ask an administrator if you need access.'
           )
         if (await deviceSignInExpired(app, rec, acct.role))
-          return endDeviceSignIn(rec, 'Your sign-in has expired. Sign in again.')
+          return endDeviceSignIn(rec, 'expired', 'Your sign-in has expired. Sign in again.')
       }
       return tokenAnswer(await issueTokens(app.redis, rec, kind), kind, rec.grant_id)
     }
@@ -833,15 +855,38 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
   app.post('/oauth/revoke', async (req, reply) => {
     if (!anyEnabled(reply)) return
     const token = str(((req.body ?? {}) as Record<string, unknown>).token)
-    if (token) await revokeToken(app.redis, token)
+    if (token) {
+      // A phone signing out (its access or refresh token) ends its whole sign-in — grant, every
+      // token and its push rows — so it leaves Signed-in phones. Answered 200 either way (RFC 7009).
+      const phone = await deviceTokenRecord(app, token)
+      if (phone)
+        await endDeviceGrant(app.redis, phone.grant_id, 'signed-out', {
+          userId: phone.user_id,
+          req
+        }).catch((err) => {
+          req.log.warn({ err, grant_id: phone.grant_id }, 'oauth: phone sign-out not finished')
+          return null
+        })
+      await revokeToken(app.redis, token)
+    }
     return reply.code(200).send({})
   })
 }
 
-/** The signed-in person's connected apps (under /api). */
+/** A device token's record (access `nvd_` or refresh `nvdr_`), this tenant's, or null. */
+async function deviceTokenRecord(app: FastifyInstance, token: string): Promise<TokenRecord | null> {
+  if (token.startsWith(DEVICE_REFRESH_PREFIX)) {
+    const rec = await peekRefresh(app.redis, token)
+    return rec?.kind === 'device' ? rec : null
+  }
+  if (token.startsWith(DEVICE_ACCESS_PREFIX)) return peekDeviceAccess(app.redis, token)
+  return null
+}
+
+/** The signed-in person's connected apps (under /api) — MCP grants only, never their phones. */
 export async function oauthConnectionRoutes(app: FastifyInstance) {
   app.get('/oauth/connections', { preHandler: requireAuth }, async (req) => {
-    const grants = await listGrants(app.redis, String(req.user!.id))
+    const grants = await listGrants(app.redis, String(req.user!.id), 'mcp')
     return {
       data: grants.map((g) => ({
         id: g.id,
@@ -857,7 +902,7 @@ export async function oauthConnectionRoutes(app: FastifyInstance) {
     '/oauth/connections/:id',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const ok = await revokeGrant(app.redis, String(req.user!.id), req.params.id)
+      const ok = await revokeGrant(app.redis, String(req.user!.id), req.params.id, 'mcp')
       if (!ok) return reply.code(404).send({ error: 'Connection not found' })
       await deleteScope(`o${req.params.id.toLowerCase()}`).catch(() => false)
       await logActivity({

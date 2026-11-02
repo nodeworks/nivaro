@@ -237,7 +237,8 @@ export async function listConnections(
   opts: { userId?: string } = {}
 ): Promise<{ logged: boolean; connections: ConnectionInfo[] }> {
   const [grants, stats] = await Promise.all([
-    opts.userId ? listGrants(redis, opts.userId) : listAllGrants(redis),
+    // MCP connections only: a signed-in phone is never listed, limited or reviewed here.
+    opts.userId ? listGrants(redis, opts.userId, 'mcp') : listAllGrants(redis, undefined, 'mcp'),
     readConnectionStats(opts)
   ])
   const now = Date.now()

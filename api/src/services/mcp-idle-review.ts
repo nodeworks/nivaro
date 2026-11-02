@@ -117,7 +117,8 @@ export async function runIdleReview(
 ): Promise<IdleReviewResult> {
   const now = opts.now ?? Date.now()
   const settings = await readMcpSettings()
-  const grants = await listAllGrants(app.redis)
+  // Connected apps only: a phone is never told it is an unused connection, nor disconnected here.
+  const grants = await listAllGrants(app.redis, undefined, 'mcp')
   const out: IdleReviewResult = {
     reviewed: grants.length,
     flagged: 0,
@@ -141,7 +142,7 @@ export async function runIdleReview(
     if (opts.dryRun) continue
     try {
       if (action === 'revoke') {
-        if (!(await revokeGrant(app.redis, g.user_id, g.id))) continue
+        if (!(await revokeGrant(app.redis, g.user_id, g.id, 'mcp'))) continue
         await logActivity({
           action: 'oauth-idle-revoke',
           user: g.user_id,

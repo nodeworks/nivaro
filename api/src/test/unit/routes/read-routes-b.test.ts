@@ -17,17 +17,29 @@ const m = vi.hoisted(() => ({
   deletes: [] as Array<{ table: string; rows: Array<Record<string, unknown>> }>,
   whereIns: [] as Array<{ table: string; n: number }>,
   readItems: vi.fn(),
-  aggregateItems: vi.fn()
+  aggregateItems: vi.fn(),
+  /** The calling phone's sign-in (a device token), when set. */
+  deviceGrant: null as string | null,
+  /** Inserted rows are stored (so a read after the insert finds them). */
+  storeInserts: false,
+  pushIds: [] as Array<[string, number]>
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
-  const sign = async (req: { user?: unknown; isAdmin?: boolean }) => {
+  const sign = async (req: { user?: unknown; isAdmin?: boolean; deviceGrantId?: string }) => {
     req.user = { id: 'U1', role: 'r-approver' }
     req.isAdmin = m.admin
+    if (m.deviceGrant) req.deviceGrantId = m.deviceGrant
   }
   return { authenticate: vi.fn(sign), requireAuth: vi.fn(sign), requireAdmin: vi.fn(sign) }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
+vi.mock('../../../services/oauth-store.js', async (orig) => ({
+  ...(await orig<object>()),
+  addGrantPushId: vi.fn(async (_r: unknown, grant: string, id: number) => {
+    m.pushIds.push([grant, id])
+  })
+}))
 vi.mock('../../../services/permissions.js', () => ({
   can: vi.fn(async () => m.can),
   getAllowedFields: vi.fn(async () => m.allowed)
@@ -89,6 +101,11 @@ vi.mock('../../../db/index.js', () => {
       },
       insert: async (row: unknown) => {
         m.inserts.push({ table, row })
+        if (m.storeInserts) {
+          const rows = m.tables[table] ?? []
+          rows.push({ id: 70 + rows.length, ...(row as object) })
+          m.tables[table] = rows
+        }
         return [1]
       },
       del: async () => {
@@ -137,6 +154,9 @@ beforeEach(() => {
   m.whereIns = []
   m.readItems.mockReset()
   m.aggregateItems.mockReset()
+  m.deviceGrant = null
+  m.storeInserts = false
+  m.pushIds = []
 })
 
 const page = (widgets: unknown[]) => ({
@@ -337,6 +357,28 @@ describe('phone push', () => {
       payload: { relay_device: 'x' }
     })
     expect(r.json().code).toBe('RELAY_DEVICE_INVALID')
+  })
+  it('a phone registering from its sign-in notes the row on that sign-in (new and existing)', async () => {
+    const G = '99999999-0000-4000-8000-000000000009'
+    m.deviceGrant = G
+    m.storeInserts = true
+    const app = await build()
+    expect(
+      (await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })).statusCode
+    ).toBe(200)
+    expect(m.pushIds).toEqual([[G, 70]])
+    // Registered again (the row exists): the same row id is noted.
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(m.pushIds).toEqual([
+      [G, 70],
+      [G, 70]
+    ])
+  })
+  it('a browser session registering a phone notes nothing', async () => {
+    m.storeInserts = true
+    const app = await build()
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(m.pushIds).toEqual([])
   })
   it("sign-out (DELETE) removes only the caller's own phone", async () => {
     m.tables.nivaro_push_subscriptions = [row('SOMEONE-ELSE')]

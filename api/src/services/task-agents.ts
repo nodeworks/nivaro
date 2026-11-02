@@ -70,7 +70,7 @@ export async function agentConnectionOf(
   const o = OAUTH_CONN.exec(conn)
   if (o) {
     if (!redis) return null
-    const g = await getGrant(redis, o[1]).catch(() => null)
+    const g = await getGrant(redis, o[1], 'mcp').catch(() => null)
     if (!g) return null
     const n = await peopleNames([g.user_id])
     return {
@@ -111,7 +111,10 @@ export async function listAssignableAgents(
 ): Promise<AgentConnection[]> {
   const everyone = opts.all === true && actor.isAdmin
   const grants = redis
-    ? await (everyone ? listAllGrants(redis, 2000) : listGrants(redis, actor.id)).catch(() => [])
+    ? await (everyone
+        ? listAllGrants(redis, 2000, 'mcp')
+        : listGrants(redis, actor.id, 'mcp')
+      ).catch(() => [])
     : []
   const kq = db('nivaro_api_keys').select('id', 'name', 'user', 'expires_at', 'is_active')
   if (!everyone) kq.where('user', actor.id)
