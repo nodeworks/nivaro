@@ -2,16 +2,21 @@ import type { FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
+import { mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { logActivity } from './activity.js'
+import { appNowForAuth } from './chaos/clock.js'
 import {
+  deviceRefreshLive,
   getGrant,
   grantKey,
   grantPushIds,
+  listAllGrants,
   listGrants,
   type OAuthGrant,
   takeGrant
 } from './oauth-store.js'
 import { wherePhoneEndpoint } from './push-relay.js'
+import { getSessionPolicy, judgeDeviceGrant, limitsFor } from './session-policy.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -336,5 +341,82 @@ export async function endUserDeviceGrants(
   if (opts.keepSid) keep.push(`sid:${opts.keepSid}`)
   // `at` only now: every grant in scope (and, before this call, every session) is ended.
   await deleteOrKeep(redis, { u: userId, at: Date.now(), keep }, opts.req)
+  return ended
+}
+
+/**
+ * Why a phone's sign-in is over although nobody ended it, or null while it stands: phone sign-in
+ * is off (MOBILE_SIGNIN=off), its refresh token lapsed, the account is no longer active, or the
+ * role's session policy (idle / max age) has passed. `account` = the person's row, read once
+ * per person by the caller (undefined = not active).
+ */
+async function passiveEnd(
+  redis: Redis,
+  g: OAuthGrant,
+  account: { role: string | null } | undefined,
+  policy: Awaited<ReturnType<typeof getSessionPolicy>>
+): Promise<string | null> {
+  if (!mobileSignInEnabled()) return 'phone sign-in is off'
+  if (!account) return 'account not active'
+  if (!(await deviceRefreshLive(redis, g))) return 'refresh token lapsed'
+  if (policy && !judgeDeviceGrant(limitsFor(policy, account.role), g, appNowForAuth()).ok)
+    return 'past the session policy'
+  return null
+}
+
+async function activeAccountOf(userId: string): Promise<{ role: string | null } | undefined> {
+  const row = (await db('nivaro_users')
+    .where({ id: userId, status: 'active' })
+    .first('id', 'role')) as { id: string; role?: string | null } | undefined
+  return row ? { role: row.role ?? null } : undefined
+}
+
+/**
+ * The person's signed-in phones, ending (endDeviceGrant 'expired' — grant, tokens and push rows)
+ * any whose sign-in is over with no action (passiveEnd). What the Signed-in phones lists show.
+ * A failed check (database, Redis) keeps the phone listed: it never ends one on a guess.
+ */
+export async function liveDeviceGrants(
+  redis: Redis,
+  userId: string,
+  req?: FastifyRequest
+): Promise<OAuthGrant[]> {
+  const grants = await listDeviceGrants(redis, userId)
+  if (grants.length === 0) return grants
+  let account: { role: string | null } | undefined
+  let policy: Awaited<ReturnType<typeof getSessionPolicy>> = null
+  try {
+    account = await activeAccountOf(userId)
+    policy = await getSessionPolicy()
+  } catch (err) {
+    req?.log.warn({ err }, 'signed-in phones: not checked for lapsed sign-ins')
+    return grants
+  }
+  const out: OAuthGrant[] = []
+  for (const g of grants) {
+    const why = await passiveEnd(redis, g, account, policy).catch(() => null)
+    if (!why) {
+      out.push(g)
+      continue
+    }
+    const ended = await endDeviceGrant(redis, g.id, 'expired', { userId, req }).catch(() => null)
+    if (!ended) out.push(g)
+  }
+  return out
+}
+
+/**
+ * The background pass (cron `device-grants-sweep`, where crons tick): every person with a phone
+ * sign-in on this instance gets the liveDeviceGrants check. Returns how many phones it ended.
+ */
+export async function sweepDeviceGrants(redis: Redis): Promise<number> {
+  const users = new Set<string>()
+  for (const g of await listAllGrants(redis, 20_000, 'device')) users.add(String(g.user_id))
+  let ended = 0
+  for (const u of users) {
+    const before = (await listDeviceGrants(redis, u)).length
+    const after = (await liveDeviceGrants(redis, u)).length
+    ended += before - after
+  }
   return ended
 }

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { endDeviceGrant, listDeviceGrants } from '../services/device-grants.js'
+import { endDeviceGrant, liveDeviceGrants } from '../services/device-grants.js'
 import type { OAuthGrant } from '../services/oauth-store.js'
 
 /**
@@ -12,7 +12,9 @@ import type { OAuthGrant } from '../services/oauth-store.js'
  *   GET    /users/:userId/devices        a person's phones (admin)
  *   DELETE /users/:userId/devices/:id    sign one of them out (admin; logged with admin_id)
  *
- * Signing a phone out ends its grant, every token and its push rows (endDeviceGrant).
+ * Signing a phone out ends its grant, every token and its push rows (endDeviceGrant). Listing
+ * ends any whose sign-in lapsed with no action (liveDeviceGrants): refresh token gone, account
+ * not active, past the session policy, or MOBILE_SIGNIN=off.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -58,7 +60,7 @@ async function signOut(
 
 export async function deviceRoutes(app: FastifyInstance) {
   app.get('/auth/devices', { preHandler: requireAuth }, async (req) => {
-    const grants = await listDeviceGrants(app.redis, String(req.user!.id))
+    const grants = await liveDeviceGrants(app.redis, String(req.user!.id), req)
     return { data: grants.map((g) => deviceRow(g, req.deviceGrantId)) }
   })
 
@@ -74,7 +76,7 @@ export async function deviceRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!UUID.test(req.params.userId))
         return reply.code(400).send({ error: 'Not a user id', code: 'USER_ID_INVALID' })
-      const grants = await listDeviceGrants(app.redis, req.params.userId)
+      const grants = await liveDeviceGrants(app.redis, req.params.userId, req)
       // `current` is the calling phone: only ever true on the admin's own list.
       const own = req.params.userId.toUpperCase() === String(req.user!.id).toUpperCase()
       return { data: grants.map((g) => deviceRow(g, own ? req.deviceGrantId : undefined)) }

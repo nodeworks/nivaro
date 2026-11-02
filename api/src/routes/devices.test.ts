@@ -8,7 +8,11 @@ const state = vi.hoisted(() => ({
   deletes: [] as Array<{ sql: string; bindings: unknown[] }>,
   activity: [] as Array<Record<string, unknown>>,
   /** The phone push row ids a SELECT on nivaro_push_subscriptions finds (IN lists honoured). */
-  pushRows: [] as number[]
+  pushRows: [] as number[],
+  /** Account status per user id (default active) and their static tokens. */
+  status: {} as Record<string, string>,
+  staticTokens: {} as Record<string, string>,
+  policy: null as Record<string, unknown> | null
 }))
 
 vi.mock('../db/index.js', async () => {
@@ -17,6 +21,18 @@ vi.mock('../db/index.js', async () => {
     if (q.method === 'del') {
       state.deletes.push({ sql: q.sql, bindings: q.bindings })
       return 1
+    }
+    if (q.sql.includes('nivaro_users') && (q.method === 'first' || q.method === 'select')) {
+      const id = q.bindings.find((b) => typeof b === 'string' && /^[0-9A-F]{8}-/i.test(b)) as
+        | string
+        | undefined
+      const status = id ? (state.status[id.toUpperCase()] ?? 'active') : 'active'
+      const wantsActive = q.bindings.includes('active')
+      const row =
+        id && (!wantsActive || status === 'active')
+          ? { id, status, role: null, static_token: state.staticTokens[id.toUpperCase()] ?? null }
+          : undefined
+      return q.method === 'first' ? row : row ? [row] : []
     }
     if (q.method === 'select' && q.sql.includes('nivaro_push_subscriptions')) {
       const inList = /\bin \(/i.test(q.sql)
@@ -31,6 +47,10 @@ vi.mock('../services/activity.js', () => ({
     state.activity.push(a)
     return 1
   })
+}))
+vi.mock('../services/session-policy.js', async (orig) => ({
+  ...(await orig<object>()),
+  getSessionPolicy: vi.fn(async () => state.policy)
 }))
 vi.mock('../admin-base.js', async (orig) => ({
   ...(await orig<object>()),
@@ -181,6 +201,10 @@ beforeEach(() => {
   state.deletes = []
   state.activity = []
   state.pushRows = []
+  state.status = {}
+  state.staticTokens = {}
+  state.policy = null
+  delete process.env.MOBILE_SIGNIN
 })
 
 const mobile = { client_id: 'nivaro-mobile', client_name: 'Nivaro' }
@@ -625,8 +649,7 @@ describe('a replayed phone refresh token', () => {
         client_id: 'nivaro-mobile'
       }).toString()
     })
-    // The account read is mocked away (no users): the token is spent either way.
-    expect(first.statusCode).toBe(400)
+    expect(first.statusCode).toBe(200)
     // Move the spent stamp past the grace window, then replay.
     for (const [k, v] of redis.kv)
       if (k.includes(':rt-spent:')) redis.kv.set(k, JSON.stringify({ ...JSON.parse(v), at: 0 }))
@@ -699,5 +722,117 @@ describe('push ids on a device grant', () => {
     expect(redis.sets.has(`nvr:oauth:grant-push:${p.grant.id}`)).toBe(false)
     expect(await store.addGrantPushId(redis as never, p.grant.id, 3)).toBe(false)
     expect(redis.kv.has(`nvr:oauth:grant:${p.grant.id}`)).toBe(false)
+  })
+})
+
+describe('a phone sign-in that ends with no action (credential lifecycle)', () => {
+  const listed = async (userId = PAT) =>
+    ((await app.inject({ url: '/api/auth/devices', ...as(userId) })).json().data ?? []).map(
+      (d: { id: string }) => d.id
+    )
+  /** device-revoked entries saying `sign-in expired`. */
+  const expiredLogs = () =>
+    state.activity.filter(
+      (a) => a.action === 'device-revoked' && String(a.comment).includes('sign-in expired')
+    )
+  const hashOf = async (t: string) => (await import('../lib/oauth.js')).hashToken(t)
+
+  it('a refresh token that lapsed: off the list, its push rows go, logged as expired', async () => {
+    const p = await phone(PAT, 'Lapsed', [61])
+    const live = await phone(PAT, 'Live', [62])
+    // The 30-day refresh token expired (its key is gone) and no rotation is under way.
+    redis.kv.delete(`nvr:oauth:rt:${await hashOf(p.refresh_token)}`)
+    expect(await listed()).toEqual([live.grant.id])
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(61)
+    expect(pushDeletes().flatMap((d) => d.bindings)).not.toContain(62)
+    expect(expiredLogs()).toHaveLength(1)
+  })
+
+  it('idle past the role’s policy without being used: ended on the next list', async () => {
+    const p = await phone(PAT, 'Idle', [63])
+    const g = JSON.parse(redis.kv.get(`nvr:oauth:grant:${p.grant.id}`) as string)
+    g.created_at = new Date(Date.now() - 3 * 3_600_000).toISOString()
+    redis.kv.set(`nvr:oauth:grant:${p.grant.id}`, JSON.stringify(g))
+    state.policy = { idle_minutes: 60 }
+    expect(await listed()).toEqual([])
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(63)
+  })
+
+  it('an account that is no longer active: its phones end (admin list)', async () => {
+    const p = await phone(SAM, 'Sam phone', [64])
+    state.status[SAM] = 'suspended'
+    const res = await app.inject({
+      url: `/api/users/${SAM}/devices`,
+      ...as(ADMIN, { 'x-admin': '1' })
+    })
+    expect(res.json().data).toEqual([])
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(64)
+  })
+
+  it('MOBILE_SIGNIN=off: every phone sign-in ends, with its alerts', async () => {
+    const p = await phone(PAT, 'Phone', [65])
+    process.env.MOBILE_SIGNIN = 'off'
+    expect(await listed()).toEqual([])
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(65)
+  })
+
+  it('the sweep (where crons tick) ends them without anyone listing', async () => {
+    const { sweepDeviceGrants } = await import('../services/device-grants.js')
+    const p = await phone(SAM, 'Sam phone', [66])
+    const keep = await phone(PAT, 'Pat phone', [67])
+    state.status[SAM] = 'suspended'
+    expect(await sweepDeviceGrants(redis as never)).toBe(1)
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(await store.getGrant(redis as never, keep.grant.id)).not.toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(66)
+  })
+
+  it('a grant mid-rotation (refresh just spent) is not taken for lapsed', async () => {
+    const p = await phone(PAT, 'Rotating')
+    await store.consumeRefreshChecked(redis as never, p.refresh_token)
+    expect(await listed()).toEqual([p.grant.id])
+  })
+
+  it('a refresh refused because the account is inactive ends the grant', async () => {
+    const p = await phone(PAT, 'Phone', [68])
+    state.status[PAT] = 'suspended'
+    const res = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: p.refresh_token,
+        client_id: 'nivaro-mobile'
+      }).toString()
+    })
+    expect(res.statusCode).toBe(400)
+    expect(await store.getGrant(redis as never, p.grant.id)).toBeNull()
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(68)
+  })
+
+  it('grant keys live as long as the refresh token (plus a margin), renewed on refresh', async () => {
+    const ttls = new Map<string, number>()
+    const expire = redis.expire
+    ;(redis as unknown as { expire: (k: string, s: number) => Promise<number> }).expire = async (
+      k: string,
+      s: number
+    ) => {
+      ttls.set(k, s)
+      return expire()
+    }
+    const p = await phone(PAT, 'Phone', [69])
+    const { DEVICE_GRANT_MARGIN_S, REFRESH_TTL_S } = store
+    expect(ttls.get(`nvr:oauth:grant:${p.grant.id}`)).toBe(REFRESH_TTL_S + DEVICE_GRANT_MARGIN_S)
+    expect(ttls.get(`nvr:oauth:grant-push:${p.grant.id}`)).toBe(
+      REFRESH_TTL_S + DEVICE_GRANT_MARGIN_S
+    )
+    await store.setDeviceGrantLife(redis as never, p.grant.id, 3600)
+    expect(ttls.get(`nvr:oauth:grant:${p.grant.id}`)).toBe(3600 + DEVICE_GRANT_MARGIN_S)
+    expect(ttls.get(`nvr:oauth:grant-push:${p.grant.id}`)).toBe(3600 + DEVICE_GRANT_MARGIN_S)
   })
 })

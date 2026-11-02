@@ -1113,6 +1113,26 @@ export async function buildServer() {
         const { failStaleClips } = await import('./services/help-video-clips.js')
         await failStaleClips().catch(() => 0)
       })
+      // Phone sign-ins that ended with no action (refresh token lapsed, account not active,
+      // past the session policy, MOBILE_SIGNIN=off): end them with their push rows, so a lapsed
+      // phone neither stays listed nor keeps getting alerts. Self-hosted only (this block);
+      // cloud tenants are swept when their phones are listed.
+      app.cron.schedule(
+        'device-grants-sweep',
+        '17 * * * *',
+        async () => {
+          if (!app.redis) return
+          const { sweepDeviceGrants } = await import('./services/device-grants.js')
+          const ended = await sweepDeviceGrants(app.redis)
+          if (ended) app.log.info({ ended }, '[device-grants] lapsed phone sign-ins ended')
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Ends phone sign-ins that lapsed with no action (refresh token gone, account not active, past the session policy, or phone sign-in turned off), with their push rows.'
+        }
+      )
       // Help videos: "watched next" (#1530) — which video people in a role
       // started after each one, recomputed nightly from the view rows. The
       // scheduler records every tick as a job run (Background Jobs).

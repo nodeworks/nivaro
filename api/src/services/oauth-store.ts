@@ -35,6 +35,12 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   grant-idle:<id>  the idle review's stamps on a grant (#2497); its own key with its own TTL,
  *                    so the review never rewrites (or resurrects) a grant; deleted on revoke/use
  *   grant-push:<id>  a device grant's phone push row ids (a SET); read and deleted with the grant
+ *   grant-rt:<id>    a device grant's CURRENT refresh token (by hash): is its sign-in still alive?
+ *
+ * Device grant keys (grant:, grant-push:) expire: their TTL is the refresh token's life
+ * (deviceRefreshLife in routes/oauth.ts) plus DEVICE_GRANT_MARGIN_S, renewed on every refresh.
+ * The margin lets the sweep (services/device-grants.ts) end a lapsed grant — push rows
+ * included — before Redis drops it silently.
  *   rt-spent:<hash>  a spent refresh token (replay detection)
  *   rt-replay:<hash> a phone refresh's answer, encrypted with the spent token itself, kept for
  *                    DEVICE_REPLAY_WINDOW_S only (a retried refresh gets the same pair back)
@@ -56,6 +62,9 @@ const idleKey = (grantId: string) => `${P}grant-idle:${grantId}`
  *  the grant JSON (the last-use stamp rewrites it) can drop one. Touched only after the grant
  *  itself was read for this tenant, like grant-idle. */
 const pushKey = (grantId: string) => `${P}grant-push:${grantId}`
+const grantRtKey = (grantId: string) => `${P}grant-rt:${grantId}`
+/** How much longer than its refresh token a device grant key lives (the sweep's head start). */
+export const DEVICE_GRANT_MARGIN_S = 2 * 86_400
 
 export type TokenKind = 'mcp' | 'device'
 
@@ -218,7 +227,35 @@ export async function createDeviceGrant(
     t: currentTenantKey()
   }
   await storeGrant(redis, grant)
+  await setDeviceGrantLife(redis, grant.id, REFRESH_TTL_S)
   return grant
+}
+
+/**
+ * Keep a device grant (and its push-id set) for `lifeS` — its refresh token's life — plus
+ * DEVICE_GRANT_MARGIN_S. Called when the grant is made and on every refresh.
+ */
+export async function setDeviceGrantLife(
+  redis: Redis,
+  grantId: string,
+  lifeS: number
+): Promise<void> {
+  const ttl = Math.max(1, Math.floor(lifeS)) + DEVICE_GRANT_MARGIN_S
+  await redis.expire(`${P}grant:${grantId}`, ttl)
+  await redis.expire(pushKey(grantId), ttl)
+}
+
+/**
+ * Does a device grant still have a usable refresh token? Its current one (grant-rt) still
+ * exists, or was spent within REFRESH_REUSE_GRACE_S (a rotation under way). A grant with no
+ * record of one counts as alive for its first minute (its tokens are being issued).
+ */
+export async function deviceRefreshLive(redis: Redis, grant: OAuthGrant): Promise<boolean> {
+  const hash = await redis.get(grantRtKey(grant.id))
+  if (!hash) return Date.now() - Date.parse(grant.created_at) < 60_000
+  if (await redis.exists(`${P}rt:${hash}`)) return true
+  const spent = await read<{ at: number }>(redis, `${P}rt-spent:${hash}`)
+  return !!spent && Date.now() - spent.at <= REFRESH_REUSE_GRACE_S * 1000
 }
 
 async function storeGrant(redis: Redis, grant: OAuthGrant): Promise<void> {
@@ -274,11 +311,13 @@ export async function issueTokens(
   // A rotated record's own tenant stamp and kind are replaced: `kind` and this tenant decide.
   const { t: _t, kind: _k, ...fields } = rec
   const value = JSON.stringify({ ...fields, kind, t: currentTenantKey() })
-  await redis
+  const tx = redis
     .multi()
     .setex(`${P}at:${hashToken(access)}`, ACCESS_TTL_S, value)
     .setex(`${P}rt:${hashToken(refresh)}`, REFRESH_TTL_S, value)
-    .exec()
+  // A phone's current refresh token, so a lapsed sign-in can be told from a live one.
+  if (device) tx.setex(grantRtKey(fields.grant_id), REFRESH_TTL_S, hashToken(refresh))
+  await tx.exec()
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_S }
 }
 
@@ -604,7 +643,7 @@ export async function takeGrant(
   const tx = redis.multi()
   // A device grant's push ids are read and deleted in the same transaction as the grant: an
   // SADD lands either before (and is returned) or after (and addGrantPushId sees no grant).
-  if (k === 'device') tx.smembers(pushKey(grantId)).del(pushKey(grantId))
+  if (k === 'device') tx.smembers(pushKey(grantId)).del(pushKey(grantId)).del(grantRtKey(grantId))
   const res = await tx
     .del(`${P}grant:${grantId}`)
     .del(idleKey(grantId))
@@ -667,7 +706,11 @@ export async function addGrantPushId(
   const tx = redis.multi()
   for (const id of others) tx.srem(pushKey(id), String(pushId))
   await tx.sadd(pushKey(grantId), String(pushId)).exec()
-  if (await redis.exists(`${P}grant:${grantId}`)) return true
+  if (await redis.exists(`${P}grant:${grantId}`)) {
+    // The set never outlives the grant (renewed with it on refresh: setDeviceGrantLife).
+    await redis.expire(pushKey(grantId), REFRESH_TTL_S + DEVICE_GRANT_MARGIN_S)
+    return true
+  }
   // Ended between the read and the SADD: nothing will ever read this set again.
   await redis.del(pushKey(grantId))
   return false

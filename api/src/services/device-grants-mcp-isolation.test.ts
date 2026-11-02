@@ -54,6 +54,7 @@ function fakeRedis() {
   const kv = new Map<string, string>()
   const sets = new Map<string, Set<string>>()
   const r = {
+    expire: async () => 1,
     kv,
     get: async (k: string) => kv.get(k) ?? null,
     mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),

@@ -58,6 +58,7 @@ import {
   rememberDeviceRotation,
   revokeGrant,
   revokeToken,
+  setDeviceGrantLife,
   type TokenRecord,
   upsertGrant
 } from '../services/oauth-store.js'
@@ -844,17 +845,15 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         kind
       )
       if (kind !== 'device') return tokenAnswer(tokens, kind, grantId)
-      // A new phone sign-in: its refresh token's life, cut short by the role's max age.
+      // A new phone sign-in: its refresh token's life, cut short by the role's max age. The
+      // grant key lives as long (plus the sweep's margin).
       const who = (await db('nivaro_users')
         .where({ id: rec.user_id })
         .first('role')
         .catch(() => null)) as { role?: string | null } | null | undefined
-      return tokenAnswer(
-        tokens,
-        kind,
-        grantId,
-        await deviceRefreshLife(app, grantId, who?.role ?? null)
-      )
+      const life = await deviceRefreshLife(app, grantId, who?.role ?? null)
+      await setDeviceGrantLife(app.redis, grantId, life).catch(() => {})
+      return tokenAnswer(tokens, kind, grantId, life)
     }
 
     if (grantType === 'refresh_token') {
@@ -902,8 +901,12 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         account && String(account.id).toUpperCase() === String(rec.user_id).toUpperCase()
           ? account
           : await activeAccount(rec.user_id)
-      if (!acct) return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
       const kind = kindOf(rec)
+      if (!acct) {
+        // A phone of an account that cannot act any more: its sign-in (and alerts) end now.
+        if (kind === 'device') return endDeviceSignIn(rec, 'expired', 'The account is not active')
+        return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
+      }
       if (kind === 'device') {
         // Over: the phone signs in again (and appears again as a new sign-in).
         if (!acct.signInAllowed)
@@ -939,12 +942,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         ).catch((err) =>
           req.log.warn({ err, grant_id: rec.grant_id }, 'oauth: refresh answer not kept')
         )
-      return tokenAnswer(
-        tokens,
-        kind,
-        rec.grant_id,
-        kind === 'device' ? await deviceRefreshLife(app, rec.grant_id, acct.role) : undefined
-      )
+      if (kind !== 'device') return tokenAnswer(tokens, kind, rec.grant_id)
+      const life = await deviceRefreshLife(app, rec.grant_id, acct.role)
+      await setDeviceGrantLife(app.redis, rec.grant_id, life).catch(() => {})
+      return tokenAnswer(tokens, kind, rec.grant_id, life)
     }
 
     return oauthError(
