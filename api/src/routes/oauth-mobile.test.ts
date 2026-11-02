@@ -447,7 +447,7 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     )
   })
 
-  for (const extra of [{}, { install_id: 'inst-2' }]) {
+  for (const extra of [{}, { install_id: 'inst-2' }] as Array<Record<string, string>>) {
     it(`a replay ${extra.install_id ? 'from another install' : 'without the install_id'} ends the sign-in`, async () => {
       const { refresh, first, grantId } = await rotatedWithInstall()
       const theft = await refresh(extra)
