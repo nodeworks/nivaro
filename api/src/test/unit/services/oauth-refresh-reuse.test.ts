@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   consumeRefreshChecked,
   createDeviceGrant,
+  DEVICE_REPLAY_WINDOW_S,
   getGrant,
   issueTokens,
   REFRESH_REUSE_GRACE_S,
@@ -107,14 +108,21 @@ describe('refresh-token reuse detection', () => {
 describe('a phone refresh retried inside the grace window', () => {
   const mobile = { client_id: 'nivaro-mobile', client_name: 'Nivaro' }
   /** A phone signed in, its refresh token rotated once (the app lost the answer). */
-  async function rotated(redis: ReturnType<typeof memRedis>, user = 'U1') {
+  async function rotated(redis: ReturnType<typeof memRedis>, user = 'U1', installId?: string) {
     const grant = await createDeviceGrant(redis as never, user, mobile, { device_name: 'P' })
     const rec = { grant_id: grant.id, user_id: user, client_id: mobile.client_id, resource: null }
     const first = await issueTokens(redis as never, rec, 'device')
     const spent = await consumeRefreshChecked(redis as never, first.refresh_token)
     expect(spent.ok).toBe(true)
     const next = await issueTokens(redis as never, rec, 'device')
-    await rememberDeviceRotation(redis as never, first.refresh_token, grant.id, rec, next)
+    await rememberDeviceRotation(
+      redis as never,
+      first.refresh_token,
+      grant.id,
+      rec,
+      next,
+      installId
+    )
     return { grant, first, next }
   }
 
@@ -133,7 +141,7 @@ describe('a phone refresh retried inside the grace window', () => {
     expect(await getGrant(redis as never, grant.id)).not.toBe(null)
   })
 
-  it('the pair is stored encrypted, only for the grace window', async () => {
+  it('the pair is stored encrypted, only for the 10 s replay window', async () => {
     const redis = memRedis()
     const ttls: number[] = []
     const setex = redis.setex
@@ -146,7 +154,34 @@ describe('a phone refresh retried inside the grace window', () => {
     expect(stored).toHaveLength(1)
     expect(stored[0][1]).not.toContain(next.access_token)
     expect(stored[0][1]).not.toContain(next.refresh_token)
-    expect(ttls).toEqual([REFRESH_REUSE_GRACE_S])
+    expect(ttls).toEqual([DEVICE_REPLAY_WINDOW_S])
+    expect(DEVICE_REPLAY_WINDOW_S).toBe(10)
+  })
+
+  it('after the 10 s replay window (still inside the grace): refused, connection kept', async () => {
+    const redis = memRedis()
+    const { grant, first } = await rotated(redis)
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + (DEVICE_REPLAY_WINDOW_S + 2) * 1000)
+    expect(await consumeRefreshChecked(redis as never, first.refresh_token)).toEqual({
+      ok: false,
+      reason: 'unknown'
+    })
+    expect(await getGrant(redis as never, grant.id)).not.toBe(null)
+  })
+
+  it('bound to the install: a replay needs the same install_id the first refresh sent', async () => {
+    const redis = memRedis()
+    const { first, next } = await rotated(redis, 'U1', 'install-AAA')
+    const refuse = { ok: false, reason: 'unknown' }
+    expect(await consumeRefreshChecked(redis as never, first.refresh_token)).toEqual(refuse)
+    expect(
+      await consumeRefreshChecked(redis as never, first.refresh_token, { installId: 'install-BBB' })
+    ).toEqual(refuse)
+    const same = await consumeRefreshChecked(redis as never, first.refresh_token, {
+      installId: 'install-AAA'
+    })
+    expect(same.ok && same.replayed?.refresh_token).toBe(next.refresh_token)
   })
 
   it('reuse after the grace window keeps today’s rule: refused, connection ended', async () => {

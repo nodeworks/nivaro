@@ -39,6 +39,8 @@ import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mc
 import { listKits, type ToolKit } from '../services/mcp-kits.js'
 import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/mcp-scope.js'
 import {
+  ACCESS_TTL_S,
+  cleanInstallId,
   consumeCode,
   consumeRefreshChecked,
   createDeviceGrant,
@@ -51,6 +53,7 @@ import {
   listGrants,
   peekDeviceAccess,
   peekRefresh,
+  REFRESH_TTL_S,
   registerClient,
   rememberDeviceRotation,
   revokeGrant,
@@ -521,6 +524,26 @@ async function deviceSignInExpired(
   return !judgeDeviceGrant(limitsFor(policy, role), grant, appNowForAuth()).ok
 }
 
+/**
+ * How long a phone's new refresh token is good for (seconds): its own 30 days, or less when the
+ * role's session policy ends the sign-in sooner (max age from when it signed in). Idle time is
+ * not counted: a refresh is a use.
+ */
+async function deviceRefreshLife(
+  app: FastifyInstance,
+  grantId: string,
+  role: string | null
+): Promise<number> {
+  const policy = await getSessionPolicy().catch(() => null)
+  const maxAge = policy ? limitsFor(policy, role).max_age_hours : null
+  if (maxAge == null) return REFRESH_TTL_S
+  const grant = await getGrant(app.redis, grantId).catch(() => null)
+  const since = grant?.created_at ? Date.parse(grant.created_at) : Number.NaN
+  if (!Number.isFinite(since)) return REFRESH_TTL_S
+  const left = Math.floor((since + maxAge * 3_600_000 - appNowForAuth()) / 1000)
+  return Math.max(0, Math.min(REFRESH_TTL_S, left))
+}
+
 const equalStrings = (a: string, b: string) => {
   const x = Buffer.from(a)
   const y = Buffer.from(b)
@@ -725,17 +748,19 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     if (!enabledFor(reply, str(b.client_id))) return
     if (await limited(app, req, reply, 'token', 120, 60)) return
     const grantType = str(b.grant_type)
-    /** The token answer: device tokens carry no scope (they act as the person everywhere). */
+    /** The token answer: device tokens carry no scope (they act as the person everywhere) but
+     *  say how long the refresh token is good for (`refresh_expires_in`, seconds). */
     const tokenAnswer = async (
       tokens: Awaited<ReturnType<typeof issueTokens>>,
       kind: 'mcp' | 'device',
-      grantId: string
+      grantId: string,
+      refreshLife = REFRESH_TTL_S
     ) =>
       reply
         .header('Cache-Control', 'no-store')
         .send(
           kind === 'device'
-            ? { ...tokens, token_type: 'Bearer' }
+            ? { ...tokens, token_type: 'Bearer', refresh_expires_in: refreshLife }
             : { ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, grantId) }
         )
     const activeUser = async (id: string) =>
@@ -817,7 +842,9 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       // the refresh token usable for the app's retry.
       const peeked = await peekRefresh(app.redis, str(b.refresh_token))
       const account = peeked ? await activeAccount(peeked.user_id) : undefined
-      const out = await consumeRefreshChecked(app.redis, str(b.refresh_token))
+      // The phone's install id (optional): a replayed refresh must come from the same install.
+      const installId = cleanInstallId(b.install_id)
+      const out = await consumeRefreshChecked(app.redis, str(b.refresh_token), { installId })
       if (!out.ok && out.reason === 'reused') {
         // A spent refresh token came back: a leaked token or a stolen copy. The connection is
         // already ended; the person's history and the server log say so (ids only).
@@ -865,8 +892,18 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         if (await deviceSignInExpired(app, rec, acct.role))
           return endDeviceSignIn(rec, 'expired', 'Your sign-in has expired. Sign in again.')
       }
-      // A phone retrying a refresh whose answer it lost (inside the grace window): that answer.
-      if (out.replayed) return tokenAnswer(out.replayed, kind, rec.grant_id)
+      // A phone retrying a refresh whose answer it lost (inside the replay window): that answer.
+      if (out.replayed) {
+        await logActivity({
+          action: 'oauth-refresh-replayed',
+          user: rec.user_id,
+          comment: rec.grant_id,
+          req
+        }).catch(() => {})
+        const elapsed = Math.max(0, ACCESS_TTL_S - out.replayed.expires_in)
+        const life = await deviceRefreshLife(app, rec.grant_id, acct.role)
+        return tokenAnswer(out.replayed, kind, rec.grant_id, Math.max(0, life - elapsed))
+      }
       const tokens = await issueTokens(app.redis, rec, kind)
       if (kind === 'device')
         await rememberDeviceRotation(
@@ -874,11 +911,17 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
           str(b.refresh_token),
           rec.grant_id,
           rec,
-          tokens
+          tokens,
+          installId
         ).catch((err) =>
           req.log.warn({ err, grant_id: rec.grant_id }, 'oauth: refresh answer not kept')
         )
-      return tokenAnswer(tokens, kind, rec.grant_id)
+      return tokenAnswer(
+        tokens,
+        kind,
+        rec.grant_id,
+        kind === 'device' ? await deviceRefreshLife(app, rec.grant_id, acct.role) : undefined
+      )
     }
 
     return oauthError(

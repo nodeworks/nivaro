@@ -28,6 +28,11 @@ vi.mock('../db/index.js', () => {
   return { db }
 })
 vi.mock('../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+const policy = vi.hoisted(() => ({ value: null as Record<string, unknown> | null }))
+vi.mock('../services/session-policy.js', async (orig) => ({
+  ...(await orig<object>()),
+  getSessionPolicy: vi.fn(async () => policy.value)
+}))
 vi.mock('../admin-base.js', async (orig) => ({
   ...(await orig<object>()),
   servesAdminSpa: false
@@ -130,6 +135,7 @@ beforeAll(async () => {
 })
 afterAll(() => app.close())
 afterEach(() => {
+  policy.value = null
   delete process.env.MOBILE_SIGNIN
   delete process.env.MCP_OAUTH
 })
@@ -262,8 +268,10 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     )
     const t = tok.json()
     expect(Object.keys(t).sort()).toEqual(
-      ['access_token', 'expires_in', 'refresh_token', 'token_type'].sort()
+      ['access_token', 'expires_in', 'refresh_expires_in', 'refresh_token', 'token_type'].sort()
     )
+    // A new sign-in: the refresh token's whole life.
+    expect(t.refresh_expires_in).toBe(30 * 86_400)
     expect(t.access_token.startsWith('nvd_')).toBe(true)
     expect(t.refresh_token.startsWith('nvdr_')).toBe(true)
     expect(t.expires_in).toBe(3600)
@@ -378,6 +386,70 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       expect(doc.issuer).toBe(iss)
       expect(doc.token_endpoint).toBe(`${iss}/oauth/token`)
     }
+  })
+
+  it('a replayed refresh is bound to the install_id the first refresh sent, and logged', async () => {
+    signIn()
+    const tok = (await exchange(codeOf(await signInCode(params())))).json()
+    const refresh = (extra: Record<string, string> = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        ...form({
+          grant_type: 'refresh_token',
+          refresh_token: tok.refresh_token,
+          client_id: 'nivaro-mobile',
+          ...extra
+        })
+      })
+    const first = await refresh({ install_id: 'inst-1' })
+    expect(first.statusCode).toBe(200)
+    vi.mocked(logActivity).mockClear()
+    expect((await refresh()).statusCode).toBe(400)
+    expect((await refresh({ install_id: 'inst-2' })).statusCode).toBe(400)
+    const again = await refresh({ install_id: 'inst-1' })
+    expect(again.statusCode).toBe(200)
+    expect(again.json().refresh_token).toBe(first.json().refresh_token)
+    const rec = await resolveAccessToken(redis as never, again.json().access_token, 'device')
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'oauth-refresh-replayed',
+        user: 'U1',
+        comment: rec?.grant_id
+      })
+    )
+  })
+
+  it('refresh_expires_in on a refresh is what is left of the sign-in (role max age)', async () => {
+    signIn()
+    const tok = (await exchange(codeOf(await signInCode(params())))).json()
+    expect(tok.refresh_expires_in).toBe(30 * 86_400)
+    policy.value = { max_age_hours: 48 }
+    const r = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({
+        grant_type: 'refresh_token',
+        refresh_token: tok.refresh_token,
+        client_id: 'nivaro-mobile'
+      })
+    })
+    expect(r.statusCode).toBe(200)
+    const left = r.json().refresh_expires_in
+    expect(left).toBeLessThanOrEqual(48 * 3600)
+    expect(left).toBeGreaterThan(48 * 3600 - 60)
+    // No max age: the refresh token's own 30 days.
+    policy.value = null
+    const r2 = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({
+        grant_type: 'refresh_token',
+        refresh_token: r.json().refresh_token,
+        client_id: 'nivaro-mobile'
+      })
+    })
+    expect(r2.json().refresh_expires_in).toBe(30 * 86_400)
   })
 
   it('each phone sign-in is its own connection', async () => {

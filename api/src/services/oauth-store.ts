@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual
+} from 'node:crypto'
 import type { Redis } from 'ioredis'
 import type { DevicePlatform } from '../lib/mobile-clients.js'
 import {
@@ -30,7 +37,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   grant-push:<id>  a device grant's phone push row ids (a SET); read and deleted with the grant
  *   rt-spent:<hash>  a spent refresh token (replay detection)
  *   rt-replay:<hash> a phone refresh's answer, encrypted with the spent token itself, kept for
- *                    the reuse grace window only (a retried refresh gets the same pair back)
+ *                    DEVICE_REPLAY_WINDOW_S only (a retried refresh gets the same pair back)
  *
  * Tokens and codes are stored by hash only. Every token is checked against its
  * grant, so revoking a connection ends its tokens at once. Cloud: every record
@@ -279,6 +286,10 @@ export async function issueTokens(
  *  retrying a refresh whose answer it lost); after it, a replay ends the whole connection. */
 export const REFRESH_REUSE_GRACE_S = 30
 
+/** How long a phone's retried refresh gets its first answer again (rememberDeviceRotation).
+ *  Shorter than the grace: a retry between the two is refused but forgiven, as before. */
+export const DEVICE_REPLAY_WINDOW_S = 10
+
 const spentKey = (hash: string) => `${P}rt-spent:${hash}`
 
 export type ConsumeRefreshResult =
@@ -298,7 +309,9 @@ export type ConsumeRefreshResult =
  */
 export async function consumeRefreshChecked(
   redis: Redis,
-  refresh: string
+  refresh: string,
+  /** The install id the phone sends with the refresh (`install_id`), for a replay's binding. */
+  opts: { installId?: string } = {}
 ): Promise<ConsumeRefreshResult> {
   const h = hashToken(refresh)
   const raw = await redis.getdel(`${P}rt:${h}`)
@@ -321,7 +334,7 @@ export async function consumeRefreshChecked(
     }
     // Inside the grace window a phone's retry gets its first answer again (idempotent refresh).
     const replay = refresh.startsWith(DEVICE_REFRESH_PREFIX)
-      ? await replayDeviceRotation(redis, refresh, spent.grant_id).catch(() => null)
+      ? await replayDeviceRotation(redis, refresh, spent.grant_id, opts.installId).catch(() => null)
       : null
     if (replay) return { ok: true, rec: replay.rec, replayed: replay.tokens }
     return { ok: false, reason: 'unknown' }
@@ -363,24 +376,35 @@ interface ReplayBlob {
   ct: string
 }
 
+/** The stored form of an install id: never the id itself. */
+const installHash = (id: string) => createHash('sha256').update(`nvr:install:${id}`).digest()
+
+/** A usable install id from a token request, or undefined (1–200 printable characters). */
+export function cleanInstallId(v: unknown): string | undefined {
+  return typeof v === 'string' && /^[\x21-\x7e]{1,200}$/.test(v) ? v : undefined
+}
+
 /**
  * Remember the pair a phone refresh (`nvdr_`) was answered with, under the spent token, for
- * REFRESH_REUSE_GRACE_S only, encrypted with a key derived from that spent token: a retry of the
- * same refresh inside the window (the app lost the answer) then gets the same pair back instead
- * of a refusal. MCP refresh tokens are never remembered.
+ * DEVICE_REPLAY_WINDOW_S only, encrypted with a key derived from that spent token: a retry of
+ * the same refresh inside the window (the app lost the answer) then gets the same pair back
+ * instead of a refusal. When that refresh carried an `install_id`, a replay must carry the same
+ * one (only its hash is kept). MCP refresh tokens are never remembered.
  */
 export async function rememberDeviceRotation(
   redis: Redis,
   spentRefresh: string,
   grantId: string,
   rec: Omit<TokenRecord, 't' | 'kind'> & Partial<Pick<TokenRecord, 't' | 'kind'>>,
-  tokens: IssuedTokens
+  tokens: IssuedTokens,
+  installId?: string
 ): Promise<void> {
   if (!spentRefresh.startsWith(DEVICE_REFRESH_PREFIX)) return
   const iv = randomBytes(12)
   const c = createCipheriv('aes-256-gcm', replayCipherKey(spentRefresh), iv)
   const { t: _t, kind: _k, ...fields } = rec
-  const plain = JSON.stringify({ tokens, rec: { ...fields, kind: 'device' } })
+  const ih = installId ? installHash(installId).toString('base64url') : null
+  const plain = JSON.stringify({ tokens, rec: { ...fields, kind: 'device' }, ih })
   const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()])
   const blob: ReplayBlob = {
     g: grantId,
@@ -390,7 +414,11 @@ export async function rememberDeviceRotation(
     tag: c.getAuthTag().toString('base64url'),
     ct: ct.toString('base64url')
   }
-  await redis.setex(replayKey(hashToken(spentRefresh)), REFRESH_REUSE_GRACE_S, JSON.stringify(blob))
+  await redis.setex(
+    replayKey(hashToken(spentRefresh)),
+    DEVICE_REPLAY_WINDOW_S,
+    JSON.stringify(blob)
+  )
 }
 
 /**
@@ -401,13 +429,14 @@ export async function rememberDeviceRotation(
 async function replayDeviceRotation(
   redis: Redis,
   refresh: string,
-  grantId: string
+  grantId: string,
+  installId?: string
 ): Promise<{ tokens: IssuedTokens; rec: TokenRecord } | null> {
   const blob = await read<ReplayBlob>(redis, replayKey(hashToken(refresh)))
   if (!blob || !sameTenant(blob) || blob.g !== grantId) return null
   const age = Date.now() - Number(blob.at)
-  if (!(age >= 0 && age <= REFRESH_REUSE_GRACE_S * 1000)) return null
-  let out: { tokens: IssuedTokens; rec: TokenRecord }
+  if (!(age >= 0 && age <= DEVICE_REPLAY_WINDOW_S * 1000)) return null
+  let out: { tokens: IssuedTokens; rec: TokenRecord; ih?: string | null }
   try {
     const d = createDecipheriv(
       'aes-256-gcm',
@@ -421,6 +450,13 @@ async function replayDeviceRotation(
     return null
   }
   if (out?.rec?.grant_id !== grantId || typeof out.tokens?.refresh_token !== 'string') return null
+  // Bound to the install the first refresh came from, when it named one.
+  if (out.ih) {
+    if (!installId) return null
+    const want = Buffer.from(out.ih, 'base64url')
+    const got = installHash(installId)
+    if (want.length !== got.length || !timingSafeEqual(want, got)) return null
+  }
   const [grant, next] = await Promise.all([
     redis.exists(`${P}grant:${grantId}`),
     redis.exists(`${P}rt:${hashToken(out.tokens.refresh_token)}`)
