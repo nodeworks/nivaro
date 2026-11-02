@@ -139,6 +139,26 @@ const readStamp = (raw: string | null): Stamp | null => {
   }
 }
 
+/** The credential each phone push row was registered with (null = no stamp), one MGET. */
+export async function phoneRowStamps(
+  redis: Redis,
+  rowIds: number[]
+): Promise<Map<number, PushCredential | null>> {
+  const out = new Map<number, PushCredential | null>()
+  const ids = rowIds.filter((n) => Number.isInteger(n) && n > 0)
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500)
+    const stamps = (await redis.mget(...part.map(registeredKey))).map(readStamp)
+    for (const [k, id] of part.entries()) out.set(id, stamps[k]?.by ?? null)
+  }
+  return out
+}
+
+/** A stamp of a credential that outlives sessions (a static token or an API key). */
+export function isLastingCredential(by: string | null | undefined): by is PushCredential {
+  return !!by && lasting(by)
+}
+
 /** Stamp a phone push row as registered now, by `by` (every registration, insert or update). */
 export async function notePhoneRegistered(
   redis: Redis,
@@ -482,4 +502,41 @@ export async function sweepDeviceGrants(redis: Redis): Promise<number> {
     ended += before - after
   }
   return ended
+}
+
+/**
+ * The background pass's second half (cron `device-grants-sweep`): phone rows registered with a
+ * static token or API key that no longer works (regenerated, deleted, revoked, expired) are
+ * deleted, through deleteOrKeep. One check per distinct credential and person. Returns how many
+ * rows went.
+ */
+export async function sweepEndedCredentialRows(redis: Redis): Promise<number> {
+  const rows = (await wherePhoneEndpoint(db('nivaro_push_subscriptions')).select(
+    'id',
+    'user'
+  )) as Array<{ id: number; user: string | null }>
+  if (rows.length === 0) return 0
+  const stamps = await phoneRowStamps(
+    redis,
+    rows.map((r) => Number(r.id))
+  )
+  const verdicts = new Map<string, boolean>()
+  const dead = new Map<string, number[]>()
+  for (const r of rows) {
+    const by = stamps.get(Number(r.id))
+    if (!isLastingCredential(by) || !r.user) continue
+    const key = `${String(r.user).toUpperCase()}|${by}`
+    let live = verdicts.get(key)
+    if (live === undefined) {
+      live = await credentialLive(redis, by, String(r.user)).catch(() => true)
+      verdicts.set(key, live)
+    }
+    if (!live) dead.set(String(r.user), [...(dead.get(String(r.user)) ?? []), Number(r.id)])
+  }
+  let n = 0
+  for (const [u, ids] of dead) {
+    await deletePushRowsOrKeep(redis, u, ids)
+    n += ids.length
+  }
+  return n
 }

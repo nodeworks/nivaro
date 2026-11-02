@@ -164,9 +164,10 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
       data = { ...data, id: null }
       payload = { ...payload, title: `${routed.prefix}${payload.title}` }
     }
-    const phones = (await wherePhoneEndpoint(
+    const registered = (await wherePhoneEndpoint(
       db('nivaro_push_subscriptions').where({ user: userId })
     ).select('id', 'endpoint')) as Array<{ id: number; endpoint: string }>
+    const phones = await withoutEndedCredentials(userId, registered)
     if (phones.length === 0) return 0
 
     const badge = await unreadBadge(userId)
@@ -241,6 +242,58 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
   } catch (err) {
     console.warn('[phone-push] sendPhonePush error:', err)
     return 0
+  }
+}
+
+/** Redis for the send-time credential check (set at boot, server.ts). */
+let pushRedis: import('ioredis').Redis | null = null
+export function setPhonePushRedis(redis: import('ioredis').Redis | null): void {
+  pushRedis = redis
+}
+
+/**
+ * Drop (and delete, through deleteOrKeep) the phones registered with a static token or API key
+ * that no longer works — regenerated, deleted, revoked or expired — so they stop getting alerts
+ * at once, not at the next sweep. One check per distinct stamp per send; session and grant rows
+ * are judged elsewhere. A check that cannot run sends as before (never loses an alert on a
+ * Redis or database error).
+ */
+async function withoutEndedCredentials<T extends { id: number }>(
+  userId: string,
+  phones: T[]
+): Promise<T[]> {
+  const redis = pushRedis
+  if (!redis || phones.length === 0) return phones
+  try {
+    const { credentialLive, deletePushRowsOrKeep, phoneRowStamps } = await import(
+      './device-grants.js'
+    )
+    const stamps = await phoneRowStamps(
+      redis,
+      phones.map((p) => p.id)
+    )
+    const lastingStamps = new Set<string>()
+    for (const by of stamps.values())
+      if (by && (by.startsWith('token:') || by.startsWith('key:'))) lastingStamps.add(by)
+    if (lastingStamps.size === 0) return phones
+    const live = new Map<string, boolean>()
+    for (const by of lastingStamps)
+      live.set(by, await credentialLive(redis, by as `token:${string}`, userId))
+    const dead = phones.filter((p) => {
+      const by = stamps.get(p.id)
+      return !!by && live.get(by) === false
+    })
+    if (dead.length === 0) return phones
+    await deletePushRowsOrKeep(
+      redis,
+      userId,
+      dead.map((p) => p.id)
+    )
+    const gone = new Set(dead.map((p) => p.id))
+    return phones.filter((p) => !gone.has(p.id))
+  } catch (err) {
+    console.warn('[phone-push] credential check skipped:', (err as Error)?.message ?? err)
+    return phones
   }
 }
 

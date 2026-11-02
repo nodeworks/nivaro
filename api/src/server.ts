@@ -367,6 +367,9 @@ export async function buildServer() {
     // Readiness results are shared by every replica (and refreshed by one).
     const { setReadinessRedis } = await import('./services/readiness.js')
     setReadinessRedis(app.redis)
+    // Phone alerts drop rows whose static token / API key stopped working (services/phone-push.ts).
+    const { setPhonePushRedis } = await import('./services/phone-push.js')
+    setPhonePushRedis(app.redis)
     // #2441 — configuration reads shared across processes (a fresh replica starts warm).
     const { setMetadataL2Redis } = await import('./db/metadata-l2.js')
     setMetadataL2Redis(app.redis)
@@ -1122,15 +1125,21 @@ export async function buildServer() {
         '17 * * * *',
         async () => {
           if (!app.redis) return
-          const { sweepDeviceGrants } = await import('./services/device-grants.js')
+          const { sweepDeviceGrants, sweepEndedCredentialRows } = await import(
+            './services/device-grants.js'
+          )
           const ended = await sweepDeviceGrants(app.redis)
           if (ended) app.log.info({ ended }, '[device-grants] lapsed phone sign-ins ended')
+          // Rows a static token / API key registered, once that credential stopped working.
+          const rows = await sweepEndedCredentialRows(app.redis)
+          if (rows)
+            app.log.info({ rows }, '[device-grants] phone rows of ended tokens/keys removed')
         },
         {
           quiet: true,
           idempotent: 'safe',
           description:
-            'Ends phone sign-ins that lapsed with no action (refresh token gone, account not active, past the session policy, or phone sign-in turned off), with their push rows.'
+            'Ends phone sign-ins that lapsed with no action (refresh token gone, account not active, past the session policy, or phone sign-in turned off), with their push rows, and removes phone rows whose static token or API key stopped working.'
         }
       )
       // Help videos: "watched next" (#1530) — which video people in a role

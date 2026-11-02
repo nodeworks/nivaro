@@ -70,12 +70,34 @@ vi.mock('../../../lib/ssrf.js', () => ({
 }))
 vi.mock('../../../admin-base.js', () => ({ adminBaseUrl: () => 'https://acme.example' }))
 vi.mock('../../../services/swallow-counter.js', () => ({ countSwallow: () => {} }))
+// Static-token / API-key phone rows: their stamps and whether those credentials still work.
+const cred = vi.hoisted(() => ({
+  stamps: new Map<number, string | null>(),
+  live: new Map<string, boolean>(),
+  checks: [] as string[],
+  removed: [] as number[][]
+}))
+vi.mock('../../../services/device-grants.js', () => ({
+  phoneRowStamps: vi.fn(async (_r: unknown, ids: number[]) => {
+    const m = new Map<number, string | null>()
+    for (const id of ids) m.set(id, cred.stamps.get(id) ?? null)
+    return m
+  }),
+  credentialLive: vi.fn(async (_r: unknown, by: string) => {
+    cred.checks.push(by)
+    return cred.live.get(by) ?? true
+  }),
+  deletePushRowsOrKeep: vi.fn(async (_r: unknown, _u: string, ids: number[]) => {
+    cred.removed.push(ids)
+  })
+}))
 
 import {
   isExpoPushToken,
   phonePushMode,
   resetRelayWarnings,
-  sendPhonePush
+  sendPhonePush,
+  setPhonePushRedis
 } from '../../../services/phone-push.js'
 
 const TOKEN = 'ExponentPushToken[abc123]'
@@ -100,6 +122,11 @@ beforeEach(() => {
   delete process.env.MOBILE_PUSH_RELAY_KEY
   h.settings = null
   resetRelayWarnings()
+  cred.stamps.clear()
+  cred.live.clear()
+  cred.checks = []
+  cred.removed = []
+  setPhonePushRedis({} as never)
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -328,6 +355,50 @@ describe('relay phones', () => {
       (c) => JSON.parse((c[1] as any).body).messages.length
     )
     expect(sizes).toEqual([50, 50, 20])
+  })
+})
+
+describe('phones registered with a static token or API key', () => {
+  beforeEach(() => {
+    h.phones = [
+      { id: 31, endpoint: `expo:${TOKEN}` },
+      { id: 32, endpoint: 'expo:ExponentPushToken[def456]' },
+      { id: 33, endpoint: 'expo:ExponentPushToken[ghi789]' }
+    ]
+    fetchMock.mockResolvedValue(tickets({ status: 'ok', id: 'a' }, { status: 'ok', id: 'b' }))
+  })
+  const sentTo = () =>
+    fetchMock.mock.calls
+      .flatMap((c) => JSON.parse((c[1] as { body: string }).body))
+      .map((m: { to: string }) => m.to)
+
+  it('a regenerated static token: that phone gets nothing and its row goes', async () => {
+    cred.stamps.set(31, 'token:aaaaaaaaaaaaaaaa')
+    cred.live.set('token:aaaaaaaaaaaaaaaa', false)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(sentTo()).not.toContain(TOKEN)
+    expect(sentTo()).toHaveLength(2)
+    expect(cred.removed).toEqual([[31]])
+  })
+
+  it('an expired API key: the same; a live key is still sent to', async () => {
+    cred.stamps.set(32, 'key:7')
+    cred.stamps.set(33, 'key:8')
+    cred.live.set('key:7', false)
+    cred.live.set('key:8', true)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(sentTo()).toEqual(expect.arrayContaining([TOKEN, 'ExponentPushToken[ghi789]']))
+    expect(sentTo()).not.toContain('ExponentPushToken[def456]')
+    expect(cred.removed).toEqual([[32]])
+  })
+
+  it('one check per distinct stamp per send; session and grant rows are not checked', async () => {
+    cred.stamps.set(31, 'key:9')
+    cred.stamps.set(32, 'key:9')
+    cred.stamps.set(33, 'sid:abc')
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(cred.checks).toEqual(['key:9'])
+    expect(sentTo()).toHaveLength(3)
   })
 })
 

@@ -16,12 +16,15 @@ const state = vi.hoisted(() => ({
   /** nivaro_api_keys rows by id. */
   /** The database refusing DELETEs. */
   delFails: false,
+  /** Owner of a push row (default Pat). */
+  rowUser: {} as Record<number, string>,
   apiKeys: {} as Record<
     string,
     { id: number; user: string; is_active: boolean; expires_at: string | null }
   >
 }))
 
+const PAT_ID = 'AAAAAAAA-0000-4000-8000-000000000001'
 vi.mock('../db/index.js', async () => {
   const { makeFakeDb } = await import('../test/fake-sql.js')
   const db = makeFakeDb((q) => {
@@ -49,7 +52,9 @@ vi.mock('../db/index.js', async () => {
     }
     if (q.method === 'select' && q.sql.includes('nivaro_push_subscriptions')) {
       const inList = /\bin \(/i.test(q.sql)
-      return state.pushRows.filter((id) => !inList || q.bindings.includes(id)).map((id) => ({ id }))
+      return state.pushRows
+        .filter((id) => !inList || q.bindings.includes(id))
+        .map((id) => ({ id, user: state.rowUser[id] ?? PAT_ID }))
     }
     return q.method === 'first' ? undefined : []
   })
@@ -219,6 +224,7 @@ beforeEach(() => {
   state.policy = null
   state.apiKeys = {}
   state.delFails = false
+  state.rowUser = {}
   delete process.env.MOBILE_SIGNIN
 })
 
@@ -568,6 +574,15 @@ describe('signing a person out on every phone', () => {
       await revokeUserSessions(redis as never, PAT, { full: false })
       expect(deleted()).toContain(22)
       expect(deleted()).not.toContain(21)
+    })
+
+    it('the hourly sweep removes rows whose token or key stopped working', async () => {
+      const { sweepEndedCredentialRows } = await import('../services/device-grants.js')
+      const { deleted } = await lasting()
+      state.staticTokens[PAT] = 'regenerated'
+      expect(await sweepEndedCredentialRows(redis as never)).toBe(1)
+      expect(deleted()).toContain(21)
+      expect(deleted()).not.toContain(22)
     })
 
     it('a full "sign out everywhere" takes them too', async () => {
