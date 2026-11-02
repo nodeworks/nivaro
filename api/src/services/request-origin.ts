@@ -5,7 +5,10 @@ import { mcpPublicOrigin } from './mcp-config.js'
 
 /** This instance's configured addresses: PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS. */
 function configuredOrigins(): string[] {
+  // MCP_PUBLIC_URL's origin first: the MCP host always answers it (a same-host scheme tie,
+  // PUBLIC_URL http://h vs MCP_PUBLIC_URL https://h, is https).
   const raw = [
+    mcpPublicOrigin(),
     config.PUBLIC_URL,
     config.ADMIN_URL,
     process.env.MCP_PUBLIC_URL,
@@ -36,12 +39,12 @@ function hostIs(origin: string, host: string): boolean {
 }
 
 /**
- * The issuer for a request — the OAuth `iss` a first-party phone app checks, and the discovery
- * document's `issuer` on that host, so the two always agree.
+ * The issuer for a request — the OAuth `iss` every client gets (phone apps and MCP clients), and
+ * the discovery document's `issuer` on that host, so the two always agree.
  *
  *  - Cloud: the tenant's verified origin (its own subdomain or active custom domain), else its
  *    canonical origin (db/tenant-context.ts).
- *  - Self-hosted: the configured address (PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS) whose
+ *  - Self-hosted: the configured address (MCP_PUBLIC_URL first, then PUBLIC_URL, ADMIN_URL, APP_URLS) whose
  *    host is the request's host — as Fastify reads it, so a forwarded host counts only from a
  *    proxy TRUST_PROXY trusts — else MCP_PUBLIC_URL's origin (mcpPublicOrigin). An internal host
  *    behind an untrusted proxy is never named.

@@ -113,14 +113,12 @@ const redirectSchemes = (uris: string[]) => [
 ]
 
 /**
- * The `iss` an authorize answer names. A first-party phone app signs in to whichever address the
- * person typed — a tenant host or custom domain in cloud — so its issuer is requestIssuer(req):
- * the tenant's verified origin, or the configured address the request's host names (else
- * MCP_PUBLIC_URL's) — the same issuer discovery answers on that host. Every other client:
- * MCP_PUBLIC_URL's.
+ * The `iss` an authorize answer names, for every client: requestIssuer(req) — the tenant's
+ * verified origin in cloud; self-hosted the configured address the request's host names
+ * (MCP_PUBLIC_URL's on the MCP host), else MCP_PUBLIC_URL's — the same issuer discovery
+ * answers on that host. A phone app checks it against the address the person typed.
  */
-const authorizeIssuer = (req: FastifyRequest, mobile: boolean) =>
-  mobile ? requestIssuer(req) : mcpPublicOrigin()
+const authorizeIssuer = (req: FastifyRequest) => requestIssuer(req)
 
 const oauthError = (reply: FastifyReply, status: number, error: string, description: string) =>
   reply
@@ -661,8 +659,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     // to a signed-in person when `reauth` is set — and the fresh sign-in stamps
     // the same session.
     // A phone app's sign-in comes back to the origin it started on: its `iss` is that origin.
-    if (!user || stale)
-      return reply.redirect(signInUrl(req.url, stale, authorizeIssuer(req, checked.client.mobile)))
+    if (!user || stale) return reply.redirect(signInUrl(req.url, stale, authorizeIssuer(req)))
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
     if (checked.client.mobile)
@@ -692,13 +689,13 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         withAuthResponse(p.redirect_uri, {
           error: 'access_denied',
           state: p.state,
-          iss: authorizeIssuer(req, checked.client.mobile)
+          iss: authorizeIssuer(req)
         })
       )
     if (checked.client.mobile) {
       // No grant yet: a phone's grant is made when its code is exchanged (POST /oauth/token),
       // so an abandoned or failed sign-in leaves nothing behind. The code carries what it needs.
-      const iss = authorizeIssuer(req, true)
+      const iss = authorizeIssuer(req)
       const code = await issueCode(app.redis, {
         kind: 'device',
         client_id: checked.client.client_id,
@@ -738,7 +735,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       req
     }).catch(() => {})
     return reply.redirect(
-      withAuthResponse(p.redirect_uri, { code, state: p.state, iss: mcpPublicOrigin() })
+      withAuthResponse(p.redirect_uri, { code, state: p.state, iss: authorizeIssuer(req) })
     )
   })
 

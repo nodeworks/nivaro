@@ -375,6 +375,29 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     )
   })
 
+  it('an MCP client’s iss is the discovery issuer of the host it authorized on', async () => {
+    signIn()
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'Claude', redirect_uris: ['https://claude.ai/cb'] }
+    })
+    expect(reg.statusCode).toBe(201)
+    const mcp = params({
+      client_id: reg.json().client_id,
+      redirect_uri: 'https://claude.ai/cb',
+      device_name: '',
+      platform: ''
+    })
+    for (const host of ['tenant-a.example', 'nivaro.example', 'nivaro:3055']) {
+      const doc = (
+        await app.inject({ url: '/.well-known/oauth-authorization-server', headers: { host } })
+      ).json()
+      const allow = await signInCode(mcp, host)
+      expect(new URL(String(allow.headers.location)).searchParams.get('iss')).toBe(doc.issuer)
+    }
+  })
+
   it('discovery names the same issuer as the authorize answer, per host', async () => {
     signIn()
     for (const host of ['tenant-a.example', 'nivaro:3055', 'nivaro.example']) {
