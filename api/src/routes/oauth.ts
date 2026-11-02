@@ -57,6 +57,7 @@ import {
   type TokenRecord,
   upsertGrant
 } from '../services/oauth-store.js'
+import { requestOrigin } from '../services/request-origin.js'
 import { getSessionPolicy, judgeDeviceGrant, limitsFor } from '../services/session-policy.js'
 import type { User } from '../types.js'
 
@@ -106,6 +107,15 @@ const redirectSchemes = (uris: string[]) => [
       .filter((s) => s && s !== 'https:')
   )
 ]
+
+/**
+ * The `iss` an authorize answer names. A first-party phone app signs in to whichever address the
+ * person typed — a tenant host or custom domain in cloud — so its issuer is the origin the
+ * request arrived on (requestOrigin: the tenant's, or protocol + host under the trusted-proxy
+ * rules), and the app checks it against that address. Every other client: MCP_PUBLIC_URL's.
+ */
+const authorizeIssuer = (req: FastifyRequest, mobile: boolean) =>
+  mobile ? requestOrigin(req) : mcpPublicOrigin()
 
 const oauthError = (reply: FastifyReply, status: number, error: string, description: string) =>
   reply
@@ -428,15 +438,15 @@ async function consentUser(
 }
 
 /**
- * Where to sign in before consenting, returning to `path` (this authorize URL).
+ * Where to sign in before consenting, returning to `path` (this authorize URL) on `origin`.
  * The instance's own login page when this process serves it — it offers every
  * method the instance has (Microsoft, SSO providers, SAML, password, token) and
  * carries the return through each; otherwise the default OIDC login.
  */
-function signInUrl(path: string, reauth = false): string {
+function signInUrl(path: string, reauth = false, origin = mcpPublicOrigin()): string {
   if (servesAdminSpa)
     return `/login?redirect=${encodeURIComponent(path)}${reauth ? '&reauth=1' : ''}`
-  return `/api/auth/login?returnTo=${encodeURIComponent(`${mcpPublicOrigin()}${path}`)}`
+  return `/api/auth/login?returnTo=${encodeURIComponent(`${origin}${path}`)}`
 }
 
 const cannotConnect = (reply: FastifyReply, message: string, status = 400) =>
@@ -619,7 +629,11 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     // a stale sign-in is asked to sign in AGAIN — the login page shows its form
     // to a signed-in person when `reauth` is set — and the fresh sign-in stamps
     // the same session.
-    if (!user || stale) return reply.redirect(signInUrl(req.url, stale))
+    // A phone app's sign-in comes back to the origin it started on: its `iss` is that origin.
+    if (!user || stale)
+      return reply.redirect(
+        signInUrl(req.url, stale, authorizeIssuer(req, checked.client.mobile))
+      )
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
     if (checked.client.mobile)
@@ -649,12 +663,13 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         withAuthResponse(p.redirect_uri, {
           error: 'access_denied',
           state: p.state,
-          iss: mcpPublicOrigin()
+          iss: authorizeIssuer(req, checked.client.mobile)
         })
       )
     if (checked.client.mobile) {
       // No grant yet: a phone's grant is made when its code is exchanged (POST /oauth/token),
       // so an abandoned or failed sign-in leaves nothing behind. The code carries what it needs.
+      const iss = authorizeIssuer(req, true)
       const code = await issueCode(app.redis, {
         kind: 'device',
         client_id: checked.client.client_id,
@@ -665,11 +680,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         code_challenge: p.code_challenge,
         resource: null,
         device_name: p.device_name,
-        platform: p.platform
+        platform: p.platform,
+        iss
       })
-      return reply.redirect(
-        withAuthResponse(p.redirect_uri, { code, state: p.state, iss: mcpPublicOrigin() })
-      )
+      return reply.redirect(withAuthResponse(p.redirect_uri, { code, state: p.state, iss }))
     }
     const scope = grantedScope(body.chat === '1' || body.chat === 'on')
     const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
@@ -740,6 +754,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       if (!rec) return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired code')
       if (rec.client_id !== str(b.client_id))
         return oauthError(reply, 400, 'invalid_grant', 'The code was issued to another client')
+      // A phone's code is good only on the origin its sign-in named as `iss`: the tokens then
+      // belong to the issuer the app checked.
+      if (rec.iss && rec.iss !== requestOrigin(req))
+        return oauthError(reply, 400, 'invalid_grant', 'The code was issued on another address')
       if (rec.redirect_uri !== str(b.redirect_uri))
         return oauthError(
           reply,

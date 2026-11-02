@@ -155,13 +155,16 @@ const signIn = () => {
   session.authAt = Date.now()
 }
 
-/** Consent → Allow → the code the app gets back. */
-async function signInCode(p: Record<string, string>) {
-  await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}` })
+/** Consent → Allow (or `decision`) → the redirect the app gets back, on `host` if given. */
+async function signInCode(p: Record<string, string>, host?: string, decision = 'allow') {
+  const headers = host ? { host } : {}
+  await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}`, headers })
+  const f = form({ ...p, csrf: session.oauthCsrf as string, decision })
   const allow = await app.inject({
     method: 'POST',
     url: '/oauth/authorize',
-    ...form({ ...p, csrf: session.oauthCsrf as string, decision: 'allow' })
+    ...f,
+    headers: { ...f.headers, ...headers }
   })
   expect(allow.statusCode).toBe(302)
   return allow
@@ -170,11 +173,11 @@ const codeOf = (allow: { headers: Record<string, unknown> }) =>
   new URL(String(allow.headers.location)).searchParams.get('code') as string
 
 /** POST /oauth/token authorization_code for the phone app (override any field). */
-const exchange = (code: string, over: Record<string, string> = {}) =>
+const exchange = (code: string, over: Record<string, string> = {}, host?: string) =>
   app.inject({
     method: 'POST',
     url: '/oauth/token',
-    ...form({
+    ...formOn(host, {
       grant_type: 'authorization_code',
       code,
       client_id: 'nivaro-mobile',
@@ -183,6 +186,11 @@ const exchange = (code: string, over: Record<string, string> = {}) =>
       ...over
     })
   })
+/** form(), sent on `host` when given. */
+function formOn(host: string | undefined, o: Record<string, string>) {
+  const f = form(o)
+  return host ? { ...f, headers: { ...f.headers, host } } : f
+}
 const deviceGrants = async () =>
   (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
 
@@ -239,7 +247,8 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     expect(back.startsWith(`${REDIRECT}?`)).toBe(true)
     const q = new URL(back).searchParams
     expect(q.get('state')).toBe('st-m')
-    expect(q.get('iss')).toBe('https://nivaro.example')
+    // The origin the sign-in arrived on (inject's default host), not MCP_PUBLIC_URL.
+    expect(q.get('iss')).toBe('http://localhost')
     // Nothing is connected until the app exchanges the code.
     expect(logActivity).not.toHaveBeenCalled()
 
@@ -304,6 +313,24 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       })
     })
     expect(reuse.statusCode).toBe(400)
+  })
+
+  it('iss is the host the sign-in arrived on; the code is exchanged only there', async () => {
+    signIn()
+    const allow = await signInCode(params(), 'tenant-a.example')
+    const q = new URL(String(allow.headers.location)).searchParams
+    expect(q.get('iss')).toBe('http://tenant-a.example')
+    const deny = await signInCode(params(), 'tenant-a.example', 'deny')
+    const dq = new URL(String(deny.headers.location)).searchParams
+    expect(dq.get('error')).toBe('access_denied')
+    expect(dq.get('iss')).toBe('http://tenant-a.example')
+    // Another host never takes this code (an issuer mix-up): refused, and the code is spent.
+    const other = await exchange(q.get('code') as string, {}, 'tenant-b.example')
+    expect(other.statusCode).toBe(400)
+    expect(other.json().error_description).toMatch(/another address/)
+    const again = await signInCode(params(), 'tenant-a.example')
+    const ok = await exchange(codeOf(again), {}, 'tenant-a.example')
+    expect(ok.statusCode).toBe(200)
   })
 
   it('each phone sign-in is its own connection', async () => {

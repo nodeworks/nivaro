@@ -97,6 +97,9 @@ interface CodeRecord extends DeviceInfo {
   redirect_uri: string
   code_challenge: string
   resource: string | null
+  /** Device codes: the issuer the authorize answer named (the origin the sign-in arrived on);
+   *  the code is exchanged only on that origin. */
+  iss?: string
   t: string
 }
 
