@@ -35,7 +35,8 @@ vi.mock('../../../db/index.js', () => {
       },
       // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
-        let v: unknown = h.phones
+        // A select by id (the drain's live-row check) sees only rows that still exist.
+        let v: unknown = st.ids.length ? h.phones.filter((p) => st.ids.includes(p.id)) : h.phones
         if (table === 'nivaro_notifications') v = { c: 0 }
         else if (table === 'nivaro_settings_overrides') v = undefined
         else if (table === 'nivaro_settings') v = { project_name: 'Acme' }
@@ -165,6 +166,38 @@ describe('relay retry queue', () => {
     expect(relayQueueSize()).toBe(RELAY_QUEUE_MAX)
     const drops = warn.mock.calls.filter((c) => String(c[0]).includes('dropped'))
     expect(drops).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('a phone signed out between queue and drain is not sent to', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enforcingRelay(true)
+    h.phones = phones(5)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    // Row 1002 is deleted (sign-out); row 1003 now belongs to another install.
+    h.phones = h.phones
+      .filter((p) => p.id !== 1002)
+      .map((p) => (p.id === 1003 ? { ...p, endpoint: `relay:${'q'.repeat(20)}` } : p))
+    await vi.advanceTimersByTimeAsync(60_000)
+    const sent = safeFetchMock.mock.calls
+      .slice(1)
+      .flatMap((c) => JSON.parse((c[1] as { body: string }).body).messages)
+      .map((m: { device: string }) => m.device)
+    expect(sent.sort()).toEqual([dev(0), dev(1), dev(4)].sort())
+    expect(relayQueueSize()).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('an item queued more than 120 s ago is dropped, never sent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enforcingRelay(true)
+    h.phones = phones(3)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    // The drain comes late (a busy process): the messages are stale by then.
+    vi.setSystemTime(Date.now() + 130_000)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(safeFetchMock).toHaveBeenCalledTimes(1)
+    expect(relayQueueSize()).toBe(0)
     warn.mockRestore()
   })
 })

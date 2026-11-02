@@ -1,11 +1,14 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { whereInList } from './db-batch.js'
 import {
   pushRelayConfig,
   RELAY_BATCH,
+  RELAY_PREFIX,
   type RelayMessage,
   type RelayResults,
-  relaySendChecked
+  relaySendChecked,
+  wherePhoneEndpoint
 } from './push-relay.js'
 import { captureTenant } from './tenant-capture.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -23,6 +26,9 @@ import { noteChannel } from './traffic-taps/channels.js'
  *  - While a tenant's relay is limiting ("limited until"), new sends go straight into the queue
  *    instead of calling the relay (phone-push.ts sendViaRelay).
  *
+ * At drain time every item is checked again: at most RELAY_QUEUE_MAX_AGE_MS old, and its row
+ * still the same phone (stillDeliverable) — a phone signed out meanwhile gets nothing.
+ *
  * A batch the relay refuses for any other reason (down, 5xx) is counted and dropped, as a direct
  * send is: the in-app notification is the record, the push only a nudge.
  */
@@ -32,10 +38,15 @@ export const RELAY_QUEUE_MAX = 500
 export const RELAY_WINDOW_MESSAGES = 60
 export const RELAY_WINDOW_S = 60
 
+/** A queued message older than this is dropped at drain time, never sent. */
+export const RELAY_QUEUE_MAX_AGE_MS = 120_000
+
 export interface RelayQueueItem {
   message: RelayMessage
   /** The nivaro_push_subscriptions row the message is for (gone → deleted, ok → touched). */
   rowId: number
+  /** When it was queued (ms); set by enqueueRelay. */
+  at?: number
 }
 
 interface TenantQueue {
@@ -87,7 +98,8 @@ export function enqueueRelay(items: RelayQueueItem[], retryAfterS: number): void
     }
     queues.set(key, q)
   }
-  q.items.push(...items)
+  const now = Date.now()
+  q.items.push(...items.map((i) => ({ ...i, at: now })))
   const over = q.items.length - RELAY_QUEUE_MAX
   if (over > 0) {
     q.items.splice(0, over)
@@ -126,6 +138,7 @@ async function drain(key: string, q: TenantQueue): Promise<void> {
           q.items = []
           return
         }
+        q.items = await stillDeliverable(q.items)
         let budget = RELAY_WINDOW_MESSAGES
         let limited = false
         const delivered: number[] = []
@@ -163,6 +176,35 @@ async function drain(key: string, q: TenantQueue): Promise<void> {
     if (q.items.length > 0) schedule(key, q)
     else if (queues.get(key) === q) queues.delete(key)
   }
+}
+
+/**
+ * The queued items that may still go out: queued at most RELAY_QUEUE_MAX_AGE_MS ago, and whose
+ * subscription row still exists as the same phone (a phone row, endpoint `relay:<device>` as
+ * queued). A phone signed out — or taken over by another install — since it was queued gets
+ * nothing. A failed check sends nothing either (fail closed).
+ */
+async function stillDeliverable(items: RelayQueueItem[]): Promise<RelayQueueItem[]> {
+  const now = Date.now()
+  const fresh = items.filter((i) => now - (i.at ?? now) <= RELAY_QUEUE_MAX_AGE_MS)
+  const stale = items.length - fresh.length
+  if (stale > 0) console.warn(`[phone-push] relay queue: dropped ${stale} stale message(s)`)
+  if (fresh.length === 0) return []
+  const ids = [...new Set(fresh.map((i) => i.rowId))]
+  let rows: Array<{ id: number; endpoint: string }>
+  try {
+    rows = (await wherePhoneEndpoint(
+      whereInList(db('nivaro_push_subscriptions'), 'id', ids)
+    ).select('id', 'endpoint')) as Array<{ id: number; endpoint: string }>
+  } catch (err) {
+    console.warn(
+      '[phone-push] relay queue: rows not checked, queue dropped:',
+      (err as Error)?.message
+    )
+    return []
+  }
+  const live = new Map(rows.map((r) => [Number(r.id), String(r.endpoint)]))
+  return fresh.filter((i) => live.get(i.rowId) === `${RELAY_PREFIX}${i.message.device}`)
 }
 
 function tally(
