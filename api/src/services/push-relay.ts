@@ -202,7 +202,7 @@ export interface RelayMessage {
 
 export type RelayStatus = 'ok' | 'gone' | 'error'
 
-/** The longest Retry-After a relay 429 is waited out for (one paced retry, phone-push.ts). */
+/** A relay 429 without a usable Retry-After waits one window (relay-retry-queue.ts). */
 export const RELAY_RETRY_MAX_S = 60
 
 export type RelayResults = Array<{ device: string; status: RelayStatus }>

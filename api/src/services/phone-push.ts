@@ -1,5 +1,4 @@
 import { db } from '../db/index.js'
-import { runInBackgroundPool } from '../db/pool-context.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { routePush } from './channel-test-mode.js'
 import {
@@ -8,13 +7,12 @@ import {
   pushRelayConfig,
   RELAY_BATCH,
   RELAY_PREFIX,
-  RELAY_RETRY_MAX_S,
   type RelayMessage,
   type RelayResults,
   relaySendChecked,
   wherePhoneEndpoint
 } from './push-relay.js'
-import { captureTenant } from './tenant-capture.js'
+import { enqueueRelay, type RelayQueueItem, relayLimitedMs } from './relay-retry-queue.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -290,41 +288,6 @@ function tallyResults(
 }
 
 /**
- * One paced retry of batches the relay's limiter refused: after `afterS` seconds, in the
- * background (its own timer, the tenant it was sent for, the background pool), one batch after
- * another; a second refusal gives up the rest (counted, logged). Never throws.
- */
-function scheduleRelayRetry(chunks: RelayChunk[], afterS: number): void {
-  const inTenant = captureTenant()
-  const run = () =>
-    inTenant(() =>
-      runInBackgroundPool(async () => {
-        const cfg = await pushRelayConfig()
-        const out = { delivered: [] as number[], gone: [] as number[] }
-        for (const [k, c] of chunks.entries()) {
-          const started = Date.now()
-          const res = await relaySendChecked(cfg, c.messages)
-          if (!res || 'retryAfter' in res) {
-            const left = chunks.slice(k).reduce((n, x) => n + x.messages.length, 0)
-            noteChannel('push', 'failed', { ms: Date.now() - started, n: left })
-            console.warn(`[phone-push] relay retry refused: ${left} message(s) not sent`)
-            break
-          }
-          tallyResults(res.results, c.byDevice, out)
-          noteChannel('push', 'sent', { ms: Date.now() - started, n: c.messages.length })
-        }
-        await removePhones(out.gone)
-        if (out.delivered.length > 0)
-          await db('nivaro_push_subscriptions')
-            .whereIn('id', out.delivered)
-            .update({ last_used_at: new Date() })
-            .catch(() => {})
-      })
-    ).catch(() => {})
-  setTimeout(() => void run(), afterS * 1000).unref?.()
-}
-
-/**
  * Send to relay phones. `content: 'minimal'` keeps the alert text and record names off the
  * relay and the push networks: the title is the instance name, the body generic, and `data`
  * ids only (the app fetches the notification itself after sign-in). A relay that is down
@@ -376,16 +339,24 @@ async function sendViaRelay(
       }))
     })
   }
+  const queued = (from: RelayChunk[]): RelayQueueItem[] =>
+    from.flatMap((c) =>
+      c.messages.map((message) => ({ message, rowId: c.byDevice.get(message.device) as number }))
+    )
+  // The relay is limiting this tenant right now: straight into the queue, no call.
+  const waitMs = relayLimitedMs()
+  if (waitMs > 0) {
+    enqueueRelay(queued(chunks), waitMs / 1000)
+    return out
+  }
   for (const [k, c] of chunks.entries()) {
     const started = Date.now()
     const res = await relaySendChecked(cfg, c.messages)
     if (res && 'retryAfter' in res) {
-      // The relay's limit counts messages: anything sent now is refused too. The rest waits
-      // for one paced retry in the background — never inside this request.
-      const rest = chunks.slice(k)
+      // The limit counts messages: anything sent now is refused too. This batch and the rest
+      // wait in the tenant's queue, drained in the background (relay-retry-queue.ts).
       noteChannel('push', 'failed', { ms: Date.now() - started, n: c.messages.length })
-      if (res.retryAfter <= RELAY_RETRY_MAX_S) scheduleRelayRetry(rest, res.retryAfter)
-      else console.warn(`[phone-push] relay limit: ${rest.length} batch(es) not sent`)
+      enqueueRelay(queued(chunks.slice(k)), res.retryAfter)
       break
     }
     if (!res) {
