@@ -95,8 +95,7 @@ export async function pushRelayConfig(): Promise<PushRelayConfig> {
     process.env.MOBILE_PUSH_RELAY_URL ||
     DEFAULT_RELAY_URL
   ).replace(/\/+$/, '')
-  const key =
-    envRelayKey() || (typeof stored.relay_key === 'string' && stored.relay_key) || null
+  const key = envRelayKey() || (typeof stored.relay_key === 'string' && stored.relay_key) || null
   return { url, key, content: stored.content === 'minimal' ? 'minimal' : 'full' }
 }
 

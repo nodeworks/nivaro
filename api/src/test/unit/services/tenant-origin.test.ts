@@ -22,7 +22,9 @@ vi.mock('knex', () => ({
         },
         first: async () => {
           const r = meta.rows[sub]
-          return r ? { ...r, db_client: 'pg', db_connection_string: `postgres://${sub}` } : undefined
+          return r
+            ? { ...r, db_client: 'pg', db_connection_string: `postgres://${sub}` }
+            : undefined
         }
       }
       return b
@@ -74,7 +76,10 @@ describe('the tenant host', () => {
     app.addHook('onRequest', tenantHook)
     app.get('/api/where', async () => ({ host: getTenantHost() ?? null }))
     await app.ready()
-    const a = await app.inject({ url: '/api/where', headers: { 'x-tenant-host': 'acme.nivaro.dev' } })
+    const a = await app.inject({
+      url: '/api/where',
+      headers: { 'x-tenant-host': 'acme.nivaro.dev' }
+    })
     const b = await app.inject({ url: '/api/where', headers: { host: 'beta.customer-domain.com' } })
     expect(a.json()).toEqual({ host: 'acme.nivaro.dev' })
     expect(b.json()).toEqual({ host: 'beta.customer-domain.com' })
@@ -109,7 +114,11 @@ describe('requestOrigin', () => {
     expect(plain.json().o).toBe('http://a.example')
     const proxied = await app.inject({
       url: '/o',
-      headers: { host: 'internal:3055', 'x-forwarded-host': 'b.example', 'x-forwarded-proto': 'https' }
+      headers: {
+        host: 'internal:3055',
+        'x-forwarded-host': 'b.example',
+        'x-forwarded-proto': 'https'
+      }
     })
     expect(proxied.json().o).toBe('https://b.example')
     await app.close()

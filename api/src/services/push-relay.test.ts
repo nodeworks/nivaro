@@ -115,7 +115,10 @@ describe('pushRelayConfig', () => {
         where: () => b,
         first: async () =>
           table === 'nivaro_settings_overrides'
-            ? { id: 4, data: JSON.stringify({ chaos: { a: 1 }, mobile_push: { content: 'minimal' } }) }
+            ? {
+                id: 4,
+                data: JSON.stringify({ chaos: { a: 1 }, mobile_push: { content: 'minimal' } })
+              }
             : undefined,
         update: async (v: Record<string, unknown>) => writes.push({ op: 'update', v }),
         insert: async (v: Record<string, unknown>) => writes.push({ op: 'insert', v })

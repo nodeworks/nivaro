@@ -11,7 +11,9 @@ export function requestOrigin(req: FastifyRequest): string {
   const tenant = tenantOrigin()
   if (tenant) return tenant
   const proto = req.protocol === 'https' ? 'https' : 'http'
-  const host = String(req.host ?? '').split(',')[0].trim()
+  const host = String(req.host ?? '')
+    .split(',')[0]
+    .trim()
   try {
     return new URL(`${proto}://${host}`).origin
   } catch {
