@@ -25,7 +25,7 @@ export const mobileAppDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Device tokens (nvd_, nvdr_) are separate from the nvo_ tokens connected assistants get. A device token never works on /api/mcp, and an assistant token never works as a phone.'
+      text: 'Device tokens (nvd_, nvdr_) are separate from the nvo_ tokens connected assistants get. On /api/mcp a device token acts as the person, never as a connected app, and an assistant token never works as a phone.'
     },
 
     { type: 'h2', id: 'mobile-app-info', text: 'GET /api/app-info' },

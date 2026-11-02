@@ -12896,7 +12896,7 @@ hooks.after('org_units', 'update', async ({ item, previousData }) =&gt; {
             <li>The authorize request can carry device_name and platform (ios or android); they label the phone in the signed-in list.</li>
             <li>MOBILE_SIGNIN=off turns phone sign-in off for the instance. It is independent of MCP_OAUTH. Phones already signed in are refused on their next request.</li>
           </ul>
-          <div class="doc-note">Device tokens (nvd_, nvdr_) are separate from the nvo_ tokens connected assistants get. A device token never works on /api/mcp, and an assistant token never works as a phone.</div>
+          <div class="doc-note">Device tokens (nvd_, nvdr_) are separate from the nvo_ tokens connected assistants get. On /api/mcp a device token acts as the person, never as a connected app, and an assistant token never works as a phone.</div>
           <h2 class="doc-h2" id="mobile-app-info">GET /api/app-info</h2>
           <p class="doc-p">A public route (no sign-in) the app calls before sign-in to learn what this instance is and what it offers. It answers the object directly, not wrapped in data, and is cached for 60 seconds.</p>
           <div class="doc-table-wrap"><table class="doc-table">
