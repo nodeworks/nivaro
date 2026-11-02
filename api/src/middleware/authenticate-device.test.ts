@@ -34,9 +34,14 @@ vi.mock('../db/index.js', () => {
         return { ...u }
       }
       if (table === 'nivaro_roles') return state.roles[String(where.id)]
+      if (table === 'nivaro_api_keys')
+        return { id: 7, name: 'Phone test', prefix: 'nvk_abcd', user: 'U1', scopes: '[]' }
       return undefined
     }
     q.update = () => ({ catch: () => undefined })
+    q.insert = async () => [7]
+    // The key list (`db('nivaro_api_keys').orderBy(…)`) answers no rows.
+    if (table === 'nivaro_api_keys') q.orderBy = async () => []
     return q
   }
   return { db, _staticDb: db, _backgroundDb: null, resolveDb: () => db }
@@ -52,8 +57,9 @@ vi.mock('../services/session-policy.js', async (orig) => ({
   getSessionPolicy: async () => policy.value
 }))
 
-const { authenticate, requireAdmin } = await import('./authenticate.js')
+const { authenticate } = await import('./authenticate.js')
 const { oauthPublicRoutes } = await import('../routes/oauth.js')
+const { apiKeysRoutes } = await import('../routes/api-keys.js')
 const store = await import('../services/oauth-store.js')
 const { bindFromRequest } = await import('../services/socket-access.js')
 const { isHumanSession } = await import('../services/agent-questions.js')
@@ -134,7 +140,8 @@ beforeAll(async () => {
   app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     ;(req as unknown as { session: unknown }).session = {
-      userId: undefined,
+      // A browser session for U1, when the test asks for one.
+      userId: req.headers['x-test-session'] ? 'U1' : undefined,
       destroy: async () => {}
     }
   })
@@ -146,7 +153,7 @@ beforeAll(async () => {
     oauth_client: req.oauthClientId ?? null
   })
   app.get('/api/auth/me', { preHandler: authenticate }, who)
-  app.get('/api/api-keys', { preHandler: requireAdmin }, who)
+  await app.register(apiKeysRoutes, { prefix: '/api/api-keys' })
   app.post('/api/mcp', { preHandler: authenticate }, who)
   app.get('/api/chat/rooms', { preHandler: authenticate }, who)
   // As routes/auth.ts GET /ws-token: what signed the request in, or 403 WS_UNBINDABLE.
@@ -352,6 +359,50 @@ describe('a phone is a session everywhere but minting credentials', () => {
     expect(await ticketSignInEnded(redis as never, bound, 'sess:revoked:', true)).toBe(false)
     await store.revokeGrant(redis as never, 'U1', grant.id)
     expect(await ticketSignInEnded(redis as never, bound, 'sess:revoked:', false)).toBe(true)
+  })
+})
+
+describe('a phone never mints a credential that would outlive it', () => {
+  const asPhone = async () => bearer((await phone()).access_token)
+  const asSession = { 'x-test-session': '1' }
+
+  it('refuses creating or changing an API key, or running as one', async () => {
+    const headers = await asPhone()
+    for (const [method, url] of [
+      ['POST', '/api/api-keys'],
+      ['PATCH', '/api/api-keys/7'],
+      ['POST', '/api/api-keys/7/simulate-token']
+    ] as const) {
+      const res = await app.inject({ method, url, headers, payload: { name: 'From the phone' } })
+      expect(res.statusCode, `${method} ${url}`).toBe(403)
+      expect(res.json().code).toBe('CREDENTIAL_MINT_REFUSED')
+      expect(res.json().error).toMatch(/from the web app\.$/)
+    }
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/api-keys',
+      headers,
+      payload: { name: 'x' }
+    })
+    expect(create.json().error).toBe('Create API keys from the web app.')
+  })
+
+  it('still lists keys, and may revoke one', async () => {
+    const headers = await asPhone()
+    expect((await app.inject({ url: '/api/api-keys', headers })).statusCode).toBe(200)
+    const revoke = await app.inject({ method: 'POST', url: '/api/api-keys/7/revoke', headers })
+    expect(revoke.statusCode).not.toBe(403)
+  })
+
+  it('a browser session creates a key as before', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/api-keys',
+      headers: asSession,
+      payload: { name: 'From the browser' }
+    })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().data.key).toMatch(/^nvk_/)
   })
 })
 

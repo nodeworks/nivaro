@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
+import { SESSION_LIKE_AUTH } from '../../lib/auth-method.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { selectInChunks } from '../db-batch.js'
 import { type AiComplete, asArray, cleanText, parseJsonLoose, titleCase } from './model.js'
@@ -321,9 +322,10 @@ export async function loadFilterUses(days: number): Promise<FilterUse[]> {
     .orderBy('id', 'desc')
     .limit(LOG_ROW_CAP)
     .select('user', 'path', 'query', 'created_at')
-  // Session traffic only — a token or API key is an integration, not a person.
+  // Session traffic only (a browser or the phone app) — a token or API key is an integration,
+  // not a person.
   if (await hasColumn('nivaro_api_logs', 'auth'))
-    q.where((w) => w.where('auth', 'session').orWhereNull('auth'))
+    q.where((w) => w.whereIn('auth', [...SESSION_LIKE_AUTH]).orWhereNull('auth'))
   const rows = (await q) as Array<{
     user: string
     path: string
