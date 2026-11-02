@@ -10,11 +10,63 @@ import { createPortal } from 'react-dom'
  *
  * Mount once per surface; extra mounts are harmless — only the first live
  * instance listens and renders.
+ *
+ * A cell whose visible text is only a summary (a pill with a hover card) can
+ * mark an element `data-copy-source`: the click then asks that element for the
+ * full text with a `nvr:copy-text` event (see `provideCopyText`), and falls
+ * back to the displayed text when nothing answers. `data-copy-label` names
+ * what the button copies.
  */
 let mountedInstances = 0
 
+export const COPY_TEXT_EVENT = 'nvr:copy-text'
+
+type CopyTextDetail = { provide: (text: Promise<string>) => void }
+
+/** Answer a `data-copy-source` element's copy request; returns the remover. */
+export function provideCopyText(el: HTMLElement, getText: () => Promise<string>): () => void {
+  const handler = (e: Event) => (e as CustomEvent<CopyTextDetail>).detail.provide(getText())
+  el.addEventListener(COPY_TEXT_EVENT, handler)
+  return () => el.removeEventListener(COPY_TEXT_EVENT, handler)
+}
+
+function requestCopyText(source: HTMLElement | null, fallback: string): Promise<string> {
+  if (!source?.isConnected) return Promise.resolve(fallback)
+  let answer: Promise<string> | null = null
+  source.dispatchEvent(
+    new CustomEvent<CopyTextDetail>(COPY_TEXT_EVENT, {
+      detail: { provide: (text) => (answer = text) }
+    })
+  )
+  return answer ? (answer as Promise<string>).catch(() => fallback) : Promise.resolve(fallback)
+}
+
+// A text that is still being fetched goes through a promised ClipboardItem so
+// Safari keeps the click's permission; elsewhere the plain write after it.
+async function writeClipboard(text: Promise<string>): Promise<void> {
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': text.then((t) => new Blob([t], { type: 'text/plain' }))
+        })
+      ])
+      return
+    } catch {
+      // Older engines refuse a promised item — write the settled text instead.
+    }
+  }
+  await navigator.clipboard?.writeText(await text)
+}
+
 export function CellCopyLayer() {
-  const [target, setTarget] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [target, setTarget] = useState<{
+    x: number
+    y: number
+    text: string
+    source: HTMLElement | null
+    label: string | null
+  } | null>(null)
   const [copied, setCopied] = useState(false)
   const [owns, setOwns] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,7 +116,14 @@ export function CellCopyLayer() {
         setTarget((t) => (t ? null : t))
         return
       }
-      setTarget({ x, y: r.top + (r.height - 20) / 2, text })
+      const source = td.querySelector<HTMLElement>('[data-copy-source]')
+      setTarget({
+        x,
+        y: r.top + (r.height - 20) / 2,
+        text,
+        source,
+        label: source?.getAttribute('data-copy-label') || null
+      })
       setCopied(false)
     }
     const clear = () => setTarget(null)
@@ -81,7 +140,8 @@ export function CellCopyLayer() {
     <button
       type='button'
       data-cell-copy-btn
-      aria-label='Copy cell value'
+      aria-label={target.label ?? 'Copy cell value'}
+      data-tip={target.label ?? undefined}
       // Below tooltips (120) but above sticky cells; the row's own click
       // handler must never fire from a copy.
       style={{ position: 'fixed', left: target.x, top: target.y, zIndex: 115 }}
@@ -93,7 +153,7 @@ export function CellCopyLayer() {
       onClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
-        void navigator.clipboard?.writeText(target.text).then(() => {
+        void writeClipboard(requestCopyText(target.source, target.text)).then(() => {
           setCopied(true)
           if (copiedTimer.current) clearTimeout(copiedTimer.current)
           copiedTimer.current = setTimeout(() => setTarget(null), 900)

@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
-import { type CSSProperties, useLayoutEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
-import { cn, formatRelative } from '../lib/utils'
+import { cn, formatDateTime, formatRelative } from '../lib/utils'
+import { provideCopyText } from './CellCopyLayer'
 
 /**
  * #7 / #12 — "shipped n / m" for a record whose collection declares
@@ -43,6 +44,24 @@ interface RelatedEvent {
   context: string | null
   created_at: string
   status?: string | null
+}
+
+/**
+ * The pill plus every event in its hover card, untruncated and with exact
+ * times — what the cell copy button puts on the clipboard.
+ */
+export function fulfilmentCopyText(
+  pill: string,
+  label: string | null | undefined,
+  events: RelatedEvent[]
+): string {
+  const lines = [pill, '', `${label ? `${label} · ` : ''}Latest events`]
+  if (events.length === 0) lines.push('No events recorded yet.')
+  for (const e of events) {
+    lines.push('', `${e.context ?? e.label} · ${formatDateTime(e.created_at)}`)
+    if (e.text) lines.push(e.text)
+  }
+  return lines.join('\n')
 }
 
 export function FulfilmentPill({
@@ -102,7 +121,8 @@ export function FulfilmentPill({
       window.removeEventListener('resize', update)
     }
   }, [showCard])
-  const { data: events } = useQuery({
+  const queryClient = useQueryClient()
+  const eventsQuery = {
     queryKey: ['fulfilment-events', collection, itemId],
     queryFn: () =>
       client
@@ -114,11 +134,32 @@ export function FulfilmentPill({
             .slice(0, 3)
         )
         .catch(() => [] as RelatedEvent[]),
-    enabled: hover && !!figures && figures.status !== 'none',
     staleTime: 60_000
-  })
+  }
+  const { data: events } = useQuery({ ...eventsQuery, enabled: showCard })
+  const status = figures?.status ?? 'none'
+  const word = status === 'complete' ? 'Shipped' : status === 'partial' ? 'Partial' : 'Not shipped'
+  const pillText = figures
+    ? figures.requested > 0
+      ? `${fmt(figures.shipped)} / ${fmt(figures.requested)} · ${word}`
+      : word
+    : ''
+  // The cell copy button copies the hover card too — fetched on the click when
+  // nobody hovered the pill first. Latest values via a ref, one listener.
+  const copyRef = useRef({ queryClient, eventsQuery, pillText, label })
+  copyRef.current = { queryClient, eventsQuery, pillText, label }
+  const hasEvents = status !== 'none'
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || !hasEvents) return
+    return provideCopyText(el, async () => {
+      const c = copyRef.current
+      const rows = await c.queryClient.fetchQuery(c.eventsQuery)
+      return fulfilmentCopyText(c.pillText, c.label, rows)
+    })
+  }, [hasEvents])
   if (!figures) return <span className='text-slate-300'>—</span>
-  const { shipped, requested, status } = figures
+  const { shipped, requested } = figures
   const tone =
     status === 'complete'
       ? {
@@ -137,7 +178,6 @@ export function FulfilmentPill({
             text: 'text-slate-500 dark:text-slate-400',
             box: 'border-slate-200 bg-slate-50 dark:border-border dark:bg-muted'
           }
-  const word = status === 'complete' ? 'Shipped' : status === 'partial' ? 'Partial' : 'Not shipped'
   return (
     <button
       ref={rootRef}
@@ -154,6 +194,8 @@ export function FulfilmentPill({
       aria-label={`${word}${requested > 0 ? ` — ${fmt(shipped)} of ${fmt(requested)}` : ''}`}
       data-fulfilment={status}
       data-fulfilment-open={hover ? 'true' : undefined}
+      data-copy-source={hasEvents ? '' : undefined}
+      data-copy-label={hasEvents ? 'Copy with latest events' : undefined}
     >
       <span
         className={cn(
