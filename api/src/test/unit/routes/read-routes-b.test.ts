@@ -400,6 +400,31 @@ describe('phone push', () => {
       endpoint_hash: `h:relay:${id}`
     })
   })
+  it('cloud: the relay key, url and connection are managed by cloud (403 CLOUD_MANAGED)', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      const app = await build()
+      for (const payload of [
+        { connect: true },
+        { disconnect: true },
+        { relay_key: 'k-from-admin' },
+        { relay_url: 'https://elsewhere.example' }
+      ]) {
+        const r = await app.inject({ method: 'POST', url: '/push/relay', payload })
+        expect(r.statusCode).toBe(403)
+        expect(r.json().code).toBe('CLOUD_MANAGED')
+      }
+      // The content choice stays the tenant's.
+      const ok = await app.inject({
+        method: 'POST',
+        url: '/push/relay',
+        payload: { content: 'minimal' }
+      })
+      expect(ok.statusCode).toBe(200)
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
+  })
   it('relay admin route: bad content and env-held key answer coded errors', async () => {
     const app = await build()
     const bad = await app.inject({ method: 'POST', url: '/push/relay', payload: { content: 'x' } })

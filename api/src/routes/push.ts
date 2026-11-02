@@ -354,6 +354,18 @@ export async function pushRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
     }
+    const body = (req.body ?? {}) as Record<string, unknown>
+    // Cloud provisioning owns a tenant's relay key and url (POST /admin/push-relay): an admin
+    // here may choose the content, never connect, set, point elsewhere or drop the key.
+    if (
+      process.env.CLOUD_META_DB_URL &&
+      (connect || disconnect || relay_key !== undefined || body.relay_url !== undefined)
+    ) {
+      return reply.code(403).send({
+        error: 'The push relay is managed by Nivaro Cloud for this workspace.',
+        code: 'CLOUD_MANAGED'
+      })
+    }
     if ((connect || typeof relay_key === 'string' || disconnect) && envRelayKey()) {
       return reply.code(409).send({
         error: 'The relay key comes from the environment (MOBILE_PUSH_RELAY_KEY) here.',

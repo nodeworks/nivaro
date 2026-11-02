@@ -69,6 +69,20 @@ describe('buildAppInfo', () => {
     })
   })
 
+  it('cloud: the logo address is on the tenant’s own origin', async () => {
+    state.row = { project_name: 'Acme', project_color: null, brand_logo: 'abc' }
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    const { runWithTenantDb } = await import('../db/tenant-context.js')
+    const logo = await new Promise<string | null>((resolve) =>
+      runWithTenantDb(
+        {} as never,
+        'acme',
+        () => void buildAppInfo().then((i) => resolve(i.logo_url))
+      )
+    )
+    expect(logo).toBe('https://acme.nivaro.dev/api/files/abc')
+  })
+
   it('maps NIVARO_ENVIRONMENT', () => {
     process.env.NIVARO_ENVIRONMENT = 'staging'
     expect(appEnvironment()).toBe('staging')

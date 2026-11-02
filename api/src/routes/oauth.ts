@@ -33,7 +33,7 @@ import { appNowForAuth } from '../services/chaos/clock.js'
 import {
   credentialLive,
   type DeviceEndReason,
-  deleteGrantPushRows,
+  deletePushRowsOrKeep,
   endDeviceGrant
 } from '../services/device-grants.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
@@ -888,11 +888,14 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         // already ended; the person's history and the server log say so (ids only).
         req.log.warn({ grant_id: out.grant_id }, 'oauth: refresh token replayed, connection ended')
         // A phone's alerts stop with it (the grant itself is already gone).
+        // A database refusal keeps the rows for the next sign-out's retry (deleteOrKeep).
         if (out.grant?.kind === 'device')
-          await deleteGrantPushRows(out.grant).catch((err) => {
-            req.log.warn({ err, grant_id: out.grant_id }, 'oauth: replayed phone push rows kept')
-            return 0
-          })
+          await deletePushRowsOrKeep(
+            app.redis,
+            String(out.grant.user_id),
+            out.grant.push_ids ?? [],
+            req
+          )
         await logActivity({
           action: 'oauth-refresh-reuse',
           user: out.user_id,
@@ -973,8 +976,11 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
   })
 
   app.post('/oauth/revoke', async (req, reply) => {
-    if (!anyEnabled(reply)) return
     const token = str(((req.body ?? {}) as Record<string, unknown>).token)
+    // A phone can always end its own sign-in, whatever MOBILE_SIGNIN / MCP_OAUTH say.
+    const phoneToken =
+      token.startsWith(DEVICE_ACCESS_PREFIX) || token.startsWith(DEVICE_REFRESH_PREFIX)
+    if (!phoneToken && !anyEnabled(reply)) return
     if (token) {
       // A phone signing out (its access or refresh token) ends its whole sign-in — grant, every
       // token and its push rows — so it leaves Signed-in phones. Answered 200 either way (RFC 7009).

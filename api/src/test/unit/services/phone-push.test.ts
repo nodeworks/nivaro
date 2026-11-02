@@ -71,7 +71,12 @@ vi.mock('../../../lib/ssrf.js', () => ({
 vi.mock('../../../admin-base.js', () => ({ adminBaseUrl: () => 'https://acme.example' }))
 vi.mock('../../../services/swallow-counter.js', () => ({ countSwallow: () => {} }))
 
-import { isExpoPushToken, phonePushMode, sendPhonePush } from '../../../services/phone-push.js'
+import {
+  isExpoPushToken,
+  phonePushMode,
+  resetRelayWarnings,
+  sendPhonePush
+} from '../../../services/phone-push.js'
 
 const TOKEN = 'ExponentPushToken[abc123]'
 
@@ -94,6 +99,7 @@ beforeEach(() => {
   delete process.env.EXPO_PUSH_URL
   delete process.env.MOBILE_PUSH_RELAY_KEY
   h.settings = null
+  resetRelayWarnings()
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -272,6 +278,18 @@ describe('relay phones', () => {
     expect(warn).toHaveBeenCalledTimes(1)
     expect(String(warn.mock.calls[0]?.[0])).toContain('1 phone')
     expect(safeFetchMock).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('no relay connected: the warning is logged at most once an hour per tenant', async () => {
+    delete process.env.MOBILE_PUSH_RELAY_KEY
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (let k = 0; k < 3; k++) await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(warn).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(Date.now() + 61 * 60_000)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(warn).toHaveBeenCalledTimes(2)
     warn.mockRestore()
   })
 

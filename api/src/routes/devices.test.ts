@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   staticTokens: {} as Record<string, string>,
   policy: null as Record<string, unknown> | null,
   /** nivaro_api_keys rows by id. */
+  /** The database refusing DELETEs. */
+  delFails: false,
   apiKeys: {} as Record<
     string,
     { id: number; user: string; is_active: boolean; expires_at: string | null }
@@ -24,6 +26,7 @@ vi.mock('../db/index.js', async () => {
   const { makeFakeDb } = await import('../test/fake-sql.js')
   const db = makeFakeDb((q) => {
     if (q.method === 'del') {
+      if (state.delFails) throw new Error('database refused')
       state.deletes.push({ sql: q.sql, bindings: q.bindings })
       return 1
     }
@@ -215,6 +218,7 @@ beforeEach(() => {
   state.staticTokens = {}
   state.policy = null
   state.apiKeys = {}
+  state.delFails = false
   delete process.env.MOBILE_SIGNIN
 })
 
@@ -721,6 +725,31 @@ describe('a replayed phone refresh token', () => {
     expect(replay.json().error_description).toMatch(/already used/)
     expect(await store.getGrant(redis as never, a.grant.id)).toBeNull()
     expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([41, PAT]))
+  })
+})
+
+describe('a replayed phone refresh token, the database refusing', () => {
+  it('keeps the push rows for a retry (deleteOrKeep)', async () => {
+    const a = await phone(PAT, 'Phone', [42])
+    const refresh = () =>
+      app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: a.refresh_token,
+          client_id: 'nivaro-mobile'
+        }).toString()
+      })
+    expect((await refresh()).statusCode).toBe(200)
+    for (const [k, v] of redis.kv)
+      if (k.includes(':rt-spent:')) redis.kv.set(k, JSON.stringify({ ...JSON.parse(v), at: 0 }))
+    state.delFails = true
+    expect((await refresh()).json().error_description).toMatch(/already used/)
+    expect(await store.getGrant(redis as never, a.grant.id)).toBeNull()
+    const kept = [...(redis.sets.get('nvr:device-push-leftover:') ?? [])].map((x) => JSON.parse(x))
+    expect(kept).toEqual([expect.objectContaining({ u: PAT, ids: [42] })])
   })
 })
 

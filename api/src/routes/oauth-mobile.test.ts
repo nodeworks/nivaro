@@ -563,6 +563,20 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     expect((await exchange(code2)).statusCode).toBe(400)
   })
 
+  it('with MOBILE_SIGNIN and MCP_OAUTH both off, a phone can still end its sign-in', async () => {
+    signIn()
+    const tok = (await exchange(codeOf(await signInCode(params())))).json()
+    const rec = await resolveAccessToken(redis as never, tok.access_token, 'device')
+    process.env.MOBILE_SIGNIN = 'off'
+    process.env.MCP_OAUTH = 'off'
+    const revoke = (token: string) =>
+      app.inject({ method: 'POST', url: '/oauth/revoke', ...form({ token }) })
+    expect((await revoke(tok.refresh_token)).statusCode).toBe(200)
+    expect((await listGrants(redis as never, 'U1')).some((g) => g.id === rec?.grant_id)).toBe(false)
+    // Anything that is not a phone token still finds the server off.
+    expect((await revoke('nvor_whatever')).statusCode).toBe(404)
+  })
+
   it('each phone sign-in is its own connection', async () => {
     signIn()
     const before = (await deviceGrants()).length

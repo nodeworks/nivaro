@@ -13,6 +13,7 @@ import {
   wherePhoneEndpoint
 } from './push-relay.js'
 import { enqueueRelay, type RelayQueueItem, relayLimitedMs } from './relay-retry-queue.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -269,6 +270,23 @@ export async function instanceOrigin(): Promise<string> {
   }
 }
 
+/** "Relay not connected" is said at most once an hour per tenant (it repeats per alert). */
+const RELAY_WARN_EVERY_MS = 3_600_000
+const relayWarnedAt = new Map<string, number>()
+function relayWarnDue(): boolean {
+  const key = currentTenantKey()
+  const last = relayWarnedAt.get(key)
+  if (last !== undefined && Date.now() - last < RELAY_WARN_EVERY_MS) return false
+  if (relayWarnedAt.size >= 1000) relayWarnedAt.clear()
+  relayWarnedAt.set(key, Date.now())
+  return true
+}
+
+/** Test hook: forget when the relay warnings were last logged. */
+export function resetRelayWarnings(): void {
+  relayWarnedAt.clear()
+}
+
 interface RelayChunk {
   messages: RelayMessage[]
   byDevice: Map<string, number>
@@ -304,7 +322,8 @@ async function sendViaRelay(
   const out = { delivered: [] as number[], gone: [] as number[] }
   if (!cfg.key) {
     noteChannel('push', 'failed', { ms: 0, n: phones.length })
-    console.warn(`[phone-push] relay not connected: skipped ${phones.length} phone(s)`)
+    if (relayWarnDue())
+      console.warn(`[phone-push] relay not connected: skipped ${phones.length} phone(s)`)
     return out
   }
   const instance = await instanceOrigin()

@@ -107,7 +107,10 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
     name: brand.name ?? 'Nivaro',
     origin,
     color: brand.color,
-    logo_url: brand.logo ? `${base}/api/files/${brand.logo}` : null,
+    // Cloud: on the tenant's own origin, never the shared process's address.
+    logo_url: brand.logo
+      ? `${process.env.CLOUD_META_DB_URL ? origin : base}/api/files/${brand.logo}`
+      : null,
     version: NIVARO_VERSION,
     cloud: !!process.env.CLOUD_META_DB_URL,
     environment: appEnvironment(),

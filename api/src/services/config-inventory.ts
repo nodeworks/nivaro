@@ -562,8 +562,8 @@ export function redactSettingsOverrides(v: unknown): unknown {
 
 /**
  * What a restore writes for `nivaro_settings_overrides.data`: the snapshot's plain parts with
- * `mobile_push.relay_key` taken from the CURRENT live row (never from the snapshot, even if an
- * uploaded file carries one). Always JSON text, or null.
+ * `mobile_push.relay_key` and `relay_url` taken from the CURRENT live row (never from the
+ * snapshot, even if an uploaded file carries them). Always JSON text, or null.
  */
 export function restoreSettingsOverrides(snapshotValue: unknown, currentValue: unknown): unknown {
   if (snapshotValue === null || snapshotValue === undefined) return null
@@ -571,12 +571,16 @@ export function restoreSettingsOverrides(snapshotValue: unknown, currentValue: u
   if (!snap) return null
   const out: Record<string, unknown> = { ...snap }
   const mp: Record<string, unknown> = isObj(out.mobile_push) ? { ...out.mobile_push } : {}
+  // The key and the url it is sent to travel together, and only from the live row: a snapshot
+  // naming another relay_url must never receive this instance's key.
   delete mp.relay_key
+  delete mp.relay_url
   const cur = jsonObject(currentValue)
-  const liveKey = isObj(cur?.mobile_push)
-    ? (cur?.mobile_push as Record<string, unknown>).relay_key
-    : null
+  const liveMp = isObj(cur?.mobile_push) ? (cur?.mobile_push as Record<string, unknown>) : null
+  const liveKey = liveMp?.relay_key
   if (typeof liveKey === 'string' && liveKey) mp.relay_key = liveKey
+  const liveUrl = liveMp?.relay_url
+  if (typeof liveUrl === 'string' && liveUrl) mp.relay_url = liveUrl
   if (Object.keys(mp).length) out.mobile_push = mp
   else delete out.mobile_push
   return JSON.stringify(out)

@@ -342,4 +342,26 @@ describe('nivaro_settings_overrides.data keeps the push relay key out of snapsho
     )
     expect(bare).toEqual({ a: 1, mobile_push: { relay_key: 'LIVE-KEY' } })
   })
+
+  it('restore takes relay_url from the live row with the key, never the snapshot', () => {
+    const liveUrl = JSON.stringify({
+      mobile_push: { relay_key: 'LIVE-KEY', relay_url: 'https://relay.live.example' }
+    })
+    const snap = JSON.stringify({
+      mobile_push: { relay_url: 'https://attacker.example', content: 'full' }
+    })
+    const out = JSON.parse(
+      String(restoreRedactedValue('nivaro_settings_overrides', 'data', snap, liveUrl))
+    )
+    expect(out.mobile_push).toEqual({
+      content: 'full',
+      relay_key: 'LIVE-KEY',
+      relay_url: 'https://relay.live.example'
+    })
+    // No live url: the snapshot's never comes in.
+    const noUrl = JSON.parse(
+      String(restoreRedactedValue('nivaro_settings_overrides', 'data', snap, live))
+    )
+    expect(noUrl.mobile_push.relay_url).toBeUndefined()
+  })
 })
