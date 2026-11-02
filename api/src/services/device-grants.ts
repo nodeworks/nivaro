@@ -1,8 +1,16 @@
 import type { FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
+import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { getGrant, grantPushIds, listGrants, type OAuthGrant, takeGrant } from './oauth-store.js'
+import {
+  getGrant,
+  grantKey,
+  grantPushIds,
+  listGrants,
+  type OAuthGrant,
+  takeGrant
+} from './oauth-store.js'
 import { wherePhoneEndpoint } from './push-relay.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -60,27 +68,67 @@ export async function deleteGrantPushRows(
 }
 
 /**
- * Push rows a database error kept: `ids` of person `u`, or (no ids) all of `u`'s phone rows, as
- * they stood at `at` (ms) — the sign-out that could not delete them.
+ * The credential a phone push row was registered with: `grant:<id>` (a phone's sign-in) or
+ * `sid:<id>` (a session). Null = something else (a key, a token) — never a reason to keep a row.
+ */
+export type PushCredential = `grant:${string}` | `sid:${string}`
+
+/**
+ * A sweep of the person's phone push rows: `ids` of person `u`, or (no ids) all of them, as they
+ * stood at `at` (ms, taken after every credential in scope was ended). `keep` = what the caller
+ * keeps signed in ("everywhere else"): its rows stay. Stored as a leftover when the database
+ * refuses, and retried on this tenant's next phone sign-out.
  */
 interface Leftover {
   u: string
   ids?: number[]
   at: number
+  keep?: PushCredential[]
 }
 /** Per tenant (cloud): leftovers are retried on this tenant's next phone sign-out. */
 const leftoverKey = () => `nvr:device-push-leftover:${currentTenantKey()}`
 /** A leftover this old is given up on (logged), so a stale sweep can never hit a far later row. */
 const LEFTOVER_MAX_AGE_MS = 30 * 86_400_000
 
-/** When each phone push row was last registered (POST /api/push/phones), per tenant. */
+/** When each phone push row was last registered (POST /api/push/phones) and with what, per
+ *  tenant. A stamp from before credentials were recorded (a bare number) counts as by nobody. */
 const registeredKey = (rowId: number) => `nvr:phone-push-reg:${currentTenantKey()}:${rowId}`
 const REGISTERED_TTL_S = 60 * 86_400 // outlives any leftover (≤ 30 days)
 
-/** Stamp a phone push row as registered now (every registration, insert or update). */
-export async function notePhoneRegistered(redis: Redis, rowId: number): Promise<void> {
+interface Stamp {
+  at: number
+  by: PushCredential | null
+}
+const readStamp = (raw: string | null): Stamp | null => {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as unknown
+    if (typeof v === 'number') return { at: v, by: null }
+    const st = v as Partial<Stamp>
+    if (!Number.isFinite(st?.at)) return null
+    const by = typeof st.by === 'string' && /^(grant|sid):./.test(st.by) ? st.by : null
+    return { at: Number(st.at), by: by as PushCredential | null }
+  } catch {
+    return null
+  }
+}
+
+/** Stamp a phone push row as registered now, by `by` (every registration, insert or update). */
+export async function notePhoneRegistered(
+  redis: Redis,
+  rowId: number,
+  by: PushCredential | null = null
+): Promise<void> {
   if (!Number.isInteger(rowId) || rowId <= 0) return
-  await redis.setex(registeredKey(rowId), REGISTERED_TTL_S, String(Date.now()))
+  await redis.setex(registeredKey(rowId), REGISTERED_TTL_S, JSON.stringify({ at: Date.now(), by }))
+}
+
+/** Is the credential still signed in? A grant that stands; a session neither gone nor revoked. */
+export async function credentialLive(redis: Redis, by: PushCredential): Promise<boolean> {
+  if (by.startsWith('grant:')) return (await redis.exists(grantKey(by.slice(6)))) === 1
+  const sid = by.slice(4)
+  const [sess, revoked] = await redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`)
+  return !!sess && !revoked
 }
 
 /** The push row ids a live sign-in of the person still holds (their grants' push sets). */
@@ -92,9 +140,10 @@ async function livePushIds(redis: Redis, userId: string): Promise<Set<number>> {
 }
 
 /**
- * Delete the person's phone push rows as they stood at `l.at` — `l.ids`, or all of them — but
- * never one a live sign-in holds, nor one registered at or after `l.at` (the person signed in
- * again on that install since: deleting it would silence a live phone).
+ * Delete the person's phone push rows as they stood at `l.at` — `l.ids`, or all of them. Kept:
+ * a row a live sign-in of the person holds; a row registered by a credential in `l.keep`; a row
+ * registered at or after `l.at` by a credential STILL signed in (the person signed in again on
+ * that install since). A row whose credential is gone goes whatever its stamp says.
  */
 async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
   if (l.ids && l.ids.length === 0) return 0
@@ -105,8 +154,15 @@ async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
   const live = await livePushIds(redis, l.u)
   const ids = rows.map((r) => Number(r.id)).filter((id) => !live.has(id))
   if (ids.length === 0) return 0
-  const stamps = await redis.mget(...ids.map(registeredKey))
-  const stale = ids.filter((_, i) => !(Number(stamps[i]) >= l.at))
+  const keep = new Set<string>(l.keep ?? [])
+  const stamps = (await redis.mget(...ids.map(registeredKey))).map(readStamp)
+  const stale: number[] = []
+  for (const [i, id] of ids.entries()) {
+    const st = stamps[i]
+    if (st?.by && keep.has(st.by)) continue
+    if (st?.by && st.at >= l.at && (await credentialLive(redis, st.by))) continue
+    stale.push(id)
+  }
   if (stale.length === 0) return 0
   return deleteGrantPushRows({ user_id: l.u, push_ids: stale })
 }
@@ -138,7 +194,9 @@ const isLeftover = (v: unknown): v is Leftover => {
     !!l &&
     typeof l.u === 'string' &&
     Number.isFinite(l.at) &&
-    (l.ids === undefined || (Array.isArray(l.ids) && l.ids.every(Number.isInteger)))
+    (l.ids === undefined || (Array.isArray(l.ids) && l.ids.every(Number.isInteger))) &&
+    (l.keep === undefined ||
+      (Array.isArray(l.keep) && l.keep.every((k) => /^(grant|sid):./.test(String(k)))))
   )
 }
 
@@ -223,21 +281,23 @@ export async function listDeviceGrants(redis: Redis, userId: string): Promise<OA
 /**
  * Sign the person out on every phone (but `except`, the calling phone's own grant). Fails
  * closed: when any phone could not be signed out (after trying them all) the first error is
- * thrown, never a partial "done". `sweepAll` (a full sign-out: nothing of the caller stays
- * signed in) also deletes every stale phone push row of the person — a backstop for a row no
- * grant recorded. Returns how many phones were signed out.
+ * thrown, never a partial "done". Then every phone push row of the person is swept — a backstop
+ * for a row no ended grant recorded — keeping only the caller's own: rows of the `except` grant
+ * and rows registered by the `keepSid` session ("everywhere else" from a browser or a phone app
+ * on a session). The sweep's time is taken only after everything in scope was ended, so a row
+ * a just-ended credential registered meanwhile goes too. Returns how many phones were signed out.
+ * Callers ending sessions too end them BEFORE this call.
  */
 export async function endUserDeviceGrants(
   redis: Redis,
   userId: string,
   opts: {
     except?: string | null
-    sweepAll?: boolean
+    keepSid?: string | null
     reason?: DeviceEndReason
     req?: FastifyRequest
   } = {}
 ): Promise<number> {
-  const at = Date.now()
   let ended = 0
   let failure: unknown = null
   for (const g of await listDeviceGrants(redis, userId)) {
@@ -254,6 +314,10 @@ export async function endUserDeviceGrants(
     }
   }
   if (failure) throw failure
-  if (opts.sweepAll && !opts.except) await deleteOrKeep(redis, { u: userId, at }, opts.req)
+  const keep: PushCredential[] = []
+  if (opts.except) keep.push(`grant:${opts.except}`)
+  if (opts.keepSid) keep.push(`sid:${opts.keepSid}`)
+  // `at` only now: every grant in scope (and, before this call, every session) is ended.
+  await deleteOrKeep(redis, { u: userId, at: Date.now(), keep }, opts.req)
   return ended
 }

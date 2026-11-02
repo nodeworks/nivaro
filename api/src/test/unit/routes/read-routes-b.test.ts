@@ -24,7 +24,12 @@ const m = vi.hoisted(() => ({
   storeInserts: false,
   pushIds: [] as Array<[string, number]>,
   /** What addGrantPushId answers: false = the sign-in ended while the request ran. */
-  grantLive: true
+  grantLive: true,
+  /** What credentialLive answers after the stamp; and the stamps written ([row, by]). */
+  credLive: true,
+  stamps: [] as Array<[number, string | null]>,
+  /** The caller signed in with a session (authMethod 'session', this session id). */
+  sid: null as string | null
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
@@ -32,10 +37,21 @@ vi.mock('../../../middleware/authenticate.js', () => {
     req.user = { id: 'U1', role: 'r-approver' }
     req.isAdmin = m.admin
     if (m.deviceGrant) req.deviceGrantId = m.deviceGrant
+    if (m.sid) {
+      ;(req as { authMethod?: string }).authMethod = 'session'
+      ;(req as { session?: unknown }).session = { sessionId: m.sid }
+    }
   }
   return { authenticate: vi.fn(sign), requireAuth: vi.fn(sign), requireAdmin: vi.fn(sign) }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
+vi.mock('../../../services/device-grants.js', async (orig) => ({
+  ...(await orig<object>()),
+  notePhoneRegistered: vi.fn(async (_r: unknown, row: number, by: string | null) => {
+    m.stamps.push([row, by])
+  }),
+  credentialLive: vi.fn(async () => m.credLive)
+}))
 vi.mock('../../../services/oauth-store.js', async (orig) => ({
   ...(await orig<object>()),
   addGrantPushId: vi.fn(async (_r: unknown, grant: string, id: number) => {
@@ -161,6 +177,9 @@ beforeEach(() => {
   m.storeInserts = false
   m.pushIds = []
   m.grantLive = true
+  m.credLive = true
+  m.stamps = []
+  m.sid = null
 })
 
 const page = (widgets: unknown[]) => ({
@@ -382,6 +401,29 @@ describe('phone push', () => {
     m.deviceGrant = '99999999-0000-4000-8000-000000000009'
     m.grantLive = false
     m.storeInserts = true
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(r.statusCode).toBe(401)
+    expect(r.json().code).toBe('SESSION_EXPIRED')
+    expect(m.deletes[0]?.rows.map((x) => x.id)).toEqual([70])
+  })
+  it('stamps the registering credential: the phone’s grant, else the session', async () => {
+    m.storeInserts = true
+    m.deviceGrant = '99999999-0000-4000-8000-000000000009'
+    const app = await build()
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    m.deviceGrant = null
+    m.sid = 'web-sid'
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(m.stamps).toEqual([
+      [70, 'grant:99999999-0000-4000-8000-000000000009'],
+      [70, 'sid:web-sid']
+    ])
+  })
+  it('a session signed out while it registered: 401 and the row is deleted', async () => {
+    m.storeInserts = true
+    m.sid = 'web-sid'
+    m.credLive = false
     const app = await build()
     const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
     expect(r.statusCode).toBe(401)

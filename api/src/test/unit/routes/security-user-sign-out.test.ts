@@ -217,14 +217,15 @@ describe('signing one person out everywhere', () => {
     addPhone(r, JANE.toUpperCase(), PHONE_1)
     addPhone(r, JANE.toUpperCase(), PHONE_2)
     expect(await revokeUserSessions(r as never, JANE, { exceptDeviceGrant: PHONE_1 })).toBe(3)
-    // One phone stays signed in: its rows are not swept with the backstop.
-    expect(state.pushDeletes).toBe(0)
+    // Everywhere else still sweeps the person's other phone rows (here: one with no stamp); the
+    // kept phone's own rows are kept (services/device-grants.ts, covered in routes/devices.test).
+    expect(state.pushDeletes).toBe(1)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(true)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
-    // Everywhere else from a session (maybe a phone app on a cookie): no sweep either.
+    // Everywhere else from a session sweeps too (keeping that session's own rows).
     addPhone(r, JANE.toUpperCase(), PHONE_2)
     expect(await revokeUserSessions(r as never, JANE, { except: 'a1' })).toBe(2)
-    expect(state.pushDeletes).toBe(0)
+    expect(state.pushDeletes).toBe(2)
   })
 
   it('POST /my/sessions/sign-out-others passes the calling phone through', async () => {

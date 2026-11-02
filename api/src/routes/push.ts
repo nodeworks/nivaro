@@ -3,7 +3,11 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { notePhoneRegistered } from '../services/device-grants.js'
+import {
+  credentialLive,
+  notePhoneRegistered,
+  type PushCredential
+} from '../services/device-grants.js'
 import { addGrantPushId } from '../services/oauth-store.js'
 import {
   instanceName,
@@ -241,21 +245,31 @@ export async function pushRoutes(app: FastifyInstance) {
           | undefined
       )?.id
     }
-    // Stamped as registered now: a sign-out's retried cleanup never deletes a row registered
-    // after it (services/device-grants.ts deleteStaleRows).
-    if (rowId)
-      await notePhoneRegistered(app.redis, Number(rowId)).catch((err) =>
+    // The credential this registration came with: the phone's sign-in, or the session. A sign-out
+    // sweep keeps a row only while that credential is still signed in (services/device-grants.ts).
+    const sid =
+      req.authMethod === 'session'
+        ? ((req.session as unknown as { sessionId?: string } | null)?.sessionId ?? null)
+        : null
+    const by: PushCredential | null = req.deviceGrantId
+      ? `grant:${req.deviceGrantId}`
+      : sid
+        ? `sid:${sid}`
+        : null
+    if (rowId) {
+      // Registered from a signed-in phone: the row ends with that sign-in.
+      const noted = req.deviceGrantId
+        ? await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch((err) => {
+            req.log.warn({ err }, 'phone push: row not noted on its sign-in')
+            return true
+          })
+        : true
+      await notePhoneRegistered(app.redis, Number(rowId), by).catch((err) =>
         req.log.warn({ err }, 'phone push: registration not stamped')
       )
-    // Registered from a signed-in phone: the row ends with that sign-in (services/device-grants.ts).
-    // A sign-in ended while this request ran takes the row with it, as ending it would have.
-    if (req.deviceGrantId && rowId) {
-      const live = await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch(
-        (err) => {
-          req.log.warn({ err }, 'phone push: row not noted on its sign-in')
-          return true
-        }
-      )
+      // Re-checked AFTER the stamp: a sign-out that ended this credential meanwhile may have
+      // swept before the row existed — the row goes with it, as the sweep would have taken it.
+      const live = noted && (by ? await credentialLive(app.redis, by).catch(() => true) : true)
       if (!live) {
         await db('nivaro_push_subscriptions').where({ id: rowId, user: req.user!.id }).del()
         return reply

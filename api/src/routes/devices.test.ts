@@ -336,8 +336,11 @@ describe('Signed-in phones', () => {
       .mockRejectedValueOnce(new Error('down') as never)
     await endDeviceGrant(redis as never, old.grant.id, 'removed')
     spy.mockRestore()
+    // Registered again from a browser session that is still signed in: no grant holds it, so the
+    // stamp (later than the failed sign-out, by a live credential) keeps it.
+    redis.kv.set('sess:live-web', JSON.stringify({ userId: PAT }))
     const t = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000)
-    await notePhoneRegistered(redis as never, 52) // no sign-in holds it: the time rule keeps it
+    await notePhoneRegistered(redis as never, 52, 'sid:live-web')
     t.mockRestore()
     const other = await phone(SAM, 'Other', [])
     await endDeviceGrant(redis as never, other.grant.id, 'removed')
@@ -441,43 +444,72 @@ describe('an administrator signs a person’s phone out', () => {
 })
 
 describe('signing a person out on every phone', () => {
-  it('a full sign-out also sweeps their stale phone push rows; one kept phone means no sweep', async () => {
-    const { endUserDeviceGrants } = await import('../services/device-grants.js')
-    await phone(PAT, 'Phone', [61])
-    const b = await phone(PAT, 'Tablet')
-    state.pushRows = [61, 62]
-    expect(
-      await endUserDeviceGrants(redis as never, PAT, { except: b.grant.id, sweepAll: true })
-    ).toBe(1)
-    expect(pushDeletes()).toHaveLength(1)
-    expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([61, PAT]))
-    expect(pushDeletes()[0].bindings).not.toContain(62)
-    state.deletes = []
-    // "Everywhere else" from a session (no sweepAll): no sweep, the caller's own row stays.
-    expect(await endUserDeviceGrants(redis as never, PAT)).toBe(1)
-    expect(pushDeletes()).toEqual([])
-    // A full sign-out: row 62 (no sign-in recorded it) goes.
-    await phone(PAT, 'Again')
-    expect(await endUserDeviceGrants(redis as never, PAT, { sweepAll: true })).toBe(1)
-    const all = pushDeletes().at(-1)
-    expect(all?.bindings).toEqual(expect.arrayContaining([61, 62, PAT]))
-    expect(all?.sql).toMatch(/endpoint.*like/i)
+  /** Phone A (a grant, row 1), phone B (row 2, registered under session sB), web session C
+   *  (row 3, registered under session sC) — all Pat's. */
+  async function three() {
+    const { notePhoneRegistered } = await import('../services/device-grants.js')
+    const { revokeUserSessions } = await import('../auth/session.js')
+    state.pushRows = [1, 2, 3]
+    for (const sid of ['sB', 'sC']) redis.kv.set(`sess:${sid}`, JSON.stringify({ userId: PAT }))
+    const a = await phone(PAT, 'Phone A', [1])
+    await notePhoneRegistered(redis as never, 1, `grant:${a.grant.id}`)
+    await notePhoneRegistered(redis as never, 2, 'sid:sB')
+    await notePhoneRegistered(redis as never, 3, 'sid:sC')
+    const deleted = () => pushDeletes().flatMap((d) => d.bindings)
+    return { a, revokeUserSessions, deleted }
+  }
+
+  it('everywhere else from web session C: B’s row goes, C’s own row stays', async () => {
+    const { revokeUserSessions, deleted } = await three()
+    await revokeUserSessions(redis as never, PAT, { except: 'sC' })
+    expect(deleted()).toEqual(expect.arrayContaining([1, 2]))
+    expect(deleted()).not.toContain(3)
+    expect(redis.kv.has('sess:sC')).toBe(true)
   })
 
-  it('the sweep keeps a row registered after the sign-out began', async () => {
+  it('everywhere else from phone A: B’s and C’s rows go, A’s row stays', async () => {
+    const { a, revokeUserSessions, deleted } = await three()
+    await revokeUserSessions(redis as never, PAT, { exceptDeviceGrant: a.grant.id })
+    expect(deleted()).toEqual(expect.arrayContaining([2, 3]))
+    expect(deleted()).not.toContain(1)
+    expect(await store.getGrant(redis as never, a.grant.id)).not.toBeNull()
+  })
+
+  it('a full sign-out deletes every phone row, whatever its stamp', async () => {
+    const { revokeUserSessions, deleted } = await three()
+    state.pushRows = [1, 2, 3, 4] // 4: no stamp, no grant recorded it
+    await revokeUserSessions(redis as never, PAT)
+    expect(deleted()).toEqual(expect.arrayContaining([1, 2, 3, 4]))
+  })
+
+  it('a row a grant registers mid-sweep goes when that grant is ended in the same sweep', async () => {
     const { endUserDeviceGrants, notePhoneRegistered } = await import(
       '../services/device-grants.js'
     )
-    state.pushRows = [70, 71]
-    const now = Date.now()
-    const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
-    await notePhoneRegistered(redis as never, 71) // registered "a minute later"
-    spy.mockReturnValue(now)
-    await endUserDeviceGrants(redis as never, PAT, { sweepAll: true })
-    spy.mockRestore()
-    const del = pushDeletes().at(-1)
-    expect(del?.bindings).toContain(70)
-    expect(del?.bindings).not.toContain(71)
+    state.pushRows = [9]
+    const g = await phone(PAT, 'Phone')
+    // While the sweep ends the grant, the phone registers row 9 under it (not yet in its set).
+    redis.beforeExec = () => notePhoneRegistered(redis as never, 9, `grant:${g.grant.id}`)
+    expect(await endUserDeviceGrants(redis as never, PAT)).toBe(1)
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(9)
+  })
+
+  it('a stamp after the sweep keeps a row only while its credential is signed in', async () => {
+    const { notePhoneRegistered, retryLeftoverPushRows } = await import(
+      '../services/device-grants.js'
+    )
+    state.pushRows = [7, 8]
+    const live = await phone(PAT, 'Live phone') // signed in; its set does not hold row 8
+    const at = Date.now()
+    const t = vi.spyOn(Date, 'now').mockReturnValue(at + 5000)
+    await notePhoneRegistered(redis as never, 8, `grant:${live.grant.id}`)
+    await notePhoneRegistered(redis as never, 7, 'grant:00000000-0000-4000-8000-00000000dead')
+    t.mockRestore()
+    await redis.sadd('nvr:device-push-leftover:', JSON.stringify({ u: PAT, at }))
+    await retryLeftoverPushRows(redis as never)
+    const deleted = pushDeletes().flatMap((d) => d.bindings)
+    expect(deleted).toContain(7)
+    expect(deleted).not.toContain(8)
   })
 })
 

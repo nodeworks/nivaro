@@ -98,11 +98,11 @@ export async function revokeUserSessions(
   await revokeSessions(redis, sids)
   // Loaded on use: this module sits under every request, the device-grant service on the db.
   const { endUserDeviceGrants } = await import('../services/device-grants.js')
-  // A full sign-out (nothing of the caller kept) also sweeps the person's stale phone push rows;
-  // "everywhere else" never does — the caller may be a phone app on a session, whose row stays.
+  // Sessions are ended above, phones here; then the person's phone push rows are swept, keeping
+  // only the caller's own ("everywhere else": the kept session's or phone's rows).
   const phones = await endUserDeviceGrants(redis, userId, {
     except: opts.exceptDeviceGrant,
-    sweepAll: !opts.except && !opts.exceptDeviceGrant
+    keepSid: opts.except
   })
   return sids.length + phones
 }
