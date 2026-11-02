@@ -853,16 +853,17 @@ type TenantResult =
  * socket.io connections never pass the tenant onRequest hook (#1132).
  */
 export async function resolveReadyTenant(
-  hostname: string
+  hostname: string,
+  customHost?: string | null
 ): Promise<{ db: Knex; slug: string; tenantId: string; origin: string } | null> {
-  const r = await resolveTenant(hostname)
+  const r = await resolveTenant(hostname, customHost)
   if (!r.found || r.suspended || r.provisioning) return null
   return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
 /** Resolves the tenant from the request hostname.
  *  Returns a discriminated union indicating not-found, suspended, provisioning, or active. */
-async function resolveTenant(hostname: string): Promise<TenantResult> {
+async function resolveTenant(hostname: string, customHost?: string | null): Promise<TenantResult> {
   // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
   const sub = hostname.split('.')[0]
   if (!sub || RESERVED.has(sub)) return { found: false }
@@ -875,12 +876,16 @@ async function resolveTenant(hostname: string): Promise<TenantResult> {
     .catch(() => null)
 
   if (!row) return { found: false }
-  const origin = verifiedTenantOrigin(hostname, {
-    slug: String(row.slug),
-    subdomain: row.subdomain ?? sub,
-    custom_domain: row.custom_domain ?? null,
-    custom_domain_status: row.custom_domain_status ?? null
-  })
+  const origin = verifiedTenantOrigin(
+    hostname,
+    {
+      slug: String(row.slug),
+      subdomain: row.subdomain ?? sub,
+      custom_domain: row.custom_domain ?? null,
+      custom_domain_status: row.custom_domain_status ?? null
+    },
+    customHost
+  )
 
   if (row.status === 'provisioning') {
     return {
@@ -930,16 +935,20 @@ function wantsHtml(req: FastifyRequest): boolean {
  *  subsequent async operations in this request's lifecycle. */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
   // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
+  const tenantHost = req.headers['x-tenant-host'] as string | undefined
   const hostname =
-    (req.headers['x-tenant-host'] as string | undefined) ??
-    (req.headers['x-forwarded-host'] as string | undefined) ??
-    req.hostname
+    tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  // The custom domain the worker served this on — believed only beside X-Tenant-Host (the
+  // worker sets both and strips the client's), and only when it is the tenant's active one.
+  const customHost = tenantHost
+    ? ((req.headers['x-tenant-custom-host'] as string | undefined) ?? null)
+    : null
   // Tenant-free paths bypass resolution entirely
   if (TENANT_FREE_PATHS.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
   }
 
-  resolveTenant(hostname)
+  resolveTenant(hostname, customHost)
     .then((result) => {
       if (!result.found) {
         // Unknown subdomain — redirect to marketing start page

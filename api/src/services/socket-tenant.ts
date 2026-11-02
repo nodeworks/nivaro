@@ -47,8 +47,12 @@ export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | nu
   const cached = data.nvrTenant as Promise<ReadyTenant | null> | undefined
   if (cached) return cached
   const host = socketTenantHost(socket)
+  // X-Tenant-Custom-Host counts only beside X-Tenant-Host, as on requests (middleware/tenant.ts).
+  const custom = headerOf(socket, 'x-tenant-host') ? headerOf(socket, 'x-tenant-custom-host') : null
   const p = host
-    ? import('../middleware/tenant.js').then((m) => m.resolveReadyTenant(host)).catch(() => null)
+    ? import('../middleware/tenant.js')
+        .then((m) => m.resolveReadyTenant(host, custom ?? null))
+        .catch(() => null)
     : Promise.resolve(null)
   data.nvrTenant = p
   return p

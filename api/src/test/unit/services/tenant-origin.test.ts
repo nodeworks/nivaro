@@ -104,14 +104,21 @@ describe('verifiedTenantOrigin', () => {
     expect(verifiedTenantOrigin(undefined, acme)).toBe('https://acme.nivaro.dev')
   })
 
-  it('an active custom domain registered to the tenant is kept; a pending one is not', () => {
-    const row = { slug: 'crmco', subdomain: 'crm', custom_domain: 'CRM.crm-corp.com' }
+  it('a custom domain comes only from X-Tenant-Custom-Host, kept when it is the ACTIVE one', () => {
+    const row = {
+      slug: 'crmco',
+      subdomain: 'crm',
+      custom_domain: 'CRM.crm-corp.com',
+      custom_domain_status: 'active'
+    }
+    const own = 'crm.nivaro.dev'
+    expect(verifiedTenantOrigin(own, row, 'crm.crm-corp.com')).toBe('https://crm.crm-corp.com')
+    // Pending, another domain, or the domain as a plain Host: canonical.
     expect(
-      verifiedTenantOrigin('crm.crm-corp.com', { ...row, custom_domain_status: 'active' })
-    ).toBe('https://crm.crm-corp.com')
-    expect(
-      verifiedTenantOrigin('crm.crm-corp.com', { ...row, custom_domain_status: 'pending' })
+      verifiedTenantOrigin(own, { ...row, custom_domain_status: 'pending' }, 'crm.crm-corp.com')
     ).toBe('https://crm.nivaro.dev')
+    expect(verifiedTenantOrigin(own, row, 'evil.example')).toBe('https://crm.nivaro.dev')
+    expect(verifiedTenantOrigin('crm.crm-corp.com', row)).toBe('https://crm.nivaro.dev')
   })
 
   it('CLOUD_BASE_DOMAIN moves the canonical host; a local base is served over http', () => {
@@ -130,8 +137,32 @@ describe('the tenant hook', () => {
       headers: { 'x-tenant-host': 'acme.nivaro.dev' }
     })
     expect(own.json().origin).toBe('https://acme.nivaro.dev')
-    const custom = await app.inject({ url: '/api/where', headers: { host: 'crm.crm-corp.com' } })
+    // The worker: X-Tenant-Host = <subdomain>.<base>, X-Tenant-Custom-Host = the domain used.
+    const custom = await app.inject({
+      url: '/api/where',
+      headers: { 'x-tenant-host': 'crm.nivaro.dev', 'x-tenant-custom-host': 'crm.crm-corp.com' }
+    })
     expect(custom.json().origin).toBe('https://crm.crm-corp.com')
+    await app.close()
+  })
+
+  it('X-Tenant-Custom-Host counts only with X-Tenant-Host, and only for the active domain', async () => {
+    const app = await hookApp()
+    const alone = await app.inject({
+      url: '/api/where',
+      headers: { host: 'crm.example.net', 'x-tenant-custom-host': 'crm.crm-corp.com' }
+    })
+    expect(alone.json().origin).toBe('https://crm.nivaro.dev')
+    const wrong = await app.inject({
+      url: '/api/where',
+      headers: { 'x-tenant-host': 'crm.nivaro.dev', 'x-tenant-custom-host': 'other.example' }
+    })
+    expect(wrong.json().origin).toBe('https://crm.nivaro.dev')
+    const pending = await app.inject({
+      url: '/api/where',
+      headers: { 'x-tenant-host': 'pend.nivaro.dev', 'x-tenant-custom-host': 'pend.example.org' }
+    })
+    expect(pending.json().origin).toBe('https://pend.nivaro.dev')
     await app.close()
   })
 
@@ -142,8 +173,6 @@ describe('the tenant hook', () => {
       headers: { 'x-tenant-host': 'acme.attacker.example' }
     })
     expect(forged.json().origin).toBe('https://acme.nivaro.dev')
-    const pending = await app.inject({ url: '/api/where', headers: { host: 'pend.example.org' } })
-    expect(pending.json().origin).toBe('https://pend.nivaro.dev')
     await app.close()
   })
 

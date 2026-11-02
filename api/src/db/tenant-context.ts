@@ -94,10 +94,11 @@ export function canonicalTenantOrigin(subdomain: string): string {
 }
 
 /**
- * The origin to name for a tenant a request resolved: the request host only when it is the
- * tenant's own `<subdomain>.<base>` or its ACTIVE custom domain (meta row), else the canonical
- * origin. A made-up host that happens to resolve to the tenant (`acme.attacker.example`) is
- * never echoed.
+ * The origin to name for a tenant a request resolved: the tenant's own `<subdomain>.<base>` when
+ * the request came on it, or its ACTIVE custom domain (meta row) when the cloud worker named it
+ * in X-Tenant-Custom-Host (`customHost`; the caller passes it only beside X-Tenant-Host), else
+ * the canonical origin. A made-up host that happens to resolve to the tenant
+ * (`acme.attacker.example`), a pending or another domain, is never echoed.
  */
 export function verifiedTenantOrigin(
   rawHost: string | string[] | undefined | null,
@@ -106,15 +107,17 @@ export function verifiedTenantOrigin(
     subdomain?: string | null
     custom_domain?: string | null
     custom_domain_status?: string | null
-  }
+  },
+  customHost?: string | string[] | null
 ): string {
   const sub = String(row.subdomain || row.slug)
   const canonical = canonicalTenantOrigin(sub)
+  const custom = cleanTenantHost(customHost)
+  const registered = cleanTenantHost(row.custom_domain)
+  if (custom && registered && row.custom_domain_status === 'active' && custom === registered)
+    return originOf(custom)
   const host = cleanTenantHost(rawHost)
-  if (!host) return canonical
-  if (host === `${sub.toLowerCase()}.${cloudBaseDomain()}`) return originOf(host)
-  const custom = cleanTenantHost(row.custom_domain)
-  if (custom && row.custom_domain_status === 'active' && host === custom) return originOf(host)
+  if (host && host === `${sub.toLowerCase()}.${cloudBaseDomain()}`) return originOf(host)
   return canonical
 }
 
