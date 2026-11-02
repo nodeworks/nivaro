@@ -1,3 +1,4 @@
+import type { FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
@@ -21,10 +22,7 @@ export interface AppInfo {
 }
 
 /** What a tenant hook already knows when it lets the probe through a blocked tenant. */
-export interface AppInfoBlock {
-  kind: 'suspended' | 'provisioning'
-  name: string
-}
+export type AppInfoBlock = NonNullable<FastifyRequest['nvrTenantBlock']>
 
 export function appEnvironment(): AppInfo['environment'] {
   const v = (process.env.NIVARO_ENVIRONMENT ?? '').trim().toLowerCase()
