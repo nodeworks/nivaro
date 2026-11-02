@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const fetchMock = vi.hoisted(() => vi.fn())
+const safeFetchMock = vi.hoisted(() => vi.fn())
 const h = vi.hoisted(() => ({
   phones: [] as Array<{ id: number; endpoint: string }>,
   badge: 3,
@@ -65,7 +66,7 @@ vi.mock('../../../services/traffic-taps/channels.js', () => ({
   noteChannelRedirect: h.noteChannelRedirect
 }))
 vi.mock('../../../lib/ssrf.js', () => ({
-  safeFetch: fetchMock
+  safeFetch: safeFetchMock
 }))
 vi.mock('../../../admin-base.js', () => ({ adminBaseUrl: () => 'https://acme.example' }))
 vi.mock('../../../services/swallow-counter.js', () => ({ countSwallow: () => {} }))
@@ -86,6 +87,7 @@ beforeEach(() => {
   h.routed = { userId: 'u1', prefix: '' }
   h.noteChannel.mockClear()
   fetchMock.mockReset()
+  safeFetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
   delete process.env.MOBILE_PUSH
   delete process.env.EXPO_ACCESS_TOKEN
@@ -208,15 +210,16 @@ describe('relay phones', () => {
   })
 
   it('sends full content with ids, url and instance; Expo is not called', async () => {
-    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
+    safeFetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
     const n = await sendPhonePush('u1', {
       title: 'Approve PO',
       body: 'CM26-1 waits',
       data: { id: 5, collection: 'workflows', item: '9', url: '/collections/workflows/9' }
     })
     expect(n).toBe(1)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, any]
+    expect(safeFetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+    const [url, init] = safeFetchMock.mock.calls[0] as [string, any]
     expect(url).toBe('https://push.nivaro.dev/v1/send')
     expect(init.headers.authorization).toBe('Bearer rk')
     expect(JSON.parse(init.body).messages).toEqual([
@@ -242,31 +245,41 @@ describe('relay phones', () => {
       overrides: JSON.stringify({ mobile_push: { content: 'minimal' } }),
       name: 'Acme'
     }
-    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
+    safeFetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
     await sendPhonePush('u1', {
       title: 'Secret PO 123',
       body: 'Vendor X owes',
       data: { id: 5, collection: 'workflows', item: '9', url: '/collections/workflows/9' }
     })
-    const msg = JSON.parse((fetchMock.mock.calls[0]?.[1] as any).body).messages[0]
+    const msg = JSON.parse((safeFetchMock.mock.calls[0]?.[1] as any).body).messages[0]
     expect(msg.title).toBe('Acme')
     expect(msg.body).toBe('You have a new notification')
     expect(msg.data).toEqual({ notification_id: '5', instance: 'https://acme.example' })
   })
 
+  it('relay rows but no key: skipped with one count-only warning', async () => {
+    delete process.env.MOBILE_PUSH_RELAY_KEY
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('1 phone')
+    expect(safeFetchMock).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('gone removes the row', async () => {
-    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'gone' }))
+    safeFetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'gone' }))
     expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
     expect(h.deleted).toEqual([9])
   })
 
   it('relay 5xx or timeout: 0 delivered, one log, no throw', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+    safeFetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
     expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(h.noteChannel).toHaveBeenCalledWith('push', 'failed', expect.anything())
-    fetchMock.mockRejectedValueOnce(new Error('timeout'))
+    safeFetchMock.mockRejectedValueOnce(new Error('timeout'))
     expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
     expect(h.deleted).toEqual([])
     warn.mockRestore()
@@ -281,17 +294,16 @@ describe('relay phones', () => {
       }))
     ]
     fetchMock.mockResolvedValueOnce(tickets({ status: 'ok', id: 't1' }))
-    fetchMock.mockResolvedValue(relayOk())
+    safeFetchMock.mockResolvedValue(relayOk())
     await sendPhonePush('u1', { title: 't', body: 'b' })
-    const urls = fetchMock.mock.calls.map((c) => c[0])
-    expect(urls).toEqual([
-      'https://exp.host/--/api/v2/push/send',
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['https://exp.host/--/api/v2/push/send'])
+    expect(safeFetchMock.mock.calls.map((c) => c[0])).toEqual([
       'https://push.nivaro.dev/v1/send',
       'https://push.nivaro.dev/v1/send'
     ])
-    const sizes = fetchMock.mock.calls
-      .slice(1)
-      .map((c) => JSON.parse((c[1] as any).body).messages.length)
+    const sizes = safeFetchMock.mock.calls.map(
+      (c) => JSON.parse((c[1] as any).body).messages.length
+    )
     expect(sizes).toEqual([100, 1])
   })
 })

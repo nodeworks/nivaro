@@ -106,6 +106,11 @@ describe('pushRelayConfig', () => {
     })
   })
 
+  it('connect with no public origin refuses before any call', async () => {
+    await expect(connectPushRelay('  ', 'A')).rejects.toMatchObject({ code: 'RELAY_NO_ORIGIN' })
+    expect(h.safeFetch).not.toHaveBeenCalled()
+  })
+
   it('connect refused by the relay throws', async () => {
     h.safeFetch.mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) })
     await expect(connectPushRelay('https://a', 'A')).rejects.toThrow(/refused/)

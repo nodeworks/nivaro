@@ -26,7 +26,8 @@ export const RELAY_KEY_MASK = '********'
 export type RelayContent = 'full' | 'minimal'
 
 /** SQL for "this subscription row is a phone" (raw select/group expressions). */
-export const PHONE_ENDPOINT_SQL = `(endpoint LIKE '${EXPO_PREFIX}%' OR endpoint LIKE '${RELAY_PREFIX}%')`
+export const PHONE_ENDPOINT_SQL =
+  `(endpoint LIKE '${EXPO_PREFIX}%' ` + `OR endpoint LIKE '${RELAY_PREFIX}%')`
 
 export function isPhoneEndpoint(endpoint: string): boolean {
   return endpoint.startsWith(EXPO_PREFIX) || endpoint.startsWith(RELAY_PREFIX)
@@ -97,6 +98,11 @@ export async function setRelayContent(content: RelayContent): Promise<void> {
   await saveStored({ content })
 }
 
+/** Forget the stored relay key (an env key is not touched). */
+export async function clearRelayKey(): Promise<void> {
+  await saveStored({ relay_key: null })
+}
+
 /** Store a relay key. The masked placeholder (a re-sent GET value) keeps the stored one. */
 export async function setRelayKey(key: string): Promise<void> {
   if (!key || key === RELAY_KEY_MASK) return
@@ -104,7 +110,22 @@ export async function setRelayKey(key: string): Promise<void> {
 }
 
 /** Register this instance with the relay and store the key it answers (shown once). */
+export class RelayError extends Error {
+  constructor(
+    message: string,
+    public code: string
+  ) {
+    super(message)
+  }
+}
+
 export async function connectPushRelay(origin: string, name: string): Promise<void> {
+  if (!origin.trim()) {
+    throw new RelayError(
+      'This instance has no public address to register with the push relay.',
+      'RELAY_NO_ORIGIN'
+    )
+  }
   const cfg = await pushRelayConfig()
   const res = await safeFetch(`${cfg.url}/v1/instances`, {
     method: 'POST',

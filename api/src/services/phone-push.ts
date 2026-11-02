@@ -275,6 +275,7 @@ async function sendViaRelay(
   const out = { delivered: [] as number[], gone: [] as number[] }
   if (!cfg.key) {
     noteChannel('push', 'failed', { ms: 0, n: phones.length })
+    console.warn(`[phone-push] relay not connected: skipped ${phones.length} phone(s)`)
     return out
   }
   const instance = await instanceOrigin()

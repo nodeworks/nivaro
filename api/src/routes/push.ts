@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import {
   instanceName,
   instanceOrigin,
@@ -11,10 +12,13 @@ import {
   sendPhonePush
 } from '../services/phone-push.js'
 import {
+  clearRelayKey,
   connectPushRelay,
   PHONE_ENDPOINT_SQL,
   pushRelayConfig,
+  RELAY_KEY_MASK,
   RELAY_PREFIX,
+  RelayError,
   setRelayContent,
   setRelayKey,
   wherePhoneEndpoint
@@ -32,8 +36,9 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  * Phones (Expo apps; stored as `expo:<token>` rows, services/phone-push.ts):
  *  GET    /push/phones        — the current user's phones
  *  POST   /push/phones        — register this phone {token | relay_device, platform?, app?,
- *                               device_name?}; `relay_device` is the Nivaro app's id at the push
- *                               relay (`relay:<id>` row, services/push-relay.ts); answers a one-time `forget_key` (only its hash is stored)
+ *                               device_name?}; `relay_device` is the Nivaro app's id at the
+ *                               push relay (`relay:<id>` row); answers a one-time
+ *                               `forget_key` (only its hash is stored)
  *  DELETE /push/phones        — remove one of the caller's phones {token}
  *  POST   /push/phones/forget — remove this phone {token, forget_key} WITHOUT a sign-in: the key
  *                               from its registration proves it is the phone that registered, so
@@ -45,6 +50,8 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *                               {relay_key?} stores a key by hand; {content?: 'full'|'minimal'}
  */
 
+const PHONE_ID_ERROR = 'token must be an Expo push token, or relay_device a valid device id'
+const PHONE_ID_CODE = 'RELAY_DEVICE_INVALID'
 const RELAY_DEVICE = /^[A-Za-z0-9_-]{16,64}$/
 
 /** The subscription endpoint a phone request names: an Expo token or a relay device id. */
@@ -191,9 +198,7 @@ export async function pushRoutes(app: FastifyInstance) {
     const { platform, app: appId, device_name } = req.body ?? {}
     const endpoint = phoneEndpoint(req.body)
     if (!endpoint) {
-      return reply
-        .code(400)
-        .send({ error: 'token must be an Expo push token, or relay_device a valid device id' })
+      return reply.code(400).send({ error: PHONE_ID_ERROR, code: PHONE_ID_CODE })
     }
     const hash = endpointHash(endpoint)
     const plat = ['ios', 'android'].includes(String(platform)) ? String(platform) : 'unknown'
@@ -237,9 +242,7 @@ export async function pushRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const endpoint = phoneEndpoint(req.body)
       if (!endpoint) {
-        return reply
-          .code(400)
-          .send({ error: 'token must be an Expo push token, or relay_device a valid device id' })
+        return reply.code(400).send({ error: PHONE_ID_ERROR, code: PHONE_ID_CODE })
       }
       const removed = await db('nivaro_push_subscriptions')
         .where({ endpoint_hash: endpointHash(endpoint), user: req.user!.id })
@@ -285,38 +288,71 @@ export async function pushRoutes(app: FastifyInstance) {
     })
   })
 
-  app.post<{ Body: { connect?: boolean; relay_key?: string; content?: string } }>(
-    '/relay',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      const { connect, relay_key, content } = req.body ?? {}
-      if (content !== undefined && content !== 'full' && content !== 'minimal') {
-        return reply.code(400).send({ error: "content must be 'full' or 'minimal'" })
-      }
-      if (content) await setRelayContent(content)
-      // The key is never sent back; a masked value re-sent from a form leaves the stored one.
-      if (typeof relay_key === 'string') await setRelayKey(relay_key.trim())
-      if (connect) {
-        try {
-          await connectPushRelay(await instanceOrigin(), await instanceName())
-        } catch (err) {
-          req.log.warn({ err }, 'push relay: connect failed')
-          return reply
-            .code(502)
-            .send({ error: 'Could not connect to the push relay.', code: 'RELAY_UNAVAILABLE' })
-        }
-      }
-      const cfg = await pushRelayConfig()
-      return reply.send({
-        data: {
-          connected: !!cfg.key,
-          url: cfg.url,
-          content: cfg.content,
-          mode: await phonePushMode()
-        }
+  app.post<{
+    Body: { connect?: boolean; disconnect?: boolean; relay_key?: string; content?: string }
+  }>('/relay', { preHandler: requireAdmin }, async (req, reply) => {
+    const { connect, disconnect, relay_key, content } = req.body ?? {}
+    if (content !== undefined && content !== 'full' && content !== 'minimal') {
+      return reply
+        .code(400)
+        .send({ error: "content must be 'full' or 'minimal'", code: 'RELAY_CONTENT_INVALID' })
+    }
+    if (
+      (connect || typeof relay_key === 'string' || disconnect) &&
+      process.env.MOBILE_PUSH_RELAY_KEY?.trim()
+    ) {
+      return reply.code(409).send({
+        error: 'The relay key comes from the environment (MOBILE_PUSH_RELAY_KEY) here.',
+        code: 'RELAY_KEY_FROM_ENV'
       })
     }
-  )
+    const changes: string[] = []
+    if (content) {
+      await setRelayContent(content)
+      changes.push(`content=${content}`)
+    }
+    // The key is never sent back or logged; a masked value re-sent from a form leaves it alone.
+    if (typeof relay_key === 'string' && relay_key.trim() && relay_key.trim() !== RELAY_KEY_MASK) {
+      await setRelayKey(relay_key.trim())
+      changes.push('key set')
+    }
+    if (disconnect) {
+      await clearRelayKey()
+      changes.push('disconnected')
+    }
+    if (connect) {
+      try {
+        await connectPushRelay(await instanceOrigin(), await instanceName())
+        changes.push('connected')
+      } catch (err) {
+        if (err instanceof RelayError) {
+          return reply.code(400).send({ error: err.message, code: err.code })
+        }
+        req.log.warn({ err }, 'push relay: connect failed')
+        return reply
+          .code(502)
+          .send({ error: 'Could not connect to the push relay.', code: 'RELAY_UNAVAILABLE' })
+      }
+    }
+    if (changes.length) {
+      await logActivity({
+        action: 'push-relay-update',
+        user: req.user?.id,
+        collection: 'nivaro_settings',
+        comment: `push relay: ${changes.join(', ')}`,
+        req
+      })
+    }
+    const cfg = await pushRelayConfig()
+    return reply.send({
+      data: {
+        connected: !!cfg.key,
+        url: cfg.url,
+        content: cfg.content,
+        mode: await phonePushMode()
+      }
+    })
+  })
 
   app.post('/phones/test', { preHandler: requireAuth }, async (req, reply) => {
     const sent = await sendPhonePush(req.user!.id, {
