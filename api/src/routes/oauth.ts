@@ -126,10 +126,14 @@ const oauthError = (reply: FastifyReply, status: number, error: string, descript
     .header('Cache-Control', 'no-store')
     .send({ error, error_description: description })
 
-function protectedResourceDoc() {
+/** RFC 9728 metadata on this host: the resource and its authorization server follow
+ *  requestIssuer(req), like the authorization-server metadata (MCP_PUBLIC_URL's on the MCP host;
+ *  the tenant's origin in cloud). */
+function protectedResourceDoc(req: FastifyRequest) {
+  const o = requestIssuer(req)
   return {
-    resource: mcpResourceUrl(),
-    authorization_servers: [mcpPublicOrigin()],
+    resource: `${o}/api/mcp`,
+    authorization_servers: [o],
     bearer_methods_supported: ['header'],
     scopes_supported: [...OAUTH_SCOPES],
     resource_name: 'Nivaro',
@@ -215,9 +219,12 @@ function enabledFor(reply: FastifyReply, clientId: string): boolean {
 
 /** A resource the token may be bound to: ours, or none named. The query string is not part of
  *  it — `/api/mcp?live=1` (a live session, #2467) is the same resource. */
-const acceptableResource = (r: string | undefined) => {
+const acceptableResource = (r: string | undefined, req: FastifyRequest) => {
   const base = r?.split(/[?#]/)[0].replace(/\/+$/, '')
-  return !base || base === mcpResourceUrl() || base === mcpPublicOrigin()
+  if (!base || base === mcpResourceUrl() || base === mcpPublicOrigin()) return true
+  // The resource this host's protected-resource document names (protectedResourceDoc).
+  const here = requestIssuer(req)
+  return base === `${here}/api/mcp` || base === here
 }
 
 type Checked =
@@ -226,7 +233,11 @@ type Checked =
   // has chosen, a self-registered client must not turn Nivaro into a redirector.
   | { ok: false; message: string }
 
-async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise<Checked> {
+async function checkAuthorize(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  p: AuthorizeParams
+): Promise<Checked> {
   const fail = (message: string) => ({ ok: false as const, message })
   // The registry first: a dynamic client can never stand in for a phone app.
   const mobile = mobileClient(p.client_id)
@@ -257,7 +268,8 @@ async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise
   // A phone app's tokens are not bound to a resource (they act as the person everywhere), so its
   // `resource` is ignored; only a phone app may name a device. Neither rides on for the others.
   if (mobile) return { ok: true, client, p: { ...p, resource: undefined } }
-  if (!acceptableResource(p.resource)) return fail('This app asked for access to another server.')
+  if (!acceptableResource(p.resource, req))
+    return fail('This app asked for access to another server.')
   return { ok: true, client, p: { ...p, device_name: undefined, platform: undefined } }
 }
 
@@ -576,9 +588,12 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     '/.well-known/oauth-protected-resource',
     '/.well-known/oauth-protected-resource/api/mcp'
   ]) {
-    app.get(path, async (_req, reply) => {
+    app.get(path, async (req, reply) => {
       if (!enabled(reply)) return
-      return reply.header('Cache-Control', 'max-age=300').send(protectedResourceDoc())
+      return reply
+        .header('Cache-Control', 'max-age=300')
+        .header('Vary', 'Host, X-Forwarded-Host, X-Tenant-Host, X-Tenant-Custom-Host')
+        .send(protectedResourceDoc(req))
     })
   }
   for (const path of [
@@ -590,7 +605,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       // The issuer is per host: a cache keyed on the URL alone must not hand one host's to another.
       return reply
         .header('Cache-Control', 'max-age=300')
-        .header('Vary', 'Host, X-Forwarded-Host, X-Tenant-Host')
+        .header('Vary', 'Host, X-Forwarded-Host, X-Tenant-Host, X-Tenant-Custom-Host')
         .send(authorizationServerDoc(req))
     })
   }
@@ -646,7 +661,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     const p = readAuthorizeParams(req.query as Record<string, unknown>)
     if (!enabledFor(reply, p.client_id)) return
     void reply.headers(SECURITY_HEADERS)
-    const checked = await checkAuthorize(app, p)
+    const checked = await checkAuthorize(app, req, p)
     if (!checked.ok) return cannotConnect(reply, checked.message)
     if (checked.client.mobile)
       void reply.header(
@@ -681,7 +696,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         reply,
         'This consent page expired. Go back to the app and connect again.'
       )
-    const checked = await checkAuthorize(app, readAuthorizeParams(body))
+    const checked = await checkAuthorize(app, req, readAuthorizeParams(body))
     if (!checked.ok) return cannotConnect(reply, checked.message)
     const p = checked.p
     if (body.decision !== 'allow')

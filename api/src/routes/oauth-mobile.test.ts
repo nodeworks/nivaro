@@ -402,6 +402,48 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     }
   })
 
+  it('the protected-resource document follows the host’s issuer; the MCP host is MCP_PUBLIC_URL', async () => {
+    for (const [host, origin] of [
+      ['tenant-a.example', 'https://tenant-a.example'],
+      ['nivaro.example', 'https://nivaro.example'],
+      ['nivaro:3055', 'https://nivaro.example']
+    ]) {
+      for (const path of [
+        '/.well-known/oauth-protected-resource',
+        '/.well-known/oauth-protected-resource/api/mcp'
+      ]) {
+        const doc = (await app.inject({ url: path, headers: { host } })).json()
+        expect(doc.resource).toBe(`${origin}/api/mcp`)
+        expect(doc.authorization_servers).toEqual([origin])
+      }
+    }
+  })
+
+  it('an MCP client may bind its token to the resource that host named', async () => {
+    signIn()
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'Claude', redirect_uris: ['https://claude.ai/cb'] }
+    })
+    const mcp = params({
+      client_id: reg.json().client_id,
+      redirect_uri: 'https://claude.ai/cb',
+      resource: 'https://tenant-a.example/api/mcp'
+    })
+    const page = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams(mcp)}`,
+      headers: { host: 'tenant-a.example' }
+    })
+    expect(page.statusCode).toBe(200)
+    // Another server's resource is still refused.
+    const other = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams({ ...mcp, resource: 'https://evil.example/api/mcp' })}`,
+      headers: { host: 'tenant-a.example' }
+    })
+    expect(other.statusCode).toBe(400)
+  })
+
   it('discovery names the same issuer as the authorize answer, per host', async () => {
     signIn()
     for (const host of ['tenant-a.example', 'nivaro:3055', 'nivaro.example']) {
