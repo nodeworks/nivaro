@@ -1,5 +1,17 @@
 import { vi } from 'vitest'
 
+// config.ts refuses to load without DB_* and a SESSION_SECRET that passes auth/secret-policy.ts.
+// Tests never reach a database, so placeholders do — set only when absent, so `npx vitest run`
+// works in a fresh worktree (no .env) and a real environment keeps its own values.
+const TEST_ENV: Record<string, string> = {
+  DB_HOST: 'localhost',
+  DB_DATABASE: 'nivaro_test',
+  DB_USER: 'nivaro_test',
+  DB_PASSWORD: 'not-a-real-password',
+  SESSION_SECRET: 'vitest-only-9f3c1a7e5b2d8046-session-key-x'
+}
+for (const [k, v] of Object.entries(TEST_ENV)) if (!process.env[k]) process.env[k] = v
+
 // db must be a vi.fn() so tests can override it with mockReturnValue / mockImplementation.
 // The factory runs at hoist time — everything is defined inline.
 vi.mock('../db/index.js', () => {
