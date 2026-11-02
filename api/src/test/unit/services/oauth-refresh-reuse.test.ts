@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   consumeRefreshChecked,
+  createDeviceGrant,
   getGrant,
   issueTokens,
   REFRESH_REUSE_GRACE_S,
+  rememberDeviceRotation,
   upsertGrant
 } from '../../../services/oauth-store.js'
 
@@ -44,7 +46,7 @@ function memRedis() {
     multi: () => {
       const ops: Array<() => Promise<unknown>> = []
       const m: Record<string, (...a: never[]) => unknown> = {}
-      for (const name of ['set', 'setex', 'del', 'sadd', 'srem', 'expire'] as const)
+      for (const name of ['set', 'setex', 'del', 'sadd', 'srem', 'smembers', 'expire'] as const)
         m[name] = (...a: never[]) => {
           ops.push(() => (r[name] as (...x: never[]) => Promise<unknown>)(...a))
           return m
@@ -99,5 +101,113 @@ describe('refresh-token reuse detection', () => {
       ok: false,
       reason: 'unknown'
     })
+  })
+})
+
+describe('a phone refresh retried inside the grace window', () => {
+  const mobile = { client_id: 'nivaro-mobile', client_name: 'Nivaro' }
+  /** A phone signed in, its refresh token rotated once (the app lost the answer). */
+  async function rotated(redis: ReturnType<typeof memRedis>, user = 'U1') {
+    const grant = await createDeviceGrant(redis as never, user, mobile, { device_name: 'P' })
+    const rec = { grant_id: grant.id, user_id: user, client_id: mobile.client_id, resource: null }
+    const first = await issueTokens(redis as never, rec, 'device')
+    const spent = await consumeRefreshChecked(redis as never, first.refresh_token)
+    expect(spent.ok).toBe(true)
+    const next = await issueTokens(redis as never, rec, 'device')
+    await rememberDeviceRotation(redis as never, first.refresh_token, grant.id, rec, next)
+    return { grant, first, next }
+  }
+
+  it('reuse at +5 s answers the SAME new pair, and the connection stays', async () => {
+    const redis = memRedis()
+    const { grant, first, next } = await rotated(redis)
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + 5000)
+    const again = await consumeRefreshChecked(redis as never, first.refresh_token)
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.replayed?.access_token).toBe(next.access_token)
+    expect(again.replayed?.refresh_token).toBe(next.refresh_token)
+    expect(again.replayed?.expires_in).toBeLessThanOrEqual(next.expires_in)
+    expect(again.rec).toMatchObject({ grant_id: grant.id, kind: 'device' })
+    expect(await getGrant(redis as never, grant.id)).not.toBe(null)
+  })
+
+  it('the pair is stored encrypted, only for the grace window', async () => {
+    const redis = memRedis()
+    const ttls: number[] = []
+    const setex = redis.setex
+    redis.setex = async (k: string, t: number, v: string) => {
+      if (k.includes(':rt-replay:')) ttls.push(t)
+      return setex(k, t, v)
+    }
+    const { next } = await rotated(redis)
+    const stored = [...redis.kv].filter(([k]) => k.includes(':rt-replay:'))
+    expect(stored).toHaveLength(1)
+    expect(stored[0][1]).not.toContain(next.access_token)
+    expect(stored[0][1]).not.toContain(next.refresh_token)
+    expect(ttls).toEqual([REFRESH_REUSE_GRACE_S])
+  })
+
+  it('reuse after the grace window keeps today’s rule: refused, connection ended', async () => {
+    const redis = memRedis()
+    const { grant, first } = await rotated(redis)
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.now() + (REFRESH_REUSE_GRACE_S + 5) * 1000)
+    const late = await consumeRefreshChecked(redis as never, first.refresh_token)
+    expect(late).toMatchObject({ ok: false, reason: 'reused', grant_id: grant.id })
+    expect(await getGrant(redis as never, grant.id)).toBe(null)
+  })
+
+  it('a reuse of another grant’s token never gets this grant’s pair', async () => {
+    const redis = memRedis()
+    const a = await rotated(redis, 'U1')
+    // Grant B rotated with no remembered answer (or another person's): its reuse gets its own
+    // refusal, never A's pair.
+    const b = await createDeviceGrant(redis as never, 'U2', mobile, { device_name: 'Q' })
+    const brec = { grant_id: b.id, user_id: 'U2', client_id: mobile.client_id, resource: null }
+    const bFirst = await issueTokens(redis as never, brec, 'device')
+    expect((await consumeRefreshChecked(redis as never, bFirst.refresh_token)).ok).toBe(true)
+    const bAgain = await consumeRefreshChecked(redis as never, bFirst.refresh_token)
+    expect(bAgain).toEqual({ ok: false, reason: 'unknown' })
+    // A's remembered answer filed under B's token (a forged entry) does not open either.
+    const aKey = [...redis.kv.keys()].find((k) => k.includes(':rt-replay:')) as string
+    const { hashToken } = await import('../../../lib/oauth.js')
+    redis.kv.set(
+      aKey.replace(/rt-replay:.*$/, `rt-replay:${hashToken(bFirst.refresh_token)}`),
+      redis.kv.get(aKey) as string
+    )
+    const forged = await consumeRefreshChecked(redis as never, bFirst.refresh_token)
+    expect(forged).toEqual({ ok: false, reason: 'unknown' })
+    expect(JSON.stringify(forged)).not.toContain(a.next.access_token)
+  })
+
+  it('a pair rotated again since is not handed out again', async () => {
+    const redis = memRedis()
+    const { first, next } = await rotated(redis)
+    expect((await consumeRefreshChecked(redis as never, next.refresh_token)).ok).toBe(true)
+    expect(await consumeRefreshChecked(redis as never, first.refresh_token)).toEqual({
+      ok: false,
+      reason: 'unknown'
+    })
+  })
+
+  it('an MCP refresh is never replayed (nothing is remembered for it)', async () => {
+    const redis = memRedis()
+    const grant = await upsertGrant(redis as never, 'U1', {
+      client_id: 'C1',
+      client_name: 'App'
+    } as never)
+    const rec = { grant_id: grant.id, user_id: 'U1', client_id: 'C1', resource: null }
+    const pair = await issueTokens(redis as never, rec)
+    await consumeRefreshChecked(redis as never, pair.refresh_token)
+    await rememberDeviceRotation(
+      redis as never,
+      pair.refresh_token,
+      grant.id,
+      rec,
+      await issueTokens(redis as never, rec)
+    )
+    expect([...redis.kv.keys()].some((k) => k.includes(':rt-replay:'))).toBe(false)
   })
 })

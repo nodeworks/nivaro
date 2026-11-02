@@ -52,6 +52,7 @@ import {
   peekDeviceAccess,
   peekRefresh,
   registerClient,
+  rememberDeviceRotation,
   revokeGrant,
   revokeToken,
   type TokenRecord,
@@ -631,9 +632,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     // the same session.
     // A phone app's sign-in comes back to the origin it started on: its `iss` is that origin.
     if (!user || stale)
-      return reply.redirect(
-        signInUrl(req.url, stale, authorizeIssuer(req, checked.client.mobile))
-      )
+      return reply.redirect(signInUrl(req.url, stale, authorizeIssuer(req, checked.client.mobile)))
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
     if (checked.client.mobile)
@@ -859,7 +858,20 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         if (await deviceSignInExpired(app, rec, acct.role))
           return endDeviceSignIn(rec, 'expired', 'Your sign-in has expired. Sign in again.')
       }
-      return tokenAnswer(await issueTokens(app.redis, rec, kind), kind, rec.grant_id)
+      // A phone retrying a refresh whose answer it lost (inside the grace window): that answer.
+      if (out.replayed) return tokenAnswer(out.replayed, kind, rec.grant_id)
+      const tokens = await issueTokens(app.redis, rec, kind)
+      if (kind === 'device')
+        await rememberDeviceRotation(
+          app.redis,
+          str(b.refresh_token),
+          rec.grant_id,
+          rec,
+          tokens
+        ).catch((err) =>
+          req.log.warn({ err, grant_id: rec.grant_id }, 'oauth: refresh answer not kept')
+        )
+      return tokenAnswer(tokens, kind, rec.grant_id)
     }
 
     return oauthError(

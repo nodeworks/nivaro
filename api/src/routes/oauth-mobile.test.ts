@@ -303,6 +303,8 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       kind: 'device',
       device_name: "Pat's iPhone"
     })
+    // The app lost that answer and retries the same refresh at once: the same pair again, and
+    // the sign-in stays (idempotent inside the reuse grace window).
     const reuse = await app.inject({
       method: 'POST',
       url: '/oauth/token',
@@ -312,7 +314,13 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
         client_id: 'nivaro-mobile'
       })
     })
-    expect(reuse.statusCode).toBe(400)
+    expect(reuse.statusCode).toBe(200)
+    expect(reuse.json()).toMatchObject({
+      access_token: r2.access_token,
+      refresh_token: r2.refresh_token,
+      token_type: 'Bearer'
+    })
+    expect(await resolveAccessToken(redis as never, r2.access_token, 'device')).not.toBeNull()
   })
 
   it('iss is the host the sign-in arrived on; the code is exchanged only there', async () => {

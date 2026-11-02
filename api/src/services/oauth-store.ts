@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import type { DevicePlatform } from '../lib/mobile-clients.js'
 import {
@@ -28,6 +28,9 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   grant-idle:<id>  the idle review's stamps on a grant (#2497); its own key with its own TTL,
  *                    so the review never rewrites (or resurrects) a grant; deleted on revoke/use
  *   grant-push:<id>  a device grant's phone push row ids (a SET); read and deleted with the grant
+ *   rt-spent:<hash>  a spent refresh token (replay detection)
+ *   rt-replay:<hash> a phone refresh's answer, encrypted with the spent token itself, kept for
+ *                    the reuse grace window only (a retried refresh gets the same pair back)
  *
  * Tokens and codes are stored by hash only. Every token is checked against its
  * grant, so revoking a connection ends its tokens at once. Cloud: every record
@@ -279,7 +282,9 @@ export const REFRESH_REUSE_GRACE_S = 30
 const spentKey = (hash: string) => `${P}rt-spent:${hash}`
 
 export type ConsumeRefreshResult =
-  | { ok: true; rec: TokenRecord }
+  /** `replayed`: a phone retried a refresh inside the grace window — this is the pair it was
+   *  answered the first time (send it again; issue nothing new). */
+  | { ok: true; rec: TokenRecord; replayed?: IssuedTokens }
   | { ok: false; reason: 'unknown' | 'revoked' }
   /** A replayed refresh token: the grant it belonged to has been ended (who + which, for the log;
    *  `grant` = what was stored, so a phone's push rows can go too). */
@@ -303,7 +308,8 @@ export async function consumeRefreshChecked(
       spentKey(h)
     )
     if (!spent || !sameTenant(spent)) return { ok: false, reason: 'unknown' }
-    if (Date.now() - spent.at > REFRESH_REUSE_GRACE_S * 1000) {
+    const late = Date.now() - spent.at > REFRESH_REUSE_GRACE_S * 1000
+    if (late) {
       const grant = await takeGrant(redis, spent.user_id, spent.grant_id).catch(() => null)
       return {
         ok: false,
@@ -313,6 +319,11 @@ export async function consumeRefreshChecked(
         grant
       }
     }
+    // Inside the grace window a phone's retry gets its first answer again (idempotent refresh).
+    const replay = refresh.startsWith(DEVICE_REFRESH_PREFIX)
+      ? await replayDeviceRotation(redis, refresh, spent.grant_id).catch(() => null)
+      : null
+    if (replay) return { ok: true, rec: replay.rec, replayed: replay.tokens }
     return { ok: false, reason: 'unknown' }
   }
   try {
@@ -333,6 +344,94 @@ export async function consumeRefreshChecked(
       : { ok: false, reason: 'revoked' }
   } catch {
     return { ok: false, reason: 'unknown' }
+  }
+}
+
+const replayKey = (hash: string) => `${P}rt-replay:${hash}`
+/** The AES-256-GCM key for a spent refresh token's remembered answer: derived from the token
+ *  itself (never stored), so only whoever holds that token can read the pair back. */
+const replayCipherKey = (refresh: string) =>
+  createHash('sha256').update(`nvr:oauth:rt-replay:v1:${refresh}`).digest()
+
+interface ReplayBlob {
+  /** The grant, the tenant, and when the answer was issued (ms). */
+  g: string
+  t: string
+  at: number
+  iv: string
+  tag: string
+  ct: string
+}
+
+/**
+ * Remember the pair a phone refresh (`nvdr_`) was answered with, under the spent token, for
+ * REFRESH_REUSE_GRACE_S only, encrypted with a key derived from that spent token: a retry of the
+ * same refresh inside the window (the app lost the answer) then gets the same pair back instead
+ * of a refusal. MCP refresh tokens are never remembered.
+ */
+export async function rememberDeviceRotation(
+  redis: Redis,
+  spentRefresh: string,
+  grantId: string,
+  rec: Omit<TokenRecord, 't' | 'kind'> & Partial<Pick<TokenRecord, 't' | 'kind'>>,
+  tokens: IssuedTokens
+): Promise<void> {
+  if (!spentRefresh.startsWith(DEVICE_REFRESH_PREFIX)) return
+  const iv = randomBytes(12)
+  const c = createCipheriv('aes-256-gcm', replayCipherKey(spentRefresh), iv)
+  const { t: _t, kind: _k, ...fields } = rec
+  const plain = JSON.stringify({ tokens, rec: { ...fields, kind: 'device' } })
+  const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()])
+  const blob: ReplayBlob = {
+    g: grantId,
+    t: currentTenantKey(),
+    at: Date.now(),
+    iv: iv.toString('base64url'),
+    tag: c.getAuthTag().toString('base64url'),
+    ct: ct.toString('base64url')
+  }
+  await redis.setex(replayKey(hashToken(spentRefresh)), REFRESH_REUSE_GRACE_S, JSON.stringify(blob))
+}
+
+/**
+ * The answer a spent phone refresh token was given, when it is still inside the grace window, of
+ * this tenant and grant (`grantId` = what the spent stamp names), its grant still stands and its
+ * refresh token has not been used since — else null.
+ */
+async function replayDeviceRotation(
+  redis: Redis,
+  refresh: string,
+  grantId: string
+): Promise<{ tokens: IssuedTokens; rec: TokenRecord } | null> {
+  const blob = await read<ReplayBlob>(redis, replayKey(hashToken(refresh)))
+  if (!blob || !sameTenant(blob) || blob.g !== grantId) return null
+  const age = Date.now() - Number(blob.at)
+  if (!(age >= 0 && age <= REFRESH_REUSE_GRACE_S * 1000)) return null
+  let out: { tokens: IssuedTokens; rec: TokenRecord }
+  try {
+    const d = createDecipheriv(
+      'aes-256-gcm',
+      replayCipherKey(refresh),
+      Buffer.from(blob.iv, 'base64url')
+    )
+    d.setAuthTag(Buffer.from(blob.tag, 'base64url'))
+    const plain = Buffer.concat([d.update(Buffer.from(blob.ct, 'base64url')), d.final()])
+    out = JSON.parse(plain.toString('utf8'))
+  } catch {
+    return null
+  }
+  if (out?.rec?.grant_id !== grantId || typeof out.tokens?.refresh_token !== 'string') return null
+  const [grant, next] = await Promise.all([
+    redis.exists(`${P}grant:${grantId}`),
+    redis.exists(`${P}rt:${hashToken(out.tokens.refresh_token)}`)
+  ])
+  if (!grant || !next) return null
+  return {
+    tokens: {
+      ...out.tokens,
+      expires_in: Math.max(1, out.tokens.expires_in - Math.floor(age / 1000))
+    },
+    rec: { ...out.rec, kind: 'device', t: currentTenantKey() }
   }
 }
 
