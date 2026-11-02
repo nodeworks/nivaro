@@ -16,7 +16,7 @@ import {
   oauthScopeRefusal
 } from '../services/mcp-config.js'
 import { applyMcpConnectionScope } from '../services/mcp-scope.js'
-import { resolveAccessToken } from '../services/oauth-store.js'
+import { resolveAccessToken, revokeGrant } from '../services/oauth-store.js'
 import { notePrincipalKind, onPermissionCacheReset } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
@@ -713,7 +713,8 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
       }
       // Phone app token (nvd_*) — the official app (or an operator's build) signed in as the
       // person, like a session: none of the OAuth MCP-only gates apply. Checked against its grant,
-      // so a phone signed out or removed ends at once; the account must still be active.
+      // so a phone signed out or removed ends at once; the account must still be active, and the
+      // sign-in inside the role's session policy (#665) on every use, as a session is.
       if (token.startsWith(DEVICE_ACCESS_PREFIX)) {
         req.authMethod = 'device'
         const rec = mobileSignInEnabled()
@@ -726,6 +727,29 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         const user = await activeUserById(rec.user_id)
         if (!user)
           throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
+        const { getSessionPolicy, judgeDeviceGrant, limitsFor } = await import(
+          '../services/session-policy.js'
+        )
+        const policy = await getSessionPolicy()
+        if (policy) {
+          const verdict = judgeDeviceGrant(
+            limitsFor(policy, user.role as string | null),
+            { created_at: rec.grant_created_at, last_used_at: rec.grant_last_used_at },
+            appNowForAuth()
+          )
+          if (!verdict.ok) {
+            // The phone's sign-in is over: its grant goes, so its refresh token stops too.
+            // TODO(Task 3): Task 3's end-device-grant helper (also deletes the push rows).
+            await revokeGrant(req.server.redis, rec.user_id, rec.grant_id).catch(() => false)
+            throw httpError(
+              401,
+              verdict.reason === 'idle'
+                ? 'Your sign-in ended after a period of inactivity. Sign in again.'
+                : 'Your sign-in has expired. Sign in again.',
+              'SESSION_EXPIRED'
+            )
+          }
+        }
         await hydrateRole(req, user)
         req.deviceGrantId = rec.grant_id
         req.deviceName = rec.device_name

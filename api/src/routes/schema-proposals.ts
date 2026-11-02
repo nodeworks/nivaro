@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isSessionLike } from '../lib/auth-method.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { cleanBadge } from '../services/mcp-calls.js'
@@ -52,14 +53,14 @@ async function proposerOf(req: FastifyRequest): Promise<ProposerRef> {
       .catch(() => null)) as { name?: string } | null
     return { user_id, via: 'api_key', client: clean(key?.name) }
   }
-  if (req.authMethod === 'session') return { user_id, via: 'session', client: null }
+  if (isSessionLike(req.authMethod)) return { user_id, via: 'session', client: null }
   if (req.authMethod === 'token') return { user_id, via: 'token', client: null }
   return { user_id, via: 'other', client: null }
 }
 
 /** Only a person signed in to the admin applies or rejects. */
 function personSessionRefusal(req: FastifyRequest, reply: FastifyReply): FastifyReply | null {
-  if (req.authMethod === 'session' && !req.mcpInner) return null
+  if (isSessionLike(req.authMethod) && !req.mcpInner) return null
   return reply.code(403).send({
     error:
       'Schema proposals are applied or rejected by an administrator in the Data Model, signed in — not through an API key or a connected app',

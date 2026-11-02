@@ -320,6 +320,16 @@ export async function consumeRefreshChecked(
   }
 }
 
+/**
+ * The record behind a refresh token WITHOUT spending it (this tenant's, or null) — so the token
+ * endpoint can read the account first, and a database error leaves the token usable.
+ */
+export async function peekRefresh(redis: Redis, refresh: string): Promise<TokenRecord | null> {
+  if (!refresh) return null
+  const rec = await read<TokenRecord>(redis, `${P}rt:${hashToken(refresh)}`)
+  return rec && sameTenant(rec) ? { ...rec, kind: kindOf(rec) } : null
+}
+
 /** Rotate (the record, or null when the token cannot be used — see consumeRefreshChecked). */
 export async function consumeRefresh(redis: Redis, refresh: string): Promise<TokenRecord | null> {
   const out = await consumeRefreshChecked(redis, refresh)
@@ -337,12 +347,22 @@ export async function grantScope(redis: Redis, grantId: string): Promise<string>
  * and the app's registered name; touches the grant's last use (≤ once a minute),
  * which also clears any idle-review flag. Only a token of `kind` resolves (with that
  * kind's prefix): a device token is never an MCP token, nor the other way round.
+ * `grant_created_at` / `grant_last_used_at` are the grant's stamps as read BEFORE this
+ * use touched them (a phone's sign-in is judged by the session policy on them).
  */
 export async function resolveAccessToken(
   redis: Redis,
   token: string,
   kind: TokenKind = 'mcp'
-): Promise<(TokenRecord & { scope: string; client_name: string }) | null> {
+): Promise<
+  | (TokenRecord & {
+      scope: string
+      client_name: string
+      grant_created_at: string
+      grant_last_used_at: string | null
+    })
+  | null
+> {
   if (!token.startsWith(kind === 'device' ? DEVICE_ACCESS_PREFIX : ACCESS_PREFIX)) return null
   const rec = await read<TokenRecord>(redis, `${P}at:${hashToken(token)}`)
   if (!sameTenant(rec) || !rec || kindOf(rec) !== kind) return null
@@ -364,7 +384,9 @@ export async function resolveAccessToken(
     ...rec,
     kind: kindOf(rec),
     scope: grant.scope || OAUTH_SCOPE,
-    client_name: grant.client_name
+    client_name: grant.client_name,
+    grant_created_at: grant.created_at,
+    grant_last_used_at: grant.last_used_at
   }
 }
 
@@ -397,6 +419,9 @@ export async function revokeGrant(redis: Redis, userId: string, grantId: string)
     .exec()
   return true
 }
+
+/** The Redis key a grant is stored under (a socket bound to a phone reads it on every sweep). */
+export const grantKey = (grantId: string) => `${P}grant:${grantId}`
 
 /** One grant by id (this tenant's), or null. */
 export async function getGrant(redis: Redis, grantId: string): Promise<OAuthGrant | null> {

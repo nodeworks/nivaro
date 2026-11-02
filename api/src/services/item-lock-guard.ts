@@ -26,10 +26,10 @@ export async function lockHolderName(userId: string): Promise<string | null> {
   return name || user.email
 }
 
-// People at a screen hold edit locks; integrations (API keys, their
-// simulations) and connected apps never take one, so a lock is not theirs
-// to honour — a partner push must not fail because someone has the form open.
-const LOCK_BOUND_AUTH = new Set(['session', 'masquerade', 'token'])
+// People at a screen (a browser or the phone app) hold edit locks; integrations (API keys,
+// their simulations) and connected apps never take one, so a lock is not theirs to honour —
+// a partner push must not fail because someone has the form open.
+const LOCK_BOUND_AUTH = new Set(['session', 'device', 'masquerade', 'token'])
 
 export interface EditLockRefusal {
   status: 409

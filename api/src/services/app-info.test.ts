@@ -21,7 +21,7 @@ vi.mock('./security.js', () => ({ maintenanceState: async () => ({ on: state.mai
 vi.mock('../admin-base.js', () => ({ adminBaseUrl: () => 'https://x.test' }))
 
 import { isAppInfoPath } from '../lib/app-info-path.js'
-import { appEnvironment, buildAppInfo, enabledFeatures } from './app-info.js'
+import { appEnvironment, buildAppInfo, enabledFeatures, resetAppInfoCache } from './app-info.js'
 
 const KEYS = [
   'NIVARO_ENVIRONMENT',
@@ -41,6 +41,7 @@ beforeEach(() => {
   state.row = undefined
   state.fail = false
   state.maint = false
+  resetAppInfoCache()
 })
 afterEach(() => {
   for (const k of KEYS) {
@@ -90,9 +91,19 @@ describe('buildAppInfo', () => {
 
   it('push mode: direct by default, relay once a relay key is set', async () => {
     expect((await buildAppInfo()).push.mode).toBe('direct')
+    resetAppInfoCache()
     process.env.MOBILE_PUSH_RELAY_KEY = 'relay-test-key'
     expect((await buildAppInfo()).push.mode).toBe('relay')
+    resetAppInfoCache()
     process.env.MOBILE_PUSH = 'off'
+    expect((await buildAppInfo()).push.mode).toBe('off')
+  })
+
+  it('push mode is cached for a short while', async () => {
+    expect((await buildAppInfo()).push.mode).toBe('direct')
+    process.env.MOBILE_PUSH = 'off'
+    expect((await buildAppInfo()).push.mode).toBe('direct')
+    resetAppInfoCache()
     expect((await buildAppInfo()).push.mode).toBe('off')
   })
 

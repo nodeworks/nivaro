@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { isSessionLike } from '../lib/auth-method.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -249,7 +250,7 @@ async function sessionUser(
   } catch {
     return null
   }
-  if (req.authMethod !== 'session' || !req.user) return null
+  if (!isSessionLike(req.authMethod) || !req.user) return null
   return { user: req.user as User, isAdmin: !!req.isAdmin }
 }
 

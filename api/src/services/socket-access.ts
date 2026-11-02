@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { canSeeRoom } from './chat.js'
 import { getIo } from './io-holder.js'
+import { grantKey } from './oauth-store.js'
 import { opsTopicGate } from './ops-live.js'
 import { can, scopesAreOpen } from './permissions.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
@@ -40,6 +41,8 @@ export type SocketBind =
   | { kind: 'token'; tokenHash: string }
   /** A named API key (nvk_), or an admin running AS one (`sim` = the nvq_ run-as token). */
   | { kind: 'apikey'; id: number; sim?: string }
+  /** A phone app's sign-in (nvd_): the device grant it lives while. */
+  | { kind: 'device'; grant: string }
 
 /** Hooks the socket plugin hangs on socket.data so this module can act on its closure state. */
 export interface SocketAccessHooks {
@@ -66,6 +69,7 @@ export interface BindSource {
   headers?: { authorization?: string }
   apiKeyId?: number | null
   apiKeySimulatedId?: number | null
+  deviceGrantId?: string
 }
 
 /**
@@ -91,6 +95,8 @@ export function bindFromRequest(req: BindSource): SocketBind | null {
         : null
     case 'token':
       return bearer ? { kind: 'token', tokenHash: sha(bearer) } : null
+    case 'device':
+      return req.deviceGrantId ? { kind: 'device', grant: req.deviceGrantId } : null
     default:
       return null
   }
@@ -104,6 +110,7 @@ function isBind(v: unknown): v is SocketBind {
   if (b.kind === 'token') return typeof b.tokenHash === 'string' && !!b.tokenHash
   if (b.kind === 'apikey')
     return Number.isFinite(Number(b.id)) && (b.sim == null || typeof b.sim === 'string')
+  if (b.kind === 'device') return typeof b.grant === 'string' && !!b.grant
   return false
 }
 
@@ -145,7 +152,30 @@ export function bindRedisKeys(bind: SocketBind): string[] {
   if (bind.kind === 'session') return [`sess:${bind.sid}`, `${REVOKED_PREFIX}${bind.sid}`]
   if (bind.kind === 'masq') return [`masq:${bind.token}`]
   if (bind.kind === 'apikey' && bind.sim) return [`keysim:${bind.sim}`]
+  if (bind.kind === 'device') return [grantKey(bind.grant)]
   return []
+}
+
+/** A phone's stored grant (its JSON in Redis), when it is still there and the person's. */
+function deviceGrantOf(
+  bind: { grant: string },
+  userId: unknown,
+  redisValues: Map<string, string | null>
+): { created_at?: string; last_used_at?: string | null } | null {
+  const raw = redisValues.get(grantKey(bind.grant))
+  if (!raw) return null
+  try {
+    const g = JSON.parse(raw) as {
+      user_id?: unknown
+      kind?: unknown
+      created_at?: string
+      last_used_at?: string | null
+    }
+    if (g.kind !== 'device') return null
+    return String(g.user_id).toUpperCase() === String(userId).toUpperCase() ? g : null
+  } catch {
+    return null
+  }
 }
 
 export interface ApiKeyState {
@@ -212,6 +242,8 @@ export function bindVerdict(
       if (!keyUsable(apiKeys.get(String(bind.id)), String(user?.id), now)) return 'key_revoked'
       if (bind.sim && !redisValues.get(`keysim:${bind.sim}`)) return 'signed_out'
       return null
+    case 'device':
+      return deviceGrantOf(bind, user?.id, redisValues) ? null : 'signed_out'
   }
 }
 
@@ -882,6 +914,22 @@ export async function sweepSockets(io: SocketIOServer, sweepDeps: SweepDeps): Pr
           } catch {
             /* unreadable stamps never expire a session */
           }
+          if ((await deps.judge((row?.role as string | null) ?? null, stamps)) === 'expired') {
+            endSocket(socket, 'expired')
+            closed++
+            continue
+          }
+        }
+        // A phone's sign-in is held to the same policy, on its grant's stamps (never used =
+        // idle since sign-in). The HTTP side ends the grant on the phone's next request.
+        if (b?.kind === 'device' && deps.judge) {
+          const g = deviceGrantOf(b, row?.id, byKey)
+          const at = (v: string | null | undefined) => {
+            const n = v ? Date.parse(v) : Number.NaN
+            return Number.isFinite(n) ? n : undefined
+          }
+          const loginAt = at(g?.created_at)
+          const stamps = { loginAt, lastSeenAt: at(g?.last_used_at) ?? loginAt }
           if ((await deps.judge((row?.role as string | null) ?? null, stamps)) === 'expired') {
             endSocket(socket, 'expired')
             closed++

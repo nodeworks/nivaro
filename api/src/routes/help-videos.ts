@@ -146,6 +146,7 @@ import {
   serializeVersion,
   serializeVideo,
   sessionTag,
+  ticketSignInEnded,
   unpublishVideo,
   updateDetails,
   type VideoRow,
@@ -1019,10 +1020,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       // the revocation marker). A missing tag mapping or a Redis error fails
       // OPEN — the status, role and visibility re-checks below still apply.
       const sid = await app.redis.get(`${SIDTAG_PREFIX}${t.tag}`).catch(() => null)
-      if (sid) {
-        const revoked = await app.redis.exists(`${REVOKED_PREFIX}${sid}`).catch(() => 0)
-        if (revoked) throw notFound
-      }
+      if (sid && (await ticketSignInEnded(app.redis, sid, REVOKED_PREFIX, false))) throw notFound
     }
     const user = (await db('nivaro_users').where({ id: t.userId, status: 'active' }).first()) as
       | (User & { is_redacted?: unknown })
@@ -1205,8 +1203,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       // media tickets this fails CLOSED — an export is every chosen video.
       const sid = await app.redis.get(`${SIDTAG_PREFIX}${ticket.tag}`).catch(() => null)
       if (!sid) return gone()
-      const revoked = await app.redis.exists(`${REVOKED_PREFIX}${sid}`).catch(() => 1)
-      if (revoked) return gone()
+      if (await ticketSignInEnded(app.redis, sid, REVOKED_PREFIX, true)) return gone()
     }
     const user = (await db('nivaro_users').where({ id: ticket.user, status: 'active' }).first()) as
       | (User & { is_redacted?: unknown })

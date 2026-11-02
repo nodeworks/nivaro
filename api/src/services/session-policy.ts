@@ -141,6 +141,28 @@ export function judgeSession(
   return { ok: true }
 }
 
+/**
+ * A phone's sign-in (a device grant) judged like a session: max age from when it signed in,
+ * idle time from its last use, or from sign-in when never used. The refresh token's own 30-day
+ * life stays the outer idle bound.
+ */
+export function judgeDeviceGrant(
+  limits: SessionLimits,
+  grant: { created_at?: string | null; last_used_at?: string | null },
+  now: number
+): SessionVerdict {
+  const loginAt = grant.created_at ? Date.parse(grant.created_at) : Number.NaN
+  const used = grant.last_used_at ? Date.parse(grant.last_used_at) : Number.NaN
+  return judgeSession(
+    limits,
+    {
+      loginAt: Number.isFinite(loginAt) ? loginAt : undefined,
+      lastSeenAt: Number.isFinite(used) ? used : Number.isFinite(loginAt) ? loginAt : undefined
+    },
+    now
+  )
+}
+
 let cache: { at: number; value: SessionPolicy | null } | null = null
 const TTL_MS = 60_000
 

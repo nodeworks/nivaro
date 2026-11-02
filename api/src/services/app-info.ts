@@ -6,6 +6,7 @@ import { NIVARO_VERSION } from '../version.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 export interface AppInfo {
   name: string
@@ -63,6 +64,26 @@ async function readBranding(): Promise<{
   }
 }
 
+/** Push mode per tenant for a short while: the probe is anonymous and the relay key a read. */
+const PUSH_MODE_TTL_MS = 30_000
+const PUSH_MODE_MAX = 1000
+const pushModes = new Map<string, { at: number; mode: AppInfo['push']['mode'] }>()
+
+async function cachedPushMode(): Promise<AppInfo['push']['mode']> {
+  const key = currentTenantKey()
+  const hit = pushModes.get(key)
+  if (hit && Date.now() - hit.at < PUSH_MODE_TTL_MS) return hit.mode
+  const mode = await phonePushMode()
+  if (pushModes.size >= PUSH_MODE_MAX) pushModes.clear()
+  pushModes.set(key, { at: Date.now(), mode })
+  return mode
+}
+
+/** Test hook: forget cached push modes. */
+export function resetAppInfoCache(): void {
+  pushModes.clear()
+}
+
 async function maintenanceOn(): Promise<boolean> {
   try {
     const { maintenanceState } = await import('./security.js')
@@ -90,7 +111,7 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
       client_ids: mobileClients().map((c) => c.client_id)
     },
     // The relay key may live in the tenant's settings; a blocked tenant sends nothing anyway.
-    push: { mode: block ? 'off' : await phonePushMode() },
+    push: { mode: block ? 'off' : await cachedPushMode() },
     features: enabledFeatures(),
     blocked: block ? block.kind : (await maintenanceOn()) ? 'maintenance' : null
   }

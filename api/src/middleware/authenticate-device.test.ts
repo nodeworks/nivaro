@@ -12,7 +12,9 @@ process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
 const ROLE = 'aaaaaaaa-0000-0000-0000-0000000000a1'
 const state = vi.hoisted(() => ({
   users: {} as Record<string, { id: string; status: string; role: string | null }>,
-  roles: {} as Record<string, { id: string; admin_access: boolean; app_access: boolean }>
+  roles: {} as Record<string, { id: string; admin_access: boolean; app_access: boolean }>,
+  /** The users table answers with an error (a database blip). */
+  usersDown: false
 }))
 
 vi.mock('../db/index.js', () => {
@@ -26,6 +28,7 @@ vi.mock('../db/index.js', () => {
     }
     q.first = async () => {
       if (table === 'nivaro_users') {
+        if (state.usersDown) throw new Error('database unavailable')
         const u = state.users[String(where.id)]
         if (!u || (where.status != null && u.status !== where.status)) return undefined
         return { ...u }
@@ -52,6 +55,9 @@ vi.mock('../services/session-policy.js', async (orig) => ({
 const { authenticate, requireAdmin } = await import('./authenticate.js')
 const { oauthPublicRoutes } = await import('../routes/oauth.js')
 const store = await import('../services/oauth-store.js')
+const { bindFromRequest } = await import('../services/socket-access.js')
+const { isHumanSession } = await import('../services/agent-questions.js')
+const { sessionTag, ticketSignInEnded, SIDTAG_PREFIX } = await import('../services/help-videos.js')
 
 /** Just enough Redis for the token store (as in the OAuth flow tests). */
 function fakeRedis() {
@@ -143,6 +149,18 @@ beforeAll(async () => {
   app.get('/api/api-keys', { preHandler: requireAdmin }, who)
   app.post('/api/mcp', { preHandler: authenticate }, who)
   app.get('/api/chat/rooms', { preHandler: authenticate }, who)
+  // As routes/auth.ts GET /ws-token: what signed the request in, or 403 WS_UNBINDABLE.
+  app.get('/api/auth/ws-token', { preHandler: authenticate }, async (req, reply) => {
+    const bind = bindFromRequest(req)
+    if (!bind) return reply.code(403).send({ code: 'WS_UNBINDABLE' })
+    return { bind }
+  })
+  app.get('/api/agent-questions/answerer', { preHandler: authenticate }, async (req) => ({
+    human: isHumanSession(req)
+  }))
+  app.get('/api/help-videos/tag', { preHandler: authenticate }, async (req) => ({
+    tag: sessionTag(req)
+  }))
   await app.register(oauthPublicRoutes)
   await app.ready()
 })
@@ -150,6 +168,7 @@ afterAll(() => app.close())
 beforeEach(() => {
   state.users = { U1: { id: 'U1', status: 'active', role: ROLE } }
   state.roles = { [ROLE]: { id: ROLE, admin_access: true, app_access: true } }
+  state.usersDown = false
   policy.value = null
 })
 afterEach(() => {
@@ -249,6 +268,14 @@ describe('device tokens act as the person', () => {
     expect(res.json().code).toBe('TOKEN_INVALID')
   })
 
+  it('a role with sign-in turned off keeps the phone out', async () => {
+    const { access_token } = await phone()
+    state.roles[ROLE].app_access = false
+    const res = await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })
+    expect(res.statusCode).toBe(401)
+    expect(res.json().code).toBe('SIGN_IN_DISABLED')
+  })
+
   it('MOBILE_SIGNIN=off refuses every device token', async () => {
     const { access_token } = await phone()
     process.env.MOBILE_SIGNIN = 'off'
@@ -297,6 +324,69 @@ function ageGrant(id: string, patch: { created_ms?: number; used_ms?: number | n
 
 const HOUR = 3_600_000
 
+describe('a phone is a session everywhere but minting credentials', () => {
+  it('opens a live connection bound to its grant (no WS_UNBINDABLE)', async () => {
+    const { grant, access_token } = await phone()
+    const res = await app.inject({ url: '/api/auth/ws-token', headers: bearer(access_token) })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().bind).toEqual({ kind: 'device', grant: grant.id })
+  })
+
+  it('answers an agent question as the person at the keyboard', async () => {
+    const { access_token } = await phone()
+    const res = await app.inject({
+      url: '/api/agent-questions/answerer',
+      headers: bearer(access_token)
+    })
+    expect(res.json()).toEqual({ human: true })
+  })
+
+  it("binds help-video media tickets to the phone's sign-in, which a sign-out ends", async () => {
+    const { grant, access_token } = await phone()
+    const res = await app.inject({ url: '/api/help-videos/tag', headers: bearer(access_token) })
+    const tag = res.json().tag as string
+    expect(tag).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    await new Promise((r) => setTimeout(r, 0))
+    const bound = redis.kv.get(`${SIDTAG_PREFIX}${tag}`) as string
+    expect(bound).toBe(`dev:${grant.id}`)
+    expect(await ticketSignInEnded(redis as never, bound, 'sess:revoked:', true)).toBe(false)
+    await store.revokeGrant(redis as never, 'U1', grant.id)
+    expect(await ticketSignInEnded(redis as never, bound, 'sess:revoked:', false)).toBe(true)
+  })
+})
+
+describe('every phone request judges the session policy', () => {
+  it('idle past the limit since its last use → 401 SESSION_EXPIRED, and the sign-in ends', async () => {
+    policy.value = { idle_minutes: 15 }
+    const { grant, access_token } = await phone()
+    ageGrant(grant.id, { created_ms: 25 * 60_000, used_ms: 20 * 60_000 })
+    const res = await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })
+    expect(res.statusCode).toBe(401)
+    expect(res.json().code).toBe('SESSION_EXPIRED')
+    expect(await store.getGrant(redis as never, grant.id)).toBeNull()
+  })
+
+  it('in use inside the idle limit → through', async () => {
+    policy.value = { idle_minutes: 15 }
+    const { grant, access_token } = await phone()
+    ageGrant(grant.id, { created_ms: 2 * HOUR, used_ms: 5 * 60_000 })
+    const res = await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it("past the role's max age → 401 SESSION_EXPIRED", async () => {
+    policy.value = { roles: { [ROLE.toUpperCase()]: { max_age_hours: 8 } } }
+    const { grant, access_token } = await phone()
+    ageGrant(grant.id, { created_ms: 9 * HOUR, used_ms: 60_000 })
+    const res = await app.inject({ url: '/api/auth/me', headers: bearer(access_token) })
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toMatchObject({
+      code: 'SESSION_EXPIRED',
+      message: 'Your sign-in has expired. Sign in again.'
+    })
+  })
+})
+
 describe('a phone refresh judges the session policy', () => {
   it('refreshes inside the policy and keeps the device kind', async () => {
     policy.value = { max_age_hours: 24 }
@@ -339,6 +429,27 @@ describe('a phone refresh judges the session policy', () => {
   it('no policy: a long-lived phone keeps refreshing', async () => {
     const { grant, refresh_token } = await phone()
     ageGrant(grant.id, { created_ms: 60 * 24 * HOUR, used_ms: 25 * 24 * HOUR })
+    expect((await refresh(refresh_token)).statusCode).toBe(200)
+  })
+
+  it('a role with sign-in turned off cannot refresh, and the sign-in ends', async () => {
+    const { grant, refresh_token } = await phone()
+    state.roles[ROLE].app_access = false
+    const res = await refresh(refresh_token)
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toEqual({
+      error: 'invalid_grant',
+      error_description:
+        'Sign-in is turned off for your role. Ask an administrator if you need access.'
+    })
+    expect(await store.getGrant(redis as never, grant.id)).toBeNull()
+  })
+
+  it('a database error during refresh leaves the refresh token usable', async () => {
+    const { refresh_token } = await phone()
+    state.usersDown = true
+    expect((await refresh(refresh_token)).statusCode).toBe(500)
+    state.usersDown = false
     expect((await refresh(refresh_token)).statusCode).toBe(200)
   })
 

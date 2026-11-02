@@ -45,7 +45,7 @@ export interface LogFilter {
 }
 
 export const LOG_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
-export const LOG_AUTH = ['session', 'token', 'api_key', 'masquerade', 'none'] as const
+export const LOG_AUTH = ['session', 'device', 'token', 'api_key', 'masquerade', 'none'] as const
 export const LOG_LEVELS = ['info', 'warn', 'error'] as const
 export const LOG_LEVEL_NUM: Record<string, number> = { info: 30, warn: 40, error: 50 }
 const MAX_HOURS = 24 * 30

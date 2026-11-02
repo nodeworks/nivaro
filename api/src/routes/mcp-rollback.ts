@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { isSessionLike } from '../lib/auth-method.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { CONN_RE } from '../services/mcp-calls.js'
 import {
@@ -26,7 +27,7 @@ import {
 type Body = { from?: unknown; to?: unknown; plan_hash?: unknown }
 
 function sessionRefusal(req: FastifyRequest, reply: FastifyReply): FastifyReply | null {
-  if (req.authMethod === 'session' && !req.mcpInner) return null
+  if (isSessionLike(req.authMethod) && !req.mcpInner) return null
   return reply.code(403).send({
     error: 'A rollback is applied by a person signed in to Nivaro, not through a key or an app',
     code: 'SESSION_REQUIRED'

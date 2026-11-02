@@ -57,6 +57,13 @@ describe('editLockRefusal', () => {
     expect(r?.body.error).toContain('Andy Francis is editing this record')
   })
 
+  it('a person on the phone app is refused like a session (2026-11-01)', async () => {
+    rows.nivaro_item_locks = held('U-ANDY')
+    const r = await editLockRefusal(person('u-howard', 'device'), 'workflows', '372704')
+    expect(r?.status).toBe(409)
+    expect(r?.body.code).toBe('RECORD_LOCKED')
+  })
+
   it('lets the holder (any of their tabs, any id case) and a free record through', async () => {
     rows.nivaro_item_locks = held('U-ANDY')
     expect(await editLockRefusal(person('u-andy'), 'workflows', '1')).toBeNull()

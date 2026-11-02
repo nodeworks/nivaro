@@ -220,10 +220,15 @@ export function flaggedSessions(nowMs: number): Sess[] {
 const tap: TrafficTap = {
   id: SESSION_GUARD_TAP,
   onRequest(c) {
-    if (c.ev.authMethod !== 'session') return
+    if (c.ev.authMethod !== 'session' && c.ev.authMethod !== 'device') return
     const r = reqOf(c.ev)
     if (!r || r.masqueradeAdminId) return
-    const sid = (r as { session?: { sessionId?: unknown } }).session?.sessionId
+    // A phone's sign-in is its device grant (the phone app is a session everywhere).
+    const grant = (r as { deviceGrantId?: string }).deviceGrantId
+    const sid =
+      c.ev.authMethod === 'device'
+        ? grant && `device:${grant}`
+        : (r as { session?: { sessionId?: unknown } }).session?.sessionId
     if (typeof sid !== 'string' || !sid) return
     noteSessionHit({
       sid: sessionKeyOf(sid),

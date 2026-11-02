@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isSessionLike } from '../lib/auth-method.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { mcpClientNameOf, mcpConnOf } from './mcp-calls.js'
 
@@ -95,7 +96,7 @@ export function effectiveStatus(row: Pick<QuestionRow, 'status' | 'expires_at'>,
  * session that is not View-as, and not an in-process MCP call.
  */
 export function isHumanSession(req: FastifyRequest): boolean {
-  return req.authMethod === 'session' && !req.mcpInner
+  return isSessionLike(req.authMethod) && !req.mcpInner
 }
 
 export interface AskInput {

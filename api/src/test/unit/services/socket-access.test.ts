@@ -143,7 +143,8 @@ describe('ws-token binding (#1719, H1)', () => {
       { kind: 'masq', token: 'nvm_x' },
       { kind: 'token', tokenHash: sha('t') },
       { kind: 'apikey', id: 7 },
-      { kind: 'apikey', id: 7, sim: 'nvq_1' }
+      { kind: 'apikey', id: 7, sim: 'nvq_1' },
+      { kind: 'device', grant: 'g-1' }
     ] as SocketBind[])
       expect(parseWsTokenValue(encodeBoundToken('ANA', bind))).toEqual({ userId: 'ANA', bind })
   })
@@ -172,6 +173,11 @@ describe('ws-token binding (#1719, H1)', () => {
       kind: 'token',
       tokenHash: sha('static')
     })
+    // A phone app (nvd_) binds to its device grant.
+    expect(
+      bindFromRequest({ authMethod: 'device', deviceGrantId: 'g-1', headers: bearer('nvd_z') })
+    ).toEqual({ kind: 'device', grant: 'g-1' })
+    expect(bindFromRequest({ authMethod: 'device', headers: bearer('nvd_z') })).toBeNull()
     expect(bindFromRequest({ authMethod: 'api_key' })).toBeNull()
     expect(bindFromRequest({})).toBeNull()
   })
@@ -342,6 +348,46 @@ describe('sweepSockets (#1719)', () => {
     expect(fine.emitted).toEqual([])
   })
 
+  it("a phone's socket lives while its grant does, the person's, and inside the policy", async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
+    const grant = (over: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        id: 'x',
+        user_id: 'ana',
+        kind: 'device',
+        created_at: '2026-11-01T10:00:00.000Z',
+        last_used_at: null,
+        ...over
+      })
+    const live = fakeSocket(ANA, [], { nvrBind: { kind: 'device', grant: 'g-live' } })
+    const gone = fakeSocket(ANA, [], { nvrBind: { kind: 'device', grant: 'g-gone' } })
+    const other = fakeSocket(ANA, [], { nvrBind: { kind: 'device', grant: 'g-bob' } })
+    const io = fakeIo([live.socket, gone.socket, other.socket])
+    const judge = vi.fn(async () => 'ok' as const)
+    const closed = await sweepSockets(io as never, {
+      redis: redisWith({
+        'nvr:oauth:grant:g-live': grant(),
+        'nvr:oauth:grant:g-bob': grant({ user_id: 'BOB' })
+      }) as never,
+      judge
+    })
+    expect(closed).toBe(2)
+    expect(gone.emitted).toContainEqual(['session:ended', { reason: 'signed_out' }])
+    expect(other.emitted).toContainEqual(['session:ended', { reason: 'signed_out' }])
+    expect(live.emitted).toEqual([])
+    // Never used = idle since sign-in.
+    const at = Date.parse('2026-11-01T10:00:00.000Z')
+    expect(judge).toHaveBeenCalledWith('R-EDITOR', { loginAt: at, lastSeenAt: at })
+
+    judge.mockResolvedValue('expired' as never)
+    const stale = fakeSocket(ANA, [], { nvrBind: { kind: 'device', grant: 'g-live' } })
+    await sweepSockets(fakeIo([stale.socket]) as never, {
+      redis: redisWith({ 'nvr:oauth:grant:g-live': grant() }) as never,
+      judge
+    })
+    expect(stale.emitted).toContainEqual(['session:ended', { reason: 'expired' }])
+  })
+
   it('closes an expired session by the policy judge', async () => {
     mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
     const s = fakeSocket(ANA, [], { nvrBind: { kind: 'session', sid: 'a' } })
@@ -504,6 +550,13 @@ describe('checkBind — the SSE stream heartbeat (H1)', () => {
     expect(await checkBind(redis({ 'sess:s1': '{}' }) as never, 'ANA', bind)).toBeNull()
     expect(await checkBind(redis({}) as never, 'ANA', bind)).toBe('signed_out')
     expect(await checkBind(redis({}) as never, 'ANA', null)).toBe('signed_out')
+  })
+  it("keeps a phone's stream while its grant stands, ends it when the phone is signed out", async () => {
+    mockDb({ users: [{ id: 'ANA', status: 'active' }] })
+    const bind: SocketBind = { kind: 'device', grant: 'g1' }
+    const g = JSON.stringify({ user_id: 'ANA', kind: 'device', created_at: '2026-11-01T00:00:00Z' })
+    expect(await checkBind(redis({ 'nvr:oauth:grant:g1': g }) as never, 'ANA', bind)).toBeNull()
+    expect(await checkBind(redis({}) as never, 'ANA', bind)).toBe('signed_out')
   })
   it('bindVerdict puts an inactive account first', () => {
     expect(

@@ -52,6 +52,7 @@ import {
   type WalkStep
 } from './help-video-walk.js'
 import { getApp } from './io-holder.js'
+import { grantKey } from './oauth-store.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
 // A video has one published version (what viewers get) and at most one draft
@@ -547,15 +548,26 @@ export function sidTag(sid: string): string {
     .slice(0, 22)
 }
 
+/** What a phone's ticket binds to (in place of a session id): its device grant. */
+export const DEVICE_BIND_PREFIX = 'dev:'
+
 /** The session tag to bind into media tickets, for a session-cookie request
- *  only (token, API-key and masquerade requests have no session to revoke).
- *  Records tag → sid in Redis (7 h) so a media request can find the session
- *  and check its revocation marker; rewritten at most once an hour per tag by
- *  this process. A failed write simply leaves the ticket unbound (fails open). */
+ *  or a phone app's sign-in (bound to its device grant). Token, API-key and
+ *  masquerade requests have no session to revoke.
+ *  Records tag → sid (or `dev:<grant id>`) in Redis (7 h) so a media request
+ *  can find the sign-in and check it still stands; rewritten at most once an
+ *  hour per tag by this process. A failed write simply leaves the ticket
+ *  unbound (fails open). */
 export function sessionTag(req: FastifyRequest): string | null {
-  if (req.authMethod !== 'session') return null
-  const sid = (req.session as { sessionId?: unknown } | undefined)?.sessionId
-  if (typeof sid !== 'string' || !SID_RE.test(sid)) return null
+  let sid: unknown
+  if (req.authMethod === 'device') {
+    sid = req.deviceGrantId ? `${DEVICE_BIND_PREFIX}${req.deviceGrantId}` : null
+    if (typeof sid !== 'string' || !SID_RE.test(sid.slice(DEVICE_BIND_PREFIX.length))) return null
+  } else {
+    if (req.authMethod !== 'session') return null
+    sid = (req.session as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof sid !== 'string' || !SID_RE.test(sid)) return null
+  }
   const tag = sidTag(sid)
   const now = Date.now()
   const last = sidTagWritten.get(tag)
@@ -575,6 +587,27 @@ export function sessionTag(req: FastifyRequest): string | null {
     }
   }
   return tag
+}
+
+/**
+ * Has the sign-in a ticket was bound to ended? `bound` is what the tag maps to: a session id
+ * (ended = its revocation marker is written) or `dev:<grant id>` (ended = the phone's grant is
+ * gone). `failClosed` answers ended when Redis cannot say.
+ */
+export async function ticketSignInEnded(
+  redis: { exists: (key: string) => Promise<number> },
+  bound: string,
+  revokedPrefix: string,
+  failClosed: boolean
+): Promise<boolean> {
+  const fallback = failClosed ? 1 : 0
+  if (bound.startsWith(DEVICE_BIND_PREFIX)) {
+    const present = await redis
+      .exists(grantKey(bound.slice(DEVICE_BIND_PREFIX.length)))
+      .catch(() => 1 - fallback)
+    return !present
+  }
+  return !!(await redis.exists(`${revokedPrefix}${bound}`).catch(() => fallback))
 }
 
 /** A media link ticket: <video>/<track>/<img> cannot send Authorization

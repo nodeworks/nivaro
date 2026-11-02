@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isSessionLike } from '../lib/auth-method.js'
 import { logActivity } from '../services/activity.js'
 import { cleanCandidates, findSetting } from '../services/ai-design/find-setting.js'
 import { type AskTurn, askAboutLayout } from '../services/ai-design/layout-ask.js'
@@ -61,7 +62,7 @@ async function proposerOf(req: FastifyRequest): Promise<ProposerRef> {
       .catch(() => null)) as { name?: string } | null
     return { user_id, via: 'api_key', client: cleanText(key?.name, 80) }
   }
-  if (method === 'session') return { user_id, via: 'session', client: null }
+  if (isSessionLike(method)) return { user_id, via: 'session', client: null }
   if (method === 'token') return { user_id, via: 'token', client: null }
   return { user_id, via: 'other', client: null }
 }

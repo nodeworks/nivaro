@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isSessionLike } from '../lib/auth-method.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -53,9 +54,10 @@ const notReady = (reply: FastifyReply) =>
     code: 'MCP_SCOPE_NOT_READY'
   })
 
-/** The person signed in as themselves (a session or their own token), never a key or an app. */
+/** The person signed in as themselves (a session, their phone or their own token), never a key
+ *  or an app. */
 const asThemselves = (req: FastifyRequest) =>
-  req.authMethod === 'session' || req.authMethod === 'token'
+  isSessionLike(req.authMethod) || req.authMethod === 'token'
 
 /** Who owns a connection, or null when it does not exist (here, on this tenant). */
 async function ownerOf(app: FastifyInstance, conn: string): Promise<string | null> {

@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { servesAdminSpa } from '../admin-base.js'
+import { signInAllowedByRole } from '../auth/role-sign-in.js'
 import { db } from '../db/index.js'
 import {
   cleanDeviceName,
@@ -41,13 +42,14 @@ import {
   issueTokens,
   kindOf,
   listGrants,
+  peekRefresh,
   registerClient,
   revokeGrant,
   revokeToken,
   type TokenRecord,
   upsertGrant
 } from '../services/oauth-store.js'
-import { getSessionPolicy, judgeSession, limitsFor } from '../services/session-policy.js'
+import { getSessionPolicy, judgeDeviceGrant, limitsFor } from '../services/session-policy.js'
 import type { User } from '../types.js'
 
 /**
@@ -459,24 +461,42 @@ async function limited(
   return true
 }
 
+/** The active account a token is for (with its role id, and whether that role lets it sign
+ *  in), or undefined. One read of the user row. */
+async function activeAccount(
+  id: string
+): Promise<{ id: string; role: string | null; signInAllowed: boolean } | undefined> {
+  const user = (await db('nivaro_users')
+    .where({ id, status: 'active' })
+    .first('id', 'role', 'account_kind')) as
+    | { id: string; role?: string | null; account_kind?: string | null }
+    | undefined
+  if (!user) return undefined
+  return {
+    id: user.id,
+    role: user.role ?? null,
+    signInAllowed: await signInAllowedByRole({
+      role: user.role ?? null,
+      account_kind: user.account_kind
+    })
+  }
+}
+
 /**
- * Has a phone's sign-in outlived the session policy (#665) of the person's role? A device grant
- * is judged like a browser session: max age from when the phone signed in, idle time from its
- * last use (sign-in, when never used). The refresh token's own 30-day life stays the outer idle
- * bound. Only judged on refresh — an access token lives an hour at most.
+ * Has a phone's sign-in outlived the session policy (#665) of the person's role? Judged as the
+ * access token is on every use (middleware/authenticate.ts): judgeDeviceGrant.
  */
-async function deviceSignInExpired(app: FastifyInstance, rec: TokenRecord): Promise<boolean> {
+async function deviceSignInExpired(
+  app: FastifyInstance,
+  rec: TokenRecord,
+  role: string | null
+): Promise<boolean> {
   const policy = await getSessionPolicy()
   if (!policy) return false
   const grant = await getGrant(app.redis, rec.grant_id)
   if (!grant) return true
-  const user = (await db('nivaro_users').where({ id: rec.user_id }).first('role')) as
-    | { role?: string | null }
-    | undefined
-  const loginAt = Date.parse(grant.created_at)
-  const lastSeenAt = grant.last_used_at ? Date.parse(grant.last_used_at) : loginAt
   // The application clock, as the session check uses (a clock-skew drill may only judge stricter).
-  return !judgeSession(limitsFor(policy, user?.role), { loginAt, lastSeenAt }, appNowForAuth()).ok
+  return !judgeDeviceGrant(limitsFor(policy, role), grant, appNowForAuth()).ok
 }
 
 const equalStrings = (a: string, b: string) => {
@@ -692,6 +712,13 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         )
     const activeUser = async (id: string) =>
       !!(await db('nivaro_users').where({ id, status: 'active' }).first('id'))
+    /** End a phone's sign-in and tell the app to sign in again. */
+    const endDeviceSignIn = async (rec: TokenRecord, description: string) => {
+      // TODO(Task 3): use Task 3's end-device-grant helper here, which also deletes the
+      // grant's push rows (nivaro_push_subscriptions, grant.push_ids).
+      await revokeGrant(app.redis, rec.user_id, rec.grant_id).catch(() => false)
+      return oauthError(reply, 400, 'invalid_grant', description)
+    }
 
     if (grantType === 'authorization_code') {
       const rec = await consumeCode(app.redis, str(b.code))
@@ -747,6 +774,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       // A public client identifies itself on every refresh (OAuth 2.1 §4.3; security audit M18).
       if (!str(b.client_id))
         return oauthError(reply, 400, 'invalid_request', 'client_id is required')
+      // The account is read BEFORE the token is spent: a database error answers 500 and leaves
+      // the refresh token usable for the app's retry.
+      const peeked = await peekRefresh(app.redis, str(b.refresh_token))
+      const account = peeked ? await activeAccount(peeked.user_id) : undefined
       const out = await consumeRefreshChecked(app.redis, str(b.refresh_token))
       if (!out.ok && out.reason === 'reused') {
         // A spent refresh token came back: a leaked token or a stolen copy. The connection is
@@ -771,13 +802,22 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       const rec = out.rec
       if (rec.client_id !== str(b.client_id))
         return oauthError(reply, 400, 'invalid_grant', 'The token was issued to another client')
-      if (!(await activeUser(rec.user_id)))
-        return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
+      // Peeked and spent are the same record, bar a race with another rotation.
+      const acct =
+        account && String(account.id).toUpperCase() === String(rec.user_id).toUpperCase()
+          ? account
+          : await activeAccount(rec.user_id)
+      if (!acct) return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
       const kind = kindOf(rec)
-      if (kind === 'device' && (await deviceSignInExpired(app, rec))) {
+      if (kind === 'device') {
         // Over: the phone signs in again (and appears again as a new sign-in).
-        await revokeGrant(app.redis, rec.user_id, rec.grant_id).catch(() => false)
-        return oauthError(reply, 400, 'invalid_grant', 'Your sign-in has expired. Sign in again.')
+        if (!acct.signInAllowed)
+          return endDeviceSignIn(
+            rec,
+            'Sign-in is turned off for your role. Ask an administrator if you need access.'
+          )
+        if (await deviceSignInExpired(app, rec, acct.role))
+          return endDeviceSignIn(rec, 'Your sign-in has expired. Sign in again.')
       }
       return tokenAnswer(await issueTokens(app.redis, rec, kind), kind, rec.grant_id)
     }
