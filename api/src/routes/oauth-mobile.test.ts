@@ -166,6 +166,25 @@ async function signInCode(p: Record<string, string>) {
   expect(allow.statusCode).toBe(302)
   return allow
 }
+const codeOf = (allow: { headers: Record<string, unknown> }) =>
+  new URL(String(allow.headers.location)).searchParams.get('code') as string
+
+/** POST /oauth/token authorization_code for the phone app (override any field). */
+const exchange = (code: string, over: Record<string, string> = {}) =>
+  app.inject({
+    method: 'POST',
+    url: '/oauth/token',
+    ...form({
+      grant_type: 'authorization_code',
+      code,
+      client_id: 'nivaro-mobile',
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      ...over
+    })
+  })
+const deviceGrants = async () =>
+  (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
 
 describe('first-party mobile apps sign in through the OAuth server', () => {
   it('refuses a redirect the app did not register, before any code exists', async () => {
@@ -177,13 +196,16 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       expect(res.statusCode).toBe(400)
       expect(res.headers.location).toBeUndefined()
       expect(res.body).toContain('did not register')
+      // A valid consent post (csrf matches) still stops at the redirect check.
+      session.oauthCsrf = 'csrf-ok'
       const post = await app.inject({
         method: 'POST',
         url: '/oauth/authorize',
-        ...form({ ...params({ redirect_uri }), csrf: 'x', decision: 'allow' })
+        ...form({ ...params({ redirect_uri }), csrf: 'csrf-ok', decision: 'allow' })
       })
       expect(post.statusCode).toBe(400)
       expect(post.headers.location).toBeUndefined()
+      expect(post.body).toContain('did not register')
     }
     expect(codeKeys()).toHaveLength(0)
   })
@@ -218,22 +240,14 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
     const q = new URL(back).searchParams
     expect(q.get('state')).toBe('st-m')
     expect(q.get('iss')).toBe('https://nivaro.example')
+    // Nothing is connected until the app exchanges the code.
+    expect(logActivity).not.toHaveBeenCalled()
+
+    const tok = await exchange(q.get('code') as string)
+    expect(tok.statusCode).toBe(200)
     expect(logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'oauth-connect', comment: "Nivaro on Pat's iPhone" })
     )
-
-    const tok = await app.inject({
-      method: 'POST',
-      url: '/oauth/token',
-      ...form({
-        grant_type: 'authorization_code',
-        code: q.get('code') as string,
-        client_id: 'nivaro-mobile',
-        redirect_uri: REDIRECT,
-        code_verifier: verifier
-      })
-    })
-    expect(tok.statusCode).toBe(200)
     const t = tok.json()
     expect(Object.keys(t).sort()).toEqual(
       ['access_token', 'expires_in', 'refresh_token', 'token_type'].sort()
@@ -294,15 +308,73 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
 
   it('each phone sign-in is its own connection', async () => {
     signIn()
-    const before = (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
-    await signInCode(params({ device_name: 'Pixel', platform: 'android' }))
-    await signInCode(params({ device_name: 'Pixel', platform: 'android' }))
-    const after = (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
-    expect(after.length).toBe(before.length + 2)
+    const before = (await deviceGrants()).length
+    for (let i = 0; i < 2; i++) {
+      const code = codeOf(await signInCode(params({ device_name: 'Pixel', platform: 'android' })))
+      expect((await exchange(code)).statusCode).toBe(200)
+    }
+    expect((await deviceGrants()).length).toBe(before + 2)
     // An unknown platform is dropped, not stored.
-    await signInCode(params({ device_name: 'Tab', platform: 'windows' }))
-    const tab = (await listGrants(redis as never, 'U1')).find((g) => g.device_name === 'Tab')
+    const code = codeOf(await signInCode(params({ device_name: 'Tab', platform: 'windows' })))
+    expect((await exchange(code)).statusCode).toBe(200)
+    const tab = (await deviceGrants()).find((g) => g.device_name === 'Tab')
+    expect(tab).toBeTruthy()
     expect(tab?.platform).toBeUndefined()
+  })
+
+  it('an abandoned or failed sign-in leaves no device grant behind', async () => {
+    signIn()
+    const before = (await deviceGrants()).length
+    // Allowed, never exchanged.
+    await signInCode(params({ device_name: 'Abandoned' }))
+    expect((await deviceGrants()).length).toBe(before)
+    // Wrong verifier: refused, and the code is spent.
+    const bad = codeOf(await signInCode(params({ device_name: 'Bad PKCE' })))
+    const wrong = await exchange(bad, { code_verifier: 'w'.repeat(50) })
+    expect(wrong.statusCode).toBe(400)
+    expect(wrong.json().error).toBe('invalid_grant')
+    expect((await exchange(bad)).statusCode).toBe(400)
+    // A phone code redeemed by another client is refused.
+    const other = codeOf(await signInCode(params({ device_name: 'Other client' })))
+    const stolen = await exchange(other, {
+      client_id: 'nvc_00000000-0000-0000-0000-000000000000'
+    })
+    expect(stolen.statusCode).toBe(400)
+    expect(stolen.json().error).toBe('invalid_grant')
+    expect((await deviceGrants()).length).toBe(before)
+    // A good code works once: the second exchange is refused and makes no second grant.
+    const good = codeOf(await signInCode(params({ device_name: 'Once' })))
+    expect((await exchange(good)).statusCode).toBe(200)
+    const reused = await exchange(good)
+    expect(reused.statusCode).toBe(400)
+    expect(reused.json().error).toBe('invalid_grant')
+    expect((await deviceGrants()).length).toBe(before + 1)
+  })
+
+  it('device fields are for phone apps only; a phone app ignores resource', async () => {
+    signIn()
+    // A phone app naming another server is not refused — the resource is simply not carried.
+    const mobile = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams(params({ resource: 'https://evil.example' }))}`
+    })
+    expect(mobile.statusCode).toBe(200)
+    expect(mobile.body).not.toContain('name="resource"')
+    expect(mobile.body).toContain('name="device_name"')
+    // An MCP client's device_name / platform are dropped.
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'Claude', redirect_uris: ['https://claude.ai/cb'] }
+    })
+    const mcp = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams(
+        params({ client_id: reg.json().client_id, redirect_uri: 'https://claude.ai/cb' })
+      )}`
+    })
+    expect(mcp.statusCode).toBe(200)
+    expect(mcp.body).toContain('Connect <strong>Claude</strong>')
+    expect(mcp.body).not.toContain('name="device_name"')
+    expect(mcp.body).not.toContain('name="platform"')
   })
 
   it('MOBILE_SIGNIN=off: authorize and token answer 404 for mobile apps', async () => {

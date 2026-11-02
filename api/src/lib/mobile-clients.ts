@@ -30,14 +30,12 @@ const CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/
 /** Schemes that can never carry an authorization code back to an app. */
 const REFUSED_SCHEMES = new Set(['javascript:', 'data:', 'file:', 'vbscript:', 'blob:', 'about:'])
 
-const printable = (s: string) =>
-  [...s]
-    .filter((c) => {
-      const code = c.charCodeAt(0)
-      return code >= 0x20 && code !== 0x7f
-    })
-    .join('')
-    .trim()
+/** Control and format characters (bidi overrides, zero-width), and lone surrogates. */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Cs}]/gu
+
+/** Visible text only, cut at `max` characters (whole code points — a pair is never split). */
+const printable = (s: string, max: number) =>
+  [...s.replace(INVISIBLE, '').trim()].slice(0, max).join('').trim()
 
 function acceptableRedirect(raw: string): boolean {
   let u: URL
@@ -55,7 +53,7 @@ function parseEntry(entry: string): MobileClient | null {
   const parts = entry.split('|')
   if (parts.length !== 3) return null
   const client_id = parts[0].trim()
-  const client_name = printable(parts[1]).slice(0, 80)
+  const client_name = printable(parts[1], 80)
   const redirect_uris = parts[2]
     .split(',')
     .map((u) => u.trim())
@@ -93,7 +91,7 @@ export function mobileSignInEnabled(): boolean {
 /** The device name an app sends on authorize, safe to store and show (≤ 60 characters). */
 export function cleanDeviceName(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined
-  return printable(raw).slice(0, 60).trim() || undefined
+  return printable(raw, 60) || undefined
 }
 
 export function devicePlatform(raw: unknown): DevicePlatform | undefined {

@@ -225,8 +225,11 @@ async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise
     return fail(
       `This app asked for a scope Nivaro does not offer (they are ${OAUTH_SCOPES.join(' and ')}).`
     )
+  // A phone app's tokens are not bound to a resource (they act as the person everywhere), so its
+  // `resource` is ignored; only a phone app may name a device. Neither rides on for the others.
+  if (mobile) return { ok: true, client, p: { ...p, resource: undefined } }
   if (!acceptableResource(p.resource)) return fail('This app asked for access to another server.')
-  return { ok: true, client, p }
+  return { ok: true, client, p: { ...p, device_name: undefined, platform: undefined } }
 }
 
 const page = (title: string, body: string) => `<!doctype html>
@@ -586,9 +589,9 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         reply,
         'This consent page expired. Go back to the app and connect again.'
       )
-    const p = readAuthorizeParams(body)
-    const checked = await checkAuthorize(app, p)
+    const checked = await checkAuthorize(app, readAuthorizeParams(body))
     if (!checked.ok) return cannotConnect(reply, checked.message)
+    const p = checked.p
     if (body.decision !== 'allow')
       return reply.redirect(
         withAuthResponse(p.redirect_uri, {
@@ -598,28 +601,20 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         })
       )
     if (checked.client.mobile) {
-      // One phone, one grant: its device tokens are revoked on their own (Profile → phones).
-      const grant = await createDeviceGrant(app.redis, String(user.id), checked.client, {
-        device_name: p.device_name,
-        platform: p.platform
-      })
+      // No grant yet: a phone's grant is made when its code is exchanged (POST /oauth/token),
+      // so an abandoned or failed sign-in leaves nothing behind. The code carries what it needs.
       const code = await issueCode(app.redis, {
         kind: 'device',
         client_id: checked.client.client_id,
+        client_name: checked.client.client_name,
         user_id: String(user.id),
-        grant_id: grant.id,
+        grant_id: '',
         redirect_uri: p.redirect_uri,
         code_challenge: p.code_challenge,
-        resource: p.resource ?? null,
+        resource: null,
         device_name: p.device_name,
         platform: p.platform
       })
-      await logActivity({
-        action: 'oauth-connect',
-        user: user.id,
-        comment: `${checked.client.client_name} on ${p.device_name ?? 'an unnamed device'}`,
-        req
-      }).catch(() => {})
       return reply.redirect(
         withAuthResponse(p.redirect_uri, { code, state: p.state, iss: mcpPublicOrigin() })
       )
@@ -691,10 +686,28 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       if (!(await activeUser(rec.user_id)))
         return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
       const kind = kindOf(rec)
+      let grantId = rec.grant_id
+      if (kind === 'device') {
+        // One phone, one grant — made only now that the exchange has passed every check.
+        const name = rec.client_name || mobileClient(rec.client_id)?.client_name || rec.client_id
+        const grant = await createDeviceGrant(
+          app.redis,
+          rec.user_id,
+          { client_id: rec.client_id, client_name: name },
+          { device_name: rec.device_name, platform: rec.platform }
+        )
+        grantId = grant.id
+        await logActivity({
+          action: 'oauth-connect',
+          user: rec.user_id,
+          comment: `${name} on ${rec.device_name ?? 'an unnamed device'}`,
+          req
+        }).catch(() => {})
+      }
       const tokens = await issueTokens(
         app.redis,
         {
-          grant_id: rec.grant_id,
+          grant_id: grantId,
           user_id: rec.user_id,
           client_id: rec.client_id,
           resource: rec.resource,
@@ -703,7 +716,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         },
         kind
       )
-      return tokenAnswer(tokens, kind, rec.grant_id)
+      return tokenAnswer(tokens, kind, grantId)
     }
 
     if (grantType === 'refresh_token') {

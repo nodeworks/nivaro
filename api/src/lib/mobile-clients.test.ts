@@ -87,6 +87,12 @@ describe('first-party mobile clients', () => {
     expect(cleanDeviceName("  Pat's iPhone\u0000 ")).toBe("Pat's iPhone")
     expect(cleanDeviceName('x'.repeat(100))).toHaveLength(60)
     expect(cleanDeviceName('   ')).toBeUndefined()
+    // Bidi overrides, zero-width and lone surrogates are dropped; real emoji stay whole.
+    expect(cleanDeviceName('Pat\u202Egnp.exe')).toBe('Patgnp.exe')
+    expect(cleanDeviceName('a\u200Bb\u2066c\uFEFFd')).toBe('abcd')
+    expect(cleanDeviceName('x\uD800y\uDC00z')).toBe('xyz')
+    expect(cleanDeviceName(`${'x'.repeat(59)}\uD83D\uDE00!`)).toBe(`${'x'.repeat(59)}\uD83D\uDE00`)
+    expect(cleanDeviceName('\u202E\u200B')).toBeUndefined()
     expect(cleanDeviceName(42)).toBeUndefined()
     expect(devicePlatform('ios')).toBe('ios')
     expect(devicePlatform('android')).toBe('android')

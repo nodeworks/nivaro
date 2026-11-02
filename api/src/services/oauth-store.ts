@@ -83,7 +83,10 @@ export interface OAuthGrant extends DeviceInfo {
 interface CodeRecord extends DeviceInfo {
   kind: TokenKind
   client_id: string
+  /** Device codes: the app's name, for the grant made when the code is exchanged. */
+  client_name?: string
   user_id: string
+  /** MCP codes: the grant consented to. Device codes: '' — their grant is made on exchange. */
   grant_id: string
   redirect_uri: string
   code_challenge: string
