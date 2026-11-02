@@ -1,0 +1,354 @@
+import { createHash } from 'node:crypto'
+import Fastify, { type FastifyInstance } from 'fastify'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
+
+vi.mock('../db/index.js', () => {
+  const users: Record<string, { id: string; status: string }> = {
+    U1: { id: 'U1', status: 'active' }
+  }
+  const db = () => {
+    let where: Record<string, unknown> = {}
+    const q = {
+      where: (w: Record<string, unknown>) => {
+        where = w
+        return q
+      },
+      first: async () => {
+        const u = users[String(where.id)]
+        return u && (where.status == null || u.status === where.status) ? u : undefined
+      }
+    }
+    return q
+  }
+  return { db }
+})
+vi.mock('../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+vi.mock('../admin-base.js', async (orig) => ({
+  ...(await orig<object>()),
+  servesAdminSpa: false
+}))
+vi.mock('../middleware/authenticate.js', () => ({
+  requireAuth: vi.fn(async () => {}),
+  authenticate: vi.fn(
+    async (req: { session?: { userId?: string }; authMethod?: string; user?: unknown }) => {
+      const id = req.session?.userId
+      if (!id) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+      req.authMethod = 'session'
+      req.user = { id, status: 'active', first_name: 'Pat', last_name: 'Lee' }
+    }
+  )
+}))
+
+const { oauthPublicRoutes } = await import('./oauth.js')
+const { resolveAccessToken, listGrants } = await import('../services/oauth-store.js')
+const { logActivity } = await import('../services/activity.js')
+
+/** Just enough Redis for the store (as in the MCP OAuth flow test). */
+function fakeRedis() {
+  const kv = new Map<string, string>()
+  const sets = new Map<string, Set<string>>()
+  const put = async (k: string, v: string) => {
+    kv.set(k, v)
+    return 'OK'
+  }
+  const r = {
+    kv,
+    get: async (k: string) => kv.get(k) ?? null,
+    mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),
+    set: put,
+    setex: async (k: string, _t: number, v: string) => put(k, v),
+    getdel: async (k: string) => {
+      const v = kv.get(k) ?? null
+      kv.delete(k)
+      return v
+    },
+    del: async (...ks: string[]) => ks.filter((k) => kv.delete(k)).length,
+    exists: async (k: string) => (kv.has(k) ? 1 : 0),
+    expire: async () => 1,
+    incr: async (k: string) => {
+      const n = Number(kv.get(k) ?? 0) + 1
+      kv.set(k, String(n))
+      return n
+    },
+    smembers: async (k: string) => [...(sets.get(k) ?? [])],
+    sadd: async (k: string, m: string) => {
+      const s = sets.get(k) ?? new Set()
+      s.add(m)
+      sets.set(k, s)
+      return 1
+    },
+    srem: async (k: string, m: string) => (sets.get(k)?.delete(m) ? 1 : 0),
+    multi: () => {
+      const ops: Array<() => Promise<unknown>> = []
+      const m = {
+        set(k: string, v: string) {
+          ops.push(() => r.set(k, v))
+          return m
+        },
+        setex(k: string, t: number, v: string) {
+          ops.push(() => r.setex(k, t, v))
+          return m
+        },
+        sadd(k: string, v: string) {
+          ops.push(() => r.sadd(k, v))
+          return m
+        },
+        srem(k: string, v: string) {
+          ops.push(() => r.srem(k, v))
+          return m
+        },
+        del(k: string) {
+          ops.push(() => r.del(k))
+          return m
+        },
+        exec: async () => Promise.all(ops.map((o) => o()))
+      }
+      return m
+    }
+  }
+  return r
+}
+
+const session: { userId?: string; oauthCsrf?: string; authAt?: number } = {}
+let app: FastifyInstance
+const redis = fakeRedis()
+
+beforeAll(async () => {
+  app = Fastify()
+  app.decorate('redis', redis as never)
+  app.decorateRequest('session', null as never)
+  app.addHook('onRequest', async (req) => {
+    ;(req as unknown as { session: typeof session }).session = session
+  })
+  await app.register(oauthPublicRoutes)
+  await app.ready()
+})
+afterAll(() => app.close())
+afterEach(() => {
+  delete process.env.MOBILE_SIGNIN
+  delete process.env.MCP_OAUTH
+})
+
+const verifier = 'v'.repeat(50)
+const challenge = createHash('sha256').update(verifier).digest('base64url')
+const REDIRECT = 'dev.nivaro.app:/oauth/callback'
+const form = (o: Record<string, string>) => ({
+  headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  payload: new URLSearchParams(o).toString()
+})
+const params = (over: Record<string, string> = {}) => ({
+  client_id: 'nivaro-mobile',
+  redirect_uri: REDIRECT,
+  response_type: 'code',
+  code_challenge: challenge,
+  code_challenge_method: 'S256',
+  state: 'st-m',
+  device_name: "Pat's iPhone",
+  platform: 'ios',
+  ...over
+})
+const codeKeys = () => [...redis.kv.keys()].filter((k) => k.startsWith('nvr:oauth:code:'))
+const signIn = () => {
+  session.userId = 'U1'
+  session.authAt = Date.now()
+}
+
+/** Consent → Allow → the code the app gets back. */
+async function signInCode(p: Record<string, string>) {
+  await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}` })
+  const allow = await app.inject({
+    method: 'POST',
+    url: '/oauth/authorize',
+    ...form({ ...p, csrf: session.oauthCsrf as string, decision: 'allow' })
+  })
+  expect(allow.statusCode).toBe(302)
+  return allow
+}
+
+describe('first-party mobile apps sign in through the OAuth server', () => {
+  it('refuses a redirect the app did not register, before any code exists', async () => {
+    signIn()
+    for (const redirect_uri of ['evil:/cb', 'dev.nivaro.app:/other', `${REDIRECT}#x`]) {
+      const res = await app.inject({
+        url: `/oauth/authorize?${new URLSearchParams(params({ redirect_uri }))}`
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.headers.location).toBeUndefined()
+      expect(res.body).toContain('did not register')
+      const post = await app.inject({
+        method: 'POST',
+        url: '/oauth/authorize',
+        ...form({ ...params({ redirect_uri }), csrf: 'x', decision: 'allow' })
+      })
+      expect(post.statusCode).toBe(400)
+      expect(post.headers.location).toBeUndefined()
+    }
+    expect(codeKeys()).toHaveLength(0)
+  })
+
+  it('shows a sign-in page that names the app and the device', async () => {
+    signIn()
+    const long = `<b>${'x'.repeat(80)}`
+    const res = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams(params({ device_name: long }))}`
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toContain('Sign in to the <strong>Nivaro</strong> app?')
+    expect(res.body).toContain('&lt;b&gt;')
+    expect(res.body).not.toContain('<b>x')
+    // ≤ 60 characters: '<b>' + 57 of the 80 x's.
+    expect(res.body).toContain(`&lt;b&gt;${'x'.repeat(57)}"`)
+    expect(res.body).not.toContain('x'.repeat(58))
+    expect(res.body).toContain('your permissions')
+    expect(res.body).not.toContain('name="chat"')
+    expect(res.body).toContain('value="allow"')
+    expect(res.body).toContain('value="deny"')
+    // The page may hand the code to the app's own scheme.
+    expect(String(res.headers['content-security-policy'])).toContain('dev.nivaro.app:')
+  })
+
+  it('runs consent → code → nvd_/nvdr_ tokens → refresh rotates', async () => {
+    signIn()
+    vi.mocked(logActivity).mockClear()
+    const allow = await signInCode(params())
+    const back = String(allow.headers.location)
+    expect(back.startsWith(`${REDIRECT}?`)).toBe(true)
+    const q = new URL(back).searchParams
+    expect(q.get('state')).toBe('st-m')
+    expect(q.get('iss')).toBe('https://nivaro.example')
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'oauth-connect', comment: "Nivaro on Pat's iPhone" })
+    )
+
+    const tok = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({
+        grant_type: 'authorization_code',
+        code: q.get('code') as string,
+        client_id: 'nivaro-mobile',
+        redirect_uri: REDIRECT,
+        code_verifier: verifier
+      })
+    })
+    expect(tok.statusCode).toBe(200)
+    const t = tok.json()
+    expect(Object.keys(t).sort()).toEqual(
+      ['access_token', 'expires_in', 'refresh_token', 'token_type'].sort()
+    )
+    expect(t.access_token.startsWith('nvd_')).toBe(true)
+    expect(t.refresh_token.startsWith('nvdr_')).toBe(true)
+    expect(t.expires_in).toBe(3600)
+    expect(t.token_type).toBe('Bearer')
+
+    const rec = await resolveAccessToken(redis as never, t.access_token, 'device')
+    expect(rec).toMatchObject({
+      user_id: 'U1',
+      client_id: 'nivaro-mobile',
+      kind: 'device',
+      device_name: "Pat's iPhone",
+      platform: 'ios'
+    })
+    // A device token is never an MCP token.
+    expect(await resolveAccessToken(redis as never, t.access_token)).toBeNull()
+    const grant = (await listGrants(redis as never, 'U1')).find((g) => g.id === rec?.grant_id)
+    expect(grant).toMatchObject({
+      kind: 'device',
+      client_id: 'nivaro-mobile',
+      client_name: 'Nivaro',
+      device_name: "Pat's iPhone",
+      platform: 'ios'
+    })
+
+    const ref = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({
+        grant_type: 'refresh_token',
+        refresh_token: t.refresh_token,
+        client_id: 'nivaro-mobile'
+      })
+    })
+    expect(ref.statusCode).toBe(200)
+    const r2 = ref.json()
+    expect(r2.access_token.startsWith('nvd_')).toBe(true)
+    expect(r2.refresh_token.startsWith('nvdr_')).toBe(true)
+    expect(r2.refresh_token).not.toBe(t.refresh_token)
+    expect(await resolveAccessToken(redis as never, r2.access_token, 'device')).toMatchObject({
+      kind: 'device',
+      device_name: "Pat's iPhone"
+    })
+    const reuse = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({
+        grant_type: 'refresh_token',
+        refresh_token: t.refresh_token,
+        client_id: 'nivaro-mobile'
+      })
+    })
+    expect(reuse.statusCode).toBe(400)
+  })
+
+  it('each phone sign-in is its own connection', async () => {
+    signIn()
+    const before = (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
+    await signInCode(params({ device_name: 'Pixel', platform: 'android' }))
+    await signInCode(params({ device_name: 'Pixel', platform: 'android' }))
+    const after = (await listGrants(redis as never, 'U1')).filter((g) => g.kind === 'device')
+    expect(after.length).toBe(before.length + 2)
+    // An unknown platform is dropped, not stored.
+    await signInCode(params({ device_name: 'Tab', platform: 'windows' }))
+    const tab = (await listGrants(redis as never, 'U1')).find((g) => g.device_name === 'Tab')
+    expect(tab?.platform).toBeUndefined()
+  })
+
+  it('MOBILE_SIGNIN=off: authorize and token answer 404 for mobile apps', async () => {
+    signIn()
+    process.env.MOBILE_SIGNIN = 'off'
+    const res = await app.inject({ url: `/oauth/authorize?${new URLSearchParams(params())}` })
+    expect(res.statusCode).toBe(404)
+    const tok = await app.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      ...form({ grant_type: 'refresh_token', refresh_token: 'nvdr_x', client_id: 'nivaro-mobile' })
+    })
+    expect(tok.statusCode).toBe(404)
+  })
+
+  it('mobile sign-in works with MCP OAuth off; MCP registration does not', async () => {
+    signIn()
+    process.env.MCP_OAUTH = 'off'
+    const res = await app.inject({ url: `/oauth/authorize?${new URLSearchParams(params())}` })
+    expect(res.statusCode).toBe(200)
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'X', redirect_uris: ['https://x.example/cb'] }
+    })
+    expect(reg.statusCode).toBe(404)
+    const as = await app.inject({ url: '/.well-known/oauth-authorization-server' })
+    expect(as.statusCode).toBe(200)
+    expect(as.json().registration_endpoint).toBeUndefined()
+    expect(as.json().token_endpoint).toBe('https://nivaro.example/oauth/token')
+    expect((await app.inject({ url: '/.well-known/oauth-protected-resource' })).statusCode).toBe(
+      404
+    )
+  })
+
+  it('a dynamic registration can never claim a mobile client id', async () => {
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: {
+        client_id: 'nivaro-mobile',
+        client_name: 'Nivaro',
+        redirect_uris: ['https://x.example/cb']
+      }
+    })
+    expect(reg.statusCode).toBe(400)
+    expect(reg.json().error).toBe('invalid_client_metadata')
+  })
+})

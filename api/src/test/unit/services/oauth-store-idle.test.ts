@@ -93,6 +93,7 @@ const grant = (over: Partial<OAuthGrant> = {}): OAuthGrant => ({
   client_id: 'nvc_x',
   client_name: 'Claude',
   scope: 'nivaro',
+  kind: 'mcp',
   created_at: '2026-06-01T00:00:00.000Z',
   last_used_at: '2026-07-01T00:00:00.000Z',
   t: '',

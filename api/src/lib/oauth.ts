@@ -36,6 +36,10 @@ export function grantedScope(chat: boolean): string {
 export const ACCESS_PREFIX = 'nvo_'
 export const REFRESH_PREFIX = 'nvor_'
 
+/** A first-party phone app's tokens (lib/mobile-clients.ts): `nvd_` access, `nvdr_` refresh. */
+export const DEVICE_ACCESS_PREFIX = 'nvd_'
+export const DEVICE_REFRESH_PREFIX = 'nvdr_'
+
 export function randomToken(prefix = ''): string {
   return `${prefix}${randomBytes(32).toString('base64url')}`
 }

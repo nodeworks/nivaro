@@ -3,6 +3,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { servesAdminSpa } from '../admin-base.js'
 import { db } from '../db/index.js'
 import {
+  cleanDeviceName,
+  type DevicePlatform,
+  devicePlatform,
+  isMobileRedirect,
+  mobileClient,
+  mobileSignInEnabled
+} from '../lib/mobile-clients.js'
+import {
   cleanClientName,
   escapeHtml,
   grantedScope,
@@ -24,12 +32,13 @@ import { deleteScope, readScopeRow, scopesReady, writeScope } from '../services/
 import {
   consumeCode,
   consumeRefreshChecked,
+  createDeviceGrant,
   getClient,
   grantScope,
   issueCode,
   issueTokens,
+  kindOf,
   listGrants,
-  type OAuthClient,
   registerClient,
   revokeGrant,
   revokeToken,
@@ -39,7 +48,9 @@ import type { User } from '../types.js'
 
 /**
  * OAuth 2.1 authorization server for remote MCP clients (ChatGPT connectors,
- * claude.ai custom connectors, Claude Code, Codex). Registered at the ROOT —
+ * claude.ai custom connectors, Claude Code, Codex) and first-party phone apps
+ * (lib/mobile-clients.ts — a fixed registry, `nvd_`/`nvdr_` device tokens, one
+ * grant per phone; MOBILE_SIGNIN, independent of MCP_OAUTH). Registered at the ROOT —
  * the well-known documents must sit at the origin — except the "connected
  * apps" list, which is under /api (registered by routes/index.ts).
  *
@@ -55,13 +66,32 @@ import type { User } from '../types.js'
  * consent page says so. Tokens live in Redis (services/oauth-store.ts).
  */
 
+/** The consent page's policy. `formAction` adds sources the Allow / Cancel post may end on —
+ *  a phone app's own URL scheme (`dev.nivaro.app:`), which `https:` does not cover. */
+const csp = (formAction: string[] = []) =>
+  `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https: http://localhost:* http://127.0.0.1:*${formAction.map((s) => ` ${s}`).join('')}; frame-ancestors 'none'; base-uri 'none'`
+
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
   'X-Frame-Options': 'DENY',
-  'Content-Security-Policy':
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'",
+  'Content-Security-Policy': csp(),
   'Referrer-Policy': 'no-referrer'
 }
+
+/** The CSP scheme sources of a mobile app's custom-scheme redirect URIs. */
+const redirectSchemes = (uris: string[]) => [
+  ...new Set(
+    uris
+      .map((u) => {
+        try {
+          return new URL(u).protocol
+        } catch {
+          return ''
+        }
+      })
+      .filter((s) => s && s !== 'https:')
+  )
+]
 
 const oauthError = (reply: FastifyReply, status: number, error: string, description: string) =>
   reply
@@ -86,7 +116,8 @@ function authorizationServerDoc() {
     issuer: o,
     authorization_endpoint: `${o}/oauth/authorize`,
     token_endpoint: `${o}/oauth/token`,
-    registration_endpoint: `${o}/oauth/register`,
+    // Dynamic registration is for MCP clients only; phone apps are a fixed registry.
+    ...(mcpOAuthEnabled() ? { registration_endpoint: `${o}/oauth/register` } : {}),
     revocation_endpoint: `${o}/oauth/revoke`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
@@ -107,6 +138,9 @@ interface AuthorizeParams {
   state?: string
   scope?: string
   resource?: string
+  /** Phone apps: the phone's name and platform, shown on the page and kept on the grant. */
+  device_name?: string
+  platform?: DevicePlatform
 }
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
@@ -120,8 +154,34 @@ function readAuthorizeParams(src: Record<string, unknown>): AuthorizeParams {
     code_challenge_method: str(src.code_challenge_method),
     state: str(src.state) || undefined,
     scope: str(src.scope) || undefined,
-    resource: str(src.resource) || undefined
+    resource: str(src.resource) || undefined,
+    device_name: cleanDeviceName(src.device_name),
+    platform: devicePlatform(src.platform)
   }
+}
+
+/** The app asking: a first-party phone app from the registry, else a dynamically registered one. */
+interface AuthClient {
+  client_id: string
+  client_name: string
+  redirect_uris: string[]
+  mobile: boolean
+}
+
+/**
+ * Whether sign-in is on for this client id: MOBILE_SIGNIN for phone apps, MCP_OAUTH for every
+ * other (dynamically registered) client. 404 sent when it is off.
+ */
+function enabledFor(reply: FastifyReply, clientId: string): boolean {
+  const mobile = !!mobileClient(clientId)
+  if (mobile ? mobileSignInEnabled() : mcpOAuthEnabled()) return true
+  void reply.code(404).send({
+    error: 'not_found',
+    error_description: mobile
+      ? 'Phone sign-in is turned off (MOBILE_SIGNIN)'
+      : 'OAuth is turned off (MCP_OAUTH)'
+  })
+  return false
 }
 
 /** A resource the token may be bound to: ours, or none named. The query string is not part of
@@ -132,17 +192,32 @@ const acceptableResource = (r: string | undefined) => {
 }
 
 type Checked =
-  | { ok: true; client: OAuthClient; p: AuthorizeParams }
+  | { ok: true; client: AuthClient; p: AuthorizeParams }
   // Shown on this origin, never sent to the client's address: before the person
   // has chosen, a self-registered client must not turn Nivaro into a redirector.
   | { ok: false; message: string }
 
 async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise<Checked> {
   const fail = (message: string) => ({ ok: false as const, message })
-  const client = p.client_id ? await getClient(app.redis, p.client_id) : null
+  // The registry first: a dynamic client can never stand in for a phone app.
+  const mobile = mobileClient(p.client_id)
+  const dynamic = !mobile && p.client_id ? await getClient(app.redis, p.client_id) : null
+  const client: AuthClient | null = mobile
+    ? { ...mobile, mobile: true }
+    : dynamic
+      ? {
+          client_id: dynamic.client_id,
+          client_name: dynamic.client_name,
+          redirect_uris: dynamic.redirect_uris,
+          mobile: false
+        }
+      : null
   if (!client) return fail('This app is not registered with Nivaro (unknown client).')
-  if (!p.redirect_uri || !redirectMatches(client.redirect_uris, p.redirect_uri))
-    return fail('This app asked to return to an address it did not register.')
+  // A phone app returns to its own scheme: exact match only, never the https/loopback rules.
+  const returnsHome = mobile
+    ? isMobileRedirect(mobile, p.redirect_uri)
+    : !!p.redirect_uri && redirectMatches(client.redirect_uris, p.redirect_uri)
+  if (!returnsHome) return fail('This app asked to return to an address it did not register.')
   if (p.response_type !== 'code') return fail('This app asked for an unsupported response type.')
   if (p.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge))
     return fail('This app did not use PKCE (S256), which Nivaro requires.')
@@ -199,8 +274,45 @@ ${choice.kits.map((k) => opt(k.key, k.label, k.description)).join('\n')}
 </fieldset>`
 }
 
+/** The authorize request carried through the consent post, plus its CSRF token. */
+const hiddenFields = (p: AuthorizeParams, csrf: string) =>
+  Object.entries({ ...p, csrf })
+    .filter(([, v]) => v != null)
+    .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(String(v))}">`)
+    .join('')
+
+/** Who is signed in, and the Cancel / Allow buttons — the foot of every consent page. */
+const consentFoot = (user: User) => {
+  const who = escapeHtml(
+    [user.first_name, user.last_name].filter(Boolean).join(' ') || String(user.email ?? user.id)
+  )
+  return `<div class="who">Signed in as <strong>${who}</strong></div>
+<div class="row"><button type="submit" name="decision" value="deny">Cancel</button>
+<button type="submit" name="decision" value="allow" class="allow">Allow</button></div>`
+}
+
+/** A first-party phone app's sign-in: names the app and the phone; no chat or kit choices. */
+function mobileConsentPage(
+  client: AuthClient,
+  p: AuthorizeParams,
+  user: User,
+  csrf: string
+): string {
+  const name = escapeHtml(client.client_name)
+  const on = p.device_name ? `On <strong>${escapeHtml(p.device_name)}</strong>.` : 'On this phone.'
+  return page(
+    `Sign in to the ${client.client_name} app`,
+    `<h1>Sign in to the <strong>${name}</strong> app?</h1>
+<p>${on} The app acts as <strong>you</strong>, with your permissions — your role and access rules still apply.</p>
+<ul><li>Its actions are recorded as yours.</li>
+<li>You can sign this phone out at any time from your profile.</li></ul>
+<form method="post" action="/oauth/authorize">${hiddenFields(p, csrf)}
+${consentFoot(user)}</form>`
+  )
+}
+
 function consentPage(
-  client: OAuthClient,
+  client: AuthClient,
   p: AuthorizeParams,
   user: User,
   csrf: string,
@@ -208,15 +320,9 @@ function consentPage(
 ): string {
   const host = new URL(p.redirect_uri).host
   const name = escapeHtml(cleanClientName(client.client_name))
-  const who = escapeHtml(
-    [user.first_name, user.last_name].filter(Boolean).join(' ') || String(user.email ?? user.id)
-  )
   // Chat (#2492) is the person's choice, pre-ticked only when the app asked for it.
   const askedChat = scopeTokens(p.scope).includes(OAUTH_CHAT_SCOPE)
-  const hidden = Object.entries({ ...p, csrf })
-    .filter(([, v]) => v != null)
-    .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(String(v))}">`)
-    .join('')
+  const hidden = hiddenFields(p, csrf)
   return page(
     `Connect ${cleanClientName(client.client_name)} to Nivaro`,
     `<h1>Connect <strong>${name}</strong> to Nivaro?</h1>
@@ -228,9 +334,7 @@ function consentPage(
 ${kitFieldset(kits)}
 <label class="opt"><input type="checkbox" name="chat" value="1"${askedChat ? ' checked' : ''}>
 <span>Also let it read and post in your chat conversations<span>Only rooms you can open. Its messages say they came from ${name}.</span></span></label>
-<div class="who">Signed in as <strong>${who}</strong></div>
-<div class="row"><button type="submit" name="decision" value="deny">Cancel</button>
-<button type="submit" name="decision" value="allow" class="allow">Allow</button></div></form>`
+${consentFoot(user)}</form>`
   )
 }
 
@@ -374,6 +478,8 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       .send({ error: 'not_found', error_description: 'OAuth is turned off (MCP_OAUTH)' })
     return false
   }
+  /** The authorization server itself: on while MCP clients or phone apps may sign in. */
+  const anyEnabled = (reply: FastifyReply) => mobileSignInEnabled() || enabled(reply)
 
   // Discovery. The path-suffixed variant is where RFC 9728 clients look first.
   for (const path of [
@@ -390,7 +496,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     '/.well-known/openid-configuration'
   ]) {
     app.get(path, async (_req, reply) => {
-      if (!enabled(reply)) return
+      if (!anyEnabled(reply)) return
       return reply.header('Cache-Control', 'max-age=300').send(authorizationServerDoc())
     })
   }
@@ -399,6 +505,14 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     if (!enabled(reply)) return
     if (await limited(app, req, reply, 'register', 20, 3600)) return
     const body = (req.body ?? {}) as Record<string, unknown>
+    // Ids are ours to assign; one that names a first-party app is refused outright.
+    if (mobileClient(str(body.client_id)))
+      return oauthError(
+        reply,
+        400,
+        'invalid_client_metadata',
+        'That client_id belongs to a first-party app'
+      )
     const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
     if (uris.length === 0 || uris.length > 10 || !uris.every(isAllowedRedirectUri))
       return oauthError(
@@ -435,11 +549,16 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
   })
 
   app.get('/oauth/authorize', async (req, reply) => {
-    if (!enabled(reply)) return
-    void reply.headers(SECURITY_HEADERS)
     const p = readAuthorizeParams(req.query as Record<string, unknown>)
+    if (!enabledFor(reply, p.client_id)) return
+    void reply.headers(SECURITY_HEADERS)
     const checked = await checkAuthorize(app, p)
     if (!checked.ok) return cannotConnect(reply, checked.message)
+    if (checked.client.mobile)
+      void reply.header(
+        'Content-Security-Policy',
+        csp(redirectSchemes(checked.client.redirect_uris))
+      )
     const { user, stale } = await consentUser(req, reply)
     // Never a session change on this GET (any site can navigate someone here):
     // a stale sign-in is asked to sign in AGAIN — the login page shows its form
@@ -448,14 +567,16 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     if (!user || stale) return reply.redirect(signInUrl(req.url, stale))
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
+    if (checked.client.mobile)
+      return reply.type('text/html').send(mobileConsentPage(checked.client, checked.p, user, csrf))
     const kits = await consentKits(app, String(user.id), checked.client.client_id).catch(() => null)
     return reply.type('text/html').send(consentPage(checked.client, checked.p, user, csrf, kits))
   })
 
   app.post('/oauth/authorize', async (req, reply) => {
-    if (!enabled(reply)) return
-    void reply.headers(SECURITY_HEADERS)
     const body = (req.body ?? {}) as Record<string, unknown>
+    if (!enabledFor(reply, str(body.client_id))) return
+    void reply.headers(SECURITY_HEADERS)
     const csrf = str(body.csrf)
     const expected = req.session?.oauthCsrf ?? ''
     req.session.oauthCsrf = undefined
@@ -476,6 +597,33 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
           iss: mcpPublicOrigin()
         })
       )
+    if (checked.client.mobile) {
+      // One phone, one grant: its device tokens are revoked on their own (Profile → phones).
+      const grant = await createDeviceGrant(app.redis, String(user.id), checked.client, {
+        device_name: p.device_name,
+        platform: p.platform
+      })
+      const code = await issueCode(app.redis, {
+        kind: 'device',
+        client_id: checked.client.client_id,
+        user_id: String(user.id),
+        grant_id: grant.id,
+        redirect_uri: p.redirect_uri,
+        code_challenge: p.code_challenge,
+        resource: p.resource ?? null,
+        device_name: p.device_name,
+        platform: p.platform
+      })
+      await logActivity({
+        action: 'oauth-connect',
+        user: user.id,
+        comment: `${checked.client.client_name} on ${p.device_name ?? 'an unnamed device'}`,
+        req
+      }).catch(() => {})
+      return reply.redirect(
+        withAuthResponse(p.redirect_uri, { code, state: p.state, iss: mcpPublicOrigin() })
+      )
+    }
     const scope = grantedScope(body.chat === '1' || body.chat === 'on')
     const grant = await upsertGrant(app.redis, String(user.id), checked.client, scope)
     // #3214 — the kit the person picked becomes this connection's limit (never a widening:
@@ -485,6 +633,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       return null
     })
     const code = await issueCode(app.redis, {
+      kind: 'mcp',
       client_id: checked.client.client_id,
       user_id: String(user.id),
       grant_id: grant.id,
@@ -504,10 +653,24 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
   })
 
   app.post('/oauth/token', async (req, reply) => {
-    if (!enabled(reply)) return
-    if (await limited(app, req, reply, 'token', 120, 60)) return
     const b = (req.body ?? {}) as Record<string, unknown>
+    // Judged on the client named BEFORE anything is spent: a refused call never uses up a code.
+    if (!enabledFor(reply, str(b.client_id))) return
+    if (await limited(app, req, reply, 'token', 120, 60)) return
     const grantType = str(b.grant_type)
+    /** The token answer: device tokens carry no scope (they act as the person everywhere). */
+    const tokenAnswer = async (
+      tokens: Awaited<ReturnType<typeof issueTokens>>,
+      kind: 'mcp' | 'device',
+      grantId: string
+    ) =>
+      reply
+        .header('Cache-Control', 'no-store')
+        .send(
+          kind === 'device'
+            ? { ...tokens, token_type: 'Bearer' }
+            : { ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, grantId) }
+        )
     const activeUser = async (id: string) =>
       !!(await db('nivaro_users').where({ id, status: 'active' }).first('id'))
 
@@ -527,15 +690,20 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         return oauthError(reply, 400, 'invalid_grant', 'PKCE verification failed')
       if (!(await activeUser(rec.user_id)))
         return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
-      const tokens = await issueTokens(app.redis, {
-        grant_id: rec.grant_id,
-        user_id: rec.user_id,
-        client_id: rec.client_id,
-        resource: rec.resource
-      })
-      return reply
-        .header('Cache-Control', 'no-store')
-        .send({ ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, rec.grant_id) })
+      const kind = kindOf(rec)
+      const tokens = await issueTokens(
+        app.redis,
+        {
+          grant_id: rec.grant_id,
+          user_id: rec.user_id,
+          client_id: rec.client_id,
+          resource: rec.resource,
+          device_name: rec.device_name,
+          platform: rec.platform
+        },
+        kind
+      )
+      return tokenAnswer(tokens, kind, rec.grant_id)
     }
 
     if (grantType === 'refresh_token') {
@@ -568,10 +736,8 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         return oauthError(reply, 400, 'invalid_grant', 'The token was issued to another client')
       if (!(await activeUser(rec.user_id)))
         return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
-      const tokens = await issueTokens(app.redis, rec)
-      return reply
-        .header('Cache-Control', 'no-store')
-        .send({ ...tokens, token_type: 'Bearer', scope: await grantScope(app.redis, rec.grant_id) })
+      const kind = kindOf(rec)
+      return tokenAnswer(await issueTokens(app.redis, rec, kind), kind, rec.grant_id)
     }
 
     return oauthError(
@@ -583,7 +749,7 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
   })
 
   app.post('/oauth/revoke', async (req, reply) => {
-    if (!enabled(reply)) return
+    if (!anyEnabled(reply)) return
     const token = str(((req.body ?? {}) as Record<string, unknown>).token)
     if (token) await revokeToken(app.redis, token)
     return reply.code(200).send({})

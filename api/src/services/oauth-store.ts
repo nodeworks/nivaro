@@ -1,14 +1,27 @@
 import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
-import { ACCESS_PREFIX, hashToken, OAUTH_SCOPE, REFRESH_PREFIX, randomToken } from '../lib/oauth.js'
+import type { DevicePlatform } from '../lib/mobile-clients.js'
+import {
+  ACCESS_PREFIX,
+  DEVICE_ACCESS_PREFIX,
+  DEVICE_REFRESH_PREFIX,
+  hashToken,
+  OAUTH_SCOPE,
+  REFRESH_PREFIX,
+  randomToken
+} from '../lib/oauth.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
- * Redis-backed OAuth state for remote MCP clients — no table, no migration.
+ * Redis-backed OAuth state for remote MCP clients and first-party phone apps — no table, no
+ * migration. A grant and its tokens have a `kind`: 'mcp' (a connected app, `nvo_`/`nvor_`) or
+ * 'device' (one phone signed in to a first-party app, `nvd_`/`nvdr_`). Records stored before
+ * kinds existed carry none and are 'mcp' (`kindOf`).
  *
  *   client:<id>      a dynamically registered client (RFC 7591); 180 days, renewed on use
  *   code:<hash>      an authorization code; 2 minutes, deleted on first use
  *   grant:<id>       one person's consent to one client — the connection they can revoke
+ *                    (a device grant: one phone's sign-in; a new grant per sign-in)
  *   at:<hash>        an access token (1 hour) naming its grant
  *   rt:<hash>        a refresh token (30 days, rotated on every use) naming its grant
  *   user:<uid>       the person's grant ids (the "connected apps" list)
@@ -29,6 +42,18 @@ const CLIENT_TTL_S = 180 * 86_400
 const IDLE_TTL_S = 800 * 86_400
 const idleKey = (grantId: string) => `${P}grant-idle:${grantId}`
 
+export type TokenKind = 'mcp' | 'device'
+
+/** The phone a device grant / token belongs to (both optional — the app may not say). */
+export interface DeviceInfo {
+  device_name?: string
+  platform?: DevicePlatform
+}
+
+/** A record's kind; a record stored before kinds existed is 'mcp'. */
+export const kindOf = (rec: { kind?: TokenKind } | null | undefined): TokenKind =>
+  rec?.kind === 'device' ? 'device' : 'mcp'
+
 export interface OAuthClient {
   client_id: string
   client_name: string
@@ -37,12 +62,15 @@ export interface OAuthClient {
   t: string
 }
 
-export interface OAuthGrant {
+export interface OAuthGrant extends DeviceInfo {
   id: string
   user_id: string
   client_id: string
   client_name: string
   scope: string
+  kind: TokenKind
+  /** Device grants: the phone push rows (nivaro_push_subscriptions ids) this sign-in made. */
+  push_ids?: number[]
   created_at: string
   last_used_at: string | null
   t: string
@@ -52,7 +80,8 @@ export interface OAuthGrant {
   idle_notice_at?: string | null
 }
 
-interface CodeRecord {
+interface CodeRecord extends DeviceInfo {
+  kind: TokenKind
   client_id: string
   user_id: string
   grant_id: string
@@ -62,11 +91,13 @@ interface CodeRecord {
   t: string
 }
 
-interface TokenRecord {
+export interface TokenRecord extends DeviceInfo {
   grant_id: string
   user_id: string
   client_id: string
   resource: string | null
+  kind: TokenKind
+  push_ids?: number[]
   t: string
 }
 
@@ -112,13 +143,13 @@ export async function getClient(redis: Redis, clientId: string): Promise<OAuthCl
 export async function upsertGrant(
   redis: Redis,
   userId: string,
-  client: OAuthClient,
+  client: Pick<OAuthClient, 'client_id' | 'client_name'>,
   scope: string = OAUTH_SCOPE
 ): Promise<OAuthGrant> {
   const ids = await redis.smembers(`${P}user:${userId}`)
   for (const id of ids) {
     const g = await read<OAuthGrant>(redis, `${P}grant:${id}`)
-    if (g && g.client_id === client.client_id && sameTenant(g)) {
+    if (g && g.client_id === client.client_id && kindOf(g) === 'mcp' && sameTenant(g)) {
       if (g.scope !== scope) {
         g.scope = scope
         await redis.set(`${P}grant:${g.id}`, JSON.stringify(g))
@@ -132,16 +163,48 @@ export async function upsertGrant(
     client_id: client.client_id,
     client_name: client.client_name,
     scope,
+    kind: 'mcp',
     created_at: new Date().toISOString(),
     last_used_at: null,
     t: currentTenantKey()
   }
+  await storeGrant(redis, grant)
+  return grant
+}
+
+/**
+ * One phone's sign-in to a first-party app: always a NEW grant (never reused), so each phone is
+ * its own connection — listed, aged and revoked on its own.
+ */
+export async function createDeviceGrant(
+  redis: Redis,
+  userId: string,
+  client: { client_id: string; client_name: string },
+  device: DeviceInfo
+): Promise<OAuthGrant> {
+  const grant: OAuthGrant = {
+    id: randomUUID(),
+    user_id: userId,
+    client_id: client.client_id,
+    client_name: client.client_name,
+    scope: OAUTH_SCOPE,
+    kind: 'device',
+    device_name: device.device_name,
+    platform: device.platform,
+    created_at: new Date().toISOString(),
+    last_used_at: null,
+    t: currentTenantKey()
+  }
+  await storeGrant(redis, grant)
+  return grant
+}
+
+async function storeGrant(redis: Redis, grant: OAuthGrant): Promise<void> {
   await redis
     .multi()
     .set(`${P}grant:${grant.id}`, JSON.stringify(grant))
-    .sadd(`${P}user:${userId}`, grant.id)
+    .sadd(`${P}user:${grant.user_id}`, grant.id)
     .exec()
-  return grant
 }
 
 export async function issueCode(redis: Redis, rec: Omit<CodeRecord, 't'>): Promise<string> {
@@ -173,13 +236,22 @@ export interface IssuedTokens {
   expires_in: number
 }
 
+/**
+ * A new access + refresh pair for a grant. `kind` picks the prefixes ('device' = `nvd_`/`nvdr_`)
+ * and is stored on both records, so a refresh keeps the kind and a token is only ever resolved
+ * as the kind it was issued as.
+ */
 export async function issueTokens(
   redis: Redis,
-  rec: Omit<TokenRecord, 't'>
+  rec: Omit<TokenRecord, 't' | 'kind'> & Partial<Pick<TokenRecord, 't' | 'kind'>>,
+  kind: TokenKind = 'mcp'
 ): Promise<IssuedTokens> {
-  const access = randomToken(ACCESS_PREFIX)
-  const refresh = randomToken(REFRESH_PREFIX)
-  const value = JSON.stringify({ ...rec, t: currentTenantKey() })
+  const device = kind === 'device'
+  const access = randomToken(device ? DEVICE_ACCESS_PREFIX : ACCESS_PREFIX)
+  const refresh = randomToken(device ? DEVICE_REFRESH_PREFIX : REFRESH_PREFIX)
+  // A rotated record's own tenant stamp and kind are replaced: `kind` and this tenant decide.
+  const { t: _t, kind: _k, ...fields } = rec
+  const value = JSON.stringify({ ...fields, kind, t: currentTenantKey() })
   await redis
     .multi()
     .setex(`${P}at:${hashToken(access)}`, ACCESS_TTL_S, value)
@@ -238,7 +310,7 @@ export async function consumeRefreshChecked(
       })
     )
     return (await redis.exists(`${P}grant:${rec.grant_id}`))
-      ? { ok: true, rec }
+      ? { ok: true, rec: { ...rec, kind: kindOf(rec) } }
       : { ok: false, reason: 'revoked' }
   } catch {
     return { ok: false, reason: 'unknown' }
@@ -260,14 +332,17 @@ export async function grantScope(redis: Redis, grantId: string): Promise<string>
 /**
  * An access token's record while its grant stands, with the grant's CURRENT scope
  * and the app's registered name; touches the grant's last use (≤ once a minute),
- * which also clears any idle-review flag.
+ * which also clears any idle-review flag. Only a token of `kind` resolves (with that
+ * kind's prefix): a device token is never an MCP token, nor the other way round.
  */
 export async function resolveAccessToken(
   redis: Redis,
-  token: string
+  token: string,
+  kind: TokenKind = 'mcp'
 ): Promise<(TokenRecord & { scope: string; client_name: string }) | null> {
+  if (!token.startsWith(kind === 'device' ? DEVICE_ACCESS_PREFIX : ACCESS_PREFIX)) return null
   const rec = await read<TokenRecord>(redis, `${P}at:${hashToken(token)}`)
-  if (!sameTenant(rec) || !rec) return null
+  if (!sameTenant(rec) || !rec || kindOf(rec) !== kind) return null
   const grant = await read<OAuthGrant>(redis, `${P}grant:${rec.grant_id}`)
   if (!grant) return null
   const last = grant.last_used_at ? Date.parse(grant.last_used_at) : 0
@@ -282,7 +357,12 @@ export async function resolveAccessToken(
       .del(idleKey(grant.id))
       .exec()
   }
-  return { ...rec, scope: grant.scope || OAUTH_SCOPE, client_name: grant.client_name }
+  return {
+    ...rec,
+    kind: kindOf(rec),
+    scope: grant.scope || OAUTH_SCOPE,
+    client_name: grant.client_name
+  }
 }
 
 /** Revoke one token (RFC 7009) — either kind. */
@@ -325,9 +405,10 @@ export async function getGrant(redis: Redis, grantId: string): Promise<OAuthGran
 
 type IdleStamps = Pick<OAuthGrant, 'idle_flagged_at' | 'idle_notice_at'>
 
-/** Grants with their idle-review stamps (one MGET). */
-async function withIdleStamps(redis: Redis, grants: OAuthGrant[]): Promise<OAuthGrant[]> {
-  if (grants.length === 0) return grants
+/** Grants with their idle-review stamps (one MGET), each with its kind (old grants: 'mcp'). */
+async function withIdleStamps(redis: Redis, stored: OAuthGrant[]): Promise<OAuthGrant[]> {
+  if (stored.length === 0) return stored
+  const grants = stored.map((g) => ({ ...g, kind: kindOf(g) }))
   const raws = await redis.mget(...grants.map((g) => idleKey(g.id)))
   return grants.map((g, i) => {
     const raw = raws[i]
