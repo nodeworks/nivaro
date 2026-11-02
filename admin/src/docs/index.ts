@@ -55,6 +55,7 @@ export * from './sections/live-ops.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
 export * from './sections/low-code.js'
+export * from './sections/mobile-app.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/offline-popout.js'
@@ -308,6 +309,7 @@ import { managedProceduresDocs } from './sections/managed-procedures.js'
 import { mcpDocs } from './sections/mcp.js'
 import { mcpAgentsDocs } from './sections/mcp-agents.js'
 import { metricAlertsGuide } from './sections/metric-alerts.js'
+import { mobileAppDocs } from './sections/mobile-app.js'
 import {
   alertEngineGuide,
   alertsApiDoc,
@@ -1047,6 +1049,11 @@ export const navSections: NavGroup[] = [
       sdkTreeHierarchy,
       treeExample
     ]
+  },
+  {
+    id: 'platform',
+    label: 'Platform',
+    items: [mobileAppDocs]
   }
 ]
 
