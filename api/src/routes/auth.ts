@@ -39,6 +39,7 @@ import {
   requireAuth
 } from '../middleware/authenticate.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
+import { accessPendingFor } from '../services/access-pending.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
@@ -990,6 +991,13 @@ export async function authRoutes(app: FastifyInstance) {
         // admin access to the roles API.
         role_name: req.userRole?.name ?? null,
         app_access: req.userRole?.app_access ?? false,
+        // Still in the new-user flow (migration 330): 'first_access' (nothing asked yet) |
+        // 'needs_authorization' (waiting for review) | null. By the settings' role ids, never a
+        // role name — apps show the awaiting-authorization screen from it.
+        access_pending: await accessPendingFor(
+          { role: req.user?.role ?? null, preferences: safeUser.preferences },
+          !!req.isAdmin
+        ),
         // Offers the manager widgets on the dashboard (#1030).
         has_reports: await import('../services/team.js')
           .then((m) => m.hasReports(req.user!.id))
