@@ -202,14 +202,23 @@ export interface RelayMessage {
 
 export type RelayStatus = 'ok' | 'gone' | 'error'
 
+/** The longest Retry-After a relay 429 is waited out for (one paced retry, phone-push.ts). */
+export const RELAY_RETRY_MAX_S = 60
+
+export type RelayResults = Array<{ device: string; status: RelayStatus }>
+/** A send: the per-device results, `retryAfter` (seconds) when the relay's limiter refused it
+ *  (429 — the limit counts MESSAGES, 60 a minute on a public key), or null (down, slow, other). */
+export type RelaySendOutcome = { results: RelayResults } | { retryAfter: number } | null
+
 /**
- * Send one batch (≤ RELAY_BATCH) through the relay. Never throws: a relay that is down, slow (3 s) or
- * answers non-2xx yields `null`, so the caller counts the batch as failed.
+ * Send one batch (≤ RELAY_BATCH) through the relay. Never throws: a relay that is down, slow
+ * (3 s) or answers non-2xx yields `null`, so the caller counts the batch as failed; a 429 says
+ * how long to wait.
  */
-export async function relaySend(
+export async function relaySendChecked(
   cfg: PushRelayConfig,
   messages: RelayMessage[]
-): Promise<Array<{ device: string; status: RelayStatus }> | null> {
+): Promise<RelaySendOutcome> {
   if (!cfg.key || messages.length === 0) return null
   try {
     const res = await safeFetch(`${cfg.url}/v1/send`, {
@@ -218,16 +227,27 @@ export async function relaySend(
       body: JSON.stringify({ messages }),
       timeoutMs: RELAY_TIMEOUT_MS
     })
-    const json = (await res.json().catch(() => ({}))) as {
-      results?: Array<{ device: string; status: RelayStatus }>
+    if (res.status === 429) {
+      const s = Number.parseInt(String(res.headers?.get?.('retry-after') ?? ''), 10)
+      return { retryAfter: Number.isFinite(s) && s > 0 ? s : RELAY_RETRY_MAX_S }
     }
+    const json = (await res.json().catch(() => ({}))) as { results?: RelayResults }
     if (!res.ok || !Array.isArray(json.results)) {
       console.warn('[push-relay] send failed:', res.status)
       return null
     }
-    return json.results
+    return { results: json.results }
   } catch (err) {
     console.warn('[push-relay] send error:', (err as Error)?.message ?? err)
     return null
   }
+}
+
+/** relaySendChecked without the limiter detail: the results, or null. */
+export async function relaySend(
+  cfg: PushRelayConfig,
+  messages: RelayMessage[]
+): Promise<RelayResults | null> {
+  const out = await relaySendChecked(cfg, messages)
+  return out && 'results' in out ? out.results : null
 }

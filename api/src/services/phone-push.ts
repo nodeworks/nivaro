@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { routePush } from './channel-test-mode.js'
 import {
@@ -7,10 +8,13 @@ import {
   pushRelayConfig,
   RELAY_BATCH,
   RELAY_PREFIX,
+  RELAY_RETRY_MAX_S,
   type RelayMessage,
-  relaySend,
+  type RelayResults,
+  relaySendChecked,
   wherePhoneEndpoint
 } from './push-relay.js'
+import { captureTenant } from './tenant-capture.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -267,6 +271,59 @@ export async function instanceOrigin(): Promise<string> {
   }
 }
 
+interface RelayChunk {
+  messages: RelayMessage[]
+  byDevice: Map<string, number>
+}
+
+function tallyResults(
+  results: RelayResults,
+  byDevice: Map<string, number>,
+  out: { delivered: number[]; gone: number[] }
+): void {
+  for (const r of results) {
+    const id = byDevice.get(r.device)
+    if (id == null) continue
+    if (r.status === 'ok') out.delivered.push(id)
+    else if (r.status === 'gone') out.gone.push(id)
+  }
+}
+
+/**
+ * One paced retry of batches the relay's limiter refused: after `afterS` seconds, in the
+ * background (its own timer, the tenant it was sent for, the background pool), one batch after
+ * another; a second refusal gives up the rest (counted, logged). Never throws.
+ */
+function scheduleRelayRetry(chunks: RelayChunk[], afterS: number): void {
+  const inTenant = captureTenant()
+  const run = () =>
+    inTenant(() =>
+      runInBackgroundPool(async () => {
+        const cfg = await pushRelayConfig()
+        const out = { delivered: [] as number[], gone: [] as number[] }
+        for (const [k, c] of chunks.entries()) {
+          const started = Date.now()
+          const res = await relaySendChecked(cfg, c.messages)
+          if (!res || 'retryAfter' in res) {
+            const left = chunks.slice(k).reduce((n, x) => n + x.messages.length, 0)
+            noteChannel('push', 'failed', { ms: Date.now() - started, n: left })
+            console.warn(`[phone-push] relay retry refused: ${left} message(s) not sent`)
+            break
+          }
+          tallyResults(res.results, c.byDevice, out)
+          noteChannel('push', 'sent', { ms: Date.now() - started, n: c.messages.length })
+        }
+        await removePhones(out.gone)
+        if (out.delivered.length > 0)
+          await db('nivaro_push_subscriptions')
+            .whereIn('id', out.delivered)
+            .update({ last_used_at: new Date() })
+            .catch(() => {})
+      })
+    ).catch(() => {})
+  setTimeout(() => void run(), afterS * 1000).unref?.()
+}
+
 /**
  * Send to relay phones. `content: 'minimal'` keeps the alert text and record names off the
  * relay and the push networks: the title is the instance name, the body generic, and `data`
@@ -305,29 +362,38 @@ async function sendViaRelay(
     if (data.collection) msgData.collection = String(data.collection)
     if (data.item) msgData.item = String(data.item)
   }
+  const chunks: RelayChunk[] = []
   for (let i = 0; i < phones.length; i += RELAY_BATCH) {
     const chunk = phones.slice(i, i + RELAY_BATCH)
-    const byDevice = new Map(chunk.map((p) => [p.endpoint.slice(RELAY_PREFIX.length), p.id]))
-    const messages: RelayMessage[] = chunk.map((p) => ({
-      device: p.endpoint.slice(RELAY_PREFIX.length),
-      title,
-      body,
-      data: msgData,
-      ...(badge != null ? { badge } : {})
-    }))
+    chunks.push({
+      byDevice: new Map(chunk.map((p) => [p.endpoint.slice(RELAY_PREFIX.length), p.id])),
+      messages: chunk.map((p) => ({
+        device: p.endpoint.slice(RELAY_PREFIX.length),
+        title,
+        body,
+        data: msgData,
+        ...(badge != null ? { badge } : {})
+      }))
+    })
+  }
+  for (const [k, c] of chunks.entries()) {
     const started = Date.now()
-    const results = await relaySend(cfg, messages)
-    if (!results) {
-      noteChannel('push', 'failed', { ms: Date.now() - started, n: chunk.length })
+    const res = await relaySendChecked(cfg, c.messages)
+    if (res && 'retryAfter' in res) {
+      // The relay's limit counts messages: anything sent now is refused too. The rest waits
+      // for one paced retry in the background — never inside this request.
+      const rest = chunks.slice(k)
+      noteChannel('push', 'failed', { ms: Date.now() - started, n: c.messages.length })
+      if (res.retryAfter <= RELAY_RETRY_MAX_S) scheduleRelayRetry(rest, res.retryAfter)
+      else console.warn(`[phone-push] relay limit: ${rest.length} batch(es) not sent`)
+      break
+    }
+    if (!res) {
+      noteChannel('push', 'failed', { ms: Date.now() - started, n: c.messages.length })
       continue
     }
-    for (const r of results) {
-      const id = byDevice.get(r.device)
-      if (id == null) continue
-      if (r.status === 'ok') out.delivered.push(id)
-      else if (r.status === 'gone') out.gone.push(id)
-    }
-    noteChannel('push', 'sent', { ms: Date.now() - started, n: chunk.length })
+    tallyResults(res.results, c.byDevice, out)
+    noteChannel('push', 'sent', { ms: Date.now() - started, n: c.messages.length })
   }
   return out
 }

@@ -305,6 +305,66 @@ describe('relay phones', () => {
   })
 })
 
+describe('relay rate limit (it counts messages: 60 a minute per key)', () => {
+  const dev = (i: number) => `relay:${String(i).padStart(20, 'y')}`
+  const ok = { ok: true, status: 200, json: async () => ({ results: [] }) }
+  const limited = (s: number) => ({
+    ok: false,
+    status: 429,
+    headers: new Headers({ 'retry-after': String(s) }),
+    json: async () => ({ error: 'rate_limited' })
+  })
+  beforeEach(() => {
+    process.env.MOBILE_PUSH_RELAY_KEY = 'rk'
+    h.phones = Array.from({ length: 120 }, (_, i) => ({ id: 500 + i, endpoint: dev(i) }))
+  })
+
+  it('a 429 stops the run; the rest goes once, paced, in the background', async () => {
+    vi.useFakeTimers()
+    safeFetchMock.mockResolvedValueOnce(ok).mockResolvedValueOnce(limited(42))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    // The call that was refused, nothing after it: the request is not held up.
+    expect(safeFetchMock).toHaveBeenCalledTimes(2)
+    safeFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [{ device: dev(60).slice(6), status: 'gone' }] })
+    })
+    await vi.advanceTimersByTimeAsync(41_000)
+    expect(safeFetchMock).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(2_000)
+    // Both refused-and-unsent chunks (50 + 20), one after the other.
+    expect(safeFetchMock).toHaveBeenCalledTimes(4)
+    const sizes = safeFetchMock.mock.calls
+      .slice(2)
+      .map((c) => JSON.parse((c[1] as any).body).messages.length)
+    expect(sizes).toEqual([50, 20])
+    expect(h.deleted).toContain(560)
+    warn.mockRestore()
+  })
+
+  it('one retry only; a wait past 60 s is not retried at all', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    safeFetchMock.mockResolvedValue(limited(5))
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(safeFetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(6_000)
+    // The retry is refused too: it gives up (no third pass).
+    expect(safeFetchMock).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(safeFetchMock).toHaveBeenCalledTimes(2)
+
+    safeFetchMock.mockReset()
+    safeFetchMock.mockResolvedValue(limited(90))
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    await vi.advanceTimersByTimeAsync(200_000)
+    expect(safeFetchMock).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+})
+
 describe('phonePushMode', () => {
   it('off, direct, relay', async () => {
     process.env.MOBILE_PUSH = 'off'
