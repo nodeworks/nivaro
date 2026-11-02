@@ -4,6 +4,7 @@ import {
   EXPO_PREFIX,
   type PushRelayConfig,
   pushRelayConfig,
+  RELAY_BATCH,
   RELAY_PREFIX,
   type RelayMessage,
   relaySend,
@@ -297,8 +298,8 @@ async function sendViaRelay(
     if (data.collection) msgData.collection = String(data.collection)
     if (data.item) msgData.item = String(data.item)
   }
-  for (let i = 0; i < phones.length; i += 100) {
-    const chunk = phones.slice(i, i + 100)
+  for (let i = 0; i < phones.length; i += RELAY_BATCH) {
+    const chunk = phones.slice(i, i + RELAY_BATCH)
     const byDevice = new Map(chunk.map((p) => [p.endpoint.slice(RELAY_PREFIX.length), p.id]))
     const messages: RelayMessage[] = chunk.map((p) => ({
       device: p.endpoint.slice(RELAY_PREFIX.length),

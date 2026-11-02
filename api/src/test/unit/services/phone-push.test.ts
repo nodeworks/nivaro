@@ -285,10 +285,10 @@ describe('relay phones', () => {
     warn.mockRestore()
   })
 
-  it('splits mixed rows by prefix and batches relay calls at 100', async () => {
+  it('splits mixed rows by prefix and batches relay calls at 50 (120 → 3 calls)', async () => {
     h.phones = [
       { id: 7, endpoint: `expo:${TOKEN}` },
-      ...Array.from({ length: 101 }, (_, i) => ({
+      ...Array.from({ length: 120 }, (_, i) => ({
         id: 100 + i,
         endpoint: `relay:${String(i).padStart(20, 'x')}`
       }))
@@ -297,14 +297,11 @@ describe('relay phones', () => {
     safeFetchMock.mockResolvedValue(relayOk())
     await sendPhonePush('u1', { title: 't', body: 'b' })
     expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['https://exp.host/--/api/v2/push/send'])
-    expect(safeFetchMock.mock.calls.map((c) => c[0])).toEqual([
-      'https://push.nivaro.dev/v1/send',
-      'https://push.nivaro.dev/v1/send'
-    ])
+    expect(safeFetchMock).toHaveBeenCalledTimes(3)
     const sizes = safeFetchMock.mock.calls.map(
       (c) => JSON.parse((c[1] as any).body).messages.length
     )
-    expect(sizes).toEqual([100, 1])
+    expect(sizes).toEqual([50, 50, 20])
   })
 })
 

@@ -22,6 +22,9 @@ export const RELAY_PREFIX = 'relay:'
 export const DEFAULT_RELAY_URL = 'https://push.nivaro.dev'
 export const RELAY_TIMEOUT_MS = 3000
 export const RELAY_KEY_MASK = '********'
+/** Messages per relay call: a public relay key may send 60 a minute, so a batch of 100 would
+ *  always be refused. */
+export const RELAY_BATCH = 50
 
 export type RelayContent = 'full' | 'minimal'
 
@@ -151,7 +154,7 @@ export interface RelayMessage {
 export type RelayStatus = 'ok' | 'gone' | 'error'
 
 /**
- * Send one batch (≤100) through the relay. Never throws: a relay that is down, slow (3 s) or
+ * Send one batch (≤ RELAY_BATCH) through the relay. Never throws: a relay that is down, slow (3 s) or
  * answers non-2xx yields `null`, so the caller counts the batch as failed.
  */
 export async function relaySend(
