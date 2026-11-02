@@ -112,7 +112,9 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     if (!app.redis) return reply.code(503).send({ error: 'The session store is unavailable' })
     let revoked: number
     try {
-      revoked = await revokeUserSessions(app.redis, id)
+      // Sessions and phone sign-ins; a static token or API key the person's phone uses keeps
+      // its alerts (they are not sessions — revoke that token or key to stop them).
+      revoked = await revokeUserSessions(app.redis, id, { full: false })
     } catch (e) {
       req.log.warn(
         { err: e, user: id },
@@ -298,7 +300,8 @@ export async function securitySelfRoutes(app: FastifyInstance) {
       // A phone keeps its own sign-in, as a browser keeps its session.
       revoked = await revokeUserSessions(app.redis, String(req.user!.id), {
         except: currentSid,
-        exceptDeviceGrant: req.deviceGrantId ?? null
+        exceptDeviceGrant: req.deviceGrantId ?? null,
+        full: false
       })
     } catch (e) {
       // Redis down or a scan that did not finish: say so, never "0 signed out".

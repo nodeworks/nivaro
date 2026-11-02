@@ -92,7 +92,13 @@ export async function sessionIdsForUser(
 export async function revokeUserSessions(
   redis: Redis,
   userId: string,
-  opts: { except?: string | null; exceptDeviceGrant?: string | null } = {}
+  opts: {
+    except?: string | null
+    exceptDeviceGrant?: string | null
+    /** false = a partial sign-out (everywhere else, an admin's session sign-out): phone rows a
+     *  static token or API key registered stay while that credential works. Default full. */
+    full?: boolean
+  } = {}
 ): Promise<number> {
   const sids = await sessionIdsForUser(redis, userId, opts)
   await revokeSessions(redis, sids)
@@ -102,7 +108,8 @@ export async function revokeUserSessions(
   // only the caller's own ("everywhere else": the kept session's or phone's rows).
   const phones = await endUserDeviceGrants(redis, userId, {
     except: opts.exceptDeviceGrant,
-    keepSid: opts.except
+    keepSid: opts.except,
+    ...(opts.full === false ? { full: false } : {})
   })
   return sids.length + phones
 }

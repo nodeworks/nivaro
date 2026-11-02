@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { REVOKED_PREFIX } from '../auth/session.js'
@@ -76,7 +77,24 @@ export async function deleteGrantPushRows(
  * The credential a phone push row was registered with: `grant:<id>` (a phone's sign-in) or
  * `sid:<id>` (a session). Null = something else (a key, a token) — never a reason to keep a row.
  */
-export type PushCredential = `grant:${string}` | `sid:${string}`
+export type PushCredential =
+  | `grant:${string}`
+  | `sid:${string}`
+  /** A static user token: the first 16 hex of its SHA-256 (never the token). */
+  | `token:${string}`
+  /** An API key (nivaro_api_keys.id). */
+  | `key:${string}`
+
+const CREDENTIAL_RE = /^(grant|sid|token|key):./
+
+/** A static token's stamp: `token:` + the first 16 hex characters of its SHA-256. */
+export function staticTokenStamp(token: string): PushCredential {
+  return `token:${createHash('sha256').update(token).digest('hex').slice(0, 16)}`
+}
+
+/** Static token and API key stamps: they outlive sessions, so only their own end (or a full
+ *  "sign out everywhere") takes their rows. */
+const lasting = (by: string) => by.startsWith('token:') || by.startsWith('key:')
 
 /**
  * A sweep of the person's phone push rows: `ids` of person `u`, or (no ids) all of them, as they
@@ -89,6 +107,9 @@ interface Leftover {
   ids?: number[]
   at: number
   keep?: PushCredential[]
+  /** false = a partial sign-out (other sessions, an admin's session sign-out): rows a static
+   *  token or API key registered stay while that credential still works. Absent = full. */
+  full?: boolean
 }
 /** Per tenant (cloud): leftovers are retried on this tenant's next phone sign-out. */
 const leftoverKey = () => `nvr:device-push-leftover:${currentTenantKey()}`
@@ -111,7 +132,7 @@ const readStamp = (raw: string | null): Stamp | null => {
     if (typeof v === 'number') return { at: v, by: null }
     const st = v as Partial<Stamp>
     if (!Number.isFinite(st?.at)) return null
-    const by = typeof st.by === 'string' && /^(grant|sid):./.test(st.by) ? st.by : null
+    const by = typeof st.by === 'string' && CREDENTIAL_RE.test(st.by) ? st.by : null
     return { at: Number(st.at), by: by as PushCredential | null }
   } catch {
     return null
@@ -129,8 +150,36 @@ export async function notePhoneRegistered(
 }
 
 /** Is the credential still signed in? A grant that stands; a session neither gone nor revoked. */
-export async function credentialLive(redis: Redis, by: PushCredential): Promise<boolean> {
+export async function credentialLive(
+  redis: Redis,
+  by: PushCredential,
+  /** The person the row belongs to: a static token or API key must still be theirs. */
+  userId?: string
+): Promise<boolean> {
   if (by.startsWith('grant:')) return (await redis.exists(grantKey(by.slice(6)))) === 1
+  if (by.startsWith('token:')) {
+    if (!userId) return false
+    const row = (await db('nivaro_users').where({ id: userId }).first('static_token')) as
+      | { static_token?: string | null }
+      | undefined
+    return !!row?.static_token && staticTokenStamp(String(row.static_token)) === by
+  }
+  if (by.startsWith('key:')) {
+    const id = Number(by.slice(4))
+    if (!Number.isInteger(id) || id <= 0) return false
+    const key = (await db('nivaro_api_keys')
+      .where({ id })
+      .first('id', 'user', 'is_active', 'expires_at')) as
+      | {
+          user?: string | null
+          is_active?: boolean | number | null
+          expires_at?: Date | string | null
+        }
+      | undefined
+    if (!key || !key.is_active) return false
+    if (key.expires_at && new Date(key.expires_at).getTime() <= Date.now()) return false
+    return !userId || String(key.user ?? '').toUpperCase() === String(userId).toUpperCase()
+  }
   const sid = by.slice(4)
   const [sess, revoked] = await redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`)
   return !!sess && !revoked
@@ -165,9 +214,16 @@ async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
   const stale: number[] = []
   for (const [i, id] of ids.entries()) {
     const st = stamps[i]
+    // A static token or API key outlives sessions: a partial sign-out keeps its row while it
+    // still works; only its own end or a full sign-out takes it.
+    if (st?.by && lasting(st.by)) {
+      if (l.full === false && (await credentialLive(redis, st.by, l.u))) continue
+      stale.push(id)
+      continue
+    }
     // Kept only while the registering credential is still signed in (asked once): a credential
     // in `keep`, or one that registered the row at or after the sweep.
-    if (st?.by && (keep.has(st.by) || st.at >= l.at) && (await credentialLive(redis, st.by)))
+    if (st?.by && (keep.has(st.by) || st.at >= l.at) && (await credentialLive(redis, st.by, l.u)))
       continue
     stale.push(id)
   }
@@ -218,7 +274,8 @@ const isLeftover = (v: unknown): v is Leftover => {
     Number.isFinite(l.at) &&
     (l.ids === undefined || (Array.isArray(l.ids) && l.ids.every(Number.isInteger))) &&
     (l.keep === undefined ||
-      (Array.isArray(l.keep) && l.keep.every((k) => /^(grant|sid):./.test(String(k)))))
+      (Array.isArray(l.keep) && l.keep.every((k) => CREDENTIAL_RE.test(String(k))))) &&
+    (l.full === undefined || typeof l.full === 'boolean')
   )
 }
 
@@ -318,6 +375,8 @@ export async function endUserDeviceGrants(
     keepSid?: string | null
     reason?: DeviceEndReason
     req?: FastifyRequest
+    /** false = a partial sign-out: static-token / API-key rows stay while they work. */
+    full?: boolean
   } = {}
 ): Promise<number> {
   let ended = 0
@@ -340,7 +399,11 @@ export async function endUserDeviceGrants(
   if (opts.except) keep.push(`grant:${opts.except}`)
   if (opts.keepSid) keep.push(`sid:${opts.keepSid}`)
   // `at` only now: every grant in scope (and, before this call, every session) is ended.
-  await deleteOrKeep(redis, { u: userId, at: Date.now(), keep }, opts.req)
+  await deleteOrKeep(
+    redis,
+    { u: userId, at: Date.now(), keep, ...(opts.full === false ? { full: false } : {}) },
+    opts.req
+  )
   return ended
 }
 

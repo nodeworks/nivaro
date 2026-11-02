@@ -7,7 +7,8 @@ import {
   credentialLive,
   deletePushRowsOrKeep,
   notePhoneRegistered,
-  type PushCredential
+  type PushCredential,
+  staticTokenStamp
 } from '../services/device-grants.js'
 import { addGrantPushId } from '../services/oauth-store.js'
 import {
@@ -255,11 +256,16 @@ export async function pushRoutes(app: FastifyInstance) {
       req.authMethod === 'session'
         ? ((req.session as unknown as { sessionId?: string } | null)?.sessionId ?? null)
         : null
+    const bearer = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
     const by: PushCredential | null = req.deviceGrantId
       ? `grant:${req.deviceGrantId}`
       : sid
         ? `sid:${sid}`
-        : null
+        : req.authMethod === 'token' && bearer
+          ? staticTokenStamp(bearer)
+          : req.authMethod === 'api_key' && req.apiKeyId
+            ? `key:${req.apiKeyId}`
+            : null
     if (rowId) {
       const id = Number(rowId)
       /** Take the row back (a refused delete is kept for a retry, services/device-grants.ts). */
@@ -274,7 +280,7 @@ export async function pushRoutes(app: FastifyInstance) {
         )
         // Re-checked AFTER the stamp: a sign-out that ended this credential meanwhile may have
         // swept before the row existed — the row goes with it, as the sweep would have taken it.
-        const live = noted && (by ? await credentialLive(app.redis, by) : true)
+        const live = noted && (by ? await credentialLive(app.redis, by, req.user!.id) : true)
         if (!live) {
           await takeBack()
           return reply

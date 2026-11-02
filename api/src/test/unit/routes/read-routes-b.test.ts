@@ -30,6 +30,9 @@ const m = vi.hoisted(() => ({
   stamps: [] as Array<[number, string | null]>,
   /** The caller signed in with a session (authMethod 'session', this session id). */
   sid: null as string | null,
+  /** The caller used a static token (authMethod 'token') or an API key (authMethod 'api_key'). */
+  staticToken: null as string | null,
+  apiKeyId: null as number | null,
   /** Redis failing under the credential re-check / the grant's push-id note. */
   credThrows: false,
   grantThrows: false,
@@ -46,6 +49,17 @@ vi.mock('../../../middleware/authenticate.js', () => {
     if (m.sid) {
       ;(req as { authMethod?: string }).authMethod = 'session'
       ;(req as { session?: unknown }).session = { sessionId: m.sid }
+    }
+    if (m.staticToken) {
+      ;(req as { authMethod?: string }).authMethod = 'token'
+      ;(req as { headers?: Record<string, string> }).headers = {
+        ...((req as { headers?: Record<string, string> }).headers ?? {}),
+        authorization: `Bearer ${m.staticToken}`
+      }
+    }
+    if (m.apiKeyId != null) {
+      ;(req as { authMethod?: string }).authMethod = 'api_key'
+      ;(req as { apiKeyId?: number }).apiKeyId = m.apiKeyId
     }
   }
   return { authenticate: vi.fn(sign), requireAuth: vi.fn(sign), requireAdmin: vi.fn(sign) }
@@ -204,6 +218,8 @@ beforeEach(() => {
   m.credLive = true
   m.stamps = []
   m.sid = null
+  m.staticToken = null
+  m.apiKeyId = null
   m.credThrows = false
   m.grantThrows = false
   m.delFails = false
@@ -458,6 +474,22 @@ describe('phone push', () => {
       [70, 'grant:99999999-0000-4000-8000-000000000009'],
       [70, 'sid:web-sid']
     ])
+  })
+  it('stamps a static token (hash prefix) or an API key (id), never the token itself', async () => {
+    const { createHash } = await import('node:crypto')
+    m.storeInserts = true
+    m.staticToken = 'static-tok-123'
+    const app = await build()
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    m.staticToken = null
+    m.apiKeyId = 9
+    await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    const h16 = createHash('sha256').update('static-tok-123').digest('hex').slice(0, 16)
+    expect(m.stamps).toEqual([
+      [70, `token:${h16}`],
+      [70, 'key:9']
+    ])
+    expect(JSON.stringify(m.stamps)).not.toContain('static-tok-123')
   })
   it('a session signed out while it registered: 401 and the row is deleted', async () => {
     m.storeInserts = true

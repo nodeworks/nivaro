@@ -12,7 +12,12 @@ const state = vi.hoisted(() => ({
   /** Account status per user id (default active) and their static tokens. */
   status: {} as Record<string, string>,
   staticTokens: {} as Record<string, string>,
-  policy: null as Record<string, unknown> | null
+  policy: null as Record<string, unknown> | null,
+  /** nivaro_api_keys rows by id. */
+  apiKeys: {} as Record<
+    string,
+    { id: number; user: string; is_active: boolean; expires_at: string | null }
+  >
 }))
 
 vi.mock('../db/index.js', async () => {
@@ -33,6 +38,11 @@ vi.mock('../db/index.js', async () => {
           ? { id, status, role: null, static_token: state.staticTokens[id.toUpperCase()] ?? null }
           : undefined
       return q.method === 'first' ? row : row ? [row] : []
+    }
+    if (q.sql.includes('nivaro_api_keys') && q.method === 'first') {
+      // `select top (?) … where [id] = ?`: the id is the last binding.
+      const id = q.bindings[q.bindings.length - 1]
+      return id != null ? state.apiKeys[String(id)] : undefined
     }
     if (q.method === 'select' && q.sql.includes('nivaro_push_subscriptions')) {
       const inList = /\bin \(/i.test(q.sql)
@@ -204,6 +214,7 @@ beforeEach(() => {
   state.status = {}
   state.staticTokens = {}
   state.policy = null
+  state.apiKeys = {}
   delete process.env.MOBILE_SIGNIN
 })
 
@@ -516,6 +527,50 @@ describe('signing a person out on every phone', () => {
     redis.beforeExec = () => notePhoneRegistered(redis as never, 9, `grant:${g.grant.id}`)
     expect(await endUserDeviceGrants(redis as never, PAT)).toBe(1)
     expect(pushDeletes().flatMap((d) => d.bindings)).toContain(9)
+  })
+
+  describe('rows a static token or API key registered (the EFP app signs in with these)', () => {
+    async function lasting() {
+      const { notePhoneRegistered, staticTokenStamp } = await import('../services/device-grants.js')
+      const { revokeUserSessions } = await import('../auth/session.js')
+      state.pushRows = [21, 22]
+      state.staticTokens[PAT] = 'pat-static-token-abc'
+      state.apiKeys['7'] = { id: 7, user: PAT, is_active: true, expires_at: null }
+      redis.kv.set('sess:sC', JSON.stringify({ userId: PAT }))
+      await notePhoneRegistered(redis as never, 21, staticTokenStamp('pat-static-token-abc'))
+      await notePhoneRegistered(redis as never, 22, 'key:7')
+      return { revokeUserSessions, deleted: () => pushDeletes().flatMap((d) => d.bindings) }
+    }
+
+    it('survive sign-out-others and an admin session sign-out', async () => {
+      const { revokeUserSessions, deleted } = await lasting()
+      await revokeUserSessions(redis as never, PAT, { except: 'sC', full: false })
+      await revokeUserSessions(redis as never, PAT, { full: false })
+      expect(deleted()).not.toContain(21)
+      expect(deleted()).not.toContain(22)
+    })
+
+    it('go once that token or key is revoked', async () => {
+      const { revokeUserSessions, deleted } = await lasting()
+      state.staticTokens[PAT] = 'a-new-token-after-regenerate'
+      state.apiKeys['7'].is_active = false
+      await revokeUserSessions(redis as never, PAT, { except: 'sC', full: false })
+      expect(deleted()).toEqual(expect.arrayContaining([21, 22]))
+    })
+
+    it('an expired key is not live either', async () => {
+      const { revokeUserSessions, deleted } = await lasting()
+      state.apiKeys['7'].expires_at = new Date(Date.now() - 1000).toISOString()
+      await revokeUserSessions(redis as never, PAT, { full: false })
+      expect(deleted()).toContain(22)
+      expect(deleted()).not.toContain(21)
+    })
+
+    it('a full "sign out everywhere" takes them too', async () => {
+      const { revokeUserSessions, deleted } = await lasting()
+      await revokeUserSessions(redis as never, PAT)
+      expect(deleted()).toEqual(expect.arrayContaining([21, 22]))
+    })
   })
 
   it('a stamp after the sweep keeps a row only while its credential is signed in', async () => {
