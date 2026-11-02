@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const safeFetchMock = vi.hoisted(() => vi.fn())
 const h = vi.hoisted(() => ({
-  phones: [] as Array<{ id: number; endpoint: string }>,
+  phones: [] as Array<{ id: number; endpoint: string; user?: string }>,
+  /** Runs once when the drain's live-row check reads the rows (to interleave a send). */
+  onCheck: null as null | (() => void),
   deleted: [] as number[],
   touched: [] as number[]
 }))
@@ -37,6 +39,11 @@ vi.mock('../../../db/index.js', () => {
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
         // A select by id (the drain's live-row check) sees only rows that still exist.
         let v: unknown = st.ids.length ? h.phones.filter((p) => st.ids.includes(p.id)) : h.phones
+        if (st.ids.length && st.op === 'select' && table === 'nivaro_push_subscriptions') {
+          const hook = h.onCheck
+          h.onCheck = null
+          hook?.()
+        }
         if (table === 'nivaro_notifications') v = { c: 0 }
         else if (table === 'nivaro_settings_overrides') v = undefined
         else if (table === 'nivaro_settings') v = { project_name: 'Acme' }
@@ -72,8 +79,19 @@ const { RELAY_QUEUE_MAX, relayQueueSize, resetRelayQueues } = await import(
 )
 
 const dev = (i: number) => String(i).padStart(20, 'z')
+// Rows store the user id upper case (mssql uuids); sends name it lower case.
 const phones = (n: number, from = 0) =>
-  Array.from({ length: n }, (_, i) => ({ id: 1000 + from + i, endpoint: `relay:${dev(from + i)}` }))
+  Array.from({ length: n }, (_, i) => ({
+    id: 1000 + from + i,
+    endpoint: `relay:${dev(from + i)}`,
+    user: 'U1'
+  }))
+/** The devices the relay was sent to after the first (refused) call. */
+const sentAfterFirst = () =>
+  safeFetchMock.mock.calls
+    .slice(1)
+    .flatMap((c) => JSON.parse((c[1] as { body: string }).body).messages)
+    .map((m: { device: string }) => m.device)
 
 /** A relay that enforces 60 messages per fixed 60 s window (as limits.ts takeToken does). */
 function enforcingRelay(startFull = false) {
@@ -111,6 +129,7 @@ beforeEach(() => {
   process.env.MOBILE_PUSH_RELAY_KEY = 'rk'
   h.deleted = []
   h.touched = []
+  h.onCheck = null
   safeFetchMock.mockReset()
   resetRelayQueues()
 })
@@ -198,6 +217,62 @@ describe('relay retry queue', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(safeFetchMock).toHaveBeenCalledTimes(1)
     expect(relayQueueSize()).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('a phone another person signed in on since gets none of the first person’s alerts', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enforcingRelay(true)
+    h.phones = phones(3)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    // Same install, same endpoint — but the row now belongs to user B.
+    h.phones = h.phones.map((p) => (p.id === 1001 ? { ...p, user: 'U2' } : p))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sentAfterFirst().sort()).toEqual([dev(0), dev(2)].sort())
+    warn.mockRestore()
+  })
+
+  it('messages queued while the drain checks its rows are kept for the next drain', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enforcingRelay(true)
+    const { enqueueRelay } = await import('../../../services/relay-retry-queue.js')
+    h.phones = phones(5)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    const late = phones(3, 5)
+    h.phones = [...h.phones, ...late]
+    h.onCheck = () =>
+      enqueueRelay(
+        late.map((p) => ({
+          message: { device: p.endpoint.slice(6), title: 't', body: 'b', data: {} },
+          rowId: p.id,
+          userId: 'u1'
+        })),
+        1
+      )
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sentAfterFirst().sort()).toEqual([0, 1, 2, 3, 4].map(dev).sort())
+    expect(relayQueueSize()).toBe(3)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sentAfterFirst()).toHaveLength(8)
+    expect(relayQueueSize()).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('the window a drain used stays marked: a send right after it is queued, not sent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    enforcingRelay(true)
+    h.phones = phones(2)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(relayQueueSize()).toBe(0)
+    const calls = safeFetchMock.mock.calls.length
+    h.phones = phones(2, 10)
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    expect(safeFetchMock.mock.calls.length).toBe(calls)
+    expect(relayQueueSize()).toBe(2)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(relayQueueSize()).toBe(0)
+    expect(sentAfterFirst()).toEqual(expect.arrayContaining([dev(10), dev(11)]))
     warn.mockRestore()
   })
 })

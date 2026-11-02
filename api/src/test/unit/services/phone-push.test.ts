@@ -190,10 +190,18 @@ describe('sendPhonePush', () => {
     expect(msg.data).toEqual({ id: null, collection: 'c', item: '1' })
   })
 
-  it('never throws when Expo is unreachable', async () => {
-    fetchMock.mockRejectedValueOnce(new Error('ENOTFOUND exp.host'))
+  it('never throws when Expo is unreachable (the stubbed fetch refuses; no real call)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockRejectedValueOnce(new TypeError('mock: Expo unreachable'))
     expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
     expect(h.noteChannel).toHaveBeenCalledWith('push', 'failed', expect.anything())
+    // The Expo call went to the stub, never the network.
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://exp.host/--/api/v2/push/send',
+      expect.anything()
+    )
+    expect(globalThis.fetch).toBe(fetchMock)
+    warn.mockRestore()
   })
 })
 

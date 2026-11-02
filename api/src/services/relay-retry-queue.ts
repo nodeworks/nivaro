@@ -45,6 +45,8 @@ export interface RelayQueueItem {
   message: RelayMessage
   /** The nivaro_push_subscriptions row the message is for (gone → deleted, ok → touched). */
   rowId: number
+  /** The person the alert is for: the row must still be theirs when it goes out. */
+  userId: string
   /** When it was queued (ms); set by enqueueRelay. */
   at?: number
 }
@@ -64,8 +66,13 @@ const clampWait = (s: number) => Math.min(RELAY_WINDOW_S, Math.max(1, Math.ceil(
 
 /** How long (ms) this tenant's relay is still limiting; 0 = send directly. */
 export function relayLimitedMs(): number {
-  const q = queues.get(currentTenantKey())
-  return q ? Math.max(0, q.limitedUntil - Date.now()) : 0
+  const key = currentTenantKey()
+  const q = queues.get(key)
+  if (!q) return 0
+  const left = q.limitedUntil - Date.now()
+  // An expired marker on an empty, idle queue: nothing left to keep.
+  if (left <= 0 && q.items.length === 0 && !q.timer && !q.draining) queues.delete(key)
+  return Math.max(0, left)
 }
 
 /** Messages waiting for this tenant. */
@@ -127,24 +134,28 @@ function schedule(key: string, q: TenantQueue): void {
 
 async function drain(key: string, q: TenantQueue): Promise<void> {
   q.draining = true
+  // This drain spends the window: sends meanwhile (and right after) queue instead of calling.
+  q.limitedUntil = Date.now() + RELAY_WINDOW_S * 1000
+  /** Checked items this drain did not send: back in front of whatever arrived meanwhile. */
+  let unsent: RelayQueueItem[] = []
   try {
     await q.inTenant(() =>
       runInBackgroundPool(async () => {
         const cfg = await pushRelayConfig()
+        // The batch is taken now; anything queued during the checks below waits for the next.
+        const taken = q.items.splice(0)
         if (!cfg.key) {
           console.warn(
-            `[phone-push] relay not connected: ${q.items.length} queued message(s) dropped`
+            `[phone-push] relay not connected: ${taken.length} queued message(s) dropped`
           )
-          q.items = []
           return
         }
-        q.items = await stillDeliverable(q.items)
+        const kept = await stillDeliverable(taken)
         let budget = RELAY_WINDOW_MESSAGES
-        let limited = false
         const delivered: number[] = []
         const gone: number[] = []
-        while (q.items.length > 0 && budget > 0) {
-          const batch = q.items.slice(0, Math.min(RELAY_BATCH, budget))
+        while (kept.length > 0 && budget > 0) {
+          const batch = kept.slice(0, Math.min(RELAY_BATCH, budget))
           const started = Date.now()
           const res = await relaySendChecked(
             cfg,
@@ -152,10 +163,9 @@ async function drain(key: string, q: TenantQueue): Promise<void> {
           )
           if (res && 'retryAfter' in res) {
             q.limitedUntil = Date.now() + clampWait(res.retryAfter) * 1000
-            limited = true
             break
           }
-          q.items.splice(0, batch.length)
+          kept.splice(0, batch.length)
           budget -= batch.length
           if (!res) {
             noteChannel('push', 'failed', { ms: Date.now() - started, n: batch.length })
@@ -164,24 +174,25 @@ async function drain(key: string, q: TenantQueue): Promise<void> {
           tally(res.results, batch, delivered, gone)
           noteChannel('push', 'sent', { ms: Date.now() - started, n: batch.length })
         }
-        // A window's worth went out: the next waits for the next window.
-        if (!limited && q.items.length > 0) q.limitedUntil = Date.now() + RELAY_WINDOW_S * 1000
+        unsent = kept
         await applyOutcome(delivered, gone)
       })
     )
   } catch (err) {
     console.warn('[phone-push] relay queue drain failed:', (err as Error)?.message ?? err)
   } finally {
+    if (unsent.length > 0) q.items.unshift(...unsent)
     q.draining = false
+    // The marker stays after the queue empties, until it expires (relayLimitedMs cleans up).
     if (q.items.length > 0) schedule(key, q)
-    else if (queues.get(key) === q) queues.delete(key)
   }
 }
 
 /**
  * The queued items that may still go out: queued at most RELAY_QUEUE_MAX_AGE_MS ago, and whose
- * subscription row still exists as the same phone (a phone row, endpoint `relay:<device>` as
- * queued). A phone signed out — or taken over by another install — since it was queued gets
+ * subscription row still exists as the same phone of the same person (a phone row, endpoint
+ * `relay:<device>` as queued, `user` = the item's recipient, any case). A phone signed out,
+ * taken over by another install or signed in on by another person since it was queued gets
  * nothing. A failed check sends nothing either (fail closed).
  */
 async function stillDeliverable(items: RelayQueueItem[]): Promise<RelayQueueItem[]> {
@@ -191,11 +202,15 @@ async function stillDeliverable(items: RelayQueueItem[]): Promise<RelayQueueItem
   if (stale > 0) console.warn(`[phone-push] relay queue: dropped ${stale} stale message(s)`)
   if (fresh.length === 0) return []
   const ids = [...new Set(fresh.map((i) => i.rowId))]
-  let rows: Array<{ id: number; endpoint: string }>
+  let rows: Array<{ id: number; endpoint: string; user: string | null }>
   try {
     rows = (await wherePhoneEndpoint(
       whereInList(db('nivaro_push_subscriptions'), 'id', ids)
-    ).select('id', 'endpoint')) as Array<{ id: number; endpoint: string }>
+    ).select('id', 'endpoint', 'user')) as Array<{
+      id: number
+      endpoint: string
+      user: string | null
+    }>
   } catch (err) {
     console.warn(
       '[phone-push] relay queue: rows not checked, queue dropped:',
@@ -203,8 +218,15 @@ async function stillDeliverable(items: RelayQueueItem[]): Promise<RelayQueueItem
     )
     return []
   }
-  const live = new Map(rows.map((r) => [Number(r.id), String(r.endpoint)]))
-  return fresh.filter((i) => live.get(i.rowId) === `${RELAY_PREFIX}${i.message.device}`)
+  const live = new Map(rows.map((r) => [Number(r.id), r]))
+  const same = (a: unknown, b: unknown) =>
+    !!a && !!b && String(a).toUpperCase() === String(b).toUpperCase()
+  return fresh.filter((i) => {
+    const r = live.get(i.rowId)
+    return (
+      !!r && String(r.endpoint) === `${RELAY_PREFIX}${i.message.device}` && same(r.user, i.userId)
+    )
+  })
 }
 
 function tally(

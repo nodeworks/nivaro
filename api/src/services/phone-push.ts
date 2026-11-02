@@ -222,7 +222,7 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
     }
     if (relayPhones.length > 0) {
       const cfg = await pushRelayConfig()
-      const relayed = await sendViaRelay(cfg, relayPhones, payload, data, badge)
+      const relayed = await sendViaRelay(cfg, userId, relayPhones, payload, data, badge)
       sent += relayed.delivered.length
       delivered.push(...relayed.delivered)
       gone.push(...relayed.gone)
@@ -295,6 +295,7 @@ function tallyResults(
  */
 async function sendViaRelay(
   cfg: PushRelayConfig,
+  userId: string,
   phones: Array<{ id: number; endpoint: string }>,
   payload: PhonePushPayload,
   data: NonNullable<PhonePushPayload['data']>,
@@ -341,7 +342,11 @@ async function sendViaRelay(
   }
   const queued = (from: RelayChunk[]): RelayQueueItem[] =>
     from.flatMap((c) =>
-      c.messages.map((message) => ({ message, rowId: c.byDevice.get(message.device) as number }))
+      c.messages.map((message) => ({
+        message,
+        rowId: c.byDevice.get(message.device) as number,
+        userId
+      }))
     )
   // The relay is limiting this tenant right now: straight into the queue, no call.
   const waitMs = relayLimitedMs()
