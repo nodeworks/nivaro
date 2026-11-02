@@ -123,7 +123,7 @@ function fakeRedis() {
   return r
 }
 
-const session: { userId?: string; oauthCsrf?: string; authAt?: number } = {}
+const session: { userId?: string; oauthCsrf?: string; authAt?: number; sessionId?: string } = {}
 let app: FastifyInstance
 const redis = fakeRedis()
 
@@ -166,6 +166,10 @@ const codeKeys = () => [...redis.kv.keys()].filter((k) => k.startsWith('nvr:oaut
 const signIn = () => {
   session.userId = 'U1'
   session.authAt = Date.now()
+  // The browser session that consents (live in the session store).
+  session.sessionId = 'S-consent'
+  redis.kv.set('sess:S-consent', JSON.stringify({ userId: 'U1' }))
+  redis.kv.delete('sess:revoked:S-consent')
 }
 
 /** Consent → Allow (or `decision`) → the redirect the app gets back, on `host` if given. */
@@ -539,6 +543,24 @@ describe('first-party mobile apps sign in through the OAuth server', () => {
       })
     })
     expect(r2.json().refresh_expires_in).toBe(30 * 86_400)
+  })
+
+  it('a code issued before "sign out everywhere" can no longer be exchanged', async () => {
+    signIn()
+    const code = codeOf(await signInCode(params()))
+    const before = (await deviceGrants()).length
+    // Sign out everywhere: the consenting session is revoked.
+    redis.kv.set('sess:revoked:S-consent', '1')
+    const res = await exchange(code)
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toBe('invalid_grant')
+    // No phone sign-in was made.
+    expect((await deviceGrants()).length).toBe(before)
+    // And with the session simply gone from the store.
+    signIn()
+    const code2 = codeOf(await signInCode(params()))
+    redis.kv.delete('sess:S-consent')
+    expect((await exchange(code2)).statusCode).toBe(400)
   })
 
   it('each phone sign-in is its own connection', async () => {

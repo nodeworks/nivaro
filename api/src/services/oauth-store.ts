@@ -119,6 +119,9 @@ interface CodeRecord extends DeviceInfo {
   /** Device codes: the issuer the authorize answer named (the origin the sign-in arrived on);
    *  the code is exchanged only on that origin. */
   iss?: string
+  /** Device codes: the browser session that consented; the code is exchanged only while it is
+   *  still signed in (a "sign out everywhere" in between voids it). */
+  sid?: string
   t: string
 }
 

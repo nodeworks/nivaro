@@ -31,6 +31,7 @@ import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import {
+  credentialLive,
   type DeviceEndReason,
   deleteGrantPushRows,
   endDeviceGrant
@@ -723,7 +724,8 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
         resource: null,
         device_name: p.device_name,
         platform: p.platform,
-        iss
+        iss,
+        sid: (req.session as unknown as { sessionId?: string } | null)?.sessionId ?? ''
       })
       return reply.redirect(withAuthResponse(p.redirect_uri, { code, state: p.state, iss }))
     }
@@ -802,6 +804,20 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
       // belong to the issuer the app checked.
       if (rec.iss && rec.iss !== requestIssuer(req))
         return oauthError(reply, 400, 'invalid_grant', 'The code was issued on another address')
+      // A phone code is good only while the session that consented is still signed in: a code
+      // kept through "sign out everywhere" never mints a sign-in after it. Fails closed.
+      if (kindOf(rec) === 'device') {
+        const live = rec.sid
+          ? await credentialLive(app.redis, `sid:${rec.sid}`).catch(() => false)
+          : false
+        if (!live)
+          return oauthError(
+            reply,
+            400,
+            'invalid_grant',
+            'The sign-in that approved this code has ended. Sign in again.'
+          )
+      }
       if (rec.redirect_uri !== str(b.redirect_uri))
         return oauthError(
           reply,
