@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { notificationSourceRegistry } from '../extensions/notification-sources.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { getRelations } from '../services/collections.js'
+import { PHONE_ENDPOINT_SQL } from '../services/push-relay.js'
 import { classifyRelationSegment, getLabels } from '../services/queues.js'
 
 /**
@@ -222,7 +223,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
         .where((b) => b.where('is_muted', 1).orWhereNotNull('notify_mode'))
         .select('room', 'is_muted', 'notify_mode')
         .catch(() => []),
-      // Push devices: browsers (web push) and phones (`expo:` rows, services/phone-push.ts)
+      // Push devices: browsers (web push) and phones (`expo:` / `relay:` rows, services/phone-push.ts)
       db('nivaro_push_subscriptions')
         .where({ user: uid })
         .select(
@@ -230,7 +231,7 @@ export async function meNotificationRoutes(app: FastifyInstance) {
           'user_agent',
           'created_at',
           'last_used_at',
-          db.raw("CASE WHEN endpoint LIKE 'expo:%' THEN 'phone' ELSE 'browser' END as kind")
+          db.raw(`CASE WHEN ${PHONE_ENDPOINT_SQL} THEN 'phone' ELSE 'browser' END as kind`)
         )
         .catch(() => []),
       // Email delivery preference (instant vs daily digest)

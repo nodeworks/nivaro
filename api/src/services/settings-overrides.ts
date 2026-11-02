@@ -56,6 +56,8 @@ export const INSTANCE_RESERVED_KEYS = [
   'huddle',
   'chaos',
   'recovery',
+  // Phone push relay (services/push-relay.ts): relay key + content mode.
+  'mobile_push',
   // Label house style for the layout lint (services/layout-style.ts, #3184).
   'layout_style',
   // Cache switches (services/cache-config.ts): per-instance, never a settings column.

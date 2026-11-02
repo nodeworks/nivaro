@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const fetchMock = vi.hoisted(() => vi.fn())
 const h = vi.hoisted(() => ({
   phones: [] as Array<{ id: number; endpoint: string }>,
   badge: 3,
@@ -7,7 +8,8 @@ const h = vi.hoisted(() => ({
   touched: [] as number[],
   routed: { userId: 'u1', prefix: '' } as { userId: string; prefix: string } | null,
   noteChannel: vi.fn(),
-  noteChannelRedirect: vi.fn()
+  noteChannelRedirect: vi.fn(),
+  settings: null as { overrides?: string; name?: string } | null
 }))
 
 vi.mock('../../../db/index.js', () => {
@@ -39,6 +41,9 @@ vi.mock('../../../db/index.js', () => {
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => {
         let v: unknown = h.phones
         if (table === 'nivaro_notifications') v = { c: h.badge }
+        else if (table === 'nivaro_settings_overrides')
+          v = h.settings?.overrides ? { data: h.settings.overrides } : undefined
+        else if (table === 'nivaro_settings') v = { project_name: h.settings?.name }
         else if (st.op === 'del') {
           h.deleted.push(...st.ids)
           v = st.ids.length
@@ -59,12 +64,15 @@ vi.mock('../../../services/traffic-taps/channels.js', () => ({
   noteChannel: h.noteChannel,
   noteChannelRedirect: h.noteChannelRedirect
 }))
+vi.mock('../../../lib/ssrf.js', () => ({
+  safeFetch: fetchMock
+}))
+vi.mock('../../../admin-base.js', () => ({ adminBaseUrl: () => 'https://acme.example' }))
 vi.mock('../../../services/swallow-counter.js', () => ({ countSwallow: () => {} }))
 
-import { isExpoPushToken, sendPhonePush } from '../../../services/phone-push.js'
+import { isExpoPushToken, phonePushMode, sendPhonePush } from '../../../services/phone-push.js'
 
 const TOKEN = 'ExponentPushToken[abc123]'
-const fetchMock = vi.fn()
 
 function tickets(...t: unknown[]) {
   return { ok: true, status: 200, json: async () => ({ data: t }) }
@@ -82,6 +90,8 @@ beforeEach(() => {
   delete process.env.MOBILE_PUSH
   delete process.env.EXPO_ACCESS_TOKEN
   delete process.env.EXPO_PUSH_URL
+  delete process.env.MOBILE_PUSH_RELAY_KEY
+  h.settings = null
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -182,5 +192,117 @@ describe('sendPhonePush', () => {
     fetchMock.mockRejectedValueOnce(new Error('ENOTFOUND exp.host'))
     expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
     expect(h.noteChannel).toHaveBeenCalledWith('push', 'failed', expect.anything())
+  })
+})
+
+describe('relay phones', () => {
+  const DEV = 'd'.repeat(24)
+  const relayOk = (...results: Array<{ device: string; status: string }>) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ results })
+  })
+  beforeEach(() => {
+    process.env.MOBILE_PUSH_RELAY_KEY = 'rk'
+    h.phones = [{ id: 9, endpoint: `relay:${DEV}` }]
+  })
+
+  it('sends full content with ids, url and instance; Expo is not called', async () => {
+    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
+    const n = await sendPhonePush('u1', {
+      title: 'Approve PO',
+      body: 'CM26-1 waits',
+      data: { id: 5, collection: 'workflows', item: '9', url: '/collections/workflows/9' }
+    })
+    expect(n).toBe(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, any]
+    expect(url).toBe('https://push.nivaro.dev/v1/send')
+    expect(init.headers.authorization).toBe('Bearer rk')
+    expect(JSON.parse(init.body).messages).toEqual([
+      {
+        device: DEV,
+        title: 'Approve PO',
+        body: 'CM26-1 waits',
+        data: {
+          notification_id: '5',
+          instance: 'https://acme.example',
+          url: '/collections/workflows/9',
+          collection: 'workflows',
+          item: '9'
+        },
+        badge: 3
+      }
+    ])
+    expect(h.touched).toEqual([9])
+  })
+
+  it('minimal content: instance name as title, generic body, ids only', async () => {
+    h.settings = {
+      overrides: JSON.stringify({ mobile_push: { content: 'minimal' } }),
+      name: 'Acme'
+    }
+    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'ok' }))
+    await sendPhonePush('u1', {
+      title: 'Secret PO 123',
+      body: 'Vendor X owes',
+      data: { id: 5, collection: 'workflows', item: '9', url: '/collections/workflows/9' }
+    })
+    const msg = JSON.parse((fetchMock.mock.calls[0]?.[1] as any).body).messages[0]
+    expect(msg.title).toBe('Acme')
+    expect(msg.body).toBe('You have a new notification')
+    expect(msg.data).toEqual({ notification_id: '5', instance: 'https://acme.example' })
+  })
+
+  it('gone removes the row', async () => {
+    fetchMock.mockResolvedValueOnce(relayOk({ device: DEV, status: 'gone' }))
+    expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
+    expect(h.deleted).toEqual([9])
+  })
+
+  it('relay 5xx or timeout: 0 delivered, one log, no throw', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) })
+    expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(h.noteChannel).toHaveBeenCalledWith('push', 'failed', expect.anything())
+    fetchMock.mockRejectedValueOnce(new Error('timeout'))
+    expect(await sendPhonePush('u1', { title: 't', body: 'b' })).toBe(0)
+    expect(h.deleted).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('splits mixed rows by prefix and batches relay calls at 100', async () => {
+    h.phones = [
+      { id: 7, endpoint: `expo:${TOKEN}` },
+      ...Array.from({ length: 101 }, (_, i) => ({
+        id: 100 + i,
+        endpoint: `relay:${String(i).padStart(20, 'x')}`
+      }))
+    ]
+    fetchMock.mockResolvedValueOnce(tickets({ status: 'ok', id: 't1' }))
+    fetchMock.mockResolvedValue(relayOk())
+    await sendPhonePush('u1', { title: 't', body: 'b' })
+    const urls = fetchMock.mock.calls.map((c) => c[0])
+    expect(urls).toEqual([
+      'https://exp.host/--/api/v2/push/send',
+      'https://push.nivaro.dev/v1/send',
+      'https://push.nivaro.dev/v1/send'
+    ])
+    const sizes = fetchMock.mock.calls
+      .slice(1)
+      .map((c) => JSON.parse((c[1] as any).body).messages.length)
+    expect(sizes).toEqual([100, 1])
+  })
+})
+
+describe('phonePushMode', () => {
+  it('off, direct, relay', async () => {
+    process.env.MOBILE_PUSH = 'off'
+    expect(await phonePushMode()).toBe('off')
+    delete process.env.MOBILE_PUSH
+    expect(await phonePushMode()).toBe('direct')
+    process.env.MOBILE_PUSH_RELAY_KEY = 'k'
+    expect(await phonePushMode()).toBe('relay')
   })
 })

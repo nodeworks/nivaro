@@ -1,5 +1,14 @@
 import { db } from '../db/index.js'
 import { routePush } from './channel-test-mode.js'
+import {
+  EXPO_PREFIX,
+  type PushRelayConfig,
+  pushRelayConfig,
+  RELAY_PREFIX,
+  type RelayMessage,
+  relaySend,
+  wherePhoneEndpoint
+} from './push-relay.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 /**
@@ -16,11 +25,14 @@ import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
  *   EXPO_ACCESS_TOKEN=       optional: the Expo project's push access token
  *   EXPO_PUSH_URL=           optional: send endpoint (default the Expo service); tests point it at a mock
  *
+ * Phones of the official Nivaro app are `relay:<device id>` rows, sent through the Nivaro push
+ * relay instead (services/push-relay.ts); `MOBILE_PUSH_RELAY_*` and Settings → mobile_push.
+ *
  * Dead phones (Expo says DeviceNotRegistered, on the ticket or on the receipt
  * read back a little later) are removed.
  */
 
-export const PHONE_PREFIX = 'expo:'
+export const PHONE_PREFIX = EXPO_PREFIX
 const DEFAULT_SEND_URL = 'https://exp.host/--/api/v2/push/send'
 const RECEIPT_DELAY_MS = 30_000
 
@@ -35,6 +47,12 @@ export function isExpoPushToken(token: unknown): token is string {
 
 export function phonePushEnabled(): boolean {
   return (process.env.MOBILE_PUSH ?? '').toLowerCase() !== 'off'
+}
+
+/** How phone alerts leave this instance: not at all, straight to Expo, or through the relay. */
+export async function phonePushMode(): Promise<'off' | 'direct' | 'relay'> {
+  if (!phonePushEnabled()) return 'off'
+  return (await pushRelayConfig()).key ? 'relay' : 'direct'
 }
 
 function sendUrl(): string {
@@ -141,21 +159,23 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
       data = { ...data, id: null }
       payload = { ...payload, title: `${routed.prefix}${payload.title}` }
     }
-    const phones = (await db('nivaro_push_subscriptions')
-      .where({ user: userId })
-      .where('endpoint', 'like', `${PHONE_PREFIX}%`)
-      .select('id', 'endpoint')) as Array<{ id: number; endpoint: string }>
+    const phones = (await wherePhoneEndpoint(
+      db('nivaro_push_subscriptions').where({ user: userId })
+    ).select('id', 'endpoint')) as Array<{ id: number; endpoint: string }>
     if (phones.length === 0) return 0
 
     const badge = await unreadBadge(userId)
     let sent = 0
     const gone: number[] = []
+    const delivered: number[] = []
     const byTicket = new Map<string, number>()
+    const expoPhones = phones.filter((p) => p.endpoint.startsWith(EXPO_PREFIX))
+    const relayPhones = phones.filter((p) => p.endpoint.startsWith(RELAY_PREFIX))
     // Expo takes at most 100 messages per request.
-    for (let i = 0; i < phones.length; i += 100) {
-      const chunk = phones.slice(i, i + 100)
+    for (let i = 0; i < expoPhones.length; i += 100) {
+      const chunk = expoPhones.slice(i, i + 100)
       const messages = chunk.map((p) => ({
-        to: p.endpoint.slice(PHONE_PREFIX.length),
+        to: p.endpoint.slice(EXPO_PREFIX.length),
         title: payload.title.slice(0, 120),
         body: payload.body.slice(0, 300),
         data,
@@ -182,6 +202,7 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
           if (!phone) return
           if (t.status === 'ok') {
             sent++
+            delivered.push(phone.id)
             if (t.id) byTicket.set(t.id, phone.id)
           } else if (t.details?.error === 'DeviceNotRegistered') {
             gone.push(phone.id)
@@ -195,11 +216,17 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
         countSwallow('phone-push-send', err)
       }
     }
+    if (relayPhones.length > 0) {
+      const cfg = await pushRelayConfig()
+      const relayed = await sendViaRelay(cfg, relayPhones, payload, data, badge)
+      sent += relayed.delivered.length
+      delivered.push(...relayed.delivered)
+      gone.push(...relayed.gone)
+    }
     await removePhones(gone)
-    if (sent > 0) {
-      const okIds = phones.filter((p) => !gone.includes(p.id)).map((p) => p.id)
+    if (delivered.length > 0) {
       await db('nivaro_push_subscriptions')
-        .whereIn('id', okIds)
+        .whereIn('id', delivered)
         .update({ last_used_at: new Date() })
         .catch(() => {})
     }
@@ -210,4 +237,88 @@ export async function sendPhonePush(userId: string, payload: PhonePushPayload): 
     console.warn('[phone-push] sendPhonePush error:', err)
     return 0
   }
+}
+
+export async function instanceName(): Promise<string> {
+  try {
+    const row = (await db('nivaro_settings').first('project_name')) as
+      | { project_name?: string | null }
+      | undefined
+    return String(row?.project_name ?? '').trim() || 'Nivaro'
+  } catch {
+    return 'Nivaro'
+  }
+}
+
+export async function instanceOrigin(): Promise<string> {
+  try {
+    const { adminBaseUrl } = await import('../admin-base.js')
+    return adminBaseUrl() ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Send to relay phones. `content: 'minimal'` keeps the alert text and record names off the
+ * relay and the push networks: the title is the instance name, the body generic, and `data`
+ * ids only (the app fetches the notification itself after sign-in). A relay that is down
+ * costs the push, never the in-app notification: failed batches are counted, nothing throws.
+ */
+async function sendViaRelay(
+  cfg: PushRelayConfig,
+  phones: Array<{ id: number; endpoint: string }>,
+  payload: PhonePushPayload,
+  data: NonNullable<PhonePushPayload['data']>,
+  badge: number | null
+): Promise<{ delivered: number[]; gone: number[] }> {
+  const out = { delivered: [] as number[], gone: [] as number[] }
+  if (!cfg.key) {
+    noteChannel('push', 'failed', { ms: 0, n: phones.length })
+    return out
+  }
+  const instance = await instanceOrigin()
+  const strs: Record<string, string> = {}
+  if (data.id != null) strs.notification_id = String(data.id)
+  if (instance) strs.instance = instance
+  let title: string
+  let body: string
+  let msgData: Record<string, string>
+  if (cfg.content === 'minimal') {
+    title = await instanceName()
+    body = 'You have a new notification'
+    msgData = strs
+  } else {
+    title = payload.title.slice(0, 120)
+    body = payload.body.slice(0, 300)
+    msgData = { ...strs }
+    if (data.url) msgData.url = String(data.url)
+    if (data.collection) msgData.collection = String(data.collection)
+    if (data.item) msgData.item = String(data.item)
+  }
+  for (let i = 0; i < phones.length; i += 100) {
+    const chunk = phones.slice(i, i + 100)
+    const byDevice = new Map(chunk.map((p) => [p.endpoint.slice(RELAY_PREFIX.length), p.id]))
+    const messages: RelayMessage[] = chunk.map((p) => ({
+      device: p.endpoint.slice(RELAY_PREFIX.length),
+      title,
+      body,
+      data: msgData,
+      ...(badge != null ? { badge } : {})
+    }))
+    const started = Date.now()
+    const results = await relaySend(cfg, messages)
+    if (!results) {
+      noteChannel('push', 'failed', { ms: Date.now() - started, n: chunk.length })
+      continue
+    }
+    for (const r of results) {
+      const id = byDevice.get(r.device)
+      if (id == null) continue
+      if (r.status === 'ok') out.delivered.push(id)
+      else if (r.status === 'gone') out.gone.push(id)
+    }
+    noteChannel('push', 'sent', { ms: Date.now() - started, n: chunk.length })
+  }
+  return out
 }
