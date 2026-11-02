@@ -197,6 +197,51 @@ async function serializeFor(
   return out
 }
 
+/** Sender names (uuid → display name) in one lookup — the rows carry the uuid only. */
+async function senderNamesOf(rows: Array<Record<string, unknown>>): Promise<Map<string, string>> {
+  const senderIds = [
+    ...new Set(
+      rows
+        .map((r) => r.sender)
+        .filter(Boolean)
+        .map(String)
+    )
+  ]
+  const senderNames = new Map<string, string>()
+  if (senderIds.length > 0) {
+    const users = (await db('nivaro_users')
+      .whereIn('id', senderIds)
+      .select('id', 'first_name', 'last_name', 'email')
+      .catch(() => [])) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    for (const u of users)
+      senderNames.set(
+        String(u.id).toUpperCase(),
+        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || ''
+      )
+  }
+  return senderNames
+}
+
+/** Rows as the list answers them: serializeFor + `sender_name` (GET / and GET /:id). */
+async function listRows(
+  rows: Array<Record<string, unknown>>,
+  userId: string,
+  app: 'portal' | 'admin' | undefined
+) {
+  const senderNames = await senderNamesOf(rows)
+  return Promise.all(
+    rows.map(async (r) => ({
+      ...(await serializeFor(r, { recipientUserId: userId, app })),
+      sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null
+    }))
+  )
+}
+
 type FilterQuery = {
   unread?: string
   status?: string
@@ -300,38 +345,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
 
     const appQ = (req.query as { app?: string }).app
     const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
-    // Sender names in one lookup — the rows carry the uuid only.
-    const senderIds = [
-      ...new Set(
-        rows
-          .map((r) => r.sender)
-          .filter(Boolean)
-          .map(String)
-      )
-    ]
-    const senderNames = new Map<string, string>()
-    if (senderIds.length > 0) {
-      const users = (await db('nivaro_users')
-        .whereIn('id', senderIds)
-        .select('id', 'first_name', 'last_name', 'email')
-        .catch(() => [])) as Array<{
-        id: string
-        first_name: string | null
-        last_name: string | null
-        email: string | null
-      }>
-      for (const u of users)
-        senderNames.set(
-          String(u.id).toUpperCase(),
-          `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || ''
-        )
-    }
-    const data = await Promise.all(
-      rows.map(async (r) => ({
-        ...(await serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })),
-        sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null
-      }))
-    )
+    const data = await listRows(rows as Array<Record<string, unknown>>, userId, app)
     // #1256 — `bundle=record`: rows of this page that name the same record
     // fold into one entry (label = the record's friendly id, lane = the most
     // urgent of its rows); bundled rows leave `data`. The page's `total` and
@@ -396,6 +410,25 @@ export async function notificationsRoutes(app: FastifyInstance) {
           )
         : []
     return reply.send({ data, pinned, total, page, limit })
+  })
+
+  /**
+   * One of the caller's own notifications, shaped exactly like a row of GET / (the phone app
+   * opens the notification a push named by id). Anyone else's id, or an unknown one → 404.
+   */
+  app.get('/:id', async (req, reply) => {
+    const userId = req.user!.id
+    const raw = (req.params as { id: string }).id
+    const nid = /^\d{1,10}$/.test(raw) ? Number(raw) : Number.NaN
+    if (!Number.isSafeInteger(nid)) return reply.code(404).send({ error: 'Notification not found' })
+    const row = (await db('nivaro_notifications').where({ id: nid, recipient: userId }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return reply.code(404).send({ error: 'Notification not found' })
+    const appQ = (req.query as { app?: string }).app
+    const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
+    const [data] = await listRows([row], userId, app)
+    return reply.send({ data })
   })
 
   /**
