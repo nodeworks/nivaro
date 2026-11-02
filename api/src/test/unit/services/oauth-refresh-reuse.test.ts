@@ -18,6 +18,8 @@ function memRedis() {
   const sets = new Map<string, Set<string>>()
   const r = {
     kv,
+    /** The commands of every MULTI, in order (`<command> <key>`). */
+    multis: [] as string[][],
     get: async (k: string) => kv.get(k) ?? null,
     mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),
     getdel: async (k: string) => {
@@ -47,8 +49,20 @@ function memRedis() {
     multi: () => {
       const ops: Array<() => Promise<unknown>> = []
       const m: Record<string, (...a: never[]) => unknown> = {}
-      for (const name of ['set', 'setex', 'del', 'sadd', 'srem', 'smembers', 'expire'] as const)
+      const names: string[] = []
+      r.multis.push(names)
+      for (const name of [
+        'set',
+        'setex',
+        'del',
+        'sadd',
+        'srem',
+        'smembers',
+        'expire',
+        'getdel'
+      ] as const)
         m[name] = (...a: never[]) => {
+          names.push(`${name} ${String(a[0])}`)
           ops.push(() => (r[name] as (...x: never[]) => Promise<unknown>)(...a))
           return m
         }
@@ -252,5 +266,25 @@ describe('a phone refresh retried inside the grace window', () => {
       await issueTokens(redis as never, rec)
     )
     expect([...redis.kv.keys()].some((k) => k.includes(':rt-replay:'))).toBe(false)
+  })
+
+  it('spending a refresh token and stamping it spent is one MULTI (no gap a check could see)', async () => {
+    const redis = memRedis()
+    const grant = await createDeviceGrant(redis as never, 'U1', mobile, { device_name: 'P' })
+    const rec = { grant_id: grant.id, user_id: 'U1', client_id: mobile.client_id, resource: null }
+    const pair = await issueTokens(redis as never, rec, 'device')
+    const getdels: string[] = []
+    const plain = redis.getdel
+    redis.getdel = async (k: string) => {
+      getdels.push(k)
+      return plain(k)
+    }
+    redis.multis.length = 0
+    expect((await consumeRefreshChecked(redis as never, pair.refresh_token)).ok).toBe(true)
+    const spend = redis.multis.find((ops) => ops.some((o) => o.startsWith('getdel ')))
+    expect(spend).toBeDefined()
+    expect(spend?.some((o) => o.startsWith('setex ') && o.includes(':rt-spent:'))).toBe(true)
+    // Not a plain GETDEL outside the transaction.
+    expect(getdels.filter((k) => !spend?.includes(`getdel ${k}`))).toEqual([])
   })
 })

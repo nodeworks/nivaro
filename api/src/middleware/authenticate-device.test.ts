@@ -115,6 +115,10 @@ function fakeRedis() {
     multi: () => {
       const ops: Array<() => Promise<unknown>> = []
       const m = {
+        getdel(k: string) {
+          ops.push(() => r.getdel(k))
+          return m
+        },
         set(k: string, v: string) {
           ops.push(() => r.set(k, v))
           return m

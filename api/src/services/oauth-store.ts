@@ -356,7 +356,36 @@ export async function consumeRefreshChecked(
   opts: { installId?: string } = {}
 ): Promise<ConsumeRefreshResult> {
   const h = hashToken(refresh)
-  const raw = await redis.getdel(`${P}rt:${h}`)
+  const rtKey = `${P}rt:${h}`
+  // Spent and stamped spent in ONE transaction: no moment where the token is gone but not yet
+  // marked spent (deviceRefreshLive would read a live phone as lapsed in that gap). The record is
+  // read first so the stamp can name its grant; the GETDEL inside says who actually spent it.
+  let raw: string | null = await redis.get(rtKey)
+  if (raw) {
+    let pre: TokenRecord | null = null
+    try {
+      pre = JSON.parse(raw) as TokenRecord
+    } catch {
+      pre = null
+    }
+    if (!pre || !sameTenant(pre)) return { ok: false, reason: 'unknown' }
+    const res = await redis
+      .multi()
+      .getdel(rtKey)
+      .setex(
+        spentKey(h),
+        REFRESH_TTL_S,
+        JSON.stringify({
+          grant_id: pre.grant_id,
+          user_id: pre.user_id,
+          at: Date.now(),
+          t: currentTenantKey()
+        })
+      )
+      .exec()
+    // Null: another refresh spent it between the read and the transaction (that one won).
+    raw = execValue<string | null>(res?.[0]) ?? null
+  }
   if (!raw) {
     const spent = await read<{ grant_id: string; user_id: string; at: number; t: string }>(
       redis,
@@ -396,16 +425,6 @@ export async function consumeRefreshChecked(
   try {
     const rec = JSON.parse(raw) as TokenRecord
     if (!sameTenant(rec)) return { ok: false, reason: 'unknown' }
-    await redis.setex(
-      spentKey(h),
-      REFRESH_TTL_S,
-      JSON.stringify({
-        grant_id: rec.grant_id,
-        user_id: rec.user_id,
-        at: Date.now(),
-        t: currentTenantKey()
-      })
-    )
     return (await redis.exists(`${P}grant:${rec.grant_id}`))
       ? { ok: true, rec: { ...rec, kind: kindOf(rec) } }
       : { ok: false, reason: 'revoked' }
