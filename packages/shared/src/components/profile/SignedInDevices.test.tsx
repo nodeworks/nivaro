@@ -116,6 +116,17 @@ describe('SignedInDevices', () => {
     expect(host.textContent).not.toContain(PHONES[1].id)
   })
 
+  it('offers no Sign out on the phone making the call: the app signs itself out', async () => {
+    await mount()
+    const current = rowEl(PHONES[0].id)
+    expect(current?.querySelector('[data-device-sign-out]')).toBeNull()
+    expect(current?.querySelector('button')).toBeNull()
+    expect(current?.querySelector('[data-device-sign-out-in-app]')?.textContent).toBe(
+      'Sign out from the app'
+    )
+    expect(rowEl(PHONES[1].id)?.querySelector('[data-device-sign-out] button')).toBeTruthy()
+  })
+
   it('signs a phone out after the second press and drops its row', async () => {
     await mount()
     const button = rowEl(PHONES[1].id)?.querySelector('[data-device-sign-out] button')
@@ -145,14 +156,14 @@ describe('SignedInDevices', () => {
     const userId = '33333333-3333-4333-8333-333333333333'
     await mount(userId)
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: `/users/${userId}/devices` })
-    const button = rowEl(PHONES[0].id)?.querySelector('[data-device-sign-out] button')
+    const button = rowEl(PHONES[1].id)?.querySelector('[data-device-sign-out] button')
     await click(button)
     await click(button)
-    await settle(() => !rowEl(PHONES[0].id))
+    await settle(() => !rowEl(PHONES[1].id))
     expect(calls).toContainEqual(
       expect.objectContaining({
         _method: 'DELETE',
-        _path: `/users/${userId}/devices/${PHONES[0].id}`
+        _path: `/users/${userId}/devices/${PHONES[1].id}`
       })
     )
   })

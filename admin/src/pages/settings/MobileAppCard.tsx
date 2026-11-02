@@ -1,4 +1,4 @@
-import { ErrorNotice, toastError } from '@nivaro/shared'
+import { ErrorNotice, toastError, useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Copy, Plug } from 'lucide-react'
 import QRCode from 'qrcode'
@@ -15,15 +15,20 @@ import { cn } from '@/lib/utils'
  * Settings → Mobile app: how people get this instance into the Nivaro phone app, and whether
  * it can send them alerts.
  *
- *  - QR of this instance's address (the origin the admin is served on, = ADMIN_URL or the cloud
- *    tenant host). The address only: no sign-in, no key. The app's scanner accepts a URL.
+ *  - QR of this instance's address: app-info `origin` (adminBaseUrl, tenant-aware) when the
+ *    server sends it, else this page's origin. The address only: no sign-in, no key. The app's
+ *    scanner accepts a URL.
  *  - Phone alerts: GET/POST /push/relay. "Connect push" registers this instance with the Nivaro
  *    push relay; hidden in cloud mode, where Nivaro Cloud provisions the relay key itself.
+ *    "Send minimal content" only applies to relay alerts, so it shows once connected. The
+ *    optional `phones` count shows as "Phones getting alerts".
  *  - Phone sign-in (MOBILE_SIGNIN, env only) and what the app shows, from GET /app-info.
  */
 
 interface AppInfo {
   name: string
+  /** The address phones reach this instance on (adminBaseUrl, tenant-aware). Newer servers only. */
+  origin?: string | null
   cloud: boolean
   environment: 'production' | 'staging' | 'development' | 'test' | 'other'
   min_app_version: string | null
@@ -36,6 +41,8 @@ interface RelayStatus {
   url: string
   content: 'full' | 'minimal'
   mode: 'off' | 'direct' | 'relay'
+  /** Phones registered for alerts on this instance. Newer servers only. */
+  phones?: number
 }
 
 const ENVIRONMENT: Record<AppInfo['environment'], string> = {
@@ -49,9 +56,18 @@ const ENVIRONMENT: Record<AppInfo['environment'], string> = {
 const label = 'text-[12px] font-medium text-slate-700 dark:text-foreground'
 const hint = 'text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'
 
-function Cell({ title, children }: { title: string; children: React.ReactNode }) {
+function Cell({
+  title,
+  children,
+  wide
+}: {
+  title: string
+  children: React.ReactNode
+  /** Spans the whole row: the odd cell out, so the grid never shows an empty gap. */
+  wide?: boolean
+}) {
   return (
-    <div className='bg-white px-3 py-2.5 dark:bg-card'>
+    <div className={cn('bg-white px-3 py-2.5 dark:bg-card', wide && '[grid-column:1/-1]')}>
       <div className='text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
         {title}
       </div>
@@ -74,19 +90,25 @@ function Dot({ tone }: { tone: 'on' | 'off' | 'warn' }) {
   )
 }
 
-/** The instance address as an SVG QR code (dark modules on white, so it scans in dark mode). */
-function useQrSvg(text: string): string | null {
-  const [svg, setSvg] = useState<string | null>(null)
+/**
+ * The instance address as an SVG QR code: dark modules on white with the standard four-module
+ * quiet zone drawn inside the image, so it scans on the dark theme's card too. `false` = could
+ * not be drawn; null = still drawing.
+ */
+function useQrSvg(text: string | null): string | false | null {
+  const [svg, setSvg] = useState<string | false | null>(null)
   useEffect(() => {
+    if (!text) return
     let live = true
+    setSvg(null)
     QRCode.toString(text, {
       type: 'svg',
-      margin: 0,
+      margin: 4,
       errorCorrectionLevel: 'M',
       color: { dark: '#0f172a', light: '#ffffff' }
     })
       .then((s) => live && setSvg(s))
-      .catch(() => live && setSvg(null))
+      .catch(() => live && setSvg(false))
     return () => {
       live = false
     }
@@ -94,8 +116,9 @@ function useQrSvg(text: string): string | null {
   return svg
 }
 
-function ConnectPhone({ origin }: { origin: string }) {
+function ConnectPhone({ origin }: { origin: string | null }) {
   const svg = useQrSvg(origin)
+  const originRef = useOverflowTip<HTMLSpanElement>(origin)
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
@@ -103,6 +126,7 @@ function ConnectPhone({ origin }: { origin: string }) {
     return () => window.clearTimeout(t)
   }, [copied])
   const copy = async () => {
+    if (!origin) return
     try {
       await navigator.clipboard.writeText(origin)
       setCopied(true)
@@ -115,17 +139,25 @@ function ConnectPhone({ origin }: { origin: string }) {
       className='m-0 flex w-[244px] max-w-full shrink-0 flex-col items-center rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'
       data-mobile-qr
     >
-      <div className='rounded-md bg-white p-2.5 ring-1 ring-slate-200 dark:ring-0'>
+      {/* Fixed white (not a theme token): the code's quiet zone must stay white in dark mode. */}
+      <div className='overflow-hidden rounded-md bg-[#ffffff] ring-1 ring-slate-200 dark:ring-0'>
         {svg ? (
           <img
             src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`}
             alt={`QR code for ${origin}`}
-            width={168}
-            height={168}
-            className='block h-[168px] w-[168px]'
+            width={188}
+            height={188}
+            className='block h-[188px] w-[188px]'
           />
+        ) : svg === false ? (
+          <p
+            className='flex h-[188px] w-[188px] items-center justify-center px-5 text-center text-[12px] text-slate-600'
+            data-mobile-qr-error
+          >
+            Could not draw the code. Use the address below.
+          </p>
         ) : (
-          <Skeleton className='h-[168px] w-[168px]' />
+          <Skeleton className='h-[188px] w-[188px] rounded-none' />
         )}
       </div>
       <figcaption className='mt-4 w-full text-center'>
@@ -138,15 +170,16 @@ function ConnectPhone({ origin }: { origin: string }) {
         </p>
         <div className='mt-3 flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1 dark:border-border dark:bg-muted/40'>
           <span
+            ref={originRef}
             className='min-w-0 flex-1 truncate text-left font-mono text-[11.5px] text-slate-700 dark:text-slate-200'
-            title={origin}
             data-mobile-origin
           >
-            {origin.replace(/^https?:\/\//, '')}
+            {origin ? origin.replace(/^https?:\/\//, '') : '…'}
           </span>
           <button
             type='button'
             onClick={copy}
+            disabled={!origin}
             aria-label={copied ? 'Address copied' : 'Copy address'}
             data-tip={copied ? undefined : 'Copy address'}
             className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
@@ -190,7 +223,6 @@ function pushSummary(mode: RelayStatus['mode'], connected: boolean, cloud: boole
 export function MobileAppCard() {
   const qc = useQueryClient()
   const switchId = useId()
-  const origin = window.location.origin
 
   const info = useQuery({
     queryKey: ['mobile-app', 'app-info'],
@@ -200,13 +232,8 @@ export function MobileAppCard() {
     queryKey: ['mobile-app', 'relay'],
     queryFn: () => api.get<{ data: RelayStatus }>('/push/relay').then((r) => r.data.data)
   })
-  // Same key and shape as Profile → Signed-in phones, so the two share one read.
-  const phones = useQuery({
-    queryKey: ['nvr-signed-in-devices', 'me'],
-    queryFn: () =>
-      api.get<{ data: Array<{ id: string }> }>('/auth/devices').then((r) => r.data.data ?? []),
-    staleTime: 30_000
-  })
+  // The server's own address when it says (cloud tenant host, ADMIN_URL), else this page's.
+  const origin = info.isLoading ? null : info.data?.origin || window.location.origin
 
   const update = useMutation({
     mutationFn: (body: { connect?: true; content?: 'full' | 'minimal' }) =>
@@ -284,7 +311,12 @@ export function MobileAppCard() {
                       {push.text}
                     </span>
                   </Cell>
-                  <Cell title='Shown in the app as'>
+                  {typeof r.phones === 'number' && (
+                    <Cell title='Phones getting alerts'>
+                      <span data-mobile-phone-count>{r.phones}</span>
+                    </Cell>
+                  )}
+                  <Cell title='Shown in the app as' wide={typeof r.phones !== 'number'}>
                     {info.data.name}
                     <span className='text-slate-500 dark:text-muted-foreground'>
                       {' · '}
@@ -297,18 +329,18 @@ export function MobileAppCard() {
                       </p>
                     )}
                   </Cell>
-                  <Cell title='Your signed-in phones'>
-                    <span data-mobile-phone-count>
-                      {phones.isLoading ? '…' : phones.isError ? 'Not known' : phones.data?.length}
-                    </span>
-                    <Link
-                      to='/profile'
-                      className='ml-2 text-[11.5px] text-sky-700 hover:underline dark:text-nvr-cyan'
-                    >
-                      Manage in your profile
-                    </Link>
-                  </Cell>
                 </div>
+
+                <p className={hint}>
+                  Each person sees and signs out their phones on their profile.{' '}
+                  <Link
+                    to='/profile'
+                    className='text-sky-700 hover:underline dark:text-nvr-cyan'
+                    data-mobile-profile-link
+                  >
+                    Your signed-in phones
+                  </Link>
+                </p>
 
                 {extraApps.length > 0 && (
                   <p className={hint}>
@@ -347,16 +379,16 @@ export function MobileAppCard() {
                     </Button>
                   )}
 
-                  {r.mode !== 'off' && (
+                  {r.connected && r.mode !== 'off' && (
                     <div className='flex max-w-xl items-start justify-between gap-6'>
                       <div className='min-w-0 flex-1'>
                         <label htmlFor={switchId} className={label}>
                           Send minimal content
                         </label>
                         <p className={cn(hint, 'mt-0.5')}>
-                          Alerts show only this instance’s name and “You have a new notification”.
-                          The app loads the rest when it opens, so no message text or record names
-                          pass through the push relay, Apple or Google.
+                          Alerts to the Nivaro app show only this instance’s name and “You have a
+                          new notification”. The app loads the rest when it opens, so no message
+                          text or record names pass through the push relay, Apple or Google.
                         </p>
                       </div>
                       <Switch

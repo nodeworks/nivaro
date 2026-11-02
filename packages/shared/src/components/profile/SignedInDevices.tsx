@@ -6,6 +6,7 @@ import { del, get } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { formatDate, formatRelative } from '../../lib/utils'
 import { ErrorNotice } from '../ErrorNotice'
+import { useOverflowTip } from '../TipLayer'
 import { Skeleton } from '../ui/skeleton'
 import { ConfirmButton, EmptyLine, SectionCard } from './primitives'
 
@@ -13,7 +14,8 @@ import { ConfirmButton, EmptyLine, SectionCard } from './primitives'
  * Profile → Signed-in phones: every phone signed in to a Nivaro app (device grants, routes/
  * devices.ts). Own page reads /auth/devices; an admin's view of someone else reads
  * /users/:id/devices. Sign out ends that phone's sign-in, its tokens and its alerts. `current`
- * marks the phone making the call — only ever true when the page is open on that phone.
+ * marks the phone making the call — only ever true when the page is open on that phone, and that
+ * row offers no Sign out: the app signs itself out (and forgets its push registration).
  */
 
 export interface SignedInDevice {
@@ -83,61 +85,94 @@ export function SignedInDevices({ userId, name }: { userId?: string; name?: stri
         </div>
       ) : (
         <ul className='-my-2 divide-y divide-slate-100 dark:divide-border/60'>
-          {phones.map((d) => {
-            const pending = signOut.isPending && signOut.variables?.id === d.id
-            return (
-              <li key={d.id} data-device-row={d.id} className='flex items-center gap-3 py-2.5'>
-                <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-300'>
-                  <Smartphone className='h-4 w-4' aria-hidden />
-                </span>
-                <div className='min-w-0 flex-1'>
-                  <p className='flex min-w-0 items-center gap-2'>
-                    <span
-                      data-device-name
-                      className='truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
-                    >
-                      {d.device_name ?? platformLabel(d)}
-                    </span>
-                    {d.current && (
-                      <span
-                        data-device-current
-                        className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-medium text-sky-700 dark:text-nvr-cyan'
-                      >
-                        This phone
-                      </span>
-                    )}
-                  </p>
-                  <p className='mt-0.5 truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
-                    {[
-                      d.device_name ? platformLabel(d) : null,
-                      `${d.client_name} app`,
-                      d.last_used_at
-                        ? `Last used ${formatRelative(d.last_used_at)}`
-                        : 'Not used since sign-in',
-                      `Signed in ${formatDate(d.created_at)}`
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </p>
-                </div>
-                <span data-device-sign-out className='contents'>
-                  <ConfirmButton
-                    title={`Sign out ${d.device_name ?? platformLabel(d)}`}
-                    onConfirm={() => signOut.mutate(d)}
-                    confirmLabel='Sign it out?'
-                    disabled={pending}
-                    className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
-                    armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
-                  >
-                    <LogOut className='h-3 w-3' aria-hidden />
-                    {pending ? 'Signing out…' : 'Sign out'}
-                  </ConfirmButton>
-                </span>
-              </li>
-            )
-          })}
+          {phones.map((d) => (
+            <DeviceRow
+              key={d.id}
+              device={d}
+              pending={signOut.isPending && signOut.variables?.id === d.id}
+              onSignOut={() => signOut.mutate(d)}
+            />
+          ))}
         </ul>
       )}
     </SectionCard>
+  )
+}
+
+function DeviceRow({
+  device: d,
+  pending,
+  onSignOut
+}: {
+  device: SignedInDevice
+  pending: boolean
+  onSignOut: () => void
+}) {
+  const name = d.device_name ?? platformLabel(d)
+  const meta = [
+    d.device_name ? platformLabel(d) : null,
+    `${d.client_name} app`,
+    d.last_used_at ? `Last used ${formatRelative(d.last_used_at)}` : 'Not used since sign-in',
+    `Signed in ${formatDate(d.created_at)}`
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const nameRef = useOverflowTip<HTMLSpanElement>(name)
+  const metaRef = useOverflowTip<HTMLParagraphElement>(meta)
+  return (
+    <li data-device-row={d.id} className='flex items-center gap-3 py-2.5'>
+      <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-300'>
+        <Smartphone className='h-4 w-4' aria-hidden />
+      </span>
+      <div className='min-w-0 flex-1'>
+        <p className='flex min-w-0 items-center gap-2'>
+          <span
+            ref={nameRef}
+            data-device-name
+            className='truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100'
+          >
+            {name}
+          </span>
+          {d.current && (
+            <span
+              data-device-current
+              className='shrink-0 rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10.5px] font-medium text-sky-700 dark:text-nvr-cyan'
+            >
+              This phone
+            </span>
+          )}
+        </p>
+        <p
+          ref={metaRef}
+          className='mt-0.5 truncate text-[11.5px] text-slate-500 dark:text-slate-400'
+        >
+          {meta}
+        </p>
+      </div>
+      {d.current ? (
+        // Signing out the phone you are on belongs in the app: it also forgets its push
+        // registration there, which a web button cannot do.
+        <span
+          data-device-sign-out-in-app
+          className='shrink-0 text-[11.5px] text-slate-500 dark:text-slate-400'
+        >
+          Sign out from the app
+        </span>
+      ) : (
+        <span data-device-sign-out className='contents'>
+          <ConfirmButton
+            title={`Sign out ${name}`}
+            onConfirm={onSignOut}
+            confirmLabel='Sign it out?'
+            disabled={pending}
+            className='inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 transition-colors hover:border-red-300 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 disabled:opacity-40 dark:border-border dark:text-slate-300 dark:hover:border-red-500/40 dark:hover:text-red-400'
+            armedClassName='border-red-300 font-semibold text-red-600 dark:border-red-500/40 dark:text-red-400'
+          >
+            <LogOut className='h-3 w-3' aria-hidden />
+            {pending ? 'Signing out…' : 'Sign out'}
+          </ConfirmButton>
+        </span>
+      )}
+    </li>
   )
 }
