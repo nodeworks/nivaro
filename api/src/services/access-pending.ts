@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Where a person stands in the new-user flow (migration 330), for `/auth/me` `access_pending`:
@@ -50,17 +51,36 @@ export function accessPendingOf(
   return requestSent(user.preferences) ? 'needs_authorization' : 'first_access'
 }
 
-/** accessPendingOf with the settings row read; a failed read answers null (never blocks). */
+/** The two settings, per tenant, for a short while: /auth/me is a hot path. A change to the
+ *  new-user roles shows within SETTINGS_TTL_MS. */
+const SETTINGS_TTL_MS = 30_000
+const SETTINGS_MAX = 1000
+const settingsCache = new Map<string, { at: number; value: FlowSettings | null }>()
+
+async function flowSettings(): Promise<FlowSettings | null> {
+  const key = currentTenantKey()
+  const hit = settingsCache.get(key)
+  if (hit && Date.now() - hit.at < SETTINGS_TTL_MS) return hit.value
+  const value = ((await db('nivaro_settings').first('new_user_role', 'access_request_role')) ??
+    null) as FlowSettings | null
+  if (settingsCache.size >= SETTINGS_MAX) settingsCache.clear()
+  settingsCache.set(key, { at: Date.now(), value })
+  return value
+}
+
+/** Test hook: forget the cached settings. */
+export function resetAccessPendingCache(): void {
+  settingsCache.clear()
+}
+
+/** accessPendingOf with the (cached) settings; a failed read answers null (never blocks). */
 export async function accessPendingFor(
   user: { role?: string | null; preferences?: unknown },
   isAdmin: boolean
 ): Promise<AccessPending> {
   if (isAdmin || !user.role) return null
   try {
-    const settings = (await db('nivaro_settings').first('new_user_role', 'access_request_role')) as
-      | FlowSettings
-      | undefined
-    return accessPendingOf(user, settings, isAdmin)
+    return accessPendingOf(user, await flowSettings(), isAdmin)
   } catch {
     return null
   }

@@ -142,7 +142,13 @@ describe('POST /admin/push-relay', () => {
       { relay_key: 42 },
       { relay_url: 'http://relay.example' },
       { relay_url: undefined },
-      { connectionString: '' }
+      { connectionString: '' },
+      { connectionString: { host: 'x' } },
+      { dbClient: 'sqlite3' },
+      { dbClient: 7 },
+      { slug: '' },
+      { slug: undefined },
+      { slug: { a: 1 } }
     ]) {
       const res = await call(body(over))
       expect(res.statusCode).toBe(400)

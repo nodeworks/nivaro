@@ -419,8 +419,10 @@ export async function notificationsRoutes(app: FastifyInstance) {
   app.get('/:id', async (req, reply) => {
     const userId = req.user!.id
     const raw = (req.params as { id: string }).id
+    // An int column: anything past int32 can name no row (and would be a driver error).
     const nid = /^\d{1,10}$/.test(raw) ? Number(raw) : Number.NaN
-    if (!Number.isSafeInteger(nid)) return reply.code(404).send({ error: 'Notification not found' })
+    if (!Number.isSafeInteger(nid) || nid > 2_147_483_647)
+      return reply.code(404).send({ error: 'Notification not found' })
     const row = (await db('nivaro_notifications').where({ id: nid, recipient: userId }).first()) as
       | Record<string, unknown>
       | undefined

@@ -12,7 +12,8 @@ import { instanceKey } from './instance-key.js'
  * Phone rows in `nivaro_push_subscriptions`: `expo:<token>` (direct, own Expo app) or
  * `relay:<device id>` (relay). `wherePhoneEndpoint` / `isPhoneEndpoint` match both.
  *
- *   MOBILE_PUSH_RELAY_URL=   default https://push.nivaro.dev; a stored `relay_url` beats it
+ *   MOBILE_PUSH_RELAY_URL=   default https://push.nivaro.dev; a stored `relay_url` beats it only
+ *                            together with the stored key (or in cloud mode)
  *   MOBILE_PUSH_RELAY_KEY=   the instance key (`_FILE` works); beats the stored one. NEVER read in
  *                            cloud mode: a tenant sends only with the key cloud stored for it
  *   nivaro_settings_overrides key `mobile_push` {relay_key, relay_url?, content: 'full'|'minimal'}
@@ -90,12 +91,17 @@ export function cleanRelayUrl(v: unknown): string | null {
 
 export async function pushRelayConfig(): Promise<PushRelayConfig> {
   const stored = await storedConfig()
-  const url = (
-    cleanRelayUrl(stored.relay_url) ||
-    process.env.MOBILE_PUSH_RELAY_URL ||
-    DEFAULT_RELAY_URL
-  ).replace(/\/+$/, '')
-  const key = envRelayKey() || (typeof stored.relay_key === 'string' && stored.relay_key) || null
+  const envKey = envRelayKey()
+  const storedKey = (typeof stored.relay_key === 'string' && stored.relay_key) || null
+  const key = envKey || storedKey
+  // A stored url travels with the stored key (cloud provisioning stores both): never with the
+  // env key, and never before a key exists (a url that came in by a config restore would
+  // otherwise receive this instance's key or its registration).
+  const storedUrl = cloudMode() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null
+  const url = (storedUrl || process.env.MOBILE_PUSH_RELAY_URL || DEFAULT_RELAY_URL).replace(
+    /\/+$/,
+    ''
+  )
   return { url, key, content: stored.content === 'minimal' ? 'minimal' : 'full' }
 }
 

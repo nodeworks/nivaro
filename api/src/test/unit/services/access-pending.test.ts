@@ -7,18 +7,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   settings: null as Record<string, unknown> | null,
-  fail: false
+  fail: false,
+  reads: 0
 }))
 vi.mock('../../../db/index.js', () => ({
   db: () => ({
     first: async () => {
+      h.reads++
       if (h.fail) throw new Error('db down')
       return h.settings
     }
   })
 }))
 
-const { accessPendingFor, accessPendingOf } = await import('../../../services/access-pending.js')
+const { accessPendingFor, accessPendingOf, resetAccessPendingCache } = await import(
+  '../../../services/access-pending.js'
+)
 
 const START = 'AAAAAAAA-0000-4000-8000-00000000000a'
 const REVIEW = 'BBBBBBBB-0000-4000-8000-00000000000b'
@@ -29,6 +33,8 @@ const asked = { access_request: { reason: 'Need it', submitted_at: '2026-11-01T0
 beforeEach(() => {
   h.settings = both
   h.fail = false
+  h.reads = 0
+  resetAccessPendingCache()
 })
 
 describe('accessPendingOf', () => {
@@ -76,6 +82,18 @@ describe('accessPendingFor', () => {
   it('reads the settings row', async () => {
     expect(await accessPendingFor({ role: START }, false)).toBe('first_access')
     expect(await accessPendingFor({ role: REVIEW }, false)).toBe('needs_authorization')
+  })
+
+  it('reads the settings once a while, not on every /auth/me', async () => {
+    await accessPendingFor({ role: START }, false)
+    await accessPendingFor({ role: REVIEW }, false)
+    await accessPendingFor({ role: START }, false)
+    expect(h.reads).toBe(1)
+    // Admins and role-less people never read them.
+    resetAccessPendingCache()
+    await accessPendingFor({ role: START }, true)
+    await accessPendingFor({ role: null }, false)
+    expect(h.reads).toBe(1)
   })
 
   it('a settings read that fails answers null (never blocks /auth/me)', async () => {

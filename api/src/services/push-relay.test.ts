@@ -94,6 +94,19 @@ describe('pushRelayConfig', () => {
     expect(await pushRelayConfig()).toMatchObject({ url: 'https://relay.cloud.example' })
   })
 
+  it('self-hosted: a stored relay_url never carries the env key; no key → env/default url', async () => {
+    // A url that came in by a config restore must not receive this instance's env key.
+    h.overrides = JSON.stringify({ mobile_push: { relay_url: 'https://elsewhere.example' } })
+    process.env.MOBILE_PUSH_RELAY_KEY = 'envkey'
+    expect(await pushRelayConfig()).toMatchObject({ key: 'envkey', url: 'https://push.nivaro.dev' })
+    delete process.env.MOBILE_PUSH_RELAY_KEY
+    // No key at all (connect registers with the url): not the stored one either.
+    expect((await pushRelayConfig()).url).toBe('https://push.nivaro.dev')
+    // Cloud: the stored url goes with the stored key.
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    expect((await pushRelayConfig()).url).toBe('https://elsewhere.example')
+  })
+
   it('a stored relay_url that is not https is ignored', async () => {
     h.overrides = JSON.stringify({ mobile_push: { relay_url: 'http://relay.example' } })
     expect((await pushRelayConfig()).url).toBe('https://push.nivaro.dev')

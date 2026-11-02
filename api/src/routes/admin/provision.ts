@@ -19,6 +19,9 @@ export function provisionSecretMatches(
   return timingSafeEqual(a, b)
 }
 
+/** The database clients a tenant may be provisioned on. */
+const DB_CLIENTS = new Set(['pg', 'mssql', 'mysql2'])
+
 // Only registered in cloud mode (when CLOUD_META_DB_URL is set).
 // Self-hosted users never see this route.
 export async function adminProvisionRoutes(app: FastifyInstance) {
@@ -194,15 +197,24 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
 
     const { connectionString, dbClient, slug, relay_key, relay_url } = (req.body ?? {}) as {
-      connectionString?: string
-      dbClient?: 'pg' | 'mssql' | 'mysql2'
-      slug?: string
+      connectionString?: unknown
+      dbClient?: unknown
+      slug?: unknown
       relay_key?: unknown
       relay_url?: unknown
     }
 
-    if (!connectionString || !dbClient) {
-      return reply.code(400).send({ error: 'connectionString and dbClient required' })
+    if (
+      typeof connectionString !== 'string' ||
+      !connectionString ||
+      typeof dbClient !== 'string' ||
+      !DB_CLIENTS.has(dbClient) ||
+      typeof slug !== 'string' ||
+      !slug
+    ) {
+      return reply
+        .code(400)
+        .send({ error: 'connectionString, dbClient (pg | mssql | mysql2) and slug required' })
     }
     const key = typeof relay_key === 'string' ? relay_key.trim() : ''
     if (!key || key.length > 500 || key === RELAY_KEY_MASK) {

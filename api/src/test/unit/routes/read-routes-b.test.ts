@@ -107,6 +107,7 @@ vi.mock('../../../services/web-push.js', () => ({
 }))
 vi.mock('../../../db/index.js', () => {
   const chain = (table: string) => {
+    let counting = false
     const preds: Array<(r: Record<string, unknown>) => boolean> = []
     const hits = () => (m.tables[table] ?? []).filter((r) => preds.every((p) => p(r)))
     const api: Record<string, unknown> = {
@@ -121,9 +122,13 @@ vi.mock('../../../db/index.js', () => {
         return api
       },
       select: () => api,
+      count: () => {
+        counting = true
+        return api
+      },
       orderBy: () => api,
       limit: () => api,
-      first: async () => hits()[0],
+      first: async () => (counting ? { c: hits().length } : hits()[0]),
       update: async (patch: unknown) => {
         m.updates.push({ table, patch })
         return 1
@@ -394,6 +399,17 @@ describe('phone push', () => {
     } finally {
       delete process.env.MOBILE_PUSH_RELAY_KEY
     }
+  })
+  it('relay status says how many phones are registered (relay + Expo rows)', async () => {
+    m.admin = true
+    m.tables.nivaro_push_subscriptions = [
+      { id: 1, endpoint: 'relay:aaaaaaaaaaaaaaaaaaaa' },
+      { id: 2, endpoint: 'expo:ExponentPushToken[x]' }
+    ]
+    const app = await build()
+    const r = await app.inject({ method: 'GET', url: '/push/relay' })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().data.phones).toBe(2)
   })
   it('malformed relay_device carries a code', async () => {
     const app = await build()

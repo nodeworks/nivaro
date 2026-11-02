@@ -160,9 +160,10 @@ async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
   const stale: number[] = []
   for (const [i, id] of ids.entries()) {
     const st = stamps[i]
-    // A kept credential keeps its row only while it is still signed in.
-    if (st?.by && keep.has(st.by) && (await credentialLive(redis, st.by))) continue
-    if (st?.by && st.at >= l.at && (await credentialLive(redis, st.by))) continue
+    // Kept only while the registering credential is still signed in (asked once): a credential
+    // in `keep`, or one that registered the row at or after the sweep.
+    if (st?.by && (keep.has(st.by) || st.at >= l.at) && (await credentialLive(redis, st.by)))
+      continue
     stale.push(id)
   }
   if (stale.length === 0) return 0

@@ -55,7 +55,7 @@ import { endpointHash, getVapidKeys, sendWebPush } from '../services/web-push.js
  *                               a sign-out that lost its session (expired token, offline) can
  *                               still stop the alerts later; the token alone is not enough
  *  POST   /push/phones/test   — send a test alert to the current user's phones
- *  GET    /push/relay         — (admin) push relay status {connected, url, content, mode}
+ *  GET    /push/relay         — (admin) push relay status {connected, url, content, mode, phones}
  *  POST   /push/relay         — (admin) {connect: true} registers this instance with the relay;
  *                               {relay_key?} stores a key by hand; {content?: 'full'|'minimal'}
  */
@@ -335,17 +335,9 @@ export async function pushRoutes(app: FastifyInstance) {
     }
   )
 
-  app.get('/relay', { preHandler: requireAdmin }, async (_req, reply) => {
-    const cfg = await pushRelayConfig()
-    return reply.send({
-      data: {
-        connected: !!cfg.key,
-        url: cfg.url,
-        content: cfg.content,
-        mode: await phonePushMode()
-      }
-    })
-  })
+  app.get('/relay', { preHandler: requireAdmin }, async (_req, reply) =>
+    reply.send({ data: await relayStatus() })
+  )
 
   app.post<{
     Body: { connect?: boolean; disconnect?: boolean; relay_key?: string; content?: string }
@@ -399,15 +391,7 @@ export async function pushRoutes(app: FastifyInstance) {
         req
       })
     }
-    const cfg = await pushRelayConfig()
-    return reply.send({
-      data: {
-        connected: !!cfg.key,
-        url: cfg.url,
-        content: cfg.content,
-        mode: await phonePushMode()
-      }
-    })
+    return reply.send({ data: await relayStatus() })
   })
 
   app.post('/phones/test', { preHandler: requireAuth }, async (req, reply) => {
@@ -418,6 +402,23 @@ export async function pushRoutes(app: FastifyInstance) {
     })
     return reply.send({ data: { sent } })
   })
+}
+
+/** The relay card's status: connection, URL, content, mode and how many phones are registered
+ *  (relay and Expo rows, every person). The key itself is never part of it. */
+async function relayStatus() {
+  const cfg = await pushRelayConfig()
+  const row = (await wherePhoneEndpoint(db('nivaro_push_subscriptions'))
+    .count({ c: '*' })
+    .first()
+    .catch(() => null)) as { c?: number | string } | null | undefined
+  return {
+    connected: !!cfg.key,
+    url: cfg.url,
+    content: cfg.content,
+    mode: await phonePushMode(),
+    phones: Number(row?.c ?? 0)
+  }
 }
 
 function forgetKeyHash(key: string): string {

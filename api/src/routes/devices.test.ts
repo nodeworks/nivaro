@@ -529,6 +529,29 @@ describe('signing a person out on every phone', () => {
     expect(pushDeletes().flatMap((d) => d.bindings)).toContain(11)
   })
 
+  it('a stamp is checked against its credential once', async () => {
+    const { notePhoneRegistered, retryLeftoverPushRows } = await import(
+      '../services/device-grants.js'
+    )
+    state.pushRows = [14]
+    const gone = 'grant:00000000-0000-4000-8000-0000000000aa'
+    const at = Date.now()
+    const t = vi.spyOn(Date, 'now').mockReturnValue(at + 5000)
+    await notePhoneRegistered(redis as never, 14, gone)
+    t.mockRestore()
+    let checks = 0
+    const exists = redis.exists
+    redis.exists = async (k: string) => {
+      if (k.endsWith('0000000000aa')) checks++
+      return exists(k)
+    }
+    // Kept AND stamped after `at`: both rules would ask.
+    await redis.sadd('nvr:device-push-leftover:', JSON.stringify({ u: PAT, at, keep: [gone] }))
+    await retryLeftoverPushRows(redis as never)
+    expect(checks).toBe(1)
+    expect(pushDeletes().flatMap((d) => d.bindings)).toContain(14)
+  })
+
   it('a kept credential keeps its row only while it is still signed in', async () => {
     const { notePhoneRegistered, retryLeftoverPushRows } = await import(
       '../services/device-grants.js'

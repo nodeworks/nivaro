@@ -14,6 +14,9 @@ vi.mock('../../../db/index.js', async () => {
   const { makeFakeDb } = await import('../../fake-sql.js')
   const db = makeFakeDb((q) => {
     if (q.sql.includes('nivaro_notifications')) {
+      // An int column refuses anything past int32: the route must never send one.
+      if (q.bindings.some((b) => typeof b === 'number' && b > 2147483647))
+        throw new Error('Arithmetic overflow converting to int')
       // `where [id] = @p… and [recipient] = @p…` filter like the database; count/select for
       // the list.
       const hits = h.rows.filter(
@@ -106,7 +109,7 @@ describe('GET /notifications/:id', () => {
   })
 
   it('another person’s id, an unknown id or a junk id → 404', async () => {
-    for (const id of ['6', '999', 'abc', '5.5'])
+    for (const id of ['6', '999', 'abc', '5.5', '2147483648', '9999999999'])
       expect([id, (await get(`/notifications/${id}`, { 'x-user': PAT })).statusCode]).toEqual([
         id,
         404
