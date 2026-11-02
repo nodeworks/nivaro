@@ -114,10 +114,13 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     try {
       revoked = await revokeUserSessions(app.redis, id)
     } catch (e) {
-      req.log.warn({ err: e, user: id }, 'sign-out everywhere did not reach every session')
-      return reply
-        .code(503)
-        .send({ error: 'Could not reach every session — nothing was reported as done. Try again.' })
+      req.log.warn(
+        { err: e, user: id },
+        'sign-out everywhere did not reach every session and phone'
+      )
+      return reply.code(503).send({
+        error: 'Could not reach every session and phone — nothing was reported as done. Try again.'
+      })
     }
     const name = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.email || id
     await logActivity({
@@ -125,7 +128,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       user: req.user?.id,
       collection: 'nivaro_users',
       item: id,
-      comment: `${name}: ${revoked} session${revoked === 1 ? '' : 's'} signed out`,
+      comment: `${name}: ${revoked} ${revoked === 1 ? 'session or phone' : 'sessions and phones'} signed out`,
       req
     })
     return { data: { revoked } }
@@ -299,13 +302,13 @@ export async function securitySelfRoutes(app: FastifyInstance) {
       })
     } catch (e) {
       // Redis down or a scan that did not finish: say so, never "0 signed out".
-      req.log.warn({ err: e }, 'sign-out-others did not reach every session')
-      return reply.code(503).send({ error: 'Could not reach every session — try again.' })
+      req.log.warn({ err: e }, 'sign-out-others did not reach every session and phone')
+      return reply.code(503).send({ error: 'Could not reach every session and phone — try again.' })
     }
     await logActivity({
       action: 'sessions-sign-out-others',
       user: req.user!.id,
-      comment: `${revoked} revoked`,
+      comment: `${revoked} sessions and phones revoked`,
       req
     })
     return reply.send({ data: { revoked } })

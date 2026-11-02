@@ -242,10 +242,21 @@ export async function pushRoutes(app: FastifyInstance) {
         )?.id
     }
     // Registered from a signed-in phone: the row ends with that sign-in (services/device-grants.ts).
-    if (req.deviceGrantId && rowId)
-      await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch((err) =>
-        req.log.warn({ err }, 'phone push: row not noted on its sign-in')
+    // A sign-in ended while this request ran takes the row with it, as ending it would have.
+    if (req.deviceGrantId && rowId) {
+      const live = await addGrantPushId(app.redis, req.deviceGrantId, Number(rowId)).catch(
+        (err) => {
+          req.log.warn({ err }, 'phone push: row not noted on its sign-in')
+          return true
+        }
       )
+      if (!live) {
+        await db('nivaro_push_subscriptions').where({ id: rowId, user: req.user!.id }).del()
+        return reply
+          .code(401)
+          .send({ error: 'Your sign-in has ended. Sign in again.', code: 'SESSION_EXPIRED' })
+      }
+    }
     return reply.send({ data: { registered: true, forget_key: forgetKey } })
   })
 

@@ -75,7 +75,9 @@ export async function deviceRoutes(app: FastifyInstance) {
       if (!UUID.test(req.params.userId))
         return reply.code(400).send({ error: 'Not a user id', code: 'USER_ID_INVALID' })
       const grants = await listDeviceGrants(app.redis, req.params.userId)
-      return { data: grants.map((g) => deviceRow(g, req.deviceGrantId)) }
+      // `current` is the calling phone: only ever true on the admin's own list.
+      const own = req.params.userId.toUpperCase() === String(req.user!.id).toUpperCase()
+      return { data: grants.map((g) => deviceRow(g, own ? req.deviceGrantId : undefined)) }
     }
   )
 

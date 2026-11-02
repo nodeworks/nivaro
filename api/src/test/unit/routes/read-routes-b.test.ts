@@ -22,7 +22,9 @@ const m = vi.hoisted(() => ({
   deviceGrant: null as string | null,
   /** Inserted rows are stored (so a read after the insert finds them). */
   storeInserts: false,
-  pushIds: [] as Array<[string, number]>
+  pushIds: [] as Array<[string, number]>,
+  /** What addGrantPushId answers: false = the sign-in ended while the request ran. */
+  grantLive: true
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
@@ -38,6 +40,7 @@ vi.mock('../../../services/oauth-store.js', async (orig) => ({
   ...(await orig<object>()),
   addGrantPushId: vi.fn(async (_r: unknown, grant: string, id: number) => {
     m.pushIds.push([grant, id])
+    return m.grantLive
   })
 }))
 vi.mock('../../../services/permissions.js', () => ({
@@ -157,6 +160,7 @@ beforeEach(() => {
   m.deviceGrant = null
   m.storeInserts = false
   m.pushIds = []
+  m.grantLive = true
 })
 
 const page = (widgets: unknown[]) => ({
@@ -373,6 +377,16 @@ describe('phone push', () => {
       [G, 70],
       [G, 70]
     ])
+  })
+  it('a sign-in that ended meanwhile takes the new row with it (401, row deleted)', async () => {
+    m.deviceGrant = '99999999-0000-4000-8000-000000000009'
+    m.grantLive = false
+    m.storeInserts = true
+    const app = await build()
+    const r = await app.inject({ method: 'POST', url: '/push/phones', payload: { token } })
+    expect(r.statusCode).toBe(401)
+    expect(r.json().code).toBe('SESSION_EXPIRED')
+    expect(m.deletes[0]?.rows.map((x) => x.id)).toEqual([70])
   })
   it('a browser session registering a phone notes nothing', async () => {
     m.storeInserts = true

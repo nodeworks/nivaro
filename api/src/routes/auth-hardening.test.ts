@@ -163,6 +163,20 @@ beforeEach(() => {
 })
 afterEach(() => vi.clearAllMocks())
 
+describe('sign out everywhere (/logout-all)', () => {
+  it('answers a coded 503 when it cannot reach every session and phone', async () => {
+    state.user = { id: 'U1', status: 'active' }
+    // memRedis has no SCAN: the session scan cannot finish.
+    const { app } = await build(fakeSession({ userId: 'U1' }))
+    const res = await app.inject({ method: 'POST', url: '/logout-all' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toEqual({
+      error: 'Could not reach every session and phone. Try again.',
+      code: 'SIGN_OUT_INCOMPLETE'
+    })
+  })
+})
+
 describe('M17 — form bodies (login CSRF)', () => {
   it('only the SAML callback takes a form-encoded body', async () => {
     expect(formBodyAllowed('/saml/callback')).toBe(true)

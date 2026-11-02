@@ -27,6 +27,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   user:<uid>       the person's grant ids (the "connected apps" list)
  *   grant-idle:<id>  the idle review's stamps on a grant (#2497); its own key with its own TTL,
  *                    so the review never rewrites (or resurrects) a grant; deleted on revoke/use
+ *   grant-push:<id>  a device grant's phone push row ids (a SET); read and deleted with the grant
  *
  * Tokens and codes are stored by hash only. Every token is checked against its
  * grant, so revoking a connection ends its tokens at once. Cloud: every record
@@ -41,6 +42,10 @@ const CLIENT_TTL_S = 180 * 86_400
 /** Idle stamps outlive any review window (flag ≤ 365 days, disconnect ≤ 730) and then lapse. */
 const IDLE_TTL_S = 800 * 86_400
 const idleKey = (grantId: string) => `${P}grant-idle:${grantId}`
+/** A device grant's phone push rows: a SET of its own (SADD/SREM), so no read-modify-write of
+ *  the grant JSON (the last-use stamp rewrites it) can drop one. Touched only after the grant
+ *  itself was read for this tenant, like grant-idle. */
+const pushKey = (grantId: string) => `${P}grant-push:${grantId}`
 
 export type TokenKind = 'mcp' | 'device'
 
@@ -69,7 +74,8 @@ export interface OAuthGrant extends DeviceInfo {
   client_name: string
   scope: string
   kind: TokenKind
-  /** Device grants: the phone push rows (nivaro_push_subscriptions ids) this sign-in made. */
+  /** Device grants: the phone push rows (nivaro_push_subscriptions ids) this sign-in made —
+   *  only on what `takeGrant` hands back (they live in grant-push:<id>, never in the grant). */
   push_ids?: number[]
   created_at: string
   last_used_at: string | null
@@ -443,14 +449,34 @@ export async function takeGrant(
 ): Promise<OAuthGrant | null> {
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
   if (!g || !sameUser(g.user_id, userId) || !sameTenant(g)) return null
-  if (kind && kindOf(g) !== kind) return null
-  await redis
-    .multi()
+  const k = kindOf(g)
+  if (kind && k !== kind) return null
+  const tx = redis.multi()
+  // A device grant's push ids are read and deleted in the same transaction as the grant: an
+  // SADD lands either before (and is returned) or after (and addGrantPushId sees no grant).
+  if (k === 'device') tx.smembers(pushKey(grantId)).del(pushKey(grantId))
+  const res = await tx
     .del(`${P}grant:${grantId}`)
     .del(idleKey(grantId))
     .srem(`${P}user:${g.user_id}`, grantId)
     .exec()
-  return { ...g, kind: kindOf(g) }
+  if (k !== 'device') return { ...g, kind: k }
+  const members = execValue<string[]>(res?.[0]) ?? []
+  const ids = [...(g.push_ids ?? []), ...members.map(Number)].filter(
+    (n) => Number.isInteger(n) && n > 0
+  )
+  return { ...g, kind: k, push_ids: [...new Set(ids)] }
+}
+
+/** One MULTI reply: ioredis answers `[err, value]` per command. */
+function execValue<T>(entry: unknown): T | undefined {
+  if (
+    Array.isArray(entry) &&
+    entry.length === 2 &&
+    (entry[0] === null || entry[0] instanceof Error)
+  )
+    return entry[0] ? undefined : (entry[1] as T)
+  return entry as T
 }
 
 /** End a connection: its tokens stop working at once (each checks its grant). */
@@ -465,17 +491,28 @@ export async function revokeGrant(
 
 /**
  * Note a phone push row (nivaro_push_subscriptions id) on the device grant that registered it,
- * so ending that sign-in stops the phone's alerts too. A grant revoked meanwhile is never
- * recreated (XX), and a non-device grant is left alone.
+ * so ending that sign-in stops the phone's alerts too. One install's row belongs to ONE sign-in:
+ * it is taken off the person's other grants (a stale sign-in on the same phone must not delete
+ * the row the live one uses). Answers false when the grant was ended meanwhile — the caller
+ * then deletes the row itself, as ending the grant would have. A non-device grant: true, no-op.
  */
-export async function addGrantPushId(redis: Redis, grantId: string, pushId: number): Promise<void> {
-  if (!Number.isInteger(pushId) || pushId <= 0) return
+export async function addGrantPushId(
+  redis: Redis,
+  grantId: string,
+  pushId: number
+): Promise<boolean> {
+  if (!Number.isInteger(pushId) || pushId <= 0) return true
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
-  if (!g || !sameTenant(g) || kindOf(g) !== 'device') return
-  const ids = g.push_ids ?? []
-  if (ids.includes(pushId)) return
-  g.push_ids = [...ids, pushId].slice(-20)
-  await redis.set(`${P}grant:${grantId}`, JSON.stringify(g), 'KEEPTTL', 'XX')
+  if (!g || !sameTenant(g)) return false
+  if (kindOf(g) !== 'device') return true
+  const others = (await redis.smembers(`${P}user:${g.user_id}`)).filter((id) => id !== grantId)
+  const tx = redis.multi()
+  for (const id of others) tx.srem(pushKey(id), String(pushId))
+  await tx.sadd(pushKey(grantId), String(pushId)).exec()
+  if (await redis.exists(`${P}grant:${grantId}`)) return true
+  // Ended between the read and the SADD: nothing will ever read this set again.
+  await redis.del(pushKey(grantId))
+  return false
 }
 
 /** The Redis key a grant is stored under (a socket bound to a phone reads it on every sweep). */

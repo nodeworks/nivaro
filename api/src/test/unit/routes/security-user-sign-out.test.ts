@@ -9,11 +9,22 @@ const state = vi.hoisted(() => ({
   } as Record<string, unknown> | null,
   activity: [] as Array<Record<string, unknown>>,
   ended: [] as string[][],
-  self: null as { id: string; deviceGrantId?: string } | null
+  self: null as { id: string; deviceGrantId?: string } | null,
+  pushDeletes: 0
 }))
-vi.mock('../../../db/index.js', () => ({
-  db: () => ({ where: () => ({ first: async () => state.user }) })
-}))
+vi.mock('../../../db/index.js', () => {
+  // users: .where().first(); phone push rows: .where({user}).where(fn).del() (the backstop)
+  const q: Record<string, unknown> = {
+    where: () => q,
+    whereIn: () => q,
+    first: async () => state.user,
+    del: async () => {
+      state.pushDeletes++
+      return 0
+    }
+  }
+  return { db: () => q }
+})
 vi.mock('../../../services/activity.js', () => ({
   logActivity: async (a: Record<string, unknown>) => {
     state.activity.push(a)
@@ -56,6 +67,10 @@ function fakeRedis(seed: Record<string, string>) {
     async srem(k: string, m: string) {
       return sets.get(k)?.delete(m) ? 1 : 0
     },
+    async sadd(k: string, m: string) {
+      sets.set(k, (sets.get(k) ?? new Set()).add(m))
+      return 1
+    },
     async scan(cursor: string, _m: string, pattern: string) {
       const re = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`)
       const keys = [...kv.keys()].filter((k) => re.test(k))
@@ -77,14 +92,15 @@ function fakeRedis(seed: Record<string, string>) {
           ops.push(() => sets.get(k)?.delete(v))
           return m
         },
+        smembers: (k: string) => {
+          ops.push(() => [...(sets.get(k) ?? [])])
+          return m
+        },
         setex: (k: string, _t: number, v: string) => {
           ops.push(() => kv.set(k, v))
           return m
         },
-        exec: async () => {
-          for (const op of ops) op()
-          return []
-        }
+        exec: async () => ops.map((op) => op())
       }
       return m
     }
@@ -104,6 +120,7 @@ describe('signing one person out everywhere', () => {
     state.activity = []
     state.ended = []
     state.self = null
+    state.pushDeletes = 0
     state.user = { id: JANE.toUpperCase(), first_name: 'Jane', last_name: 'Roe' }
   })
 
@@ -133,7 +150,7 @@ describe('signing one person out everywhere', () => {
       action: 'sessions-revoke-user',
       collection: 'nivaro_users',
       item: JANE,
-      comment: 'Jane Roe: 2 sessions signed out'
+      comment: 'Jane Roe: 2 sessions and phones signed out'
     })
     const self = await app.inject({
       method: 'POST',
@@ -179,6 +196,8 @@ describe('signing one person out everywhere', () => {
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(false)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
     expect(r.kv.has(`nvr:oauth:grant:${SAMS}`)).toBe(true)
+    // Every phone signed out: all of the person's phone push rows go too (the backstop).
+    expect(state.pushDeletes).toBe(1)
   })
 
   it('an administrator signing someone out reaches their phones', async () => {
@@ -197,6 +216,8 @@ describe('signing one person out everywhere', () => {
     addPhone(r, JANE.toUpperCase(), PHONE_1)
     addPhone(r, JANE.toUpperCase(), PHONE_2)
     expect(await revokeUserSessions(r as never, JANE, { exceptDeviceGrant: PHONE_1 })).toBe(3)
+    // One phone stays signed in: its rows are not swept with the backstop.
+    expect(state.pushDeletes).toBe(0)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(true)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
   })

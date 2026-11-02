@@ -29,6 +29,9 @@ describe('OAuth token audience', () => {
       ['POST', '/api/api-keys'],
       ['POST', '/api/auth/masquerade'],
       ['POST', '/api/users/U1/token'],
+      // Signed-in phones: a connected app never signs a person's phones out.
+      ['DELETE', '/api/users/U1/devices/x'],
+      ['DELETE', '/api/auth/devices/x'],
       ['DELETE', '/api/oauth/connections/x'],
       // #2466 / #2498 — an agent never revokes, re-limits or undoes through its own token.
       ['DELETE', '/api/mcp-connections/mine/k1'],

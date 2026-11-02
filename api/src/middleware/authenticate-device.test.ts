@@ -135,6 +135,10 @@ function fakeRedis() {
           ops.push(() => r.del(k))
           return m
         },
+        smembers(k: string) {
+          ops.push(() => r.smembers(k))
+          return m
+        },
         exec: async () => Promise.all(ops.map((o) => o()))
       }
       return m

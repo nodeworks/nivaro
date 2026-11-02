@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { getGrant, listGrants, type OAuthGrant, takeGrant } from './oauth-store.js'
 import { wherePhoneEndpoint } from './push-relay.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Signed-in phones: one device grant per phone sign-in (services/oauth-store.ts, kind 'device').
@@ -58,11 +59,67 @@ export async function deleteGrantPushRows(
   )
 }
 
+/** Push rows a database error kept: `ids` of person `u`, or (no ids) all of `u`'s phone rows. */
+interface Leftover {
+  u: string
+  ids?: number[]
+}
+/** Per tenant (cloud): leftovers are retried on this tenant's next phone sign-out. */
+const leftoverKey = () => `nvr:device-push-leftover:${currentTenantKey()}`
+
+/** Every phone push row of the person (any phone, any sign-in). */
+async function deleteAllPhoneRows(userId: string): Promise<number> {
+  return Number(
+    await wherePhoneEndpoint(db('nivaro_push_subscriptions').where({ user: userId })).del()
+  )
+}
+
+async function deleteLeftover(l: Leftover): Promise<void> {
+  if (l.ids) await deleteGrantPushRows({ user_id: l.u, push_ids: l.ids })
+  else await deleteAllPhoneRows(l.u)
+}
+
 /**
- * End one phone's sign-in: its push rows go first (a database error throws and leaves the grant,
- * so the caller can retry), then the grant and its tokens; a push id added meanwhile is removed
- * too. `userId` limits it to that person's phones. Returns the ended grant, or null when there is
- * no such phone (here, on this tenant). Logged as `device-revoked`.
+ * Delete push rows, or — the database refusing — keep them for the next phone sign-out on this
+ * tenant to delete (the credential is already dead; only the alerts are left to stop).
+ */
+async function deleteOrKeep(redis: Redis, l: Leftover, req?: FastifyRequest): Promise<void> {
+  if (l.ids && l.ids.length === 0) return
+  try {
+    await deleteLeftover(l)
+  } catch (err) {
+    req?.log.warn({ err, user: l.u, push_ids: l.ids ?? 'all' }, 'phone push rows kept for retry')
+    try {
+      await redis.sadd(leftoverKey(), JSON.stringify(l))
+    } catch {
+      // Redis too: logged above, nothing more to do
+    }
+  }
+}
+
+/** Retry the push rows an earlier sign-out could not delete (best effort, never throws). */
+export async function retryLeftoverPushRows(redis: Redis): Promise<void> {
+  try {
+    for (const raw of await redis.smembers(leftoverKey())) {
+      try {
+        await deleteLeftover(JSON.parse(raw) as Leftover)
+        await redis.srem(leftoverKey(), raw)
+      } catch {
+        // still refused, or a damaged entry: left for the next pass (a damaged one is dropped)
+        if (!raw.startsWith('{')) await redis.srem(leftoverKey(), raw).catch(() => 0)
+      }
+    }
+  } catch {
+    // Redis trouble: the next sign-out tries again
+  }
+}
+
+/**
+ * End one phone's sign-in. The credential dies first — the grant and every token, with its push
+ * ids read in the same Redis transaction — then its push rows are deleted; a database error
+ * keeps them for a retry (never leaves the phone signed in). `userId` limits it to that person's
+ * phones. Returns the ended grant, or null when there is no such phone (here, on this tenant).
+ * Logged as `device-revoked`.
  */
 export async function endDeviceGrant(
   redis: Redis,
@@ -74,11 +131,11 @@ export async function endDeviceGrant(
   if (!g) return null
   if (opts.userId && String(g.user_id).toUpperCase() !== String(opts.userId).toUpperCase())
     return null
-  await deleteGrantPushRows(g)
   const ended = await takeGrant(redis, g.user_id, g.id, 'device')
   if (!ended) return null
-  const late = (ended.push_ids ?? []).filter((id) => !(g.push_ids ?? []).includes(id))
-  if (late.length) await deleteGrantPushRows({ ...ended, push_ids: late }).catch(() => 0)
+  // Rows an earlier sign-out could not delete go first; then this phone's.
+  await retryLeftoverPushRows(redis)
+  await deleteOrKeep(redis, { u: String(ended.user_id), ids: ended.push_ids ?? [] }, opts.req)
   await logActivity({
     action: 'device-revoked',
     user: opts.adminId ?? ended.user_id,
@@ -101,7 +158,8 @@ export async function listDeviceGrants(redis: Redis, userId: string): Promise<OA
 /**
  * Sign the person out on every phone (but `except`, the calling phone's own grant). Fails
  * closed: when any phone could not be signed out (after trying them all) the first error is
- * thrown, never a partial "done". Returns how many phones were signed out.
+ * thrown, never a partial "done". With no `except`, every phone push row of the person goes
+ * too (a backstop for a row no grant recorded). Returns how many phones were signed out.
  */
 export async function endUserDeviceGrants(
   redis: Redis,
@@ -124,5 +182,6 @@ export async function endUserDeviceGrants(
     }
   }
   if (failure) throw failure
+  if (!opts.except) await deleteOrKeep(redis, { u: userId }, opts.req)
   return ended
 }

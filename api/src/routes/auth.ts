@@ -928,7 +928,18 @@ export async function authRoutes(app: FastifyInstance) {
 
     // Revoke, don't just delete: a rolling save from another tab's in-flight
     // request would otherwise write any of these back (see auth/session.ts).
-    const destroyed = userId ? await revokeUserSessions(app.redis, String(userId)) : 0
+    // Sessions and phones (revokeUserSessions ends the person's device grants too).
+    let destroyed = 0
+    try {
+      destroyed = userId ? await revokeUserSessions(app.redis, String(userId)) : 0
+    } catch (e) {
+      // Redis down or a scan that did not finish: say so, never "signed out everywhere".
+      req.log.warn({ err: e }, 'logout-all did not reach every session and phone')
+      return reply.code(503).send({
+        error: 'Could not reach every session and phone. Try again.',
+        code: 'SIGN_OUT_INCOMPLETE'
+      })
+    }
     return reply.send({ ok: true, destroyed })
   })
 

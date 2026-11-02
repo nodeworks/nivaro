@@ -71,6 +71,9 @@ function fakeRedis() {
   const sets = new Map<string, Set<string>>()
   const r = {
     kv,
+    sets,
+    /** Runs once before the next MULTI's commands (to interleave another request). */
+    beforeExec: null as null | (() => Promise<unknown>),
     get: async (k: string) => kv.get(k) ?? null,
     mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),
     set: async (k: string, v: string, ...flags: string[]) => {
@@ -87,7 +90,7 @@ function fakeRedis() {
       kv.delete(k)
       return v
     },
-    del: async (...ks: string[]) => ks.filter((k) => kv.delete(k)).length,
+    del: async (...ks: string[]) => ks.filter((k) => kv.delete(k) || sets.delete(k)).length,
     exists: async (k: string) => (kv.has(k) ? 1 : 0),
     expire: async () => 1,
     incr: async (k: string) => {
@@ -130,7 +133,18 @@ function fakeRedis() {
           ops.push(() => r.del(k))
           return m
         },
-        exec: async () => Promise.all(ops.map((o) => o()))
+        smembers(k: string) {
+          ops.push(() => r.smembers(k))
+          return m
+        },
+        exec: async () => {
+          const hook = r.beforeExec
+          r.beforeExec = null
+          if (hook) await hook()
+          const out: unknown[] = []
+          for (const o of ops) out.push(await o())
+          return out
+        }
       }
       return m
     }
@@ -257,8 +271,9 @@ describe('Signed-in phones', () => {
     expect(list.json().data).toEqual([])
   })
 
-  it('a database error keeps the phone signed in and answers a coded 503', async () => {
+  it('a database error still ends the credential; the push rows are retried on the next sign-out', async () => {
     const a = await phone(PAT, 'Phone', [3])
+    const b = await phone(PAT, 'Tablet', [4])
     const { db } = await import('../db/index.js')
     const spy = vi
       .spyOn(db.client as never, '_query' as never)
@@ -269,9 +284,50 @@ describe('Signed-in phones', () => {
       ...as(PAT)
     })
     spy.mockRestore()
-    expect(res.statusCode).toBe(503)
-    expect(res.json().code).toBe('DEVICE_SIGN_OUT_FAILED')
-    expect(await store.getGrant(redis as never, a.grant.id)).not.toBeNull()
+    expect(res.statusCode).toBe(200)
+    expect(await store.resolveAccessToken(redis as never, a.access_token, 'device')).toBeNull()
+    expect(pushDeletes()).toEqual([])
+    expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toHaveLength(1)
+    // The next phone sign-out deletes its own rows and the kept ones.
+    await endDeviceGrant(redis as never, b.grant.id, 'removed')
+    const ids = pushDeletes().flatMap((d) => d.bindings)
+    expect(ids).toEqual(expect.arrayContaining([3, 4]))
+    expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toEqual([])
+  })
+
+  it('a push id noted while the grant is touched for use is never lost (no read-modify-write)', async () => {
+    const a = await phone(PAT, 'Phone')
+    // Make the next use rewrite the grant JSON (last use > 1 minute ago)…
+    const key = `nvr:oauth:grant:${a.grant.id}`
+    redis.kv.set(
+      key,
+      JSON.stringify({
+        ...JSON.parse(redis.kv.get(key) as string),
+        last_used_at: '2020-01-01T00:00:00Z'
+      })
+    )
+    // …and register a push row between its read and its write.
+    redis.beforeExec = () => store.addGrantPushId(redis as never, a.grant.id, 77)
+    await store.resolveAccessToken(redis as never, a.access_token, 'device')
+    expect(JSON.parse(redis.kv.get(key) as string).last_used_at).not.toBe('2020-01-01T00:00:00Z')
+    await endDeviceGrant(redis as never, a.grant.id, 'removed')
+    expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([77, PAT]))
+  })
+
+  it('one install’s row belongs to its latest sign-in: ending the stale one keeps it', async () => {
+    const stale = await phone(PAT, 'Phone (old sign-in)', [50])
+    const live = await phone(PAT, 'Phone', [50])
+    await endDeviceGrant(redis as never, stale.grant.id, 'removed')
+    expect(pushDeletes()).toEqual([])
+    await endDeviceGrant(redis as never, live.grant.id, 'removed')
+    expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([50, PAT]))
+  })
+
+  it('a push id noted after the grant ended says so (the caller deletes the row)', async () => {
+    const a = await phone(PAT, 'Phone')
+    redis.beforeExec = () => store.takeGrant(redis as never, PAT, a.grant.id)
+    expect(await store.addGrantPushId(redis as never, a.grant.id, 88)).toBe(false)
+    expect(redis.sets.get(`nvr:oauth:grant-push:${a.grant.id}`)?.size ?? 0).toBe(0)
   })
 })
 
@@ -287,6 +343,12 @@ describe('an administrator signs a person’s phone out', () => {
     expect((await app.inject({ url: `/api/users/${SAM}/devices`, ...as(PAT) })).statusCode).toBe(
       403
     )
+    // `current` is the calling phone — never true on someone else's list.
+    const odd = await app.inject({
+      url: `/api/users/${SAM}/devices`,
+      ...as(ADMIN, { 'x-admin': '1', 'x-grant': s.grant.id })
+    })
+    expect(odd.json().data[0].current).toBe(false)
   })
 
   it('removes it with its push rows, logged as device-revoked with admin_id', async () => {
@@ -317,6 +379,24 @@ describe('an administrator signs a person’s phone out', () => {
     })
     expect(res.statusCode).toBe(404)
     expect(await store.getGrant(redis as never, p.grant.id)).not.toBeNull()
+  })
+})
+
+describe('signing a person out on every phone', () => {
+  it('also deletes all their phone push rows (backstop), but not when one phone stays', async () => {
+    const { endUserDeviceGrants } = await import('../services/device-grants.js')
+    const a = await phone(PAT, 'Phone', [61])
+    const b = await phone(PAT, 'Tablet')
+    expect(await endUserDeviceGrants(redis as never, PAT, { except: b.grant.id })).toBe(1)
+    expect(pushDeletes()).toHaveLength(1)
+    expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([61, PAT]))
+    state.deletes = []
+    expect(await endUserDeviceGrants(redis as never, PAT)).toBe(1)
+    const all = pushDeletes().at(-1)
+    expect(all?.bindings).toContain(PAT)
+    expect(all?.sql).not.toMatch(/\bin\b/i)
+    expect(all?.sql).toMatch(/endpoint.*like/i)
+    void a
   })
 })
 
@@ -430,14 +510,22 @@ describe('MCP connection lists never show a phone', () => {
 })
 
 describe('push ids on a device grant', () => {
-  it('are noted once, only on device grants, never recreating a revoked grant', async () => {
-    const p = await phone(PAT, 'Phone', [1, 1, 2])
-    expect((await store.getGrant(redis as never, p.grant.id))?.push_ids).toEqual([1, 2])
+  it('are noted once each, only on device grants, never recreating a revoked grant', async () => {
+    const p = await phone(
+      PAT,
+      'Phone',
+      [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+    )
     const g = await store.upsertGrant(redis as never, PAT, { client_id: 'nvc_x', client_name: 'X' })
-    await store.addGrantPushId(redis as never, g.id, 9)
-    expect((await store.getGrant(redis as never, g.id))?.push_ids).toBeUndefined()
-    await endDeviceGrant(redis as never, p.grant.id, 'removed')
-    await store.addGrantPushId(redis as never, p.grant.id, 3)
+    expect(await store.addGrantPushId(redis as never, g.id, 9)).toBe(true)
+    expect(redis.sets.has(`nvr:oauth:grant-push:${g.id}`)).toBe(false)
+    const ended = await store.takeGrant(redis as never, PAT, p.grant.id)
+    // No cap: every row the sign-in made is handed back.
+    expect(ended?.push_ids?.sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 21 }, (_, i) => i + 1)
+    )
+    expect(redis.sets.has(`nvr:oauth:grant-push:${p.grant.id}`)).toBe(false)
+    expect(await store.addGrantPushId(redis as never, p.grant.id, 3)).toBe(false)
     expect(redis.kv.has(`nvr:oauth:grant:${p.grant.id}`)).toBe(false)
   })
 })
