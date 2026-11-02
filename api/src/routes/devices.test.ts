@@ -6,7 +6,9 @@ process.env.MCP_PUBLIC_URL = 'https://nivaro.example'
 const state = vi.hoisted(() => ({
   /** Every DELETE the fake database ran (SQL + bindings). */
   deletes: [] as Array<{ sql: string; bindings: unknown[] }>,
-  activity: [] as Array<Record<string, unknown>>
+  activity: [] as Array<Record<string, unknown>>,
+  /** The phone push row ids a SELECT on nivaro_push_subscriptions finds (IN lists honoured). */
+  pushRows: [] as number[]
 }))
 
 vi.mock('../db/index.js', async () => {
@@ -15,6 +17,10 @@ vi.mock('../db/index.js', async () => {
     if (q.method === 'del') {
       state.deletes.push({ sql: q.sql, bindings: q.bindings })
       return 1
+    }
+    if (q.method === 'select' && q.sql.includes('nivaro_push_subscriptions')) {
+      const inList = /\bin \(/i.test(q.sql)
+      return state.pushRows.filter((id) => !inList || q.bindings.includes(id)).map((id) => ({ id }))
     }
     return q.method === 'first' ? undefined : []
   })
@@ -174,6 +180,7 @@ beforeEach(() => {
   redis = fakeRedis()
   state.deletes = []
   state.activity = []
+  state.pushRows = []
 })
 
 const mobile = { client_id: 'nivaro-mobile', client_name: 'Nivaro' }
@@ -272,6 +279,7 @@ describe('Signed-in phones', () => {
   })
 
   it('a database error still ends the credential; the push rows are retried on the next sign-out', async () => {
+    state.pushRows = [3, 4]
     const a = await phone(PAT, 'Phone', [3])
     const b = await phone(PAT, 'Tablet', [4])
     const { db } = await import('../db/index.js')
@@ -293,6 +301,56 @@ describe('Signed-in phones', () => {
     const ids = pushDeletes().flatMap((d) => d.bindings)
     expect(ids).toEqual(expect.arrayContaining([3, 4]))
     expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toEqual([])
+  })
+
+  it('a retried sign-out never silences the same install signed in again (row 50 kept)', async () => {
+    state.pushRows = [50, 51]
+    const old = await phone(PAT, 'Phone', [50])
+    const { db } = await import('../db/index.js')
+    const spy = vi
+      .spyOn(db.client as never, '_query' as never)
+      .mockRejectedValueOnce(new Error('down') as never)
+    await endDeviceGrant(redis as never, old.grant.id, 'removed') // outage → leftover [50]
+    spy.mockRestore()
+    expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toHaveLength(1)
+    // The person signs in again on that install: row 50 is registered on the new sign-in.
+    // (No registration stamp here: the live sign-in's push set alone must keep it.)
+    const again = await phone(PAT, 'Phone', [50])
+    // An unrelated sign-out runs the retry.
+    const other = await phone(SAM, "Sam's Pixel", [51])
+    await endDeviceGrant(redis as never, other.grant.id, 'removed')
+    const deleted = pushDeletes().flatMap((d) => d.bindings)
+    expect(deleted).not.toContain(50)
+    expect(deleted).toContain(51)
+    expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toEqual([])
+    expect(await store.getGrant(redis as never, again.grant.id)).not.toBeNull()
+  })
+
+  it('a retried sign-out keeps a row the person registered again from a browser session', async () => {
+    const { notePhoneRegistered } = await import('../services/device-grants.js')
+    state.pushRows = [52]
+    const old = await phone(PAT, 'Phone', [52])
+    const { db } = await import('../db/index.js')
+    const spy = vi
+      .spyOn(db.client as never, '_query' as never)
+      .mockRejectedValueOnce(new Error('down') as never)
+    await endDeviceGrant(redis as never, old.grant.id, 'removed')
+    spy.mockRestore()
+    const t = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000)
+    await notePhoneRegistered(redis as never, 52) // no sign-in holds it: the time rule keeps it
+    t.mockRestore()
+    const other = await phone(SAM, 'Other', [])
+    await endDeviceGrant(redis as never, other.grant.id, 'removed')
+    expect(pushDeletes().flatMap((d) => d.bindings)).not.toContain(52)
+  })
+
+  it('a damaged leftover entry is dropped', async () => {
+    const { retryLeftoverPushRows } = await import('../services/device-grants.js')
+    await redis.sadd('nvr:device-push-leftover:', 'not json')
+    await redis.sadd('nvr:device-push-leftover:', JSON.stringify({ u: PAT }))
+    await retryLeftoverPushRows(redis as never)
+    expect([...(redis.sets.get('nvr:device-push-leftover:') ?? [])]).toEqual([])
+    expect(pushDeletes()).toEqual([])
   })
 
   it('a push id noted while the grant is touched for use is never lost (no read-modify-write)', async () => {
@@ -383,20 +441,43 @@ describe('an administrator signs a person’s phone out', () => {
 })
 
 describe('signing a person out on every phone', () => {
-  it('also deletes all their phone push rows (backstop), but not when one phone stays', async () => {
+  it('a full sign-out also sweeps their stale phone push rows; one kept phone means no sweep', async () => {
     const { endUserDeviceGrants } = await import('../services/device-grants.js')
-    const a = await phone(PAT, 'Phone', [61])
+    await phone(PAT, 'Phone', [61])
     const b = await phone(PAT, 'Tablet')
-    expect(await endUserDeviceGrants(redis as never, PAT, { except: b.grant.id })).toBe(1)
+    state.pushRows = [61, 62]
+    expect(
+      await endUserDeviceGrants(redis as never, PAT, { except: b.grant.id, sweepAll: true })
+    ).toBe(1)
     expect(pushDeletes()).toHaveLength(1)
     expect(pushDeletes()[0].bindings).toEqual(expect.arrayContaining([61, PAT]))
+    expect(pushDeletes()[0].bindings).not.toContain(62)
     state.deletes = []
+    // "Everywhere else" from a session (no sweepAll): no sweep, the caller's own row stays.
     expect(await endUserDeviceGrants(redis as never, PAT)).toBe(1)
+    expect(pushDeletes()).toEqual([])
+    // A full sign-out: row 62 (no sign-in recorded it) goes.
+    await phone(PAT, 'Again')
+    expect(await endUserDeviceGrants(redis as never, PAT, { sweepAll: true })).toBe(1)
     const all = pushDeletes().at(-1)
-    expect(all?.bindings).toContain(PAT)
-    expect(all?.sql).not.toMatch(/\bin\b/i)
+    expect(all?.bindings).toEqual(expect.arrayContaining([61, 62, PAT]))
     expect(all?.sql).toMatch(/endpoint.*like/i)
-    void a
+  })
+
+  it('the sweep keeps a row registered after the sign-out began', async () => {
+    const { endUserDeviceGrants, notePhoneRegistered } = await import(
+      '../services/device-grants.js'
+    )
+    state.pushRows = [70, 71]
+    const now = Date.now()
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    await notePhoneRegistered(redis as never, 71) // registered "a minute later"
+    spy.mockReturnValue(now)
+    await endUserDeviceGrants(redis as never, PAT, { sweepAll: true })
+    spy.mockRestore()
+    const del = pushDeletes().at(-1)
+    expect(del?.bindings).toContain(70)
+    expect(del?.bindings).not.toContain(71)
   })
 })
 

@@ -18,6 +18,7 @@ vi.mock('../../../db/index.js', () => {
     where: () => q,
     whereIn: () => q,
     first: async () => state.user,
+    select: async () => [{ id: 1 }],
     del: async () => {
       state.pushDeletes++
       return 0
@@ -220,6 +221,10 @@ describe('signing one person out everywhere', () => {
     expect(state.pushDeletes).toBe(0)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_1}`)).toBe(true)
     expect(r.kv.has(`nvr:oauth:grant:${PHONE_2}`)).toBe(false)
+    // Everywhere else from a session (maybe a phone app on a cookie): no sweep either.
+    addPhone(r, JANE.toUpperCase(), PHONE_2)
+    expect(await revokeUserSessions(r as never, JANE, { except: 'a1' })).toBe(2)
+    expect(state.pushDeletes).toBe(0)
   })
 
   it('POST /my/sessions/sign-out-others passes the calling phone through', async () => {

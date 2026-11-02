@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { notePhoneRegistered } from '../services/device-grants.js'
 import { addGrantPushId } from '../services/oauth-store.js'
 import {
   instanceName,
@@ -234,13 +235,18 @@ export async function pushRoutes(app: FastifyInstance) {
         endpoint_hash: hash,
         created_at: new Date()
       })
-      if (req.deviceGrantId)
-        rowId = (
-          (await db('nivaro_push_subscriptions').where({ endpoint_hash: hash }).first('id')) as
-            | { id: number }
-            | undefined
-        )?.id
+      rowId = (
+        (await db('nivaro_push_subscriptions').where({ endpoint_hash: hash }).first('id')) as
+          | { id: number }
+          | undefined
+      )?.id
     }
+    // Stamped as registered now: a sign-out's retried cleanup never deletes a row registered
+    // after it (services/device-grants.ts deleteStaleRows).
+    if (rowId)
+      await notePhoneRegistered(app.redis, Number(rowId)).catch((err) =>
+        req.log.warn({ err }, 'phone push: registration not stamped')
+      )
     // Registered from a signed-in phone: the row ends with that sign-in (services/device-grants.ts).
     // A sign-in ended while this request ran takes the row with it, as ending it would have.
     if (req.deviceGrantId && rowId) {

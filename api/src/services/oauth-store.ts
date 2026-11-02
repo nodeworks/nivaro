@@ -489,6 +489,11 @@ export async function revokeGrant(
   return !!(await takeGrant(redis, userId, grantId, kind))
 }
 
+/** The push row ids a device grant holds now (its grant-push set). */
+export async function grantPushIds(redis: Redis, grantId: string): Promise<number[]> {
+  return (await redis.smembers(pushKey(grantId))).map(Number).filter((n) => Number.isInteger(n))
+}
+
 /**
  * Note a phone push row (nivaro_push_subscriptions id) on the device grant that registered it,
  * so ending that sign-in stops the phone's alerts too. One install's row belongs to ONE sign-in:
@@ -505,6 +510,9 @@ export async function addGrantPushId(
   const g = await read<OAuthGrant>(redis, `${P}grant:${grantId}`)
   if (!g || !sameTenant(g)) return false
   if (kindOf(g) !== 'device') return true
+  // Known race: two sign-ins on one install registering at the same moment can both keep the
+  // id (each SREMs before the other's SADD). The next registration from the live one repairs
+  // it, and a stale grant's later end deletes only by id + person.
   const others = (await redis.smembers(`${P}user:${g.user_id}`)).filter((id) => id !== grantId)
   const tx = redis.multi()
   for (const id of others) tx.srem(pushKey(id), String(pushId))

@@ -308,7 +308,7 @@ export async function securitySelfRoutes(app: FastifyInstance) {
     await logActivity({
       action: 'sessions-sign-out-others',
       user: req.user!.id,
-      comment: `${revoked} sessions and phones revoked`,
+      comment: `${revoked} ${revoked === 1 ? 'session or phone' : 'sessions and phones'} revoked`,
       req
     })
     return reply.send({ data: { revoked } })

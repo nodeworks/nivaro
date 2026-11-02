@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
-import { getGrant, listGrants, type OAuthGrant, takeGrant } from './oauth-store.js'
+import { getGrant, grantPushIds, listGrants, type OAuthGrant, takeGrant } from './oauth-store.js'
 import { wherePhoneEndpoint } from './push-relay.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -59,34 +59,69 @@ export async function deleteGrantPushRows(
   )
 }
 
-/** Push rows a database error kept: `ids` of person `u`, or (no ids) all of `u`'s phone rows. */
+/**
+ * Push rows a database error kept: `ids` of person `u`, or (no ids) all of `u`'s phone rows, as
+ * they stood at `at` (ms) — the sign-out that could not delete them.
+ */
 interface Leftover {
   u: string
   ids?: number[]
+  at: number
 }
 /** Per tenant (cloud): leftovers are retried on this tenant's next phone sign-out. */
 const leftoverKey = () => `nvr:device-push-leftover:${currentTenantKey()}`
+/** A leftover this old is given up on (logged), so a stale sweep can never hit a far later row. */
+const LEFTOVER_MAX_AGE_MS = 30 * 86_400_000
 
-/** Every phone push row of the person (any phone, any sign-in). */
-async function deleteAllPhoneRows(userId: string): Promise<number> {
-  return Number(
-    await wherePhoneEndpoint(db('nivaro_push_subscriptions').where({ user: userId })).del()
-  )
+/** When each phone push row was last registered (POST /api/push/phones), per tenant. */
+const registeredKey = (rowId: number) => `nvr:phone-push-reg:${currentTenantKey()}:${rowId}`
+const REGISTERED_TTL_S = 60 * 86_400 // outlives any leftover (≤ 30 days)
+
+/** Stamp a phone push row as registered now (every registration, insert or update). */
+export async function notePhoneRegistered(redis: Redis, rowId: number): Promise<void> {
+  if (!Number.isInteger(rowId) || rowId <= 0) return
+  await redis.setex(registeredKey(rowId), REGISTERED_TTL_S, String(Date.now()))
 }
 
-async function deleteLeftover(l: Leftover): Promise<void> {
-  if (l.ids) await deleteGrantPushRows({ user_id: l.u, push_ids: l.ids })
-  else await deleteAllPhoneRows(l.u)
+/** The push row ids a live sign-in of the person still holds (their grants' push sets). */
+async function livePushIds(redis: Redis, userId: string): Promise<Set<number>> {
+  const out = new Set<number>()
+  for (const g of await listDeviceGrants(redis, userId))
+    for (const id of await grantPushIds(redis, g.id)) out.add(id)
+  return out
+}
+
+/**
+ * Delete the person's phone push rows as they stood at `l.at` — `l.ids`, or all of them — but
+ * never one a live sign-in holds, nor one registered at or after `l.at` (the person signed in
+ * again on that install since: deleting it would silence a live phone).
+ */
+async function deleteStaleRows(redis: Redis, l: Leftover): Promise<number> {
+  if (l.ids && l.ids.length === 0) return 0
+  const q = wherePhoneEndpoint(db('nivaro_push_subscriptions').where({ user: l.u }))
+  if (l.ids) q.whereIn('id', l.ids)
+  const rows = (await q.select('id')) as Array<{ id: number }>
+  if (rows.length === 0) return 0
+  const live = await livePushIds(redis, l.u)
+  const ids = rows.map((r) => Number(r.id)).filter((id) => !live.has(id))
+  if (ids.length === 0) return 0
+  const stamps = await redis.mget(...ids.map(registeredKey))
+  const stale = ids.filter((_, i) => !(Number(stamps[i]) >= l.at))
+  if (stale.length === 0) return 0
+  return deleteGrantPushRows({ user_id: l.u, push_ids: stale })
 }
 
 /**
  * Delete push rows, or — the database refusing — keep them for the next phone sign-out on this
  * tenant to delete (the credential is already dead; only the alerts are left to stop).
+ * `l.ids` = the rows a sign-in just handed back (deleted as they are); no ids = the backstop
+ * sweep, which deletes only stale rows (deleteStaleRows).
  */
 async function deleteOrKeep(redis: Redis, l: Leftover, req?: FastifyRequest): Promise<void> {
   if (l.ids && l.ids.length === 0) return
   try {
-    await deleteLeftover(l)
+    if (l.ids) await deleteGrantPushRows({ user_id: l.u, push_ids: l.ids })
+    else await deleteStaleRows(redis, l)
   } catch (err) {
     req?.log.warn({ err, user: l.u, push_ids: l.ids ?? 'all' }, 'phone push rows kept for retry')
     try {
@@ -97,16 +132,42 @@ async function deleteOrKeep(redis: Redis, l: Leftover, req?: FastifyRequest): Pr
   }
 }
 
-/** Retry the push rows an earlier sign-out could not delete (best effort, never throws). */
-export async function retryLeftoverPushRows(redis: Redis): Promise<void> {
+const isLeftover = (v: unknown): v is Leftover => {
+  const l = v as Leftover
+  return (
+    !!l &&
+    typeof l.u === 'string' &&
+    Number.isFinite(l.at) &&
+    (l.ids === undefined || (Array.isArray(l.ids) && l.ids.every(Number.isInteger)))
+  )
+}
+
+/**
+ * Retry the push rows an earlier sign-out could not delete — only rows still stale by then
+ * (deleteStaleRows). Damaged or expired entries are dropped with a log. Never throws.
+ */
+export async function retryLeftoverPushRows(redis: Redis, req?: FastifyRequest): Promise<void> {
   try {
     for (const raw of await redis.smembers(leftoverKey())) {
+      let l: unknown
       try {
-        await deleteLeftover(JSON.parse(raw) as Leftover)
+        l = JSON.parse(raw)
+      } catch {
+        l = null
+      }
+      if (!isLeftover(l) || Date.now() - l.at > LEFTOVER_MAX_AGE_MS) {
+        req?.log.warn(
+          { entry: raw.slice(0, 200) },
+          'phone push leftover dropped (damaged or expired)'
+        )
+        await redis.srem(leftoverKey(), raw).catch(() => 0)
+        continue
+      }
+      try {
+        await deleteStaleRows(redis, l)
         await redis.srem(leftoverKey(), raw)
       } catch {
-        // still refused, or a damaged entry: left for the next pass (a damaged one is dropped)
-        if (!raw.startsWith('{')) await redis.srem(leftoverKey(), raw).catch(() => 0)
+        // still refused: left for the next pass
       }
     }
   } catch {
@@ -134,8 +195,12 @@ export async function endDeviceGrant(
   const ended = await takeGrant(redis, g.user_id, g.id, 'device')
   if (!ended) return null
   // Rows an earlier sign-out could not delete go first; then this phone's.
-  await retryLeftoverPushRows(redis)
-  await deleteOrKeep(redis, { u: String(ended.user_id), ids: ended.push_ids ?? [] }, opts.req)
+  await retryLeftoverPushRows(redis, opts.req)
+  await deleteOrKeep(
+    redis,
+    { u: String(ended.user_id), ids: ended.push_ids ?? [], at: Date.now() },
+    opts.req
+  )
   await logActivity({
     action: 'device-revoked',
     user: opts.adminId ?? ended.user_id,
@@ -158,14 +223,21 @@ export async function listDeviceGrants(redis: Redis, userId: string): Promise<OA
 /**
  * Sign the person out on every phone (but `except`, the calling phone's own grant). Fails
  * closed: when any phone could not be signed out (after trying them all) the first error is
- * thrown, never a partial "done". With no `except`, every phone push row of the person goes
- * too (a backstop for a row no grant recorded). Returns how many phones were signed out.
+ * thrown, never a partial "done". `sweepAll` (a full sign-out: nothing of the caller stays
+ * signed in) also deletes every stale phone push row of the person — a backstop for a row no
+ * grant recorded. Returns how many phones were signed out.
  */
 export async function endUserDeviceGrants(
   redis: Redis,
   userId: string,
-  opts: { except?: string | null; reason?: DeviceEndReason; req?: FastifyRequest } = {}
+  opts: {
+    except?: string | null
+    sweepAll?: boolean
+    reason?: DeviceEndReason
+    req?: FastifyRequest
+  } = {}
 ): Promise<number> {
+  const at = Date.now()
   let ended = 0
   let failure: unknown = null
   for (const g of await listDeviceGrants(redis, userId)) {
@@ -182,6 +254,6 @@ export async function endUserDeviceGrants(
     }
   }
   if (failure) throw failure
-  if (!opts.except) await deleteOrKeep(redis, { u: userId }, opts.req)
+  if (opts.sweepAll && !opts.except) await deleteOrKeep(redis, { u: userId, at }, opts.req)
   return ended
 }
