@@ -21,7 +21,14 @@ vi.mock('../../../services/workflow-conditions.js', () => ({
   fetchRecordForConditions: vi.fn(async () => ({}))
 }))
 
+vi.mock('../../../services/edit-lock.js', () => ({
+  adminOnlyStateOf: vi.fn(async () => null),
+  adminOnlyTransitionsFor: vi.fn(async () => new Set<string>())
+}))
+
+import { adminOnlyStateOf, adminOnlyTransitionsFor } from '../../../services/edit-lock.js'
 import {
+  adminOnlyTransitionRefusal,
   commentMissing,
   manualTransitionRefusal,
   TRANSITION_COMMENT_REQUIRED
@@ -103,5 +110,55 @@ describe('manualTransitionRefusal', () => {
     const tx = { ...sendBack, comment_mode: 'none', required_roles: '["role-vp"]' }
     expect((await ask({ transition: tx }))?.status).toBe(403)
     expect(await ask({ transition: tx, isAdmin: true })).toBeNull()
+  })
+})
+
+describe('admin-only transitions', () => {
+  // A role this person lacks: a role refusal here would mean the order is wrong.
+  const cancel = { id: 'T-CANCEL', from_state: 's-l1', required_roles: '["role-other"]' }
+  const ask2 = (over: Record<string, unknown> = {}) =>
+    adminOnlyTransitionRefusal({
+      isAdmin: false,
+      collection: 'workflows',
+      item: '372789',
+      transitionId: 't-cancel',
+      ...over
+    })
+  const listed = () => {
+    vi.mocked(adminOnlyTransitionsFor).mockResolvedValue(new Set(['T-CANCEL']))
+    vi.mocked(adminOnlyStateOf).mockResolvedValue({ key: 'approved', label: 'Approved' })
+  }
+
+  it('refuses a non-admin running a listed move at an admin-only state', async () => {
+    listed()
+    const r = await ask2()
+    expect(r?.status).toBe(403)
+    expect(r?.body.code).toBe('ADMIN_ONLY_TRANSITION')
+    expect(r?.body.error).toBe(
+      'Only administrators can make this move at Approved. Use Request help to ask for a change.'
+    )
+  })
+
+  it('lets the same move through while the record is in an approval state', async () => {
+    listed()
+    vi.mocked(adminOnlyStateOf).mockResolvedValue(null)
+    expect(await ask2()).toBeNull()
+  })
+
+  it('never refuses an admin', async () => {
+    listed()
+    expect(await ask2({ isAdmin: true })).toBeNull()
+  })
+
+  it('leaves moves that are not listed alone', async () => {
+    listed()
+    expect(await ask2({ transitionId: 't-forward' })).toBeNull()
+  })
+
+  it('runs inside manualTransitionRefusal, before the role and owner checks', async () => {
+    listed()
+    const r = await ask({ transition: cancel })
+    expect(r?.body.code).toBe('ADMIN_ONLY_TRANSITION')
+    expect(await ask({ transition: cancel, isAdmin: true })).toBeNull()
   })
 })

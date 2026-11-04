@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { adminOnlyStateOf, adminOnlyTransitionsFor } from './edit-lock.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -14,6 +15,7 @@ import { evaluateConditionRules, fetchRecordForConditions } from './workflow-con
  */
 
 export const TRANSITION_COMMENT_REQUIRED = 'TRANSITION_COMMENT_REQUIRED'
+export const ADMIN_ONLY_TRANSITION = 'ADMIN_ONLY_TRANSITION'
 
 export interface GateTransition {
   id: string
@@ -57,6 +59,34 @@ export function commentMissing(transition: Pick<GateTransition, 'comment_mode'>,
 }
 
 /**
+ * Post-approval lock (admin-only tier): a record resting in an admin-only state
+ * lets only administrators run the moves the collection lists (Cancel Workflow,
+ * send-backs). Judged by transition id against the record's own latest state,
+ * so the same move stays open while the record is still being approved. Only
+ * listed ids are refused — an escape hatch out of a terminal state is not
+ * affected unless listed. Admins are never refused.
+ */
+export async function adminOnlyTransitionRefusal(opts: {
+  isAdmin: boolean
+  collection: string
+  item: string
+  transitionId: string
+}): Promise<TransitionRefusal | null> {
+  if (opts.isAdmin) return null
+  const listed = await adminOnlyTransitionsFor(opts.collection)
+  if (!listed.has(String(opts.transitionId).toUpperCase())) return null
+  const state = await adminOnlyStateOf(opts.collection, opts.item)
+  if (!state) return null
+  return {
+    status: 403,
+    body: {
+      error: `Only administrators can make this move at ${state.label || state.key}. Use Request help to ask for a change.`,
+      code: ADMIN_ONLY_TRANSITION
+    }
+  }
+}
+
+/**
  * Why this person may not run `transition` on `instance` now, or null when
  * every gate passes. Order matters: shape errors first, then who, then data.
  */
@@ -94,6 +124,14 @@ export async function manualTransitionRefusal(opts: {
   if (on(transition.auto_trigger)) {
     return refuse(400, 'Automatic transitions cannot be executed manually')
   }
+
+  const adminOnly = await adminOnlyTransitionRefusal({
+    isAdmin,
+    collection: opts.collection,
+    item: opts.item,
+    transitionId: transition.id
+  })
+  if (adminOnly) return adminOnly
 
   if (!isAdmin) {
     const roles = rolesOf(transition.required_roles)

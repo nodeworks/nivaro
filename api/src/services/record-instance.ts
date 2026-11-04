@@ -23,6 +23,7 @@
 import { db, dbRead } from '../db/index.js'
 import { excludeBranchChildren } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
+import { adminOnlyStatesFor, adminOnlyTransitionsFor } from './edit-lock.js'
 import { ownerOnlyAllows, ownsStep, recordCreators, sameUser } from './record-access.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
@@ -196,6 +197,27 @@ export async function applyOwnerOnly(
   }
 }
 
+/**
+ * Post-approval lock: a record resting in an admin-only state does not offer a
+ * non-admin the moves the collection lists — the same answer the transition
+ * gate gives (services/manual-transition-gate.ts). Judged by the page's own
+ * current state, so no per-record read; collections without the tier skip it.
+ */
+export async function applyAdminOnlyTransitions(
+  collection: string,
+  entries: Array<{ state: StateRow | null; available: TransitionRow[] }>,
+  viewer: Viewer
+): Promise<void> {
+  if (viewer.isAdmin) return
+  const listed = await adminOnlyTransitionsFor(collection)
+  if (listed.size === 0) return
+  const states = await adminOnlyStatesFor(collection)
+  for (const e of entries) {
+    if (!e.state || !states.has(e.state.key)) continue
+    e.available = e.available.filter((t) => !listed.has(String(t.id).toUpperCase()))
+  }
+}
+
 /** Same normalisation as `$state`: `item` is a string mirror of the id, and
  *  uuid-keyed collections have it stored in either casing. */
 export const itemKey = (v: unknown) => String(v).toLowerCase()
@@ -321,6 +343,7 @@ export async function loadCurrentInstances(
     })
   }
   await applyOwnerOnly([...out.values()], viewer)
+  await applyAdminOnlyTransitions(collection, [...out.values()], viewer)
   return out
 }
 

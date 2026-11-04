@@ -314,6 +314,17 @@ export async function adminOnlyStateOf(
   return { key: inst.key, label: inst.label ?? inst.key }
 }
 
+/** Transition ids (upper-cased) only admins may run from an admin-only state. */
+export async function adminOnlyTransitionsFor(collection: string): Promise<Set<string>> {
+  const adminOnly = (await lockPlan()).locks.get(collection)?.admin_only
+  return new Set((adminOnly?.transitions ?? []).map((id) => String(id).toUpperCase()))
+}
+
+/** The pipeline state keys that are admin-only for `collection` (list pages judge by state). */
+export async function adminOnlyStatesFor(collection: string): Promise<Set<string>> {
+  return new Set((await lockPlan()).locks.get(collection)?.admin_only?.states ?? [])
+}
+
 /**
  * Is `parentId` of `parent` locked right now, and may `user` change it?
  * Exported for the instance read (the form shows read-only from it).
