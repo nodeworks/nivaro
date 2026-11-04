@@ -19445,7 +19445,7 @@ node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry
               <tr><td>Cache console</td><td>In-process caches on this replica, each with a Bust button (and a bust-all). Every bust is audit-logged.</td></tr>
               <tr><td>Degradation map</td><td>What stops working when each dependency (database, Redis, SMTP) goes down. Database and Redis are probed live.</td></tr>
               <tr><td>Top expensive SQL</td><td>The 15 statements costing the server the most CPU since its last restart. SELECT statements get an Explain button that opens the query plan.</td></tr>
-              <tr><td>Deadlocks</td><td>Recent deadlock events mined from the server health session, with the statements involved.</td></tr>
+              <tr><td>Deadlocks</td><td>Recent deadlocks involving this database, read from the server health session's event file (the in-memory buffer when the file cannot be read), with the statements involved. Deadlocks in other databases on a shared server are left out.</td></tr>
               <tr><td>Long transactions</td><td>Sleeping sessions that have held an open transaction idle for 5+ minutes.</td></tr>
               <tr><td>Unused indexes</td><td>Nonclustered indexes with heavy writes and zero reads since the server last restarted.</td></tr>
               <tr><td>Table heat</td><td>Read/write activity per table since the server last restarted.</td></tr>

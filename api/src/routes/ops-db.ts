@@ -4,6 +4,7 @@ import { isMssql } from '../db/dialect.js'
 import { _backgroundDb, _staticDb, db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { readDeadlockReports } from '../services/deadlock-reports.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 
 /**
@@ -159,22 +160,11 @@ export async function opsDbRoutes(app: FastifyInstance) {
   }
   app.addHook('preHandler', requireAdmin)
 
-  // #100 — deadlock graphs mined from the system_health XE ring buffer.
+  // #100 — deadlock graphs from system_health (event file, ring buffer fallback), this
+  // database's only: the server may be shared with other databases and environments.
   app.get('/deadlocks', async (_req, reply) => {
     const result = await dmv(async () => {
-      const rows = (await db.raw(`
-        SELECT TOP 20
-          xed.value('@timestamp', 'datetime2') AS occurred_at,
-          xed.query('.') AS graph
-        FROM (
-          SELECT CAST(target_data AS XML) AS target_data
-          FROM sys.dm_xe_session_targets st
-          JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
-          WHERE s.name = 'system_health' AND st.target_name = 'ring_buffer'
-        ) AS tab
-        CROSS APPLY target_data.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(xed)
-        ORDER BY occurred_at DESC
-      `)) as Array<{ occurred_at: Date; graph: string }>
+      const rows = await readDeadlockReports({ limit: 20, thisDatabase: true })
       return rows.map((r) => {
         const xml = String(r.graph ?? '')
         // Mine the two statements + victim out of the graph — the full XML is

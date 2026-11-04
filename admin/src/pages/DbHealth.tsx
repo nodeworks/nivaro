@@ -1190,7 +1190,7 @@ export function DbHealthPage() {
 
           <Panel
             title='Deadlocks'
-            sub='Mined from the system_health session; the hourly sweep also raises an issue on fresh ones (#100)'
+            sub="This database's deadlocks from the system_health event file; the hourly sweep also raises an issue on fresh ones (#100)"
           >
             {deadlocks.data?.unavailable ? (
               <Unavailable reason={deadlocks.data.unavailable} />

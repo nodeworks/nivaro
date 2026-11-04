@@ -36,7 +36,7 @@ export const dbHealthDocs: DocSection = {
         ],
         [
           'Deadlocks',
-          'Recent deadlock events mined from the server health session, with the statements involved.'
+          "Recent deadlocks involving this database, read from the server health session's event file (the in-memory buffer when the file cannot be read), with the statements involved. Deadlocks in other databases on a shared server are left out."
         ],
         [
           'Long transactions',

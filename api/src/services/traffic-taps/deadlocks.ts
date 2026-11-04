@@ -1,7 +1,7 @@
 // api/src/services/traffic-taps/deadlocks.ts
 /**
  * #1171 — deadlock markers. The `system_health` extended-event session's `xml_deadlock_report`
- * events (its event file; the ring buffer DB Health reads is the fallback — see readReports). Each
+ * events (event file, ring buffer fallback — services/deadlock-reports.ts). Each
  * deadlock becomes a sparkline marker at the moment it happened, named by the two (or more)
  * entities whose statements met.
  *
@@ -14,7 +14,7 @@
  * Never in cloud mode (the ring buffer is server-wide). Without VIEW SERVER STATE the list is
  * simply empty and `available` says so.
  */
-import { db } from '../../db/index.js'
+import { readDeadlockReports } from '../deadlock-reports.js'
 import { requestStatements } from '../request-trace.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 import { clipSql, shapeNeedle } from './db-blocking.js'
@@ -192,41 +192,11 @@ export function deadlockLabel(e: DeadlockEvent): string {
   return `Deadlock: ${sides}${v ? ` (victim: ${v})` : ''}`
 }
 
-/**
- * The newest deadlock reports. system_health's event FILE first: its ring buffer, read through the
- * DMV, is cut at a few MB (`truncated="1"`) and on a busy server holds no deadlock at all while the
- * file has them (seen on the shared database, 2026-10-01). The ring is the fallback for servers
- * without `timestamp_utc` on the file reader (before SQL Server 2017) or without file access.
- */
-async function readReports(): Promise<Array<{ occurred_at: Date | string; graph: string }>> {
-  try {
-    return (await db.raw(`
-      SELECT TOP 50 timestamp_utc AS occurred_at, CAST(event_data AS nvarchar(max)) AS graph
-      FROM sys.fn_xe_file_target_read_file('system_health*.xel', NULL, NULL, NULL)
-      WHERE object_name = 'xml_deadlock_report'
-      ORDER BY timestamp_utc DESC
-    `)) as Array<{ occurred_at: Date | string; graph: string }>
-  } catch {
-    return (await db.raw(`
-      SELECT TOP 50
-        xed.value('@timestamp', 'datetime2') AS occurred_at,
-        CAST(xed.query('.') AS nvarchar(max)) AS graph
-      FROM (
-        SELECT CAST(target_data AS XML) AS target_data
-        FROM sys.dm_xe_session_targets st
-        JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
-        WHERE s.name = 'system_health' AND st.target_name = 'ring_buffer'
-      ) AS tab
-      CROSS APPLY target_data.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(xed)
-      ORDER BY occurred_at DESC
-    `)) as Array<{ occurred_at: Date | string; graph: string }>
-  }
-}
-
 async function readRing(): Promise<void> {
   const st = state()
   try {
-    const rows = await readReports()
+    // Server-wide on purpose: the map names the other program in a deadlock with this API.
+    const rows = await readDeadlockReports({ limit: 50 })
     st.available = true
     for (const r of rows) {
       const at = new Date(r.occurred_at).getTime()

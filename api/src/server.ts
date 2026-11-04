@@ -1626,24 +1626,18 @@ export async function buildServer() {
           .catch(() => {})
       })
 
-      // Deadlock reporter (#100): hourly sweep of the system_health ring
-      // buffer — a fresh deadlock raises ONE deduped issue naming the victim.
+      // Deadlock reporter (#100): hourly sweep of system_health (event file, ring
+      // buffer fallback) for this database's deadlocks — a fresh one raises ONE
+      // deduped issue naming the victim.
       app.cron.schedule('deadlock-sweep', '35 * * * *', async () => {
-        const { db } = await import('./db/index.js')
+        const { readDeadlockReports } = await import('./services/deadlock-reports.js')
         const { trackError } = await import('./services/error-tracking.js')
         try {
-          const rows = (await db.raw(`
-            SELECT TOP 3 xed.value('@timestamp', 'datetime2') AS occurred_at,
-                   xed.query('.') AS graph
-            FROM (
-              SELECT CAST(target_data AS XML) AS target_data
-              FROM sys.dm_xe_session_targets st
-              JOIN sys.dm_xe_sessions s ON s.address = st.event_session_address
-              WHERE s.name = 'system_health' AND st.target_name = 'ring_buffer'
-            ) AS tab
-            CROSS APPLY target_data.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(xed)
-            ORDER BY occurred_at DESC
-          `)) as Array<{ occurred_at: Date; graph: string }>
+          const rows = await readDeadlockReports({
+            limit: 3,
+            since: new Date(Date.now() - 65 * 60_000),
+            thisDatabase: true
+          })
           const fresh = rows.filter(
             (r) => Date.now() - new Date(r.occurred_at).getTime() < 65 * 60_000
           )
