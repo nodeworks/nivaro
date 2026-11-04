@@ -15,12 +15,16 @@ import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
  *
  * Returns the refusal to send, or null when the caller may go on. A record the
  * caller cannot see reads as missing (404), never as forbidden. Admins pass.
+ * `adminOnlyTier: false` (a push retry, which re-sends the stored payload
+ * like the record's Push button) skips the post-approval admin-only tier;
+ * the approval tier still judges it.
  */
 export async function recordRefusal(
   req: FastifyRequest,
   collection: string,
   item: string,
-  action: 'read' | 'update'
+  action: 'read' | 'update',
+  opts: { adminOnlyTier?: boolean } = {}
 ): Promise<{ code: number; body: Record<string, unknown> } | null> {
   if (req.isAdmin) return null
   try {
@@ -36,7 +40,9 @@ export async function recordRefusal(
   if (action === 'read') return null
   const { assertNotEditLocked, EditLockedError, EDIT_LOCKED } = await import('./edit-lock.js')
   try {
-    await assertNotEditLocked(req.user, collection, { ids: [item] }, req)
+    await assertNotEditLocked(req.user, collection, { ids: [item] }, req, {
+      adminOnlyTier: opts.adminOnlyTier
+    })
   } catch (e) {
     const message =
       e instanceof EditLockedError

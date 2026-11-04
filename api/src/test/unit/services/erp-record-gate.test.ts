@@ -75,7 +75,15 @@ describe('recordRefusal', () => {
       expect.objectContaining({ id: 'u1' }),
       'workflows',
       { ids: ['5'] },
-      expect.anything()
+      expect.anything(),
+      { adminOnlyTier: undefined }
     )
+  })
+
+  it("passes a push retry's admin-only opt-out to the lock", async () => {
+    await recordRefusal(req(), 'workflows', '5', 'update', { adminOnlyTier: false })
+    expect(vi.mocked(editLock.assertNotEditLocked).mock.calls[0]?.[4]).toEqual({
+      adminOnlyTier: false
+    })
   })
 })

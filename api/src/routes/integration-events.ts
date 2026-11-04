@@ -289,6 +289,7 @@ export async function integrationEventsRoutes(app: FastifyInstance) {
     // to change THAT record (visible, updatable, not edit-locked), not just the
     // collection (army3: any approver could replay a shipment on any request).
     // A provider that cannot name an entry's record replays for admins only.
+    // The admin-only tier holds here (unlike a push retry): a replay re-applies data.
     if (!req.isAdmin) {
       if (!provider.get) return reply.code(403).send({ error: 'Forbidden' })
       const entry = await provider.get(entryId).catch(() => null)
