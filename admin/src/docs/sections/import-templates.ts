@@ -314,7 +314,7 @@ const { data: created } = await cms.request(
     { type: 'h3', text: 'Re-import by state' },
     {
       type: 'p',
-      text: '`reimport.states` (a list of pipeline state keys) limits when non-administrators see **Re-import** on a record: only while the record is in one of those states. Administrators always see it. Empty or missing = shown in every state, as before.'
+      text: '`reimport.states` (a list of pipeline state keys) limits when non-administrators see `Re-import` on a record: only while the record is in one of those states. Administrators always see it. Empty or missing = shown in every state, as before.'
     },
     { type: 'h2', id: 'import-template-replay', text: 'Replay a past file' },
     {
