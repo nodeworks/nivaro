@@ -1756,6 +1756,11 @@ function FieldMetaEditor({
   const [note, setNote] = useState(fm?.note ?? '')
   const [hidden, setHidden] = useState(fm?.hidden ?? false)
   const [readonly, setReadonly] = useState(fm?.readonly ?? false)
+  // `options.admin_only_edit`: only administrators change the value (the
+  // server drops everyone else's write to it).
+  const [adminOnlyEdit, setAdminOnlyEdit] = useState(
+    () => parseJson<{ admin_only_edit?: boolean }>(fm?.options)?.admin_only_edit === true
+  )
   const [required, setRequired] = useState(fm?.required ?? false)
   const [nullable, setNullable] = useState(
     () => parseJson<{ nullable?: boolean }>(fm?.options)?.nullable ?? true
@@ -1985,6 +1990,8 @@ function FieldMetaEditor({
     // home there (stringify silently drops non-index props). Leave those untouched.
     if (Array.isArray(raw)) return base
     const parsed = raw as Record<string, unknown>
+    if (adminOnlyEdit) parsed.admin_only_edit = true
+    else delete parsed.admin_only_edit
     if (autoIdPattern) {
       let variants: unknown[] | undefined
       if (autoIdVariants.trim() && autoIdVariantsValid) {
@@ -2735,6 +2742,15 @@ function FieldMetaEditor({
             className='rounded'
           />
           Read-only
+        </label>
+        <label className='flex cursor-pointer items-center gap-1.5'>
+          <input
+            type='checkbox'
+            checked={adminOnlyEdit}
+            onChange={(e) => setAdminOnlyEdit(e.target.checked)}
+            className='rounded'
+          />
+          Only administrators can change this
         </label>
         <label className='flex cursor-pointer items-center gap-1.5'>
           <input

@@ -2988,6 +2988,14 @@ export function InlineTableField({
     []
   )
   const { isAdmin: viewerIsAdmin } = useItemEditAuth()
+  /** A column marked `options.admin_only_edit` is read-only for non-admins —
+   *  the server drops their writes to it (dropServerSetFields). */
+  const adminOnlyLocked = useCallback(
+    (c: CMSField) =>
+      !viewerIsAdmin &&
+      parseJson<{ admin_only_edit?: boolean }>(c.options)?.admin_only_edit === true,
+    [viewerIsAdmin]
+  )
   /** A closed column the endpoint marks locked is read-only for non-admins —
    *  the writer refuses anything but the actual there (the reconcile actions
    *  set exactly that, so they keep working). */
@@ -6783,6 +6791,7 @@ export function InlineTableField({
     c.interface === 'match-agg-column' ||
     c.interface === 'relation-path' ||
     !!c.readonly ||
+    adminOnlyLocked(c) ||
     isSummaryCol(c)
 
   type RowEditorArgs = {
@@ -6996,6 +7005,7 @@ export function InlineTableField({
                   </div>
                 ) : displayOnlyIface ||
                   c.readonly ||
+                  adminOnlyLocked(c) ||
                   editState?.locks?.includes(c.field) ||
                   closedLockedCell(c.field, args.draft) ? (
                   <div
@@ -8305,7 +8315,9 @@ export function InlineTableField({
                                       data-tip={
                                         inlineEdit && editState?.locks?.includes(c.field)
                                           ? lockReasonText(c.field)
-                                          : undefined
+                                          : adminOnlyLocked(c)
+                                            ? 'Only administrators can change this field'
+                                            : undefined
                                       }
                                       data-grid-cell={inlineEdit ? cellKey(id, c.field) : undefined}
                                     >
@@ -8328,6 +8340,7 @@ export function InlineTableField({
                                         displayOnly={
                                           !inlineEdit ||
                                           isPendingDelete ||
+                                          adminOnlyLocked(c) ||
                                           (inlineEdit && !!editState?.locks?.includes(c.field))
                                         }
                                       />

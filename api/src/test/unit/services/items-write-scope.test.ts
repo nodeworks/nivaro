@@ -95,7 +95,14 @@ vi.mock('../../../services/collections.js', async (orig) => ({
     { field: 'workflow_state', type: 'string', special: null, readonly: true },
     { field: 'name', type: 'string', interface: 'input', special: null, readonly: false },
     { field: 'notes', type: 'text', interface: 'input-multiline', special: null, readonly: false },
-    { field: 'amount', type: 'decimal', special: null, readonly: false }
+    { field: 'amount', type: 'decimal', special: null, readonly: false },
+    {
+      field: 'requisition_id',
+      type: 'string',
+      special: null,
+      readonly: false,
+      options: { admin_only_edit: true }
+    }
   ]),
   getRelations: vi.fn(async () => [])
 }))
@@ -142,6 +149,15 @@ import {
   updateOne
 } from '../../../services/items.js'
 
+const move = vi.hoisted(() => ({ allowed: false, asked: [] as unknown[][] }))
+vi.mock('../../../services/requirement-writes.js', () => ({
+  REQUIREMENTS_FOR_HEADER: 'x-nivaro-requirements-for',
+  requirementWriteAllowed: vi.fn(async (...args: unknown[]) => {
+    move.asked.push(args)
+    return move.allowed
+  })
+}))
+
 const paul = { id: 'U-PAUL', role: 'APPROVER' } as never
 const asCaller = { isAdmin: false } as never
 const asAdmin = { isAdmin: true } as never
@@ -155,6 +171,8 @@ beforeEach(() => {
   scope.restricted = false
   scope.applied = 0
   perm.fields = null
+  move.allowed = false
+  move.asked = []
 })
 
 describe('update and delete honour User Scopes', () => {
@@ -226,6 +244,59 @@ describe('server-set fields', () => {
     const body: Record<string, unknown> = { creator: 'U-X', workflow_state: 'approved' }
     expect(await dropServerSetFields(paul, 'workflows', body, 'update', asAdmin, true)).toEqual([])
     expect(body).toEqual({ creator: 'U-X', workflow_state: 'approved' })
+  })
+})
+
+describe('admin-only fields', () => {
+  const idBody = () => ({ requisition_id: 'R1', notes: 'x' }) as Record<string, unknown>
+
+  it('a non-admin caller payload drops the field and reports it', async () => {
+    const body = idBody()
+    const dropped = await dropServerSetFields(paul, 'workflows', body, 'update', asCaller, true)
+    expect(dropped).toEqual(['requisition_id'])
+    expect(body).toEqual({ notes: 'x' })
+  })
+
+  it('an admin keeps it', async () => {
+    const body = idBody()
+    expect(await dropServerSetFields(paul, 'workflows', body, 'update', asAdmin, true)).toEqual([])
+    expect(body).toEqual(idBody())
+  })
+
+  it('server code without a request keeps it', async () => {
+    const body = idBody()
+    expect(await dropServerSetFields(paul, 'workflows', body, 'update', undefined, true)).toEqual(
+      []
+    )
+    expect(body).toEqual(idBody())
+  })
+
+  it('server code writing on the caller behalf (not a caller payload) keeps it', async () => {
+    const body = idBody()
+    await dropServerSetFields(paul, 'workflows', body, 'update', asCaller, false)
+    expect(body).toEqual(idBody())
+  })
+
+  it('a requirements-dialog write of the move keeps it', async () => {
+    move.allowed = true
+    const body = idBody()
+    const dropped = await dropServerSetFields(paul, 'workflows', body, 'update', asCaller, true, [
+      '7'
+    ])
+    expect(dropped).toEqual([])
+    expect(body).toEqual(idBody())
+    expect(move.asked[0].slice(1)).toEqual(['workflows', '7', ['requisition_id']])
+  })
+
+  it('the dialog exception is refused when the move does not ask for it, and never on a create', async () => {
+    move.allowed = false
+    const body = idBody()
+    await dropServerSetFields(paul, 'workflows', body, 'update', asCaller, true, ['7'])
+    expect(body).toEqual({ notes: 'x' })
+    move.allowed = true
+    const created = idBody()
+    await dropServerSetFields(paul, 'workflows', created, 'create', asCaller, true)
+    expect(created).toEqual({ notes: 'x' })
   })
 })
 

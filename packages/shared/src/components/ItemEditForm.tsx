@@ -55,6 +55,7 @@ import {
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
+import type { FieldSource } from '../lib/config-sentences'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -131,7 +132,6 @@ import {
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
-import type { FieldSource } from '../lib/config-sentences'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import type { AvailableBulkAction } from './bulk/BulkActionButtons'
 import { FieldSourcesContext } from './ConfigReadBack'
@@ -175,7 +175,6 @@ import {
 } from './item-edit/FieldAffordances'
 import { useFieldCommentsApi } from './item-edit/FieldComments'
 import { FieldRow } from './item-edit/FieldRow'
-import { fieldSourcesFor } from './item-edit/field-sources'
 import {
   buildTourSteps,
   FormTour,
@@ -184,6 +183,7 @@ import {
   useFormTourSeen
 } from './item-edit/FormTour'
 import { type FieldCommentsApi, FieldCommentsContext } from './item-edit/field-comments-context'
+import { fieldSourcesFor } from './item-edit/field-sources'
 import { formDensityOf, useFormDensityCss } from './item-edit/form-density'
 import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
@@ -9410,6 +9410,18 @@ function ItemEditFormView({
   }
   // Role preview (#8): fields the previewed role may read but not update.
   if (viewAs.active) for (const f of viewAs.readonly) lockedFields.add(f)
+  // Fields only administrators change (`options.admin_only_edit`): everyone
+  // else sees them locked (the server drops their writes); an admin keeps
+  // them editable even where the layout would show them read-only.
+  const adminOnlyFields = new Set<string>()
+  if (!isAdmin) {
+    for (const f of fieldConfig ?? []) {
+      if (parseJson<{ admin_only_edit?: boolean }>(f.options)?.admin_only_edit === true) {
+        adminOnlyFields.add(f.field)
+        lockedFields.add(f.field)
+      }
+    }
+  }
   // #25 — section-level locks: a group listing the viewer's role in
   // locked_for_roles renders every field it holds read-only (admins exempt;
   // the server drops those keys on update too).
@@ -9501,6 +9513,10 @@ function ItemEditFormView({
       }
       if (viewingAddendum) {
         lockReasons[key] = 'Viewing an addendum — switch to the current record to edit'
+        continue
+      }
+      if (adminOnlyFields.has(key)) {
+        lockReasons[key] = 'Only administrators can change this field'
         continue
       }
       if (!f.readonly) continue
