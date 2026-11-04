@@ -14,10 +14,20 @@ const t = vi.hoisted(() => ({
 
 vi.mock('../../../db/index.js', () => ({
   db: (table: string) => {
-    const rows = () => t.tables[table.split(' ')[0]] ?? []
+    // whereNull is honoured (an open instance vs the latest one); the rest
+    // answer every row.
+    const nulls: string[] = []
+    const rows = () =>
+      (t.tables[table.split(' ')[0]] ?? []).filter((r) =>
+        nulls.every((c) => r[c.split('.').pop() as string] == null)
+      )
     const chain: Record<string, unknown> = {}
-    for (const m of ['where', 'whereIn', 'whereNull', 'whereNotNull', 'join', 'select'])
+    for (const m of ['where', 'whereIn', 'whereNotNull', 'join', 'select', 'orderBy'])
       chain[m] = () => chain
+    chain.whereNull = (c: string) => {
+      nulls.push(c)
+      return chain
+    }
     chain.first = () => Promise.resolve(rows()[0])
     // biome-ignore lint/suspicious/noThenProperty: a knex query builder is a thenable
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
@@ -70,8 +80,10 @@ vi.mock('../../../services/items.js', () => {
 })
 
 import {
+  adminOnlyStateOf,
   assertNotEditLocked,
   EditLockedError,
+  editLockVerdictFor,
   forgetEditLockPlan,
   lockHolderVerdict,
   ownRowLinks,
@@ -110,6 +122,43 @@ describe('edit_lock config', () => {
     // A lock alone is worth storing even with the default opening mode.
     expect(validateSummaryModeRules({ edit_lock: body.edit_lock }).value).not.toBeNull()
     expect(validateSummaryModeRules({ edit_lock: { states: [1] } }).error).toBeTruthy()
+    const adminOnly = {
+      states: [],
+      children: [],
+      admin_only: {
+        states: ['done'],
+        transitions: [],
+        open_fields: ['is_on_hold'],
+        open_children: []
+      }
+    }
+    expect(validateSummaryModeRules({ edit_lock: adminOnly }).value?.edit_lock).toEqual(adminOnly)
+  })
+
+  it('takes an admin-only tier; either tier alone is a lock', () => {
+    expect(
+      parseEditLock({ states: [], children: ['x'], admin_only: { states: ['done'] } })
+    ).toEqual({
+      states: [],
+      children: ['x'],
+      admin_only: { states: ['done'], transitions: [], open_fields: [], open_children: [] }
+    })
+    expect(parseEditLock({ states: [], admin_only: { states: [] } })).toBeNull()
+    expect(validateEditLock({ admin_only: { states: 'x' } }).error).toMatch(/admin_only.states/)
+    expect(
+      validateEditLock({ admin_only: { states: ['done'], transitions: ['a b'] } }).error
+    ).toMatch(/admin_only.transitions/)
+    const id = 'BCA96932-0000-4000-8000-000000000001'
+    expect(
+      validateEditLock({
+        admin_only: { states: ['done'], transitions: [id], open_fields: ['is_on_hold'] }
+      }).value?.admin_only
+    ).toEqual({
+      states: ['done'],
+      transitions: [id],
+      open_fields: ['is_on_hold'],
+      open_children: []
+    })
   })
 })
 
@@ -151,6 +200,13 @@ const RELATIONS = [
     one_collection: 'workflows',
     one_field: 'notes',
     junction_field: null
+  },
+  {
+    many_collection: 'workflow_purchase_orders_junction',
+    many_field: 'workflows_id',
+    one_collection: 'workflows',
+    one_field: 'purchase_orders',
+    junction_field: 'purchase_orders_id'
   },
   {
     many_collection: 'order_lines',
@@ -333,5 +389,179 @@ describe('recordWriteRefusal (one record, the single item-action sequence)', () 
   it('lets a person who may change the record through', async () => {
     expect(await recordWriteRefusal(reqAs('U-RODNEY'), 'orders', '8')).toBeNull()
     expect(await recordWriteRefusal(reqAs('U-CJ'), 'workflows', '100')).toBeNull()
+  })
+})
+
+// Post-approval: only admins may change the record — the creator and the step
+// owners lose their exemption; open fields and open children stay writable.
+describe('admin-only tier', () => {
+  beforeEach(() => {
+    seed()
+    t.tables.nivaro_collections = [
+      {
+        collection: 'workflows',
+        summary_mode_rules: JSON.stringify({
+          edit_lock: {
+            states: ['waiting_l1'],
+            children: ['workflow_line_items'],
+            admin_only: {
+              states: ['waiting_po', 'completed'],
+              open_fields: ['is_on_hold', 'is_priority'],
+              open_children: ['workflow_purchase_orders_junction']
+            }
+          }
+        })
+      }
+    ]
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i2', current_state: 's9', key: 'waiting_po', label: 'Waiting on PO' }
+    ]
+    t.tables.workflow_purchase_orders_junction = [{ workflows_id: 100 }]
+  })
+
+  it('refuses the creator and a step owner, lets an admin through', async () => {
+    await expect(
+      assertNotEditLocked(
+        userOf('U-CJ'),
+        'workflows',
+        { ids: [100], payload: { project: 5 } },
+        reqAs('U-CJ')
+      )
+    ).rejects.toThrow(
+      'This record is at Waiting on PO — only administrators can change it. Use Request help to ask for a change.'
+    )
+    await expect(
+      assertNotEditLocked(userOf('U-BART'), 'workflows', { ids: [100] }, reqAs('U-BART'))
+    ).rejects.toBeInstanceOf(EditLockedError)
+    await expect(
+      assertNotEditLocked(
+        userOf('U-ADM'),
+        'workflows',
+        { ids: [100], payload: { project: 5 } },
+        reqAs('U-ADM', true)
+      )
+    ).resolves.toBeUndefined()
+  })
+
+  it('locks a completed run in an admin-only state; a completed approval-state run stays open', async () => {
+    t.tables.nivaro_workflow_instances = [
+      {
+        id: 'i3',
+        current_state: 's10',
+        key: 'completed',
+        label: null,
+        completed_at: '2026-11-01T00:00:00Z'
+      }
+    ]
+    await expect(
+      assertNotEditLocked(userOf('U-CJ'), 'workflows', { ids: [100] }, reqAs('U-CJ'))
+    ).rejects.toThrow(/at completed — only administrators can change it/)
+    t.tables.nivaro_workflow_instances = [
+      {
+        id: 'i4',
+        current_state: 's1',
+        key: 'waiting_l1',
+        label: 'Level 1 Approval',
+        completed_at: '2026-11-01T00:00:00Z'
+      }
+    ]
+    await expect(
+      assertNotEditLocked(userOf('U-RODNEY'), 'workflows', { ids: [100] }, reqAs('U-RODNEY'))
+    ).resolves.toBeUndefined()
+  })
+
+  it('keeps the approval tier (creator passes) for a run still waiting in an approval state', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    await expect(
+      assertNotEditLocked(userOf('U-CJ'), 'workflows', { ids: [100] }, reqAs('U-CJ'))
+    ).resolves.toBeUndefined()
+    await expect(
+      assertNotEditLocked(userOf('U-RODNEY'), 'workflows', { ids: [100] }, reqAs('U-RODNEY'))
+    ).rejects.toThrow(/only the person who created it/)
+  })
+
+  it('lets an update of open fields only through; never a delete or another field', async () => {
+    const as = (payload?: Record<string, unknown>) =>
+      assertNotEditLocked(userOf('U-CJ'), 'workflows', { ids: [100], payload }, reqAs('U-CJ'))
+    await expect(as({ is_on_hold: true })).resolves.toBeUndefined()
+    await expect(as({ id: 100, is_priority: false, _change_reason: 'x' })).resolves.toBeUndefined()
+    await expect(as({ is_on_hold: true, project: 5 })).rejects.toBeInstanceOf(EditLockedError)
+    await expect(as({})).rejects.toBeInstanceOf(EditLockedError)
+    await expect(as()).rejects.toBeInstanceOf(EditLockedError)
+  })
+
+  it('leaves open children and notes open; own rows stay locked', async () => {
+    await expect(
+      assertNotEditLocked(
+        userOf('U-CJ'),
+        'workflow_purchase_orders_junction',
+        { payload: { workflows_id: 100, purchase_orders_id: 7 } },
+        reqAs('U-CJ')
+      )
+    ).resolves.toBeUndefined()
+    await expect(
+      assertNotEditLocked(
+        userOf('U-CJ'),
+        'workflow_line_items',
+        { ids: [7], payload: { qty: 2 } },
+        reqAs('U-CJ')
+      )
+    ).rejects.toThrow(/only administrators can change it/)
+    await expect(
+      assertNotEditLocked(userOf('U-RODNEY'), 'notes', { ids: [9] }, reqAs('U-RODNEY'))
+    ).resolves.toBeUndefined()
+  })
+
+  it('recordWriteRefusal judges the fields a caller says it writes', async () => {
+    expect(
+      await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100, { fields: ['is_on_hold'] })
+    ).toBeNull()
+    expect(await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100)).toMatchObject({
+      status: 403,
+      body: { code: 'EDIT_LOCKED' }
+    })
+    expect(
+      await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100, { fields: ['project'] })
+    ).toMatchObject({ status: 403 })
+  })
+
+  it('answers the form with the admin-only tier and its open fields', async () => {
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toEqual({
+      locked: true,
+      allowed: false,
+      message:
+        'This record is at Waiting on PO — only administrators can change it. Use Request help to ask for a change.',
+      tier: 'admin_only',
+      open_fields: ['is_on_hold', 'is_priority']
+    })
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toMatchObject({
+      locked: true,
+      allowed: true,
+      tier: 'approval'
+    })
+  })
+
+  it('adminOnlyStateOf names the admin-only state, or null', async () => {
+    expect(await adminOnlyStateOf('workflows', '100')).toEqual({
+      key: 'waiting_po',
+      label: 'Waiting on PO'
+    })
+    expect(await adminOnlyStateOf('orders', '1')).toBeNull()
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    expect(await adminOnlyStateOf('workflows', '100')).toBeNull()
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i3', current_state: 's10', key: 'completed', label: null, completed_at: 'x' }
+    ]
+    expect(await adminOnlyStateOf('workflows', '100')).toEqual({
+      key: 'completed',
+      label: 'completed'
+    })
   })
 })
