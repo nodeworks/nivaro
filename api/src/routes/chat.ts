@@ -2124,6 +2124,19 @@ export async function chatRoutes(app: FastifyInstance) {
     const target =
       targets.find((t) => t.field === b.field) ?? (targets.length === 1 ? targets[0] : null)
     if (!target) return reply.code(400).send({ error: 'Pick the record field to attach it to' })
+    // A change to the record (its file field, or a row of its files junction):
+    // the caller must be able to change THAT record — visible, updatable, not
+    // held by someone else, not edit-locked. A junction row is judged as the
+    // record; the write itself then carries the request so the items service
+    // judges the row too.
+    const { recordWriteRefusal } = await import('../services/edit-lock.js')
+    const refusal = await recordWriteRefusal(
+      req,
+      rec.collection,
+      rec.id,
+      target.kind === 'm2m' ? {} : { fields: [target.field] }
+    )
+    if (refusal) return reply.code(refusal.status).send(refusal.body)
     const { createOne, updateOne } = await import('../services/items.js')
     try {
       if (target.kind === 'm2m') {
@@ -2131,12 +2144,14 @@ export async function chatRoutes(app: FastifyInstance) {
           .where({ [target.parent_fk!]: rec.id, [target.file_fk!]: fileId })
           .first()
         if (!exists)
-          await createOne(req.user!, target.junction!, {
-            [target.parent_fk!]: rec.id,
-            [target.file_fk!]: fileId
-          })
+          await createOne(
+            req.user!,
+            target.junction!,
+            { [target.parent_fk!]: rec.id, [target.file_fk!]: fileId },
+            req
+          )
       } else {
-        await updateOne(req.user!, rec.collection, rec.id, { [target.field]: fileId })
+        await updateOne(req.user!, rec.collection, rec.id, { [target.field]: fileId }, req)
       }
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode ?? 500

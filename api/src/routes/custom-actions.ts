@@ -228,7 +228,14 @@ export async function customActionRoutes(app: FastifyInstance): Promise<void> {
           if (Object.keys(payload).length === 0) {
             return reply.code(400).send({ error: 'The action has no fields configured' })
           }
-          await updateOne(req.user!, collection, item, payload)
+          // A person's write: the record's edit locks judge it as a PATCH would
+          // (an admin-only state lets only its open fields through).
+          const { recordWriteRefusal } = await import('../services/edit-lock.js')
+          const refusal = await recordWriteRefusal(req, collection, item, {
+            fields: Object.keys(payload)
+          })
+          if (refusal) return reply.code(refusal.status).send(refusal.body)
+          await updateOne(req.user!, collection, item, payload, req)
           result = { updated: Object.keys(payload) }
         }
       } catch (err) {
