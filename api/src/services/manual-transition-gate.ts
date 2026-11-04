@@ -87,6 +87,27 @@ export async function adminOnlyTransitionRefusal(opts: {
 }
 
 /**
+ * The moves on offer to a person, less the ones adminOnlyTransitionRefusal
+ * would refuse them — for the lists that offer moves (the record panel, the
+ * Command Center peek). The record's state is read once, and only when a
+ * listed move is on offer.
+ */
+export async function withoutAdminOnlyMoves<T extends { id: unknown }>(opts: {
+  isAdmin: boolean
+  collection: string
+  item: string
+  transitions: T[]
+}): Promise<T[]> {
+  const { transitions } = opts
+  if (opts.isAdmin || transitions.length === 0) return transitions
+  const listed = await adminOnlyTransitionsFor(opts.collection)
+  const isListed = (t: T) => listed.has(String(t.id).toUpperCase())
+  if (!transitions.some(isListed)) return transitions
+  if (!(await adminOnlyStateOf(opts.collection, opts.item))) return transitions
+  return transitions.filter((t) => !isListed(t))
+}
+
+/**
  * Why this person may not run `transition` on `instance` now, or null when
  * every gate passes. Order matters: shape errors first, then who, then data.
  * `skipRequirements` / `skipComment`: the question asked while the move's own

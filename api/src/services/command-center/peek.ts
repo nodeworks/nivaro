@@ -206,16 +206,9 @@ export async function offeredTransitions(
       })
       offered = offeredToActor(offered, actor)
     }
-    if (!isAdmin) {
-      // Post-approval lock: never offer a move the gate would refuse.
-      const { adminOnlyTransitionRefusal } = await import('../manual-transition-gate.js')
-      const kept: typeof offered = []
-      for (const t of offered) {
-        if (!(await adminOnlyTransitionRefusal({ isAdmin, collection, item, transitionId: t.id })))
-          kept.push(t)
-      }
-      offered = kept
-    }
+    // Post-approval lock: never offer a move the gate would refuse.
+    const { withoutAdminOnlyMoves } = await import('../manual-transition-gate.js')
+    offered = await withoutAdminOnlyMoves({ isAdmin, collection, item, transitions: offered })
     return offered.slice(0, 8).map((t) => ({ key: String(t.id), label: t.label }))
   } catch {
     return []
