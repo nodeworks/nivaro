@@ -510,7 +510,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           collection,
           records[i] as Record<string, unknown>,
           req,
-          req.workspaceId ?? undefined
+          req.workspaceId ?? undefined,
+          { callerPayload: true }
         )
         imported++
       } catch (err) {

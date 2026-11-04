@@ -85,6 +85,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
+import { adminOnlyEditSupported, withAdminOnlyEdit } from '@/lib/admin-only-option'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
@@ -1982,6 +1983,9 @@ function FieldMetaEditor({
     return null
   }
 
+  // Choice interfaces store their options as a bare array: no room for the flag.
+  const adminOnlySupported = adminOnlyEditSupported(buildOptions())
+
   // Merge (or remove) the auto_id key on top of whatever buildOptions() produced,
   // without disturbing the interface-specific options it already builds.
   function withAutoId(base: string | null): string | null {
@@ -1989,9 +1993,10 @@ function FieldMetaEditor({
     // Choice interfaces serialize options as a bare choices ARRAY — auto_id has no
     // home there (stringify silently drops non-index props). Leave those untouched.
     if (Array.isArray(raw)) return base
-    const parsed = raw as Record<string, unknown>
-    if (adminOnlyEdit) parsed.admin_only_edit = true
-    else delete parsed.admin_only_edit
+    const parsed = JSON.parse(withAdminOnlyEdit(base, adminOnlyEdit) ?? '{}') as Record<
+      string,
+      unknown
+    >
     if (autoIdPattern) {
       let variants: unknown[] | undefined
       if (autoIdVariants.trim() && autoIdVariantsValid) {
@@ -2743,10 +2748,14 @@ function FieldMetaEditor({
           />
           Read-only
         </label>
-        <label className='flex cursor-pointer items-center gap-1.5'>
+        <label
+          className='flex cursor-pointer items-center gap-1.5'
+          data-tip={adminOnlySupported ? undefined : 'Not available for choice fields'}
+        >
           <input
             type='checkbox'
-            checked={adminOnlyEdit}
+            checked={adminOnlyEdit && adminOnlySupported}
+            disabled={!adminOnlySupported}
             onChange={(e) => setAdminOnlyEdit(e.target.checked)}
             className='rounded'
           />

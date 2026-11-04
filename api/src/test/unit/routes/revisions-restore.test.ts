@@ -137,7 +137,8 @@ describe('O2M restore', () => {
       '1',
       { amount: 7 },
       expect.anything(),
-      undefined
+      undefined,
+      { callerPayload: true }
     )
     // re-created without its id; the readonly vendor is not the caller's to set
     expect(items.createOne).toHaveBeenCalledWith(
@@ -145,7 +146,8 @@ describe('O2M restore', () => {
       'workflow_line_items',
       { amount: 4, workflow: '100' },
       expect.anything(),
-      undefined
+      undefined,
+      { callerPayload: true }
     )
     expect(res.json().data).toMatchObject({
       created: 1,
@@ -182,7 +184,8 @@ describe('whole-snapshot rollback', () => {
       '1',
       { amount: 3 },
       expect.anything(),
-      undefined
+      undefined,
+      { callerPayload: true }
     )
     expect(res.json().data.skipped_fields).toEqual(['vendor'])
   })

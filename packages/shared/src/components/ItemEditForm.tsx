@@ -9411,8 +9411,8 @@ function ItemEditFormView({
   // Role preview (#8): fields the previewed role may read but not update.
   if (viewAs.active) for (const f of viewAs.readonly) lockedFields.add(f)
   // Fields only administrators change (`options.admin_only_edit`): everyone
-  // else sees them locked (the server drops their writes); an admin keeps
-  // them editable even where the layout would show them read-only.
+  // else sees them locked (the server drops their writes); admins are never
+  // locked by this option.
   const adminOnlyFields = new Set<string>()
   if (!isAdmin) {
     for (const f of fieldConfig ?? []) {
