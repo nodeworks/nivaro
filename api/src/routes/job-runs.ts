@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { cronTicksEnabled } from '../plugins/cron.js'
+import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { describeJobRunRow, parseProgress, skippedRows } from '../services/job-run-sentences.js'
 import { readJobLog } from '../services/job-runs.js'
 
@@ -86,11 +88,18 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
         .map((c) => [c.id, c])
     )
     const since = new Date(Date.now() - BUSY_WINDOW_MS)
-    const running = (await db('nivaro_job_runs')
-      .where('status', 'running')
-      .where('started_at', '>=', since)
-      .orderBy('id', 'desc')
-      .limit(50)) as Array<Record<string, unknown>>
+    // A poll of the status index (S) then the clustered row deadlocked with a run
+    // finishing (X on the row, then the status key) — staging 2026-11-04. The pill is
+    // decoration, so it reads without shared locks and retries a lost deadlock once.
+    const running = (await withDeadlockRetry(() =>
+      db
+        .select('id', 'kind', 'job_id', 'label', 'started_at')
+        .from(isMssql(db) ? db.raw('?? WITH (NOLOCK)', ['nivaro_job_runs']) : 'nivaro_job_runs')
+        .where('status', 'running')
+        .where('started_at', '>=', since)
+        .orderBy('id', 'desc')
+        .limit(50)
+    )) as Array<Record<string, unknown>>
     const hot = running.filter(
       (r) =>
         BUSY_KINDS.has(String(r.kind)) || (r.kind === 'cron' && heavyCrons.has(String(r.job_id)))
