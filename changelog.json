@@ -1,10 +1,499 @@
 {
-  "generated_at": "2026-10-30T20:53:42.768Z",
+  "generated_at": "2026-11-04T22:26:28.797Z",
   "releases": [
+    {
+      "version": "0.3.66",
+      "tag": "v0.3.66",
+      "date": "2026-11-04T17:26:12-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "form",
+              "text": "open fields stay editable post-approval, re-import by state, Request help button",
+              "hash": "4485db113"
+            },
+            {
+              "section": "Added",
+              "scope": "fields",
+              "text": "admin-only field option",
+              "hash": "a81a5dc45"
+            },
+            {
+              "section": "Added",
+              "scope": "edit-lock",
+              "text": "move-requirement writes pass the post-approval lock",
+              "hash": "992ef8b96"
+            },
+            {
+              "section": "Added",
+              "scope": "workflow",
+              "text": "admin-only transitions at post-approval states",
+              "hash": "77607a3d2"
+            },
+            {
+              "section": "Added",
+              "scope": "edit-lock",
+              "text": "admin-only tier for post-approval states",
+              "hash": "96f838b4c"
+            },
+            {
+              "section": "Added",
+              "scope": "cells",
+              "text": "Shipped cell copy includes the latest-events card",
+              "hash": "90cdea72f"
+            },
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "mobile app settings and signed-in phones",
+              "hash": "3b29b55cd"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "/auth/me says whether the person still waits for access",
+              "hash": "1e1838c32"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "GET /notifications/:id reads one of my own",
+              "hash": "b5c2deb42"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "a phone's retried refresh gets the same pair back",
+              "hash": "e149c58a0"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "a phone app's issuer is the address it signed in on",
+              "hash": "8a2cab73a"
+            },
+            {
+              "section": "Added",
+              "scope": "cloud",
+              "text": "the tenant context carries the host it was served on",
+              "hash": "b2712e800"
+            },
+            {
+              "section": "Added",
+              "scope": "push",
+              "text": "cloud provisioning stores a tenant's push relay key",
+              "hash": "8f52bd992"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "list and revoke signed-in phones",
+              "hash": "b9cf14f88"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "device tokens sign the person in like a session",
+              "hash": "18d53d1e8"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "first-party mobile apps sign in through the OAuth server",
+              "hash": "f2d55c96a"
+            },
+            {
+              "section": "Added",
+              "scope": "push",
+              "text": "phone push through the Nivaro push relay",
+              "hash": "8484d6210"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "app-info tells a phone app what this instance is",
+              "hash": "b5881f2d6"
+            },
+            {
+              "section": "Added",
+              "scope": "replays",
+              "text": "native app recordings play inside a phone frame",
+              "hash": "0348fd7f1"
+            },
+            {
+              "section": "Added",
+              "scope": "push",
+              "text": "phone alerts for Expo apps",
+              "hash": "b4b83fc91"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "phone and tablet versions for Summary layouts; clone keeps tab nesting",
+              "hash": "ab2db0f1c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "edit-lock",
+              "text": "the admin-only tier reads the record's own run",
+              "hash": "7c3a2f640"
+            },
+            {
+              "section": "Fixed",
+              "scope": "locks",
+              "text": "chat attach and update_fields actions judge the record",
+              "hash": "f2553fc6e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "erp",
+              "text": "a push retry skips the admin-only tier",
+              "hash": "5563a81d7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "transition mutations honour admin-only moves",
+              "hash": "ffc7018db"
+            },
+            {
+              "section": "Fixed",
+              "scope": "bulk-actions",
+              "text": "bulk transitions honour admin-only moves",
+              "hash": "f73d2583e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "form",
+              "text": "partial edit lock locks non-open fields at the source",
+              "hash": "9ea61e7b1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "fields",
+              "text": "admin-only field holds on every route that forwards a person's body",
+              "hash": "7369a3eff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "edit-lock",
+              "text": "pushes skip the admin-only tier; held locks keep open fields",
+              "hash": "b8248545b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db-health",
+              "text": "deadlock readers use the system_health event file",
+              "hash": "ae9cecf95"
+            },
+            {
+              "section": "Fixed",
+              "scope": "jobs",
+              "text": "the busy pill's running-runs read cannot deadlock a finishing run",
+              "hash": "e5b15358f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone's push-id set expires with its grant",
+              "hash": "dd8572c58"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a refresh token is spent and stamped spent in one MULTI",
+              "hash": "0793b3d64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a phone row whose static token or API key ended stops at once",
+              "hash": "daf1179de"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "review minors for the phone app server support",
+              "hash": "5cdec0e19"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a static-token or API-key phone keeps its alerts on sign-outs",
+              "hash": "2f2b0a2b4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone code dies with the session that approved it",
+              "hash": "b109dd506"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone sign-in that lapses with no action is ended",
+              "hash": "fbdc458ca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "the 401 challenge names the document of the host the client called",
+              "hash": "0b1694b40"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "the protected-resource document follows the host's issuer",
+              "hash": "12471358d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a queued relay alert goes only to the phone's same person",
+              "hash": "7eece8127"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a queued relay message is checked again before it goes",
+              "hash": "44e052dd5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "relay 429s wait in one paced queue per tenant",
+              "hash": "54f3b550f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cloud",
+              "text": "a custom domain is trusted only from X-Tenant-Custom-Host",
+              "hash": "d837e0dcb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone's first token answer respects the role's max age",
+              "hash": "abcec1ed4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a replay from another install ends the phone's sign-in",
+              "hash": "55fef1959"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "every client's iss is its host's discovery issuer",
+              "hash": "0d22fb841"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a relay 429 gets one paced retry in the background",
+              "hash": "570bd07a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "relay status counts phones; review minors",
+              "hash": "1b672f59b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone's refresh replay is 10 s and bound to its install",
+              "hash": "8293eb5b6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone's issuer comes from the configured addresses",
+              "hash": "d9d28d6a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cloud",
+              "text": "a tenant's origin is canonical, never a host a caller made up",
+              "hash": "0b621b4ad"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "QR quiet zone, no web sign-out of the calling phone, relay-only content switch",
+              "hash": "e30c899a4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a phone registration that cannot be confirmed is taken back",
+              "hash": "b9164aa56"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "relay sends go out 50 messages per call",
+              "hash": "d2afbf130"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "sign-out sweeps keep only the caller's live phone rows",
+              "hash": "cc5888741"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a retried phone cleanup never silences a live phone",
+              "hash": "f0fad5a74"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a signed-out phone never keeps its alerts",
+              "hash": "f002ca7af"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone cannot create, change or run as an API key",
+              "hash": "ac055a131"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone is a session everywhere but minting credentials",
+              "hash": "2dc72de37"
+            },
+            {
+              "section": "Fixed",
+              "scope": "auth",
+              "text": "a phone's grant is made only when its code is exchanged",
+              "hash": "b5e1f4016"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "keep the relay key out of config snapshots; relay admin hardening",
+              "hash": "f81e853c0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "phone forget needs the key from its registration",
+              "hash": "09d5b7444"
+            },
+            {
+              "section": "Fixed",
+              "scope": "push",
+              "text": "a phone's alerts stop on sign-out even without a working sign-in",
+              "hash": "6805f56f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "toolbars, tabs and record header hold up on narrow screens",
+              "hash": "2aa7a879b"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "pipelines",
+              "text": "read the admin-only state once per offered list",
+              "hash": "9e7655277"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Request help wording and reimport.states markup",
+              "hash": "f9459486d"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "format summary-mode section",
+              "hash": "894d25663"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "post-approval locks (admin-only tier, admin_only_edit, reimport.states)",
+              "hash": "71b849d05"
+            },
+            {
+              "section": "Documentation",
+              "scope": "mobile",
+              "text": "a device token on /api/mcp acts as the person",
+              "hash": "5e9383787"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "mobile app sign-in, app-info and push relay",
+              "hash": "835e9ed44"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "auth",
+              "text": "probe for the phone sign-in on a throwaway API",
+              "hash": "3ecc0e260"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "type the install-id replay cases",
+              "hash": "aaa94a6e8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "placeholder DB and session settings when the env has none",
+              "hash": "89f960e0d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "biome format for the relay and tenant-origin changes",
+              "hash": "8158c6613"
+            },
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "app-info answers on a suspended or provisioning tenant",
+              "hash": "4bdea5407"
+            }
+          ]
+        }
+      ],
+      "count": 76
+    },
     {
       "version": "0.3.65",
       "tag": "v0.3.65",
-      "date": "2026-10-30T16:53:25-04:00",
+      "date": "2026-10-30T16:53:42-04:00",
       "sections": [
         {
           "label": "Fixed",
