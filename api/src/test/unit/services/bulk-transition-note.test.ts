@@ -26,7 +26,7 @@ vi.mock('../../../db/index.js', () => ({
           ? { id: 'inst-1', collection: 'workflows', item: '1', current_state: 'S1' }
           : undefined
     const c: Record<string, unknown> = {}
-    for (const m of ['where', 'orderBy']) c[m] = vi.fn(() => c)
+    for (const m of ['where', 'whereNotNull', 'orderBy']) c[m] = vi.fn(() => c)
     c.first = vi.fn(async () => row)
     c.select = vi.fn(async () =>
       t === 'nivaro_workflow_transitions'

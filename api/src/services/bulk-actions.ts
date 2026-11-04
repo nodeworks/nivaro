@@ -8,7 +8,7 @@ import {
 import { logActivity } from '../services/activity.js'
 import type { User } from '../types.js'
 import { type GuardRule, guardPasses, parseJsonLoose, renderTemplate } from './action-guards.js'
-import { commentMissing } from './manual-transition-gate.js'
+import { adminOnlyTransitionRefusal, commentMissing } from './manual-transition-gate.js'
 import { can } from './permissions.js'
 import {
   coerceBool,
@@ -646,6 +646,18 @@ export async function runDefinition(
           skip(item, 'already completed')
           continue
         }
+      }
+      // A move only admins run from where the record sits (the edit lock's
+      // admin-only tier): the single-item route's gate, per record.
+      const adminOnly = await adminOnlyTransitionRefusal({
+        isAdmin: !!req.isAdmin,
+        collection,
+        item,
+        transitionId: String(transition.id)
+      })
+      if (adminOnly) {
+        fail(item, String(adminOnly.body.error ?? 'Only administrators can make this move here.'))
+        continue
       }
       if (!req.isAdmin && transition.required_roles) {
         const roles = parseJson(transition.required_roles) as string[] | null
