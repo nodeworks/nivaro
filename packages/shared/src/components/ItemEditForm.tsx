@@ -68,6 +68,7 @@ import {
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
+import { editLockLockedFields } from '../lib/edit-lock-fields'
 import { entryConfigOf } from '../lib/entry-config'
 import { copyErrorDetails, describeError, type ErrorDescription } from '../lib/error-message'
 import { errorToastOptions } from '../lib/error-toast'
@@ -5161,7 +5162,6 @@ function ItemEditFormView({
     [editLock?.open_fields]
   )
   const editLockPartial = !!editLockMessage && editLockOpenFields.size > 0
-  const lockedByEditLock = (field: string) => editLockPartial && !editLockOpenFields.has(field)
 
   // ── Item lock ──────────────────────────────────────────────────────────────
   // Summary mode neither takes nor honours the edit lock: the lock is
@@ -9401,6 +9401,15 @@ function ItemEditFormView({
   if (isReadOnly) {
     for (const f of fieldConfig ?? []) lockedFields.add(f.field)
   }
+  // A post-approval state with open fields: everything else is locked at the
+  // source for the same reason (every render path reads this set).
+  if (editLockPartial) {
+    for (const f of editLockLockedFields(
+      (fieldConfig ?? []).map((c) => c.field),
+      editLockOpenFields
+    ))
+      lockedFields.add(f)
+  }
   if (hasLockConditions) {
     const currentRole = currentUserData?.role ?? null
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
@@ -10129,7 +10138,7 @@ function ItemEditFormView({
                       visible={true}
                       forceVisible={designHidden(f) || undefined}
                       locked={
-                        isReadOnly || lockedByEditLock(f.field) || addendumViewId !== 'original'
+                        isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
                       }
                       layoutAiEnabled={layoutAiEnabled}
                       renderField={renderField}
@@ -10830,12 +10839,7 @@ function ItemEditFormView({
                   forceVisible={
                     designHidden(f, visibleFields.has(f.field) || !visibleFields.size) || undefined
                   }
-                  locked={
-                    lockedFields.has(f.field) ||
-                    isReadOnly ||
-                    lockedByEditLock(f.field) ||
-                    addendumViewId !== 'original'
-                  }
+                  locked={lockedFields.has(f.field) || isReadOnly || addendumViewId !== 'original'}
                   layoutAiEnabled={layoutAiEnabled}
                   renderField={renderField}
                   onCountChange={handleM2MCountChange}
@@ -11043,7 +11047,7 @@ function ItemEditFormView({
                     visible={true}
                     forceVisible={designHidden(f) || undefined}
                     locked={
-                      isReadOnly || lockedByEditLock(f.field) || addendumViewId !== 'original'
+                      isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
                     }
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
