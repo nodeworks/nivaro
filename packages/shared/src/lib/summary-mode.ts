@@ -42,7 +42,18 @@ export interface SummaryModeRules {
   rules: SummaryModeRule[]
   /** Server-enforced edit lock (api services/edit-lock.ts) — not an opening
    *  mode; carried through so a Form UX save never drops it. */
-  edit_lock?: { states: string[]; children: string[] }
+  edit_lock?: {
+    states: string[]
+    children: string[]
+    /** Post-approval states: only administrators change the record, except
+     *  the fields / child collections listed as open. */
+    admin_only?: {
+      states: string[]
+      transitions: string[]
+      open_fields: string[]
+      open_children: string[]
+    }
+  }
 }
 
 export const NO_STATE = '__none__'

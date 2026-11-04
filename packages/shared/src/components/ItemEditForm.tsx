@@ -55,6 +55,7 @@ import {
 import { useSlowReason } from '../hooks/useSlowReason'
 import { formatApiPayload } from '../lib/api-payload'
 import { del, get, patch, post, put } from '../lib/commands'
+import type { FieldSource } from '../lib/config-sentences'
 import {
   deleteDraft,
   draftCreatedAs,
@@ -67,6 +68,7 @@ import {
   type StoredDraft,
   saveDraft
 } from '../lib/draft-store'
+import { editLockLockedFields } from '../lib/edit-lock-fields'
 import { entryConfigOf } from '../lib/entry-config'
 import { copyErrorDetails, describeError, type ErrorDescription } from '../lib/error-message'
 import { errorToastOptions } from '../lib/error-toast'
@@ -117,6 +119,7 @@ import {
 import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
 import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
+import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { htmlToText } from '../lib/sanitize-html'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
@@ -131,7 +134,6 @@ import {
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
-import type { FieldSource } from '../lib/config-sentences'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import type { AvailableBulkAction } from './bulk/BulkActionButtons'
 import { FieldSourcesContext } from './ConfigReadBack'
@@ -175,7 +177,6 @@ import {
 } from './item-edit/FieldAffordances'
 import { useFieldCommentsApi } from './item-edit/FieldComments'
 import { FieldRow } from './item-edit/FieldRow'
-import { fieldSourcesFor } from './item-edit/field-sources'
 import {
   buildTourSteps,
   FormTour,
@@ -184,6 +185,7 @@ import {
   useFormTourSeen
 } from './item-edit/FormTour'
 import { type FieldCommentsApi, FieldCommentsContext } from './item-edit/field-comments-context'
+import { fieldSourcesFor } from './item-edit/field-sources'
 import { formDensityOf, useFormDensityCss } from './item-edit/form-density'
 import { FoldArea, RowGroupCell, rowMemberField } from './item-edit/form-structure-ui'
 import {
@@ -5129,7 +5131,13 @@ function ItemEditFormView({
     [colMeta?.summary_mode_rules]
   )
   const { data: editLockInstance } = useQuery<{
-    edit_lock?: { locked?: boolean; allowed?: boolean; message?: string } | null
+    edit_lock?: {
+      locked?: boolean
+      allowed?: boolean
+      message?: string
+      tier?: 'approval' | 'admin_only'
+      open_fields?: string[]
+    } | null
   } | null>({
     queryKey: ['pipeline-instance-lock', collection, itemId],
     queryFn: () =>
@@ -5146,6 +5154,14 @@ function ItemEditFormView({
       ? editLock.message?.trim() ||
         'This record is in approval — you can view it but not change it.'
       : null
+  // A post-approval (admin-only) state still lets a person change the fields it
+  // leaves open (hold, owners …): the form stays editable for those and the rest
+  // carry the lock message. The server judges every save per payload anyway.
+  const editLockOpenFields = useMemo(
+    () => new Set(editLock?.open_fields ?? []),
+    [editLock?.open_fields]
+  )
+  const editLockPartial = !!editLockMessage && editLockOpenFields.size > 0
 
   // ── Item lock ──────────────────────────────────────────────────────────────
   // Summary mode neither takes nor honours the edit lock: the lock is
@@ -5161,7 +5177,7 @@ function ItemEditFormView({
     !!colMeta?.item_locking_enabled &&
     summaryModeSettled &&
     !readMode &&
-    !editLockMessage
+    (!editLockMessage || editLockPartial)
   // A background workspace tab (efp-new RecordSurfaceContext) counts as off screen.
   const surfaceActive = useRecordSurface().active
   const {
@@ -5188,7 +5204,7 @@ function ItemEditFormView({
     lazy: true,
     active: active && surfaceActive
   })
-  const isReadOnly = lockReadOnly || !!recordGone || !!editLockMessage
+  const isReadOnly = lockReadOnly || !!recordGone || (!!editLockMessage && !editLockPartial)
   readOnlyRef.current = isReadOnly && !isNew
   // The step moved (this form's own transition, a live state change, another
   // tab): who may edit now is the server's call — re-read the edit-lock
@@ -9385,6 +9401,15 @@ function ItemEditFormView({
   if (isReadOnly) {
     for (const f of fieldConfig ?? []) lockedFields.add(f.field)
   }
+  // A post-approval state with open fields: everything else is locked at the
+  // source for the same reason (every render path reads this set).
+  if (editLockPartial) {
+    for (const f of editLockLockedFields(
+      (fieldConfig ?? []).map((c) => c.field),
+      editLockOpenFields
+    ))
+      lockedFields.add(f)
+  }
   if (hasLockConditions) {
     const currentRole = currentUserData?.role ?? null
     const currentStateId = pipelineInstanceData?.instance?.current_state ?? null
@@ -9410,6 +9435,18 @@ function ItemEditFormView({
   }
   // Role preview (#8): fields the previewed role may read but not update.
   if (viewAs.active) for (const f of viewAs.readonly) lockedFields.add(f)
+  // Fields only administrators change (`options.admin_only_edit`): everyone
+  // else sees them locked (the server drops their writes); admins are never
+  // locked by this option.
+  const adminOnlyFields = new Set<string>()
+  if (!isAdmin) {
+    for (const f of fieldConfig ?? []) {
+      if (parseJson<{ admin_only_edit?: boolean }>(f.options)?.admin_only_edit === true) {
+        adminOnlyFields.add(f.field)
+        lockedFields.add(f.field)
+      }
+    }
+  }
   // #25 — section-level locks: a group listing the viewer's role in
   // locked_for_roles renders every field it holds read-only (admins exempt;
   // the server drops those keys on update too).
@@ -9490,7 +9527,7 @@ function ItemEditFormView({
         lockReasons[key] = `${viewAs.preview?.role.name ?? 'This role'} cannot edit this field`
         continue
       }
-      if (editLockMessage) {
+      if (editLockMessage && !editLockOpenFields.has(key)) {
         lockReasons[key] = editLockMessage
         continue
       }
@@ -9501,6 +9538,10 @@ function ItemEditFormView({
       }
       if (viewingAddendum) {
         lockReasons[key] = 'Viewing an addendum — switch to the current record to edit'
+        continue
+      }
+      if (adminOnlyFields.has(key)) {
+        lockReasons[key] = 'Only administrators can change this field'
         continue
       }
       if (!f.readonly) continue
@@ -10096,7 +10137,9 @@ function ItemEditFormView({
                       autoFillTick={autoFillTicks[f.field]}
                       visible={true}
                       forceVisible={designHidden(f) || undefined}
-                      locked={isReadOnly || addendumViewId !== 'original'}
+                      locked={
+                        isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
+                      }
                       layoutAiEnabled={layoutAiEnabled}
                       renderField={renderField}
                       onCountChange={handleM2MCountChange}
@@ -11003,7 +11046,9 @@ function ItemEditFormView({
                     autoFillTick={autoFillTicks[f.field]}
                     visible={true}
                     forceVisible={designHidden(f) || undefined}
-                    locked={isReadOnly || addendumViewId !== 'original'}
+                    locked={
+                      isReadOnly || lockedFields.has(f.field) || addendumViewId !== 'original'
+                    }
                     layoutAiEnabled={layoutAiEnabled}
                     renderField={renderField}
                     onCountChange={handleM2MCountChange}
@@ -12052,7 +12097,7 @@ function ItemEditFormView({
                                               aria-checked={!readMode}
                                               data-summary-mode-option='edit'
                                               title={
-                                                editLockMessage
+                                                editLockMessage && !editLockPartial
                                                   ? `Form view — read-only: ${editLockMessage}`
                                                   : 'Edit mode — change this record'
                                               }
@@ -12066,7 +12111,7 @@ function ItemEditFormView({
                                             >
                                               {/* An approval-locked record is not offered "Edit":
                                                   the full form still opens, read-only. */}
-                                              {editLockMessage ? (
+                                              {editLockMessage && !editLockPartial ? (
                                                 <>
                                                   <Lock className='h-3.5 w-3.5' strokeWidth={2} />
                                                   Form
@@ -12195,7 +12240,9 @@ function ItemEditFormView({
                                           <HeaderMenu>
                                             <ImportFromFileButton
                                               collection={collection}
-                                              templateFilter={(t) => t.reimport?.enabled === true}
+                                              templateFilter={(t) =>
+                                                reimportAllowed(t, recordStateKey, isAdmin)
+                                              }
                                               getLabel={(t) =>
                                                 t.reimport?.button_label ?? t.button_label
                                               }
@@ -12592,17 +12639,6 @@ function ItemEditFormView({
                                               </svg>
                                               Save as template
                                             </button>
-                                            <button
-                                              type='button'
-                                              data-tip='Ask the administrators to change something on this record'
-                                              data-request-change
-                                              data-nvr-menu-close
-                                              onClick={() => setSupportOpen(true)}
-                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                            >
-                                              <LifeBuoy className='h-3.5 w-3.5' />
-                                              Request a change
-                                            </button>
                                             {!isAdmin && !isNew && itemId && (
                                               <button
                                                 type='button'
@@ -12896,6 +12932,20 @@ function ItemEditFormView({
                                           actions={headerRegistryActions}
                                           onPick={setHeaderRegistryPick}
                                         />
+                                      )}
+                                      {/* Request help is a primary action beside Save, never in the
+                                        folded ⋯ panel: on a locked record it is the way to a change. */}
+                                      {!isNew && itemId && (
+                                        <button
+                                          type='button'
+                                          data-tip='Ask the administrators to change something on this record'
+                                          data-request-change
+                                          onClick={() => setSupportOpen(true)}
+                                          className='inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                        >
+                                          <LifeBuoy className='h-3.5 w-3.5' />
+                                          Request help
+                                        </button>
                                       )}
                                       {/* Record actions stay inline beside Save, never in the
                                         folded ⋯ panel: on a narrower screen Push to Fusion was

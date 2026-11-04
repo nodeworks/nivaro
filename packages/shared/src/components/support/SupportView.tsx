@@ -235,7 +235,7 @@ export function SupportView({
                 </p>
                 {tab === 'mine' && (
                   <p className='max-w-sm text-[12px] text-slate-500 dark:text-muted-foreground'>
-                    Use Get help for anything general, or Request a change from a record's ⋯ menu to
+                    Use Get help for anything general, or Request help on a record (beside Save) to
                     ask for a change to that record.
                   </p>
                 )}

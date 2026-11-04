@@ -8,7 +8,8 @@ const state = vi.hoisted(() => ({
   can: { read: true, update: true } as Record<string, boolean>,
   hidden: new Set<string>(),
   locked: new Set<string>(),
-  editLock: 'open' as 'open' | 'refuse' | 'broken'
+  editLock: 'open' as 'open' | 'refuse' | 'broken',
+  lockArgs: [] as unknown[]
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -31,7 +32,8 @@ vi.mock('../../../services/edit-lock.js', () => {
   return {
     EDIT_LOCKED: 'EDIT_LOCKED',
     EditLockedError,
-    assertNotEditLocked: async () => {
+    assertNotEditLocked: async (...args: unknown[]) => {
+      state.lockArgs = args
       if (state.editLock === 'refuse')
         throw new EditLockedError('Only the step owners may change it.')
       if (state.editLock === 'broken') throw new Error('db down')
@@ -87,6 +89,13 @@ describe('item action execute gates', () => {
       // Runs a step as the caller, never as a machine identity.
       callAsCaller: expect.any(Function)
     })
+  })
+
+  it('judges the approval edit lock without its admin-only tier (a push moves the record on)', async () => {
+    await run({ collection: 'workflows', itemId: 42 })
+    expect(state.lockArgs[0]).toMatchObject({ id: 'U1' })
+    expect(state.lockArgs.slice(1, 3)).toEqual(['workflows', { ids: [42] }])
+    expect(state.lockArgs[4]).toEqual({ adminOnlyTier: false })
   })
 
   it('refuses a collection the action does not serve', async () => {

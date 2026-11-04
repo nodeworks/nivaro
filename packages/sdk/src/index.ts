@@ -654,7 +654,7 @@ import { type Command, cmd } from './command.js'
 import { errorBodyMessage, NivaroError, REQUEST_ID_HEADER, retryAfterMs } from './errors.js'
 
 export type { Command } from './command.js'
-export { withSignal } from './command.js'
+export { withHeaders, withSignal } from './command.js'
 export { errorBodyMessage, isNivaroError, NivaroError, REQUEST_ID_HEADER } from './errors.js'
 
 // ─── Items ────────────────────────────────────────────────────────────────────
@@ -2137,9 +2137,9 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     return currentToken
   }
 
-  function baseHeaders(json: boolean): Record<string, string> {
+  function baseHeaders(json: boolean, own?: Record<string, string>): Record<string, string> {
     const extra = typeof options.headers === 'function' ? options.headers() : options.headers
-    const h: Record<string, string> = { ...(extra ?? {}) }
+    const h: Record<string, string> = { ...(extra ?? {}), ...(own ?? {}) }
     if (json) h['Content-Type'] = 'application/json'
     if (currentToken) h.Authorization = `Bearer ${currentToken}`
     return h
@@ -2324,7 +2324,7 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
         command._method,
         command._path,
         fullUrl,
-        baseHeaders(true),
+        baseHeaders(true, command._headers),
         async (headers) => {
           // A fresh timeout per attempt: each try gets the whole budget.
           ctrl = timed ? new AbortController() : null

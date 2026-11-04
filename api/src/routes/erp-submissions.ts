@@ -629,7 +629,11 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
         | ErpSubmissionRow
         | undefined
       if (!row) return reply.code(404).send({ error: 'Not found' })
-      const refusal = await recordRefusal(req, row.collection, String(row.item), 'update')
+      // A retry re-sends the stored payload, like the record's Push button: the
+      // post-approval admin-only tier does not hold it (the approval tier does).
+      const refusal = await recordRefusal(req, row.collection, String(row.item), 'update', {
+        adminOnlyTier: false
+      })
       if (refusal) return reply.code(refusal.code).send(refusal.body)
       // A pending or accepted push already reached the partner — re-sending it
       // by hand makes a duplicate order. Admins (Firefight, traffic map) may.
@@ -694,7 +698,9 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           results.push({ id, status: 'skipped', error: `already ${row.status}` })
           continue
         }
-        const refusal = await recordRefusal(req, row.collection, String(row.item), 'update')
+        const refusal = await recordRefusal(req, row.collection, String(row.item), 'update', {
+          adminOnlyTier: false
+        })
         if (refusal) {
           // Hidden records read as missing, the same as the single route.
           results.push({ id, status: refusal.code === 404 ? 'missing' : 'forbidden' })

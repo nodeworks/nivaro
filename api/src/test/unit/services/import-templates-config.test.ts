@@ -377,6 +377,17 @@ describe('normalizeImportTemplateConfig', () => {
     })
   })
 
+  it('keeps reimport.states and drops non-string entries', () => {
+    const { config } = normalizeImportTemplateConfig({
+      reimport: { enabled: true, match_by: ['name'], states: ['started', 7, null, ' ', 'review '] }
+    })
+    expect(config.reimport?.states).toEqual(['started', 'review'])
+    const none = normalizeImportTemplateConfig({
+      reimport: { enabled: true, match_by: ['name'], states: [] }
+    })
+    expect(none.config.reimport?.states).toBeUndefined()
+  })
+
   it('normalizes reimport to null when the raw block is absent', () => {
     const { config, errors } = normalizeImportTemplateConfig({})
     expect(errors).toEqual([])

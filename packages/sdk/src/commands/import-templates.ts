@@ -17,6 +17,8 @@ export interface ImportTemplateSummary {
     match_by: string[]
     attachments: 'add' | 'replace'
     button_label?: string | null
+    /** State keys where non-admins see Re-import; empty/absent = any state. */
+    states?: string[] | null
   } | null
 }
 

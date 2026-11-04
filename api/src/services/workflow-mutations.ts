@@ -8,7 +8,11 @@ import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
 import { writeStartHistory } from './instance-start.js'
-import { commentMissing, TRANSITION_COMMENT_REQUIRED } from './manual-transition-gate.js'
+import {
+  adminOnlyTransitionRefusal,
+  commentMissing,
+  TRANSITION_COMMENT_REQUIRED
+} from './manual-transition-gate.js'
 import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
@@ -220,8 +224,22 @@ export async function executeWorkflowTransition(opts: {
     throw new WorkflowMutationError(400, 'Automatic transitions cannot be executed manually')
   }
 
-  // Role gate
   const isAdmin = opts.actor.isAdmin ?? false
+
+  // Post-approval lock: a move kept for administrators in an admin-only state
+  // (the same gate as the REST route's manual-transition-gate.ts).
+  const adminOnly = await adminOnlyTransitionRefusal({
+    isAdmin,
+    collection,
+    item,
+    transitionId: String(transition.id)
+  })
+  if (adminOnly) {
+    const { error, ...extras } = adminOnly.body
+    throw new WorkflowMutationError(adminOnly.status, String(error), extras)
+  }
+
+  // Role gate
   if (!isAdmin && transition.required_roles) {
     const roles = parseJson(transition.required_roles) as string[] | null
     if (Array.isArray(roles) && roles.length > 0) {

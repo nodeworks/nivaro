@@ -1034,6 +1034,12 @@ const AUDIT_SPECIALS = ['user-created', 'date-created', 'user-updated', 'date-up
  * audit pass stamps the real values. Admins and server code without a request
  * keep them; server code that writes a read-only field on someone's behalf
  * (bulk actions, extensions) does not pass `callerPayload`.
+ *
+ * `options.admin_only_edit` fields drop the same way (caller payloads only) —
+ * the save carries on without them. The one exception is a write from a
+ * move's requirements dialog (requirement-writes.ts): on an update, `ids`
+ * names the record(s) written and the server asks whether that move wants
+ * exactly these values from this caller. A create has no record to ask about.
  */
 export async function dropServerSetFields(
   user: User,
@@ -1041,7 +1047,8 @@ export async function dropServerSetFields(
   payload: Record<string, unknown>,
   phase: 'create' | 'update',
   req: FastifyRequest | undefined,
-  callerPayload: boolean
+  callerPayload: boolean,
+  ids?: Array<string | number>
 ): Promise<string[]> {
   if (!req || req.isAdmin) return []
   let fields: CMSField[]
@@ -1054,14 +1061,37 @@ export async function dropServerSetFields(
   const allowed = await getAllowedFields(user, phase, collection)
   const listed = allowed && !allowed.includes('*') ? new Set(allowed) : null
   const dropped: string[] = []
+  const adminOnly: string[] = []
   for (const key of Object.keys(payload)) {
     if (key.startsWith('_') || key === 'id') continue
     const f = byName.get(key)
     const audit = (f?.special ?? []).some((s) => AUDIT_SPECIALS.includes(s))
     const readonly = callerPayload && f?.readonly === true
+    const adminField = callerPayload && f?.options?.admin_only_edit === true
     if (audit || readonly || (listed && !listed.has(key))) {
       delete payload[key]
       dropped.push(key)
+    } else if (adminField) {
+      adminOnly.push(key)
+    }
+  }
+  if (adminOnly.length > 0) {
+    let keep = false
+    if (phase === 'update' && ids && ids.length > 0) {
+      const { requirementWriteAllowed } = await import('./requirement-writes.js')
+      keep = true
+      for (const id of ids) {
+        if (!(await requirementWriteAllowed(req, collection, id, adminOnly))) {
+          keep = false
+          break
+        }
+      }
+    }
+    if (!keep) {
+      for (const key of adminOnly) {
+        delete payload[key]
+        dropped.push(key)
+      }
     }
   }
   return dropped
@@ -6580,7 +6610,9 @@ export async function updateOne(
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   await enforceContracts(collection, user?.id, data, 'update')
   // Creator, stamps, read-only and unlisted fields are the server's (see createOne).
-  await dropServerSetFields(user, collection, data, 'update', req, opts?.callerPayload === true)
+  await dropServerSetFields(user, collection, data, 'update', req, opts?.callerPayload === true, [
+    id
+  ])
   if (opts?.callerPayload) await trimSingleLineInputs(collection, data)
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)

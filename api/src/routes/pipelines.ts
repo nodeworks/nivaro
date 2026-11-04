@@ -22,6 +22,7 @@ import { selectInChunks } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
+import { withoutAdminOnlyMoves } from '../services/manual-transition-gate.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -2478,6 +2479,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       })
       offeredTransitions = offeredToActor(availableTransitions, actor)
     }
+
+    // Post-approval lock: the moves the gate refuses a non-admin at an
+    // admin-only state are not offered either (the same lists judge both).
+    offeredTransitions = await withoutAdminOnlyMoves({
+      isAdmin,
+      collection,
+      item,
+      transitions: offeredTransitions
+    })
 
     // Get history with joined state labels. #645: a delegate's move names the
     // out-of-office owner it stood in for (migration 395 — probed, so a

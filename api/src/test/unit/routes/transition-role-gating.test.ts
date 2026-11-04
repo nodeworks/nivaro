@@ -103,6 +103,13 @@ vi.mock('../../../services/instance-guard.js', () => {
   }
 })
 
+// No admin-only lock tier in these fixtures; the real plan reader needs a live db.
+vi.mock('../../../services/edit-lock.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/edit-lock.js')>()),
+  adminOnlyTransitionsFor: vi.fn(async () => new Set<string>()),
+  adminOnlyStatesFor: vi.fn(async () => new Set<string>())
+}))
+
 import { db } from '../../../db/index.js'
 import { itemsRoutes } from '../../../routes/items.js'
 import { pipelinesRoutes } from '../../../routes/pipelines.js'

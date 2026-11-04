@@ -128,7 +128,10 @@ describe('POST /:id/retry', () => {
     vi.mocked(db).mockImplementation((() => table([ROW])) as never)
     const res = await app().inject({ method: 'POST', url: '/7/retry' })
     expect(res.statusCode).toBe(403)
-    expect(recordRefusal).toHaveBeenCalledWith(expect.anything(), 'workflows', '1001', 'update')
+    // A retry re-sends the stored payload like a push: the admin-only tier skips it.
+    expect(recordRefusal).toHaveBeenCalledWith(expect.anything(), 'workflows', '1001', 'update', {
+      adminOnlyTier: false
+    })
     expect(callExternalApi).not.toHaveBeenCalled()
   })
   it('never lets a non-admin re-send an accepted push (409)', async () => {
@@ -166,6 +169,9 @@ describe('POST /bulk-retry', () => {
       { id: 7, status: 'missing' },
       { id: 8, status: 'forbidden' }
     ])
+    expect(recordRefusal).toHaveBeenCalledWith(expect.anything(), 'workflows', '1001', 'update', {
+      adminOnlyTier: false
+    })
   })
   it('an allowed caller reaches the body check', async () => {
     vi.mocked(db).mockImplementation((() => table([ROW])) as never)

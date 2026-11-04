@@ -8,7 +8,8 @@ const state = vi.hoisted(() => ({
   locked: new Set<string>(),
   actions: new Map<string, Record<string, unknown>>(),
   retry: vi.fn(),
-  log: vi.fn()
+  log: vi.fn(),
+  refusalOpts: [] as unknown[]
 }))
 
 vi.mock('../../../db/index.js', () => {
@@ -29,12 +30,14 @@ vi.mock('../../../db/index.js', () => {
 })
 // The single-record path's gates (readable, updatable, approval edit lock).
 vi.mock('../../../services/edit-lock.js', () => ({
-  recordWriteRefusal: async (_req: unknown, _c: string, id: string) =>
-    state.unreadable.has(String(id))
+  recordWriteRefusal: async (_req: unknown, _c: string, id: string, opts: unknown) => {
+    state.refusalOpts.push(opts)
+    return state.unreadable.has(String(id))
       ? { status: 404, body: { error: 'Not found' } }
       : state.locked.has(String(id))
         ? { status: 403, body: { error: 'This record is at L1 — locked', code: 'EDIT_LOCKED' } }
         : null
+  }
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: state.log }))
 vi.mock('../../../extensions/item-actions.js', () => ({
@@ -152,6 +155,8 @@ describe('runItemActionOver (#620 push)', () => {
     }
     expect(execute).toHaveBeenCalledTimes(1)
     expect((execute.mock.calls[0] as unknown[])[0]).toMatchObject({ itemId: '8' })
+    // the push is judged without the admin-only tier (it moves the record on)
+    expect(state.refusalOpts.at(-1)).toEqual({ heldLock: false, adminOnlyTier: false })
   })
 
   it('a dry run classifies without executing', async () => {

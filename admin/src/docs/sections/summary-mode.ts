@@ -74,6 +74,28 @@ export const summaryMode: DocSection = {
   "states": ["waiting_on_manager_approval", "waiting_on_vp_approval"],
   "children": ["workflow_line_items"]
 }`
+    },
+    { type: 'h3', id: 'summary-mode-admin-only', text: 'Admin-only steps (post-approval)' },
+    {
+      type: 'p',
+      text: '`edit_lock.admin_only` is a stricter tier for steps after approval: in its `states` only administrators change the record or the rows of its `children`. Not even the creator or the step\u2019s owners can. `open_fields` (field names) and `open_children` (collection names) stay writable for everyone who may normally write them, for example a PO number that arrives after approval. `transitions` lists transition ids that only administrators may run while the record is at one of those states; the Pipeline panel and the row menu hide them, and the move route and bulk transitions refuse them with 403 `ADMIN_ONLY_TRANSITION`. A completed record is judged by its latest instance, so a finished state can be listed too. Item actions and outbound pushes skip this tier. When `open_fields` is not empty the person-held edit lock is still granted, so the open fields can be edited. Refusals read \u201cThis record is at {step} \u2014 only administrators can change it. Use Request help to ask for a change.\u201d; the form opens read-only with that sentence, and every saved record has a Request help button beside Save.'
+    },
+    {
+      type: 'pre',
+      code: `"edit_lock": {
+  "states": ["waiting_on_manager_approval"],
+  "children": ["workflow_line_items"],
+  "admin_only": {
+    "states": ["approved", "ordered"],
+    "transitions": ["<transition uuid>"],
+    "open_fields": ["po_number"],
+    "open_children": ["workflow_notes"]
+  }
+}`
+    },
+    {
+      type: 'p',
+      text: 'The move-requirements dialog is the one exception: its PATCH carries the header `x-nivaro-requirements-for: <transition id>`, and the fields that move declares as requirements are let through both lock tiers and the admin-only field option, but only when the caller may run that move now on that record (its conditions are still evaluated). The SDK sends it through `withHeaders` on a command.'
     }
   ]
 }

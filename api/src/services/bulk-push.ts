@@ -67,7 +67,12 @@ function recorder(result: BulkRunResult) {
 async function pushRefusal(req: FastifyRequest, collection: string, item: string) {
   const { recordWriteRefusal } = await import('./edit-lock.js')
   try {
-    const refused = await recordWriteRefusal(req, collection, item, { heldLock: false })
+    // Like the single item action: not the admin-only tier (a push moves the
+    // record on from it); the approval tier still applies.
+    const refused = await recordWriteRefusal(req, collection, item, {
+      heldLock: false,
+      adminOnlyTier: false
+    })
     if (!refused) return null
     return refused.status === 404 ? 'Record not found or not readable' : refused.body.error
   } catch {

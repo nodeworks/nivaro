@@ -1298,7 +1298,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
 
       try {
         parent = (await createOne(req.user!, collection, values, req, workspaceId, {
-          skipRollupRecalc: true
+          skipRollupRecalc: true,
+          callerPayload: true
         })) as {
           id: string | number
         }
@@ -1364,7 +1365,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
               req,
               workspaceId,
               {
-                skipRollupRecalc: true
+                skipRollupRecalc: true,
+                callerPayload: true
               }
             )) as { id: string | number }
             createdChildIds.push(child.id)
@@ -1379,7 +1381,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
                   grandchildPayload,
                   req,
                   workspaceId,
-                  { skipRollupRecalc: true }
+                  { skipRollupRecalc: true, callerPayload: true }
                 )) as { id: string | number }
                 createdGrandchildren.push({
                   collection: nestedRelation.collection,

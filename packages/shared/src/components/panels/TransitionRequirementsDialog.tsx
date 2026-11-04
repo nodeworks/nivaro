@@ -1,3 +1,4 @@
+import type { Command } from '@nivaro/sdk'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -23,6 +24,9 @@ import {
   DialogTitle
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+
+/** Names the move a save is for (api services/requirement-writes.ts). */
+const REQUIREMENTS_FOR_HEADER = 'x-nivaro-requirements-for'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -581,12 +585,17 @@ function M2OPickCell({
 
 export function TransitionRequirementsDialog({
   payload,
+  transitionId,
   isRetry,
   onSubmitted,
   executing = false,
   onClose
 }: {
   payload: TransitionRequirementsPayload
+  /** The move these values are for: each value's save names it, so a record
+   *  locked against edits still takes the values its own move asks for, from
+   *  someone who may run that move (the server checks, api requirement-writes). */
+  transitionId?: string
   /** True when this payload came from a retry's second 422 (values changed underneath). */
   isRetry?: boolean
   /** Runs the transition once the rows are saved. May return the call's
@@ -607,6 +616,13 @@ export function TransitionRequirementsDialog({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [phase, setPhase] = useState<'save' | 'transition'>('save')
+  // The header rides only these saves. Built inline, not with the SDK's
+  // withHeaders: @nivaro/react takes the SDK as a peer, and a host on an older
+  // SDK simply sends the save without it.
+  const forMove = <T,>(command: Command<T>): Command<T> =>
+    transitionId
+      ? ({ ...command, _headers: { [REQUIREMENTS_FOR_HEADER]: transitionId } } as Command<T>)
+      : command
 
   const setFieldValue = (rk: string, field: string, v: FieldValue) => {
     setValues((prev) => ({ ...prev, [rk]: { ...prev[rk], [field]: v } }))
@@ -746,7 +762,9 @@ export function TransitionRequirementsDialog({
                 return { rk, ok: true as const }
               try {
                 if (Object.keys(changed).length > 0)
-                  await client.request(patch(`/items/${entry.collection}/${entry.item}`, changed))
+                  await client.request(
+                    forMove(patch(`/items/${entry.collection}/${entry.item}`, changed))
+                  )
                 // Record-level many-to-many / files (#814): junction rows.
                 for (const { meta, add, remove } of linkChanges) {
                   if (!meta.junction || !meta.fk_to_child || !meta.junction_field) continue
@@ -819,7 +837,7 @@ export function TransitionRequirementsDialog({
           }
           try {
             if (Object.keys(changed).length > 0) {
-              await client.request(patch(`/items/${entry.collection}/${row.id}`, changed))
+              await client.request(forMove(patch(`/items/${entry.collection}/${row.id}`, changed)))
             }
             // Junction writes for m2m fields — inserts for adds, targeted
             // deletes (by junction row id) for removals.

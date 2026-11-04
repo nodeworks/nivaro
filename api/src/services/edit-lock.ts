@@ -23,6 +23,27 @@
  * a line or a zone link of a record someone else is editing is refused 409
  * RECORD_LOCKED like the record itself.
  *
+ * Admin-only tier (2026-11-04, Rob: changing a record after its approvals
+ * defeats the purpose of the approvals) —
+ *
+ *   admin_only: { states: ['approved', 'closed'],       // pipeline state keys
+ *                 transitions: ['<transition id>', …],  // moves only admins run there
+ *                 open_fields: ['is_on_hold'],          // record fields still open
+ *                 open_children: ['<link junction>'] }  // own rows still open
+ *
+ * While the record's LATEST pipeline run sits in one of those states — open or
+ * finished, so a completed record stays locked — only admins may change the
+ * record or its own rows: the creator and the step owners lose their
+ * exemption. What stays open is named, never inferred: an update that writes
+ * nothing but `open_fields`, and the rows of `open_children`. A delete never
+ * passes. A record whose latest run is in neither tier is judged as before.
+ * Item actions and outbound pushes (a record's Push button) skip this tier
+ * (`adminOnlyTier: false`): they move the record forward, which is how it
+ * leaves these states — the approval tier still judges them. A person-held
+ * edit lock stays usable when the tier leaves open fields (the save itself is
+ * judged per payload). In either tier, the values a move's own requirements
+ * dialog saves pass for whoever may run that move (requirement-writes.ts).
+ *
  * Judged on REQUEST writes only (the items service is handed the request):
  * the engine's own writes — flows, transition actions, addendum apply, crons,
  * imports — carry no request and are never locked out by it. A question that
@@ -31,6 +52,8 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { excludeBranchChildren } from './branch-instances.js'
+import { pickInstance } from './record-state.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 export const EDIT_LOCKED = 'EDIT_LOCKED'
@@ -40,29 +63,68 @@ export class EditLockedError extends Error {
   code = EDIT_LOCKED
 }
 
+export interface EditLockAdminOnly {
+  /** pipeline state keys in which only admins may change the record */
+  states: string[]
+  /** transition ids only admins may run from those states */
+  transitions: string[]
+  /** record fields a non-admin may still write there */
+  open_fields: string[]
+  /** own-row collections that stay open there */
+  open_children: string[]
+}
+
 export interface EditLockConfig {
+  /** approval states (creator, step owners, admins); may be [] with admin_only */
   states: string[]
   children: string[]
+  admin_only?: EditLockAdminOnly
 }
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/
 const STATE_KEY_RE = /^[A-Za-z0-9_\-:.]{1,100}$/
+const TRANSITION_ID_RE = /^[0-9A-Fa-f-]{36}$/
 const MAX_LIST = 50
+
+const ADMIN_ONLY_LISTS = [
+  ['states', STATE_KEY_RE, 'state keys'],
+  ['transitions', TRANSITION_ID_RE, 'transition ids'],
+  ['open_fields', IDENT, 'field names'],
+  ['open_children', IDENT, 'collection names']
+] as const
+
+const list = (v: unknown, re: RegExp) =>
+  Array.isArray(v)
+    ? [...new Set(v.filter((x): x is string => typeof x === 'string' && re.test(x)))].slice(
+        0,
+        MAX_LIST
+      )
+    : []
+
+function parseAdminOnly(raw: unknown): EditLockAdminOnly | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  const out: EditLockAdminOnly = {
+    states: list(o.states, STATE_KEY_RE),
+    transitions: list(o.transitions, TRANSITION_ID_RE),
+    open_fields: list(o.open_fields, IDENT),
+    open_children: list(o.open_children, IDENT)
+  }
+  return out.states.length > 0 ? out : null
+}
 
 /** Lenient read of the `edit_lock` key; null = no lock configured. */
 export function parseEditLock(raw: unknown): EditLockConfig | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const o = raw as { states?: unknown; children?: unknown }
-  const list = (v: unknown, re: RegExp) =>
-    Array.isArray(v)
-      ? [...new Set(v.filter((x): x is string => typeof x === 'string' && re.test(x)))].slice(
-          0,
-          MAX_LIST
-        )
-      : []
+  const o = raw as { states?: unknown; children?: unknown; admin_only?: unknown }
   const states = list(o.states, STATE_KEY_RE)
-  if (states.length === 0) return null
-  return { states, children: list(o.children, IDENT) }
+  const adminOnly = parseAdminOnly(o.admin_only)
+  if (states.length === 0 && !adminOnly) return null
+  return {
+    states,
+    children: list(o.children, IDENT),
+    ...(adminOnly ? { admin_only: adminOnly } : {})
+  }
 }
 
 /** Strict write of the `edit_lock` key: normalized value or an error. */
@@ -72,19 +134,30 @@ export function validateEditLock(
   if (raw == null) return { value: null }
   if (typeof raw !== 'object' || Array.isArray(raw))
     return { error: 'summary_mode_rules.edit_lock must be an object' }
-  const o = raw as { states?: unknown; children?: unknown }
-  for (const [key, re] of [
-    ['states', STATE_KEY_RE],
-    ['children', IDENT]
-  ] as const) {
-    const v = o[key]
-    if (v === undefined) continue
+  const o = raw as { states?: unknown; children?: unknown; admin_only?: unknown }
+  const checkList = (path: string, v: unknown, re: RegExp, what: string) => {
+    if (v === undefined) return null
     if (!Array.isArray(v) || v.length > MAX_LIST)
-      return { error: `summary_mode_rules.edit_lock.${key} must be a list of at most ${MAX_LIST}` }
+      return `summary_mode_rules.edit_lock.${path} must be a list of at most ${MAX_LIST}`
     if (!v.every((x) => typeof x === 'string' && re.test(x)))
-      return {
-        error: `summary_mode_rules.edit_lock.${key} entries must be ${key === 'states' ? 'state keys' : 'collection names'}`
-      }
+      return `summary_mode_rules.edit_lock.${path} entries must be ${what}`
+    return null
+  }
+  for (const [key, re, what] of [
+    ['states', STATE_KEY_RE, 'state keys'],
+    ['children', IDENT, 'collection names']
+  ] as const) {
+    const error = checkList(key, o[key], re, what)
+    if (error) return { error }
+  }
+  if (o.admin_only != null) {
+    if (typeof o.admin_only !== 'object' || Array.isArray(o.admin_only))
+      return { error: 'summary_mode_rules.edit_lock.admin_only must be an object' }
+    const a = o.admin_only as Record<string, unknown>
+    for (const [key, re, what] of ADMIN_ONLY_LISTS) {
+      const error = checkList(`admin_only.${key}`, a[key], re, what)
+      if (error) return { error }
+    }
   }
   return { value: parseEditLock(raw) }
 }
@@ -199,9 +272,85 @@ export interface EditLockVerdict {
   locked: boolean
   allowed: boolean
   message: string
+  /** which tier locked it (absent when open) */
+  tier?: 'approval' | 'admin_only'
+  /** the fields a non-admin may still write (tier 'admin_only' only) */
+  open_fields?: string[]
 }
 
 const OPEN: EditLockVerdict = { locked: false, allowed: true, message: '' }
+
+interface InstanceRow {
+  id: string
+  current_state: string
+  key: string
+  label: string | null
+  completed_at?: unknown
+}
+
+/**
+ * The record's run for the admin-only tier, open or finished — THE record's
+ * run as the rest of the app reads it (findRecordInstance): never a parallel
+ * branch child; among the rest the open one, else the newest by start. The
+ * same start falls to the higher id (the read's own order, kept by the sort).
+ */
+async function latestInstance(collection: string, item: string): Promise<InstanceRow | undefined> {
+  const rows = (await db('nivaro_workflow_instances as i')
+    .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+    .where({ 'i.collection': collection, 'i.item': String(item) })
+    .orderBy([
+      { column: 'i.started_at', order: 'desc' },
+      { column: 'i.id', order: 'desc' }
+    ])
+    .select(
+      'i.id',
+      'i.collection',
+      'i.item',
+      'i.template',
+      'i.current_state',
+      'i.started_at',
+      'i.completed_at',
+      's.key',
+      's.label'
+    )) as Array<
+    InstanceRow & {
+      collection: string
+      item: string
+      template: string
+      started_at: Date | null
+      completed_at: Date | null
+    }
+  >
+  if (rows.length <= 1) return rows[0]
+  const kept = await excludeBranchChildren(rows)
+  return pickInstance(kept.length ? kept : rows)
+}
+
+/**
+ * The admin-only state `item` of `collection` sits in (its latest run), or
+ * null — for the gates that judge moves out of it and the form.
+ */
+export async function adminOnlyStateOf(
+  collection: string,
+  item: string
+): Promise<{ key: string; label: string } | null> {
+  const adminOnly = (await lockPlan()).locks.get(collection)?.admin_only
+  if (!adminOnly) return null
+  const inst = await latestInstance(collection, item)
+  if (!inst || !adminOnly.states.includes(inst.key)) return null
+  return { key: inst.key, label: inst.label ?? inst.key }
+}
+
+/** Transition ids (upper-cased) only admins may run from an admin-only state. */
+export async function adminOnlyTransitionsFor(collection: string): Promise<Set<string>> {
+  const adminOnly = (await lockPlan()).locks.get(collection)?.admin_only
+  return new Set((adminOnly?.transitions ?? []).map((id) => String(id).toUpperCase()))
+}
+
+/** The pipeline state keys that are admin-only for `collection` (list pages judge by state). */
+export async function adminOnlyStatesFor(collection: string): Promise<Set<string>> {
+  return new Set((await lockPlan()).locks.get(collection)?.admin_only?.states ?? [])
+}
 
 /**
  * Is `parentId` of `parent` locked right now, and may `user` change it?
@@ -215,17 +364,34 @@ export async function editLockVerdictFor(
 ): Promise<EditLockVerdict> {
   const cfg = lock ?? (await lockPlan()).locks.get(parent)
   if (!cfg) return OPEN
-  const inst = (await db('nivaro_workflow_instances as i')
-    .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-    .where({ 'i.collection': parent, 'i.item': String(parentId) })
-    .whereNull('i.completed_at')
-    .first('i.id', 'i.current_state', 's.key', 's.label')) as
-    | { id: string; current_state: string; key: string; label: string | null }
-    | undefined
+  // Admins never get here (the callers let them through first).
+  let latest: InstanceRow | undefined
+  if (cfg.admin_only) {
+    latest = await latestInstance(parent, String(parentId))
+    if (latest && cfg.admin_only.states.includes(latest.key))
+      return {
+        locked: true,
+        allowed: false,
+        message: `This record is at ${latest.label ?? latest.key} — only administrators can change it. Use Request help to ask for a change.`,
+        tier: 'admin_only',
+        open_fields: cfg.admin_only.open_fields
+      }
+  }
+  if (cfg.states.length === 0) return OPEN
+  // The approval tier reads only an OPEN run (the latest one when it is open).
+  const inst =
+    latest && latest.completed_at == null
+      ? latest
+      : ((await db('nivaro_workflow_instances as i')
+          .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
+          .where({ 'i.collection': parent, 'i.item': String(parentId) })
+          .whereNull('i.completed_at')
+          .first('i.id', 'i.current_state', 's.key', 's.label')) as InstanceRow | undefined)
   if (!inst || !cfg.states.includes(inst.key)) return OPEN
   const { recordCreators, sameUser, ownsStep } = await import('./record-access.js')
   const creator = (await recordCreators(parent, [String(parentId)])).get(String(parentId))
-  if (sameUser(creator, user.id)) return { locked: true, allowed: true, message: '' }
+  if (sameUser(creator, user.id))
+    return { locked: true, allowed: true, message: '', tier: 'approval' }
   const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
   const owners = await resolveStateOwnersBatch([
     {
@@ -237,12 +403,13 @@ export async function editLockVerdictFor(
     }
   ])
   if (ownsStep(owners.get('x') ?? [], String(user.id)))
-    return { locked: true, allowed: true, message: '' }
+    return { locked: true, allowed: true, message: '', tier: 'approval' }
   const step = inst.label ?? inst.key
   return {
     locked: true,
     allowed: false,
-    message: `This record is at ${step} — only the person who created it, the owners of that step and administrators can change it.`
+    message: `This record is at ${step} — only the person who created it, the owners of that step and administrators can change it.`,
+    tier: 'approval'
   }
 }
 
@@ -270,7 +437,11 @@ export async function lockHolderVerdict(
     if (!user) return OPEN
     const { isAdminRole } = await import('./permissions.js')
     if (await isAdminRole(user)) return OPEN
-    return await editLockVerdictFor(user, collection, String(item), cfg)
+    const verdict = await editLockVerdictFor(user, collection, String(item), cfg)
+    // A form with open fields is still worth holding: each save is judged.
+    if (verdict.tier === 'admin_only' && (cfg.admin_only?.open_fields.length ?? 0) > 0)
+      return { ...verdict, allowed: true, message: '' }
+    return verdict
   } catch {
     return OPEN
   }
@@ -289,12 +460,18 @@ function fkOf(value: unknown): string | null {
  * row) the parent's person-held edit lock (409 RECORD_LOCKED, admins
  * included, as on the record) and, for a record and its own rows, the
  * approval edit lock (403 EDIT_LOCKED, admins pass). Throws on a refusal.
+ * In an admin-only state, an update writing only the lock's open fields and
+ * a row of one of its open children still pass; `adminOnlyTier: false` (item
+ * actions, outbound pushes) skips that tier altogether. In either tier, an
+ * update of values a move's requirements dialog asks for passes for whoever
+ * may run that move (requirement-writes.ts).
  */
 export async function assertNotEditLocked(
   user: User | null | undefined,
   collection: string,
   opts: { ids?: Array<string | number>; payload?: Record<string, unknown> | null },
-  req?: FastifyRequest
+  req?: FastifyRequest,
+  tiers: { adminOnlyTier?: boolean } = {}
 ): Promise<void> {
   if (!req || !user) return
   const plan = await lockPlan()
@@ -348,21 +525,58 @@ export async function assertNotEditLocked(
   if (links && currentFailed)
     throw new EditLockedError('Could not confirm you may change this record while it waits.')
 
-  const targets: Array<{ parent: string; id: string }> = []
-  if (own) for (const id of ids) targets.push({ parent: collection, id })
-  if (links) targets.push(...parentsOf(links))
+  // Admin-only tier: an update of the record that writes nothing but open
+  // fields (a delete has no payload; `id` and `_` keys are not fields).
+  const written = Object.keys(opts.payload ?? {}).filter((k) => k !== 'id' && !k.startsWith('_'))
+  const onlyOpenFields = (open: string[] | undefined) =>
+    !!opts.payload && written.length > 0 && written.every((k) => !!open?.includes(k))
+
+  // A value the move's own requirements dialog saves (requirement-writes.ts):
+  // the request names the move, and every row written is one the server
+  // finds that move asks for, on the very record judged here. Asked only
+  // when a lock would refuse, once per call.
+  let moveRecords: Promise<Array<{ collection: string; item: string } | null>> | null = null
+  const forTheMove = async (parent: string, id: string) => {
+    if (ids.length === 0 || written.length === 0) return false
+    const { REQUIREMENTS_FOR_HEADER, requirementWriteTarget } = await import(
+      './requirement-writes.js'
+    )
+    if (!req.headers?.[REQUIREMENTS_FOR_HEADER]) return false
+    moveRecords ??= Promise.all(
+      ids.map((rowId) => requirementWriteTarget(req, collection, rowId, written))
+    )
+    const found = await moveRecords
+    return found.every(
+      (m) => !!m && m.collection === parent && m.item.toLowerCase() === id.toLowerCase()
+    )
+  }
+
+  const targets: Array<{ parent: string; id: string; child: boolean }> = []
+  if (own) for (const id of ids) targets.push({ parent: collection, id, child: false })
+  if (links) for (const p of parentsOf(links)) targets.push({ ...p, child: true })
   const seen = new Set<string>()
   for (const t of targets) {
     const k = `${t.parent}:${t.id.toLowerCase()}`
     if (seen.has(k)) continue
     seen.add(k)
+    const planned = plan.locks.get(t.parent)
+    const lock =
+      planned && tiers.adminOnlyTier === false
+        ? { states: planned.states, children: planned.children }
+        : planned
     let verdict: EditLockVerdict
     try {
-      verdict = await editLockVerdictFor(user, t.parent, t.id, plan.locks.get(t.parent))
+      verdict = await editLockVerdictFor(user, t.parent, t.id, lock)
     } catch {
       throw new EditLockedError('Could not confirm you may change this record while it waits.')
     }
-    if (!verdict.allowed) throw new EditLockedError(verdict.message)
+    if (verdict.allowed) continue
+    if (verdict.tier === 'admin_only') {
+      if (t.child && lock?.admin_only?.open_children.includes(collection)) continue
+      if (!t.child && onlyOpenFields(verdict.open_fields)) continue
+    }
+    if (await forTheMove(t.parent, t.id)) continue
+    throw new EditLockedError(verdict.message)
   }
 }
 
@@ -387,13 +601,16 @@ export interface RecordWriteRefusal {
  * person-held edit lock (409 RECORD_LOCKED, admins included) and its
  * approval lock lets them (403 EDIT_LOCKED). null = go ahead. `heldLock:
  * false` skips the person-held lock (an outbound push, like the record's own
- * Push button, does not write the form someone has open).
+ * Push button, does not write the form someone has open). `fields` = the
+ * record fields the caller writes, when it knows them: an admin-only lock
+ * lets a write of nothing but its open fields through. `adminOnlyTier:
+ * false` skips the admin-only tier (outbound pushes).
  */
 export async function recordWriteRefusal(
   req: FastifyRequest,
   collection: string,
   id: string | number,
-  opts: { heldLock?: boolean } = {}
+  opts: { heldLock?: boolean; fields?: string[]; adminOnlyTier?: boolean } = {}
 ): Promise<RecordWriteRefusal | null> {
   const user = req.user
   if (!user) return { status: 403, body: { error: 'Forbidden' } }
@@ -421,7 +638,10 @@ export async function recordWriteRefusal(
   if (!(await items.canUpdateItem(user, collection, id, req.workspaceId ?? undefined)))
     return { status: 403, body: { error: 'You do not have permission to change this record' } }
   try {
-    await assertNotEditLocked(user, collection, { ids: [id] }, req)
+    const payload = opts.fields ? Object.fromEntries(opts.fields.map((f) => [f, null])) : undefined
+    await assertNotEditLocked(user, collection, { ids: [id], payload }, req, {
+      adminOnlyTier: opts.adminOnlyTier
+    })
   } catch (err) {
     if (err instanceof EditLockedError)
       return { status: 403, body: { error: err.message, code: EDIT_LOCKED } }

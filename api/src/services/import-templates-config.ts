@@ -65,6 +65,8 @@ export interface ImportReimportConfig {
   attachments: 'add' | 'replace'
   /** Optional label for the re-import button; falls back to the template's button_label. */
   button_label?: string | null
+  /** State keys where non-admins see Re-import; empty/absent = any state. */
+  states?: string[] | null
 }
 
 export interface ImportTemplateConfig {
@@ -436,13 +438,20 @@ function normalizeReimport(
       ? src.button_label.trim().slice(0, 100)
       : null
 
+  const states = Array.isArray(src.states)
+    ? src.states
+        .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+        .map((v) => v.trim())
+    : []
+
   return {
     enabled,
     header_fields: headerFields,
     lines,
     match_by: matchBy,
     attachments,
-    button_label: buttonLabel
+    button_label: buttonLabel,
+    ...(states.length > 0 ? { states } : {})
   }
 }
 

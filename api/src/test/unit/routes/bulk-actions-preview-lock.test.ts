@@ -18,6 +18,7 @@ vi.mock('../../../services/edit-lock.js', () => ({
 }))
 
 import { refuseUnwritable } from '../../../routes/bulk-actions.js'
+import { recordWriteRefusal } from '../../../services/edit-lock.js'
 
 describe('bulk-action preview judges the write gates', () => {
   it('turns a locked or unreadable "would change" into a failure; leaves the writable one', async () => {
@@ -43,5 +44,22 @@ describe('bulk-action preview judges the write gates', () => {
     ])
     expect(result.outcomes[0].reason).toContain('Level 2')
     expect(result).toMatchObject({ succeeded: 1, failed: 2, skipped: 1 })
+  })
+
+  it('tells the gate which fields the action writes (an admin-only lock lets open fields through)', async () => {
+    vi.mocked(recordWriteRefusal).mockClear()
+    const result = {
+      succeeded: 1,
+      failed: 0,
+      skipped: 0,
+      errors: [] as Array<{ item: string; error: string }>,
+      skipped_items: [] as string[],
+      outcomes: [{ item: '5', outcome: 'change' as const, reason: 'is_on_hold → true' }]
+    }
+    await refuseUnwritable(result, 'workflows', {} as never, ['is_on_hold'])
+    expect(recordWriteRefusal).toHaveBeenCalledWith({}, 'workflows', '5', {
+      heldLock: false,
+      fields: ['is_on_hold']
+    })
   })
 })

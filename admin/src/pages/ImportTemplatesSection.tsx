@@ -116,6 +116,7 @@ interface ImportReimportConfig {
   match_by: string[]
   attachments: 'add' | 'replace'
   button_label?: string | null
+  states?: string[] | null
 }
 
 export interface ConfigErrorDetail {
@@ -1513,6 +1514,21 @@ function ReimportFields({
                 onCommit={(v) => onChange({ button_label: v || null })}
                 placeholder='Falls back to header button label'
                 maxLength={100}
+                className='h-8 text-[12px]'
+              />
+            </LabeledField>
+            <LabeledField label='Show to non-admins in states'>
+              <BufferedInput
+                value={(reimport.states ?? []).join(', ')}
+                onCommit={(v) =>
+                  onChange({
+                    states: v
+                      .split(',')
+                      .map((x) => x.trim())
+                      .filter(Boolean)
+                  })
+                }
+                placeholder='State keys, comma-separated — blank = any state'
                 className='h-8 text-[12px]'
               />
             </LabeledField>

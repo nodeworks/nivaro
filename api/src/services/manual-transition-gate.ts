@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { adminOnlyStateOf, adminOnlyTransitionsFor } from './edit-lock.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -14,6 +15,7 @@ import { evaluateConditionRules, fetchRecordForConditions } from './workflow-con
  */
 
 export const TRANSITION_COMMENT_REQUIRED = 'TRANSITION_COMMENT_REQUIRED'
+export const ADMIN_ONLY_TRANSITION = 'ADMIN_ONLY_TRANSITION'
 
 export interface GateTransition {
   id: string
@@ -57,8 +59,60 @@ export function commentMissing(transition: Pick<GateTransition, 'comment_mode'>,
 }
 
 /**
+ * Post-approval lock (admin-only tier): a record resting in an admin-only state
+ * lets only administrators run the moves the collection lists (Cancel Workflow,
+ * send-backs). Judged by transition id against the record's own latest state,
+ * so the same move stays open while the record is still being approved. Only
+ * listed ids are refused — an escape hatch out of a terminal state is not
+ * affected unless listed. Admins are never refused.
+ */
+export async function adminOnlyTransitionRefusal(opts: {
+  isAdmin: boolean
+  collection: string
+  item: string
+  transitionId: string
+}): Promise<TransitionRefusal | null> {
+  if (opts.isAdmin) return null
+  const listed = await adminOnlyTransitionsFor(opts.collection)
+  if (!listed.has(String(opts.transitionId).toUpperCase())) return null
+  const state = await adminOnlyStateOf(opts.collection, opts.item)
+  if (!state) return null
+  return {
+    status: 403,
+    body: {
+      error: `Only administrators can make this move at ${state.label || state.key}. Use Request help to ask for a change.`,
+      code: ADMIN_ONLY_TRANSITION
+    }
+  }
+}
+
+/**
+ * The moves on offer to a person, less the ones adminOnlyTransitionRefusal
+ * would refuse them — for the lists that offer moves (the record panel, the
+ * Command Center peek). The record's state is read once, and only when a
+ * listed move is on offer.
+ */
+export async function withoutAdminOnlyMoves<T extends { id: unknown }>(opts: {
+  isAdmin: boolean
+  collection: string
+  item: string
+  transitions: T[]
+}): Promise<T[]> {
+  const { transitions } = opts
+  if (opts.isAdmin || transitions.length === 0) return transitions
+  const listed = await adminOnlyTransitionsFor(opts.collection)
+  const isListed = (t: T) => listed.has(String(t.id).toUpperCase())
+  if (!transitions.some(isListed)) return transitions
+  if (!(await adminOnlyStateOf(opts.collection, opts.item))) return transitions
+  return transitions.filter((t) => !isListed(t))
+}
+
+/**
  * Why this person may not run `transition` on `instance` now, or null when
  * every gate passes. Order matters: shape errors first, then who, then data.
+ * `skipRequirements` / `skipComment`: the question asked while the move's own
+ * requirements dialog saves its values (requirement-writes.ts) — those values
+ * are what the requirements wait for, and the note rides the move itself.
  */
 export async function manualTransitionRefusal(opts: {
   user: User | undefined
@@ -69,6 +123,8 @@ export async function manualTransitionRefusal(opts: {
   transition: GateTransition
   comment?: string | null
   reviewed?: boolean
+  skipRequirements?: boolean
+  skipComment?: boolean
   log?: Pick<FastifyBaseLogger, 'warn'>
 }): Promise<TransitionRefusal | null> {
   const { instance, transition, isAdmin } = opts
@@ -94,6 +150,14 @@ export async function manualTransitionRefusal(opts: {
   if (on(transition.auto_trigger)) {
     return refuse(400, 'Automatic transitions cannot be executed manually')
   }
+
+  const adminOnly = await adminOnlyTransitionRefusal({
+    isAdmin,
+    collection: opts.collection,
+    item: opts.item,
+    transitionId: transition.id
+  })
+  if (adminOnly) return adminOnly
 
   if (!isAdmin) {
     const roles = rolesOf(transition.required_roles)
@@ -124,12 +188,12 @@ export async function manualTransitionRefusal(opts: {
 
   // The record panel keeps Confirm disabled until a note is typed; every other
   // caller (worklist bulk bar, board drag, API keys, MCP) is held to it here.
-  if (commentMissing(transition, opts.comment)) {
+  if (opts.skipComment !== true && commentMissing(transition, opts.comment)) {
     return refuse(422, 'A note is required for this move.', { code: TRANSITION_COMMENT_REQUIRED })
   }
 
   // Requirements: a data-entry gate takes priority over conditional branching.
-  if (transition.requirements) {
+  if (transition.requirements && opts.skipRequirements !== true) {
     const blocking = await evaluateTransitionRequirements(
       db,
       transition.requirements,

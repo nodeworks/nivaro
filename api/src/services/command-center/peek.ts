@@ -206,6 +206,9 @@ export async function offeredTransitions(
       })
       offered = offeredToActor(offered, actor)
     }
+    // Post-approval lock: never offer a move the gate would refuse.
+    const { withoutAdminOnlyMoves } = await import('../manual-transition-gate.js')
+    offered = await withoutAdminOnlyMoves({ isAdmin, collection, item, transitions: offered })
     return offered.slice(0, 8).map((t) => ({ key: String(t.id), label: t.label }))
   } catch {
     return []

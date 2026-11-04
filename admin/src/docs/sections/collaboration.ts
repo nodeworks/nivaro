@@ -1177,7 +1177,7 @@ export const collabSupportRequests: DocSection = {
     {
       type: 'ul',
       items: [
-        "**Raise one** from a record's ⋯ menu (Request a change — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.",
+        '**Raise one** with Request help on a record (beside Save — the request types for that kind of record are offered) or from Get help (General Support). Files can be attached.',
         '**Follow it** on the Support page (`/support`) under My requests, in the "Tasks I\'ve requested" dashboard widget, and through notifications on every status change and reply.',
         '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
         '**Analytics** (Analytics tab on the Desk, administrators and team members; a team member sees the tickets routed to their teams): tickets by request type and team, first response and resolution time (median and p75, with the share within the target: 4 hours to first reply and 3 days to resolution by default), the share of closed tickets that were reopened, tickets per kind of record, how many arrived with a replay clip or screenshot, and the busiest requesters, over 7, 30 or 90 days. Counts and timings only, no ticket text. `GET /api/support/analytics?days=&first_response_hours=&resolution_hours=`.',

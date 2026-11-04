@@ -702,10 +702,14 @@ export async function revisionsRoutes(app: FastifyInstance) {
       if (current) {
         delete change.values[many_field]
         if (Object.keys(change.values).length === 0) continue
-        await updateOne(user, collection, String(row.id), change.values, req, ws)
+        await updateOne(user, collection, String(row.id), change.values, req, ws, {
+          callerPayload: true
+        })
         updated++
       } else {
-        await createOne(user, collection, { ...change.values, [many_field]: parent_id }, req, ws)
+        await createOne(user, collection, { ...change.values, [many_field]: parent_id }, req, ws, {
+          callerPayload: true
+        })
         created++
       }
     }
@@ -823,7 +827,8 @@ export async function revisionsRoutes(app: FastifyInstance) {
           activity.item,
           change.values,
           req,
-          req.workspaceId ?? undefined
+          req.workspaceId ?? undefined,
+          { callerPayload: true }
         )
       }
     }
@@ -908,7 +913,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
       {
         [field]: revisionData[field]
       },
-      req
+      req,
+      undefined,
+      { callerPayload: true }
     )
 
     await logActivity({

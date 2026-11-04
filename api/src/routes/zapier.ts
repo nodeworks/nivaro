@@ -252,7 +252,16 @@ export async function zapierRoutes(app: FastifyInstance) {
       try {
         // createOne enforces allowed fields, hooks, activity logging, quotas,
         // encryption, and workspace stamping.
-        const row = await createOne(req.user!, collection, data, req, req.workspaceId ?? undefined)
+        const row = await createOne(
+          req.user!,
+          collection,
+          data,
+          req,
+          req.workspaceId ?? undefined,
+          {
+            callerPayload: true
+          }
+        )
         return reply.code(201).send({ data: row })
       } catch (err) {
         req.log.warn({ err, collection }, 'Zapier create-item failed')
@@ -289,7 +298,8 @@ export async function zapierRoutes(app: FastifyInstance) {
         id,
         data,
         req,
-        req.workspaceId ?? undefined
+        req.workspaceId ?? undefined,
+        { callerPayload: true }
       )
       return { data: row }
     } catch (err) {
