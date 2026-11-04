@@ -74,8 +74,7 @@ export const summaryMode: DocSection = {
   "states": ["waiting_on_manager_approval", "waiting_on_vp_approval"],
   "children": ["workflow_line_items"]
 }`
-    }
-    ,
+    },
     { type: 'h3', id: 'summary-mode-admin-only', text: 'Admin-only steps (post-approval)' },
     {
       type: 'p',
