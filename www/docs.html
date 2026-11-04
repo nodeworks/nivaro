@@ -9758,6 +9758,8 @@ const { data: created } = await cms.request(
 )
 // → { id, line_ids }</code></pre>
           <div class="doc-note doc-warn">Lookup collections are never <code class="doc-code">nivaro_*</code> system tables, with exactly one deliberate exception — the <code class="doc-code">$users</code> sentinel (see above) — the fetcher otherwise blocks them the same way the Data Import Queue blocks system collections as import targets. Parse and test panel resolve lookups without a per-viewer read check on the lookup collection itself, since templates are admin-authored — the same curation-not-security precedent as picker_filter and widget feeds.</div>
+          <h3 class="doc-h3">Re-import by state</h3>
+          <p class="doc-p"><code class="doc-code">reimport.states</code> (a list of pipeline state keys) limits when non-administrators see **Re-import** on a record: only while the record is in one of those states. Administrators always see it. Empty or missing = shown in every state, as before.</p>
           <h2 class="doc-h2" id="import-template-replay">Replay a past file</h2>
           <p class="doc-p">Under the Test panel, **Replay a past file** lists the files this template already imported (the <code class="doc-code">import:&lt;template&gt;:&lt;file&gt;</code> stamps the prefill path writes on created rows, on the header record and on every line) and runs the template over one of them again — with the saved rules, or with the rules as they currently stand in the editor. The result names how many header fields and lines would come out differently and how the issue count moves, so a rule change is judged on real files before it is saved. Nothing is created. API: <code class="doc-code">GET /import-templates/:id/past-files</code>, <code class="doc-code">POST /import-templates/:id/replay {file_id, config?}</code>.</p>
           <!-- /SYNC:import-templates -->
@@ -10574,6 +10576,7 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
               <tr><td>Required</td><td>All fields</td><td>Marks the field as required in the editor.</td></tr>
               <tr><td>Hidden</td><td>All fields</td><td>Hides the field from the item editor entirely.</td></tr>
               <tr><td>Read-only</td><td>All fields</td><td>Renders the field as non-editable.</td></tr>
+              <tr><td>Only administrators can change this</td><td>All fields except choice fields</td><td>Stored as <code class="doc-code">options.admin_only_edit</code>. Non-admin writes to the field are dropped on every route that takes a person’s body (like a read-only field), and the form shows “Only administrators can change this field”. Reads are unaffected.</td></tr>
               <tr><td>Inline edit</td><td>M2O relations</td><td>On by default. When enabled, the related record can be opened and edited inline next to the relation picker; when disabled, the field is a plain pick-only combobox.</td></tr>
               <tr><td>Max values</td><td>M2M relations</td><td>Integer limit on how many related records can be linked. Leave blank for unlimited. Setting it to 1 switches the field to a single-select combobox.</td></tr></tr></tbody>
           </table></div>
@@ -11606,7 +11609,7 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
         </div>
 
         <!-- SUMMARY MODE -->
-        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"},{"id":"summary-mode-edit-lock","label":"Edit lock while a record waits"}]'>
+        <div class="doc-section" id="s-summary-mode" data-toc='[{"id":"summary-mode","label":"Summary Mode"},{"id":"summary-mode-edit-lock","label":"Edit lock while a record waits"},{"id":"summary-mode-admin-only","label":"Admin-only steps (post-approval)"}]'>
           <!-- SYNC:summary-mode -->
           <h1 class="doc-h1" id="summary-mode">Summary Mode</h1>
           <p class="doc-p">Summary mode is the record form rendered as a read-only presentation: the active grouped layout as section cards and definition grids, child tables instead of editable grids, related records as labels and drill links. Nothing on the record itself can be changed until the viewer switches to Edit — but the Notes and Tasks slots stay live, so a reviewer can comment on or assign work from the summary without leaving it.</p>
@@ -11643,6 +11646,19 @@ POST &lt;enrich_endpoint&gt; { "ids": ["1", "2"] }
   "states": ["waiting_on_manager_approval", "waiting_on_vp_approval"],
   "children": ["workflow_line_items"]
 }</code></pre>
+          <h3 class="doc-h3" id="summary-mode-admin-only">Admin-only steps (post-approval)</h3>
+          <p class="doc-p"><code class="doc-code">edit_lock.admin_only</code> is a stricter tier for steps after approval: in its <code class="doc-code">states</code> only administrators change the record or the rows of its <code class="doc-code">children</code>. Not even the creator or the step’s owners can. <code class="doc-code">open_fields</code> (field names) and <code class="doc-code">open_children</code> (collection names) stay writable for everyone who may normally write them, for example a PO number that arrives after approval. <code class="doc-code">transitions</code> lists transition ids that only administrators may run while the record is at one of those states; the Pipeline panel and the row menu hide them, and the move route and bulk transitions refuse them with 403 <code class="doc-code">ADMIN_ONLY_TRANSITION</code>. A completed record is judged by its latest instance, so a finished state can be listed too. Item actions and outbound pushes skip this tier. When <code class="doc-code">open_fields</code> is not empty the person-held edit lock is still granted, so the open fields can be edited. Refusals read “This record is at {step} — only administrators can change it. Use Request help to ask for a change.”; the form opens read-only with that sentence, and every saved record has a Request help button beside Save.</p>
+          <pre class="doc-pre"><code>"edit_lock": {
+  "states": ["waiting_on_manager_approval"],
+  "children": ["workflow_line_items"],
+  "admin_only": {
+    "states": ["approved", "ordered"],
+    "transitions": ["&lt;transition uuid&gt;"],
+    "open_fields": ["po_number"],
+    "open_children": ["workflow_notes"]
+  }
+}</code></pre>
+          <p class="doc-p">The move-requirements dialog is the one exception: its PATCH carries the header <code class="doc-code">x-nivaro-requirements-for: &lt;transition id&gt;</code>, and the fields that move declares as requirements are let through both lock tiers and the admin-only field option, but only when the caller may run that move now on that record (its conditions are still evaluated). The SDK sends it through <code class="doc-code">withHeaders</code> on a command.</p>
           <!-- /SYNC:summary-mode -->
         </div>
 

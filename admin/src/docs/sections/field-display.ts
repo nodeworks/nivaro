@@ -38,6 +38,11 @@ export const fieldDisplaySettingsGuide: DocSection = {
         ['Hidden', 'All fields', 'Hides the field from the item editor entirely.'],
         ['Read-only', 'All fields', 'Renders the field as non-editable.'],
         [
+          'Only administrators can change this',
+          'All fields except choice fields',
+          'Stored as `options.admin_only_edit`. Non-admin writes to the field are dropped on every route that takes a person\u2019s body (like a read-only field), and the form shows \u201cOnly administrators can change this field\u201d. Reads are unaffected.'
+        ],
+        [
           'Inline edit',
           'M2O relations',
           'On by default. When enabled, the related record can be opened and edited inline next to the relation picker; when disabled, the field is a plain pick-only combobox.'

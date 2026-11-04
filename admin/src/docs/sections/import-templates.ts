@@ -311,6 +311,11 @@ const { data: created } = await cms.request(
       type: 'warn',
       text: 'Lookup collections are never `nivaro_*` system tables, with exactly one deliberate exception — the `$users` sentinel (see above) — the fetcher otherwise blocks them the same way the Data Import Queue blocks system collections as import targets. Parse and test panel resolve lookups without a per-viewer read check on the lookup collection itself, since templates are admin-authored — the same curation-not-security precedent as picker_filter and widget feeds.'
     },
+    { type: 'h3', text: 'Re-import by state' },
+    {
+      type: 'p',
+      text: '`reimport.states` (a list of pipeline state keys) limits when non-administrators see **Re-import** on a record: only while the record is in one of those states. Administrators always see it. Empty or missing = shown in every state, as before.'
+    },
     { type: 'h2', id: 'import-template-replay', text: 'Replay a past file' },
     {
       type: 'p',
