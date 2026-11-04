@@ -52,6 +52,8 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { excludeBranchChildren } from './branch-instances.js'
+import { pickInstance } from './record-state.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 export const EDIT_LOCKED = 'EDIT_LOCKED'
@@ -286,18 +288,42 @@ interface InstanceRow {
   completed_at?: unknown
 }
 
-/** The record's newest pipeline run, open or finished (the admin-only tier). */
+/**
+ * The record's run for the admin-only tier, open or finished — THE record's
+ * run as the rest of the app reads it (findRecordInstance): never a parallel
+ * branch child; among the rest the open one, else the newest by start. The
+ * same start falls to the higher id (the read's own order, kept by the sort).
+ */
 async function latestInstance(collection: string, item: string): Promise<InstanceRow | undefined> {
-  return (await db('nivaro_workflow_instances as i')
+  const rows = (await db('nivaro_workflow_instances as i')
     .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
     .where({ 'i.collection': collection, 'i.item': String(item) })
     .orderBy([
       { column: 'i.started_at', order: 'desc' },
       { column: 'i.id', order: 'desc' }
     ])
-    .first('i.id', 'i.current_state', 'i.completed_at', 's.key', 's.label')) as
-    | InstanceRow
-    | undefined
+    .select(
+      'i.id',
+      'i.collection',
+      'i.item',
+      'i.template',
+      'i.current_state',
+      'i.started_at',
+      'i.completed_at',
+      's.key',
+      's.label'
+    )) as Array<
+    InstanceRow & {
+      collection: string
+      item: string
+      template: string
+      started_at: Date | null
+      completed_at: Date | null
+    }
+  >
+  if (rows.length <= 1) return rows[0]
+  const kept = await excludeBranchChildren(rows)
+  return pickInstance(kept.length ? kept : rows)
 }
 
 /**

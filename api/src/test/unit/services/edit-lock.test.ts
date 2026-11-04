@@ -86,6 +86,10 @@ vi.mock('../../../services/requirement-writes.js', () => ({
     return t.moveTargets[`${c}:${id}`] ?? null
   })
 }))
+vi.mock('../../../services/instance-guard.js', () => ({
+  InstanceAccessError: class extends Error {},
+  assertInstanceAccess: async () => undefined
+}))
 vi.mock('../../../services/items.js', () => {
   class ForbiddenError extends Error {}
   class CollectionNotFoundError extends Error {}
@@ -111,6 +115,7 @@ import {
   recordWriteRefusal,
   validateEditLock
 } from '../../../services/edit-lock.js'
+import { recordRefusal } from '../../../services/erp-record-gate.js'
 import { parseSummaryModeRules, validateSummaryModeRules } from '../../../services/summary-mode.js'
 
 describe('edit_lock config', () => {
@@ -639,6 +644,56 @@ describe('admin-only tier', () => {
     })
   })
 
+  it("reads the record's run as the app does: branch children never, an open run first", async () => {
+    const inst = (id: string, key: string, started: string, extra = {}) => ({
+      id,
+      collection: 'workflows',
+      item: '100',
+      template: 'tpl',
+      current_state: `s-${key}`,
+      key,
+      label: key,
+      started_at: started,
+      completed_at: null,
+      ...extra
+    })
+    // a newer parallel-branch child sitting in an admin-only state is not the record's run
+    t.tables.nivaro_workflow_instances = [
+      inst('i-parent', 'waiting_l1', '2026-10-01T00:00:00Z'),
+      inst('i-branch', 'waiting_po', '2026-11-01T00:00:00Z')
+    ]
+    t.tables.nivaro_workflow_history = [
+      {
+        instance: 'i-parent',
+        transition: null,
+        comment: JSON.stringify({ action: 'split', children: ['i-branch'] })
+      },
+      {
+        instance: 'i-branch',
+        transition: null,
+        comment: JSON.stringify({ action: 'branch', parent: 'i-parent' })
+      }
+    ]
+    expect(await adminOnlyStateOf('workflows', '100')).toBeNull()
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toMatchObject({
+      allowed: true,
+      tier: 'approval'
+    })
+    // an open run wins over a newer finished one
+    t.tables.nivaro_workflow_history = []
+    t.tables.nivaro_workflow_instances = [
+      inst('i-done', 'completed', '2026-11-01T00:00:00Z', { completed_at: '2026-11-02T00:00:00Z' }),
+      inst('i-open', 'waiting_l1', '2026-10-01T00:00:00Z')
+    ]
+    expect(await adminOnlyStateOf('workflows', '100')).toBeNull()
+    // only finished runs: the newest one
+    t.tables.nivaro_workflow_instances[1].completed_at = '2026-10-05T00:00:00Z'
+    expect(await adminOnlyStateOf('workflows', '100')).toEqual({
+      key: 'completed',
+      label: 'completed'
+    })
+  })
+
   it('item actions and outbound pushes skip the admin-only tier, never the approval tier', async () => {
     await expect(
       assertNotEditLocked(userOf('U-RODNEY'), 'workflows', { ids: [100] }, reqAs('U-RODNEY'), {
@@ -665,6 +720,24 @@ describe('admin-only tier', () => {
         adminOnlyTier: false
       })
     ).toMatchObject({ status: 403, body: { code: 'EDIT_LOCKED' } })
+  })
+
+  it('an ERP push retry passes the admin-only tier; the approval tier still refuses a non-owner', async () => {
+    const retry = () =>
+      recordRefusal(reqAs('U-RODNEY'), 'workflows', '100', 'update', { adminOnlyTier: false })
+    expect(await retry()).toBeNull()
+    // without the opt-out (an event replay) the admin-only tier holds
+    expect(await recordRefusal(reqAs('U-RODNEY'), 'workflows', '100', 'update')).toMatchObject({
+      code: 403,
+      body: { code: 'EDIT_LOCKED' }
+    })
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i1', current_state: 's1', key: 'waiting_l1', label: 'Level 1 Approval' }
+    ]
+    expect(await retry()).toMatchObject({
+      code: 403,
+      body: { error: expect.stringMatching(/only the person who created it/), code: 'EDIT_LOCKED' }
+    })
   })
 
   it('keeps a person-held lock usable when open fields remain; voids it when none do', async () => {

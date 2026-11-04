@@ -9,12 +9,15 @@ const t = vi.hoisted(() => ({
   instances: {} as Record<string, Record<string, unknown>>,
   access: true,
   refuseFor: new Set<string>(),
-  reads: 0
+  reads: 0,
+  // tables whose read throws (the database is unreachable mid-question)
+  broken: new Set<string>()
 }))
 
 vi.mock('../../../db/index.js', () => ({
   db: (table: string) => {
     t.reads++
+    if (t.broken.has(table)) throw new Error(`read of ${table} failed`)
     const filters: Array<Record<string, unknown>> = []
     const same = (a: unknown, b: unknown) => String(a).toUpperCase() === String(b).toUpperCase()
     const rows = () =>
@@ -95,6 +98,7 @@ beforeEach(() => {
   t.access = true
   t.refuseFor = new Set(['workflows:200'])
   t.reads = 0
+  t.broken = new Set()
 })
 
 describe('requirementWriteAllowed', () => {
@@ -152,6 +156,28 @@ describe('requirementWriteAllowed', () => {
     )
     // Record fields only belong to a record of the move's own pipeline.
     expect(await requirementWriteAllowed(req(), 'projects', 100, ['project_id'])).toBe(false)
+  })
+
+  it('refuses when a read throws — the transition, the row, or the runs', async () => {
+    for (const table of ['nivaro_workflow_transitions', 'lines', 'nivaro_workflow_instances']) {
+      t.broken = new Set([table])
+      expect(await requirementWriteAllowed(req(), 'lines', 7, ['req_no'])).toBe(false)
+    }
+    t.broken = new Set(['nivaro_workflow_transitions'])
+    expect(
+      await requirementWriteAllowed(req(), 'workflows', 100, ['project_id', 'project_name'])
+    ).toBe(false)
+  })
+
+  it("refuses when the record's instance read rejects", async () => {
+    const { findRecordInstance } = await import('../../../services/branch-instances.js')
+    vi.mocked(findRecordInstance).mockRejectedValueOnce(new Error('connection reset'))
+    expect(await requirementWriteAllowed(req(), 'lines', 7, ['req_no'])).toBe(false)
+    expect(manualTransitionRefusal).not.toHaveBeenCalled()
+    // and when the record-access question rejects
+    const { instanceAccessAllowed } = await import('../../../services/instance-guard.js')
+    vi.mocked(instanceAccessAllowed).mockRejectedValueOnce(new Error('connection reset'))
+    expect(await requirementWriteAllowed(req(), 'lines', 7, ['req_no'])).toBe(false)
   })
 
   it('asks once per request', async () => {
