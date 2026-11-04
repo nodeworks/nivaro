@@ -18,6 +18,10 @@ vi.mock('../../../services/branch-instances.js', () => ({
     completed_at: null
   }))
 }))
+vi.mock('../../../services/edit-lock.js', () => ({
+  adminOnlyTransitionsFor: vi.fn(async () => new Set()),
+  adminOnlyStateOf: vi.fn(async () => null)
+}))
 vi.mock('../../../services/transition-guard.js', () => ({
   TransitionDuplicateError: class extends Error {},
   claimTransition: vi.fn(async () => ({ release: async () => {} }))

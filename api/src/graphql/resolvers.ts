@@ -14,6 +14,7 @@ import { chainFields } from '../services/chain-columns.js'
 import { readableFileIds } from '../services/file-access.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
+import { adminOnlyTransitionRefusal } from '../services/manual-transition-gate.js'
 import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import {
@@ -150,6 +151,24 @@ function instanceEventsAsSubscriber(
 }
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
+
+/**
+ * Post-approval lock: a move the collection keeps for administrators in an
+ * admin-only state is refused here as on the REST transition route
+ * (manual-transition-gate.ts) — before anything moves.
+ */
+async function assertAdminOnlyMove(
+  isAdmin: boolean,
+  collection: string,
+  item: string,
+  transitionId: string
+): Promise<void> {
+  const refusal = await adminOnlyTransitionRefusal({ isAdmin, collection, item, transitionId })
+  if (refusal)
+    throw new GraphQLError(String(refusal.body.error), {
+      extensions: { code: refusal.body.code, status: refusal.status }
+    })
+}
 
 function requireUser(ctx: GQLContext): User {
   if (!ctx.user) throw new Error('Unauthorized')
@@ -923,6 +942,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         transition.from_state === null || transition.from_state === instance.current_state
       if (!fromOk) throw new Error('Transition is not valid from the current state')
 
+      await assertAdminOnlyMove(ctx.isAdmin ?? false, collection, String(item), transition.id)
+
       if (!ctx.isAdmin && transition.required_roles) {
         const roles = parseJson(transition.required_roles) as string[] | null
         if (roles?.length && (!user.role || !roles.includes(user.role))) {
@@ -1120,6 +1141,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       const fromOk =
         transition.from_state === null || transition.from_state === instance.current_state
       if (!fromOk) throw new Error('Transition is not valid from the current state')
+
+      await assertAdminOnlyMove(ctx.isAdmin ?? false, collection, String(item), transition.id)
 
       if (!ctx.isAdmin && transition.required_roles) {
         const roles = parseJson(transition.required_roles) as string[] | null
