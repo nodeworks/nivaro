@@ -213,12 +213,16 @@ export async function itemActionsRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'You cannot change this record' })
     // The action writes through extension code with no request, which the
     // approval edit lock exempts as an engine write — so judge the caller here.
+    // Not the admin-only tier: an action (a push) is how a record moves on
+    // from those states.
     {
       const { assertNotEditLocked, EditLockedError, EDIT_LOCKED } = await import(
         '../services/edit-lock.js'
       )
       try {
-        await assertNotEditLocked(user, collection, { ids: [itemId] }, req)
+        await assertNotEditLocked(user, collection, { ids: [itemId] }, req, {
+          adminOnlyTier: false
+        })
       } catch (e) {
         const message =
           e instanceof EditLockedError

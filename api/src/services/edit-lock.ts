@@ -37,6 +37,11 @@
  * exemption. What stays open is named, never inferred: an update that writes
  * nothing but `open_fields`, and the rows of `open_children`. A delete never
  * passes. A record whose latest run is in neither tier is judged as before.
+ * Item actions and outbound pushes (a record's Push button) skip this tier
+ * (`adminOnlyTier: false`): they move the record forward, which is how it
+ * leaves these states — the approval tier still judges them. A person-held
+ * edit lock stays usable when the tier leaves open fields (the save itself is
+ * judged per payload).
  *
  * Judged on REQUEST writes only (the items service is handed the request):
  * the engine's own writes — flows, transition actions, addendum apply, crons,
@@ -96,9 +101,12 @@ const list = (v: unknown, re: RegExp) =>
 function parseAdminOnly(raw: unknown): EditLockAdminOnly | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
-  const out = Object.fromEntries(
-    ADMIN_ONLY_LISTS.map(([key, re]) => [key, list(o[key], re)])
-  ) as unknown as EditLockAdminOnly
+  const out: EditLockAdminOnly = {
+    states: list(o.states, STATE_KEY_RE),
+    transitions: list(o.transitions, TRANSITION_ID_RE),
+    open_fields: list(o.open_fields, IDENT),
+    open_children: list(o.open_children, IDENT)
+  }
   return out.states.length > 0 ? out : null
 }
 
@@ -391,7 +399,11 @@ export async function lockHolderVerdict(
     if (!user) return OPEN
     const { isAdminRole } = await import('./permissions.js')
     if (await isAdminRole(user)) return OPEN
-    return await editLockVerdictFor(user, collection, String(item), cfg)
+    const verdict = await editLockVerdictFor(user, collection, String(item), cfg)
+    // A form with open fields is still worth holding: each save is judged.
+    if (verdict.tier === 'admin_only' && (cfg.admin_only?.open_fields.length ?? 0) > 0)
+      return { ...verdict, allowed: true, message: '' }
+    return verdict
   } catch {
     return OPEN
   }
@@ -411,13 +423,15 @@ function fkOf(value: unknown): string | null {
  * included, as on the record) and, for a record and its own rows, the
  * approval edit lock (403 EDIT_LOCKED, admins pass). Throws on a refusal.
  * In an admin-only state, an update writing only the lock's open fields and
- * a row of one of its open children still pass.
+ * a row of one of its open children still pass; `adminOnlyTier: false` (item
+ * actions, outbound pushes) skips that tier altogether.
  */
 export async function assertNotEditLocked(
   user: User | null | undefined,
   collection: string,
   opts: { ids?: Array<string | number>; payload?: Record<string, unknown> | null },
-  req?: FastifyRequest
+  req?: FastifyRequest,
+  tiers: { adminOnlyTier?: boolean } = {}
 ): Promise<void> {
   if (!req || !user) return
   const plan = await lockPlan()
@@ -485,7 +499,11 @@ export async function assertNotEditLocked(
     const k = `${t.parent}:${t.id.toLowerCase()}`
     if (seen.has(k)) continue
     seen.add(k)
-    const lock = plan.locks.get(t.parent)
+    const planned = plan.locks.get(t.parent)
+    const lock =
+      planned && tiers.adminOnlyTier === false
+        ? { states: planned.states, children: planned.children }
+        : planned
     let verdict: EditLockVerdict
     try {
       verdict = await editLockVerdictFor(user, t.parent, t.id, lock)
@@ -524,13 +542,14 @@ export interface RecordWriteRefusal {
  * false` skips the person-held lock (an outbound push, like the record's own
  * Push button, does not write the form someone has open). `fields` = the
  * record fields the caller writes, when it knows them: an admin-only lock
- * lets a write of nothing but its open fields through.
+ * lets a write of nothing but its open fields through. `adminOnlyTier:
+ * false` skips the admin-only tier (outbound pushes).
  */
 export async function recordWriteRefusal(
   req: FastifyRequest,
   collection: string,
   id: string | number,
-  opts: { heldLock?: boolean; fields?: string[] } = {}
+  opts: { heldLock?: boolean; fields?: string[]; adminOnlyTier?: boolean } = {}
 ): Promise<RecordWriteRefusal | null> {
   const user = req.user
   if (!user) return { status: 403, body: { error: 'Forbidden' } }
@@ -559,7 +578,9 @@ export async function recordWriteRefusal(
     return { status: 403, body: { error: 'You do not have permission to change this record' } }
   try {
     const payload = opts.fields ? Object.fromEntries(opts.fields.map((f) => [f, null])) : undefined
-    await assertNotEditLocked(user, collection, { ids: [id], payload }, req)
+    await assertNotEditLocked(user, collection, { ids: [id], payload }, req, {
+      adminOnlyTier: opts.adminOnlyTier
+    })
   } catch (err) {
     if (err instanceof EditLockedError)
       return { status: 403, body: { error: err.message, code: EDIT_LOCKED } }
