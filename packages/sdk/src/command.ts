@@ -14,6 +14,8 @@ export interface Command<TResult> {
   readonly _body?: unknown
   /** Cancels the request when it aborts (never serialized; see withSignal). */
   readonly _signal?: AbortSignal
+  /** Headers for this call only (see withHeaders); the client's own auth and content type win. */
+  readonly _headers?: Record<string, string>
   readonly _phantom?: TResult
 }
 
@@ -36,4 +38,16 @@ export function withSignal<T>(
   signal: AbortSignal | null | undefined
 ): Command<T> {
   return signal ? { ...command, _signal: signal } : command
+}
+
+/**
+ * The same command, sent with `headers` on this one call — e.g. the requirements dialog naming
+ * the move it saves values for — without changing the headers of every other call. The client's
+ * own `Authorization` / `Content-Type` win. Without headers the command is returned as is.
+ */
+export function withHeaders<T>(
+  command: Command<T>,
+  headers: Record<string, string> | null | undefined
+): Command<T> {
+  return headers && Object.keys(headers).length > 0 ? { ...command, _headers: headers } : command
 }

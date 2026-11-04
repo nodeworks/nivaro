@@ -9,7 +9,9 @@ const t = vi.hoisted(() => ({
   admin: false,
   held: null as null | { parent: string; id: string },
   hidden: new Set<string>(),
-  frozen: new Set<string>()
+  frozen: new Set<string>(),
+  // requirement-writes.ts answer: `${collection}:${id}` → the move's record
+  moveTargets: {} as Record<string, { collection: string; item: string }>
 }))
 
 vi.mock('../../../db/index.js', () => ({
@@ -78,6 +80,12 @@ vi.mock('../../../services/item-lock-guard.js', () => {
         : null
   }
 })
+vi.mock('../../../services/requirement-writes.js', () => ({
+  REQUIREMENTS_FOR_HEADER: 'x-nivaro-requirements-for',
+  requirementWriteTarget: vi.fn(async (_req: unknown, c: string, id: string | number) => {
+    return t.moveTargets[`${c}:${id}`] ?? null
+  })
+}))
 vi.mock('../../../services/items.js', () => {
   class ForbiddenError extends Error {}
   class CollectionNotFoundError extends Error {}
@@ -678,5 +686,103 @@ describe('admin-only tier', () => {
     })
     t.admin = true
     expect((await lockHolderVerdict('U-RODNEY', 'workflows', '100')).allowed).toBe(true)
+  })
+})
+
+// The move's own requirements dialog (requirement-writes.ts): a value the move
+// asks for saves for whoever may run it, in either tier; nothing else does.
+describe('move-requirement writes', () => {
+  const moveReq = (id: string) =>
+    ({
+      user: { id, role: 'R' },
+      isAdmin: false,
+      authMethod: 'session',
+      headers: { 'x-nivaro-requirements-for': 'T-FUSION' }
+    }) as never
+  beforeEach(async () => {
+    seed()
+    t.moveTargets = {}
+    const { requirementWriteTarget } = await import('../../../services/requirement-writes.js')
+    vi.mocked(requirementWriteTarget).mockClear()
+  })
+  const adminOnly = () => {
+    t.tables.nivaro_collections = [
+      {
+        collection: 'workflows',
+        summary_mode_rules: JSON.stringify({
+          edit_lock: {
+            states: ['waiting_l1'],
+            children: ['workflow_line_items'],
+            admin_only: { states: ['waiting_po'] }
+          }
+        })
+      }
+    ]
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i2', current_state: 's9', key: 'waiting_po', label: 'Waiting on PO' }
+    ]
+    forgetEditLockPlan()
+  }
+
+  it("lets a line's requirement value and the record's own through at an admin-only state", async () => {
+    adminOnly()
+    t.moveTargets = {
+      'workflow_line_items:7': { collection: 'workflows', item: '100' },
+      'workflows:100': { collection: 'workflows', item: '100' }
+    }
+    await expect(
+      assertNotEditLocked(
+        userOf('U-CJ'),
+        'workflow_line_items',
+        { ids: [7], payload: { req_no: 'R-1' } },
+        moveReq('U-CJ')
+      )
+    ).resolves.toBeUndefined()
+    await expect(
+      assertNotEditLocked(
+        userOf('U-CJ'),
+        'workflows',
+        { ids: [100], payload: { project_id: 'P-9' } },
+        moveReq('U-CJ')
+      )
+    ).resolves.toBeUndefined()
+  })
+
+  it('refuses without the header, a delete, a create, and a move of another record', async () => {
+    adminOnly()
+    t.moveTargets = { 'workflow_line_items:7': { collection: 'workflows', item: '101' } }
+    const line = (opts: { ids?: number[]; payload?: Record<string, unknown> }, r: unknown) =>
+      assertNotEditLocked(userOf('U-CJ'), 'workflow_line_items', opts, r as never)
+    await expect(line({ ids: [7], payload: { req_no: 'R-1' } }, reqAs('U-CJ'))).rejects.toThrow(
+      /only administrators can change it/
+    )
+    await expect(line({ ids: [7], payload: { req_no: 'R-1' } }, moveReq('U-CJ'))).rejects.toThrow(
+      /only administrators can change it/
+    )
+    t.moveTargets['workflow_line_items:7'] = { collection: 'workflows', item: '100' }
+    await expect(line({ ids: [7] }, moveReq('U-CJ'))).rejects.toBeInstanceOf(EditLockedError)
+    await expect(
+      line({ payload: { workflow: 100, req_no: 'R-1' } }, moveReq('U-CJ'))
+    ).rejects.toBeInstanceOf(EditLockedError)
+  })
+
+  it('passes the approval tier too, for someone who is neither creator nor owner', async () => {
+    t.moveTargets = { 'workflow_line_items:7': { collection: 'workflows', item: '100' } }
+    await expect(
+      assertNotEditLocked(
+        userOf('U-RODNEY'),
+        'workflow_line_items',
+        { ids: [7], payload: { req_no: 'R-1' } },
+        moveReq('U-RODNEY')
+      )
+    ).resolves.toBeUndefined()
+    await expect(
+      assertNotEditLocked(
+        userOf('U-RODNEY'),
+        'workflow_line_items',
+        { ids: [7], payload: { req_no: 'R-1' } },
+        reqAs('U-RODNEY')
+      )
+    ).rejects.toThrow(/only the person who created it/)
   })
 })

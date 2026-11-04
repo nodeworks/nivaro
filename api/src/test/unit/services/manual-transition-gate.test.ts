@@ -113,6 +113,23 @@ describe('manualTransitionRefusal', () => {
   })
 })
 
+describe('requirement writes ask the gate without requirements or the note', () => {
+  it('skips the requirements and the note check; keeps who may run it', async () => {
+    const { evaluateTransitionRequirements } = await import(
+      '../../../services/transition-requirements.js'
+    )
+    vi.mocked(evaluateTransitionRequirements).mockResolvedValue([{ type: 'child_fields' }] as never)
+    const tx = { ...sendBack, requirements: '[{"type":"child_fields"}]' }
+    expect((await ask({ transition: tx, comment: 'note' }))?.status).toBe(422)
+    expect(await ask({ transition: tx, skipRequirements: true, skipComment: true })).toBeNull()
+    expect(evaluateTransitionRequirements).toHaveBeenCalledTimes(1)
+    const roleTx = { ...tx, required_roles: '["role-vp"]' }
+    expect(
+      (await ask({ transition: roleTx, skipRequirements: true, skipComment: true }))?.status
+    ).toBe(403)
+  })
+})
+
 describe('admin-only transitions', () => {
   // A role this person lacks: a role refusal here would mean the order is wrong.
   const cancel = { id: 'T-CANCEL', from_state: 's-l1', required_roles: '["role-other"]' }

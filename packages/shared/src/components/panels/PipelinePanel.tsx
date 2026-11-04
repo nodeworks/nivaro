@@ -2405,6 +2405,7 @@ function PipelinePanelInner({
           <TransitionRequirementsDialog
             key={requirementsDialog.revision}
             payload={requirementsDialog.payload}
+            transitionId={requirementsDialog.transitionId}
             isRetry={requirementsDialog.revision > 1}
             onSubmitted={() =>
               // mutateAsync so the dialog can stay busy until the transition
@@ -2903,6 +2904,7 @@ function PipelineTransitionButtonsInner({
           <TransitionRequirementsDialog
             key={requirementsDialog.revision}
             payload={requirementsDialog.payload}
+            transitionId={requirementsDialog.transitionId}
             isRetry={requirementsDialog.revision > 1}
             onSubmitted={() =>
               // mutateAsync so the dialog can stay busy until the transition

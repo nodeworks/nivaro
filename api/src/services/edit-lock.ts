@@ -41,7 +41,8 @@
  * (`adminOnlyTier: false`): they move the record forward, which is how it
  * leaves these states — the approval tier still judges them. A person-held
  * edit lock stays usable when the tier leaves open fields (the save itself is
- * judged per payload).
+ * judged per payload). In either tier, the values a move's own requirements
+ * dialog saves pass for whoever may run that move (requirement-writes.ts).
  *
  * Judged on REQUEST writes only (the items service is handed the request):
  * the engine's own writes — flows, transition actions, addendum apply, crons,
@@ -435,7 +436,9 @@ function fkOf(value: unknown): string | null {
  * approval edit lock (403 EDIT_LOCKED, admins pass). Throws on a refusal.
  * In an admin-only state, an update writing only the lock's open fields and
  * a row of one of its open children still pass; `adminOnlyTier: false` (item
- * actions, outbound pushes) skips that tier altogether.
+ * actions, outbound pushes) skips that tier altogether. In either tier, an
+ * update of values a move's requirements dialog asks for passes for whoever
+ * may run that move (requirement-writes.ts).
  */
 export async function assertNotEditLocked(
   user: User | null | undefined,
@@ -502,6 +505,26 @@ export async function assertNotEditLocked(
   const onlyOpenFields = (open: string[] | undefined) =>
     !!opts.payload && written.length > 0 && written.every((k) => !!open?.includes(k))
 
+  // A value the move's own requirements dialog saves (requirement-writes.ts):
+  // the request names the move, and every row written is one the server
+  // finds that move asks for, on the very record judged here. Asked only
+  // when a lock would refuse, once per call.
+  let moveRecords: Promise<Array<{ collection: string; item: string } | null>> | null = null
+  const forTheMove = async (parent: string, id: string) => {
+    if (ids.length === 0 || written.length === 0) return false
+    const { REQUIREMENTS_FOR_HEADER, requirementWriteTarget } = await import(
+      './requirement-writes.js'
+    )
+    if (!req.headers?.[REQUIREMENTS_FOR_HEADER]) return false
+    moveRecords ??= Promise.all(
+      ids.map((rowId) => requirementWriteTarget(req, collection, rowId, written))
+    )
+    const found = await moveRecords
+    return found.every(
+      (m) => !!m && m.collection === parent && m.item.toLowerCase() === id.toLowerCase()
+    )
+  }
+
   const targets: Array<{ parent: string; id: string; child: boolean }> = []
   if (own) for (const id of ids) targets.push({ parent: collection, id, child: false })
   if (links) for (const p of parentsOf(links)) targets.push({ ...p, child: true })
@@ -526,6 +549,7 @@ export async function assertNotEditLocked(
       if (t.child && lock?.admin_only?.open_children.includes(collection)) continue
       if (!t.child && onlyOpenFields(verdict.open_fields)) continue
     }
+    if (await forTheMove(t.parent, t.id)) continue
     throw new EditLockedError(verdict.message)
   }
 }

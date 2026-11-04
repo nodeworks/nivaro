@@ -89,6 +89,9 @@ export async function adminOnlyTransitionRefusal(opts: {
 /**
  * Why this person may not run `transition` on `instance` now, or null when
  * every gate passes. Order matters: shape errors first, then who, then data.
+ * `skipRequirements` / `skipComment`: the question asked while the move's own
+ * requirements dialog saves its values (requirement-writes.ts) — those values
+ * are what the requirements wait for, and the note rides the move itself.
  */
 export async function manualTransitionRefusal(opts: {
   user: User | undefined
@@ -99,6 +102,8 @@ export async function manualTransitionRefusal(opts: {
   transition: GateTransition
   comment?: string | null
   reviewed?: boolean
+  skipRequirements?: boolean
+  skipComment?: boolean
   log?: Pick<FastifyBaseLogger, 'warn'>
 }): Promise<TransitionRefusal | null> {
   const { instance, transition, isAdmin } = opts
@@ -162,12 +167,12 @@ export async function manualTransitionRefusal(opts: {
 
   // The record panel keeps Confirm disabled until a note is typed; every other
   // caller (worklist bulk bar, board drag, API keys, MCP) is held to it here.
-  if (commentMissing(transition, opts.comment)) {
+  if (opts.skipComment !== true && commentMissing(transition, opts.comment)) {
     return refuse(422, 'A note is required for this move.', { code: TRANSITION_COMMENT_REQUIRED })
   }
 
   // Requirements: a data-entry gate takes priority over conditional branching.
-  if (transition.requirements) {
+  if (transition.requirements && opts.skipRequirements !== true) {
     const blocking = await evaluateTransitionRequirements(
       db,
       transition.requirements,
