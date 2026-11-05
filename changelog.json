@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-11-04T22:26:28.797Z",
+  "generated_at": "2026-11-05T13:12:06.798Z",
   "releases": [
+    {
+      "version": "0.3.67",
+      "tag": "v0.3.67",
+      "date": "2026-11-05T08:11:52-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "extension transition checks",
+              "hash": "77c661e93"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "transition checks fail closed on state lookup, docs notes",
+              "hash": "416e4ec72"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "priority:threshold script entry",
+              "hash": "1aa4151ca"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.66",
       "tag": "v0.3.66",
-      "date": "2026-11-04T17:26:12-05:00",
+      "date": "2026-11-04T17:26:28-05:00",
       "sections": [
         {
           "label": "Added",
