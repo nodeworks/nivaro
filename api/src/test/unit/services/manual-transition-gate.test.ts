@@ -29,8 +29,11 @@ vi.mock('../../../services/edit-lock.js', () => ({
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn(() => {
     const c: Record<string, unknown> = {}
-    c.where = vi.fn(() => c)
-    c.first = vi.fn(async () => undefined)
+    c.where = vi.fn((w: { id: string }) => {
+      c.id = w.id
+      return c
+    })
+    c.first = vi.fn(async () => ({ key: `key-of-${c.id}` }))
     return c
   })
 }))
@@ -201,7 +204,11 @@ describe('extension transition checks', () => {
       const r = await ask({ comment: 'note', transition: { ...sendBack, to_state: 's-l0' } })
       expect(r).toEqual({ status: 422, body: { error: 'Not now', code: 'VETO' } })
       expect(check).toHaveBeenCalledWith(
-        expect.objectContaining({ transitionId: 't-send-back', fromState: 's-l1', toState: 's-l0' })
+        expect.objectContaining({
+          transitionId: 't-send-back',
+          fromState: 'key-of-s-l1',
+          toState: 'key-of-s-l0'
+        })
       )
     } finally {
       clearTransitionChecks()

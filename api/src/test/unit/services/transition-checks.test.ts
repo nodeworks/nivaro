@@ -66,6 +66,17 @@ describe('transition checks', () => {
     expect(console.warn).toHaveBeenCalled()
   })
 
+  it('a state lookup failure -> 503 TRANSITION_CHECK_FAILED', async () => {
+    registerTransitionCheck('ext', async () => null)
+    const { db } = await import('../../../db/index.js')
+    vi.mocked(db).mockImplementationOnce((() => {
+      throw new Error('db down')
+    }) as never)
+    const r = await ask()
+    expect(r?.status).toBe(503)
+    expect(r?.body.code).toBe('TRANSITION_CHECK_FAILED')
+  })
+
   it('same owner re-register replaces', async () => {
     registerTransitionCheck('ext', async () => ({ status: 422, error: 'old', code: 'OLD' }))
     registerTransitionCheck('ext', async () => null)

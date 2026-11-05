@@ -285,7 +285,8 @@ export interface ExtensionContext {
   itemActions: { register(def: ItemActionDef): void }
   /** Veto manual workflow/pipeline moves. Checks run at every manual path (record panel, branch,
    *  bulk, GraphQL, workflow mutation) right after the admin-only gate; automatic engine
-   *  transitions are not checked. */
+   *  transitions are not checked. Checks also run when the search command offer list is built,
+   *  so keep them cheap. `toState` is the transition's nominal target (branch skips not resolved). */
   transitions: {
     /** Register this extension's check (re-registering replaces it). Return a refusal to block
      *  the move, or null to allow. `fromState` / `toState` are state keys. A throwing check

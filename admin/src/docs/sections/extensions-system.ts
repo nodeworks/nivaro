@@ -372,7 +372,7 @@ export const extContext: DocSection = {
         [
           'access',
           '{ readFilter(user, collection) } (optional)',
-          "The role's read access for your own raw-SQL read model. Pass the request's `req.user`: `allowed` is false when the role cannot read the collection at all, and `apply(query, alias)` adds the role's row filter for rows of that collection under `alias`, exactly as the items API narrows them. User Scopes are not included — apply your own. Admins: allowed, nothing applied. A raw SQL list that skips this shows rows the person could never open. Older APIs do not offer it — fall back to a narrower audience, never a wider one."
+          'The role\'s read access for your own raw-SQL read model. Pass the request\'s `req.user`: `allowed` is false when the role cannot read the collection at all, and `apply(query, alias)` adds the role\'s row filter for rows of that collection under `alias`, exactly as the items API narrows them. User Scopes are not included — apply your own. Admins: allowed, nothing applied. A raw SQL list that skips this shows rows the person could never open. Older APIs do not offer it — fall back to a narrower audience, never a wider one.'
         ],
         [
           'sql',
@@ -422,7 +422,7 @@ export const extContext: DocSection = {
         [
           'transitions',
           'Object',
-          'ctx.transitions.registerCheck(fn) — veto manual workflow/pipeline moves. fn({collection, item, transitionId, fromState, toState, user, isAdmin}) returns {status, error, code} to refuse or null to allow; state values are keys. Runs at every manual path (record panel, branch, bulk, GraphQL) after the admin-only gate, never for automatic transitions. A throwing check refuses with 503 TRANSITION_CHECK_FAILED.'
+          'ctx.transitions.registerCheck(fn) — veto manual workflow/pipeline moves. fn({collection, item, transitionId, fromState, toState, user, isAdmin}) returns {status, error, code} to refuse or null to allow; state values are keys. Runs at every manual path (record panel, branch, bulk, GraphQL) after the admin-only gate, never for automatic transitions. A throwing check refuses with 503 TRANSITION_CHECK_FAILED. Also run when the search command offer list is built, so keep checks cheap. toState is the transition\'s nominal target; branch skips are not resolved.'
         ],
         ['dashboardWidgets', 'Object', 'Register custom dashboard widget types.'],
         [

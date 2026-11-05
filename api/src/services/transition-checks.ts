@@ -44,7 +44,7 @@ export function clearTransitionChecks(): void {
 const KEY_TTL_MS = 60_000
 const keyCache = tenantState(() => new Map<string, { key: string; at: number }>())
 
-/** State id → state key, cached 60 s. An id with no row (or already a key) comes back as given. */
+/** State id → state key, cached 60 s. An id with no row gives null (and is not cached). */
 async function stateKeyOf(id: string | null | undefined): Promise<string | null> {
   if (id === null || id === undefined || id === '') return null
   const cache = keyCache()
@@ -53,7 +53,8 @@ async function stateKeyOf(id: string | null | undefined): Promise<string | null>
   const row = (await db('nivaro_workflow_states').where({ id }).first('key')) as
     | { key?: string | null }
     | undefined
-  const key = row?.key ? String(row.key) : id
+  if (!row?.key) return null
+  const key = String(row.key)
   cache.set(id, { key, at: Date.now() })
   return key
 }
@@ -70,10 +71,21 @@ export async function registeredTransitionRefusal(
   }
 ): Promise<TransitionRefusal | null> {
   if (checks.size === 0) return null
-  const full: TransitionCheckArgs = {
-    ...args,
-    fromState: await stateKeyOf(args.fromState),
-    toState: await stateKeyOf(args.toState)
+  let full: TransitionCheckArgs
+  try {
+    full = {
+      ...args,
+      fromState: await stateKeyOf(args.fromState),
+      toState: await stateKeyOf(args.toState)
+    }
+  } catch (err) {
+    console.warn(
+      `[transition-checks] state lookup failed: ${err instanceof Error ? err.message : String(err)}`
+    )
+    return {
+      status: 503,
+      body: { error: 'A transition check failed — try again', code: 'TRANSITION_CHECK_FAILED' }
+    }
   }
   for (const [owner, fn] of checks) {
     try {
