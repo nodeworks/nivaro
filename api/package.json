@@ -87,6 +87,7 @@
     "scope:bom-categories": "tsx extensions/efp-ops/scripts/scope-bom-categories.ts",
     "cifa:bom-categories": "tsx extensions/efp-ops/scripts/cifa-bom-categories.ts",
     "priority:flag": "tsx extensions/efp-ops/scripts/priority-flag.ts",
+    "priority:threshold": "tsx extensions/efp-ops/scripts/priority-threshold.ts",
     "retire:po-file-queue": "tsx extensions/efp-ops/scripts/retire-po-file-queue.ts",
     "new-user:roles": "tsx extensions/efp-ops/scripts/new-user-roles.ts",
     "machine:accounts": "tsx extensions/efp-ops/scripts/machine-accounts.ts",
