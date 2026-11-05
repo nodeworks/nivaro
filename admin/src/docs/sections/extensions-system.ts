@@ -419,6 +419,11 @@ export const extContext: DocSection = {
       rows: [
         ['bulkActions', 'Object', 'Register selection bar buttons for collections.'],
         ['itemActions', 'Object', 'Register toolbar buttons on item edit pages.'],
+        [
+          'transitions',
+          'Object',
+          'ctx.transitions.registerCheck(fn) — veto manual workflow/pipeline moves. fn({collection, item, transitionId, fromState, toState, user, isAdmin}) returns {status, error, code} to refuse or null to allow; state values are keys. Runs at every manual path (record panel, branch, bulk, GraphQL) after the admin-only gate, never for automatic transitions. A throwing check refuses with 503 TRANSITION_CHECK_FAILED. Also run when the search command offer list is built, so keep checks cheap. toState is the transition\'s nominal target; branch skips are not resolved.'
+        ],
         ['dashboardWidgets', 'Object', 'Register custom dashboard widget types.'],
         [
           'collectionViews',

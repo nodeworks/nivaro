@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { adminOnlyStateOf, adminOnlyTransitionsFor } from './edit-lock.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
+import { registeredTransitionRefusal } from './transition-checks.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
@@ -20,6 +21,7 @@ export const ADMIN_ONLY_TRANSITION = 'ADMIN_ONLY_TRANSITION'
 export interface GateTransition {
   id: string
   from_state: string | null
+  to_state?: string | null
   required_roles: string | null
   auto_trigger?: boolean | number | null
   require_owner?: boolean | number | null
@@ -158,6 +160,18 @@ export async function manualTransitionRefusal(opts: {
     transitionId: transition.id
   })
   if (adminOnly) return adminOnly
+
+  // Extension veto (ctx.transitions.registerCheck), right after the admin-only gate.
+  const vetoed = await registeredTransitionRefusal({
+    collection: opts.collection,
+    item: opts.item,
+    transitionId: transition.id,
+    fromState: instance.current_state,
+    toState: transition.to_state ?? null,
+    user: opts.user,
+    isAdmin
+  })
+  if (vetoed) return vetoed
 
   if (!isAdmin) {
     const roles = rolesOf(transition.required_roles)

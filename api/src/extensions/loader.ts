@@ -44,6 +44,7 @@ import {
   renderPayloadTemplate
 } from '../services/payload-templates/index.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { registerTransitionCheck } from '../services/transition-checks.js'
 import { resolveExtensionBuild } from './build-identity.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
 import { type CollectionViewDef, collectionViewRegistry } from './collection-views.js'
@@ -802,6 +803,12 @@ export function registrationMembers(
       hasBodySecret: (apiName, name) => extensionHasBodySecret(apiName, name),
       scrubResponse: (apiName, value) => extensionScrubResponse(apiName, value)
     },
+    transitions: {
+      registerCheck: (fn) => {
+        note('transition-checks')
+        registerTransitionCheck(extId, fn)
+      }
+    },
     notificationChannels: {
       register: (def) => {
         note('notification-channels')
@@ -1395,6 +1402,7 @@ async function loadExtension(
     | 'bulkActions'
     | 'itemActions'
     | 'payloadTemplates'
+    | 'transitions'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1626,6 +1634,7 @@ export async function loadExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'payloadTemplates'
+    | 'transitions'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1758,6 +1767,7 @@ export async function loadCloudExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'payloadTemplates'
+    | 'transitions'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'
@@ -1955,6 +1965,7 @@ export async function scanNewExtensions(
     | 'bulkActions'
     | 'itemActions'
     | 'payloadTemplates'
+    | 'transitions'
     | 'notificationChannels'
     | 'notificationSources'
     | 'notes'

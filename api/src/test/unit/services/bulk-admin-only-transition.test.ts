@@ -55,6 +55,10 @@ vi.mock('../../../db/index.js', () => ({
 }))
 
 import { runDefinition } from '../../../services/bulk-actions.js'
+import {
+  clearTransitionChecks,
+  registerTransitionCheck
+} from '../../../services/transition-checks.js'
 
 const def = {
   kind: 'transition',
@@ -93,5 +97,20 @@ describe('bulk transition — admin-only moves', () => {
     const r = await runDefinition(def, ['1', '2'], 'No longer needed', asAdmin, { dryRun: true })
     expect(r.failed).toBe(0)
     expect(r.succeeded).toBe(2)
+  })
+})
+
+describe('bulk transition — extension checks', () => {
+  it('a registered check fails the record it refuses; the others go on', async () => {
+    registerTransitionCheck('ext', async ({ item }) =>
+      item === '2' ? { status: 422, error: 'Over budget', code: 'VETO' } : null
+    )
+    try {
+      const r = await runDefinition(def, ['2'], 'x', asAdmin, { dryRun: true })
+      expect(r.failed).toBe(1)
+      expect(r.outcomes[0]).toMatchObject({ item: '2', outcome: 'fail', reason: 'Over budget' })
+    } finally {
+      clearTransitionChecks()
+    }
   })
 })

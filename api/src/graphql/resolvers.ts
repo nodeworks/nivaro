@@ -31,6 +31,7 @@ import {
 } from '../services/pipeline-engine.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { registeredTransitionRefusal } from '../services/transition-checks.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
@@ -161,9 +162,27 @@ async function assertAdminOnlyMove(
   isAdmin: boolean,
   collection: string,
   item: string,
-  transitionId: string
+  transition: { id: string; to_state?: string | null },
+  fromState: string | null,
+  user: User | undefined
 ): Promise<void> {
-  const refusal = await adminOnlyTransitionRefusal({ isAdmin, collection, item, transitionId })
+  const refusal =
+    (await adminOnlyTransitionRefusal({
+      isAdmin,
+      collection,
+      item,
+      transitionId: transition.id
+    })) ??
+    // Extension veto (ctx.transitions.registerCheck), after the admin-only gate.
+    (await registeredTransitionRefusal({
+      collection,
+      item,
+      transitionId: transition.id,
+      fromState,
+      toState: transition.to_state ?? null,
+      user,
+      isAdmin
+    }))
   if (refusal)
     throw new GraphQLError(String(refusal.body.error), {
       extensions: { code: refusal.body.code, status: refusal.status }
@@ -942,7 +961,14 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         transition.from_state === null || transition.from_state === instance.current_state
       if (!fromOk) throw new Error('Transition is not valid from the current state')
 
-      await assertAdminOnlyMove(ctx.isAdmin ?? false, collection, String(item), transition.id)
+      await assertAdminOnlyMove(
+        ctx.isAdmin ?? false,
+        collection,
+        String(item),
+        transition,
+        instance.current_state,
+        user
+      )
 
       if (!ctx.isAdmin && transition.required_roles) {
         const roles = parseJson(transition.required_roles) as string[] | null
@@ -1142,7 +1168,14 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         transition.from_state === null || transition.from_state === instance.current_state
       if (!fromOk) throw new Error('Transition is not valid from the current state')
 
-      await assertAdminOnlyMove(ctx.isAdmin ?? false, collection, String(item), transition.id)
+      await assertAdminOnlyMove(
+        ctx.isAdmin ?? false,
+        collection,
+        String(item),
+        transition,
+        instance.current_state,
+        user
+      )
 
       if (!ctx.isAdmin && transition.required_roles) {
         const roles = parseJson(transition.required_roles) as string[] | null
