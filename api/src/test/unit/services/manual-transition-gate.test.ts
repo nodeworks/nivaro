@@ -26,6 +26,15 @@ vi.mock('../../../services/edit-lock.js', () => ({
   adminOnlyTransitionsFor: vi.fn(async () => new Set<string>())
 }))
 
+vi.mock('../../../db/index.js', () => ({
+  db: vi.fn(() => {
+    const c: Record<string, unknown> = {}
+    c.where = vi.fn(() => c)
+    c.first = vi.fn(async () => undefined)
+    return c
+  })
+}))
+
 import { adminOnlyStateOf, adminOnlyTransitionsFor } from '../../../services/edit-lock.js'
 import {
   adminOnlyTransitionRefusal,
@@ -34,6 +43,10 @@ import {
   TRANSITION_COMMENT_REQUIRED
 } from '../../../services/manual-transition-gate.js'
 import { checkTransitionOwner } from '../../../services/record-access.js'
+import {
+  clearTransitionChecks,
+  registerTransitionCheck
+} from '../../../services/transition-checks.js'
 
 const user = { id: 'u-approver', role: 'role-approver' } as never
 const instance = { id: 'inst-1', current_state: 's-l1', completed_at: null }
@@ -177,5 +190,21 @@ describe('admin-only transitions', () => {
     const r = await ask({ transition: cancel })
     expect(r?.body.code).toBe('ADMIN_ONLY_TRANSITION')
     expect(await ask({ transition: cancel, isAdmin: true })).toBeNull()
+  })
+})
+
+describe('extension transition checks', () => {
+  it('a registered refusing check refuses the move, with the state keys', async () => {
+    const check = vi.fn(async () => ({ status: 422, error: 'Not now', code: 'VETO' }))
+    registerTransitionCheck('ext', check)
+    try {
+      const r = await ask({ comment: 'note', transition: { ...sendBack, to_state: 's-l0' } })
+      expect(r).toEqual({ status: 422, body: { error: 'Not now', code: 'VETO' } })
+      expect(check).toHaveBeenCalledWith(
+        expect.objectContaining({ transitionId: 't-send-back', fromState: 's-l1', toState: 's-l0' })
+      )
+    } finally {
+      clearTransitionChecks()
+    }
   })
 })

@@ -16,6 +16,7 @@ import {
 import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
+import { registeredTransitionRefusal } from './transition-checks.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -237,6 +238,21 @@ export async function executeWorkflowTransition(opts: {
   if (adminOnly) {
     const { error, ...extras } = adminOnly.body
     throw new WorkflowMutationError(adminOnly.status, String(error), extras)
+  }
+
+  // Extension veto (ctx.transitions.registerCheck), same as the REST gate chain.
+  const vetoed = await registeredTransitionRefusal({
+    collection,
+    item,
+    transitionId: String(transition.id),
+    fromState: instance.current_state,
+    toState: transition.to_state ?? null,
+    user: opts.actor.user ?? undefined,
+    isAdmin
+  })
+  if (vetoed) {
+    const { error, ...extras } = vetoed.body
+    throw new WorkflowMutationError(vetoed.status, String(error), extras)
   }
 
   // Role gate

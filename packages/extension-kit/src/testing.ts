@@ -759,6 +759,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       hasBodySecret: async () => false,
       scrubResponse: async (_apiName, value) => value
     },
+    transitions: { registerCheck: () => {} },
     notificationChannels: { register: (d) => registered.notificationChannels.push(d) },
     notificationSources: { register: (p) => registered.notificationSources.push(p) },
     notes: {

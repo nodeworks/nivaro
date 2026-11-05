@@ -283,6 +283,25 @@ export interface ExtensionContext {
   bulkActions: { register(def: BulkActionDef): void }
   /** Contextual buttons in the record form's toolbar. */
   itemActions: { register(def: ItemActionDef): void }
+  /** Veto manual workflow/pipeline moves. Checks run at every manual path (record panel, branch,
+   *  bulk, GraphQL, workflow mutation) right after the admin-only gate; automatic engine
+   *  transitions are not checked. */
+  transitions: {
+    /** Register this extension's check (re-registering replaces it). Return a refusal to block
+     *  the move, or null to allow. `fromState` / `toState` are state keys. A throwing check
+     *  refuses with 503 `TRANSITION_CHECK_FAILED`. */
+    registerCheck(
+      fn: (args: {
+        collection: string
+        item: string
+        transitionId: string
+        fromState: string | null
+        toState: string | null
+        user: { id?: string; role?: string | null } | undefined
+        isAdmin: boolean
+      }) => Promise<{ status: number; error: string; code: string } | null>
+    ): void
+  }
   /** Partner payload templates (spec 2026-10-22): bodies editable in the admin, versioned,
    *  published before a push ever uses them. */
   payloadTemplates: {

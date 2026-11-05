@@ -17,6 +17,7 @@ import {
   type WorkflowTransition
 } from './pipeline-engine.js'
 import { checkTransitionOwner } from './record-access.js'
+import { registeredTransitionRefusal } from './transition-checks.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { valueUnchanged } from './value-unchanged.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -657,6 +658,19 @@ export async function runDefinition(
       })
       if (adminOnly) {
         fail(item, String(adminOnly.body.error ?? 'Only administrators can make this move here.'))
+        continue
+      }
+      const vetoed = await registeredTransitionRefusal({
+        collection,
+        item,
+        transitionId: String(transition.id),
+        fromState: instance.current_state,
+        toState: transition.to_state ?? null,
+        user: req.user,
+        isAdmin: !!req.isAdmin
+      })
+      if (vetoed) {
+        fail(item, String(vetoed.body.error ?? 'This move is not allowed right now.'))
         continue
       }
       if (!req.isAdmin && transition.required_roles) {

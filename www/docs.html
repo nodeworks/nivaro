@@ -7453,6 +7453,7 @@ export const qualityChecks: QualityCheck[] = [
             <thead><tr><th>Property</th><th>Type</th><th>Purpose</th></tr></thead>
             <tbody><tr><tr><td>bulkActions</td><td>Object</td><td>Register selection bar buttons for collections.</td></tr>
               <tr><td>itemActions</td><td>Object</td><td>Register toolbar buttons on item edit pages.</td></tr>
+              <tr><td>transitions</td><td>Object</td><td>ctx.transitions.registerCheck(fn) — veto manual workflow/pipeline moves. fn({collection, item, transitionId, fromState, toState, user, isAdmin}) returns {status, error, code} to refuse or null to allow; state values are keys. Runs at every manual path (record panel, branch, bulk, GraphQL) after the admin-only gate, never for automatic transitions. A throwing check refuses with 503 TRANSITION_CHECK_FAILED.</td></tr>
               <tr><td>dashboardWidgets</td><td>Object</td><td>Register custom dashboard widget types.</td></tr>
               <tr><td>collectionViews</td><td>Object</td><td>Register custom collection view modes (Kanban, calendar, etc).</td></tr>
               <tr><td>notificationChannels</td><td>Object</td><td>Register delivery channels (Slack, SMS, custom).</td></tr></tr></tbody>

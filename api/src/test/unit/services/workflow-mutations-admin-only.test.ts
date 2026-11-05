@@ -55,6 +55,10 @@ vi.mock('../../../db/index.js', () => ({
 }))
 
 import {
+  clearTransitionChecks,
+  registerTransitionCheck
+} from '../../../services/transition-checks.js'
+import {
   executeWorkflowTransition,
   WorkflowMutationError
 } from '../../../services/workflow-mutations.js'
@@ -90,5 +94,30 @@ describe('executeWorkflowTransition — admin-only moves', () => {
       actor: actor(true)
     })
     expect(applyTransition).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('executeWorkflowTransition — extension checks', () => {
+  it("refuses with the check's status and code, and never applies the move", async () => {
+    registerTransitionCheck('ext', async () => ({
+      status: 422,
+      error: 'Over budget',
+      code: 'VETO'
+    }))
+    try {
+      const err = await executeWorkflowTransition({
+        collection: 'orders',
+        item: '1',
+        transitionId: 'T-CANCEL',
+        actor: actor(true)
+      }).catch((e) => e)
+      expect(err).toBeInstanceOf(WorkflowMutationError)
+      expect(err.statusCode).toBe(422)
+      expect(err.message).toBe('Over budget')
+      expect(err.extras).toEqual({ code: 'VETO' })
+      expect(applyTransition).not.toHaveBeenCalled()
+    } finally {
+      clearTransitionChecks()
+    }
   })
 })
