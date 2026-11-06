@@ -12,8 +12,8 @@ const COLS: Record<string, string[]> = {
   vendors: ['id', 'name', 'secret_note'],
   vendor_notes: ['id', 'vendor', 'note'],
   workflows: ['id', 'name', 'vendor'],
-  vendors_divisions: ['id', 'vendor', 'division'],
-  divisions: ['id', 'name']
+  vendors_divisions: ['id', 'vendor', 'division', 'note'],
+  divisions: ['id', 'name', 'note']
 }
 const COMPUTED: Record<string, unknown[]> = {
   vendors: [
@@ -361,5 +361,35 @@ describe('army 6: the field-policy check follows an M2M alias onto its junction 
         filter: { divisions: { _some: { division: { name: { _eq: 'Zone 1' } } } } }
       } as never)
     ).rejects.toMatchObject({ statusCode: 403, code: 'FIELD_NOT_READABLE' })
+  })
+})
+
+describe('security review: a junction column never stands in for a hidden far column', () => {
+  it('a segment both tables have is judged on the far collection (where it compiles)', async () => {
+    perm.byCollection = { vendors: ['id', 'name', 'divisions'], divisions: ['id', 'name'] }
+    await expect(
+      readItems(someone, 'vendors', {
+        filter: { divisions: { _some: { note: { _eq: 'x' } } } }
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 403, code: 'FIELD_NOT_READABLE' })
+  })
+
+  it('_link filters the junction row and is judged there', async () => {
+    perm.byCollection = {
+      vendors: ['id', 'name', 'divisions'],
+      divisions: ['id', 'name'],
+      vendors_divisions: ['id', 'vendor', 'division']
+    }
+    await expect(
+      readItems(someone, 'vendors', {
+        filter: { divisions: { _some: { _link: { note: { _eq: 'x' } } } } }
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 403, code: 'FIELD_NOT_READABLE' })
+    perm.byCollection.vendors_divisions = ['id', 'vendor', 'division', 'note']
+    await expect(
+      readItems(someone, 'vendors', {
+        filter: { divisions: { _some: { _link: { note: { _eq: 'x' } } } } }
+      } as never)
+    ).resolves.toBeTruthy()
   })
 })

@@ -666,6 +666,19 @@ async function calculatedFieldNames(collection: string): Promise<Set<string>> {
   )
 }
 
+/** Path marker for a `_link` subtree: the M2M junction row the alias crosses. */
+const JUNCTION_SEG = '\u0000link'
+
+/** Whether `collection` has its own field (column or relation) named `seg` —
+ *  then a same-named junction leg is NOT unwrapped (assertFilterCompiles' legIsOwnField). */
+async function farHasOwnField(collection: string, seg: string): Promise<boolean> {
+  const k = seg.toLowerCase()
+  if ([...(await getActualColumns(collection))].some((c) => c.toLowerCase() === k)) return true
+  return (await getRelsForCollection(collection)).some(
+    (r) => (r.many_collection ?? '').toLowerCase() === collection.toLowerCase() && r.many_field.toLowerCase() === k
+  )
+}
+
 /**
  * Every filter, sort and condition path that reaches a system table may name
  * only columns the caller can read there — on the table itself and through a
@@ -694,6 +707,8 @@ async function assertReadableSystemPaths(
     if (serverBuiltFilterNodes.has(f)) return
     for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
       if (k === '_and' || k === '_or' || k === '_some' || k === '_none') walk(v, prefix)
+      // `_link` filters the M2M junction row itself (assertFilterCompiles) — judged there.
+      else if (k === '_link') walk(v, [...prefix, JUNCTION_SEG])
       else if (k.startsWith('_') || k.startsWith('$')) continue
       else {
         // A dotted key (`{"created_by.role": …}`) is a path too.
@@ -739,21 +754,32 @@ async function assertReadableSystemPaths(
     // `$state`, `$aging`… are virtual paths with their own gates.
     if (String(segs[0] ?? '').startsWith('$')) continue
     let current = collection
-    let junction: string | undefined
+    let m2m: { junction: string; farLeg?: string } | undefined
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
       const last = i === segs.length - 1
-      // After an M2M alias the compilers stand on the JUNCTION row when the
-      // next segment is one of its columns (`project_types._some.project_types_id.active`,
-      // `divisions.divisions_id`) — judging it on the far collection refused every
-      // M2M cascade picker (army 6 b02).
-      if (junction) {
-        const jRels = await getRelsForCollection(junction)
-        const onJunction =
-          !!resolveFilterHop(seg, junction, jRels) ||
-          [...(await getActualColumns(junction))].some((c) => c.toLowerCase() === seg.toLowerCase())
-        if (onJunction) current = junction
-        junction = undefined
+      // After an M2M alias the compilers judge the FAR collection, with two
+      // exceptions (assertFilterCompiles): the junction's own leg to the far
+      // row (`project_types._some.project_types_id.active`, `divisions.division`)
+      // is unwrapped — it IS the far row — and `_link` filters the junction row.
+      // Judging the leg as a far column refused every M2M cascade picker
+      // (army 6 b02); judging anything else on the junction would let a
+      // junction column stand in for a hidden far one.
+      if (m2m) {
+        const hop = m2m
+        m2m = undefined
+        if (seg === JUNCTION_SEG) {
+          current = hop.junction
+          continue
+        }
+        if (
+          hop.farLeg &&
+          seg.toLowerCase() === hop.farLeg.toLowerCase() &&
+          !(await farHasOwnField(current, seg))
+        ) {
+          if (last) break // the far row's id
+          continue
+        }
       }
       // The hop the compilers would take from here (case-insensitive like the
       // database, the `_id`-less FK alias, M2M through the junction).
@@ -790,7 +816,7 @@ async function assertReadableSystemPaths(
         break
       }
       current = hop.next
-      junction = hop.junction
+      m2m = hop.junction ? { junction: hop.junction, farLeg: hop.farLeg } : undefined
     }
   }
   if (bad.size === 0) return
@@ -810,7 +836,7 @@ function resolveFilterHop(
   seg: string,
   current: string,
   rels: CMSRelation[]
-): { next: string; column: string; junction?: string } | null {
+): { next: string; column: string; junction?: string; farLeg?: string } | null {
   const k = seg.toLowerCase()
   const cur = current.toLowerCase()
   const eq = (a: string | null | undefined, b: string) => (a ?? '').toLowerCase() === b
@@ -832,7 +858,12 @@ function resolveFilterHop(
           eq(o.many_field, (r.junction_field ?? '').toLowerCase())
       )
       if (other?.one_collection)
-        return { next: other.one_collection, column: r.one_field ?? seg, junction: r.many_collection }
+        return {
+          next: other.one_collection,
+          column: r.one_field ?? seg,
+          junction: r.many_collection,
+          farLeg: r.junction_field ?? undefined
+        }
     }
   }
   for (const r of rels) {
@@ -3442,7 +3473,7 @@ async function assertRelationPathsExist(
     if (seen.has(key)) continue
     seen.add(key)
     let current = collection
-    let junction: string | undefined
+    let farLeg: string | undefined
     let followed = true
     for (const seg of segs.slice(0, -1)) {
       const hop = resolveFilterHop(seg, current, await getRelsForCollection(current))
@@ -3451,7 +3482,7 @@ async function assertRelationPathsExist(
         break
       }
       current = hop.next
-      junction = hop.junction
+      farLeg = hop.farLeg
     }
     if (!followed) continue
     const last = new Set([segs[segs.length - 1]])
@@ -3459,12 +3490,16 @@ async function assertRelationPathsExist(
       try {
         await assertNamedFieldsExist(current, last, await getRelsForCollection(current))
       } catch (err) {
-        // An M2M alias under `_some` / `_none` is judged on the junction row
-        // (`divisions: {_some: {division: …}}`, the cascade pickers' shape) —
-        // a field of the junction is as good as one of the far collection
-        // (army 6: every M2M cascade picker answered 400).
-        if ((err as { code?: unknown }).code !== 'UNKNOWN_FIELD' || !junction) throw err
-        await assertNamedFieldsExist(junction, last, await getRelsForCollection(junction))
+        // The junction's own leg to the far row (`divisions: {_some: {division: …}}`,
+        // the cascade pickers' shape) is unwrapped by the compiler — it names the far
+        // row itself (army 6: every M2M cascade picker answered 400). Any other
+        // junction column is not compiled there and stays refused.
+        if (
+          (err as { code?: unknown }).code !== 'UNKNOWN_FIELD' ||
+          !farLeg ||
+          segs[segs.length - 1].toLowerCase() !== farLeg.toLowerCase()
+        )
+          throw err
       }
     } catch (err) {
       if ((err as { code?: unknown }).code !== 'UNKNOWN_FIELD') throw err
