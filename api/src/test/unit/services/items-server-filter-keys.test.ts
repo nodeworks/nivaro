@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const COLS: Record<string, string[]> = {
   vendors: ['id', 'name', 'secret_note'],
   vendor_notes: ['id', 'vendor', 'note'],
-  workflows: ['id', 'name', 'vendor']
+  workflows: ['id', 'name', 'vendor'],
+  vendors_divisions: ['id', 'vendor', 'division'],
+  divisions: ['id', 'name']
 }
 const COMPUTED: Record<string, unknown[]> = {
   vendors: [
@@ -41,6 +43,21 @@ const RELS = [
     one_collection: 'vendors',
     one_field: null,
     junction_field: null
+  },
+  // vendors.divisions — an M2M through vendors_divisions
+  {
+    many_collection: 'vendors_divisions',
+    many_field: 'vendor',
+    one_collection: 'vendors',
+    one_field: 'divisions',
+    junction_field: 'division'
+  },
+  {
+    many_collection: 'vendors_divisions',
+    many_field: 'division',
+    one_collection: 'divisions',
+    one_field: null,
+    junction_field: 'vendor'
   }
 ]
 
@@ -135,9 +152,12 @@ vi.mock('../../../services/collections.js', async (orig) => ({
   ...(await orig<object>()),
   getCollection: vi.fn(async (c: string) => (COLS[c] ? { collection: c } : undefined)),
   getFields: vi.fn(async () => []),
-  getRelations: vi.fn(async (c: string) =>
-    RELS.filter((r) => r.many_collection === c || r.one_collection === c)
-  )
+  // A collection's relations plus the far legs of its junctions (as the real reader does).
+  getRelations: vi.fn(async (c: string) => {
+    const own = RELS.filter((r) => r.many_collection === c || r.one_collection === c)
+    const junctions = new Set(own.filter((r) => r.junction_field).map((r) => r.many_collection))
+    return [...own, ...RELS.filter((r) => junctions.has(r.many_collection) && !own.includes(r))]
+  })
 }))
 
 import { readItems, readOne, serverBuiltFilter } from '../../../services/items.js'
@@ -299,5 +319,26 @@ describe('b16-N8: a relation path whose last segment the target lacks', () => {
         sort: ['vendor.name']
       })
     ).resolves.toBeTruthy()
+  })
+})
+
+describe('army 6: an M2M cascade filter names a junction column under _some', () => {
+  it('reads (the picker shape divisions._some.division), a far field too', async () => {
+    perm.admin = true
+    for (const filter of [
+      { divisions: { _some: { division: { _eq: 2 } } } },
+      { divisions: { _some: { id: { _eq: 2 } } } },
+      { divisions: { _some: { name: { _eq: 'Zone 1' } } } }
+    ])
+      await expect(readItems(someone, 'vendors', { filter } as never)).resolves.toBeTruthy()
+  })
+
+  it('a field on neither the junction nor the far collection is still a 400', async () => {
+    perm.admin = true
+    await expect(
+      readItems(someone, 'vendors', {
+        filter: { divisions: { _some: { nope: { _eq: 2 } } } }
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 400, code: 'UNKNOWN_FIELD' })
   })
 })
