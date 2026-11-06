@@ -206,6 +206,12 @@ export interface CatalogModeConfig {
   /** copy_fields child columns the user may edit per Summary row (e.g. ['price']);
    *  a manual edit survives later qty commits and re-runs compute_fields. */
   editable_fields?: string[]
+  /** editable_fields a non-admin may change only while the catalog gives the
+   *  line no value for it (no `copy_fields` source value and no related
+   *  `copy_to` lookup value, or 0) — e.g. ['price']: a priced catalog item
+   *  keeps its catalog price, an unpriced one is priced by hand. Admins always
+   *  edit. UI only — pair it with a server rule (army 2026-11-05 a02-5). */
+  catalog_locked_fields?: string[]
   /** Attribute-driven item builders (e.g. fiber jumpers: pick connector + length → resolves a catalog item). */
   builders?: CatalogBuilderConfig[]
   /** Read-only CHILD-ROW columns appended to the Summary table (e.g. each line's
@@ -346,6 +352,8 @@ export function CatalogPickerField({
   const parentDraftCtx = useParentDraft()
   const reimportHandler = useReimportHandler()
   const editableFields = config.editable_fields ?? []
+  const catalogLocked = config.catalog_locked_fields ?? []
+  const { isAdmin } = useItemEditAuth()
   const isNew = parentId === 'new'
   const qtyField = config.qty_field ?? 'quantity'
 
@@ -1714,6 +1722,26 @@ export function CatalogPickerField({
     return out
   }
 
+  /** The value the catalog gives a line for `field` — a related copy_to
+   *  lookup (the warehouse price) first, then the copy_fields source. */
+  const catalogSourceValue = (catalogId: string, field: string): unknown => {
+    for (const rc of config.related_columns ?? []) {
+      if (rc.copy_to !== field) continue
+      const v = relatedValue(rc.key, catalogId)
+      if (v != null && v !== '') return v
+    }
+    const src = config.copy_fields?.[field]
+    return src ? catalogRowFor(catalogId)[src] : undefined
+  }
+  /** A Summary cell the viewer may type in: editable, not read-only, and not
+   *  a catalog-locked field the catalog already prices (non-admins). */
+  const cellEditable = (catalogId: string, field: string): boolean => {
+    if (readOnly || !editableFields.includes(field)) return false
+    if (isAdmin || !catalogLocked.includes(field)) return true
+    const v = catalogSourceValue(catalogId, field)
+    return v == null || v === '' || !(Number(v) > 0)
+  }
+
   function buildRowPayload(
     catalogId: string,
     qty: number,
@@ -2723,11 +2751,19 @@ export function CatalogPickerField({
                           )
                         })}
                         {copyCols.map((c) =>
-                          editableFields.includes(c) && !readOnly ? (
+                          cellEditable(e.key, c) ? (
                             cellInput(e.key, c, e.row)
                           ) : (
                             <span
                               key={c}
+                              data-catalog-locked={
+                                !readOnly && editableFields.includes(c) ? c : undefined
+                              }
+                              data-tip={
+                                !readOnly && editableFields.includes(c)
+                                  ? 'Set by the catalog — only an administrator can change it'
+                                  : undefined
+                              }
                               {...sumCols.box(
                                 `s:${c}`,
                                 'w-20 shrink-0',

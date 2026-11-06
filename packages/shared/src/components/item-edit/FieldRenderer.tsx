@@ -20,6 +20,7 @@ import { choiceLabel } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { NumberDraftInput } from '../ui/number-draft-input'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
@@ -610,12 +611,15 @@ export const FieldRenderer = memo(function FieldRenderer({
     const entryError = entry.ok ? null : entry.message
     return (
       <div>
-        <Input
+        <NumberDraftInput
           type='number'
           aria-invalid={entryError ? true : undefined}
           step={step}
-          value={strVal}
-          onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+          // The typed text is kept while the person types ("2.0" must not
+          // become "2" before the "5" lands — army 4 a01-15); the number is
+          // committed on every change that parses.
+          value={value}
+          onValue={onChange}
           // Round on blur, not per keystroke — rounding while typing fights the
           // person entering "0.0625" one character at a time.
           onBlur={(e) => {

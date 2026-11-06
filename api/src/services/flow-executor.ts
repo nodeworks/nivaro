@@ -216,6 +216,48 @@ const splitAddresses = (to: string) => [
 ]
 
 /**
+ * A mail / notification op's optional `exclude` (templated, #army4 2026-11-05):
+ * addresses and/or user ids to leave out — `"{{actor_email}}"` keeps the person
+ * who acted from being told about their own Submit / Approve. Lower-cased
+ * addresses + upper-cased ids; an id also excludes its account's address.
+ * Only ever NARROWS a send.
+ */
+export async function resolveExclusions(
+  raw: unknown,
+  data: FlowData
+): Promise<{ emails: Set<string>; ids: Set<string> }> {
+  const out = { emails: new Set<string>(), ids: new Set<string>() }
+  if (typeof raw !== 'string' || !raw.trim()) return out
+  for (const token of splitTokens(resolveTemplate(raw, data))) {
+    if (token.includes('@')) out.emails.add(token.toLowerCase())
+    else out.ids.add(token.toUpperCase())
+  }
+  if (out.ids.size > 0) {
+    try {
+      const rows = (await db('nivaro_users')
+        .whereIn('id', [...out.ids])
+        .select('id', 'email')) as Array<{ id: string; email: string | null }>
+      for (const r of rows) if (r.email) out.emails.add(String(r.email).toLowerCase())
+    } catch {
+      /* ids alone still exclude notification recipients */
+    }
+  }
+  return out
+}
+
+/** Comma / semicolon / whitespace separated tokens, deduped, blanks dropped. */
+export function splitTokens(value: string): string[] {
+  return [
+    ...new Set(
+      String(value ?? '')
+        .split(/[,;\s]+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+    )
+  ]
+}
+
+/**
  * Why THIS address is on a flow mail: the trigger payload's
  * `recipient_reasons` (owners, by the transition payload) first, then the
  * record's own people (creator / contacts, expanded by the flow's item-read
@@ -273,7 +315,22 @@ async function richTextFieldsOf(dataRec: Record<string, unknown>): Promise<Set<s
 
 async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
-  const to = resolveTemplate((opts.to as string) ?? '', data)
+  const rawTo = resolveTemplate((opts.to as string) ?? '', data)
+  // `exclude` narrows the list (never adds): the actor, an address already told.
+  const excluded = await resolveExclusions(opts.exclude, data)
+  const to =
+    excluded.emails.size > 0
+      ? splitAddresses(rawTo)
+          .filter((a) => !excluded.emails.has(a.toLowerCase()))
+          .join(', ')
+      : rawTo
+  if (rawTo && !to) {
+    ctx.log.info(
+      { flowId: ctx.flowId, key: op.key },
+      'Mail operation: every recipient excluded, nothing to send'
+    )
+    return { status: 'resolve' as const, output: data }
+  }
   const subject = resolveTemplate((opts.subject as string) ?? op.name, data)
   const templateName = typeof opts.template === 'string' ? opts.template.trim() : ''
   const from = opts.from ? resolveTemplate(opts.from as string, data) : undefined
@@ -339,6 +396,20 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
         const current = String(dataRec.record_url)
         const q = current.includes('?') ? current.slice(current.indexOf('?') + 1) : undefined
         out.record_url = await recordLink(col, item, { recipientUserId: userId, query: q })
+      }
+      // The record card's title link is the same record: it resolves for the
+      // same person, so one email never sends an admin to two apps (army 4
+      // a14-20: "Open record" → admin, the card's "CR26-…" → portal).
+      const card = dataRec.record_card as
+        | { collection?: string; item?: string | number; url?: string }
+        | null
+        | undefined
+      if (userId && card?.collection && card.item != null && typeof card.url === 'string') {
+        const q = card.url.includes('?') ? card.url.slice(card.url.indexOf('?') + 1) : undefined
+        out.record_card = {
+          ...card,
+          url: await recordLink(card.collection, card.item, { recipientUserId: userId, query: q })
+        }
       }
     } catch {
       /* shared link stays */
@@ -438,6 +509,39 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
   }
 }
 
+/**
+ * A notification op's recipients: `recipient` may name ONE user id (as it
+ * always did) or a list of user ids and/or addresses (`"{{owner_emails}}"`).
+ * An address only ever resolves to an existing, active account with exactly
+ * that address (userIdForEmail) — anything else is dropped, so a templated
+ * list can never reach someone who is not a user. Exclusions apply last.
+ */
+export async function resolveNotificationRecipients(
+  raw: string,
+  excluded: { emails: Set<string>; ids: Set<string> }
+): Promise<string[]> {
+  const tokens = splitTokens(raw)
+  if (tokens.length === 0) return []
+  const { userIdForEmail } = await import('./app-links.js')
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const t of tokens) {
+    if (t.includes('@')) {
+      if (excluded.emails.has(t.toLowerCase())) continue
+      const id = await userIdForEmail(t)
+      if (!id) continue
+      if (excluded.ids.has(id.toUpperCase()) || seen.has(id.toUpperCase())) continue
+      seen.add(id.toUpperCase())
+      ids.push(id)
+    } else {
+      if (excluded.ids.has(t.toUpperCase()) || seen.has(t.toUpperCase())) continue
+      seen.add(t.toUpperCase())
+      ids.push(t)
+    }
+  }
+  return ids
+}
+
 async function runNotification(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const recipient = resolveTemplate((opts.recipient as string) ?? '', data)
@@ -448,13 +552,27 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'Notification missing recipient, skipping')
     return { status: 'reject' as const, output: { ...data, $error: 'missing recipient' } }
   }
+  const excluded = await resolveExclusions(opts.exclude, data)
+  const recipients = await resolveNotificationRecipients(recipient, excluded)
+  if (recipients.length === 0) {
+    ctx.log.info(
+      { flowId: ctx.flowId, key: op.key },
+      'Notification: no recipient left after exclusions, nothing to send'
+    )
+    return { status: 'resolve' as const, output: data }
+  }
 
   if (ctx.dryRun) {
     return {
       status: 'resolve' as const,
       output: {
         ...data,
-        [`$preview_${op.key}`]: { op: 'notification', recipient, subject, message }
+        [`$preview_${op.key}`]: {
+          op: 'notification',
+          recipient: recipients.join(', '),
+          subject,
+          message
+        }
       }
     }
   }
@@ -481,18 +599,29 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     const { getIo } = await import('./io-holder.js')
     const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
     const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
-    await notifyUser(appShim, recipient, {
-      subject,
-      message,
-      sender: ctx.userId ?? null,
-      collection: linkCollection,
-      item: linkCollection ? linkItem : null,
-      ...(category ? { category } : {}),
-      always_inbox: opts.always_inbox !== false,
-      ...(opts.ack_required === true ? { ack_required: true } : {}),
-      channels: { inapp: true, email: false }
-    })
-    ctx.log.info({ flowId: ctx.flowId, key: op.key, recipient }, 'Notification sent')
+    const failures: string[] = []
+    for (const userId of recipients) {
+      try {
+        await notifyUser(appShim, userId, {
+          subject,
+          message,
+          sender: ctx.userId ?? null,
+          collection: linkCollection,
+          item: linkCollection ? linkItem : null,
+          ...(category ? { category } : {}),
+          always_inbox: opts.always_inbox !== false,
+          ...(opts.ack_required === true ? { ack_required: true } : {}),
+          channels: { inapp: true, email: false }
+        })
+      } catch (err) {
+        failures.push(`${userId}: ${errorText(err)}`)
+      }
+    }
+    if (failures.length === recipients.length) throw new Error(failures.join('; '))
+    ctx.log.info(
+      { flowId: ctx.flowId, key: op.key, recipients: recipients.length, failures },
+      'Notification sent'
+    )
     return { status: 'resolve' as const, output: data }
   } catch (err) {
     ctx.log.error({ err, flowId: ctx.flowId, key: op.key }, 'Notification send failed')

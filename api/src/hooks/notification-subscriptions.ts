@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify'
-import { config } from '../config.js'
+import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
+import { recordLink } from '../services/app-links.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
@@ -114,7 +115,7 @@ function subFilterFields(sub: { filter_field?: string | null; filters?: unknown 
   return out
 }
 
-async function readsFilterFields(
+export async function readsFilterFields(
   view: RecipientView,
   sub: { filter_field?: string | null; filters?: unknown },
   skip: string[] = []
@@ -772,7 +773,7 @@ async function fireSubscriptionNotifications(
             record_card: card,
             record_url:
               card?.url ??
-              `${config.ADMIN_URL}/collections/${openCollection}/${openItem}${rowQuery ? `?${rowQuery}` : ''}`,
+              (await recordUrlFor(openCollection, openItem, sub.user, rowQuery ?? undefined)),
             friendly_id: friendly ?? card?.title ?? String(item),
             changes: seenBundle
               ? seenBundle
@@ -814,7 +815,7 @@ async function fireSubscriptionNotifications(
               ? {
                   action_url:
                     (emailCtx.record_url as string | undefined) ??
-                    `${config.ADMIN_URL}/collections/${collection}/${item}`,
+                    (await recordUrlFor(collection, item, sub.user)),
                   action_label: 'View item'
                 }
               : {})
@@ -827,6 +828,47 @@ async function fireSubscriptionNotifications(
   } catch (err) {
     // Non-fatal — log and continue
     console.warn('[notification-subscriptions] error:', err)
+  }
+}
+
+/**
+ * A state subscription saved by the legacy sync is labelled with the state's
+ * KEY ("Workflow state: waiting_on_manager_approval"); people know the state
+ * by its label ("Waiting on Level 1 Approval"). The key this transition
+ * entered maps to its label; any other snake_case key reads as words.
+ * Anything else comes back as it was (services/overview/data.ts does the
+ * same for the Overview page).
+ */
+export function stateMarkerLabel(
+  label: string | null | undefined,
+  stateKey: string,
+  stateLabel: string
+): string | null {
+  if (!label) return null
+  const m = /^(.*): ([a-z0-9]+(?:_[a-z0-9]+)+)$/.exec(label)
+  if (!m) return label
+  if (m[2] === stateKey && stateLabel) return `${m[1]}: ${stateLabel}`
+  const words = m[2].replace(/_/g, ' ')
+  return `${m[1]}: ${words.charAt(0).toUpperCase()}${words.slice(1)}`
+}
+
+/**
+ * The record link for ONE recipient — the portal for portal people, the admin
+ * for admins (app-links.ts; gotcha "cross-app links"). Never raw ADMIN_URL:
+ * portal users were sent to the admin host (army 4, 2026-11-05). A failed
+ * lookup falls back to the admin link.
+ */
+export async function recordUrlFor(
+  collection: string,
+  item: string | number,
+  recipientUserId: string,
+  query?: string
+): Promise<string> {
+  try {
+    return await recordLink(collection, item, { recipientUserId, query })
+  } catch {
+    const base = adminBaseUrl() ?? ''
+    return `${base}/collections/${collection}/${encodeURIComponent(String(item))}${query ? `?${query}` : ''}`
   }
 }
 
@@ -908,6 +950,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
     // already names the addendum.
     const { resolvePipelineSubject } = await import('../services/pipeline-subject.js')
     const subject = await resolvePipelineSubject(opts.collection, opts.item)
+    // The instance's own record (an addendum) — owners resolve against it.
+    const instanceRef = { collection: opts.collection, item: opts.item }
     opts = { ...opts, collection: subject.collection, item: subject.itemId }
     const subs = await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
@@ -970,6 +1014,32 @@ export async function fireWorkflowStateSubscriptions(opts: {
       }
     }
 
+    // An owner of the new state is emailed by the owner flow; their state
+    // subscription keeps the in-app row and skips a second email (army 4,
+    // 2026-11-05). Resolved once, lazily — most transitions email nobody here.
+    let flowOwners: Promise<{ ids: Set<string>; emails: Set<string>; inapp: boolean }> | null = null
+    /** 'mail' = the owner flow emails this person; 'both' = it also pings them in-app. */
+    const ownerFlowTells = async (
+      userId: string,
+      email: string | null | undefined
+    ): Promise<'none' | 'mail' | 'both'> => {
+      flowOwners ??= import('../services/owner-mail-flows.js')
+        .then(({ ownersEmailedByFlow }) =>
+          ownersEmailedByFlow({
+            collection: instanceRef.collection,
+            item: instanceRef.item,
+            subjectCollection: opts.collection,
+            toStateKey: opts.stateKey
+          })
+        )
+        .catch(() => ({ ids: new Set<string>(), emails: new Set<string>(), inapp: false }))
+      const o = await flowOwners
+      const owner =
+        o.ids.has(String(userId).toUpperCase()) ||
+        (!!email && o.emails.has(String(email).toLowerCase()))
+      return !owner ? 'none' : o.inapp ? 'both' : 'mail'
+    }
+
     const now = new Date()
     for (const sub of relevant) {
       if (opts.actorUserId && sub.user === opts.actorUserId && !isRecordScoped(sub)) continue
@@ -1002,7 +1072,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
         (recordScoped ? await friendlyRecordLabel(opts.collection, opts.item) : opts.item)
       const label = recordScoped
         ? `Watching ${friendly}`
-        : sub.label || `${opts.collection} workflow`
+        : stateMarkerLabel(sub.label, opts.stateKey, opts.stateLabel) ||
+          `${opts.collection} workflow`
       let subject = `${recordScoped ? label : `${label} ${friendly}`}: ${opts.transitionLabel} → ${opts.stateLabel}${
         actorName ? ` by ${actorName}` : ''
       }`
@@ -1022,8 +1093,11 @@ export async function fireWorkflowStateSubscriptions(opts: {
         message = templated.message || message
       }
 
-      const wantInapp = channelOn(sub.notify_inapp)
-      const wantEmail = channelOn(sub.notify_email)
+      // Record watches stay as they are; a state subscription an owner flow
+      // already covers for this person gives way to it (one email, one ping).
+      const ownerTold = recordScoped ? 'none' : await ownerFlowTells(sub.user, sub.email)
+      const wantInapp = channelOn(sub.notify_inapp) && ownerTold !== 'both'
+      const wantEmail = channelOn(sub.notify_email) && ownerTold === 'none'
 
       if (wantInapp) {
         const [notif] = await db('nivaro_notifications')
@@ -1092,7 +1166,7 @@ export async function fireWorkflowStateSubscriptions(opts: {
           data: {
             first_name: sub.first_name,
             message,
-            action_url: `${config.ADMIN_URL}/collections/${opts.collection}/${opts.item}`,
+            action_url: await recordUrlFor(opts.collection, opts.item, sub.user),
             action_label: 'View item'
           }
         }).catch((err) => {

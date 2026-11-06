@@ -187,9 +187,40 @@ describe('POST /pipelines/simulate', () => {
 describe('company-wide pipeline reads are admin-only', () => {
   it('refuses flow-map / replay / matrix for a non-admin and serves an admin', async () => {
     for (const p of ['flow-map', 'replay', 'matrix']) {
-      expect((await call('GET', `/pipelines/tpl-1/${p}`)).statusCode).toBe(403)
+      expect(
+        (await call('GET', `/pipelines/00000000-0000-4000-8000-0000000000a1/${p}`)).statusCode
+      ).toBe(403)
     }
     who.admin = true
-    expect((await call('GET', '/pipelines/tpl-1/flow-map')).statusCode).toBe(200)
+    expect(
+      (await call('GET', '/pipelines/00000000-0000-4000-8000-0000000000a1/flow-map')).statusCode
+    ).toBe(200)
+  })
+})
+
+describe('GET /pipelines/instance/:collection/:item refused by the read gate — army4 L-1', () => {
+  it('answers 404 once: no second send while the async onSend hooks run', async () => {
+    // A handler that sent the gate's 404 and returned undefined made Fastify
+    // send AGAIN while slow onSend hooks were still running; the second send
+    // hit ERR_HTTP_HEADERS_SENT and the error handler logged the 404 as 500.
+    who.hidden.add('372891')
+    const app = Fastify({ logger: false })
+    const sends: Array<[number, string]> = []
+    const errors: string[] = []
+    app.addHook('onSend', async (_req, reply, payload) => {
+      sends.push([reply.statusCode, typeof payload])
+      await new Promise((r) => setTimeout(r, 5))
+      return payload
+    })
+    app.setErrorHandler((err: Error & { code?: string }, _req, reply) => {
+      errors.push(err.code ?? err.message)
+      return reply.code(500).send({ error: 'boom' })
+    })
+    await app.register(pipelinesRoutes, { prefix: '/pipelines' })
+    const res = await app.inject({ method: 'GET', url: '/pipelines/instance/workflows/372891' })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(res.statusCode).toBe(404)
+    expect(sends).toEqual([[404, 'string']])
+    expect(errors).toEqual([])
   })
 })

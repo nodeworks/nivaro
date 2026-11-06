@@ -35,6 +35,10 @@ export interface ValidationRule {
   // gte_field / lte_field: the field this one is compared with
   field?: string
   op?: string
+  /** A warning only: the form shows it under the field and saving still
+   *  works — the server never refuses a write on it (the client twin skips it
+   *  in its save check too). */
+  soft?: boolean
 }
 
 export class FieldValidationError extends Error {
@@ -287,6 +291,9 @@ export async function enforceValidationRules(
     const label = f.field
     const value = record[f.field]
     for (const rule of rules) {
+      // A soft rule is a warning: never a refusal (army4 a01-5 — the client
+      // skipped it and the server refused the save it allowed).
+      if (rule.soft) continue
       // A field the caller did not send is judged only by a cross-field rule
       // whose OTHER field they did send (moving the start past a stored end).
       const crossField = rule.type === 'gte_field' || rule.type === 'lte_field'

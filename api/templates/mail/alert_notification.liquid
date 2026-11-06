@@ -5,8 +5,11 @@
   <strong>{{ metric_name }}</strong> is now <strong>{{ metric_value }}</strong>
   {% if operator and threshold_value and threshold_value != '' %}(threshold: {{ operator }} {{ threshold_value }}){% endif %}
 </p>
+{% render 'partials/button', url: manage_url, label: 'Open alerts' %}
+{%- unless why -%}
 <p style="margin:0 0 18px;color:#64748b;font-size:13px;">
   You are receiving this because you subscribed to this alert rule. Manage your
   subscriptions from the Alert Manager.
 </p>
+{%- endunless -%}
 {% endblock %}

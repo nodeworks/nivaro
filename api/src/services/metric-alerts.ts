@@ -85,6 +85,44 @@ export function evaluateOperator(operator: string, value: number, threshold: num
 
 const COLLECTION_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/**
+ * A rule's stored `filters` in the one shape the evaluator reads:
+ * `{ key: value | values[] }`. The Alert Manager writes that shape; seeded /
+ * promoted rules also arrive as a list of `{key, values}` (or `{key, value}`,
+ * `{field, …}`) entries. Read as an object, a list's entries are keyed "0",
+ * "1"… — no filter ever applied and the alert counted every division
+ * (army 4, 2026-11-05: "Zone 1" reported 168, real 58). Anything else → null.
+ */
+export function normalizeMetricFilters(raw: unknown): Record<string, unknown> | null {
+  const parsed = typeof raw === 'string' ? parseJsonSafe<unknown>(raw) : raw
+  if (parsed == null) return null
+  if (Array.isArray(parsed)) {
+    const out: Record<string, unknown> = {}
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const e = entry as Record<string, unknown>
+      const key = String(e.key ?? e.field ?? '').trim()
+      if (!key) continue
+      const value = 'values' in e ? e.values : e.value
+      const list = Array.isArray(value) ? value : value != null && value !== '' ? [value] : []
+      if (list.length === 0) continue
+      const prev = out[key]
+      out[key] = Array.isArray(prev) ? [...new Set([...prev, ...list])] : list
+    }
+    return Object.keys(out).length > 0 ? out : null
+  }
+  if (typeof parsed === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      // A numeric key is a list entry read as an object — never a filter.
+      if (/^\d+$/.test(k)) continue
+      out[k] = v
+    }
+    return Object.keys(out).length > 0 ? out : null
+  }
+  return null
+}
+
 export async function resolveMetricValue(
   source: MetricSource,
   filters: Record<string, unknown> | null,
@@ -96,6 +134,7 @@ export async function resolveMetricValue(
    */
   asUser?: { user: User; isAdmin: boolean }
 ): Promise<number | null> {
+  filters = normalizeMetricFilters(filters)
   try {
     if (
       asUser &&
@@ -259,7 +298,7 @@ export async function runMetricAlertChecks(
       results.skipped++
       continue
     }
-    const filters = parseJsonSafe<Record<string, unknown>>(rule.filters)
+    const filters = normalizeMetricFilters(rule.filters)
     const value = await resolveMetricValue(source, filters)
     if (value === null) {
       results.skipped++
@@ -328,6 +367,16 @@ function fmtValue(value: number, unit: string): string {
   return num
 }
 
+/** The alerts page in the recipient's app; null when no link can be built. */
+async function alertsLinkFor(userId: string): Promise<string | null> {
+  try {
+    const { linkTo } = await import('./app-links.js')
+    return await linkTo('alerts', {}, { recipientUserId: userId })
+  } catch {
+    return null
+  }
+}
+
 async function notifyImmediateSubscribers(
   app: FastifyInstance,
   rule: RuleRow,
@@ -387,7 +436,13 @@ async function notifyImmediateSubscribers(
         subject,
         category: 'alerts',
         template: 'alert',
+        collection: 'nivaro_metric_alert_log',
+        item: String(logId),
+        why: `you subscribed to the alert "${rule.name}"`,
         data: {
+          // A metric rule has no record: the button opens the alerts page in
+          // the recipient's own app (portal or admin).
+          manage_url: await alertsLinkFor(sub.user),
           rule_name: rule.name,
           metric_name: rule.def_name,
           metric_value: fmtValue(value, rule.def_unit),
@@ -504,7 +559,9 @@ export async function runMetricAlertDigest(
         subject,
         category: 'alerts',
         template: 'alert_digest',
+        why: `you subscribed to ${frequency} alert summaries`,
         data: {
+          manage_url: await alertsLinkFor(userId),
           frequency,
           alert_count: firing.length,
           alerts: firing.map((e) => ({

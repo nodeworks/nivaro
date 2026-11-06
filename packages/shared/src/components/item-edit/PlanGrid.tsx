@@ -19,6 +19,7 @@ import { useAfterIdle } from '../../lib/defer'
 import { evaluateNumeric } from '../../lib/expression'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative } from '../../lib/utils'
+import { NumberDraftInput } from '../ui/number-draft-input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type CompareDetailRow,
@@ -2498,16 +2499,17 @@ function SplitPane(props: {
               <tr key={String(c.id)} className='border-t border-slate-100 dark:border-border'>
                 <td className='py-1 text-slate-800 dark:text-slate-100'>{c.label}</td>
                 <td className='py-1 text-right'>
-                  <input
+                  {/* Typed text is kept ("12." / "12.05" — army 4 a01-15); a cleared share is 0. */}
+                  <NumberDraftInput
+                    bare
+                    type='text'
+                    allowNegative={false}
                     data-plan-share={String(c.id)}
                     aria-label={`${c.label} share`}
-                    inputMode='decimal'
                     value={shares?.[String(c.id)] ?? ''}
-                    onChange={(e) => {
-                      const n = Number(e.target.value)
-                      if (!Number.isFinite(n) || n < 0) return
-                      setShares((prev) => ({ ...(prev ?? {}), [String(c.id)]: n }))
-                    }}
+                    onValue={(n) =>
+                      setShares((prev) => ({ ...(prev ?? {}), [String(c.id)]: n ?? 0 }))
+                    }
                     className='h-6 w-16 rounded border border-slate-200 bg-background px-1.5 text-right text-[12px] outline-none focus:border-slate-400 dark:border-border'
                   />
                   <span className='ml-0.5 text-slate-500'>%</span>

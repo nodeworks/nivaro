@@ -12,12 +12,22 @@ vi.mock('../../../db/index.js', () => ({
   })
 }))
 
-const voided = vi.hoisted(() => ({ users: new Set<string>() }))
+const voided = vi.hoisted(() => ({
+  users: new Set<string>(),
+  tier: new Map<string, 'approval' | 'admin_only'>()
+}))
 vi.mock('../../../services/edit-lock.js', () => ({
-  lockHolderVerdict: async (holder: string) =>
-    voided.users.has(holder)
-      ? { locked: true, allowed: false, message: 'This record is at Level 1.' }
+  lockHolderVerdict: async (holder: string | { id: string }) => {
+    const id = typeof holder === 'string' ? holder : holder.id
+    return voided.users.has(id)
+      ? {
+          locked: true,
+          allowed: false,
+          message: 'This record is at Level 1.',
+          tier: voided.tier.get(id) ?? 'approval'
+        }
       : { locked: false, allowed: true, message: '' }
+  }
 }))
 
 import { editLockRefusal } from '../../../services/item-lock-guard.js'
@@ -38,7 +48,25 @@ describe('editLockRefusal', () => {
     rows.nivaro_collections = { item_locking_enabled: 1 }
     rows.nivaro_users = { first_name: 'Andy', last_name: 'Francis', email: 'a@x' }
     voided.users.clear()
+    voided.tier.clear()
     setLockPresenceProbe(null)
+  })
+
+  it('someone the approval lock refuses is not told to wait for the holder (a10-5)', async () => {
+    // Paul may not change the record at this step at all: the approval gate's
+    // 403 (who may edit, and why) answers him — not "ask Ben to release it".
+    rows.nivaro_item_locks = held('U-BEN')
+    voided.users.add('u-paul')
+    expect(await editLockRefusal(person('u-paul'), 'workflows', '372933')).toBeNull()
+    // Someone who may edit at this step still meets the holder's lock.
+    expect((await editLockRefusal(person('u-gaby'), 'workflows', '372933'))?.status).toBe(409)
+  })
+
+  it('an admin-only record keeps the holder lock for everyone (its open children stay writable)', async () => {
+    rows.nivaro_item_locks = held('U-BEN')
+    voided.users.add('u-paul')
+    voided.tier.set('u-paul', 'admin_only')
+    expect((await editLockRefusal(person('u-paul'), 'workflows', '372933'))?.status).toBe(409)
   })
 
   it('ignores a lock its holder may no longer use (record moved into a step they do not own)', async () => {

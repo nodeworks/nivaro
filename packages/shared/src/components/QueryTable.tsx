@@ -1,5 +1,5 @@
+import { ArrowDown, ArrowUp, ChevronsDownUp, ChevronsUpDown, Download, Search } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { ChevronsDownUp, ChevronsUpDown } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
 
@@ -132,6 +132,18 @@ export interface QueryTableConfig {
   sticky?: boolean
   /** Render zeroes as an em dash — de-noises mostly-empty month grids. */
   zero_dash?: boolean
+  /** Header clicks sort the rows (asc → desc → data order). Flat tables only:
+   *  ignored with tree_group_by. Off by default. */
+  sortable?: boolean
+  /** A search box above the table — shows the rows whose text (any column,
+   *  raw or formatted) contains what was typed. Off by default. */
+  search?: boolean
+  /** A CSV button above the table: the rows and columns as shown (search,
+   *  sort and hidden rows applied). Off by default. */
+  export_csv?: boolean | { filename?: string }
+  /** A "Hide empty rows" pill: hides rows whose `fields` are all blank or 0.
+   *  Off by default; `default_on` starts with the rows hidden. */
+  hide_empty?: { fields: string[]; label?: string; default_on?: boolean }
   /** Column show/hide toggle pills above the table (e.g. Actuals / Forecasts /
    *  Calendar Year). A toggle turned OFF hides columns matched by exact
    *  `fields` or a field-name `suffix` — unless `hide_when_on` inverts it
@@ -359,6 +371,10 @@ export function QueryTable({
   // Sections whose open/closed state the user flipped away from the default.
   const [toggled, setToggled] = useState<Set<string>>(() => new Set())
   const [granularity, setGranularity] = useState<'month' | 'quarter'>('month')
+  // sortable / search / hide_empty (army4 a04-4, a12-7): view state only.
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null)
+  const [query, setQuery] = useState('')
+  const [hideEmpty, setHideEmpty] = useState(!!config?.hide_empty?.default_on)
   // Column-visibility toggles the user turned OFF (default_on: false starts off).
   const [togglesOff, setTogglesOff] = useState<Set<string>>(
     () => new Set((config?.toggles ?? []).filter((t) => t.default_on === false).map((t) => t.label))
@@ -574,6 +590,43 @@ export function QueryTable({
       </div>
     )
   }
+
+  // hide_empty / search / sort — before the totals, so the footer adds up
+  // the rows on screen.
+  const hideEmptyFields = config?.hide_empty?.fields ?? []
+  if (hideEmptyFields.length > 0 && hideEmpty) {
+    effective = effective.filter((r) =>
+      hideEmptyFields.some((f) => {
+        const v = r[f]
+        return v != null && v !== '' && Number(v) !== 0
+      })
+    )
+  }
+  const q = config?.search ? query.trim().toLowerCase() : ''
+  if (q) {
+    effective = effective.filter((r) =>
+      columns.some((c) => {
+        const v = cellValue(r, c)
+        if (v == null || v === '') return false
+        return String(v).toLowerCase().includes(q) || fmt(v, c.format).toLowerCase().includes(q)
+      })
+    )
+  }
+  const canSort = !!config?.sortable && !config?.tree_group_by
+  const sortKey = (c: QueryTableColumn, i: number) => c.field ?? c.label ?? String(i)
+  if (canSort && sort) {
+    const idx = columns.findIndex((c, i) => sortKey(c, i) === sort.key)
+    const col = idx >= 0 ? columns[idx] : null
+    if (col) {
+      effective = [...effective].sort((a, b) =>
+        sortCompare(cellValue(a, col), cellValue(b, col), sort.dir)
+      )
+    }
+  }
+  const nextSort = (key: string) =>
+    setSort((cur) =>
+      !cur || cur.key !== key ? { key, dir: 1 } : cur.dir === 1 ? { key, dir: -1 } : null
+    )
 
   // Totals: sum plain numeric columns, then run formulas over the sums.
   let totals: Record<string, unknown> | null = null
@@ -988,8 +1041,80 @@ export function QueryTable({
       </button>
     ) : null
 
+  const csvName =
+    typeof config?.export_csv === 'object' && config.export_csv.filename
+      ? config.export_csv.filename
+      : 'export.csv'
+  const viewTools =
+    config?.search || config?.export_csv || hideEmptyFields.length > 0 ? (
+      <div className='flex flex-wrap items-center gap-2'>
+        {config?.search && (
+          <label className='relative inline-flex items-center'>
+            <Search
+              className='pointer-events-none absolute left-2 h-3.5 w-3.5 text-slate-400'
+              aria-hidden
+            />
+            <input
+              type='search'
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Search rows'
+              aria-label='Search rows'
+              data-qt-search=''
+              className='h-7 w-48 rounded-md border border-slate-200 bg-white pl-7 pr-2 text-[12px] text-slate-700 outline-none placeholder:text-slate-400 focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
+            />
+          </label>
+        )}
+        {hideEmptyFields.length > 0 && (
+          <button
+            type='button'
+            aria-pressed={hideEmpty}
+            data-qt-hide-empty={hideEmpty ? 'on' : 'off'}
+            onClick={() => setHideEmpty((v) => !v)}
+            className={`h-7 whitespace-nowrap rounded-md border px-2.5 text-[11.5px] font-medium transition-colors ${
+              hideEmpty
+                ? 'border-nvr-cyan bg-nvr-cyan text-white'
+                : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+            }`}
+          >
+            {config?.hide_empty?.label ?? 'Hide empty rows'}
+          </button>
+        )}
+        {(q || (hideEmpty && hideEmptyFields.length > 0)) && (
+          <span
+            className='text-[11.5px] tabular-nums text-slate-500 dark:text-slate-400'
+            data-qt-shown=''
+          >
+            {effective.length.toLocaleString('en-US')} of {rows.length.toLocaleString('en-US')} rows
+          </span>
+        )}
+        {config?.export_csv && (
+          <button
+            type='button'
+            data-qt-csv=''
+            onClick={() =>
+              downloadCsv(
+                csvName,
+                queryTableCsv(
+                  columns.filter((c) => showTop(c) || !c.field),
+                  effective,
+                  cellValue,
+                  (c) => c.label ?? titleize(c.field ?? '')
+                )
+              )
+            }
+            className='inline-flex h-7 items-center gap-1.5 rounded-md border border-slate-200 px-2 text-[11.5px] font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800 dark:border-border dark:text-slate-300 dark:hover:bg-muted dark:hover:text-slate-100'
+          >
+            <Download className='h-3.5 w-3.5' aria-hidden />
+            CSV
+          </button>
+        )}
+      </div>
+    ) : null
+
   return (
     <div className={sticky ? 'flex min-h-0 flex-1 flex-col' : undefined}>
+      {viewTools && <div className='shrink-0 pb-2'>{viewTools}</div>}
       {(config?.pivot?.quarter_toggle || (config?.toggles?.length ?? 0) > 0 || treeToggle) && (
         <div className='flex shrink-0 flex-wrap items-center justify-between gap-2 pb-2'>
           {(config?.toggles?.length ?? 0) > 0 ? (
@@ -1133,8 +1258,32 @@ export function QueryTable({
                           ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
                           : 'text-slate-500 dark:text-slate-400'
                       } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                      aria-sort={
+                        canSort && sort?.key === sortKey(c, i)
+                          ? sort.dir === 1
+                            ? 'ascending'
+                            : 'descending'
+                          : undefined
+                      }
                     >
-                      {c.label ?? titleize(c.field ?? '')}
+                      {canSort ? (
+                        <button
+                          type='button'
+                          data-qt-sort={sortKey(c, i)}
+                          onClick={() => nextSort(sortKey(c, i))}
+                          className={`inline-flex items-center gap-0.5 font-semibold uppercase tracking-wider hover:text-slate-800 dark:hover:text-slate-100 ${isNumeric(c) ? 'flex-row-reverse' : ''}`}
+                        >
+                          {c.label ?? titleize(c.field ?? '')}
+                          {sort?.key === sortKey(c, i) &&
+                            (sort.dir === 1 ? (
+                              <ArrowUp className='h-3 w-3' aria-hidden />
+                            ) : (
+                              <ArrowDown className='h-3 w-3' aria-hidden />
+                            ))}
+                        </button>
+                      ) : (
+                        (c.label ?? titleize(c.field ?? ''))
+                      )}
                       {c.stack && config?.stack_legend && (
                         <span
                           className='flex justify-end gap-1.5 text-[9px] font-medium normal-case tracking-normal'
@@ -1246,6 +1395,49 @@ export function QueryTable({
       </div>
     </div>
   )
+}
+
+/** Sort order for a column's values (`dir` 1 = ascending, -1 = descending):
+ *  numbers by value, text naturally, blanks last either way. */
+export function sortCompare(a: unknown, b: unknown, dir: 1 | -1 = 1): number {
+  const blank = (v: unknown) => v == null || v === ''
+  if (blank(a) && blank(b)) return 0
+  if (blank(a)) return 1
+  if (blank(b)) return -1
+  const na = typeof a === 'number' ? a : Number(a)
+  const nb = typeof b === 'number' ? b : Number(b)
+  if (Number.isFinite(na) && Number.isFinite(nb)) return (na - nb) * dir
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }) * dir
+}
+
+/** The rows as CSV text — raw values (numbers unformatted), RFC 4180 quoting. */
+export function queryTableCsv(
+  columns: QueryTableColumn[],
+  rows: Array<Record<string, unknown>>,
+  value: (row: Record<string, unknown>, c: QueryTableColumn) => unknown,
+  label: (c: QueryTableColumn) => string
+): string {
+  const cell = (v: unknown) => {
+    if (v == null) return ''
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    // A leading = + - @ would run as a formula in a spreadsheet.
+    const safe = /^[=+\-@]/.test(s) && !/^-?\d/.test(s) ? `'${s}` : s
+    return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
+  }
+  const lines = [columns.map((c) => cell(label(c))).join(',')]
+  for (const r of rows) lines.push(columns.map((c) => cell(value(r, c))).join(','))
+  return `${lines.join('\r\n')}\r\n`
+}
+
+function downloadCsv(filename: string, text: string) {
+  const url = URL.createObjectURL(new Blob([`\ufeff${text}`], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 /** Key-stable wrapper letting a section render a header row + child rows. */

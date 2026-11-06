@@ -24,7 +24,12 @@
   </tr>
 </table>
 {%- if detail -%}{% render 'partials/lead', text: detail %}{%- endif -%}
+{%- if record_url -%}
 {% render 'partials/button', url: record_url, label: 'Open record', secondary_url: manage_url, secondary_label: 'Manage alerts' %}
+{%- else -%}
+{%- comment -%}A metric rule has no record: the button opens the alerts page.{%- endcomment -%}
+{% render 'partials/button', url: manage_url, label: 'Open alerts' %}
+{%- endif -%}
 {% render 'partials/record-card', card: record_card %}
 {%- endif -%}
 {% endblock %}

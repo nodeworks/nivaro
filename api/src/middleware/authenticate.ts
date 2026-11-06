@@ -4,6 +4,11 @@ import { roleAllowsSignIn } from '../auth/role-sign-in.js'
 import { db } from '../db/index.js'
 import { mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { ACCESS_PREFIX, DEVICE_ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
+import {
+  ACCESS_PENDING_MESSAGE,
+  accessPendingFor,
+  accessPendingRouteAllowed
+} from '../services/access-pending.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
@@ -636,6 +641,7 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
 
 async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
   await authenticateIdentity(req, reply)
+  await accessPendingGate(req)
   // #3205 — an MCP connection's own limits (tools, collections, actions), on /api/mcp and the
   // in-process calls its tools make. They only narrow what the credential already allows.
   await applyMcpConnectionScope(req)
@@ -650,6 +656,34 @@ async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
     if (retry) void reply.header('Retry-After', String(retry))
     throw err
   }
+}
+
+/**
+ * Army 4 B1 — a person still in the new-user flow (First Access / Needs Authorization, judged
+ * by the `nivaro_settings` role ids: services/access-pending.ts) may call only what the
+ * Request-access screen needs; everything else is 403 ACCESS_PENDING. Covers every route that
+ * signs in through here: REST, GraphQL, custom queries, extension routes, the MCP endpoint, SSE.
+ *
+ * Only a person's sign-in is judged (session, phone, static token, View-as, connected app):
+ * API keys and run-as-key carry their own scopes and never stand in the flow. Administrators
+ * are never pending. The settings behind the verdict are cached per tenant (30 s), so this
+ * adds no database read to a request.
+ *
+ * The identity is CLEARED before the refusal: routes that sign in optionally (GraphQL, custom
+ * query execute, the maintenance hook, legacy forwards) catch authenticate's error and go on
+ * as an anonymous caller — never as the pending person.
+ */
+async function accessPendingGate(req: FastifyRequest): Promise<void> {
+  const user = req.user
+  if (!user || req.isAdmin || !user.role) return
+  if (req.authMethod === 'api_key' || req.authMethod === 'key_sim') return
+  const pending = await accessPendingFor(user, false)
+  if (!pending) return
+  if (accessPendingRouteAllowed(req.method, req.url)) return
+  req.user = undefined
+  req.userRole = null
+  req.isAdmin = false
+  throw httpError(403, ACCESS_PENDING_MESSAGE, 'ACCESS_PENDING')
 }
 
 async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {

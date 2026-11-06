@@ -12,7 +12,9 @@ const m = vi.hoisted(() => ({
   sessionAdmin: false,
   mintRefusal: false,
   principals: [] as string[],
-  activity: [] as Row[]
+  activity: [] as Row[],
+  /** Regions the reader may see (scope-guard readableRegionIds); null = the lookup failed. */
+  regions: new Set(['7']) as Set<string> | null
 }))
 
 const ci = (a: unknown, b: unknown) =>
@@ -73,6 +75,11 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     req.isAdmin ? null : { error: 'Forbidden', code: 'ADMIN_ONLY' },
   credentialMintRefusal: () =>
     m.mintRefusal ? { error: 'Sign in as yourself', code: 'CREDENTIAL_MINT_REFUSED' } : null
+}))
+// 2e71e3ada: a wallboard pinned to a region the creator can no longer read is refused (never
+// widened to everywhere) — the region lookup is stubbed here, its own tests cover it.
+vi.mock('../../../services/command-center/scope-guard.js', () => ({
+  readableRegionIds: vi.fn(async () => m.regions)
 }))
 vi.mock('../../../services/permission-cache.js', () => ({
   notePrincipalKind: (_u: unknown, kind: string) => m.principals.push(kind)
@@ -167,6 +174,7 @@ beforeEach(() => {
   m.mintRefusal = false
   m.principals = []
   m.activity = []
+  m.regions = new Set(['7'])
 })
 
 describe('wallboard links read as their creator, for Command Center GETs only', () => {
@@ -180,6 +188,19 @@ describe('wallboard links read as their creator, for Command Center GETs only', 
     // A wallboard is a business board: the creator's data, never an administrator console.
     expect(r.json()).toEqual({ user: CREATOR, admin: false })
     expect(m.principals).toEqual([`kiosk:${LINK_ID}`])
+  })
+
+  it('a link pinned to a region its creator can no longer read is refused, never widened', async () => {
+    for (const regions of [new Set<string>(), null]) {
+      m.regions = regions
+      const app = await build()
+      const r = await app.inject({
+        method: 'GET',
+        url: `/api/command-center/snapshot?kiosk=${TOKEN}`
+      })
+      expect(r.statusCode).toBe(403)
+      expect(r.json()).toMatchObject({ code: 'KIOSK_REGION_UNAVAILABLE' })
+    }
   })
 
   it('tells the board what the link opens on', async () => {

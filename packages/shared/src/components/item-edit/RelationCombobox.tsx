@@ -74,6 +74,16 @@ export function useStaleTip(active: boolean): {
 
 // ─── RelationCombobox (M2O) ────────────────────────────────────────────────────
 
+/** Picking the option that is already the field's value. It must be a
+ *  no-op: sending the same id again still counted as a parent change for the
+ *  form (string vs number id), so re-picking Project Type cleared the Project
+ *  Sub Type it had auto-filled (army 2026-11-05). */
+export function isSamePick(value: unknown, id: unknown): boolean {
+  if (value === null || value === undefined || value === '') return false
+  if (id === null || id === undefined || id === '') return false
+  return String(value) === String(id)
+}
+
 export function RelationCombobox({
   collection,
   value,
@@ -623,7 +633,8 @@ export function RelationCombobox({
                   type='button'
                   data-nvr-pinned-option
                   onClick={() => {
-                    onChange(pinnedItem?.id ?? pinned?.id)
+                    const id = pinnedItem?.id ?? pinned?.id
+                    if (!isSamePick(value, id)) onChange(id)
                     setOpen(false)
                   }}
                   className='flex w-full items-center gap-2 border-b border-slate-100 bg-nvr-cyan/5 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border'
@@ -708,7 +719,7 @@ export function RelationCombobox({
                         key={String(item.id)}
                         type='button'
                         onClick={() => {
-                          onChange(item.id)
+                          if (!isSamePick(value, item.id)) onChange(item.id)
                           setOpen(false)
                         }}
                         className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'

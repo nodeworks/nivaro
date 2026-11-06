@@ -145,7 +145,8 @@ export async function fieldTranslationsRoutes(app: FastifyInstance) {
     if (!body || typeof body !== 'object') {
       return reply.code(400).send({ error: 'Body must be { [field]: { [locale]: value } }' })
     }
-    if (!(await mayWriteTranslations(req, reply, collection, itemId, Object.keys(body)))) return
+    if (!(await mayWriteTranslations(req, reply, collection, itemId, Object.keys(body))))
+      return reply
 
     const now = new Date()
 
@@ -231,7 +232,7 @@ export async function fieldTranslationsRoutes(app: FastifyInstance) {
       itemId: string
       field: string
     }
-    if (!(await mayWriteTranslations(req, reply, collection, itemId, [field]))) return
+    if (!(await mayWriteTranslations(req, reply, collection, itemId, [field]))) return reply
 
     await db('nivaro_field_translations').where({ collection, item_id: itemId, field }).delete()
 

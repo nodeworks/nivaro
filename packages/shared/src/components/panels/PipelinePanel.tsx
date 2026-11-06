@@ -13,11 +13,20 @@ import {
   X,
   Zap
 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
-import { errorToastOptions } from '../../lib/error-toast'
+import { errorToastOptions, toastError } from '../../lib/error-toast'
 import {
   signalSentence,
   useRecordSignalPeers,
@@ -287,6 +296,245 @@ export function transitionRequirementsFromError(
     return e.response.requirements ?? []
   }
   return null
+}
+
+/** The refusal code of a failed request, either client error shape (SDK / axios). */
+export function refusalCode(err: unknown): string | null {
+  const resp = (err as { response?: { code?: unknown; data?: { code?: unknown } } } | null)
+    ?.response
+  const code = resp?.code ?? resp?.data?.code
+  return typeof code === 'string' ? code : null
+}
+
+/**
+ * A refusal the record page can fix in place: the refusal code → the key of
+ * the registry action that fixes it. Offered only when that action is
+ * available to the caller for this collection (/bulk-actions/available judges
+ * access), so a person who cannot fix it just reads the message (army4 a15-2:
+ * Priority could only be set from the list's row menu).
+ */
+export const REFUSAL_FIX_ACTIONS: Readonly<Record<string, string>> = {
+  PRIORITY_REQUIRED: 'priority'
+}
+
+export interface RefusalFixOffer {
+  code: string
+  actionKey: string
+  transitionId: string
+  comment?: string
+}
+
+/** The fix offer for a failed transition, or null. */
+export function refusalFixFor(
+  err: unknown,
+  vars: { transition_id: string; comment?: string }
+): RefusalFixOffer | null {
+  const code = refusalCode(err)
+  const actionKey = code ? REFUSAL_FIX_ACTIONS[code] : undefined
+  if (!code || !actionKey) return null
+  return { code, actionKey, transitionId: vars.transition_id, comment: vars.comment }
+}
+
+/** How long the buttons stay off after the record's pipeline read came back. */
+const SETTLE_BEAT_MS = 600
+
+/**
+ * After a move lands, the transition buttons stay off until the record's
+ * pipeline read has come back, plus a beat. An admin owns every step, so the
+ * NEXT step's Approve appeared in the same spot at once and a double click
+ * approved two steps (army4 a15-8).
+ */
+function useTransitionSettle(queryKey: readonly unknown[]) {
+  const queryClient = useQueryClient()
+  const [settling, setSettling] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  const keyRef = useRef(queryKey)
+  keyRef.current = queryKey
+  const settle = useCallback(async () => {
+    setSettling(true)
+    try {
+      await queryClient.refetchQueries({ queryKey: [...keyRef.current], type: 'active' })
+    } catch {
+      /* the beat below still applies */
+    }
+    await new Promise((r) => setTimeout(r, SETTLE_BEAT_MS))
+    if (alive.current) setSettling(false)
+  }, [queryClient])
+  return { settling, settle }
+}
+
+/** Header Owners tile + owner panels read these — a move changes who owns the record. */
+function invalidateOwnerReads(
+  queryClient: ReturnType<typeof useQueryClient>,
+  collection: string,
+  item: string
+) {
+  for (const head of [
+    'pipeline-owners-resolved',
+    'pipeline-instance-owners',
+    'pipeline-all-owners'
+  ])
+    void queryClient.invalidateQueries({ queryKey: [head, collection, item] })
+}
+
+/**
+ * The newest send back that put the record where it is now — shown while the
+ * record still sits in the state it was sent back to, so the person who must
+ * fix it reads why without opening the history (army4 a15-4). Only a person's
+ * move with a note counts.
+ */
+export function latestSendBack(
+  history: PipelineHistoryEntry[],
+  currentStateId: string | null | undefined,
+  states: Array<Pick<PipelineState, 'id' | 'sort'>>
+): PipelineHistoryEntry | null {
+  if (!currentStateId) return null
+  const sortOf = new Map(states.map((st) => [String(st.id).toUpperCase(), st.sort]))
+  const newest = [...history].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  )[0]
+  if (!newest?.from_state) return null
+  if (String(newest.to_state).toUpperCase() !== String(currentStateId).toUpperCase()) return null
+  if (!newest.comment?.trim()) return null
+  if (newest.origin && newest.origin !== 'person') return null
+  const from = sortOf.get(String(newest.from_state).toUpperCase())
+  const to = sortOf.get(String(newest.to_state).toUpperCase())
+  // A send back lands on a step that sorts BEFORE the one it left.
+  if (from == null || to == null || to >= from) return null
+  return newest
+}
+
+function SendBackNotice({ entry }: { entry: PipelineHistoryEntry }) {
+  const who =
+    [entry.first_name, entry.last_name].filter(Boolean).join(' ') || entry.user_email || 'Someone'
+  return (
+    <div
+      className='mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/30 dark:bg-amber-500/10'
+      data-send-back-notice
+    >
+      <p className='text-[12px] font-medium text-amber-900 dark:text-amber-200'>
+        Sent back by {withBehalf(who, entry)} · {formatRelative(entry.timestamp)}
+      </p>
+      <p className='mt-0.5 whitespace-pre-line text-[13px] text-amber-950 dark:text-amber-100'>
+        {entry.comment}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Inline fix for a refusal the caller can fix (REFUSAL_FIX_ACTIONS): runs the
+ * registry action on this record (reason when it asks for one), then retries
+ * the move. Renders nothing when the action is not offered to the caller.
+ */
+function RefusalFixPanel({
+  collection,
+  item,
+  offer,
+  onFixed,
+  onDismiss,
+  className,
+  style
+}: {
+  collection: string
+  item: string
+  offer: RefusalFixOffer
+  onFixed: () => void
+  onDismiss: () => void
+  /** Placement (the header variant floats it under the buttons). */
+  className?: string
+  style?: CSSProperties
+}) {
+  const client = useNivaroClient()
+  const queryClient = useQueryClient()
+  const [reason, setReason] = useState('')
+  const { data: action, isLoading } = useQuery({
+    queryKey: ['bulk-actions-available-one', collection, offer.actionKey],
+    queryFn: async () => {
+      const res = await client.request<{
+        data: Array<{ key: string; label: string; require_reason: boolean; source: string }>
+      }>(get('/bulk-actions/available', { collection }))
+      return (res.data ?? []).find((a) => a.key === offer.actionKey) ?? null
+    },
+    staleTime: 60_000
+  })
+  const run = useMutation({
+    mutationFn: async () => {
+      const body = { collection, ids: [item], reason: reason.trim() || null }
+      const res =
+        action?.source === 'extension'
+          ? await client.request<{
+              data: { succeeded?: number; errors?: Array<{ error: string }> }
+            }>(post(`/bulk-actions/${offer.actionKey}/execute`, body))
+          : await client.request<{
+              data: { succeeded?: number; errors?: Array<{ error: string }> }
+            }>(post('/bulk-actions/run', { ...body, key: offer.actionKey }))
+      const r = res.data ?? {}
+      if (action?.source !== 'extension' && !(r.succeeded && r.succeeded > 0))
+        throw new Error(
+          r.errors?.[0]?.error || `${action?.label ?? 'The fix'} did not change the record`
+        )
+    },
+    onSuccess: () => {
+      invalidateRecordData(queryClient, collection, item)
+      toast.success(`${action?.label ?? 'Done'} — trying again`)
+      onFixed()
+    },
+    onError: (err) => toastError(err, `${action?.label ?? 'The fix'} failed`)
+  })
+  if (isLoading || !action) return null
+  const canRun = !run.isPending && (!action.require_reason || reason.trim().length > 0)
+  return (
+    <div
+      className={cn(
+        'space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-500/30 dark:bg-amber-950',
+        className
+      )}
+      style={style}
+      data-refusal-fix={offer.code}
+    >
+      <p className='text-[12px] text-amber-950 dark:text-amber-100'>
+        You can fix this here: {action.label.toLowerCase()} this record, then it is tried again.
+      </p>
+      {action.require_reason && (
+        <input
+          type='text'
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder='Reason (required)'
+          aria-label='Reason'
+          className='w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30 dark:border-border dark:bg-card'
+        />
+      )}
+      <div className='flex items-center justify-end gap-2'>
+        <Button
+          type='button'
+          size='sm'
+          variant='ghost'
+          className='h-7 text-[12px]'
+          onClick={onDismiss}
+        >
+          Not now
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          className='h-7 gap-1.5 text-[12px]'
+          disabled={!canRun}
+          onClick={() => run.mutate()}
+        >
+          {run.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
+          {action.label}, then try again
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 // ─── State badge ──────────────────────────────────────────────────────────────
@@ -1755,6 +2003,8 @@ function PipelinePanelInner({
   const [showHistory, setShowHistory] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
+  // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
+  const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
   // #1722 — "Kim is approving" for the others, while this panel's confirm or requirements
   // dialog is open; and the same notice from anyone else's.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
@@ -1773,9 +2023,17 @@ function PipelinePanelInner({
   const runTransition = (vars: { transition_id: string; comment?: string }) => {
     if (transitionBusyRef.current) return
     transitionBusyRef.current = true
+    setFixOffer(null)
     executeTransition.mutate(vars, {
-      onSettled: () => {
-        transitionBusyRef.current = false
+      onSettled: (_data, err) => {
+        if (err) {
+          transitionBusyRef.current = false
+          return
+        }
+        // Stay busy until the record's pipeline read has come back (a15-8).
+        void settle().finally(() => {
+          transitionBusyRef.current = false
+        })
       }
     })
   }
@@ -1813,6 +2071,7 @@ function PipelinePanelInner({
   const queryKey = asRole
     ? ['pipeline-instance', collection, item, asRole]
     : ['pipeline-instance', collection, item]
+  const { settling, settle } = useTransitionSettle(queryKey)
   const { data, isLoading } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
@@ -1917,6 +2176,9 @@ function PipelinePanelInner({
       // ...and its on_success writes (order number, line sales_order_ids)
       // — the header and the child grids, so the form shows them at once.
       invalidateRecordData(queryClient, collection, String(item))
+      // The header Owners tile + owner panels: the move changed who owns it.
+      invalidateOwnerReads(queryClient, collection, String(item))
+      setFixOffer(null)
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -1946,6 +2208,8 @@ function PipelinePanelInner({
       // the global handler answers {error: 'Forbidden', message: '<why>'}
       // and the toast used to say just "Forbidden".
       const resp = (err as { response?: { status?: number } })?.response
+      // A refusal the caller may be able to fix right here (Priority flag).
+      setFixOffer(refusalFixFor(err, variables))
       toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
@@ -2072,7 +2336,7 @@ function PipelinePanelInner({
             variant={isActive ? 'default' : 'outline'}
             className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
             style={colorStyle(isActive)}
-            disabled={executeTransition.isPending}
+            disabled={executeTransition.isPending || settling}
             onClick={() => trySetPending(tx.id)}
           >
             {running && <Loader2 className='h-3 w-3 animate-spin' />}
@@ -2088,7 +2352,7 @@ function PipelinePanelInner({
               variant={isActive ? 'default' : 'outline'}
               className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
               style={colorStyle(isActive)}
-              disabled={executeTransition.isPending}
+              disabled={executeTransition.isPending || settling}
             >
               {label}
               <ChevronDown className='h-3 w-3' />
@@ -2117,6 +2381,19 @@ function PipelinePanelInner({
       )
     })
   }
+
+  const fixPanel = fixOffer ? (
+    <RefusalFixPanel
+      collection={collection}
+      item={String(item)}
+      offer={fixOffer}
+      onDismiss={() => setFixOffer(null)}
+      onFixed={() =>
+        runTransition({ transition_id: fixOffer.transitionId, comment: fixOffer.comment })
+      }
+    />
+  ) : null
+  const sendBack = latestSendBack(history ?? [], instance?.current_state, states ?? [])
 
   const confirmForm = (
     <div className='space-y-3 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-border p-3.5'>
@@ -2286,6 +2563,13 @@ function PipelinePanelInner({
             {confirmForm}
           </div>
         )}
+        {!expanded && fixPanel && (
+          <div className='border-t border-slate-100 dark:border-border/60 px-4 py-3'>
+            {fixPanel}
+          </div>
+        )}
+        {/* Why it came back — shown open or folded, while it sits where it was sent. */}
+        {sendBack && !instance?.completed_at && <SendBackNotice entry={sendBack} />}
         {expanded && (
           <div className='border-t border-slate-100 dark:border-border/60'>
             <AutoHeldNotice held={data?.auto_held ?? []} />
@@ -2372,6 +2656,7 @@ function PipelinePanelInner({
                       {renderTransitionButtons(visibleTransitions)}
                     </div>
                     {pendingTransition && confirmForm}
+                    {fixPanel}
                   </div>
                 )}
                 <div className='px-5 py-3'>
@@ -2471,6 +2756,8 @@ function PipelineTransitionButtonsInner({
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
+  // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
+  const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
   // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -2482,9 +2769,17 @@ function PipelineTransitionButtonsInner({
   const runTransition = (vars: { transition_id: string; comment?: string }) => {
     if (transitionBusyRef.current) return
     transitionBusyRef.current = true
+    setFixOffer(null)
     executeTransition.mutate(vars, {
-      onSettled: () => {
-        transitionBusyRef.current = false
+      onSettled: (_data, err) => {
+        if (err) {
+          transitionBusyRef.current = false
+          return
+        }
+        // Stay busy until the record's pipeline read has come back (a15-8).
+        void settle().finally(() => {
+          transitionBusyRef.current = false
+        })
       }
     })
   }
@@ -2518,6 +2813,7 @@ function PipelineTransitionButtonsInner({
     setPendingTransition(txId)
   }
   const queryKey = ['pipeline-instance', collection, item]
+  const { settling, settle } = useTransitionSettle(queryKey)
   const { data } = useQuery<PipelinePanelData>({
     queryKey,
     queryFn: () =>
@@ -2566,6 +2862,9 @@ function PipelineTransitionButtonsInner({
       // ...and its on_success writes (order number, line sales_order_ids)
       // — the header and the child grids, so the form shows them at once.
       invalidateRecordData(queryClient, collection, String(item))
+      // The header Owners tile + owner panels: the move changed who owns it.
+      invalidateOwnerReads(queryClient, collection, String(item))
+      setFixOffer(null)
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
@@ -2595,6 +2894,8 @@ function PipelineTransitionButtonsInner({
       // the global handler answers {error: 'Forbidden', message: '<why>'}
       // and the toast used to say just "Forbidden".
       const resp = (err as { response?: { status?: number } })?.response
+      // A refusal the caller may be able to fix right here (Priority flag).
+      setFixOffer(refusalFixFor(err, variables))
       toast.error(userErrorMessage(err, 'Failed to execute transition'), {
         duration: 12000,
         // What to do next + Copy details (lib/error-toast.ts); "Why?" below wins the action slot.
@@ -2697,7 +2998,7 @@ function PipelineTransitionButtonsInner({
               size='sm'
               variant='outline'
               className='shrink-0 gap-1.5 text-[12px]'
-              disabled={executeTransition.isPending}
+              disabled={executeTransition.isPending || settling}
               data-transitions-folded
             >
               {executeTransition.isPending && <Loader2 className='h-3 w-3 animate-spin' />}
@@ -2772,7 +3073,7 @@ function PipelineTransitionButtonsInner({
                   variant={isActive ? 'default' : 'outline'}
                   className='gap-1.5 text-[12px]'
                   style={colorStyle(isActive)}
-                  disabled={executeTransition.isPending}
+                  disabled={executeTransition.isPending || settling}
                   onClick={() => trySetPending(tx.id)}
                 >
                   {running && <Loader2 className='h-3 w-3 animate-spin' />}
@@ -2803,7 +3104,7 @@ function PipelineTransitionButtonsInner({
                     variant={isActive ? 'default' : 'outline'}
                     className='gap-1.5 text-[12px]'
                     style={colorStyle(isActive)}
-                    disabled={executeTransition.isPending}
+                    disabled={executeTransition.isPending || settling}
                   >
                     {label}
                     <ChevronDown className='h-3 w-3' />
@@ -2898,6 +3199,19 @@ function PipelineTransitionButtonsInner({
             </Button>
           </div>
         </div>
+      )}
+      {fixOffer && !pendingTransition && (
+        <RefusalFixPanel
+          collection={collection}
+          item={String(item)}
+          offer={fixOffer}
+          className='absolute right-0 top-full z-50 mt-1 shadow-lg'
+          style={{ width: confirmWidth }}
+          onDismiss={() => setFixOffer(null)}
+          onFixed={() =>
+            runTransition({ transition_id: fixOffer.transitionId, comment: fixOffer.comment })
+          }
+        />
       )}
       {requirementsDialog && (
         <Suspense fallback={null}>

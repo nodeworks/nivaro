@@ -207,6 +207,69 @@ export function noteMasqueradeLock(req: FastifyRequest, collection: string, item
     .catch(() => undefined)
 }
 
+// ── Take-over notice (a10-6) ───────────────────────────────────────────────
+// A forced take-over remembers whom it displaced (Redis, 1 h): that person's
+// next lock answer (heartbeat 404 / acquire 409) carries `taken_over: true`,
+// so their form says "X took over editing" — not "while you were away".
+const FORCED_TTL_S = 3600
+
+function forcedKey(collection: string, item: string, user: string): string {
+  const h = createHash('sha256')
+    .update(`${collection}${SEP}${item}${SEP}${String(user).toUpperCase()}`)
+    .digest('hex')
+    .slice(0, 32)
+  return `nvr:lockforced:${currentTenantKey()}:${h}`
+}
+
+/** Remember that `taker` force-took the lock `displaced` held. Never fails the request. */
+export async function noteForcedTakeover(
+  app: FastifyInstance,
+  collection: string,
+  item: string,
+  displaced: string,
+  taker: string
+): Promise<void> {
+  const redis = (app as { redis?: FastifyInstance['redis'] }).redis
+  if (!redis) return
+  await Promise.resolve()
+    .then(() =>
+      redis.set(
+        forcedKey(collection, item, displaced),
+        String(taker).toUpperCase(),
+        'EX',
+        FORCED_TTL_S
+      )
+    )
+    .catch(() => undefined)
+}
+
+/** Whether the lock `holder` holds now is the one force-taken from `me`. */
+export async function wasTakenOverFrom(
+  app: FastifyInstance,
+  collection: string,
+  item: string,
+  me: string,
+  holder: string | null | undefined
+): Promise<boolean> {
+  const redis = (app as { redis?: FastifyInstance['redis'] }).redis
+  if (!redis || !holder) return false
+  try {
+    const taker = (await redis.get(forcedKey(collection, item, me))) as string | null
+    return !!taker && taker === String(holder).toUpperCase()
+  } catch {
+    return false
+  }
+}
+
+/** The person took the lock back (or it went to them): the notice is spent. */
+function forgetForcedTakeover(app: FastifyInstance, collection: string, item: string, me: string) {
+  const redis = (app as { redis?: FastifyInstance['redis'] }).redis
+  if (!redis) return
+  void Promise.resolve()
+    .then(() => redis.del(forcedKey(collection, item, me)))
+    .catch(() => undefined)
+}
+
 /**
  * The View-as `token` ended: release every lock it took that `userId` (the
  * viewed person) still holds — announced, and handed to the wait queue, like
@@ -723,13 +786,17 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         return reply.code(403).send(waiting)
       }
       if (existing && existing.user !== me) {
+        // RECORD_LOCKED names the refusal (a10-5): a generic 409 read as
+        // "something changed — reload", which is not what happened.
         return reply.code(409).send({
           error: 'Item is locked by another user',
+          code: 'RECORD_LOCKED',
           locked_by: existing.user,
           locked_by_name: await lockHolderName(existing.user),
           note: existing.note ?? null,
           expires_at: existing.expires_at,
-          may_take_over: await mayTakeOver(req.user, !!req.isAdmin)
+          may_take_over: await mayTakeOver(req.user, !!req.isAdmin),
+          taken_over: await wasTakenOverFrom(app, collection, item, me, existing.user)
         })
       }
 
@@ -755,6 +822,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           if (winner && winner.user !== me) {
             return reply.code(409).send({
               error: 'Item is locked by another user',
+              code: 'RECORD_LOCKED',
               locked_by: winner.user,
               locked_by_name: await lockHolderName(winner.user),
               note: winner.note ?? null,
@@ -766,6 +834,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       }
 
       noteMasqueradeLock(req, collection, item)
+      if (!existing) forgetForcedTakeover(app, collection, item, me)
       // Holding the lock means no longer waiting for it.
       await leaveQueue(collection, item, me)
       emitLockEvent(app, collection, item, me, true, !existing)
@@ -915,6 +984,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       const existing = await getCurrentLock(collection, item, req.user!.id)
       if (existing && existing.user !== req.user!.id) {
         await db('nivaro_item_locks').where({ collection, item }).del()
+        await noteForcedTakeover(app, collection, item, existing.user, req.user!.id)
         const { notifyUser } = await import('../services/notification-channels.js')
         const what = await lockSubject(collection, String(item))
         void notifyUser(app, existing.user, {
@@ -977,7 +1047,8 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           error: 'You do not hold a lock on this item',
           locked_by: existing?.user ?? null,
           locked_by_name: existing ? await lockHolderName(existing.user) : null,
-          note: existing?.note ?? null
+          note: existing?.note ?? null,
+          taken_over: await wasTakenOverFrom(app, collection, item, me, existing?.user)
         })
       }
 

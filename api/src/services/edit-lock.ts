@@ -356,6 +356,65 @@ export async function adminOnlyStatesFor(collection: string): Promise<Set<string
  * Is `parentId` of `parent` locked right now, and may `user` change it?
  * Exported for the instance read (the form shows read-only from it).
  */
+/**
+ * The admin-only tier's sentence (a15-6). It is about FIELDS: a record at a
+ * post-approval step may still offer this person a move (the record panel's
+ * actions, which the tier does not lock) — then the sentence says so instead
+ * of sending them to Request help for something they can do themselves.
+ */
+export function adminOnlyLockMessage(step: string, hasMove: boolean): string {
+  return hasMove
+    ? `This record is at ${step} — only administrators can change its fields. You can still use the actions above; use Request help to ask for any other change.`
+    : `This record is at ${step} — only administrators can change its fields. Use Request help to ask for a change.`
+}
+
+/**
+ * Whether the record's run offers `user` (never an admin here) at least one
+ * manual move from where it stands — judged by the same gate a move is run
+ * through (manual-transition-gate.ts: from-state, automatic, admin-only list,
+ * extension vetoes, roles, step owner, conditions). Requirements and the note
+ * are what the move's own dialog asks for, so they do not take a move off
+ * offer. Any doubt = false (the plain Request help sentence).
+ */
+async function offersAMove(
+  user: User,
+  collection: string,
+  item: string,
+  inst: InstanceRow
+): Promise<boolean> {
+  try {
+    const template = (inst as InstanceRow & { template?: string | null }).template
+    if (!template) return false
+    const transitions = (await db('nivaro_workflow_transitions')
+      .where({ template })
+      .where((q) => q.where('from_state', inst.current_state).orWhereNull('from_state'))
+      // Every column: some (allow_creator, …) are newer than some databases.
+      .select('*')) as Array<import('./manual-transition-gate.js').GateTransition>
+    if (transitions.length === 0) return false
+    const { manualTransitionRefusal } = await import('./manual-transition-gate.js')
+    for (const t of transitions) {
+      const refused = await manualTransitionRefusal({
+        user,
+        isAdmin: false,
+        collection,
+        item,
+        instance: {
+          id: String(inst.id),
+          current_state: inst.current_state,
+          completed_at: (inst.completed_at as Date | string | null | undefined) ?? null
+        },
+        transition: t,
+        skipRequirements: true,
+        skipComment: true
+      })
+      if (!refused) return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
 export async function editLockVerdictFor(
   user: User,
   parent: string,
@@ -372,7 +431,10 @@ export async function editLockVerdictFor(
       return {
         locked: true,
         allowed: false,
-        message: `This record is at ${latest.label ?? latest.key} — only administrators can change it. Use Request help to ask for a change.`,
+        message: adminOnlyLockMessage(
+          latest.label ?? latest.key,
+          await offersAMove(user, parent, String(parentId), latest)
+        ),
         tier: 'admin_only',
         open_fields: cfg.admin_only.open_fields
       }

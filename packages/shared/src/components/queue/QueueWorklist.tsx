@@ -139,6 +139,8 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '.
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
+import { dedupeChooserKeys } from './column-chooser'
+import { stateAspectEffect } from './live-state-aspect'
 import { OwnerAvatars } from './OwnerAvatars'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
@@ -965,8 +967,11 @@ export function QueueWorklist({
           if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
           if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
           if (fields.includes(LIVE_ASPECTS.state)) {
+            // Off screen = the pill (a record entering by a pipeline start, army 4 a06-1).
+            const fx = stateAspectEffect(visible, viewRef.current === 'kanban')
             stats = true
-            if (visible || viewRef.current === 'kanban') refresh = true
+            if (fx.refresh) refresh = true
+            pill += fx.pill
           }
           if (!aspectTimer)
             aspectTimer = setTimeout(() => {
@@ -2413,9 +2418,17 @@ export function QueueWorklist({
     onError: () => toast.error('Failed to update view')
   })
 
+  // Deleting a saved view asks once, inline (it went on one click — army 4).
+  const [confirmDeleteViewId, setConfirmDeleteViewId] = useState<number | null>(null)
+  useEffect(() => {
+    if (confirmDeleteViewId == null) return
+    const t = setTimeout(() => setConfirmDeleteViewId(null), 5000)
+    return () => clearTimeout(t)
+  }, [confirmDeleteViewId])
   const deleteViewMut = useMutation({
     mutationFn: (viewId: number) => client.request(del(`/queues/views/${viewId}`)),
     onSuccess: (_res, viewId) => {
+      setConfirmDeleteViewId(null)
       qc.invalidateQueries({ queryKey: ['queue-views', queueId] })
       setActiveViewId(null)
       if (defaultViewId === viewId) setDefaultViewId(null)
@@ -3184,6 +3197,15 @@ export function QueueWorklist({
     })
   )
   const allToggleable = [...baseColumns, ...extraColumns, ...formulaColumns]
+  // One chooser entry per column name (a built-in and an extra field can share one).
+  const chooserKeys = dedupeChooserKeys(
+    orderedToggleableKeys,
+    (k) => {
+      const h = allToggleable.find((c) => c.key === k)?.header
+      return typeof h === 'string' ? h : k
+    },
+    effectiveVisible
+  )
 
   // CBV-parity per-row Actions menu (open / peek / transitions / copy / delete).
   // Hidden for 'tasks' sentinel rows — their item_id is a task PK, not a record.
@@ -4065,12 +4087,9 @@ export function QueueWorklist({
                     collisionDetection={closestCenter}
                     onDragEnd={handleDragEnd}
                   >
-                    <SortableContext
-                      items={orderedToggleableKeys}
-                      strategy={verticalListSortingStrategy}
-                    >
+                    <SortableContext items={chooserKeys} strategy={verticalListSortingStrategy}>
                       <div className='space-y-1.5'>
-                        {orderedToggleableKeys.map((key) => {
+                        {chooserKeys.map((key) => {
                           const col = allToggleable.find((c) => c.key === key)
                           return (
                             <SortableColumnToggle
@@ -4588,16 +4607,41 @@ export function QueueWorklist({
                   <Bell className={cn('h-3 w-3', viewSubFor(v.id) && 'fill-current')} />
                 </button>
               )}
-              {v.user === userId && (
-                <button
-                  type='button'
-                  onClick={() => deleteViewMut.mutate(v.id)}
-                  className='invisible text-slate-400 hover:text-red-500 group-hover:visible'
-                  aria-label={`Delete view ${v.name}`}
-                >
-                  ×
-                </button>
-              )}
+              {v.user === userId &&
+                (confirmDeleteViewId === v.id ? (
+                  <span
+                    className='flex shrink-0 items-center gap-1'
+                    data-view-delete-confirm={v.id}
+                  >
+                    <span className='text-red-600 dark:text-red-400'>Delete?</span>
+                    <button
+                      type='button'
+                      onClick={() => deleteViewMut.mutate(v.id)}
+                      disabled={deleteViewMut.isPending}
+                      className='font-semibold text-red-600 hover:underline disabled:opacity-50 dark:text-red-400'
+                      aria-label={`Yes, delete view ${v.name}`}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type='button'
+                      onClick={() => setConfirmDeleteViewId(null)}
+                      className='text-slate-500 hover:underline dark:text-slate-400'
+                      aria-label={`Keep view ${v.name}`}
+                    >
+                      No
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type='button'
+                    onClick={() => setConfirmDeleteViewId(v.id)}
+                    className='invisible text-slate-400 hover:text-red-500 group-hover:visible'
+                    aria-label={`Delete view ${v.name}`}
+                  >
+                    ×
+                  </button>
+                ))}
             </span>
           ))}
           <Popover open={saveOpen} onOpenChange={setSaveOpen}>

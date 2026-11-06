@@ -539,7 +539,7 @@ function SummaryFieldValueInner({
     iface === 'wysiwyg' ||
     typeof val === 'string'
   ) {
-    const plain = richTextToPlain(val)
+    const plain = summaryPlainText(val, iface)
     if (plain !== null)
       return (
         <span className='truncate text-slate-700 dark:text-slate-200' title={plain}>
@@ -567,6 +567,26 @@ function SummaryFieldValueInner({
   }
 
   return <span className='truncate text-slate-700 dark:text-slate-200'>{String(val)}</span>
+}
+
+const RICH_TEXT_IFACES = new Set([
+  'extension-editorjs',
+  'input-rich-text-html',
+  'rich_text',
+  'wysiwyg'
+])
+
+/** The Summary text for a string value, or null when it is not text to
+ *  flatten. A rich-text field shows its words; any field may hold a legacy
+ *  EditorJS blob, shown as its words too. A PLAIN text field shows exactly
+ *  what was typed — `<b>x</b>` reads `<b>x</b>` here as it does on the form
+ *  (React escapes it), never `x` (army 2026-11-05: the MWF ID read two ways). */
+export function summaryPlainText(val: unknown, iface: string): string | null {
+  if (typeof val !== 'string') return null
+  if (RICH_TEXT_IFACES.has(iface)) return richTextToPlain(val)
+  const s = val.trim()
+  if (s.startsWith('{') && /"blocks"\s*:/.test(s)) return richTextToPlain(val)
+  return null
 }
 
 // ─── getDisplayText ────────────────────────────────────────────────────────────

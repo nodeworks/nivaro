@@ -87,6 +87,9 @@ function recordScopeItem(sub: {
   }
 }
 
+/** Appended to a state subscription that the owner email already covers. */
+export const OWNER_MAIL_NOTE = ' (the owner notice covers it — no second email)'
+
 function nameOf(u: {
   first_name?: string | null
   last_name?: string | null
@@ -115,14 +118,57 @@ export async function whoWouldHear(input: {
   if (!record) notes.push('The record could not be read — record-value filters judged as empty.')
 
   // Candidate paths → people. A person reached twice keeps both reasons.
-  const told = new Map<string, { via: AudienceVia[]; category: NotifyCategory }>()
+  // Each path asks for its own channels (a subscription's notify_inapp /
+  // notify_email, the owner flow's email); a person reached twice gets the
+  // union — what the real senders do between them.
+  type Ask = { inapp: boolean; email: boolean; sender: boolean }
+  const told = new Map<string, { via: AudienceVia[]; category: NotifyCategory; ask: Ask }>()
   const notTold: AudienceMiss[] = []
   const users = new Map<string, Record<string, unknown>>()
-  const addTold = (userId: string, via: AudienceVia, category: NotifyCategory) => {
+  const addTold = (
+    userId: string,
+    via: AudienceVia,
+    category: NotifyCategory,
+    ask: Ask = { inapp: true, email: false, sender: false }
+  ) => {
     const k = userId.toUpperCase()
-    const cur = told.get(k) ?? { via: [], category }
+    const cur = told.get(k) ?? {
+      via: [],
+      category,
+      ask: { inapp: false, email: false, sender: false }
+    }
     cur.via.push(via)
+    cur.ask = {
+      inapp: cur.ask.inapp || ask.inapp,
+      email: cur.ask.email || ask.email,
+      sender: cur.ask.sender || ask.sender
+    }
     told.set(k, cur)
+  }
+  // The same gates the hooks apply (hooks/notification-subscriptions.ts): the
+  // subscriber must be able to see the record (User Scopes, row filters) and
+  // read every field their filters test. The bench used to skip this and
+  // listed people the real send left out (army 4, 2026-11-05).
+  const { recipientView, readsFilterFields } = await import(
+    '../hooks/notification-subscriptions.js'
+  )
+  const cannotSee = async (
+    userId: string,
+    sub: Record<string, unknown>,
+    ev: AudienceEvent,
+    skip: string[] = []
+  ): Promise<string | null> => {
+    const view = await recipientView(userId, collection, item, ev).catch(() => null)
+    if (!view)
+      return 'They cannot see this record (role, User Scope or row filter) — subscriptions only tell people who can.'
+    if (!(await readsFilterFields(view, sub as never, skip).catch(() => false)))
+      return 'Their subscription filters on a field they cannot read — it never matches.'
+    return null
+  }
+  const subAsk = (s: Record<string, unknown>): Ask => {
+    const on = (v: unknown) => v !== false && v !== 0
+    const instant = ((s.digest_frequency as string | null) ?? 'instant') === 'instant'
+    return { inapp: on(s.notify_inapp), email: on(s.notify_email), sender: instant }
   }
 
   let toState: { key: string; label: string; id: string } | null = null
@@ -161,6 +207,9 @@ export async function whoWouldHear(input: {
         'ns.filter_value',
         'ns.filters',
         'ns.label',
+        'ns.notify_inapp',
+        'ns.notify_email',
+        'ns.digest_frequency',
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -201,7 +250,12 @@ export async function whoWouldHear(input: {
           continue
         }
       }
-      addTold(uid, via, 'watch')
+      const hidden = await cannotSee(uid, s, event)
+      if (hidden) {
+        notTold.push({ user_id: uid, name: nameOf(s as never), via, reason: hidden })
+        continue
+      }
+      addTold(uid, via, 'watch', subAsk(s))
     }
   } else if (toState) {
     const subs = (await db('nivaro_notification_subscriptions as ns')
@@ -218,6 +272,9 @@ export async function whoWouldHear(input: {
         'ns.filter_value',
         'ns.filters',
         'ns.label',
+        'ns.notify_inapp',
+        'ns.notify_email',
+        'ns.digest_frequency',
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -273,7 +330,12 @@ export async function whoWouldHear(input: {
         notTold.push({ user_id: uid, name: nameOf(s as never), via, reason: failed })
         continue
       }
-      addTold(uid, via, 'workflow')
+      const hidden = await cannotSee(uid, s, 'transition', ['to_state'])
+      if (hidden) {
+        notTold.push({ user_id: uid, name: nameOf(s as never), via, reason: hidden })
+        continue
+      }
+      addTold(uid, via, 'workflow', subAsk(s))
     }
   }
 
@@ -309,37 +371,65 @@ export async function whoWouldHear(input: {
   // ── Owners of the state entered (#525) ────────────────────────────────────
   const owners: AudienceReport['owners'] = []
   if (event === 'transition' && toState) {
-    const flows = (await db('nivaro_flows')
-      .where({ status: 'active', trigger: 'workflow-transition' })
-      .count('* as n')
-      .first()
-      .catch(() => ({ n: 0 }))) as { n: number | string } | undefined
-    const flowCount = Number(flows?.n ?? 0)
+    // Only the flows that email `{{owner_emails}}` AND whose simple
+    // collection / state conditions pass for this move (owner-mail-flows.ts
+    // — the same judgement the state-subscription hook uses to skip a
+    // second email to an owner who also subscribes).
+    const { loadOwnerMailFlows, coveringFlows } = await import('./owner-mail-flows.js')
+    const covering = coveringFlows(await loadOwnerMailFlows(), {
+      collection,
+      subjectCollection: collection,
+      toStateKey: toState.key
+    })
+    const flowCount = covering.length
+    const excludesActor = flowCount > 0 && covering.every((f) => f.excludesActor)
     if (flowCount > 0)
       notes.push(
-        `${flowCount} active flow(s) listen to workflow transitions and email the new state's owners — each flow's own condition decides whether it runs for this record.`
+        `${flowCount} active flow(s) email the new state's owners for this move — any other condition in those flows still decides whether it runs.`
       )
     if (flowCount === 0)
       notes.push(
-        'No active flow listens to workflow-transition, so owners are SHOWN but nobody emails them — only in-app state subscriptions fire.'
+        'No active flow emails the owners for this move, so owners are SHOWN but nobody emails them — only in-app state subscriptions fire.'
       )
     const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
     const map = await resolveStateOwnersBatch([
       { key: 'x', stateId: toState.id, instanceId, collection, itemId: item }
     ])
+    const actorOwner = new Set<string>()
     for (const o of map.get('x') ?? []) {
       users.set(String(o.id).toUpperCase(), o as unknown as Record<string, unknown>)
-      if (flowCount > 0)
-        addTold(o.id, { kind: 'owner', label: `Owner of ${toState.label}`, id: null }, 'workflow')
+      if (flowCount === 0) continue
+      if (excludesActor && actor && String(o.id).toUpperCase() === actor) {
+        actorOwner.add(actor)
+        continue
+      }
+      addTold(o.id, { kind: 'owner', label: `Owner of ${toState.label}`, id: null }, 'workflow', {
+        inapp: covering.some((f) => f.pingsOwners),
+        email: true,
+        sender: false
+      })
     }
     for (const o of map.get('x') ?? []) {
-      const d = told.get(String(o.id).toUpperCase())
+      const k = String(o.id).toUpperCase()
+      const d = told.get(k)
       owners.push({
         user_id: o.id,
         name: nameOf(o),
         told: !!d,
-        reason: d ? null : 'No notify flow is active for transitions.'
+        reason: d
+          ? null
+          : actorOwner.has(k)
+            ? 'They made this move — the owner email leaves out the person who acted.'
+            : 'No notify flow emails the owners for this move.'
       })
+    }
+    // An owner who also subscribes to the state gets ONE email: the owner
+    // flow's. Their subscription keeps the in-app row (the hook skips its email).
+    for (const t of told.values()) {
+      if (!t.via.some((v) => v.kind === 'owner')) continue
+      for (const v of t.via)
+        if (v.kind === 'state_subscription' && !v.label.endsWith(OWNER_MAIL_NOTE))
+          v.label = `${v.label}${OWNER_MAIL_NOTE}`
     }
   }
 
@@ -356,7 +446,9 @@ export async function whoWouldHear(input: {
       subject,
       collection,
       item,
-      category: t.category
+      category: t.category,
+      channels: { inapp: t.ask.inapp, email: t.ask.email },
+      ...(t.ask.sender && t.ask.email ? { cadence: 'sender' as const } : {})
     }).catch(
       (): DeliveryDecision => ({
         category: t.category,

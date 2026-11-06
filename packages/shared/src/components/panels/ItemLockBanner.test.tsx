@@ -9,7 +9,7 @@ import {
   type RealtimeAdapter,
   RealtimeContext
 } from '../../lib/realtime'
-import { ItemLockBanner, useItemLock } from './ItemLockBanner'
+import { ItemLockBanner, takenAwayText, useItemLock } from './ItemLockBanner'
 
 type Cmd = { _method: string; _path: string }
 
@@ -577,5 +577,169 @@ describe('useItemLock — the approval edit lock refuses the holder', () => {
       await lock?.claim()
     })
     expect(said(calls, 'POST')).toHaveLength(2)
+  })
+})
+
+// a10-4: "An edit lock is held only by someone actually editing" — a form
+// that saved and sits clean let other people wait up to 5 minutes.
+describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
+  function DirtyProbe({ dirty }: { dirty: boolean }) {
+    lock = useItemLock('workflows', '7', true, { lazy: true, dirty })
+    return null
+  }
+
+  it('lets go once the form is clean, re-takes nothing on its own, and the next edit claims it', async () => {
+    vi.useFakeTimers()
+    let held = true
+    const { client, calls } = fakeClient((cmd) => {
+      // The lock is gone server side once released: the heartbeat answers 404.
+      if (cmd._path.endsWith('/heartbeat') && !held)
+        throw { status: 404, response: { error: 'You do not hold a lock on this item' } }
+      if (cmd._method === 'DELETE') held = false
+      if (cmd._method === 'POST' && cmd._path.endsWith('/lock')) held = true
+      return { data: null }
+    })
+    const render = (dirty: boolean) =>
+      act(() =>
+        root.render(
+          <NivaroProvider client={client}>
+            <DirtyProbe dirty={dirty} />
+          </NivaroProvider>
+        )
+      )
+    render(true)
+    await flush()
+    await act(async () => {
+      await lock?.claim()
+    })
+    expect(lock?.acquired).toBe(true)
+    // Saved: clean. A quick edit right after keeps it (no drop + re-take)…
+    render(false)
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    render(true)
+    await act(async () => {
+      vi.advanceTimersByTime(2_000)
+    })
+    expect(said(calls, 'DELETE')).toHaveLength(0)
+    // …a form that stays clean lets go.
+    render(false)
+    await act(async () => {
+      vi.advanceTimersByTime(1_600)
+    })
+    await flush()
+    expect(said(calls, 'DELETE')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+    // No heartbeat, no re-take while clean.
+    await act(async () => {
+      vi.advanceTimersByTime(30_000)
+    })
+    expect(said(calls, 'POST')).toHaveLength(1)
+    // The next real edit takes it again.
+    render(true)
+    await act(async () => {
+      await lock?.claim()
+    })
+    expect(said(calls, 'POST')).toHaveLength(2)
+    expect(lock?.acquired).toBe(true)
+  })
+
+  it('a lock lost while clean is not taken back by the heartbeat', async () => {
+    vi.useFakeTimers()
+    let held = true
+    const { client, calls } = fakeClient((cmd) => {
+      if (cmd._path.endsWith('/heartbeat') && !held)
+        throw { status: 404, response: { error: 'You do not hold a lock on this item' } }
+      return { data: null }
+    })
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <DirtyProbe dirty={false} />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    // Taken explicitly (Lock again) while clean, then the row vanished.
+    await act(async () => {
+      await lock?.relock()
+    })
+    held = false
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+    })
+    await flush()
+    expect(said(calls, 'POST')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+  })
+})
+
+describe('Take over (a10-6)', () => {
+  const holder = { locked_by: 'u-2', locked_by_name: 'Paul Babson', may_take_over: true }
+  const button = (text: string) =>
+    [...host.querySelectorAll('button')].find((b) => b.textContent === text) as
+      | HTMLButtonElement
+      | undefined
+
+  it('asks first — the holder may have unsaved changes', () => {
+    const onTakeOver = vi.fn()
+    act(() =>
+      root.render(
+        <ItemLockBanner lockHolder={holder} onTakeOver={onTakeOver} takingOver={false} isAdmin />
+      )
+    )
+    act(() => button('Take over')?.click())
+    expect(onTakeOver).not.toHaveBeenCalled()
+    expect(host.textContent).toContain('Paul Babson may have unsaved changes')
+    act(() => button('Cancel')?.click())
+    expect(button('Take over')).toBeTruthy()
+    act(() => button('Take over')?.click())
+    act(() => button('Take over anyway')?.click())
+    expect(onTakeOver).toHaveBeenCalledTimes(1)
+  })
+
+  it('the person pushed out is told who took over, not that they were away', () => {
+    expect(takenAwayText(true, 'Ben Boulanger')).toMatch(/^Ben Boulanger took over editing/)
+    expect(takenAwayText(false)).toMatch(/while you were away/)
+  })
+
+  it('coming back to a lock force-taken meanwhile says "took over"', async () => {
+    vi.useFakeTimers()
+    const focus = { on: true }
+    const spy = vi.spyOn(document, 'hasFocus').mockImplementation(() => focus.on)
+    const taken = { by: null as null | Record<string, unknown> }
+    const { client } = fakeClient((cmd) => {
+      if (cmd._method === 'POST' && cmd._path.endsWith('/lock') && taken.by)
+        throw { status: 409, response: taken.by }
+      return { data: taken.by }
+    })
+    const { toast } = await import('sonner')
+    const warn = vi.spyOn(toast, 'warning')
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <Probe />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      await lock?.claim()
+    })
+    focus.on = false
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+      vi.advanceTimersByTime(1_600)
+    })
+    taken.by = { locked_by: 'u-ben', locked_by_name: 'Ben Boulanger', taken_over: true }
+    focus.on = true
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await flush()
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^Ben Boulanger took over editing/))
+    warn.mockRestore()
+    spy.mockRestore()
   })
 })

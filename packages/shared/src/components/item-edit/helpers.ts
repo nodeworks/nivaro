@@ -279,6 +279,18 @@ export function seedQuickPickerSteps(
 
 // ─── CascadeEffectController ───────────────────────────────────────────────────
 
+/** A parent value as the cascade compares it: an id, whatever shape it came
+ *  in (5, '5', {id: 5}), so a reload that reshapes the same pick is no change. */
+export function cascadeParentKey(v: unknown): string | null {
+  if (v == null || v === '') return null
+  if (Array.isArray(v)) return v.map((x) => cascadeParentKey(x) ?? '').join(',')
+  if (typeof v === 'object') {
+    const id = (v as { id?: unknown }).id
+    return id == null ? JSON.stringify(v) : String(id)
+  }
+  return String(v)
+}
+
 export function CascadeEffectController({
   cascadeRules,
   cascadeFilter,
@@ -300,14 +312,47 @@ export function CascadeEffectController({
   const prevFilterRef = useRef<string | undefined>(undefined)
   const onClearRef = useRef(onClear)
   onClearRef.current = onClear
+  const parentDraft = useParentDraft()
+  const dirtyFields = parentDraft?.dirtyFields
 
+  // clear_on_parent_change clears only when the PERSON changed a parent's
+  // value (army 2026-11-05 a02-2: the cascade filter also settles on its own —
+  // after Create, when M2M parents load — and that wiped a saved Unit Type).
+  // A parent counts when its draft value moved since the last run and, where
+  // the host tracks it, the person touched it (dirtyFields). The clear waits
+  // for the filter change that follows. A host with no parent draft keeps the
+  // old rule (any filter change clears).
+  const changeParents = cascadeRules
+    .filter((r) => r.clear_on_parent_change)
+    .map((r) => r.parent_field)
+  const parentValuesStr = parentDraft
+    ? JSON.stringify(changeParents.map((p) => cascadeParentKey(parentDraft.draft?.[p])))
+    : ''
+  const prevParentValuesRef = useRef<string | undefined>(undefined)
+  const parentChangedRef = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the string keys stand for parentDraft / changeParents (fresh objects every render)
   useEffect(() => {
+    const prevValues = prevParentValuesRef.current
+    prevParentValuesRef.current = parentValuesStr
+    if (parentDraft && prevValues !== undefined && prevValues !== parentValuesStr) {
+      const before = JSON.parse(prevValues) as Array<string | null>
+      const now = JSON.parse(parentValuesStr) as Array<string | null>
+      if (
+        changeParents.some((p, i) => before[i] !== now[i] && (!dirtyFields || dirtyFields.has(p)))
+      )
+        parentChangedRef.current = true
+    }
     const prev = prevFilterRef.current
     prevFilterRef.current = cascadeFilterStr
     if (prev === undefined) return
     if (prev === cascadeFilterStr) return
-    if (cascadeRules.some((r) => r.clear_on_parent_change)) onClearRef.current()
-  }, [cascadeFilterStr, cascadeRules])
+    if (changeParents.length === 0) return
+    if (parentDraft) {
+      if (!parentChangedRef.current) return
+      parentChangedRef.current = false
+    }
+    onClearRef.current()
+  }, [cascadeFilterStr, parentValuesStr, cascadeRules, dirtyFields])
 
   // This check deliberately bypasses react-query (it clears a field as a side
   // effect rather than rendering data), which also means nothing dedupes it —
@@ -324,8 +369,6 @@ export function CascadeEffectController({
   // the picker's amber "not an available option" flag. A filter-key heuristic
   // is not enough: M2M parents settle asynchronously after mount, so the
   // load-time filter itself changes without any user interaction.
-  const parentDraft = useParentDraft()
-  const dirtyFields = parentDraft?.dirtyFields
   // A required parent the USER emptied this session: the child's picker is
   // disabled ("Select Project first") and its value can no longer be
   // re-picked, yet it kept narrowing everything downstream (Project cleared →

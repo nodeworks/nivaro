@@ -37,6 +37,18 @@ const IDLE_RECHECK_MS = 60_000
  *  next one waits this long — or until the browser is back online — instead
  *  of firing per keystroke. */
 const CLAIM_RETRY_MS = 15_000
+/** A form that turned clean lets its lock go after this long (a10-4) — typing
+ *  again right after Save keeps it instead of dropping and re-taking it. */
+const CLEAN_RELEASE_MS = 1_500
+
+/** What a person whose lock moved to someone else while they were not
+ *  holding it is told: a forced take-over says so (a10-6); otherwise the lock
+ *  went while they were away. */
+export function takenAwayText(takenOver: boolean, name?: string | null): string {
+  return takenOver
+    ? `${name ?? 'Someone else'} took over editing — your changes are still here, but can’t be saved until they release it`
+    : 'Someone else started editing while you were away — your changes are still here, but can’t be saved until they release it'
+}
 
 export interface LockHolder {
   locked_by: string
@@ -159,9 +171,18 @@ export function useItemLock(
     lazy?: boolean
     /** False = mounted but not on screen (a background workspace tab). */
     active?: boolean
+    /** Whether the form holds unsaved work (lazy mode). A form that turns
+     *  clean (saved, or every edit undone) lets its lock go and takes it
+     *  again on the next real edit; while clean, nothing re-takes it on its
+     *  own (heartbeat, coming back to the tab). Absent = not tracked. */
+    dirty?: boolean
   } = {}
 ) {
-  const { lazy = false, active = true } = opts
+  const { lazy = false, active = true, dirty } = opts
+  // a10-4: "An edit lock is held only by someone actually editing".
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
+  const cleanNow = useCallback(() => lazy && dirtyRef.current === false, [lazy])
   const client = useNivaroClient()
   const { isAdmin, userId } = useItemEditAuth()
   // Optional: a host without react-query (a bare lock probe) just skips the re-read.
@@ -193,6 +214,9 @@ export function useItemLock(
   const notVisibleRef = useRef(false)
   // Why the last acquire failed — only a 409 means "someone else is editing".
   const lastRefusalRef = useRef<number | null>(null)
+  // The last 409 said the lock was force-taken from this person (a10-6):
+  // the taker's name, else null.
+  const lastTakenOverRef = useRef<string | null>(null)
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatRef.current) {
@@ -233,6 +257,7 @@ export function useItemLock(
   const acquire = useCallback(async () => {
     if (!collection || !item || notVisibleRef.current) return false
     lastRefusalRef.current = null
+    lastTakenOverRef.current = null
     try {
       await client.request(
         post(`/item-locks/${collection}/${item}/lock`, { beat_ms: HEARTBEAT_MS })
@@ -268,6 +293,8 @@ export function useItemLock(
             const resume = () => {
               window.removeEventListener('pointerdown', resume, true)
               window.removeEventListener('keydown', resume, true)
+              // A clean form takes it on its next real edit (claim) instead.
+              if (cleanNow()) return
               acquire()
             }
             window.addEventListener('pointerdown', resume, true)
@@ -285,10 +312,20 @@ export function useItemLock(
             const status = e.status ?? e.response?.status
             if (onEditLocked(err)) return
             if (status !== 404 && status !== 409) return
-            const body = (e.response?.data ?? e.response) as LockHolder | undefined
+            const body = (e.response?.data ?? e.response) as
+              | (LockHolder & { taken_over?: boolean })
+              | undefined
             // Nobody holds it any more — another window of this person let it
             // go (#2131) or it lapsed: take it back rather than edit unlocked.
             if (status === 404 && !body?.locked_by) {
+              // …unless nothing is being edited: a clean form never re-takes
+              // a lock on its own (a10-4) — the next real edit claims it.
+              if (cleanNow()) {
+                stopHeartbeat()
+                acquiredRef.current = false
+                setAcquired(false)
+                return
+              }
               void acquire()
               return
             }
@@ -300,8 +337,12 @@ export function useItemLock(
                 locked_by: body.locked_by,
                 locked_by_name: body.locked_by_name ?? null
               })
+              // A forced take-over says so; a lock that lapsed (a sleeping
+              // laptop) and went to someone else is the "away" case (a10-6).
               toast.warning(
-                `${body.locked_by_name ?? 'Another user'} took over editing — your changes are no longer being saved`
+                body.taken_over === false
+                  ? takenAwayText(false)
+                  : `${body.locked_by_name ?? 'Another user'} took over editing — your changes are no longer being saved`
               )
             }
           })
@@ -319,8 +360,12 @@ export function useItemLock(
         response?: (LockHolder & { status?: number; data?: LockHolder }) | undefined
       }
       const status = e.status ?? e.response?.status
-      const body = (e.response?.data ?? e.response) as LockHolder | undefined
+      const body = (e.response?.data ?? e.response) as
+        | (LockHolder & { taken_over?: boolean })
+        | undefined
       lastRefusalRef.current = status ?? null
+      lastTakenOverRef.current =
+        body?.taken_over === true ? (body.locked_by_name ?? 'Someone else') : null
       if (onEditLocked(err)) return false
       if (status === 404) {
         notVisibleRef.current = true
@@ -340,7 +385,7 @@ export function useItemLock(
       }
       return false
     }
-  }, [client, collection, item, stopHeartbeat, onEditLocked])
+  }, [client, collection, item, stopHeartbeat, onEditLocked, cleanNow])
 
   const refreshLockInfo = useCallback(async () => {
     if (!collection || !item) return
@@ -510,11 +555,11 @@ export function useItemLock(
     if (onScreen) {
       if (offScreenReleasedRef.current) {
         offScreenReleasedRef.current = false
+        // Nothing unsaved: nothing to hold — the next real edit claims it.
+        if (cleanNow()) return
         void acquire().then((ok) => {
           if (!ok && lastRefusalRef.current === 409)
-            toast.warning(
-              'Someone else started editing while you were away — your changes are still here, but can’t be saved until they release it'
-            )
+            toast.warning(takenAwayText(lastTakenOverRef.current != null, lastTakenOverRef.current))
         })
       }
       return
@@ -542,7 +587,8 @@ export function useItemLock(
     client,
     stopHeartbeat,
     userId,
-    releaseOnExit
+    releaseOnExit,
+    cleanNow
   ])
 
   // Nobody known to hold it, and not holding it ourselves: re-read now and
@@ -570,7 +616,7 @@ export function useItemLock(
     const onPageShow = (e: PageTransitionEvent) => {
       if (e.persisted && offScreenReleasedRef.current) {
         offScreenReleasedRef.current = false
-        void acquire()
+        if (!cleanNow()) void acquire()
       }
     }
     window.addEventListener('pagehide', onPageHide)
@@ -579,7 +625,27 @@ export function useItemLock(
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
     }
-  }, [enabled, collection, item, stopHeartbeat, acquire, releaseOnExit])
+  }, [enabled, collection, item, stopHeartbeat, acquire, releaseOnExit, cleanNow])
+
+  // a10-4: the form turned clean (its save landed, or every edit was undone)
+  // while holding the lock — let it go, quietly. A short wait first: typing
+  // again right after Save keeps the lock instead of dropping and re-taking
+  // it. The next real edit claims it again (lazy mode).
+  useEffect(() => {
+    if (!enabled || !lazy || !collection || !item || dirty !== false) return
+    if (!acquiredRef.current) return
+    const t = setTimeout(() => {
+      if (dirtyRef.current !== false || !acquiredRef.current) return
+      stopHeartbeat()
+      acquiredRef.current = false
+      setAcquired(false)
+      client
+        .request(del(`/item-locks/${collection}/${item}/lock`))
+        .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
+        .catch(() => {})
+    }, CLEAN_RELEASE_MS)
+    return () => clearTimeout(t)
+  }, [enabled, lazy, collection, item, dirty, client, stopHeartbeat, userId])
 
   // #2131: the same person's other window (a popped-out record, another tab)
   // just released the lock while this one still edits — take it straight back.
@@ -985,6 +1051,11 @@ export function ItemLockBanner({
   onLeaveQueue?: () => void
   joining?: boolean
 }) {
+  // a10-6: Take over asks first — the holder may have unsaved work.
+  const [confirmTakeOver, setConfirmTakeOver] = useState(false)
+  const holderId = lockHolder?.locked_by ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a different holder asks afresh
+  useEffect(() => setConfirmTakeOver(false), [holderId])
   if (!lockHolder) return null
   const name = lockHolder.locked_by_name || 'Another user'
   const ahead = queue?.length ?? 0
@@ -1055,21 +1126,52 @@ export function ItemLockBanner({
         // Admins always; other roles only when the server says they may (the
         // takeover-role allowlist, #256) — unknown = offered, and a 403 then
         // hides it. A Take over that can only fail was a dead end.
-        (isAdmin || lockHolder.may_take_over !== false) && (
-          <Button
-            size='sm'
-            variant='outline'
-            className={
-              isAdmin
-                ? 'h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
-                : 'h-7 shrink-0 border-amber-200 bg-white/60 text-[12px] text-amber-700/80 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-transparent dark:text-amber-200/80 dark:hover:bg-amber-500/15'
-            }
-            onClick={onTakeOver}
-            disabled={takingOver}
-          >
-            {takingOver ? 'Taking over…' : 'Take over'}
-          </Button>
-        )
+        (isAdmin || lockHolder.may_take_over !== false) &&
+          (confirmTakeOver ? (
+            <span
+              className='flex basis-full flex-wrap items-center justify-end gap-2 text-[12px] text-amber-800 dark:text-amber-200'
+              data-lock-takeover-confirm
+            >
+              <span className='min-w-0 flex-1 text-right'>
+                {name} may have unsaved changes — they can’t save them once you take over.
+              </span>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
+                onClick={() => setConfirmTakeOver(false)}
+                disabled={takingOver}
+              >
+                Cancel
+              </Button>
+              <Button
+                size='sm'
+                className='h-7 shrink-0 bg-amber-600 text-[12px] text-white hover:bg-amber-700'
+                onClick={() => {
+                  setConfirmTakeOver(false)
+                  onTakeOver()
+                }}
+                disabled={takingOver}
+                data-lock-takeover-go
+              >
+                Take over anyway
+              </Button>
+            </span>
+          ) : (
+            <Button
+              size='sm'
+              variant='outline'
+              className={
+                isAdmin
+                  ? 'h-7 shrink-0 border-amber-300 bg-white text-[12px] text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-200 dark:hover:bg-amber-500/15'
+                  : 'h-7 shrink-0 border-amber-200 bg-white/60 text-[12px] text-amber-700/80 hover:bg-amber-100 dark:border-amber-500/30 dark:bg-transparent dark:text-amber-200/80 dark:hover:bg-amber-500/15'
+              }
+              onClick={() => setConfirmTakeOver(true)}
+              disabled={takingOver}
+            >
+              {takingOver ? 'Taking over…' : 'Take over'}
+            </Button>
+          ))
       }
     </div>
   )

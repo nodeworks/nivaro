@@ -15,6 +15,7 @@ import {
 } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { NumberDraftInput } from '../ui/number-draft-input'
 import { Switch } from '../ui/switch'
 import type { CMSField, CMSRelation } from './types'
 
@@ -24,7 +25,8 @@ function isCloneable(f: CMSField, relations: CMSRelation[], collection: string) 
   if (SKIP_FIELDS.has(f.field)) return false
   if (f.computed_formula) return false
   const iface = f.interface ?? ''
-  if (['sub_rows', 'repeater', 'rich_text', 'file', 'image', 'o2m', 'm2m', 'm2a'].includes(iface)) return false
+  if (['sub_rows', 'repeater', 'rich_text', 'file', 'image', 'o2m', 'm2m', 'm2a'].includes(iface))
+    return false
   if (['sub_rows', 'repeater', 'rich_text'].includes(f.type)) return false
   const isO2M = relations.some((r) => r.one_collection === collection && r.one_field === f.field)
   if (isO2M) return false
@@ -37,12 +39,27 @@ function isSubRowField(f: CMSField) {
 
 function toLocalDatetime(value: unknown): string {
   if (!value) return ''
-  try { return new Date(String(value)).toISOString().slice(0, 16) } catch { return '' }
+  try {
+    return new Date(String(value)).toISOString().slice(0, 16)
+  } catch {
+    return ''
+  }
 }
 
-interface FieldState { include: boolean; value: unknown }
+interface FieldState {
+  include: boolean
+  value: unknown
+}
 
-function CloneFieldInput({ field, value, onChange }: { field: CMSField; value: unknown; onChange: (v: unknown) => void }) {
+function CloneFieldInput({
+  field,
+  value,
+  onChange
+}: {
+  field: CMSField
+  value: unknown
+  onChange: (v: unknown) => void
+}) {
   if (field.type === 'boolean') {
     return (
       <div className='flex items-center gap-2'>
@@ -52,7 +69,7 @@ function CloneFieldInput({ field, value, onChange }: { field: CMSField; value: u
           onChange={(e) => onChange(e.target.checked)}
           className='h-4 w-4 accent-nvr-cyan rounded'
         />
-        <span className='text-[12px] text-slate-500'>{Boolean(value) ? 'Yes' : 'No'}</span>
+        <span className='text-[12px] text-slate-500'>{value ? 'Yes' : 'No'}</span>
       </div>
     )
   }
@@ -78,22 +95,22 @@ function CloneFieldInput({ field, value, onChange }: { field: CMSField; value: u
   }
   if (field.type === 'integer' || field.type === 'bigInteger') {
     return (
-      <Input
+      <NumberDraftInput
         type='number'
         step='1'
-        value={value === null || value === undefined ? '' : String(value)}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        value={value}
+        onValue={onChange}
         className='h-7 text-[12px]'
       />
     )
   }
   if (field.type === 'float' || field.type === 'decimal' || field.type === 'double') {
     return (
-      <Input
+      <NumberDraftInput
         type='number'
         step='any'
-        value={value === null || value === undefined ? '' : String(value)}
-        onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        value={value}
+        onValue={onChange}
         className='h-7 text-[12px]'
       />
     )
@@ -117,7 +134,14 @@ interface CloneDialogProps {
   onSuccess: (newId: string | number) => void
 }
 
-export function CloneDialog({ collection, itemId, fields, relations, currentValues, onSuccess }: CloneDialogProps) {
+export function CloneDialog({
+  collection,
+  itemId,
+  fields,
+  relations,
+  currentValues,
+  onSuccess
+}: CloneDialogProps) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const [cloning, setCloning] = useState(false)
@@ -151,12 +175,21 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
       for (const f of cloneableFields) {
         const state = fieldStates[f.field]
         if (!state) continue
-        if (!state.include) { exclude_fields.push(f.field); continue }
+        if (!state.include) {
+          exclude_fields.push(f.field)
+          continue
+        }
         if (isDirty(f.field, state)) field_overrides[f.field] = state.value
       }
-      const include_sub_rows = subRowFields.filter((f) => subRowIncludes[f.field]).map((f) => f.field)
+      const include_sub_rows = subRowFields
+        .filter((f) => subRowIncludes[f.field])
+        .map((f) => f.field)
       const res = await client.request<{ data: { id: string | number } }>(
-        post(`/items/${collection}/${itemId}/clone`, { field_overrides, exclude_fields, include_sub_rows })
+        post(`/items/${collection}/${itemId}/clone`, {
+          field_overrides,
+          exclude_fields,
+          include_sub_rows
+        })
       )
       setOpen(false)
       const newId = res?.data?.id
@@ -175,7 +208,13 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
   }
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (v) openFresh(); else setOpen(false) }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (v) openFresh()
+        else setOpen(false)
+      }}
+    >
       <DialogTrigger asChild>
         <Button size='sm' variant='outline' className='gap-1.5'>
           <Copy className='h-3.5 w-3.5' />
@@ -190,7 +229,9 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
           <div className='space-y-4'>
             {cloneableFields.length > 0 && (
               <div>
-                <p className='mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400'>Field values</p>
+                <p className='mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+                  Field values
+                </p>
                 <div className='space-y-2'>
                   {cloneableFields.map((f) => {
                     const state = fieldStates[f.field]
@@ -200,24 +241,49 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
                       <div key={f.field} className='flex items-start gap-2'>
                         <Switch
                           checked={state.include}
-                          onCheckedChange={() => setFieldStates((s) => ({ ...s, [f.field]: { ...s[f.field], include: !s[f.field].include } }))}
+                          onCheckedChange={() =>
+                            setFieldStates((s) => ({
+                              ...s,
+                              [f.field]: { ...s[f.field], include: !s[f.field].include }
+                            }))
+                          }
                           className='mt-1 shrink-0 scale-75'
                         />
-                        <Label className={cn('mt-1.5 w-32 shrink-0 truncate text-[12px]', !state.include && 'text-slate-400 line-through')}>
+                        <Label
+                          className={cn(
+                            'mt-1.5 w-32 shrink-0 truncate text-[12px]',
+                            !state.include && 'text-slate-400 line-through'
+                          )}
+                        >
                           {titleCase(f.field)}
                         </Label>
-                        <div className={cn('flex-1', !state.include && 'pointer-events-none opacity-40')}>
+                        <div
+                          className={cn(
+                            'flex-1',
+                            !state.include && 'pointer-events-none opacity-40'
+                          )}
+                        >
                           <CloneFieldInput
                             field={f}
                             value={state.value}
-                            onChange={(v) => setFieldStates((s) => ({ ...s, [f.field]: { ...s[f.field], value: v } }))}
+                            onChange={(v) =>
+                              setFieldStates((s) => ({
+                                ...s,
+                                [f.field]: { ...s[f.field], value: v }
+                              }))
+                            }
                           />
                         </div>
                         {dirty && state.include && (
                           <button
                             type='button'
                             title='Reset to original'
-                            onClick={() => setFieldStates((s) => ({ ...s, [f.field]: { ...s[f.field], value: currentValues[f.field] ?? null } }))}
+                            onClick={() =>
+                              setFieldStates((s) => ({
+                                ...s,
+                                [f.field]: { ...s[f.field], value: currentValues[f.field] ?? null }
+                              }))
+                            }
                             className='mt-1.5 shrink-0 text-slate-400 hover:text-slate-600'
                           >
                             <RotateCcw className='h-3.5 w-3.5' />
@@ -231,7 +297,9 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
             )}
             {subRowFields.length > 0 && (
               <div>
-                <p className='mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400'>Sub-rows</p>
+                <p className='mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400'>
+                  Sub-rows
+                </p>
                 <div className='space-y-2'>
                   {subRowFields.map((f) => (
                     <div key={f.field} className='flex items-center gap-2'>
@@ -240,7 +308,9 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
                         onCheckedChange={(v) => setSubRowIncludes((s) => ({ ...s, [f.field]: v }))}
                         className='shrink-0 scale-75'
                       />
-                      <Label className='text-[12px]'>Include <span className='font-mono'>{f.field}</span> sub-rows</Label>
+                      <Label className='text-[12px]'>
+                        Include <span className='font-mono'>{f.field}</span> sub-rows
+                      </Label>
                     </div>
                   ))}
                 </div>
@@ -249,7 +319,9 @@ export function CloneDialog({ collection, itemId, fields, relations, currentValu
           </div>
         </div>
         <DialogFooter className='shrink-0 border-t border-slate-100 px-6 py-4 dark:border-border'>
-          <Button variant='outline' size='sm' onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant='outline' size='sm' onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
           <Button size='sm' disabled={cloning} onClick={handleClone}>
             <Copy className='mr-1.5 h-3.5 w-3.5' />
             {cloning ? 'Cloning…' : 'Clone'}

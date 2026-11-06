@@ -3,6 +3,7 @@ import {
   type AutoIdLookups,
   allAutoIdPatterns,
   autoIdVariantFields,
+  clipTokenValue,
   extractSuffix,
   parseAutoIdPattern,
   renderAutoIdPattern,
@@ -189,6 +190,29 @@ describe('resolveAutoIdTokens', () => {
       seqValue: '####'
     })
     expect(out).toBe('-####')
+  })
+
+  it('{path|N} keeps the first N characters then … (army4 a01-9)', async () => {
+    const p = parseAutoIdPattern('{funding_years[0] % 100}X {description|10}')
+    expect(p.tokens[1]).toMatchObject({ kind: 'relation', path: ['description'], maxLen: 10 })
+    const long = await resolveAutoIdTokens(p, {
+      collection: 'workflows',
+      values: { funding_years: [2026], description: 'Fiber build out to the north ring' },
+      lookups,
+      seqValue: ''
+    })
+    expect(long).toBe('26X Fiber buil…')
+    const short = await resolveAutoIdTokens(p, {
+      collection: 'workflows',
+      values: { funding_years: [2026], description: 'Short' },
+      lookups,
+      seqValue: ''
+    })
+    expect(short).toBe('26X Short')
+    expect(validateAutoIdPattern('{description|0}')).toMatch(/Invalid length/)
+    expect(validateAutoIdPattern('{description|x}')).toMatch(/Invalid length/)
+    expect(clipTokenValue('abc  def', 5)).toBe('abc…')
+    expect(clipTokenValue('abc', null)).toBe('abc')
   })
 
   it('applies modulo to numeric values', async () => {

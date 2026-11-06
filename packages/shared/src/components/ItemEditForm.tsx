@@ -121,7 +121,6 @@ import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
-import { htmlToText } from '../lib/sanitize-html'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import {
   normalizeSummaryModeRules,
@@ -215,6 +214,16 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { deferredSections } from './item-edit/lazy-sections'
+import {
+  fetchLatestRevisions,
+  type LineCollision,
+  lineConflictKey,
+  lineLabelOf,
+  noteLineReads,
+  resolveLineCollision,
+  rowBaseBookFor,
+  withRowBaseRevision
+} from './item-edit/line-midair'
 import { checkNumberEntry, NUMBER_FIELD_TYPES, ruleValueFor } from './item-edit/line-qty'
 import { liveRecordWrite } from './item-edit/live-record-marks'
 import {
@@ -227,6 +236,7 @@ import {
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
+import { LineCollisionDialog, MidairCollisionDialog } from './item-edit/MidairCollisionDialog'
 import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
 import {
   LiveRowsContext,
@@ -285,7 +295,7 @@ import { ValidationSummary, type ValidationSummaryItem } from './item-edit/Valid
 import { useViewAsRole, ViewAsRoleBar } from './item-edit/ViewAsRole'
 import { choiceLabelsFrom } from './layout-editor/overview/describe-conditions'
 import { LegalHoldBanner } from './panels/LegalHoldBanner'
-import { RecordIntegrityBanner } from './panels/RecordIntegrityBanner'
+import { RecordIntegrityBanner, useRecordIntegrity } from './panels/RecordIntegrityBanner'
 import { SlaBreachBanner } from './panels/SlaBreachBanner'
 import { RecordGraphSheet } from './RecordGraph'
 import { type ReadViewLayout, RecordReadView } from './RecordReadView'
@@ -654,6 +664,13 @@ function SaveProgressDialog({
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
+export {
+  type LineCollision,
+  lineConflictKey,
+  lineLabelOf,
+  resolveLineCollision,
+  withRowBaseRevision
+} from './item-edit/line-midair'
 export { M2MStagingContext, useM2MStaging } from './item-edit/M2MStagingContext'
 export type { M2MStagingCtx, RenderFieldProps }
 
@@ -1176,13 +1193,30 @@ export function duplicateChildRow(
   return out
 }
 
+/** Saved value and typed value are the same value (a01-10): an emptied text
+ *  field ('') is the empty value it started as (null), and "2.50" is 2.5. */
+function sameAsSaved(a: unknown, b: unknown): boolean {
+  const na = a === '' ? null : a
+  const nb = b === '' ? null : b
+  if (valuesEqual(na, nb)) return true
+  const num = (v: unknown) =>
+    typeof v === 'number'
+      ? v
+      : typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v)
+        ? Number(v)
+        : Number.NaN
+  const x = num(na)
+  const y = num(nb)
+  return Number.isFinite(x) && Number.isFinite(y) && x === y
+}
+
 /** Whether any field of the draft still differs from the record it was
  *  loaded from (`__` keys are form bookkeeping, never a change). */
 export function draftDiffers(
   draft: Record<string, unknown>,
   baseline: Record<string, unknown>
 ): boolean {
-  return Object.keys(draft).some((k) => !k.startsWith('__') && !valuesEqual(draft[k], baseline[k]))
+  return Object.keys(draft).some((k) => !k.startsWith('__') && !sameAsSaved(draft[k], baseline[k]))
 }
 
 /** Whether a remote write leaves the collision baseline where it is: it does
@@ -1196,6 +1230,97 @@ export function keepCollisionBase(
   incoming: Record<string, unknown>
 ): boolean {
   return changed.some((k) => ownEdits.has(k) && !valuesEqual(draft[k], incoming[k]))
+}
+
+/** Whether a fresh read of a record's lines (`['o2m-rows', rc, mf, itemId,
+ *  …]`) proves the form's line count (`[…, itemId, '']`) stale (a10-1): an
+ *  unfiltered read must agree with it; a filtered grid shows a subset, so only
+ *  one showing MORE rows than the count does. The count's own entry never. */
+export function o2mCountIsStale(
+  key: unknown[],
+  itemId: string,
+  counted: unknown,
+  rows: unknown
+): boolean {
+  if (key[0] !== 'o2m-rows' || String(key[3]) !== String(itemId)) return false
+  if (key.length === 5 && key[4] === '') return false
+  // A count not read yet is still on its way — nothing to correct.
+  if (!Array.isArray(rows) || !Array.isArray(counted)) return false
+  return key.length === 4 ? rows.length !== counted.length : rows.length > counted.length
+}
+
+/** a01-4: the cross-field date/number rules (gte_field / lte_field) touched
+ *  by a change to `changed`, judged now on the draft: field → its error, or
+ *  null when the rule passes (or a side is still empty). Only fields whose
+ *  rule names `changed` (or that are `changed`) are answered. */
+export function liveCrossFieldErrors(
+  fields: Array<{
+    field: string
+    label?: string | null
+    type?: string | null
+    validation_rules?: unknown
+  }>,
+  draft: Record<string, unknown>,
+  changed: string
+): Record<string, string | null> {
+  const out: Record<string, string | null> = {}
+  for (const f of fields) {
+    const raw = f.validation_rules
+    let rules: unknown = raw
+    if (typeof raw === 'string') {
+      try {
+        rules = JSON.parse(raw)
+      } catch {
+        continue
+      }
+    }
+    if (!Array.isArray(rules)) continue
+    for (const rule of rules as Array<{ type?: string; field?: string; soft?: boolean }>) {
+      if (!rule || rule.soft || (rule.type !== 'gte_field' && rule.type !== 'lte_field')) continue
+      if (f.field !== changed && rule.field !== changed) continue
+      const err = applyValidationRule(
+        rule as never,
+        ruleValueFor(f.type, draft[f.field]),
+        f.label ?? titleCase(f.field),
+        draft
+      )
+      if (err) {
+        out[f.field] = err
+        break
+      }
+      if (!(f.field in out)) out[f.field] = null
+    }
+  }
+  return out
+}
+
+/** Whether every field the form shows is locked for this person (a07-4) —
+ *  hidden, system and unassigned fields aside. A form with nothing shown is
+ *  not "all locked" (still loading). */
+export function everyShownFieldLocked(
+  isNew: boolean,
+  fields: Array<{ field: string; hidden?: boolean | null; layout_assigned?: boolean }>,
+  locked: (field: string) => boolean
+): boolean {
+  if (isNew) return false
+  const shown = fields.filter(
+    (f) =>
+      !f.hidden &&
+      !SYSTEM_FIELDS.has(f.field) &&
+      !isSentinelKey(f.field) &&
+      f.layout_assigned !== false
+  )
+  return shown.length > 0 && shown.every((f) => locked(f.field))
+}
+
+/** The save dialog's line for a refused field (a01-8): the field's label and
+ *  the refusal as save-refusal.ts words it ("Line 1: Amount must be …"). */
+export function refusalStepText(
+  bad: { field: string; message: string },
+  fields: Array<{ field: string; label?: string | null }>
+): string {
+  const label = fields.find((f) => f.field === bad.field)?.label || titleCase(bad.field)
+  return `${label} — ${bad.message}`
 }
 
 /** Whether a field's validation rule is judged on this save — the server's
@@ -2028,6 +2153,8 @@ function ItemEditFormView({
   const saveNoticeRef = useRef<{
     hidden: { reason: string | null } | null
     linkProblems: string[]
+    /** Lines whose staged edit met someone else's newer save (a10-3). */
+    lineConflicts?: number
   }>({ hidden: null, linkProblems: [] })
   // A create an older server answered with no row and no id: the record
   // exists, so the form is replaced by a plain note — never a second Save.
@@ -2122,6 +2249,8 @@ function ItemEditFormView({
     []
   )
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({})
+  // Cross-field errors set live (a01-4) — cleared only while still showing.
+  const crossErrorsRef = useRef<Map<string, string>>(new Map())
   // The 'Can't save yet' summary shows after a failed save until dismissed or
   // the errors clear (it derives from validationErrors, so it never lingers).
   const [showValidationSummary, setShowValidationSummary] = useState(false)
@@ -2139,6 +2268,87 @@ function ItemEditFormView({
     mine: Record<string, unknown>
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
+  // Mid-air for LINES (a10-3): the revision each staged line edit is based on,
+  // keyed `<rc>:<rowId>`. Taken when the row is first staged (or handed in by
+  // the grid from when its editor opened — `__base_revision` on queueEdit),
+  // sent as `_base_revision` on the line PATCH, dropped once the line saved
+  // or its staged edit went away. A 409 keeps the line staged and opens the
+  // Theirs / Mine chooser below (lineCollision).
+  const o2mBaseRevRef = useRef<Map<string, Promise<number | null>>>(new Map())
+  // Bases asked for in one tick go out as ONE `GET /revisions/latest` per
+  // child collection ("apply to every line" stages them all at once).
+  const o2mBaseNoneRef = useRef<Set<string>>(new Set())
+  const o2mBaseBatchRef = useRef<
+    Map<string, { ids: string[]; result: Promise<Map<string, number | null>> }>
+  >(new Map())
+  const [lineCollision, setLineCollision] = useState<LineCollision[] | null>(null)
+  /** A grid's saved rows as its query cached them (the key carries more
+   *  segments — filter, layout — so prefix-match; either cache shape). */
+  const cachedGridRows = (rc: string, mf: string): Array<Record<string, unknown>> => {
+    const hit = qc
+      .getQueriesData<unknown>({ queryKey: ['o2m-rows', rc, mf, String(itemId)] })
+      .find(([, d]) => Array.isArray(d) && (d as unknown[]).length > 0)
+    return (hit?.[1] as Array<Record<string, unknown>> | undefined) ?? []
+  }
+  const noteRowBaseRef = useRef<(rc: string, rowId: string, known?: unknown) => void>(() => {})
+  noteRowBaseRef.current = (rc, rowId, known) => {
+    if (!rowId || rowId === 'new' || rowId.startsWith('pending:')) return
+    const k = `${rc}:${rowId}`
+    if (o2mBaseRevRef.current.has(k)) return
+    if (typeof known === 'number' && Number.isFinite(known) && known > 0) {
+      o2mBaseRevRef.current.set(k, Promise.resolve(known))
+      return
+    }
+    // M1: the base from the READ that showed this line (the shared book is fed
+    // by every `o2m-rows` read below), not one taken now at first edit.
+    const readBase = rowBaseBookFor(client, rc).peek(rowId)
+    if (readBase) {
+      o2mBaseRevRef.current.set(k, readBase)
+      return
+    }
+    let batch = o2mBaseBatchRef.current.get(rc)
+    if (!batch) {
+      const ids: string[] = []
+      const result = Promise.resolve()
+        .then(() => {
+          o2mBaseBatchRef.current.delete(rc)
+          return fetchLatestRevisions(client, rc, ids)
+        })
+        .catch(() => new Map<string, number | null>())
+      batch = { ids, result }
+      o2mBaseBatchRef.current.set(rc, batch)
+    }
+    batch.ids.push(rowId)
+    o2mBaseRevRef.current.set(
+      k,
+      batch.result.then((m) => m.get(rowId) ?? null)
+    )
+  }
+  // Every read of this record's lines (`['o2m-rows', rc, mf, itemId, …]`, any
+  // grid kind) notes each line's base revision as of that read — one batched
+  // `/revisions/latest` per read of new or changed lines (M1).
+  useEffect(
+    () =>
+      isNew || itemId == null || designOn ? undefined : noteLineReads(qc, client, String(itemId)),
+    [qc, client, itemId, isNew, designOn]
+  )
+  /** The base a staged line's PATCH carries (M1): the one taken when it was
+   *  staged (or handed in by the grid from its read), else — unknown or the
+   *  read failed — fetched NOW, before the write, never skipped. Null only
+   *  when the line has no revision at all. */
+  const lineBaseFor = async (rc: string, rowId: string): Promise<number | null> => {
+    const k = `${rc}:${rowId}`
+    const known = await o2mBaseRevRef.current.get(k)
+    if (typeof known === 'number' && known > 0) return known
+    if (!rowId || rowId === 'new' || rowId.startsWith('pending:')) return null
+    if (o2mBaseNoneRef.current.has(k)) return null
+    const m = await fetchLatestRevisions(client, rc, [rowId]).catch(
+      () => new Map<string, number | null>()
+    )
+    const b = m.get(rowId) ?? null
+    if (b != null) o2mBaseRevRef.current.set(k, Promise.resolve(b))
+    return b
+  }
   // Offline outbox (#1678): a Save that failed on the network waits in the
   // per-person outbox. While this form holds the entry (it pressed Save, or
   // the person opened Review) it replays through its own save — lines,
@@ -2376,8 +2586,8 @@ function ItemEditFormView({
   // under it keeps body at pointer-events:none, so the chooser rendered on
   // top but no click reached it (only Escape got a mouse user out).
   useEffect(() => {
-    if (collision) setSaveDialogOpen(false)
-  }, [collision])
+    if (collision || lineCollision) setSaveDialogOpen(false)
+  }, [collision, lineCollision])
   function updateStep(
     id: string,
     upd: Partial<SaveStepItem> | ((prev: SaveStepItem) => Partial<SaveStepItem>)
@@ -2475,7 +2685,11 @@ function ItemEditFormView({
         }),
       getPendingEdits: (rc, mf) => pendingO2MEdits.get(`${rc}.${mf}`) ?? new Map(),
       getPendingDeletes: (rc, mf) => pendingO2MDeletes.get(`${rc}.${mf}`) ?? new Set(),
-      queueEdit: (rc, mf, rowId, changes) =>
+      queueEdit: (rc, mf, rowId, rawChanges) => {
+        // The line's mid-air base: the grid's (editor open) when it sent one,
+        // else read now — the first staging of a row wins, later ones keep it.
+        const { __base_revision: knownBase, ...changes } = rawChanges
+        noteRowBaseRef.current(rc, rowId, knownBase)
         setPendingO2MEdits((prev) => {
           const next = new Map(prev)
           const key = `${rc}.${mf}`
@@ -2483,8 +2697,10 @@ function ItemEditFormView({
           edits.set(rowId, { ...(edits.get(rowId) ?? {}), ...changes })
           next.set(key, edits)
           return next
-        }),
+        })
+      },
       queueDelete: (rc, mf, rowId) => {
+        o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
         setPendingO2MDeletes((prev) => {
           const next = new Map(prev)
           const key = `${rc}.${mf}`
@@ -2503,7 +2719,8 @@ function ItemEditFormView({
           return next
         })
       },
-      cancelPendingEdit: (rc, mf, rowId) =>
+      cancelPendingEdit: (rc, mf, rowId) => {
+        o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
         setPendingO2MEdits((prev) => {
           const next = new Map(prev)
           const key = `${rc}.${mf}`
@@ -2511,7 +2728,8 @@ function ItemEditFormView({
           edits.delete(rowId)
           next.set(key, edits)
           return next
-        }),
+        })
+      },
       cancelPendingDelete: (rc, mf, rowId) =>
         setPendingO2MDeletes((prev) => {
           const next = new Map(prev)
@@ -4735,7 +4953,8 @@ function ItemEditFormView({
       // Revert / Take theirs that puts the last change back leaves nothing to
       // save: the form is clean again (the tab dot, the leave-page prompt and
       // the stored draft all follow isDirty).
-      setIsDirty(undoingRef.current ? draftDiffers(next, initialDataRef.current) : true)
+      // a01-10: typing the saved value back by hand does the same.
+      setIsDirty(isNew ? true : draftDiffers(next, initialDataRef.current))
       const isEmpty = value === null || value === undefined || value === ''
       if (!isEmpty) touchedFields.current.add(field)
       setValidationErrors((prev) => {
@@ -4748,6 +4967,23 @@ function ItemEditFormView({
         }
         return next
       })
+      // a01-4: "End must be on or after Start" shows as soon as both are set,
+      // not only at Save (and clears the moment either side is fixed).
+      const cross = liveCrossFieldErrors(fieldConfig ?? [], next, field)
+      if (Object.keys(cross).length > 0)
+        setValidationErrors((prev) => {
+          const out = { ...prev }
+          for (const [k, err] of Object.entries(cross)) {
+            if (err) {
+              out[k] = err
+              crossErrorsRef.current.set(k, err)
+            } else if (crossErrorsRef.current.has(k)) {
+              if (out[k] === crossErrorsRef.current.get(k)) delete out[k]
+              crossErrorsRef.current.delete(k)
+            }
+          }
+          return out
+        })
       evaluateFieldRulesForChange(field)
       // Cross-record defaults: any field whose cross_record_defaults watches this
       // FK copies mapped source-record values into the draft when the FK is set.
@@ -4755,7 +4991,7 @@ function ItemEditFormView({
       // Upstream cascades: a pick fills its own cascade parents in reverse.
       if (!isEmpty) upstreamCascadesRef.current(field, value)
     },
-    [designOn, fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
+    [designOn, fieldConfig, evaluateFieldRulesForChange, runCrossDefaults, isNew]
   )
   /** Puts a field back (Revert, Take theirs): allowed on a read-only form and
    *  leaves it clean when nothing else differs. */
@@ -5045,6 +5281,23 @@ function ItemEditFormView({
     })
     return map
   }, [o2mRelations, o2mQueryResults])
+  // a10-1: a grid whose rows query is not the count's own entry (a row
+  // filter, a layout segment) took in a line someone else added or removed —
+  // the count re-reads too, so "at least one line" judges the rows on screen
+  // (it used to stay at 0 until a window focus happened to refetch it).
+  useEffect(() => {
+    if (isNew || !itemId) return
+    const watched = new Set(o2mRelations.map((r) => `${r.many_collection}\u0000${r.many_field}`))
+    if (watched.size === 0) return
+    return qc.getQueryCache().subscribe((e) => {
+      if (e.type !== 'updated' || e.action.type !== 'success') return
+      const key = e.query.queryKey as unknown[]
+      if (key[0] !== 'o2m-rows' || !watched.has(`${String(key[1])}\u0000${String(key[2])}`)) return
+      const countKey = ['o2m-rows', key[1], key[2], itemId, '']
+      if (!o2mCountIsStale(key, itemId, qc.getQueryData<unknown[]>(countKey), e.action.data)) return
+      void qc.invalidateQueries({ queryKey: countKey, exact: true })
+    })
+  }, [qc, itemId, isNew, o2mRelations])
 
   // Required O2M support: effective row count per O2M alias field — saved
   // rows minus staged deletes plus staged pending rows. "Required" on an O2M
@@ -5202,7 +5455,9 @@ function ItemEditFormView({
     claim: claimLock
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled, {
     lazy: true,
-    active: active && surfaceActive
+    active: active && surfaceActive,
+    // a10-4: a clean form (saved, or edits undone) lets the lock go.
+    dirty: hasUnsaved
   })
   const isReadOnly = lockReadOnly || !!recordGone || (!!editLockMessage && !editLockPartial)
   readOnlyRef.current = isReadOnly && !isNew
@@ -7421,6 +7676,16 @@ function ItemEditFormView({
   // Judged against the CURRENTLY VIEWED layout's own assignments when one is
   // active — a field the open layout doesn't show must not count against the
   // percentage (2026-08-24).
+  // The record's data-integrity findings (the banner's own query — same keys,
+  // so no second request): a record with open issues is never "100% complete"
+  // (army4 a01-3: lines without Category showed 100% beside 2 issues).
+  const integrity = useRecordIntegrity(
+    collection,
+    String(itemId ?? ''),
+    !isNew && !!itemId && !designOn && !activeLayoutData?.layout?.hide_integrity_banner
+  )
+  const integrityIssues =
+    integrity.data?.enabled === false ? 0 : (integrity.data?.findings?.length ?? 0)
   const completeness = useMemo(() => {
     const layoutFieldSet =
       (activeLayoutData?.assignments?.length ?? 0) > 0
@@ -7457,9 +7722,12 @@ function ItemEditFormView({
     const filled = required.filter(isFilled)
     const requiredMissing = required.filter((f) => !isFilled(f))
     const recommendedMissing = recommended.filter((f) => !isFilled(f))
+    const rawPct = required.length ? Math.round((filled.length / required.length) * 100) : 100
     return {
       hasRequired: required.length > 0,
-      pct: required.length ? Math.round((filled.length / required.length) * 100) : 100,
+      // Open integrity issues keep it below 100 — the record is not done.
+      pct: integrityIssues > 0 ? Math.min(rawPct, 99) : rawPct,
+      issues: integrityIssues,
       filled: filled.length,
       total: required.length,
       requiredMissing: requiredMissing.map((f) => f.label ?? f.field),
@@ -7474,7 +7742,8 @@ function ItemEditFormView({
     m2mAliasFieldStates,
     activeLayoutData,
     o2mAliasFields,
-    o2mEffectiveCounts
+    o2mEffectiveCounts,
+    integrityIssues
   ])
 
   // Provenance (#29): where the record came from — shown as a chip beside the
@@ -7802,7 +8071,17 @@ function ItemEditFormView({
           // Required O2M = at least one row, pending or existing. An
           // unsettled count (query in flight) never blocks.
           const n = o2mEffectiveCounts[f.field]
-          if (n !== undefined && n === 0)
+          // a10-1: a line the grid already shows (added live by someone
+          // else) counts even before the count itself re-reads.
+          const rel = o2mRelations.find((r) => r.one_field === f.field)
+          const relKey = rel ? `${rel.many_collection}.${rel.many_field}` : ''
+          const dels = pendingO2MDeletes.get(relKey)
+          const onScreen = rel
+            ? cachedGridRows(String(rel.many_collection), String(rel.many_field)).filter(
+                (r) => !dels?.has(String(r.id))
+              ).length
+            : 0
+          if (n !== undefined && n === 0 && onScreen === 0)
             errs[f.field] = `At least one ${f.label || titleCase(f.field)} item is required`
         } else if (
           relations.some((r) => r.one_collection === collection && r.one_field === f.field)
@@ -8503,18 +8782,21 @@ function ItemEditFormView({
         const msg = errMsg(err)
         // What happened, what to do and which fields (lib/error-message.ts).
         const described = describeError(err)
-        updateStep('main', {
-          status: 'error',
-          error: msg,
-          hint: described.hint,
-          details: described,
-          denied: isAccessRefusal(err)
-        })
         // The refused field gets its error and the form moves to it — for a
         // child line ("workflow_lines[0]: Quantity can not be negative") that
         // is the lines grid, on whichever step holds it.
         const formFields = new Set(allFields.map((f) => f.field))
         const bad = refusedFieldOf(err, formFields)
+        updateStep('main', {
+          status: 'error',
+          // a01-8: a refused line reads "Line 1: …" with the grid's name, never
+          // the internal path "workflow_lines[0]: …".
+          error:
+            bad && /[A-Za-z0-9_]+\[[^\]]*\]:/.test(msg) ? refusalStepText(bad, allFields) : msg,
+          hint: described.hint,
+          details: described,
+          denied: isAccessRefusal(err)
+        })
         if (bad) {
           formUsage.markRefused({ [bad.field]: bad.message })
           setValidationErrors({ [bad.field]: bad.message })
@@ -8635,6 +8917,29 @@ function ItemEditFormView({
       // lines; keeping everything would duplicate the saved ones).
       remainingO2MRowsRef.current = new Map()
       const remainingO2MRows = remainingO2MRowsRef.current
+      // M1: every staged line whose base is still unknown (its staging-time
+      // read failed, a restored draft, an outbox replay) gets one — ONE
+      // batched read per child collection, before any line is written.
+      o2mBaseNoneRef.current.clear()
+      for (const key of editO2MKeys) {
+        const rc = key.slice(0, key.indexOf('.'))
+        const unknown: string[] = []
+        for (const rowId of (pendingO2MEdits.get(key) ?? new Map()).keys()) {
+          if (rowId === 'new' || rowId.startsWith('pending:')) continue
+          const b = await o2mBaseRevRef.current.get(`${rc}:${rowId}`)
+          if (!(typeof b === 'number' && b > 0)) unknown.push(rowId)
+        }
+        if (unknown.length === 0) continue
+        const latest = await fetchLatestRevisions(client, rc, unknown).catch(
+          () => new Map<string, number | null>()
+        )
+        for (const rowId of unknown) {
+          if (!latest.has(rowId)) continue
+          o2mBaseRevRef.current.set(`${rc}:${rowId}`, Promise.resolve(latest.get(rowId) ?? null))
+          // Read just now: null means the line has no revision — no re-read.
+          if (latest.get(rowId) == null) o2mBaseNoneRef.current.add(`${rc}:${rowId}`)
+        }
+      }
       // ── Early edits ───────────────────────────────────────────────────────
       // A staged edit flagged `__flush_early` is the GIVING half of a move
       // between two rows (an amount carried from one row into another, or into
@@ -8654,11 +8959,17 @@ function ItemEditFormView({
           if (Object.keys(body).length === 0) continue
           if (changeReasonRef.current && !body._change_reason)
             body._change_reason = changeReasonRef.current
+          const base = await lineBaseFor(rc, rowId)
           const ok = await client
-            .request(patch(`/items/${rc}/${rowId}`, body))
+            .request(patch(`/items/${rc}/${rowId}`, withRowBaseRevision(body, base)))
             .then(() => true)
             .catch(() => false)
-          if (ok) earlyDone.add(`${key}:${rowId}`)
+          if (ok) {
+            earlyDone.add(`${key}:${rowId}`)
+            o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
+            // Our own save is newer than the read-time base: the next read brings it.
+            rowBaseBookFor(client, rc).forget(rowId)
+          }
         }
       }
 
@@ -8811,9 +9122,13 @@ function ItemEditFormView({
 
       // ── O2M edits ─────────────────────────────────────────────────────────
       const nextEdits = new Map(pendingO2MEdits)
+      // Lines someone else saved since this person's staged edit was based
+      // (409 MIDAIR_COLLISION) — they stay staged and the chooser opens.
+      const lineCollisions: LineCollision[] = []
       for (const key of editO2MKeys) {
         const stepId = `o2m:edit:${key}`
-        const [rc] = key.split('.')
+        const [rc, mf] = key.split('.')
+        const savedLines = cachedGridRows(rc, mf)
         const edits = pendingO2MEdits.get(key) ?? new Map()
         updateStep(stepId, { status: 'running', progress: { done: 0, total: edits.size } })
         let hasErr = false
@@ -8840,17 +9155,41 @@ function ItemEditFormView({
               // beats the one collected for the save as a whole.
               if (changeReasonRef.current && !cleanChanges._change_reason)
                 cleanChanges._change_reason = changeReasonRef.current
-              await client.request(patch(`/items/${rc}/${rowId}`, cleanChanges)).catch((err) => {
-                hasErr = true
-                rowPatchFailed = true
-                const challenge = changeReasonChallenge(err)
-                if (challenge) {
-                  flushChallenge = challenge
-                  updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
-                } else {
-                  updateStep(stepId, { status: 'error', error: errMsg(err) })
-                }
-              })
+              const base = await lineBaseFor(rc, rowId)
+              await client
+                .request(patch(`/items/${rc}/${rowId}`, withRowBaseRevision(cleanChanges, base)))
+                .then(() => {
+                  o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
+                  rowBaseBookFor(client, rc).forget(rowId)
+                })
+                .catch((err) => {
+                  hasErr = true
+                  rowPatchFailed = true
+                  const challenge = changeReasonChallenge(err)
+                  const coll = challenge ? null : midairCollisionOf(err)
+                  if (challenge) {
+                    flushChallenge = challenge
+                    updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
+                  } else if (coll) {
+                    const label = lineLabelOf(savedLines, rowId)
+                    const mine: Record<string, unknown> = {}
+                    for (const c of coll.conflicts) mine[c.field] = cleanChanges[c.field]
+                    lineCollisions.push({
+                      key,
+                      rowId,
+                      label,
+                      conflicts: coll.conflicts,
+                      latest: coll.latest,
+                      mine
+                    })
+                    updateStep(stepId, {
+                      status: 'error',
+                      error: `${label} was changed by someone else — pick which value wins`
+                    })
+                  } else {
+                    updateStep(stepId, { status: 'error', error: errMsg(err) })
+                  }
+                })
             }
             if (rowPatchFailed) {
               // Gate: the row's own edit didn't land — retain the queued edit UNCHANGED (nested
@@ -8943,6 +9282,10 @@ function ItemEditFormView({
       }
       setPendingO2MEdits(nextEdits)
       if (flushChallenge) setCrChallenge(flushChallenge)
+      if (lineCollisions.length > 0) {
+        saveNoticeRef.current.lineConflicts = lineCollisions.length
+        setLineCollision(lineCollisions)
+      }
 
       // ── O2M deletes ───────────────────────────────────────────────────────
       const nextDels = new Map(pendingO2MDeletes)
@@ -9182,6 +9525,12 @@ function ItemEditFormView({
               : `Saved, but this ${noun.toLowerCase()} is now outside what you can see${why}.`,
             { duration: 15_000 }
           )
+        } else if (notice.lineConflicts) {
+          // The chooser is open: the rest saved, these lines wait on a pick.
+          toast.warning(
+            `Saved, except ${notice.lineConflicts} ${notice.lineConflicts === 1 ? 'line' : 'lines'} someone else changed — pick which value wins`,
+            { duration: 10_000 }
+          )
         } else toast.success(isNew ? 'Record created' : 'Changes saved')
         if (notice.linkProblems.length > 0) {
           toast.error(
@@ -9240,6 +9589,47 @@ function ItemEditFormView({
     setTourOpen(false)
     tourSeen.markSeen()
   }, [tourSeen.markSeen])
+  // Lines the person settled in the line chooser (a10-3): what they kept as
+  // "Mine" saves against the newer revision; "Theirs" fields leave the staged
+  // edit. The save runs after the commit so it reads the settled staging.
+  const [lineResaveTick, setLineResaveTick] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fires once per settled chooser
+  useEffect(() => {
+    if (lineResaveTick > 0 && !saveMut.isPending) saveMut.mutate()
+  }, [lineResaveTick])
+  const resolveLineChooser = (theirsKeys: Set<string>) => {
+    const list = lineCollision ?? []
+    setLineCollision(null)
+    const next = new Map(pendingO2MEdits)
+    let keep = 0
+    for (const lc of list) {
+      const rc = lc.key.slice(0, lc.key.indexOf('.'))
+      const mf = lc.key.slice(lc.key.indexOf('.') + 1)
+      const rowsMap = new Map(next.get(lc.key) ?? [])
+      const cur = rowsMap.get(lc.rowId)
+      qc.invalidateQueries({ queryKey: ['o2m-rows', rc, mf, String(itemId)] })
+      if (!cur) continue
+      const theirs = new Set(
+        lc.conflicts.filter((c) => theirsKeys.has(lineConflictKey(lc, c.field))).map((c) => c.field)
+      )
+      const resolved = resolveLineCollision(cur, theirs)
+      if (resolved) {
+        rowsMap.set(lc.rowId, resolved)
+        // Mine is now a choice made against the newer save.
+        o2mBaseRevRef.current.set(`${rc}:${lc.rowId}`, Promise.resolve(lc.latest || null))
+        keep++
+      } else {
+        rowsMap.delete(lc.rowId)
+        o2mBaseRevRef.current.delete(`${rc}:${lc.rowId}`)
+      }
+      if (rowsMap.size > 0) next.set(lc.key, rowsMap)
+      else next.delete(lc.key)
+    }
+    setPendingO2MEdits(next)
+    if (keep > 0) setLineResaveTick((t) => t + 1)
+    else toast.success('Kept the newer values')
+  }
+
   const recordSurface = useRecordSurface()
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
   useLeaveLinkGuard(
@@ -9560,6 +9950,13 @@ function ItemEditFormView({
     }
   }
   const exactLockReasons = refineLockReasons(lockReasons, lockWhy.data)
+  // a07-4: every field the form shows is locked (step locks, role locks, the
+  // approval lock) — an orange Save there offers a save that cannot happen.
+  const everyFieldLocked = everyShownFieldLocked(
+    isNew,
+    allFields,
+    (f) => !!lockReasons[f] || lockedFields.has(f)
+  )
 
   // Apply-to-lines (#5): a header/field assignment carrying
   // overrides.apply_to_lines {grid, target, label?} gets a button that copies
@@ -11845,18 +12242,30 @@ function ItemEditFormView({
                                               className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
                                                 completeness.requiredMissing.length > 0
                                                   ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
-                                                  : completeness.pct >= 100
-                                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
-                                                    : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                                  : completeness.issues > 0
+                                                    ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                                    : completeness.pct >= 100
+                                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                                      : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
                                               }`}
+                                              data-completeness-issues={
+                                                completeness.issues || undefined
+                                              }
                                               data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
                                                 completeness.requiredMissing.length > 0
                                                   ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
+                                                  : ''
+                                              }${
+                                                completeness.issues > 0
+                                                  ? ` · ${completeness.issues} data integrity issue${completeness.issues === 1 ? '' : 's'} to fix`
                                                   : ''
                                               }`}
                                             >
                                               <span key={completeness.pct} className='nvr-fade-in'>
                                                 {completeness.pct}% complete
+                                                {completeness.issues > 0
+                                                  ? ` · ${completeness.issues} issue${completeness.issues === 1 ? '' : 's'}`
+                                                  : ''}
                                               </span>
                                             </span>
                                           )}
@@ -13019,7 +13428,15 @@ function ItemEditFormView({
                                             size='sm'
                                             onClick={() => handleSave()}
                                             disabled={
-                                              saveMut.isPending || isReadOnly || viewAs.active
+                                              saveMut.isPending ||
+                                              isReadOnly ||
+                                              viewAs.active ||
+                                              everyFieldLocked
+                                            }
+                                            data-tip={
+                                              everyFieldLocked && !isReadOnly
+                                                ? 'Every field here is locked — nothing to save'
+                                                : undefined
                                             }
                                             className={cn(
                                               'gap-1.5 transition-colors duration-300',
@@ -13184,6 +13601,13 @@ function ItemEditFormView({
                                       setCollision(null)
                                       setTimeout(() => saveMut.mutate(), 0)
                                     }}
+                                  />
+                                )}
+                                {lineCollision && (
+                                  <LineCollisionDialog
+                                    lines={lineCollision}
+                                    onCancel={() => setLineCollision(null)}
+                                    onResolve={resolveLineChooser}
                                   />
                                 )}
                                 <ChangeReasonDialog
@@ -14381,152 +14805,5 @@ function ItemEditFormView({
         </AddendumO2MContext.Provider>
       </RelationPathDataContext.Provider>
     </ReimportHandlerContext.Provider>
-  )
-}
-
-/**
- * Mid-air collision merge dialog: someone else saved the same fields since
- * this draft loaded. Per field, keep THEIRS (adopt the newer value) or MINE
- * (overwrite it) — the retry writes only what was explicitly kept, against
- * the newer revision baseline. Defaults to theirs: overwriting a colleague's
- * work should be the deliberate choice, not the path of least resistance.
- */
-function MidairCollisionDialog({
-  collision,
-  fieldLabel,
-  onCancel,
-  onResolve
-}: {
-  collision: {
-    conflicts: Array<{ field: string; current_value: unknown }>
-    mine: Record<string, unknown>
-  }
-  fieldLabel: (field: string) => string
-  onCancel: () => void
-  onResolve: (takeTheirs: Set<string>) => void
-}) {
-  const [takeTheirs, setTakeTheirs] = useState<Set<string>>(
-    () => new Set(collision.conflicts.map((c) => c.field))
-  )
-  // Portal into the hosting dialog (a record drill sheet) when there is one —
-  // a modal sheet's lock makes everything outside it unclickable.
-  const [host, setHost] = useState<HTMLElement | null>(null)
-  // Rich text reads as text here, never as raw <p> markup.
-  const fmt = (v: unknown) => {
-    if (v == null || v === '') return '—'
-    if (typeof v === 'object') return JSON.stringify(v).slice(0, 120)
-    const str = String(v)
-    const text = /<[a-z][^>]*>/i.test(str) ? htmlToText(str) : str
-    return text.trim() ? text.slice(0, 200) : '—'
-  }
-  const anchor = (
-    <span
-      hidden
-      ref={(el) => {
-        if (el && !host)
-          setHost((el.closest('[role="dialog"]') as HTMLElement | null) ?? document.body)
-      }}
-    />
-  )
-  if (!host) return anchor
-  return createPortal(
-    <div
-      role='dialog'
-      aria-modal='true'
-      aria-labelledby='nvr-midair-title'
-      className='pointer-events-auto fixed inset-0 z-[130] flex items-center justify-center'
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onCancel()
-        }
-      }}
-    >
-      <div className='absolute inset-0 bg-black/40' onClick={onCancel} />
-      <div className='relative w-[560px] max-w-[94vw] rounded-lg border border-slate-200 bg-white p-5 shadow-xl dark:border-border dark:bg-card'>
-        <p
-          id='nvr-midair-title'
-          className='text-[14px] font-semibold text-slate-900 dark:text-foreground'
-        >
-          Someone else changed this record
-        </p>
-        <p className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-          These fields were saved by someone else while you were editing. Pick which value wins for
-          each — everything else you changed saves normally.
-        </p>
-        <div className='mt-3 max-h-[320px] space-y-2 overflow-y-auto'>
-          {collision.conflicts.map((c) => {
-            const theirs = takeTheirs.has(c.field)
-            return (
-              <div
-                key={c.field}
-                className='rounded-md border border-slate-200 p-2.5 dark:border-border'
-              >
-                <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-                  {fieldLabel(c.field)}
-                </p>
-                <div className='mt-1.5 grid grid-cols-2 gap-2'>
-                  <button
-                    type='button'
-                    onClick={() => setTakeTheirs((prev) => new Set([...prev, c.field]))}
-                    className={
-                      theirs
-                        ? 'rounded-md border-2 border-nvr-cyan/60 bg-nvr-cyan/5 px-2.5 py-1.5 text-left'
-                        : 'rounded-md border border-slate-200 px-2.5 py-1.5 text-left hover:border-slate-300 dark:border-border'
-                    }
-                  >
-                    <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                      Theirs (current)
-                    </p>
-                    <p className='mt-0.5 break-words text-[12px] text-slate-700 dark:text-foreground'>
-                      {fmt(c.current_value)}
-                    </p>
-                  </button>
-                  <button
-                    type='button'
-                    onClick={() =>
-                      setTakeTheirs((prev) => {
-                        const next = new Set(prev)
-                        next.delete(c.field)
-                        return next
-                      })
-                    }
-                    className={
-                      !theirs
-                        ? 'rounded-md border-2 border-amber-400/70 bg-amber-50 px-2.5 py-1.5 text-left dark:bg-amber-400/10'
-                        : 'rounded-md border border-slate-200 px-2.5 py-1.5 text-left hover:border-slate-300 dark:border-border'
-                    }
-                  >
-                    <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                      Mine (overwrite)
-                    </p>
-                    <p className='mt-0.5 break-words text-[12px] text-slate-700 dark:text-foreground'>
-                      {fmt(collision.mine[c.field])}
-                    </p>
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-        <div className='mt-4 flex items-center justify-end gap-2'>
-          <button
-            type='button'
-            onClick={onCancel}
-            className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] text-slate-600 dark:border-border dark:text-muted-foreground'
-          >
-            Cancel save
-          </button>
-          <button
-            type='button'
-            onClick={() => onResolve(takeTheirs)}
-            className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white'
-          >
-            Apply &amp; save
-          </button>
-        </div>
-      </div>
-    </div>,
-    host
   )
 }

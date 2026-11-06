@@ -210,7 +210,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const config = await getHierarchyConfig(Number(req.params.id))
       if (!config) return reply.code(404).send({ error: 'Not found' })
-      if (!(await checkLevelReadAccess(req, config, reply))) return
+      if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
       const tree = await getHierarchyTree(config)
       return reply.send({ data: tree })
@@ -223,7 +223,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const config = await getHierarchyConfig(Number(req.params.id))
       if (!config) return reply.code(404).send({ error: 'Not found' })
-      if (!(await checkLevelReadAccess(req, config, reply))) return
+      if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
       const nodes = await getHierarchyNodes(config)
       return reply.send({ data: nodes })
@@ -236,7 +236,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const config = await getHierarchyConfig(Number(req.params.id))
       if (!config) return reply.code(404).send({ error: 'Not found' })
-      if (!(await checkLevelReadAccess(req, config, reply))) return
+      if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
       const children = await getNodeChildren(config, req.params.collection, req.params.nodeId)
       return reply.send({ data: children })
@@ -249,7 +249,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const config = await getHierarchyConfig(Number(req.params.id))
       if (!config) return reply.code(404).send({ error: 'Not found' })
-      if (!(await checkLevelReadAccess(req, config, reply))) return
+      if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
       const ancestors = await getNodeAncestors(config, req.params.collection, req.params.nodeId)
       return reply.send({ data: ancestors })

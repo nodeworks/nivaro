@@ -67,7 +67,16 @@ export function autoIdVariantFields(config: AutoIdConfig): string[] {
 export type AutoIdToken =
   | { raw: string; kind: 'date'; name: 'YY' | 'YYYY' | 'MM' }
   | { raw: string; kind: 'seq'; name: 'seq' | 'seq4' | 'seq6' }
-  | { raw: string; kind: 'relation'; path: string[]; firstIsMany: boolean; mod: number | null }
+  | {
+      raw: string
+      kind: 'relation'
+      path: string[]
+      firstIsMany: boolean
+      mod: number | null
+      /** `{path|N}`: at most N characters, then "…" (army4 a01-9 — a 627-character
+       *  description was copied whole into the record name). */
+      maxLen?: number | null
+    }
 
 export interface ParsedAutoIdPattern {
   tokens: AutoIdToken[]
@@ -95,8 +104,17 @@ export function parseAutoIdPattern(pattern: string): ParsedAutoIdPattern {
       tokens.push({ raw: m[0], kind: 'seq', name: inner as 'seq' | 'seq4' | 'seq6' })
       continue
     }
-    // Relation token: `path` or `path % N`
-    const [pathPart, modPart] = inner.split('%').map((s) => s.trim())
+    // Relation token: `path`, `path % N`, and either with `|N` (at most N
+    // characters, then "…") at the end.
+    const [tokenPart, lenPart] = inner.split('|').map((s) => s.trim())
+    let maxLen: number | null = null
+    if (lenPart !== undefined) {
+      maxLen = Number(lenPart)
+      if (!Number.isInteger(maxLen) || maxLen <= 0) {
+        throw new Error(`Invalid length in token ${m[0]}`)
+      }
+    }
+    const [pathPart, modPart] = tokenPart.split('%').map((s) => s.trim())
     let mod: number | null = null
     if (modPart !== undefined) {
       mod = Number(modPart)
@@ -109,7 +127,14 @@ export function parseAutoIdPattern(pattern: string): ParsedAutoIdPattern {
     const firstIsMany = segs[0].endsWith('[0]')
     const path = segs.map((s, i) => (i === 0 && firstIsMany ? s.slice(0, -3) : s))
     if (path.some((s) => !/^[A-Za-z0-9_]+$/.test(s))) throw new Error(`Malformed token ${m[0]}`)
-    tokens.push({ raw: m[0], kind: 'relation', path, firstIsMany, mod })
+    tokens.push({
+      raw: m[0],
+      kind: 'relation',
+      path,
+      firstIsMany,
+      mod,
+      ...(maxLen != null ? { maxLen } : {})
+    })
   }
   literals.push(pattern.slice(last))
 
@@ -127,6 +152,13 @@ export function parseAutoIdPattern(pattern: string): ParsedAutoIdPattern {
     throw new Error('A non-digit literal (e.g. "-") must immediately precede {seq}')
   }
   return { tokens, literals, separator: sep }
+}
+
+/** A token value cut to `maxLen` characters (whitespace at the cut dropped)
+ *  plus "…"; untouched when it fits or there is no limit. */
+export function clipTokenValue(value: string, maxLen: number | null | undefined): string {
+  if (!maxLen || value.length <= maxLen) return value
+  return `${value.slice(0, maxLen).trimEnd()}…`
 }
 
 export function validateAutoIdPattern(pattern: string): string | null {
@@ -280,7 +312,7 @@ async function resolveRelationToken(
       if (!Number.isFinite(n)) return ''
       value = n % token.mod
     }
-    return String(value)
+    return clipTokenValue(String(value), token.maxLen)
   } catch {
     return ''
   }

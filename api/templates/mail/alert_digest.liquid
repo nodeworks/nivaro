@@ -16,7 +16,10 @@
   </tr>
   {% endfor %}
 </table>
+{% render 'partials/button', url: manage_url, label: 'Open alerts' %}
+{%- unless manage_url -%}
 <p style="margin:18px 0 0;color:#64748b;font-size:13px;">
   Manage your alert subscriptions from the Alert Manager.
 </p>
+{%- endunless -%}
 {% endblock %}

@@ -19,6 +19,14 @@ import {
   type CopyInclude,
   runBulkUserAction
 } from '../services/people-access.js'
+import {
+  accessRequestOutcome,
+  existingIds,
+  notifyAdminsOfAccessRequest,
+  parseAccessRequestBody,
+  sameRequest,
+  storedRequest
+} from '../services/portal-access-request.js'
 import { writeRevision } from '../services/revisions.js'
 import { ownTeamsFacts } from '../services/teams-bot/profile.js'
 import { avatarEtag, readUserCards, USER_CARD_BATCH_MAX } from '../services/user-cards.js'
@@ -714,20 +722,19 @@ export async function usersRoutes(app: FastifyInstance) {
   // account still on the new-user role (or with no role at all) is moved —
   // a resubmit, or a real user, never changes role here; admins never move.
   app.post('/me/access-request', { preHandler: authenticate }, async (req, reply) => {
-    const body = (req.body ?? {}) as Record<string, unknown>
-    const reason = String(body.reason ?? '').trim()
-    if (!reason) return reply.code(400).send({ error: 'reason is required' })
-    const divisions = Array.isArray(body.divisions)
-      ? (body.divisions as unknown[]).filter((v) => typeof v === 'string' || typeof v === 'number')
-      : []
-    const vendor =
-      typeof body.vendor === 'string' || typeof body.vendor === 'number' ? body.vendor : null
-    const access_request = {
-      divisions: divisions.slice(0, 50),
-      vendor,
-      vendor_name: body.vendor_name == null ? null : String(body.vendor_name).slice(0, 500),
-      reason: reason.slice(0, 2000),
-      submitted_at: new Date().toISOString()
+    const parsed = parseAccessRequestBody(req.body)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error, code: parsed.code })
+    // Only ids that exist are stored: an approval writes them straight into
+    // the person's scope values.
+    const asked = parsed.value
+    const divisions = await existingIds('divisions', asked.divisions)
+    const vendorOk =
+      asked.vendor != null && (await existingIds('vendors', [asked.vendor])).length > 0
+    const next = {
+      ...asked,
+      divisions,
+      vendor: vendorOk ? asked.vendor : null,
+      vendor_name: vendorOk ? asked.vendor_name : null
     }
 
     const me = req.user!.id
@@ -736,9 +743,15 @@ export async function usersRoutes(app: FastifyInstance) {
       typeof row?.preferences === 'string'
         ? (JSON.parse(row.preferences) as Record<string, unknown>)
         : ((row?.preferences as Record<string, unknown>) ?? {})
-    const patch: Record<string, unknown> = {
-      preferences: JSON.stringify({ ...prefs, access_request })
+    const prev = storedRequest(prefs)
+    const changed = !sameRequest(prev, next)
+    const access_request = {
+      ...next,
+      // An unchanged resend keeps its place in the queue.
+      submitted_at: !changed && prev?.submitted_at ? prev.submitted_at : new Date().toISOString()
     }
+    const patch: Record<string, unknown> = {}
+    if (changed) patch.preferences = JSON.stringify({ ...prefs, access_request })
 
     const settings = (await db('nivaro_settings')
       .first('new_user_role', 'access_request_role')
@@ -765,16 +778,33 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
 
+    const outcome = accessRequestOutcome(prev, changed, roleChanged)
+    // Nothing new: no write, no activity row, nobody told again.
+    if (!outcome.write)
+      return reply.send({ data: { access_request, role_changed: false, unchanged: true } })
+
     await db('nivaro_users').where({ id: me }).update(patch)
     await logActivity({
       action: 'access-request',
       user: me,
       collection: 'nivaro_users',
       item: me,
-      comment: roleChanged ? 'submitted; moved to the review role' : 'submitted',
+      comment: outcome.comment,
       req
     })
-    return reply.send({ data: { access_request, role_changed: roleChanged } })
+    let notified = 0
+    if (outcome.notify) {
+      const name =
+        [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') ||
+        req.user?.email ||
+        'Someone'
+      notified = await notifyAdminsOfAccessRequest(
+        app,
+        { id: String(me), name },
+        access_request
+      ).catch(() => 0)
+    }
+    return reply.send({ data: { access_request, role_changed: roleChanged, notified } })
   })
 
   app.patch('/me/preferences', { preHandler: authenticate }, async (req, reply) => {

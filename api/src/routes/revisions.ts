@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFields } from '../services/collections.js'
-import { chunkArray } from '../services/db-batch.js'
+import { chunkArray, selectInChunks, whereInList } from '../services/db-batch.js'
 import { assertNotEditLocked } from '../services/edit-lock.js'
 import {
   apiKeyNames,
@@ -16,6 +16,7 @@ import { isMachineAccount } from '../services/machine-accounts.js'
 import { checkLastValueAccess, myLastValue } from '../services/my-last-value.js'
 import { originOfRow } from '../services/note-authorship.js'
 import { can, getAllowedFields } from '../services/permissions.js'
+import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import {
   o2mParentCollection,
   o2mParentVisibleTo,
@@ -104,8 +105,72 @@ export async function snapshotChanges(
   return { values, skipped }
 }
 
+/** How many record ids one `GET /revisions/latest` may ask about. */
+export const LATEST_REVISIONS_MAX = 500
+
+/** Collections whose history a batch read never serves: system tables, chat
+ *  (per-room visibility — /api/chat is its only gate) and files. */
+const LATEST_REFUSED = /^(nivaro_|directus_|chat_)/i
+
 export async function revisionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+
+  // GET /revisions/latest?collection=X&items=1,2,3 — per record, the newest
+  // revision id: the mid-air baseline (`_base_revision`) a grid takes for
+  // every line in ONE read when it loads its rows (army4 M1), instead of one
+  // `latest_only` read per line at first edit. Only records the caller can
+  // read are answered (role policy, row filter, User Scopes — judged as the
+  // caller); an unreadable id is simply left out, never confirmed. A readable
+  // record with no revision answers null.
+  app.get('/latest', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Sign in required' })
+    const q = req.query as { collection?: string; items?: string }
+    const collection = String(q.collection ?? '')
+    if (!collection || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection))
+      return reply.code(400).send({ error: 'collection is required' })
+    if (LATEST_REFUSED.test(collection) || collection.toLowerCase() === 'files')
+      return reply.code(403).send({ error: 'Not available for this collection' })
+    const asked = [
+      ...new Set(
+        String(q.items ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s !== '' && s.length <= 64)
+      )
+    ]
+    if (asked.length === 0) return reply.code(400).send({ error: 'items is required' })
+    if (asked.length > LATEST_REVISIONS_MAX)
+      return reply
+        .code(400)
+        .send({
+          error: `At most ${LATEST_REVISIONS_MAX} items per request`,
+          code: 'TOO_MANY_ITEMS'
+        })
+    if (!(await can(req.user, 'read', collection)))
+      return reply.code(404).send({ error: 'Not found' })
+    const gates = await compileAccessGates(req.user, collection, { actingAdmin: !!req.isAdmin })
+    const seen = await visibleIds(gates, asked)
+    const ids = asked.filter((i) => seen.has(i))
+    const data: Record<string, number | null> = {}
+    for (const id of ids) data[id] = null
+    if (ids.length > 0) {
+      const rows = await selectInChunks(
+        ids,
+        1000,
+        (chunk) =>
+          whereInList(db('nivaro_revisions').where({ collection }), 'item', chunk)
+            .groupBy('item')
+            .select('item', db.raw('MAX(id) as latest')) as unknown as Promise<
+            Array<{ item: unknown; latest: unknown }>
+          >
+      )
+      for (const r of rows) {
+        const n = Number(r.latest)
+        if (Number.isFinite(n) && n > 0) data[String(r.item)] = n
+      }
+    }
+    return reply.send({ data })
+  })
 
   app.get('/', async (req, reply) => {
     const q = req.query as { collection?: string; item?: string; latest_only?: string }

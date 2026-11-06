@@ -654,7 +654,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid verification code' })
     }
     // Per account (whichever session the attempts come from) and per address (H9).
-    if (await refuseIfThrottled(req, reply, 'totp', String(pendingUserId))) return
+    if (await refuseIfThrottled(req, reply, 'totp', String(pendingUserId))) return reply
 
     const user = (await db<User>('nivaro_users')
       .where({ id: pendingUserId, status: 'active' })
@@ -797,7 +797,7 @@ export async function authRoutes(app: FastifyInstance) {
     ) {
       return reply.code(400).send({ error: 'token and password (min 8 chars) required' })
     }
-    if (await refuseIfThrottled(req, reply, 'setup', token)) return
+    if (await refuseIfThrottled(req, reply, 'setup', token)) return reply
 
     const user = (await db('nivaro_users')
       .where({ static_token: token, status: 'active' })
@@ -829,7 +829,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (typeof email !== 'string' || !email || typeof password !== 'string' || !password)
       return reply.code(400).send({ error: 'email and password required' })
     const account = email.toLowerCase().trim()
-    if (await refuseIfThrottled(req, reply, 'password', account)) return
+    if (await refuseIfThrottled(req, reply, 'password', account)) return reply
 
     const user = (await db('nivaro_users').where({ email: account, status: 'active' }).first()) as
       | (UserWithTotp & { password_hash?: string | null })
@@ -868,7 +868,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'token required' })
     }
     // Per address only: a guessed token names no account to count against.
-    if (await refuseIfThrottled(req, reply, 'token', null)) return
+    if (await refuseIfThrottled(req, reply, 'token', null)) return reply
     const user = (await db<User>('nivaro_users')
       .where({ static_token: token.trim(), status: 'active' })
       .first()) as User | undefined

@@ -627,6 +627,19 @@ export async function buildServer() {
       req,
       reply
     ) => {
+      // The answer is already on the wire: this error is a SECOND reply on an
+      // answered request (an async handler that sent and then returned
+      // undefined, so Fastify sent again while the first answer's async onSend
+      // hooks were still running → ERR_HTTP_HEADERS_SENT). Never rewrite the
+      // status — that logged a sent 404 as a 500 (army4 L-1) — and never
+      // answer twice. Routes return `reply` after a send.
+      if (reply.raw.headersSent || reply.raw.writableEnded) {
+        req.log.warn(
+          { code: err.code, url: maskUrlQuery(req.url), status: reply.statusCode },
+          'error after the response was sent (a handler sent without returning reply)'
+        )
+        return
+      }
       // A write the database refused over the caller's data (a link to a
       // record that does not exist, a duplicate) is a 4xx with a reason —
       // not a 500, not an issue, and never the database's own names.

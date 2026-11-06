@@ -419,8 +419,10 @@ export function applyMailTestMode(
  * distribution lists) are not users at all. A lookup failure delivers rather
  * than silently swallowing the mail.
  */
-async function dropInactiveRecipients(to: string[]): Promise<string[]> {
-  if (to.length === 0) return to
+export async function dropInactiveRecipients(
+  to: string[]
+): Promise<{ kept: string[]; skipped: Array<{ address: string; reason: string }> }> {
+  if (to.length === 0) return { kept: to, skipped: [] }
   try {
     const rows = (await db('nivaro_users')
       .whereIn(
@@ -432,22 +434,52 @@ async function dropInactiveRecipients(to: string[]): Promise<string[]> {
       status?: string | null
       is_redacted?: boolean | number
     }>
-    const blocked = new Set(
-      rows
-        .filter(
-          (r) =>
-            String(r.status ?? '').toLowerCase() === 'suspended' ||
-            r.is_redacted === true ||
-            r.is_redacted === 1
+    const blocked = new Map<string, string>()
+    for (const r of rows) {
+      const redacted = r.is_redacted === true || r.is_redacted === 1
+      const suspended = String(r.status ?? '').toLowerCase() === 'suspended'
+      if (redacted || suspended)
+        blocked.set(
+          String(r.email ?? '').toLowerCase(),
+          redacted ? 'account redacted' : 'account suspended'
         )
-        .map((r) => String(r.email ?? '').toLowerCase())
-    )
-    if (blocked.size === 0) return to
-    return to.filter((a) => !blocked.has(a.toLowerCase()))
+    }
+    if (blocked.size === 0) return { kept: to, skipped: [] }
+    return {
+      kept: to.filter((a) => !blocked.has(a.toLowerCase())),
+      skipped: to
+        .filter((a) => blocked.has(a.toLowerCase()))
+        .map((a) => ({ address: a, reason: blocked.get(a.toLowerCase())! }))
+    }
   } catch {
-    return to
+    return { kept: to, skipped: [] }
   }
 }
+
+/**
+ * One mail-log row per recipient a send left out on purpose — suspended /
+ * redacted accounts, and people whose rules say "No email" for this category —
+ * so "why didn't X get it?" has an answer on the record's Mail tab (army 4,
+ * 2026-11-05: three suspended owners and the opt-outs left no row at all).
+ * Logged as 'dropped' with a `skipped: <reason>` error (the suppression rows'
+ * convention), never as a separate status: the delivery board and mail-log
+ * filter know the four statuses only.
+ */
+async function logSkipped(
+  skipped: Array<{ address: string; reason: string }>,
+  subject: string,
+  ctx: {
+    template?: string | null
+    collection?: string | null
+    item?: string | number | null
+  }
+): Promise<void> {
+  for (const s of skipped) {
+    await logMail(s.address, subject, 'dropped', { ...ctx, error: `skipped: ${s.reason}` })
+  }
+}
+
+export const NO_EMAIL_REASON = 'their notification rules turn email off for this'
 
 async function applyDigestDeferral(
   recipients: string[],
@@ -455,7 +487,9 @@ async function applyDigestDeferral(
   htmlOrText: string,
   skip?: boolean,
   explicitCategory?: NotifyCategory,
-  senderCadence?: boolean
+  senderCadence?: boolean,
+  /** Filled with the addresses left out because their rules say "No email". */
+  offOut?: string[]
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -521,6 +555,7 @@ async function applyDigestDeferral(
       }
     }
     const kept = off.size > 0 ? recipients.filter((r) => !off.has(r.toLowerCase())) : recipients
+    if (offOut && off.size > 0) offOut.push(...recipients.filter((r) => off.has(r.toLowerCase())))
     if (daily.size === 0) return kept
     const snippet = String(htmlOrText)
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -817,33 +852,42 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))
     .map((s) => s.trim())
     .filter(Boolean)
-  const active = await dropInactiveRecipients(original)
+  const recordCtx = { template: opts.template, collection: opts.collection, item: opts.item }
+  const inactive = await dropInactiveRecipients(original)
+  await logSkipped(inactive.skipped, opts.subject, recordCtx)
+  const active = inactive.kept
   if (active.length === 0) return { status: 'dropped', log_id: null }
+  const off: string[] = []
   const afterDigest = await applyDigestDeferral(
     active,
     opts.subject,
     html,
     opts.skipDigest,
     opts.category,
-    opts.cadence === 'sender'
+    opts.cadence === 'sender',
+    off
   )
+  await logSkipped(
+    off.map((address) => ({ address, reason: NO_EMAIL_REASON })),
+    opts.subject,
+    recordCtx
+  )
+  const deferredTo = active.filter((a) => !afterDigest.includes(a) && !off.includes(a))
   let deferredLogId: number | null = null
-  if (afterDigest.length < active.length) {
-    deferredLogId = await logMail(
-      active.filter((a) => !afterDigest.includes(a)),
-      opts.subject,
-      'deferred',
-      {
-        template: opts.template
-      }
-    )
+  if (deferredTo.length > 0) {
+    // The deferred row keeps the record so its Mail tab shows who will hear
+    // in their daily summary.
+    deferredLogId = await logMail(deferredTo, opts.subject, 'deferred', recordCtx)
   }
-  if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
+  if (afterDigest.length === 0)
+    return deferredTo.length > 0
+      ? { status: 'deferred', log_id: deferredLogId }
+      : { status: 'dropped', log_id: null }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
   if (!routed || (routed.to.length === 0 && routed.caught.length === 0)) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
-    const id = await logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
+    const id = await logMail(afterDigest, opts.subject, 'dropped', recordCtx)
     return { status: 'dropped', log_id: id }
   }
   let caughtLogId: number | null = null
@@ -979,32 +1023,41 @@ export async function sendRawMail(opts: {
   const original = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(','))
     .map((s) => s.trim())
     .filter(Boolean)
-  const active2 = await dropInactiveRecipients(original)
+  const logTemplate = opts.template ?? null
+  const recordCtx = { template: logTemplate, collection: opts.collection, item: opts.item }
+  const inactive = await dropInactiveRecipients(original)
+  await logSkipped(inactive.skipped, opts.subject, recordCtx)
+  const active2 = inactive.kept
   if (active2.length === 0) return { status: 'dropped', log_id: null }
+  const off: string[] = []
   const afterDigest = await applyDigestDeferral(
     active2,
     opts.subject,
     opts.html,
     opts.skipDigest,
     opts.category,
-    opts.cadence === 'sender'
+    opts.cadence === 'sender',
+    off
   )
-  const logTemplate = opts.template ?? null
+  await logSkipped(
+    off.map((address) => ({ address, reason: NO_EMAIL_REASON })),
+    opts.subject,
+    recordCtx
+  )
+  const deferredTo = active2.filter((a) => !afterDigest.includes(a) && !off.includes(a))
   let deferredLogId: number | null = null
-  if (afterDigest.length < active2.length) {
-    deferredLogId = await logMail(
-      active2.filter((a) => !afterDigest.includes(a)),
-      opts.subject,
-      'deferred',
-      { template: logTemplate }
-    )
+  if (deferredTo.length > 0) {
+    deferredLogId = await logMail(deferredTo, opts.subject, 'deferred', recordCtx)
   }
-  if (afterDigest.length === 0) return { status: 'deferred', log_id: deferredLogId }
+  if (afterDigest.length === 0)
+    return deferredTo.length > 0
+      ? { status: 'deferred', log_id: deferredLogId }
+      : { status: 'dropped', log_id: null }
   const routed = applyMailTestMode(smtp, afterDigest, opts.subject)
   if (routed?.redirected.length) noteChannelRedirect('mail', routed.redirected.length)
   if (!routed || (routed.to.length === 0 && routed.caught.length === 0)) {
     console.warn('[mail] test mode: dropped email to', opts.to, '(no test recipient configured)')
-    const id = await logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
+    const id = await logMail(afterDigest, opts.subject, 'dropped', recordCtx)
     return { status: 'dropped', log_id: id }
   }
   const {

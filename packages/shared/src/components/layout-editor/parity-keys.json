@@ -204,7 +204,7 @@
     "tab_or_section": "Who gets this form",
     "scope": "form",
     "status": "add",
-    "layout_types": ["grouped"]
+    "layout_types": ["grouped", "summary"]
   },
   {
     "key": "layout.conditions.tablet_of",
@@ -213,7 +213,7 @@
     "tab_or_section": "Who gets this form",
     "scope": "form",
     "status": "add",
-    "layout_types": ["grouped"]
+    "layout_types": ["grouped", "summary"]
   },
   {
     "key": "layout.density",

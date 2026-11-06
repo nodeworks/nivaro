@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { accessPendingFor } from './access-pending.js'
 import {
   type BindSource,
   bindFromRequest,
@@ -109,6 +110,9 @@ export async function loadStreamIdentity(
       | undefined
     isAdmin = !!role?.admin_access
   }
+  // Army 4 B1: a person still waiting for access gets no stream (GraphQL over ws, SSE) — their
+  // ticket mint is refused by authenticate already; this covers a static token too.
+  if (!isAdmin && bind.kind !== 'apikey' && (await accessPendingFor(user, false))) return null
   return { user, isAdmin }
 }
 

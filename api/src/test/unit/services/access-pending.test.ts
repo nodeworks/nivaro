@@ -7,22 +7,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   settings: null as Record<string, unknown> | null,
+  role: null as Record<string, unknown> | null,
   fail: false,
   reads: 0
 }))
 vi.mock('../../../db/index.js', () => ({
-  db: () => ({
-    first: async () => {
-      h.reads++
-      if (h.fail) throw new Error('db down')
-      return h.settings
+  db: (table: string) => {
+    const c = {
+      where: () => c,
+      first: async () => {
+        if (table === 'nivaro_roles') return h.role
+        h.reads++
+        if (h.fail) throw new Error('db down')
+        return h.settings
+      }
     }
-  })
+    return c
+  }
 }))
 
-const { accessPendingFor, accessPendingOf, resetAccessPendingCache } = await import(
-  '../../../services/access-pending.js'
-)
+const { accessPendingFor, accessPendingOf, accessPendingSignIn, resetAccessPendingCache } =
+  await import('../../../services/access-pending.js')
 
 const START = 'AAAAAAAA-0000-4000-8000-00000000000a'
 const REVIEW = 'BBBBBBBB-0000-4000-8000-00000000000b'
@@ -32,6 +37,7 @@ const asked = { access_request: { reason: 'Need it', submitted_at: '2026-11-01T0
 
 beforeEach(() => {
   h.settings = both
+  h.role = { admin_access: false }
   h.fail = false
   h.reads = 0
   resetAccessPendingCache()
@@ -99,5 +105,25 @@ describe('accessPendingFor', () => {
   it('a settings read that fails answers null (never blocks /auth/me)', async () => {
     h.fail = true
     expect(await accessPendingFor({ role: START }, false)).toBeNull()
+  })
+})
+
+// Army 4 B1: sockets and streams judge a sign-in outside a request.
+describe('accessPendingSignIn', () => {
+  it('pending person on a session / View-as / token sign-in', async () => {
+    expect(await accessPendingSignIn({ role: START }, 'session')).toBe(true)
+    expect(await accessPendingSignIn({ role: REVIEW }, 'masq')).toBe(true)
+    expect(await accessPendingSignIn({ role: START }, 'token')).toBe(true)
+  })
+
+  it('never for an API key, a real role, an admin role, or no flow', async () => {
+    expect(await accessPendingSignIn({ role: START }, 'apikey')).toBe(false)
+    expect(await accessPendingSignIn({ role: REAL }, 'session')).toBe(false)
+    h.role = { admin_access: true }
+    expect(await accessPendingSignIn({ role: START }, 'session')).toBe(false)
+    h.role = { admin_access: false }
+    h.settings = null
+    resetAccessPendingCache()
+    expect(await accessPendingSignIn({ role: START }, 'session')).toBe(false)
   })
 })

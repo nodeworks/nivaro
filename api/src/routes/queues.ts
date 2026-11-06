@@ -27,10 +27,10 @@ import {
   validateColumnFormats
 } from '../services/queues.js'
 import { clientGoneSignal, gateServerTiming } from '../services/read-gate.js'
-import { singleFlight } from '../services/single-flight.js'
-import { currentTenantKey } from '../services/tenant-rooms.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { checkTransitionOwner } from '../services/record-access.js'
+import { singleFlight } from '../services/single-flight.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 
 // Format-only validation for extra_fields entries used as SQL column identifiers in
 // resolveCollectionSource's .select(['id', ...extraFieldNames]) — mirrors
@@ -111,6 +111,48 @@ const SOURCE_TYPES: QueueSourceType[] = [
 ]
 const MAX_SOURCES_PER_QUEUE = 10
 
+export interface QueueBadge {
+  total: number
+  sla_breached: number
+  unowned: number
+  source: 'cache' | 'snapshot'
+  as_of: string | null
+  /**
+   * No figure exists (a live queue before its first daily stat snapshot —
+   * production until the snapshot cron runs after cutover, staging after
+   * every nightly restore). The zeros are placeholders for old clients;
+   * readers must show "unknown" or read the queue's own stats, never 0
+   * (army 4 a08-14: the dashboard said "Past SLA 0" over 340 live records).
+   */
+  unknown?: true
+}
+
+/** A live queue's badge from its newest stat snapshot, or the explicit "no figure". */
+export function badgeFromSnapshot(
+  snap:
+    | {
+        snapshot_date: string | Date
+        total: number | null
+        sla_breached: number | null
+        unowned: number | null
+      }
+    | undefined
+): QueueBadge {
+  if (!snap)
+    return { total: 0, sla_breached: 0, unowned: 0, source: 'snapshot', as_of: null, unknown: true }
+  return {
+    total: Number(snap.total ?? 0),
+    sla_breached: Number(snap.sla_breached ?? 0),
+    unowned: Number(snap.unowned ?? 0),
+    source: 'snapshot',
+    // snapshot_date is a DATE column: the day, not a Date's toString().
+    as_of:
+      snap.snapshot_date instanceof Date
+        ? snap.snapshot_date.toISOString().slice(0, 10)
+        : String(snap.snapshot_date).slice(0, 10)
+  }
+}
+
 export async function queuesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
   // Queue ids are uuids and view ids integers: anything else (a mistyped
@@ -172,16 +214,7 @@ export async function queuesRoutes(app: FastifyInstance) {
   app.get('/badges', async (req, reply) => {
     const queues = (await db<QueueRow>('nivaro_queues').select('*')) as QueueRow[]
     const readable = queues.filter((q) => canReadQueue(q, req))
-    const out: Record<
-      string,
-      {
-        total: number
-        sla_breached: number
-        unowned: number
-        source: 'cache' | 'snapshot'
-        as_of: string | null
-      }
-    > = {}
+    const out: Record<string, QueueBadge> = {}
     const matIds = readable.filter((q) => q.materialized).map((q) => q.id)
     if (matIds.length > 0) {
       const counts = (await db('nivaro_queue_items')
@@ -226,16 +259,7 @@ export async function queuesRoutes(app: FastifyInstance) {
         unowned: number
       }>
       for (const qid of liveIds) {
-        const snap = snaps.find((sn) => sn.queue_id === qid)
-        out[qid] = snap
-          ? {
-              total: Number(snap.total ?? 0),
-              sla_breached: Number(snap.sla_breached ?? 0),
-              unowned: Number(snap.unowned ?? 0),
-              source: 'snapshot',
-              as_of: String(snap.snapshot_date)
-            }
-          : { total: 0, sla_breached: 0, unowned: 0, source: 'snapshot', as_of: null }
+        out[qid] = badgeFromSnapshot(snaps.find((sn) => sn.queue_id === qid))
       }
     }
     return reply.send({ data: out })

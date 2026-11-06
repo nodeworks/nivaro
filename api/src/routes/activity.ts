@@ -22,6 +22,7 @@ import { agentBadgesForActivity } from '../services/mcp-attribution.js'
 import { agentBadgeLabel, readMcpSettings } from '../services/mcp-calls.js'
 import { myRecordSet, whereInRecordSet } from '../services/overview/my-records.js'
 import { getAllowedFields } from '../services/permissions.js'
+import { isStatementTimeout } from '../services/request-trace.js'
 import type { User } from '../types.js'
 import { registerActivityUndoRoutes } from './activity-undo.js'
 
@@ -190,10 +191,25 @@ export async function activityRoutes(app: FastifyInstance) {
     }
 
     const filtered = hasActivityFilter(parsed.filters) || !!groupKey || !!scope
-    const [rows, total] = await Promise.all([
-      pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
-      filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
-    ])
+    let rows: Array<Record<string, unknown>>
+    let total: number
+    try {
+      ;[rows, total] = await Promise.all([
+        pageIds.then((rows) => pageRows((rows as Array<{ id: number }>).map((r) => r.id))),
+        filtered ? countQuery.then(countOf) : wholeTableCount(countQuery)
+      ])
+    } catch (err) {
+      // A filter no index serves (an action or person alone, no date range, over 12M rows)
+      // can outrun the statement timeout: that is "too broad right now", not a server
+      // fault (army 4 L-2: `action=access-request&limit=5` → 500 after 15 s).
+      if (!isStatementTimeout(err)) throw err
+      req.log.warn({ err, query: q }, 'activity list: statement timed out')
+      return reply.code(503).send({
+        error: 'The activity log took too long to search with these filters.',
+        hint: 'Add a date range or a collection to narrow it, then try again.',
+        code: 'ACTIVITY_BUSY'
+      })
+    }
     const data = req.isAdmin ? rows : await forNonAdmin(req.user as User, rows)
     return reply.send({
       data,

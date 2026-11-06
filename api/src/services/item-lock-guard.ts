@@ -91,6 +91,20 @@ export async function editLockRefusal(
   if (!(await isLockingEnabled(collection))) return null
   const { lockHolderVerdict } = await import('./edit-lock.js')
   if (!(await lockHolderVerdict(lock.user, collection, String(item))).allowed) return null
+  // a10-5: someone the approval edit lock refuses could not save this record
+  // even once the holder lets go — "ask them to release it" sent them to wait
+  // for nothing. The approval gate that runs next (assertNotEditLocked, 403
+  // EDIT_LOCKED with the step's reason) answers them instead. Only the
+  // approval tier: an admin-only record's open children stay writable, so the
+  // holder's lock still guards them.
+  if (req.user) {
+    const mine = await lockHolderVerdict(
+      req.user as { id: string; role?: string | null },
+      collection,
+      String(item)
+    ).catch(() => null)
+    if (mine && !mine.allowed && mine.tier !== 'admin_only') return null
+  }
   const name = await lockHolderName(lock.user).catch(() => null)
   return {
     status: 409,

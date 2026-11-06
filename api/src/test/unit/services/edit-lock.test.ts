@@ -86,6 +86,12 @@ vi.mock('../../../services/requirement-writes.js', () => ({
     return t.moveTargets[`${c}:${id}`] ?? null
   })
 }))
+// a15-6: which moves the record's run offers (manual-transition-gate.ts).
+const gate = vi.hoisted(() => ({ allow: new Set<string>() }))
+vi.mock('../../../services/manual-transition-gate.js', () => ({
+  manualTransitionRefusal: async (o: { transition: { id: string } }) =>
+    gate.allow.has(o.transition.id) ? null : { status: 403, body: { error: 'no' } }
+}))
 vi.mock('../../../services/instance-guard.js', () => ({
   InstanceAccessError: class extends Error {},
   assertInstanceAccess: async () => undefined
@@ -104,6 +110,7 @@ vi.mock('../../../services/items.js', () => {
 })
 
 import {
+  adminOnlyLockMessage,
   adminOnlyStateOf,
   assertNotEditLocked,
   EditLockedError,
@@ -444,6 +451,29 @@ describe('admin-only tier', () => {
     t.tables.workflow_purchase_orders_junction = [{ workflows_id: 100 }]
   })
 
+  it('says the creator can still use the actions when a move is on offer (a15-6)', async () => {
+    gate.allow = new Set()
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i2', template: 'T1', current_state: 's9', key: 'waiting_po', label: 'Waiting on PO' }
+    ]
+    t.tables.nivaro_workflow_transitions = [
+      { id: 'tx-push', from_state: 's9', required_roles: null },
+      { id: 'tx-cancel', from_state: null, required_roles: null }
+    ]
+    const none = await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')
+    expect(none.message).toBe(adminOnlyLockMessage('Waiting on PO', false))
+    expect(none.message).toMatch(/change its fields\. Use Request help to ask for a change\.$/)
+    gate.allow = new Set(['tx-push'])
+    const some = await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')
+    expect(some.allowed).toBe(false)
+    expect(some.message).toBe(
+      'This record is at Waiting on PO — only administrators can change its fields. You can still use the actions above; use Request help to ask for any other change.'
+    )
+    expect(some.message).not.toMatch(/Fusion/)
+    delete t.tables.nivaro_workflow_transitions
+    gate.allow = new Set()
+  })
+
   it('refuses the creator and a step owner, lets an admin through', async () => {
     await expect(
       assertNotEditLocked(
@@ -453,7 +483,7 @@ describe('admin-only tier', () => {
         reqAs('U-CJ')
       )
     ).rejects.toThrow(
-      'This record is at Waiting on PO — only administrators can change it. Use Request help to ask for a change.'
+      'This record is at Waiting on PO — only administrators can change its fields. Use Request help to ask for a change.'
     )
     await expect(
       assertNotEditLocked(userOf('U-BART'), 'workflows', { ids: [100] }, reqAs('U-BART'))
@@ -557,7 +587,7 @@ describe('admin-only tier', () => {
       locked: true,
       allowed: false,
       message:
-        'This record is at Waiting on PO — only administrators can change it. Use Request help to ask for a change.',
+        'This record is at Waiting on PO — only administrators can change its fields. Use Request help to ask for a change.',
       tier: 'admin_only',
       open_fields: ['is_on_hold', 'is_priority']
     })

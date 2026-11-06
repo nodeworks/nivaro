@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //         one they may not run.
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean; headers: any }) => {
+    if (req.headers['x-test-pending'])
+      throw Object.assign(new Error('waiting'), { statusCode: 403, code: 'ACCESS_PENDING' })
     const id = req.headers['x-test-user']
     if (id) req.user = { id, role: 'R' }
     req.isAdmin = req.headers['x-test-admin'] === '1'
@@ -133,6 +135,18 @@ describe('effectiveCacheTtl', () => {
     expect(effectiveCacheTtl(0, false)).toBe(0)
     process.env.PUBLIC_QUERY_MIN_CACHE_S = '0'
     expect(effectiveCacheTtl(0, true)).toBe(0)
+  })
+})
+
+describe('access pending (army 4 B1)', () => {
+  it('a person still waiting for access runs no query — authenticated or public', async () => {
+    const { a } = await app()
+    for (const slug of ['members', 'pub']) {
+      const res = await execute(a, slug, { 'x-test-pending': '1' })
+      expect(res.statusCode, slug).toBe(403)
+      expect(res.json()).toMatchObject({ code: 'ACCESS_PENDING' })
+    }
+    expect(execCustomQuerySql).not.toHaveBeenCalled()
   })
 })
 

@@ -162,7 +162,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Body: TriggerInput }>('/', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     try {
       const body = req.body ?? {}
@@ -207,7 +207,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.patch<{ Params: { id: string }; Body: TriggerInput }>('/:id', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     const id = Number(req.params.id)
     const existing = (await db('nivaro_agent_triggers').where({ id }).first()) as
@@ -240,7 +240,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     const id = Number(req.params.id)
     const row = (await db('nivaro_agent_triggers').where({ id }).first()) as
@@ -262,7 +262,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/:id/test', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     const row = (await db('nivaro_agent_triggers')
       .where({ id: Number(req.params.id) })
@@ -338,7 +338,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/deliveries/:id/retry', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     try {
       const d = await retryDelivery(Number(req.params.id))
@@ -358,7 +358,7 @@ export async function agentTriggerRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/deliveries/:id/discard', async (req, reply) => {
-    if (refuseAgent(req, reply)) return
+    if (refuseAgent(req, reply)) return reply
     if (!(await agentTriggersReady())) return notReady(reply)
     const ok = await discardDelivery(Number(req.params.id))
     if (!ok)

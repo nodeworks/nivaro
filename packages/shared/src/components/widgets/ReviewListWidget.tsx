@@ -15,7 +15,8 @@ export interface ReviewListStatusOption {
   value: string
   label: string
   color: string
-  /** Picking this option first asks the reviewer for a note (required). */
+  /** The confirm asks for a note and will not send without one. Every option
+   *  is confirmed first either way; without this the note is optional. */
   require_note?: boolean
 }
 
@@ -329,14 +330,12 @@ export function ReviewListWidget({
   }
 
   const handleAction = (group: ReviewGroup, option: ReviewListStatusOption) => {
-    // A decision that requires a reason (rejections) collects it FIRST — the
-    // status must never land without the note that explains it.
-    if (option.require_note) {
-      setNoteText('')
-      setNoteAsk({ group, option })
-      return
-    }
-    void performAction(group, option, null)
+    // Every decision is confirmed first (army 2026-11-05: Approve committed on
+    // the first click and notified the requestor). A decision that requires a
+    // reason (rejections) collects it in the same confirm — the status must
+    // never land without the note that explains it.
+    setNoteText('')
+    setNoteAsk({ group, option })
   }
 
   const performAction = async (
@@ -618,28 +617,54 @@ export function ReviewListWidget({
           <div
             className='fixed inset-0 z-[130] flex items-center justify-center bg-black/40 p-4'
             onClick={() => setNoteAsk(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                setNoteAsk(null)
+              }
+            }}
           >
             <div
+              role='dialog'
+              aria-modal='true'
+              aria-labelledby='review-confirm-title'
+              data-review-confirm={noteAsk.option.value}
               className='w-full max-w-md rounded-lg border border-slate-200 bg-white p-4 shadow-xl dark:border-border dark:bg-card'
               onClick={(e) => e.stopPropagation()}
             >
-              <p className='text-[13px] font-medium text-slate-700 dark:text-slate-200'>
-                {noteAsk.option.label} — add a note
+              <p
+                id='review-confirm-title'
+                className='text-[13px] font-medium text-slate-700 dark:text-slate-200'
+              >
+                {noteAsk.option.label} {noteAsk.group.key || 'these rows'}?
               </p>
-              <p className='mt-0.5 text-[11px] text-slate-500'>
-                A reason is required for this decision. It is recorded with the record.
+              <p className='mt-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] tabular-nums text-slate-600 dark:border-border dark:bg-white/[0.03] dark:text-slate-300'>
+                {noteAsk.group.count} row{noteAsk.group.count === 1 ? '' : 's'}
+                {noteAsk.group.sum != null
+                  ? ` · ${formatValue(noteAsk.group.sum, config.aggregate_sum_format ?? 'number')}`
+                  : ''}
+              </p>
+              <p className='mt-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
+                {noteAsk.option.require_note
+                  ? 'A reason is required for this decision. It is recorded with the record.'
+                  : 'Nothing changes until you confirm. A note is optional and is recorded with the decision.'}
               </p>
               <textarea
                 value={noteText}
                 onChange={(e) => setNoteText(e.target.value)}
                 rows={3}
                 autoFocus
+                aria-label={noteAsk.option.require_note ? 'Reason' : 'Note (optional)'}
+                data-review-confirm-note
                 className='mt-2 w-full rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-200'
-                placeholder='Why is this being rejected?'
+                placeholder={
+                  noteAsk.option.require_note ? 'Why is this being rejected?' : 'Note (optional)'
+                }
               />
               <div className='mt-3 flex items-center justify-end gap-1.5'>
                 <button
                   type='button'
+                  data-review-confirm-cancel
                   onClick={() => setNoteAsk(null)}
                   className='rounded px-2.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 dark:hover:bg-muted'
                 >
@@ -647,13 +672,17 @@ export function ReviewListWidget({
                 </button>
                 <button
                   type='button'
-                  disabled={!noteText.trim()}
+                  data-review-confirm-submit
+                  disabled={!!noteAsk.option.require_note && !noteText.trim()}
                   onClick={() => {
                     const ask = noteAsk
                     setNoteAsk(null)
-                    void performAction(ask.group, ask.option, noteText.trim())
+                    void performAction(ask.group, ask.option, noteText.trim() || null)
                   }}
-                  className='rounded bg-red-600 px-3 py-1 text-[11px] font-medium text-white hover:brightness-110 disabled:opacity-50'
+                  className={cn(
+                    'rounded px-3 py-1 text-[11px] font-medium hover:brightness-110 disabled:opacity-50',
+                    noteAsk.option.require_note ? 'bg-red-600 text-white' : 'bg-nvr-cyan text-white'
+                  )}
                 >
                   {noteAsk.option.label}
                 </button>

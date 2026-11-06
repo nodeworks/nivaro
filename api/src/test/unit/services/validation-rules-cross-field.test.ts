@@ -125,3 +125,23 @@ describe('enforceValidationRules with a cross-field rule', () => {
     ).rejects.toMatchObject({ rule: 'gte_field' })
   })
 })
+
+describe('enforceValidationRules and soft (warning-only) rules — army4 a01-5', () => {
+  it('a soft rule never refuses the write; a hard rule beside it still does', async () => {
+    meta.fields = [
+      {
+        field: 'qty',
+        validation_rules: JSON.stringify([
+          { type: 'min', value: 5, soft: true, message: 'Low — check it' },
+          { type: 'max', value: 100 }
+        ])
+      }
+    ]
+    await expect(
+      enforceValidationRules('workflows', { qty: 2 }, new Set(['qty']))
+    ).resolves.toBeUndefined()
+    await expect(
+      enforceValidationRules('workflows', { qty: 200 }, new Set(['qty']))
+    ).rejects.toMatchObject({ field: 'qty', rule: 'max' })
+  })
+})

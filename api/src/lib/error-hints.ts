@@ -70,6 +70,7 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   VALUE_OUT_OF_RANGE: 'Use a smaller number, then save again.',
   DELETE_GUARDED: 'This record is protected from deletion. Sort out what the message names first.',
   TRANSITION_DUPLICATE: 'This move was already made. Reload the record to see where it is now.',
+  PRIORITY_REQUIRED: 'Flag the workflow as Priority, then approve.',
   NESTED_ROW_REFUSED: 'Fix the line the message names, then save again.',
   NESTED_ROW_NOT_OWNED: 'That line belongs to another record. Reload, then try again.',
   NESTED_ROWS_LIMIT: 'Save fewer lines at once, then add the rest in another save.',

@@ -911,7 +911,10 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       // access-level checks below. For public queries this is a no-op on failure.
       try {
         await authenticate(req, reply)
-      } catch {
+      } catch (err) {
+        // A person still waiting for access is refused outright (army 4 B1): no query runs for
+        // them, `public` ones included.
+        if ((err as { code?: string })?.code === 'ACCESS_PENDING') throw err
         // Will be re-enforced per access level below.
       }
 

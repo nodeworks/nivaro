@@ -35,6 +35,7 @@ vi.mock('../../../services/revision-access.js', () => ({
 }))
 
 const calls = vi.hoisted(() => ({ list: [] as Array<{ kind: string; detail: unknown }> }))
+const fail = vi.hoisted(() => ({ count: null as Error | null }))
 vi.mock('../../../db/index.js', () => {
   const make = () => {
     const st = {
@@ -69,6 +70,7 @@ vi.mock('../../../db/index.js', () => {
     const answer = async () => {
       if (st.count) {
         calls.list.push({ kind: 'count', detail: null })
+        if (fail.count) throw fail.count
         return [{ count: 5 }]
       }
       if (st.whereIn) {
@@ -106,11 +108,27 @@ async function app() {
 
 beforeEach(() => {
   who.admin = true
+  fail.count = null
   calls.list.length = 0
   logActivity.mockClear()
 })
 
 describe('GET /api/activity', () => {
+  it('answers 503 ACTIVITY_BUSY (not 500) when a broad filter outruns the statement timeout', async () => {
+    fail.count = Object.assign(new Error('Timeout: Request failed to complete in 15000ms'), {
+      code: 'ETIMEOUT'
+    })
+    const a = await app()
+    const r = await a.inject({ method: 'GET', url: '/api/activity?action=access-request&limit=5' })
+    expect(r.statusCode).toBe(503)
+    expect(r.json().code).toBe('ACTIVITY_BUSY')
+    expect(r.json().hint).toMatch(/date range/)
+    // Any other failure is still a fault.
+    fail.count = new Error('Invalid column name')
+    const r2 = await a.inject({ method: 'GET', url: '/api/activity?action=access-request&limit=5' })
+    expect(r2.statusCode).toBe(500)
+  })
+
   it('refuses anyone who is not an administrator — list, actions and one entry', async () => {
     who.admin = false
     const a = await app()

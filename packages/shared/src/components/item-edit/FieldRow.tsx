@@ -62,6 +62,7 @@ import {
   usePlacementTextContext
 } from './placement-behaviour'
 import { jsonEqual, keepIfEqual } from './render-stability'
+import { softRuleWarning } from './soft-rules'
 import type { CMSField, CMSRelation, RenderFieldProps } from './types'
 import { usePersonalDefaultsApi } from './usePersonalDefaults'
 
@@ -857,6 +858,12 @@ export const FieldRow = memo(function FieldRow({
   // #2712: a display formula has no column — no history, watch, AI or input.
   const isCalc = isDisplayFormulaRow(field)
   const counter = isCalc ? null : fieldCounterConfig(field)
+  // Judged like the save check judges a rule: a new record, or a value the
+  // person changed this session — an old record's stored date never nags.
+  const softWarning =
+    isCalc || !(itemId === 'new' || !itemId || parentDraftCtx?.dirtyFields?.has(field.field))
+      ? null
+      : softRuleWarning(field, draft)
   const repeatLast =
     !isCalc &&
     !locked &&
@@ -1358,6 +1365,15 @@ export const FieldRow = memo(function FieldRow({
         </div>
       )}
       {counter && <FieldCounter value={draft[field.field]} config={counter} />}
+      {!error && softWarning && (
+        // A soft (warning-only) rule the value breaks: said here, never blocks the save.
+        <p
+          data-field-warning={field.field}
+          className='text-[11.5px] leading-snug text-amber-700 dark:text-amber-400'
+        >
+          {softWarning}
+        </p>
+      )}
       {personalDefaultHint && !personalDefaultApplied && (
         <PersonalDefaultHint field={field.field} text={personalDefaultHint} />
       )}

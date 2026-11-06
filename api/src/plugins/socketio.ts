@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { issuingAdminStillAdmin } from '../middleware/authenticate.js'
+import { accessPendingSignIn } from '../services/access-pending.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
@@ -674,6 +675,10 @@ export function createWatchRoomGate(): {
     }
   }
 }
+
+/** How often a socket signed in to its own rooms only (access pending, army 4 B1) asks
+ *  whether access came through. */
+const ACCESS_PENDING_RECHECK_MS = 20_000
 
 /**
  * #1672 — whether clients may fall back to HTTP long-polling when the websocket upgrade is
@@ -1345,9 +1350,55 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
     }
 
-    /** Sign the socket in as `user`, bound to what signed it in (#1719). */
-    const signIn = (user: User, bind: SocketBind) => {
-      authenticatedUser = user
+    /**
+     * Army 4 B1 — a person still in the new-user flow (services/access-pending.ts) signs a
+     * socket in to their OWN rooms only (personal, session / View-as, so notices and sign-out
+     * reach it): `authenticatedUser` stays null, so every room join (collection, record, chat,
+     * presence, watch, widgets, huddles) is refused as for an anonymous socket, and no presence
+     * is written. An API-key socket never stands in the flow.
+     */
+    const accessPendingSocket = (user: User, bind: SocketBind): Promise<boolean> =>
+      accessPendingSignIn(user, bind.kind)
+    /** While pending, the socket asks now and then whether access came through, and then signs
+     *  in fully — the tab that waited on the Request-access screen keeps this connection. */
+    let pendingTimer: ReturnType<typeof setInterval> | null = null
+    const stopPendingTimer = () => {
+      if (pendingTimer) clearInterval(pendingTimer)
+      pendingTimer = null
+    }
+    socket.once('disconnect', stopPendingTimer)
+    /** Sign in, or (access pending) sign in to own rooms only; true = fully signed in. */
+    const signInJudged = async (user: User, bind: SocketBind): Promise<boolean> => {
+      if (!(await accessPendingSocket(user, bind))) {
+        stopPendingTimer()
+        signIn(user, bind)
+        return true
+      }
+      signIn(user, bind, true)
+      if (!pendingTimer) {
+        pendingTimer = setInterval(
+          inSocketTenant(socket, async () => {
+            if (!socket.connected) return stopPendingTimer()
+            const fresh = (await db<User>('nivaro_users')
+              .where({ id: user.id, status: 'active' })
+              .first()
+              .catch(() => undefined)) as User | undefined
+            if (!fresh || (await accessPendingSocket(fresh, bind).catch(() => true))) return
+            stopPendingTimer()
+            signIn(fresh, bind)
+            void markOnline(fresh.id, socket.id)
+          }),
+          ACCESS_PENDING_RECHECK_MS
+        )
+        pendingTimer.unref?.()
+      }
+      return false
+    }
+
+    /** Sign the socket in as `user`, bound to what signed it in (#1719). `pending` = own rooms
+     *  only (accessPendingSocket). */
+    const signIn = (user: User, bind: SocketBind, pending = false) => {
+      authenticatedUser = pending ? null : user
       socket.data.nvrBind = bind
       const meta = socketMeta.get(socket.id)
       if (meta)
@@ -1362,6 +1413,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // A revoke publishes to these rooms, which reach the socket on every replica.
       if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))
       else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
+      if (pending) {
+        socket.emit('auth:ok', { userId: user.id, access_pending: true })
+        return
+      }
       void joinTenantAllRoom()
       socket.emit('auth:ok', { userId: user.id })
       // #2450 — the journal position now, so the client's first reconnect can replay from it
@@ -1542,10 +1597,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           // An API-key socket carries the key's scopes and row restrictions, like its requests.
           if (user && bind.kind === 'apikey')
             user = (await userWithApiKey(user, bind.id)) ?? undefined
-          if (user) {
-            signIn(user, bind)
-            void markOnline(user.id, socket.id)
-          }
+          if (user && (await signInJudged(user, bind))) void markOnline(user.id, socket.id)
           return
         }
 
@@ -1563,8 +1615,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             .first()
           if (user) {
             touchMasqueradeMarker(app.redis, String(user.id), payloadIds.admin_id)
-            signIn(user, { kind: 'masq', token })
-            void markOnline(user.id, socket.id)
+            if (await signInJudged(user, { kind: 'masq', token }))
+              void markOnline(user.id, socket.id)
           }
           return
         }
@@ -1572,7 +1624,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
           .first()
-        if (user) signIn(user, { kind: 'token', tokenHash: sha(token) })
+        if (user) await signInJudged(user, { kind: 'token', tokenHash: sha(token) })
       } catch (err) {
         app.log.warn({ err }, 'Socket auth failed')
       }

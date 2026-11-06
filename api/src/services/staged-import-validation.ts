@@ -41,6 +41,18 @@ export interface ImportValidationConfig {
   lookups?: Array<{ column: string; collection: string; match_field: string; label?: string }>
   required?: string[]
   numeric?: string[]
+  /** Per-column value bounds, checked on every non-empty numeric cell:
+   *  `{ quantity: { min: 0, max: 1000000, integer: true } }`. A value outside
+   *  them is a hard error, so a file with a negative or fractional forecast
+   *  never reaches the import (army4 a13-14). */
+  bounds?: Record<string, ColumnBounds>
+}
+
+export interface ColumnBounds {
+  min?: number
+  max?: number
+  /** Whole numbers only. */
+  integer?: boolean
 }
 
 /* Row numbers in issues are SPREADSHEET rows (header = row 1, first data
@@ -128,9 +140,36 @@ export function resolveHeaderMap(
 /** A cleaned cell counts as empty when it is '' after the cleaner ran. */
 const isEmpty = (v: string | undefined) => v == null || v === ''
 
-const isNumericValue = (v: string) => {
-  const n = Number(v)
-  return Number.isFinite(n)
+/** A cell read as a number EXACTLY as the import reads it — twin of the
+ *  number branch of table-import.ts `readCell` ("1,200", "$5", "(3)" = −3), so
+ *  validation and the dry run agree on what is a number. null = not one. */
+export function readNumberCell(text: string): number | null {
+  const v = text.trim()
+  if (v === '') return null
+  const negative = /^\(.*\)$/.test(v)
+  const n = Number(v.replace(/[,$%\s()]/g, ''))
+  if (!Number.isFinite(n)) return null
+  return negative ? -n : n
+}
+
+const isNumericValue = (v: string) => readNumberCell(v) != null
+
+/** Why a number breaks its bounds, or null. */
+export function boundsProblem(n: number, b: ColumnBounds): string | null {
+  if (b.integer && !Number.isInteger(n)) return 'not a whole number'
+  if (typeof b.min === 'number' && n < b.min) return `below ${b.min.toLocaleString('en-US')}`
+  if (typeof b.max === 'number' && n > b.max) return `above ${b.max.toLocaleString('en-US')}`
+  return null
+}
+
+function describeBounds(b: ColumnBounds): string {
+  const parts: string[] = []
+  if (b.integer) parts.push('a whole number')
+  if (typeof b.min === 'number' && typeof b.max === 'number')
+    parts.push(`from ${b.min.toLocaleString('en-US')} to ${b.max.toLocaleString('en-US')}`)
+  else if (typeof b.min === 'number') parts.push(`at least ${b.min.toLocaleString('en-US')}`)
+  else if (typeof b.max === 'number') parts.push(`at most ${b.max.toLocaleString('en-US')}`)
+  return parts.join(' ') || 'within its bounds'
 }
 
 function sample(nums: number[], cap = 10): number[] {
@@ -233,6 +272,30 @@ export async function validateStagedRows(
       report.errors.push({
         code: 'not_numeric',
         message: `${bad.length} row(s) have a non-numeric ${col}`,
+        rows: sample(bad),
+        count: bad.length
+      })
+    }
+  }
+
+  for (const [col, b] of Object.entries(cfg?.bounds ?? {})) {
+    if (!b || typeof b !== 'object' || !headerOf(col)) continue
+    const bad: number[] = []
+    const seen: string[] = []
+    scan.forEach((r, i) => {
+      const v = valueOf(r, col)
+      if (isEmpty(v)) return
+      const n = readNumberCell(v as string)
+      if (n == null) return // reported by the numeric check
+      if (boundsProblem(n, b)) {
+        bad.push(i + 2)
+        if (seen.length < 5 && !seen.includes((v as string).trim())) seen.push((v as string).trim())
+      }
+    })
+    if (bad.length > 0) {
+      report.errors.push({
+        code: 'out_of_bounds',
+        message: `${bad.length} row(s) have a ${col} that is not ${describeBounds(b)} (${seen.join(', ')})`,
         rows: sample(bad),
         count: bad.length
       })

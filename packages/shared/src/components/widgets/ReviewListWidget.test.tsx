@@ -41,7 +41,10 @@ const data: ReviewListResult = {
   truncated: false
 }
 
-async function mount(request: (cmd: { _path: string; _body?: unknown }) => Promise<unknown>) {
+async function mount(
+  request: (cmd: { _path: string; _body?: unknown }) => Promise<unknown>,
+  confirm = true
+) {
   const onRefetch = vi.fn()
   const client = { request: vi.fn(request) }
   await act(async () => {
@@ -60,10 +63,29 @@ async function mount(request: (cmd: { _path: string; _body?: unknown }) => Promi
     approve.click()
     await new Promise((r) => setTimeout(r, 0))
   })
+  if (confirm) {
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-review-confirm-submit]')!.click()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
   return { client, onRefetch }
 }
 
 describe('ReviewListWidget action endpoint', () => {
+  it('sends nothing until the decision is confirmed; Cancel sends nothing', async () => {
+    const { client } = await mount(async () => ({ data: { updated: 2 } }), false)
+    const dialog = host.querySelector('[data-review-confirm="approved"]')
+    expect(dialog?.textContent).toContain('Approve A?')
+    expect(dialog?.textContent).toContain('2 rows')
+    expect(client.request.mock.calls.some((c) => c[0]._path === '/ext/decide')).toBe(false)
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-review-confirm-cancel]')!.click()
+    })
+    expect(host.querySelector('[data-review-confirm]')).toBeNull()
+    expect(client.request.mock.calls.some((c) => c[0]._path === '/ext/decide')).toBe(false)
+  })
+
   it('sends the status each row showed with the decision', async () => {
     const { client } = await mount(async () => ({ data: { updated: 2 } }))
     const call = client.request.mock.calls.find((c) => c[0]._path === '/ext/decide')!

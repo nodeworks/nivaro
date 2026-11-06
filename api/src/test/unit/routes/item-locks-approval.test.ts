@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // refuses gets one.
 const state = vi.hoisted(() => ({
   me: 'U-PETER',
+  admin: false,
   lock: null as null | Record<string, unknown>,
   refused: new Set<string>(),
   deleted: [] as string[],
@@ -46,7 +47,7 @@ vi.mock('../../../db/index.js', () => {
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: state.me, role: 'R' }
-    req.isAdmin = false
+    req.isAdmin = state.admin
   },
   requireAuth: async () => undefined,
   requireAdmin: async () => undefined
@@ -138,6 +139,9 @@ describe('edit locks follow the approval edit lock', () => {
     })
     expect(res.statusCode).toBe(409)
     expect(res.json().locked_by).toBe('U-BRYAN')
+    // Named, so the client never shows the generic "something changed — reload" hint (a10-5).
+    expect(res.json().code).toBe('RECORD_LOCKED')
+    expect(res.json().taken_over).toBe(false)
   })
 
   it('gives no lock to someone the approval lock refuses', async () => {
@@ -255,5 +259,77 @@ describe('edit locks need update rights on the record', () => {
     expect(r.statusCode).toBe(200)
     expect(state.lock).toBeNull()
     expect(state.notified).toContain(OTHER)
+  })
+})
+
+// a10-6: the person a forced take-over pushed out is told so — not "while you were away".
+describe('a forced take-over is named to the person it displaced', () => {
+  function fakeRedis() {
+    const kv = new Map<string, string>()
+    return {
+      set: async (k: string, v: string) => {
+        kv.set(k, v)
+        return 'OK'
+      },
+      get: async (k: string) => kv.get(k) ?? null,
+      del: async (k: string) => (kv.delete(k) ? 1 : 0),
+      sadd: async () => 1,
+      expire: async () => 1
+    }
+  }
+  async function appWithRedis() {
+    const a = Fastify()
+    a.decorate('redis', fakeRedis() as never)
+    await a.register(itemLocksRoutes, { prefix: '/api/item-locks' })
+    return a
+  }
+  beforeEach(() => {
+    state.lock = null
+    state.refused = new Set()
+    state.deleted = []
+    state.inserted = []
+    state.notified = []
+    state.admin = false
+    vi.mocked(canUpdateItem).mockReset()
+    vi.mocked(canUpdateItem).mockResolvedValue(true)
+  })
+
+  it('heartbeat and acquire of the displaced holder say taken_over; anyone else does not', async () => {
+    const a = await appWithRedis()
+    state.lock = lockOf('U-PAUL')
+    state.me = 'U-BEN'
+    state.admin = true
+    const forced = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372793/lock/force',
+      payload: {}
+    })
+    expect(forced.statusCode).toBe(200)
+    expect(state.lock?.user).toBe('U-BEN')
+    state.admin = false
+
+    state.me = 'U-PAUL'
+    const beat = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372793/heartbeat',
+      payload: {}
+    })
+    expect(beat.statusCode).toBe(404)
+    expect(beat.json().taken_over).toBe(true)
+    const again = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372793/lock',
+      payload: {}
+    })
+    expect(again.statusCode).toBe(409)
+    expect(again.json().taken_over).toBe(true)
+
+    state.me = 'U-GABY'
+    const other = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372793/lock',
+      payload: {}
+    })
+    expect(other.json().taken_over).toBe(false)
   })
 })

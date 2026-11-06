@@ -19,7 +19,7 @@ import { selectInChunks } from './db-batch.js'
 import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
 import { originFields } from './note-authorship.js'
-import { resolveStateOwners } from './pipeline-engine.js'
+import { activeOwnersOnly, nextSkipTransition, resolveStateOwners } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
   addendumLabel,
@@ -356,8 +356,14 @@ export async function evaluateSkipCriteriaDetailed(
       criteriaOverride?.skipIfNoOwners !== undefined
         ? criteriaOverride.skipIfNoOwners
         : coerceBool(state.skip_if_no_owners)
+    // ASSIGNED owners only ({skipFallback}): the binding's owner fallback
+    // (IR: the creator) keeps a record in someone's queue, it is not an
+    // approver — counting it meant a step with no owner group never skipped
+    // and nobody but an admin could move the record (army4 a15-1).
     if (effectiveSkipNoOwners) {
-      const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
+      const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database, {
+        skipFallback: true
+      })
       if (owners.length === 0) return { skipped: true, reasons: [NO_OWNERS_REASON] }
     }
 
@@ -372,7 +378,9 @@ export async function evaluateSkipCriteriaDetailed(
     const results: Array<{ matched: boolean; reason: string | null }> = []
     for (const cond of criteria.conditions) {
       if (cond.type === 'no_owners') {
-        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
+        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database, {
+          skipFallback: true
+        })
         results.push({
           matched: owners.length === 0,
           reason: owners.length === 0 ? NO_OWNERS_REASON : null
@@ -454,10 +462,10 @@ export async function evaluateSkipCriteria(
 const MACHINE_COMMENT =
   /^(auto: |state-merge|legacy-|reforecast|linx-state-sync|instance-migration|natural-key upsert|import:)/i
 
-async function buildTransitionEventPayload(args: {
+export async function buildTransitionEventPayload(args: {
   instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
   newStateObj: WorkflowState | null
-  prevStateObj: Pick<WorkflowState, 'key' | 'label'> | null
+  prevStateObj: (Pick<WorkflowState, 'key' | 'label'> & { id?: string | null }) | null
   transitionId: string | null
   transitionLabel: string
   /** The transition's notify_text — how people are told about it. */
@@ -472,9 +480,34 @@ async function buildTransitionEventPayload(args: {
   asOf?: Date | null
 }): Promise<Record<string, unknown>> {
   const { instance, newStateObj, prevStateObj, enteredPrevAt } = args
+  // Suspended / redacted owners are left out of what people are told ("It is
+  // now waiting on …") and of who is mailed — they cannot act (army4 a14-4).
+  // Owner resolution keeps them, so owner-gaps still lists such a step.
   const owners = newStateObj
-    ? await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
+    ? await activeOwnersOnly(
+        await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
+      )
     : []
+  // Who the record was waiting on BEFORE this move (the state it left) —
+  // assigned owners only, the way the owner-only gate judges them, active
+  // people only. A cancel notice tells them it no longer needs them.
+  let previousOwners: Awaited<ReturnType<typeof resolveStateOwners>> = []
+  if (prevStateObj?.id && String(prevStateObj.id) !== String(newStateObj?.id ?? '')) {
+    try {
+      previousOwners = await activeOwnersOnly(
+        await resolveStateOwners(
+          String(prevStateObj.id),
+          instance.id,
+          instance.collection,
+          instance.item,
+          db,
+          { skipFallback: true }
+        )
+      )
+    } catch {
+      previousOwners = []
+    }
+  }
   const friendlyId = await resolveFriendlyId(instance.collection, instance.item)
   // The SUBJECT record — an addendum's parent — so flows can read creator /
   // contacts off the workflow and match on `subject_collection` while the
@@ -585,6 +618,16 @@ async function buildTransitionEventPayload(args: {
       : null,
     owners,
     owner_emails: owners
+      .map((o) => o.email)
+      .filter(Boolean)
+      .join(','),
+    previous_owners: previousOwners,
+    // A plain transition is its own chain; flushChainEvents overwrites these
+    // for the hops of an auto chain.
+    final_in_chain: true,
+    chain_final_state: null,
+    chain_length: 1,
+    previous_owner_emails: previousOwners
       .map((o) => o.email)
       .filter(Boolean)
       .join(','),
@@ -819,11 +862,8 @@ export async function resolveTransitionTarget(
 
   if (!shouldSkip) return state
 
-  const nextTransition = await database<WorkflowTransition>('nivaro_workflow_transitions')
-    .where({ template: templateId, from_state: toStateId })
-    .whereNot({ to_state: toStateId })
-    .orderBy('sort')
-    .first()
+  // A forward route only — never the state's send-back (pipeline-engine.ts).
+  const nextTransition = await nextSkipTransition(database, templateId, state)
 
   if (!nextTransition) return state
 
@@ -1085,6 +1125,39 @@ interface ApplyTransitionOpts {
   userId?: string | null
   comment?: string | null
   source?: 'manual' | 'auto'
+  /** Collect the `workflow-transition` event instead of firing it — the auto
+   *  chain fires every hop's event once the chain settles (flushChainEvents). */
+  deferEvents?: DeferredTransitionEvent[]
+}
+
+export interface DeferredTransitionEvent {
+  payload: Record<string, unknown>
+  fire: () => void
+}
+
+/**
+ * Fire the events an auto chain collected, in order, each marked with whether
+ * it was the chain's LAST hop. Every hop still reaches every flow (a partner
+ * write-back must see each state), but a flow that tells PEOPLE can stop on
+ * `final_in_chain == false` — "now Order Submission" and "now Completed" went
+ * out in the same second for one IR (army4 a14-5). `chain_final_state` names
+ * where the record ended up. Never throws.
+ */
+export function flushChainEvents(events: DeferredTransitionEvent[]): void {
+  const last = events.length - 1
+  if (last < 0) return
+  const finalState = events[last].payload.to_state ?? null
+  events.forEach((e, i) => {
+    e.payload.final_in_chain = i === last
+    e.payload.chain_final_state = finalState
+    e.payload.chain_length = events.length
+    try {
+      e.fire()
+    } catch {
+      /* trigger emission is best-effort */
+    }
+  })
+  events.length = 0
 }
 
 // ─── Records mid-transition (#818) ───────────────────────────────────────────
@@ -1294,17 +1367,22 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
       onBehalfOf: behalfStored ? onBehalfOf : null,
       enteredPrevAt
     })
-    withChainStep(historyStep, () =>
-      emitTrigger(
-        'workflow-transition',
-        payload,
-        console as unknown as Parameters<typeof emitTrigger>[2],
-        opts.userId ?? undefined,
-        // One record's transition events reach their flows in the order they
-        // happened, so a partner push for an older state never lands last.
-        { orderKey: `${instance.collection}:${instance.item}` }
+    const fire = () =>
+      withChainStep(historyStep, () =>
+        emitTrigger(
+          'workflow-transition',
+          payload,
+          console as unknown as Parameters<typeof emitTrigger>[2],
+          opts.userId ?? undefined,
+          // One record's transition events reach their flows in the order they
+          // happened, so a partner push for an older state never lands last.
+          { orderKey: `${instance.collection}:${instance.item}` }
+        )
       )
-    )
+    // Inside an auto chain (runAutoTransitions) the event waits until the
+    // chain settles, so each hop can say whether it was the last one.
+    if (opts.deferEvents) opts.deferEvents.push({ payload, fire })
+    else fire()
     // Record rooms (#933, #948): a line in the record's chat room when the
     // room type opted in, and the new owners follow the room when it opted in.
     if (instance.collection !== 'nivaro_addendums') {
@@ -1404,6 +1482,8 @@ export async function runAutoTransitions(collection: string, item: string): Prom
   // Mid-transition (a transition action's writeback fired this through the
   // record's after-hook): the transition's caller re-evaluates once it lands.
   if (isTransitionInFlight(collection, item)) return
+  // Every hop's event waits for the chain to settle (flushChainEvents).
+  const deferred: DeferredTransitionEvent[] = []
   try {
     // Each hop hangs under the history row of the hop before it, so a chain
     // of auto transitions reads as a chain, not as siblings.
@@ -1450,7 +1530,8 @@ export async function runAutoTransitions(collection: string, item: string): Prom
               transition: fired,
               userId: null,
               comment: `auto: ${fired.label}`,
-              source: 'auto'
+              source: 'auto',
+              deferEvents: deferred
             })
         )
       } catch (err) {
@@ -1478,6 +1559,8 @@ export async function runAutoTransitions(collection: string, item: string): Prom
     }
   } catch (err) {
     console.error({ err, collection, item }, 'runAutoTransitions failed')
+  } finally {
+    flushChainEvents(deferred)
   }
 }
 

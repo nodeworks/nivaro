@@ -137,6 +137,7 @@ import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
+import { midairCollisionOf } from '../../lib/record-outbox'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { userErrorMessage } from '../../lib/safe-error'
@@ -169,7 +170,17 @@ import {
   SENTINEL_FIELDS,
   SYSTEM_FIELDS
 } from './helpers'
+import {
+  incrementGuarded,
+  type LineConflict,
+  lineConflictKey,
+  lineLabelOf,
+  resolveLineCollision,
+  rowBaseBookFor,
+  writeLineGuarded
+} from './line-midair'
 import { changedRowFields, checkNumberEntry, lineRuleErrors, NUMBER_FIELD_TYPES } from './line-qty'
+import { LineCollisionDialog } from './MidairCollisionDialog'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
   type LiveRowsCtx,
@@ -601,7 +612,9 @@ function AllocateDrawer({
   stagingActive,
   pendingRows,
   pendingEdits,
-  pendingDeletes
+  pendingDeletes,
+  writeRow,
+  stagedBase
 }: {
   config: AllocateDrawerConfig
   relatedCollection: string
@@ -620,6 +633,11 @@ function AllocateDrawer({
   pendingRows?: Record<string, unknown>[]
   pendingEdits?: Map<string, Record<string, unknown>>
   pendingDeletes?: Set<string>
+  /** The grid's guarded write of one saved row (H4): against the base the
+   *  grid read it at; false = a mid-air collision, shown in the chooser. */
+  writeRow?: (rowId: string, body: Record<string, unknown>) => Promise<boolean>
+  /** Keys a staged edit of a saved row carries (its read-time base). */
+  stagedBase?: (rowId: string) => Record<string, unknown>
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -747,7 +765,10 @@ function AllocateDrawer({
         })
       } else if (savedId) {
         if (deleted) staging.cancelPendingDelete(relatedCollection, manyField, savedId)
-        staging.queueEdit(relatedCollection, manyField, savedId, { [config.value_field]: amount })
+        staging.queueEdit(relatedCollection, manyField, savedId, {
+          [config.value_field]: amount,
+          ...(stagedBase?.(savedId) ?? {})
+        })
       } else {
         staging.queueRow(relatedCollection, manyField, {
           ...rowDefaults,
@@ -765,10 +786,11 @@ function AllocateDrawer({
         if (existing?.id != null)
           await client.request(del(`/items/${relatedCollection}/${existing.id}`))
       } else if (existing?.id != null) {
-        if (Number(existing[config.value_field]) !== amount)
-          await client.request(
-            patch(`/items/${relatedCollection}/${existing.id}`, { [config.value_field]: amount })
-          )
+        if (Number(existing[config.value_field]) !== amount) {
+          const body = { [config.value_field]: amount }
+          if (writeRow) await writeRow(String(existing.id), body)
+          else await client.request(patch(`/items/${relatedCollection}/${existing.id}`, body))
+        }
       } else {
         await client.request(
           post(`/items/${relatedCollection}`, {
@@ -1270,7 +1292,10 @@ function AutoAllocateButton({
     const runningByCandidate: Record<string, number> = {}
     let totalAllocated = 0
     let rowsTouched = 0
+    let conflicted = 0
     const short: number[] = []
+    const addToAllocation = (id: string, take: number) =>
+      incrementGuarded(client, matchCfg.collection, id, qtyF, take)
     try {
       for (let ri = 0; ri < rows.length; ri++) {
         const row = rows[ri]
@@ -1341,11 +1366,13 @@ function AutoAllocateButton({
           const take = Math.min(left, capacity)
           const mine = existing.find((e) => String(e[fk]) === cid)
           if (mine) {
-            await client.request(
-              patch(`/items/${matchCfg.collection}/${mine.id}`, {
-                [qtyF]: (Number(mine[qtyF]) || 0) + take
-              })
-            )
+            // An increment, never a blind read-modify-write (H4): the add
+            // lands on the value as it is now, guarded by the mid-air check.
+            const added = await addToAllocation(String(mine.id), take)
+            if (!added) {
+              conflicted++
+              continue
+            }
           } else {
             await client.request(
               post(`/items/${matchCfg.collection}`, { ...built.seed, [fk]: c.id, [qtyF]: take })
@@ -1366,6 +1393,10 @@ function AutoAllocateButton({
       )
       if (short.length > 0)
         parts.push(`short on row${short.length === 1 ? '' : 's'} ${short.join(', ')}`)
+      if (conflicted > 0)
+        parts.push(
+          `${conflicted} allocation${conflicted === 1 ? '' : 's'} kept changing while this ran — left as saved; run again`
+        )
       setSummary(parts.join(' — '))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       qc.invalidateQueries({ queryKey: ['match-agg'] })
@@ -2252,6 +2283,46 @@ export function InlineTableField({
     staleTime: 30_000
   })
 
+  // Mid-air for lines (H4 / M1): every saved row's base revision is taken
+  // from the READ that showed it — one batched `/revisions/latest` per read
+  // of new or changed rows — and every write to a saved row carries it, so a
+  // newer save by someone else of the same field is a 409 (the Theirs / Mine
+  // chooser below), never a silent overwrite. A read-only grid writes nothing.
+  const rowBases = useMemo(
+    () => rowBaseBookFor(client, relatedCollection),
+    [client, relatedCollection]
+  )
+  useEffect(() => {
+    if (!isNew && !readOnly) rowBases.noteRows(rawRows)
+  }, [rawRows, rowBases, isNew, readOnly])
+  /** Extra keys a staged edit of a saved row carries: the base from the read
+   *  that showed it, which the form sends on the record Save. */
+  const stagedBase = (rowId: string): Record<string, unknown> => {
+    if (isNew) return {}
+    const b = rowBases.settled(rowId)
+    return typeof b === 'number' && b > 0 ? { __base_revision: b } : {}
+  }
+  // Immediate writes that met someone else's newer save, waiting on the
+  // person's Theirs / Mine pick (same chooser as the record form's lines).
+  const [lineConflicts, setLineConflicts] = useState<LineConflict[] | null>(null)
+  /** Write one saved row now, against its read-time base. True = written;
+   *  false = refused as a mid-air collision (queued for the chooser, nothing
+   *  overwritten). Any other error is thrown as before. */
+  const writeRowRef = useRef<
+    (url: string, rowId: string, body: Record<string, unknown>) => Promise<boolean>
+  >(async () => false)
+  /** Collisions met during one action, shown together when it ends. */
+  const conflictBatchRef = useRef<LineConflict[]>([])
+  const flushConflicts = () => {
+    const list = conflictBatchRef.current
+    conflictBatchRef.current = []
+    if (list.length === 0) return
+    setLineConflicts((prev) => {
+      const byRow = new Map((prev ?? []).map((c) => [c.rowId, c]))
+      for (const c of list) byRow.set(c.rowId, c)
+      return [...byRow.values()]
+    })
+  }
   // Cell marks decorate rows that already render — the read waits for the
   // grid's own rows and the form's reads to settle first.
   const provenanceSettled = useAfterIdle(2000)
@@ -3028,14 +3099,16 @@ export function InlineTableField({
       if (isPendingMode && staging) {
         staging.queueEdit(relatedCollection, manyField, rowId, {
           ...patchValues,
-          _change_reason: reason
+          _change_reason: reason,
+          ...stagedBase(rowId)
         })
         return
       }
       try {
-        await client.request(
-          patch(`/items/${relatedCollection}/${rowId}`, { ...patchValues, _change_reason: reason })
-        )
+        await writeRowNow(`/items/${relatedCollection}/${rowId}`, rowId, {
+          ...patchValues,
+          _change_reason: reason
+        })
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       } catch (err) {
         toast.error(`Could not save: ${userErrorMessage(err, 'unknown error')}`)
@@ -3965,6 +4038,48 @@ export function InlineTableField({
   const LOCAL_WRITE_GRACE_MS = 10_000
   const stampLocalWrite = (id: string | number) =>
     localWritesRef.current.set(String(id), Date.now())
+  writeRowRef.current = async (url, rowId, body) => {
+    const r = await writeLineGuarded(client, rowBases, url, rowId, body, {
+      key: `${relatedCollection}.${manyField}`,
+      label: lineLabelOf(rows, rowId, rowOrderField)
+    })
+    if (!r.ok) {
+      conflictBatchRef.current.push(r.conflict)
+      return false
+    }
+    stampLocalWrite(rowId)
+    return true
+  }
+  /** One immediate write outside a bulk run: written, or shown in the chooser. */
+  const writeRowNow = async (url: string, rowId: string, body: Record<string, unknown>) => {
+    const ok = await writeRowRef.current(url, rowId, body)
+    if (!ok) flushConflicts()
+    return ok
+  }
+  /** The person picked Theirs / Mine: "Mine" fields save against the newer
+   *  revision (a second collision asks again); "Theirs" fields are left as
+   *  the other person saved them. */
+  const resolveLineConflicts = async (theirsKeys: Set<string>) => {
+    const list = lineConflicts ?? []
+    setLineConflicts(null)
+    let kept = 0
+    for (const lc of list) {
+      const theirs = new Set(
+        lc.conflicts.filter((c) => theirsKeys.has(lineConflictKey(lc, c.field))).map((c) => c.field)
+      )
+      const next = resolveLineCollision(lc.mine, theirs)
+      if (!next) continue
+      if (lc.latest > 0) rowBases.set(lc.rowId, lc.latest)
+      try {
+        if (await writeRowRef.current(lc.url, lc.rowId, next)) kept++
+      } catch (err) {
+        toast.error(`${lc.label}: ${userErrorMessage(err, 'could not save')}`)
+      }
+    }
+    flushConflicts()
+    qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+    if (kept === 0 && list.length > 0) toast.success('Kept the newer values')
+  }
   const displayKeysSig = displayCols
     .map((c) => c.field)
     .filter((f) => !f.includes('.'))
@@ -4037,9 +4152,11 @@ export function InlineTableField({
         added.add(id)
         continue
       }
-      // The user's own staged change is not "remote"; neither is a write this
-      // tab made moments ago and the fetch is only now reflecting.
-      if (pendingEdits.has(id) || wroteRecently(id, now)) continue
+      // A write this tab made moments ago is not "remote". A row with a
+      // staged edit still counts (a10-3): the saved row moving under it means
+      // someone else saved it — the row says "Changed by others" and Save
+      // asks which value wins. (Staged values never reach rawRows.)
+      if (wroteRecently(id, now)) continue
       if (!snapshotsEqual(snapshotRow(r), b)) changed.add(id)
     }
     for (const id of base.keys()) if (!idsNow.has(id)) removed.push(id)
@@ -4094,6 +4211,8 @@ export function InlineTableField({
       }
       setDraftFields(patch)
       setRemoteDismissed(next)
+      // Every remote change settled: the save is a choice made against them.
+      if (!only || remoteRowChanges.length === 1) noteEditorBase(rowId)
     }
     const keepMine = () => {
       const next: Record<string, unknown> = { ...remoteDismissed }
@@ -4102,6 +4221,7 @@ export function InlineTableField({
         if (editBaseRef.current) editBaseRef.current.snap[c.field] = c.theirs
       }
       setRemoteDismissed(next)
+      noteEditorBase(rowId)
     }
     return (
       <div
@@ -4527,6 +4647,7 @@ export function InlineTableField({
       let swapped = 0
       let unresolved = 0
       let failed = 0
+      let conflicted = 0
       for (const job of jobs) {
         for (const id of job.ids)
           swapDoneRef.current.add(`${job.rule.child_field}|${id}|${job.filterKey}`)
@@ -4632,13 +4753,17 @@ export function InlineTableField({
           const id = String(r.id)
           const changes = await derive({ ...r, ...(pendingEdits.get(id) ?? {}) })
           if ((isPendingMode || isNew) && staging) {
-            staging.queueEdit(relatedCollection, manyField, id, changes)
+            staging.queueEdit(relatedCollection, manyField, id, { ...changes, ...stagedBase(id) })
           } else {
-            const ok = await client
-              .request(patch(`/items/${relatedCollection}/${id}`, changes))
-              .then(() => true)
-              .catch(() => false)
-            if (!ok) {
+            const ok = await writeRowRef
+              .current(`/items/${relatedCollection}/${id}`, id, changes)
+              .then((written) => (written ? 'ok' : 'conflict'))
+              .catch(() => 'failed' as const)
+            if (ok === 'conflict') {
+              conflicted++
+              continue
+            }
+            if (ok !== 'ok') {
               failed++
               continue
             }
@@ -4670,6 +4795,8 @@ export function InlineTableField({
         toast.warning(
           `${unresolved + failed} ${unresolved + failed === 1 ? 'line' : 'lines'} could not be switched — no matching default option${failed ? ' / save failed' : ''}`
         )
+      // Lines someone else changed meanwhile: the chooser, nothing overwritten.
+      if (conflicted) flushConflicts()
     })().finally(() => {
       swapBusyRef.current = false
     })
@@ -5013,6 +5140,28 @@ export function InlineTableField({
       })
   }
 
+  // Mid-air for lines (a10-3): the revision a row's editor opened on. The
+  // row's save carries it (`_base_revision` on an immediate PATCH; handed to
+  // the form's staging as `__base_revision`, which the form sends on the
+  // record Save), so the server refuses a write over someone else's newer
+  // save of the same field (409) instead of silently overwriting it.
+  const editorBaseRef = useRef<Map<string, Promise<number | null>>>(new Map())
+  function noteEditorBase(id: string) {
+    if (isNew || id === 'new' || id.startsWith('pending:')) return
+    // An already staged row keeps the base it was first staged on (the form).
+    if (isPendingMode && pendingEdits.has(id)) {
+      editorBaseRef.current.delete(id)
+      return
+    }
+    // The base of the row AS THE GRID SHOWS IT (M1): taken from the read
+    // that brought this row, not at open — someone else's save between the
+    // read and the open must not become the base. Unknown = fetched now.
+    editorBaseRef.current.set(id, rowBases.baseOf(id))
+  }
+  /** The editor-open base for a row, settled (null when unknown). */
+  const editorBaseOf = async (id: string): Promise<number | null> =>
+    (await editorBaseRef.current.get(id)) ?? null
+
   function startEdit(row: Record<string, unknown>) {
     if (readOnly) return
     const id = String(row.id)
@@ -5030,6 +5179,7 @@ export function InlineTableField({
     // #16 — remember what the row held when its editor opened, so a write by
     // someone else while it is open shows up as a per-field ghost.
     editBaseRef.current = { rowId: id, snap: snapshotRow(row) }
+    noteEditorBase(id)
     setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(id, draft)
   }
@@ -5298,12 +5448,23 @@ export function InlineTableField({
       ? applyComputedFields({ ...cur.draft, [k]: v })
       : applyComputedFields({ [k]: v })
     const filled = v !== null && v !== undefined && v !== ''
+    // a02-8: a cell flagged by the last Save (required, a bad number, a rule)
+    // stops being red once it changes — filled, or emptied when the column is
+    // not required — and the message goes with the last flagged cell. It used
+    // to stay red after "-5" was cleared, and the row grew under the cursor.
+    const required = !!displayCols.find((c) => c.field === k)?.required
+    const leaves = (filled || !required) && !!cur?.missing?.includes(k)
+    const nextMissing = leaves ? (cur?.missing ?? []).filter((f) => f !== k) : cur?.missing
+    if (leaves && nextMissing?.length === 0) setUniqueError(null)
     setEditState((s) =>
       s
         ? {
             ...s,
             draft: nextDraft,
-            missing: filled && s.missing?.includes(k) ? s.missing.filter((f) => f !== k) : s.missing
+            missing:
+              (filled || !required) && s.missing?.includes(k)
+                ? s.missing.filter((f) => f !== k)
+                : s.missing
           }
         : s
     )
@@ -5677,10 +5838,13 @@ export function InlineTableField({
             clearIfStillEditing()
             return true
           }
+          const base = await editorBaseOf(editState.rowId)
           staging.queueEdit(relatedCollection, manyField, editState.rowId, {
             ...queuedPayload,
-            ...Object.fromEntries(nestedOpsEntries)
+            ...Object.fromEntries(nestedOpsEntries),
+            ...(base != null ? { __base_revision: base } : {})
           })
+          editorBaseRef.current.delete(editState.rowId)
           clearIfStillEditing()
           return true
         }
@@ -5688,9 +5852,12 @@ export function InlineTableField({
           clearIfStillEditing()
           return true
         }
+        const base = await editorBaseOf(editState.rowId)
+        const withBase = (body: Record<string, unknown>) =>
+          base != null ? { ...body, _base_revision: base } : body
         try {
           await client.request(
-            patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, rowPayload)
+            patch(`/items/${relatedCollection}/${editState.rowId}${pCtx}`, withBase(rowPayload))
           )
         } catch (err) {
           const challenge = changeReasonChallenge(err)
@@ -5699,7 +5866,11 @@ export function InlineTableField({
             setCrChallenge({
               challenge,
               retry: async (reason: string) => {
-                await client.request(patch(url, { ...rowPayload, _change_reason: reason }))
+                await client.request(
+                  patch(url, withBase({ ...rowPayload, _change_reason: reason }))
+                )
+                editorBaseRef.current.delete(savedRowId)
+                rowBases.forget(savedRowId)
                 stampLocalWrite(savedRowId)
                 qc.invalidateQueries({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
@@ -5710,8 +5881,25 @@ export function InlineTableField({
             setSaving(false)
             return false
           }
+          const coll = midairCollisionOf(err)
+          if (coll) {
+            // Someone else saved this line after the editor opened. The fresh
+            // row brings the "Changed by others while you edit" strip (Take
+            // theirs / Keep mine per field); the next Save writes what is in
+            // the editor then, as a choice made against the newer save.
+            editorBaseRef.current.set(savedRowId, Promise.resolve(coll.latest || null))
+            if (coll.latest > 0) rowBases.set(savedRowId, coll.latest)
+            qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+            toast.warning(
+              'Someone else changed this line while you edited it — take their values or keep yours, then save again'
+            )
+            setSaving(false)
+            return false
+          }
           throw err
         }
+        editorBaseRef.current.delete(savedRowId)
+        rowBases.forget(savedRowId)
         stampLocalWrite(savedRowId)
         qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       }
@@ -5762,16 +5950,30 @@ export function InlineTableField({
           rows
             .filter((r) => !pendingDeletes.has(String(r.id)))
             .forEach((row) =>
-              staging.queueEdit(relatedCollection, manyField, String(row.id), applyValues)
+              staging.queueEdit(relatedCollection, manyField, String(row.id), {
+                ...applyValues,
+                ...stagedBase(String(row.id))
+              })
             )
         } else {
-          await Promise.all(
-            rows.map((row) =>
-              client.request(patch(`/items/${relatedCollection}/${row.id}${pCtx}`, applyValues))
+          // Each line against the base the grid read it at (H4): a line
+          // someone else changed meanwhile goes to the chooser, not over.
+          try {
+            await Promise.all(
+              rows.map((row) =>
+                writeRowRef.current(
+                  `/items/${relatedCollection}/${row.id}${pCtx}`,
+                  String(row.id),
+                  applyValues
+                )
+              )
             )
-          )
-          for (const row of rows) stampLocalWrite(String(row.id))
-          qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
+          } finally {
+            flushConflicts()
+            qc.invalidateQueries({
+              queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+            })
+          }
         }
       }
       if (pendingRows.length && staging) {
@@ -6536,7 +6738,11 @@ export function InlineTableField({
             ...(pendingRows[t.idx] ?? t.row),
             ...changes
           })
-        else staging.queueEdit(relatedCollection, manyField, t.key, changes)
+        else
+          staging.queueEdit(relatedCollection, manyField, t.key, {
+            ...changes,
+            ...stagedBase(t.key)
+          })
         applied++
       }
       finish(applied, [])
@@ -6559,14 +6765,14 @@ export function InlineTableField({
           continue
         }
         try {
-          await client.request(
-            patch(
-              `/items/${relatedCollection}/${t.key}${pCtx}`,
-              reason ? { ...changes, _change_reason: reason } : changes
-            )
+          // Against the base the grid read the line at (H4): a line someone
+          // else changed meanwhile waits in the chooser, not overwritten.
+          const written = await writeRowRef.current(
+            `/items/${relatedCollection}/${t.key}${pCtx}`,
+            t.key,
+            reason ? { ...changes, _change_reason: reason } : changes
           )
-          stampLocalWrite(t.key)
-          applied++
+          if (written) applied++
         } catch (err) {
           const challenge = reason ? null : changeReasonChallenge(err)
           if (challenge) {
@@ -6579,6 +6785,7 @@ export function InlineTableField({
           failed.push(`#${t.key} ${userErrorMessage(err, 'failed')}`)
         }
       }
+      flushConflicts()
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
       finish(applied, failed)
     }
@@ -7262,6 +7469,21 @@ export function InlineTableField({
           void pending?.retry(reason)
         }}
       />
+      {lineConflicts && lineConflicts.length > 0 && (
+        <LineCollisionDialog
+          lines={lineConflicts}
+          intro='Someone else saved these line values after this table loaded, so your change was not written. Pick which value wins for each.'
+          cancelLabel='Keep theirs'
+          fieldLabel={(f) => cols.find((c) => c.field === f)?.label || titleCase(f)}
+          onCancel={() => {
+            setLineConflicts(null)
+            qc.invalidateQueries({
+              queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
+            })
+          }}
+          onResolve={(theirs) => void resolveLineConflicts(theirs)}
+        />
+      )}
       {!readOnly && (
         <div className='flex items-center gap-2 text-[11px]'>
           <span className='text-slate-400'>Add</span>
@@ -7324,6 +7546,10 @@ export function InlineTableField({
               pendingRows={pendingRows}
               pendingEdits={pendingEdits}
               pendingDeletes={pendingDeletes}
+              writeRow={(rowId, body) =>
+                writeRowNow(`/items/${relatedCollection}/${rowId}`, rowId, body)
+              }
+              stagedBase={stagedBase}
             />
           )}
           {autoAllocate &&
@@ -7367,11 +7593,15 @@ export function InlineTableField({
                 // Otherwise reuse the grid's own write paths: a pending-mode grid
                 // queues the edit for the parent save, an immediate grid PATCHes.
                 if (isPendingMode && staging) {
-                  staging.queueEdit(relatedCollection, manyField, rowId, changes)
+                  staging.queueEdit(relatedCollection, manyField, rowId, {
+                    ...changes,
+                    ...stagedBase(rowId)
+                  })
                   return
                 }
-                await client.request(patch(`/items/${relatedCollection}/${rowId}`, changes))
-                stampLocalWrite(rowId)
+                // Against the line's read-time base (H4); a collision opens
+                // the chooser instead of overwriting.
+                await writeRowNow(`/items/${relatedCollection}/${rowId}`, rowId, changes)
                 await qc.invalidateQueries({
                   queryKey: ['o2m-rows', relatedCollection, manyField, parentId]
                 })
@@ -8196,6 +8426,14 @@ export function InlineTableField({
                               {isPendingDelete ? (
                                 <span className='inline-flex text-[10px] font-medium text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'>
                                   Delete
+                                </span>
+                              ) : isPendingEdit && sinceOpened?.changed.has(id) ? (
+                                <span
+                                  data-row-changed-by-others=''
+                                  data-tip='Someone else saved this line after you changed it. Save asks which value wins.'
+                                  className='nvr-pop inline-flex whitespace-nowrap text-[10px] font-medium text-red-700 bg-red-50 border border-red-200 dark:text-red-300 dark:bg-red-500/10 dark:border-red-500/40 rounded px-1.5 py-0.5'
+                                >
+                                  Changed by others
                                 </span>
                               ) : isPendingEdit ? (
                                 <span className='nvr-pop inline-flex text-[10px] font-medium text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-500/10 dark:border-amber-500/40 rounded px-1.5 py-0.5'>

@@ -1237,13 +1237,122 @@ export async function resolveStateOwners(
   instanceId: string | null,
   collection: string,
   itemId: string,
-  database: typeof db = db
+  database: typeof db = db,
+  opts: OwnerResolutionOptions = {}
 ): Promise<ResolvedOwner[]> {
   const result = await resolveStateOwnersBatch(
     [{ key: '_single', stateId, instanceId, collection, itemId }],
-    database
+    database,
+    opts
   )
   return result.get('_single') ?? []
+}
+
+/** Account states that can never act on a record. */
+const INACTIVE_STATUSES = new Set(['suspended', 'archived', 'deleted', 'inactive'])
+
+/** True for a person who can no longer act: suspended (or archived), redacted,
+ *  or renamed "Redacted Redacted" by the legacy redaction proc. */
+export function isInactivePerson(row: {
+  status?: string | null
+  is_redacted?: boolean | number | null
+  first_name?: string | null
+  last_name?: string | null
+}): boolean {
+  if (INACTIVE_STATUSES.has(String(row.status ?? '').toLowerCase())) return true
+  if (row.is_redacted === true || row.is_redacted === 1) return true
+  return (
+    String(row.first_name ?? '').toLowerCase() === 'redacted' &&
+    String(row.last_name ?? '').toLowerCase() === 'redacted'
+  )
+}
+
+/**
+ * The owners who can still act — suspended / redacted people left out. For
+ * what a person is TOLD (mail "waiting on …", payload owners); owner
+ * resolution itself keeps them, so a step held only by inactive people still
+ * reads as covered there and shows up in owner-gaps as a gap of its own.
+ * Best-effort: a failed lookup keeps the list as it was.
+ */
+export async function activeOwnersOnly<T extends { id: string }>(
+  owners: T[],
+  database: typeof db = db
+): Promise<T[]> {
+  if (owners.length === 0) return owners
+  try {
+    const ids = [...new Set(owners.map((o) => String(o.id)))]
+    const rows = (await selectInChunks(ids, 2000, (chunk) =>
+      database('nivaro_users')
+        .whereIn('id', chunk)
+        .select('id', 'status', 'is_redacted', 'first_name', 'last_name')
+    )) as Array<{
+      id: string
+      status: string | null
+      is_redacted: boolean | number | null
+      first_name: string | null
+      last_name: string | null
+    }>
+    const dead = new Set(
+      rows.filter((r) => isInactivePerson(r)).map((r) => String(r.id).toUpperCase())
+    )
+    if (dead.size === 0) return owners
+    return owners.filter((o) => !dead.has(String(o.id).toUpperCase()))
+  } catch {
+    return owners
+  }
+}
+
+/**
+ * The route a SKIPPED state is left by: the first transition (by its own
+ * sort) whose target state sorts AFTER the skipped one. Send-backs sort
+ * before their source (the row-menu rule reads them the same way), so a
+ * skip never turns into a send-back — Finance Review's "Send Back → Started"
+ * (sort 0) beat its "Approve" (sort 2) and a no-owner skip would have
+ * returned the request to Started. `to_previous` routes never carry a skip.
+ * A template whose states are not sorted (no forward route found) keeps the
+ * old pick: the first route by sort.
+ */
+export function pickSkipTransition<
+  T extends { to_state: string; sort?: number | null; to_previous?: unknown }
+>(
+  transitions: T[],
+  fromSort: number | null | undefined,
+  sortOf: Map<string, number>
+): T | undefined {
+  const ordered = [...transitions].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0))
+  const usable = ordered.filter((t) => !coerceBool(t.to_previous))
+  if (fromSort != null && Number.isFinite(Number(fromSort))) {
+    const forward = usable.find((t) => {
+      const s = sortOf.get(String(t.to_state).toUpperCase())
+      return s != null && s > Number(fromSort)
+    })
+    if (forward) return forward
+  }
+  return usable[0] ?? ordered[0]
+}
+
+/** Reads the routes out of `fromState` and picks the one a skip takes. */
+export async function nextSkipTransition(
+  database: typeof db,
+  templateId: string,
+  fromState: Pick<WorkflowState, 'id' | 'sort'>
+): Promise<WorkflowTransition | undefined> {
+  const routes = (await database<WorkflowTransition>('nivaro_workflow_transitions')
+    .where({ template: templateId, from_state: fromState.id })
+    .whereNot({ to_state: fromState.id })
+    .orderBy('sort')) as WorkflowTransition[]
+  if (routes.length <= 1) return routes[0]
+  const states = (await database('nivaro_workflow_states')
+    .where({ template: templateId })
+    .select('id', 'sort')) as Array<{ id: string; sort: number | null }>
+  const sortOf = new Map<string, number>()
+  for (const st of states)
+    if (st.sort != null) sortOf.set(String(st.id).toUpperCase(), Number(st.sort))
+  return pickSkipTransition(
+    routes as Array<WorkflowTransition & { to_previous?: unknown }>,
+    fromState.sort,
+    sortOf
+  )
 }
 
 // ─── Skip criteria / auto-advance ─────────────────────────────────────────────
@@ -1270,7 +1379,12 @@ export async function evaluateSkipCriteria(
     const results: boolean[] = []
     for (const cond of criteria.conditions) {
       if (cond.type === 'no_owners') {
-        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
+        // ASSIGNED owners only: the binding's owner fallback (the creator)
+        // keeps a record in a queue — it is not someone who can approve it,
+        // and counting it meant a no-owner step never skipped.
+        const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database, {
+          skipFallback: true
+        })
         results.push(owners.length === 0)
       } else if (cond.type === 'field_compare') {
         // Dotted relation paths / M2M aliases resolve like the detailed
@@ -1331,11 +1445,7 @@ export async function resolveTransitionTarget(
 
   if (!shouldSkip) return state
 
-  const nextTransition = await database<WorkflowTransition>('nivaro_workflow_transitions')
-    .where({ template: templateId, from_state: toStateId })
-    .whereNot({ to_state: toStateId })
-    .orderBy('sort')
-    .first()
+  const nextTransition = await nextSkipTransition(database, templateId, state)
 
   if (!nextTransition) return state
 
@@ -1661,6 +1771,21 @@ export async function previewOwnerGroupImpact(
   return { state_key: state.key, matched, total_in_state: instances.length, sample }
 }
 
+/**
+ * The instances nobody who can ACT owns: no assigned owner (resolve with
+ * {skipFallback} — the queue-only creator fallback is not cover), or only
+ * inactive ones (`live` = upper-cased ids of active owners). Keyed by item.
+ */
+export function instancesWithoutActingOwner<T extends { item: string }>(
+  instances: T[],
+  owners: Map<string, Array<{ id: string }>>,
+  live: Set<string>
+): T[] {
+  return instances.filter(
+    (i) => !(owners.get(String(i.item)) ?? []).some((o) => live.has(String(o.id).toUpperCase()))
+  )
+}
+
 export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapCluster[]> {
   const bindings = (await db('nivaro_workflow_bindings')
     .where({ template: templateId })
@@ -1704,8 +1829,15 @@ export async function analyzeOwnerGaps(templateId: string): Promise<OwnerGapClus
       collection: b.collection,
       itemId: String(i.item)
     }))
-    const owners = await resolveStateOwnersBatch(requests)
-    const unowned = instances.filter((i) => (owners.get(String(i.item)) ?? []).length === 0)
+    // A gap is a record nobody who can ACT owns: the binding's owner
+    // fallback (the creator, queue-only) does not cover a step, and neither
+    // do suspended / redacted people.
+    const owners = await resolveStateOwnersBatch(requests, db, { skipFallback: true })
+    const allIds = [...new Set([...owners.values()].flat().map((o) => String(o.id)))]
+    const live = new Set(
+      (await activeOwnersOnly(allIds.map((id) => ({ id })))).map((o) => o.id.toUpperCase())
+    )
+    const unowned = instancesWithoutActingOwner(instances, owners, live)
     if (unowned.length === 0) continue
 
     // Per state: prepared groups + the records' resolved filter values.

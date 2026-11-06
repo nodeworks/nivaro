@@ -1,16 +1,16 @@
 import type { DigestLine, DigestSection, DigestSectionProvider } from '@nivaro/extension-kit'
-import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { linkTo, recordLink } from './app-links.js'
 import { chunkArray } from './db-batch.js'
 import { sendRawMail } from './mail.js'
 import { classifyNotification, emailModeFor, type NotifyPrefs } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
+  type AddendumInfo,
   addendumLabel,
-  addendumRecordPath,
   loadAddendums
 } from './pipeline-subject.js'
 import { fetchQueueItems } from './queues.js'
@@ -115,14 +115,17 @@ async function buildNotificationDigestSection(
     (n) => emailModeFor(np, classifyNotification(n.subject ?? ''), legacy) !== 'off'
   )
   if (kept.length === 0) return null
-  return {
-    title: `${cadence === 'weekly' ? 'This week' : 'Since your last summary'} — ${kept.length} notification${kept.length === 1 ? '' : 's'}`,
-    lines: kept.map((n) => ({
+  const lines: DigestLine[] = []
+  for (const n of kept) {
+    lines.push({
       text: n.subject ?? 'Notification',
       sub: (n.message ?? '').slice(0, 120) || null,
-      url:
-        n.collection && n.item ? `${config.ADMIN_URL}/collections/${n.collection}/${n.item}` : null
-    }))
+      url: n.collection && n.item ? await recordLinkFor(n.collection, n.item, userId) : null
+    })
+  }
+  return {
+    title: `${cadence === 'weekly' ? 'This week' : 'Since your last summary'} — ${kept.length} notification${kept.length === 1 ? '' : 's'}`,
+    lines
   }
 }
 
@@ -155,7 +158,9 @@ async function buildQueueSubscriptionSection(
       lines.push({
         text: sub.queue_name,
         sub: parts.join(' · '),
-        url: `${config.ADMIN_URL}/queues/${sub.queue_id}`
+        url: await linkTo('queue', { id: sub.queue_id }, { recipientUserId: userId }).catch(
+          () => null
+        )
       })
     } catch (err) {
       console.warn('[daily-digest] queue summary failed for', sub.queue_id, err)
@@ -164,8 +169,34 @@ async function buildQueueSubscriptionSection(
   return lines.length > 0 ? { title: `Your queues (${lines.length})`, lines } : null
 }
 
+/** One open item a person owns — labelled and linked per recipient at send time. */
+export interface OwnedRef {
+  collection: string
+  item: string
+  stateLabel: string | null
+  addendum: AddendumInfo | null
+}
+
+/** Open items shown per person before "+N more"; the rest are on My Work. */
+export const MAX_OWNED_LINES = 25
+
+/** A record link in the RECIPIENT's app (portal for portal people, admin for
+ *  admins) — never raw ADMIN_URL (army 4, 2026-11-05). Null when no link
+ *  can be built. */
+async function recordLinkFor(
+  collection: string,
+  item: string,
+  userId: string,
+  query?: string
+): Promise<string | null> {
+  return recordLink(collection, item, { recipientUserId: userId, query }).catch(() => null)
+}
+
 /** Open workflow-engine items where the user is a resolved current-state owner. */
-async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
+async function buildOwnershipBuckets(): Promise<{
+  buckets: Map<string, OwnedRef[]>
+  labelFor: (collection: string) => string
+}> {
   // Bound collections' instances PLUS addendum instances (never bound —
   // pipeline-subject.ts); an addendum awaiting your approval is an action.
   const instances = (await db('nivaro_workflow_instances as wi')
@@ -188,12 +219,18 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
     current_state: string
     state_label: string | null
   }>
-  const buckets = new Map<string, DigestLine[]>()
-  if (instances.length === 0) return buckets
+  const buckets = new Map<string, OwnedRef[]>()
 
   // Collection labels from the registry (singular preferred), titleCase
   // fallback — never hardcode deployment collection names here.
   const collectionLabels = new Map<string, string>()
+  const labelFor = (c: string) =>
+    collectionLabels.get(c) ??
+    c
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (ch) => ch.toUpperCase())
+      .replace(/s$/, '')
+  if (instances.length === 0) return { buckets, labelFor }
   try {
     const distinct = [...new Set(instances.map((i) => i.collection))]
     const metas = (await db('nivaro_collections')
@@ -209,14 +246,8 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
       }
     }
   } catch {
-    /* fall back to titleCase below */
+    /* fall back to titleCase */
   }
-  const labelFor = (c: string) =>
-    collectionLabels.get(c) ??
-    c
-      .replace(/_/g, ' ')
-      .replace(/\b\w/g, (ch) => ch.toUpperCase())
-      .replace(/s$/, '')
 
   const ownersByKey = await resolveStateOwnersBatch(
     instances.map((inst) => ({
@@ -233,24 +264,87 @@ async function buildOwnershipBuckets(): Promise<Map<string, DigestLine[]>> {
   for (const inst of instances) {
     const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
     const info =
-      inst.collection === ADDENDUM_COLLECTION ? addendumInfos.get(String(inst.item)) : undefined
-    const addendumPath = info ? addendumRecordPath(info) : null
-    const text = info
-      ? addendumLabel(
-          info,
-          info.parentCollection ? `${labelFor(info.parentCollection)} ${info.parentId}` : null
-        )
-      : `${labelFor(inst.collection)} ${inst.item}`
+      inst.collection === ADDENDUM_COLLECTION
+        ? (addendumInfos.get(String(inst.item)) ?? null)
+        : null
     for (const o of owners) {
       if (!buckets.has(o.id)) buckets.set(o.id, [])
       buckets.get(o.id)!.push({
-        text,
-        sub: inst.state_label,
-        url: `${config.ADMIN_URL}${addendumPath ?? `/collections/${inst.collection}/${inst.item}`}`
+        collection: inst.collection,
+        item: String(inst.item),
+        stateLabel: inst.state_label,
+        addendum: info
       })
     }
   }
-  return buckets
+  return { buckets, labelFor }
+}
+
+/** Friendly labels (the collection's display template — "CR26-81383", not the
+ *  internal id) for every ref that will actually be shown, one batched read
+ *  per collection. Addendums label by their PARENT record. */
+async function labelOwnedRefs(refs: OwnedRef[]): Promise<Record<string, string>> {
+  const byCollection = new Map<string, Set<string>>()
+  for (const r of refs) {
+    const c = r.addendum ? r.addendum.parentCollection : r.collection
+    const id = r.addendum ? r.addendum.parentId : r.item
+    if (!c || !id) continue
+    if (!byCollection.has(c)) byCollection.set(c, new Set())
+    byCollection.get(c)!.add(String(id))
+  }
+  if (byCollection.size === 0) return {}
+  try {
+    const { getLabels } = await import('./queues.js')
+    return await getLabels(byCollection)
+  } catch {
+    return {}
+  }
+}
+
+/** The digest lines for one person's owned items: the first MAX_OWNED_LINES,
+ *  labelled + linked for THEM, then a "+N more" line to My Work. */
+export async function ownedLines(
+  owned: OwnedRef[],
+  labels: Record<string, string>,
+  labelFor: (collection: string) => string,
+  links: {
+    record(collection: string, item: string, query?: string): Promise<string | null>
+    myWork(): Promise<string | null>
+  }
+): Promise<DigestLine[]> {
+  const lines: DigestLine[] = []
+  for (const r of owned.slice(0, MAX_OWNED_LINES)) {
+    if (r.addendum) {
+      const pc = r.addendum.parentCollection
+      const pid = r.addendum.parentId
+      const parentLabel =
+        pc && pid ? `${labelFor(pc)} ${labels[`${pc}:${pid}`]?.trim() || pid}` : null
+      lines.push({
+        text: addendumLabel(r.addendum, parentLabel),
+        sub: r.stateLabel,
+        url:
+          pc && pid
+            ? await links.record(pc, pid, `addendum=${encodeURIComponent(r.addendum.id)}`)
+            : null
+      })
+      continue
+    }
+    const friendly = labels[`${r.collection}:${r.item}`]?.trim()
+    lines.push({
+      text: `${labelFor(r.collection)} ${friendly || r.item}`,
+      sub: r.stateLabel,
+      url: await links.record(r.collection, r.item)
+    })
+  }
+  const more = owned.length - lines.length
+  if (more > 0) {
+    lines.push({
+      text: `+${more} more — see them all on My Work`,
+      sub: null,
+      url: await links.myWork()
+    })
+  }
+  return lines
 }
 
 /**
@@ -416,7 +510,12 @@ export async function runDailyActionDigest(
   }
   if (digestUsers.size === 0) return { sent: 0 }
 
-  const ownership = await buildOwnershipBuckets()
+  const { buckets: ownership, labelFor } = await buildOwnershipBuckets()
+  // Labels only for the items that will be shown (the first MAX_OWNED_LINES
+  // of each person due a summary) — one batched read per collection.
+  const ownedLabels = await labelOwnedRefs(
+    [...digestUsers.keys()].flatMap((id) => (ownership.get(id) ?? []).slice(0, MAX_OWNED_LINES))
+  )
   const deferredByUser = new Map<string, typeof deferred>()
   for (const d of deferred) {
     if (!deferredByUser.has(d.user)) deferredByUser.set(d.user, [])
@@ -463,7 +562,10 @@ export async function runDailyActionDigest(
     if (owned.length > 0) {
       sections.push({
         title: `Open items assigned to you (${owned.length})`,
-        lines: owned.slice(0, 25)
+        lines: await ownedLines(owned, ownedLabels, labelFor, {
+          record: (collection, item, query) => recordLinkFor(collection, item, userId, query),
+          myWork: () => linkTo('my_work', {}, { recipientUserId: userId }).catch(() => null)
+        })
       })
     }
 

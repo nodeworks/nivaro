@@ -2,6 +2,7 @@ import { Check, MapPin, Star } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { fiscalPeriodOf, getFiscalStartMonth } from '../../lib/fiscal'
 import { Input } from '../ui/input'
+import { NumberDraftInput } from '../ui/number-draft-input'
 import { parseJson } from './helpers'
 import type { CMSField } from './types'
 
@@ -710,27 +711,23 @@ export function RepeaterField({
                         }
                         className='mt-1 block h-4 w-4 accent-nvr-cyan'
                       />
+                    ) : col.type === 'number' ? (
+                      // Keeps "2.0" as typed until the next key (army 4 a01-15).
+                      <NumberDraftInput
+                        type='number'
+                        value={row[col.key]}
+                        onValue={(n) =>
+                          commit(rows.map((r, j) => (j === i ? { ...r, [col.key]: n } : r)))
+                        }
+                        className='mt-0.5 h-7 text-[12.5px]'
+                      />
                     ) : (
                       <Input
-                        type={
-                          col.type === 'number' ? 'number' : col.type === 'date' ? 'date' : 'text'
-                        }
+                        type={col.type === 'date' ? 'date' : 'text'}
                         value={String(row[col.key] ?? '')}
                         onChange={(e) =>
                           commit(
-                            rows.map((r, j) =>
-                              j === i
-                                ? {
-                                    ...r,
-                                    [col.key]:
-                                      col.type === 'number'
-                                        ? e.target.value === ''
-                                          ? null
-                                          : Number(e.target.value)
-                                        : e.target.value
-                                  }
-                                : r
-                            )
+                            rows.map((r, j) => (j === i ? { ...r, [col.key]: e.target.value } : r))
                           )
                         }
                         className='mt-0.5 h-7 text-[12.5px]'

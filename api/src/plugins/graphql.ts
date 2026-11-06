@@ -364,7 +364,9 @@ export async function graphqlPlugin(
   app.post('/graphql', async (req, reply) => {
     try {
       await authenticate(req, reply)
-    } catch {
+    } catch (err) {
+      // A person still waiting for access is refused outright (army 4 B1), not run anonymous.
+      if ((err as { code?: string })?.code === 'ACCESS_PENDING') throw err
       // unauthenticated — resolvers will throw UNAUTHENTICATED
     }
 

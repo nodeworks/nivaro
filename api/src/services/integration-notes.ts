@@ -34,6 +34,15 @@ interface LedgerRow {
   resolved_at: Date | null
 }
 
+/**
+ * A skip that only says "this record is not ready for that partner yet" (no
+ * external id, none of the keys set) is expected on every early record — a
+ * note on every submit naming partner systems people never see is noise
+ * (army 4, 2026-11-05: "LinX not told … no Nuvolo ID yet" on every submit).
+ * The integrations board and the ledger still have the row.
+ */
+const NOT_YET_SKIP = /^skip_(when_empty|unless_any):/
+
 /** One ledger row in the thread's words. '' means "do not render". */
 export function obligationNoteText(row: {
   api: string
@@ -49,6 +58,7 @@ export function obligationNoteText(row: {
     case 'pending':
       return `${row.api} sent (${row.kind}) — awaiting acknowledgement`
     case 'skipped':
+      if (NOT_YET_SKIP.test(String(row.reason ?? '').trim())) return ''
       return `${row.api} not told (${row.kind})${tail}`
     case 'failed':
       return `${row.api} send failed (${row.kind})${tail}`

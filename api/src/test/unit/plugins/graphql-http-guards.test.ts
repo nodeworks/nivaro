@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ tenant: '', builds: 0, signedIn: false }))
+const state = vi.hoisted(() => ({ tenant: '', builds: 0, signedIn: false, pending: false }))
 
 vi.mock('../../../services/schema-builder.js', async () => {
   const g = await import('graphql')
@@ -25,6 +25,8 @@ vi.mock('../../../services/tenant-rooms.js', async (orig) => ({
 }))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
+    if (state.pending)
+      throw Object.assign(new Error('waiting'), { statusCode: 403, code: 'ACCESS_PENDING' })
     if (state.signedIn) {
       req.user = { id: 'U1', role: 'R' }
       req.isAdmin = true
@@ -41,6 +43,7 @@ beforeEach(async () => {
   state.tenant = ''
   state.builds = 0
   state.signedIn = false
+  state.pending = false
   app = Fastify()
   app.decorate('redis', {} as never)
   await app.register(graphqlPlugin, { prefix: '/api' })
@@ -60,6 +63,13 @@ describe('GraphQL HTTP guards', () => {
     const body = res.json() as { errors?: Array<{ message: string }>; data?: unknown }
     expect(body.data).toBeUndefined()
     expect(body.errors?.[0]?.message).toMatch(/introspection/i)
+  })
+
+  it('refuses a person still waiting for access outright, not as anonymous (army 4 B1)', async () => {
+    state.pending = true
+    const res = await post('{ built }')
+    expect(res.statusCode).toBe(403)
+    expect(res.json()).toMatchObject({ code: 'ACCESS_PENDING' })
   })
 
   it('allows introspection for a signed-in caller', async () => {

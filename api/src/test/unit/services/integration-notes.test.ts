@@ -92,7 +92,7 @@ describe('obligationNoteText', () => {
 })
 
 describe('plainObligationReason', () => {
-  it('words the stored skip vocabulary for people', () => {
+  it('leaves "not ready for that partner yet" skips out of the thread', () => {
     expect(
       obligationNoteText({
         api: 'LinX',
@@ -101,7 +101,22 @@ describe('plainObligationReason', () => {
         reason: 'skip_when_empty: nuvolo_id empty',
         trigger: 'transition'
       })
-    ).toBe('LinX not told (LinX — workflow status write-back) — this record has no Nuvolo ID yet')
+    ).toBe('')
+    expect(
+      obligationNoteText({
+        api: 'Partner',
+        kind: 'wf.state',
+        outcome: 'skipped',
+        reason: 'skip_unless_any: none of po_number, requisition_id is set',
+        trigger: 'transition'
+      })
+    ).toBe('')
+  })
+
+  it('words the stored skip vocabulary for people', () => {
+    expect(plainObligationReason('skip_when_empty: nuvolo_id empty')).toBe(
+      'this record has no Nuvolo ID yet'
+    )
     expect(plainObligationReason('skip_unless_any: none of po_number, requisition_id is set')).toBe(
       'this record has none of PO number, Requisition ID yet'
     )

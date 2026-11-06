@@ -11,6 +11,75 @@ type GridCol = {
   note: string | null
 }
 
+// Twin of @nivaro/shared ui/number-draft-input (army 4 a01-15): the typed text
+// is kept while the person types, so "2.0" is not re-rendered as "2" before the
+// "5" lands (2.05 became 25). Every change that parses commits its number;
+// leaving the cell drops the draft and shows the stored value.
+export function GridNumberInput({
+  value,
+  onValue,
+  placeholder
+}: {
+  value: unknown
+  onValue: (n: number | null) => void
+  placeholder?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = value === null || value === undefined ? '' : String(value)
+  return (
+    <input
+      type='number'
+      value={draft ?? shown}
+      onChange={(e) => {
+        const text = e.target.value
+        // Text the browser cannot read yet ("-") reads as "" with badInput.
+        if (text === '' && e.target.validity?.badInput) {
+          setDraft('')
+          return
+        }
+        setDraft(text)
+        if (text.trim() === '') return onValue(null)
+        const n = Number(text)
+        if (Number.isFinite(n)) onValue(n)
+      }}
+      onBlur={() => setDraft(null)}
+      placeholder={placeholder}
+      data-nf-grid-cell
+    />
+  )
+}
+
+/** Per record id, its newest revision (null = none yet); unreadable ids are
+ *  absent. One `GET /revisions/latest` per 500 ids. */
+export async function latestRevisions(
+  client: { request: <T>(cmd: never) => Promise<T> },
+  collection: string,
+  ids: string[]
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>()
+  const list = [...new Set(ids)].filter((id) => id && id !== 'new')
+  for (let i = 0; i < list.length; i += 500) {
+    try {
+      const r = await client.request<{ data: Record<string, number | null> }>(
+        get('/revisions/latest', {
+          collection,
+          items: list.slice(i, i + 500).join(',')
+        }) as never
+      )
+      for (const [id, v] of Object.entries(r?.data ?? {}))
+        out.set(id, typeof v === 'number' && Number.isFinite(v) ? v : null)
+    } catch {
+      /* unknown bases are fetched again before the write */
+    }
+  }
+  return out
+}
+
+function isMidair(err: unknown): boolean {
+  const r = (err as { response?: { data?: { code?: string }; code?: string } })?.response
+  return (r?.data?.code ?? r?.code) === 'MIDAIR_COLLISION'
+}
+
 function titleCase(s: string) {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
@@ -43,6 +112,11 @@ export function InlineGridField({
   }, [])
 
   const hasPending = stagedEdits.size > 0 || stagedNew.length > 0 || stagedDeletes.size > 0
+  // Mid-air for lines (army4 H4/M1, twin of @nivaro/shared line-midair): each
+  // row's newest revision as of the read that showed it. A staged edit's
+  // PATCH carries it as `_base_revision`, so someone else's newer save of the
+  // same field is a 409 instead of a silent overwrite.
+  const basesRef = useRef<Map<string, number | null>>(new Map())
 
   const fetchRows = useCallback(async () => {
     if (!client || !itemId || !relCol || !manyField) return
@@ -54,7 +128,13 @@ export function InlineGridField({
           fields: '*'
         })
       )
-      if (mountedRef.current) setRows(res.data ?? [])
+      const read = res.data ?? []
+      basesRef.current = await latestRevisions(
+        client,
+        relCol,
+        read.map((r) => String(r.id))
+      )
+      if (mountedRef.current) setRows(read)
     } catch {
       if (mountedRef.current) setRows([])
     }
@@ -86,8 +166,29 @@ export function InlineGridField({
     for (const row of stagedNew) {
       await client.request(post(`/items/${relCol}`, { ...row, [manyField]: itemId }))
     }
-    for (const [id, changes] of stagedEdits) {
-      if (!stagedDeletes.has(id)) await client.request(patch(`/items/${relCol}/${id}`, changes))
+    const edits = [...stagedEdits].filter(([id]) => !stagedDeletes.has(id))
+    // A base the read did not get (failed read) is fetched now, never skipped.
+    const unknown = edits.map(([id]) => id).filter((id) => !((basesRef.current.get(id) ?? 0) > 0))
+    if (unknown.length > 0) {
+      const late = await latestRevisions(client, relCol, unknown)
+      for (const [id, b] of late) basesRef.current.set(id, b)
+    }
+    for (const [id, changes] of edits) {
+      const base = basesRef.current.get(id)
+      try {
+        await client.request(
+          patch(
+            `/items/${relCol}/${id}`,
+            typeof base === 'number' && base > 0 ? { ...changes, _base_revision: base } : changes
+          )
+        )
+      } catch (err) {
+        // Someone else saved this line since it was read: show their values
+        // (re-read), keep the edit staged, and let the Save fail loudly. The
+        // next Save is then a choice made against their save.
+        if (isMidair(err)) await fetchRows()
+        throw err
+      }
     }
     if (mountedRef.current) {
       setStagedEdits(new Map())
@@ -143,15 +244,7 @@ export function InlineGridField({
       )
     }
     if (isNum) {
-      return (
-        <input
-          type='number'
-          value={val === null || val === undefined ? '' : String(val)}
-          onChange={(e) => set(e.target.value === '' ? null : Number(e.target.value))}
-          placeholder={col.note ?? undefined}
-          data-nf-grid-cell
-        />
-      )
+      return <GridNumberInput value={val} onValue={set} placeholder={col.note ?? undefined} />
     }
     if (col.type === 'datetime' || col.interface === 'datetime') {
       return (

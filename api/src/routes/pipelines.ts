@@ -8,7 +8,7 @@ import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
 import { clearAutoFailures, heldForInstance } from '../services/auto-transition-memory.js'
-import { findRecordInstance } from '../services/branch-instances.js'
+import { excludeBranchChildren, findRecordInstance } from '../services/branch-instances.js'
 import {
   type BranchLane,
   type BranchLanes,
@@ -41,6 +41,7 @@ import {
   offeredToActor,
   visibleIds
 } from '../services/record-access.js'
+import { pickInstance } from '../services/record-state.js'
 import { formatWorkflowState, runRecordTransition } from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
@@ -492,6 +493,25 @@ interface BranchOwner {
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** One instance per record id, picked like findRecordInstance (pickInstance). */
+export function pickInstancePerItem<
+  T extends { id: string; item: string; completed_at: Date | null; started_at: Date | null }
+>(rows: T[]): T[] {
+  const byItem = new Map<string, T[]>()
+  for (const r of rows) {
+    const k = String(r.item)
+    const list = byItem.get(k)
+    if (list) list.push(r)
+    else byItem.set(k, [r])
+  }
+  const out: T[] = []
+  for (const list of byItem.values()) {
+    const pick = list.length === 1 ? list[0] : (pickInstance(list) as T | undefined)
+    if (pick) out.push(pick)
+  }
+  return out
+}
+
 /**
  * Who may add an owner to a record's pipeline: admins, and the people who own
  * its current step (checkTransitionOwner — groups, manual owners, delegates).
@@ -580,7 +600,70 @@ async function readableAddendumIds(req: FastifyRequest, ids: string[]): Promise<
   return out
 }
 
+/** A completed instance offers only moves authored FROM its own (terminal)
+ *  state — the manual-transition gate's escape rule, twin of the panel's. */
+export function offeredOnCompleted(
+  instance: { completed_at: unknown; current_state: string | null },
+  tx: { from_state: string | null }
+): boolean {
+  if (!instance.completed_at) return true
+  return (
+    String(tx.from_state ?? '').toUpperCase() === String(instance.current_state ?? '').toUpperCase()
+  )
+}
+
+/** Route params that name a template / state / transition row (uniqueidentifier). */
+const UUID_PARAMS = ['id', 'stateId', 'txId'] as const
+
+/**
+ * Which of a route's params are uniqueidentifiers, from its path inside this plugin. `:id` is
+ * a template id only where it is the FIRST segment (`/:id`, `/:id/states`, …); elsewhere it
+ * names another table — `/owner-group-users/:id` is an integer row (army 4 review H1: guarding
+ * it 404'd every "remove from owner group"). `:stateId` / `:txId` always name a state /
+ * transition row.
+ */
+export function uuidParamsOf(path: string): string[] {
+  const out: string[] = []
+  if (/^\/:id(\/|$)/.test(path)) out.push('id')
+  if (/(^|\/):stateId(\/|$)/.test(path)) out.push('stateId')
+  if (/(^|\/):txId(\/|$)/.test(path)) out.push('txId')
+  return out
+}
+
+/**
+ * The first uuid-typed param that is not a uuid, or null. `GET
+ * /pipelines/instance-owners?collection=…` has no route of its own, so it
+ * landed in `GET /:id` and SQL Server answered 500 "Conversion failed … to
+ * uniqueidentifier" (army4 L-1) — such a request names no row: 404.
+ * `keys` = the route's uuid params (uuidParamsOf); default all three.
+ */
+export function badUuidParam(
+  params: unknown,
+  keys: readonly string[] = UUID_PARAMS
+): string | null {
+  if (!params || typeof params !== 'object') return null
+  const p = params as Record<string, unknown>
+  for (const k of keys) {
+    if (p[k] === undefined) continue
+    if (!UUID_SHAPE.test(String(p[k]))) return k
+  }
+  return null
+}
+
 export async function pipelinesRoutes(app: FastifyInstance) {
+  // Before auth and every route's own checks: a non-uuid id never reaches SQL. Per route —
+  // only the params that really are uuids there (uuidParamsOf). Must precede every route
+  // declaration: onRoute only sees routes added after it.
+  app.addHook('onRoute', (route) => {
+    const keys = uuidParamsOf(route.url.slice((route.prefix ?? '').length))
+    if (!keys.length) return
+    const guard = async (req: FastifyRequest, reply: FastifyReply) => {
+      const bad = badUuidParam(req.params, keys)
+      if (bad) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND', param: bad })
+    }
+    const prior = route.preValidation
+    route.preValidation = prior ? [guard, ...(Array.isArray(prior) ? prior : [prior])] : [guard]
+  })
   // Owner matrix versions (#833): must precede every route declaration —
   // onRoute only sees routes added after it.
   registerOwnerMatrixCapture(app)
@@ -2141,7 +2224,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
       const brief = await buildApprovalBrief(collection, String(item))
       return reply.send({ data: brief })
     }
@@ -2271,7 +2354,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     }
     // The record itself must be visible (row filter, User Scopes) — the
     // simulation echoes its values and owners.
-    if (!(await recordReadGate(req, reply, collection, item))) return
+    if (!(await recordReadGate(req, reply, collection, item))) return reply
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2381,7 +2464,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Get pipeline state for a specific item
   app.get('/instance/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
-    if (!(await recordReadGate(req, reply, collection, String(item)))) return
+    if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2447,6 +2530,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // Transition applies if from_state is null (any) or matches current state
         const fromOk = tx.from_state === null || tx.from_state === currentState
         if (!fromOk) return false
+        // A finished record offers only the escape hatches authored out of
+        // the state it sits in (Uncancel) — the gate refuses every other move
+        // there (manual-transition-gate.ts), so "Cancel" on a Canceled
+        // record was offered and then refused (army4 a15-7).
+        if (!offeredOnCompleted(instance, tx)) return false
         // Conditional branching: hide transitions whose condition rules don't match the record
         if (tx.condition_rules && !evaluateConditionRules(tx.condition_rules, conditionRecord)) {
           return false
@@ -3531,14 +3619,31 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         (ids ?? []).map(String).filter(Boolean).slice(0, 500)
       )
       if (!idList.length) return reply.send({ data: {} })
-      const instances = (await db('nivaro_workflow_instances')
+      const allInstances = (await db('nivaro_workflow_instances')
         .where({ collection })
         .whereIn('item', idList)
-        .select('id', 'item', 'current_state')) as Array<{
+        .select(
+          'id',
+          'collection',
+          'item',
+          'template',
+          'current_state',
+          'completed_at',
+          'started_at'
+        )) as Array<{
         id: string
+        collection: string
         item: string
+        template: string
         current_state: string | null
+        completed_at: Date | null
+        started_at: Date | null
       }>
+      // ONE instance per record — the one the record page shows
+      // (findRecordInstance: open first, newest start). Several rows for one
+      // record (an old completed run, a restart) used to share a key, so the
+      // last one read won and the header Owners tile could show nobody.
+      const instances = pickInstancePerItem(await excludeBranchChildren(allInstances))
       const requests = instances
         .filter((i) => i.current_state)
         .map((i) => ({
@@ -3585,7 +3690,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
-    if (!(await recordReadGate(req, reply, collection, String(item)))) return
+    if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
 
     const instance = await findRecordInstance<WorkflowInstance>(collection, item)
     if (!instance) return reply.send({ data: [], meta: { can_add: false } })
@@ -3615,7 +3720,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
       const body = (req.body ?? {}) as { user?: string; state?: string | null }
       if (!body.user) return reply.code(400).send({ error: 'user is required' })
       if (!UUID_SHAPE.test(String(body.user)))
@@ -3835,7 +3940,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         item: string
         stateId: string
       }
-      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
 
       const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
       if (!state) return reply.code(404).send({ error: 'State not found' })
@@ -3854,7 +3959,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
       // Path relevance + skip prediction + owners live in services/pipeline-chain.ts
       // (shared with the transition emails).
       const { computeStateChain } = await import('../services/pipeline-chain.js')
@@ -3923,7 +4028,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      if (!(await recordReadGate(req, reply, collection, String(item)))) return
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return reply
       const { creatorColumns } = await import('../services/dashboard-feed.js')
       const col = (await creatorColumns([collection])).get(collection)
       if (!col) return reply.send({ data: null })

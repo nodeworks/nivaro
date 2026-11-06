@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
+import { NumberDraftInput } from '../ui/number-draft-input'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import { useO2MStaging } from './O2MStagingContext'
 import type { ActiveLayoutData, CMSField, FieldGroup } from './types'
@@ -206,10 +207,11 @@ export const InlineGridField = memo(function InlineGridField({
       col.type === 'decimal'
     ) {
       return (
-        <input
+        <NumberDraftInput
+          bare
           type='number'
-          value={String(v)}
-          onChange={(e) => set(col.field, e.target.value === '' ? null : Number(e.target.value))}
+          value={v}
+          onValue={(n) => set(col.field, n)}
           className='w-full rounded border border-slate-200 px-2 py-1.5 text-[12px] focus:outline-none focus:border-nvr-cyan'
         />
       )

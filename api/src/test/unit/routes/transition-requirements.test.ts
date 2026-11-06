@@ -112,7 +112,7 @@ describe('POST /pipelines/:id/transitions — requirements validation', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/pipelines/tpl-1/transitions',
+      url: '/pipelines/00000000-0000-4000-8000-0000000000a1/transitions',
       payload: { to_state: 'st-2', label: 'Advance', requirements: 'nope' }
     })
 
@@ -127,7 +127,7 @@ describe('POST /pipelines/:id/transitions — requirements validation', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/pipelines/tpl-1/transitions',
+      url: '/pipelines/00000000-0000-4000-8000-0000000000a1/transitions',
       payload: {
         to_state: 'st-2',
         label: 'Advance',
@@ -146,7 +146,7 @@ describe('POST /pipelines/:id/transitions — requirements validation', () => {
 
     const res = await app.inject({
       method: 'POST',
-      url: '/pipelines/tpl-1/transitions',
+      url: '/pipelines/00000000-0000-4000-8000-0000000000a1/transitions',
       payload: { to_state: 'st-2', label: 'Advance', requirements: [{ type: 'future' }] }
     })
 
@@ -182,7 +182,7 @@ describe('PATCH /pipelines/transitions/:txId — requirements validation', () =>
 
     const res = await app.inject({
       method: 'PATCH',
-      url: '/pipelines/transitions/tx-1',
+      url: '/pipelines/transitions/00000000-0000-4000-8000-0000000000b2',
       payload: { requirements: { not: 'an array' } }
     })
 
@@ -198,7 +198,7 @@ describe('PATCH /pipelines/transitions/:txId — requirements validation', () =>
 
     const res = await app.inject({
       method: 'PATCH',
-      url: '/pipelines/transitions/tx-1',
+      url: '/pipelines/transitions/00000000-0000-4000-8000-0000000000b2',
       payload: { requirements: [{ type: 'future', foo: 'bar' }] }
     })
 
@@ -586,7 +586,7 @@ describe('transition requirements — display_fields', () => {
     await app.ready()
     const res = await app.inject({
       method: 'POST',
-      url: '/pipelines/tpl-1/transitions',
+      url: '/pipelines/00000000-0000-4000-8000-0000000000a1/transitions',
       payload: {
         to_state: 'st-2',
         label: 'Go',
