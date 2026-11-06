@@ -86,7 +86,10 @@ export function statValue(
       const v = q[0]?.[stat.query.value_field]
       return v === null || v === undefined || v === '' ? null : String(v)
     }
-    return sumField(q, stat.query.value_field)
+    // No row holds a number (no rows, or SUM over nothing = NULL): no figure,
+    // never $0 — "Total CAPEX Budget $0" read as a real zero target (army 5
+    // b04-N-1). empty_label says why.
+    return hasNumeric(q, stat.query.value_field) ? sumField(q, stat.query.value_field) : null
   }
   // date/text values only come from a query; summing a field as a date reads 1970
   if (stat.format === 'date' || stat.format === 'text') return null
@@ -103,6 +106,9 @@ export function statValue(
     return v === null || !Number.isFinite(v) ? null : v
   }
   if (stat.field) {
+    // Rows that all lack the field: no figure. No rows at all stays 0 (an
+    // empty selection sums to nothing, which is a real 0).
+    if (matched.length > 0 && !hasNumeric(matched, stat.field)) return null
     return (
       sumField(matched, stat.field) -
       (stat.field_subtract ? sumField(matched, stat.field_subtract) : 0)

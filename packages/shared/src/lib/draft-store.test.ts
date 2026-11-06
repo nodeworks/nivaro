@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
-import { draftCreatedAs, markDraftCreated } from './draft-store'
+import { draftCreatedAs, keepDraftSavedAt, markDraftCreated, type StoredDraft } from './draft-store'
 
 const KEY = 'workflows:new:u1'
 
@@ -35,5 +35,35 @@ describe('draft created markers', () => {
     localStorage.setItem(`nvr:draft-created:${KEY}`, '{nope')
     expect(draftCreatedAs(KEY, '2026-10-24T22:14:00Z')).toBeNull()
     expect(draftCreatedAs(KEY, null)).toBeNull()
+  })
+})
+
+// army5 b09-N3b: a restored-then-left draft said "from just now" minutes later.
+describe('keepDraftSavedAt', () => {
+  const d = (saved_at: string, fields: Record<string, unknown>): StoredDraft => ({
+    key: 'workflows:1:u1',
+    collection: 'workflows',
+    item_id: '1',
+    user_id: 'u1',
+    saved_at,
+    fields,
+    base: {},
+    base_updated_at: null,
+    pending_rows: {},
+    pending_edits: {},
+    pending_deletes: {},
+    m2m_links: {},
+    m2m_unlinks: {}
+  })
+  it('the same work keeps its original time', () => {
+    const prev = d('2026-11-06T16:46:31Z', { description: 'S3' })
+    const next = d('2026-11-06T16:48:20Z', { description: 'S3' })
+    expect(keepDraftSavedAt(next, prev).saved_at).toBe('2026-11-06T16:46:31Z')
+  })
+  it('changed work is stamped anew', () => {
+    const prev = d('2026-11-06T16:46:31Z', { description: 'S3' })
+    const next = d('2026-11-06T16:48:20Z', { description: 'S4' })
+    expect(keepDraftSavedAt(next, prev).saved_at).toBe('2026-11-06T16:48:20Z')
+    expect(keepDraftSavedAt(next, null).saved_at).toBe('2026-11-06T16:48:20Z')
   })
 })

@@ -147,6 +147,16 @@ export interface LineageData {
   }>
 }
 
+/** The narrowing parents a picker may offer to clear: not one that was filled FROM this very
+ *  field (an upstream pick) — clearing that widens the list to other zones (b02-N1/N6). */
+export function clearableParents(
+  parentKeys: string[],
+  field: string,
+  derivedOrigin?: (parentField: string) => string | null
+): string[] {
+  return parentKeys.filter((k) => derivedOrigin?.(k) !== field)
+}
+
 /** Lineage of a computed field, fetched only while `enabled`. */
 export function useFieldLineage(
   collection: string,
@@ -695,7 +705,12 @@ export const FieldRow = memo(function FieldRow({
     | {
         sig: string
         onChange: typeof onChange
-        value: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
+        value: {
+          labels: string[]
+          keys: string[]
+          clearable?: string[]
+          onClear?: (key: string) => void
+        }
       }
     | undefined
   >(undefined)
@@ -996,13 +1011,26 @@ export const FieldRow = memo(function FieldRow({
     return value
   }
   function narrowedBy() {
-    const sig = JSON.stringify([cascadeParentLabels, cascadeParentFieldKeys])
+    // A parent that was FILLED from this very field (an upstream pick) is not offered
+    // for clearing: dropping it widens the list to records of other zones (b02-N1/N6).
+    const clearable = clearableParents(
+      cascadeParentFieldKeys,
+      field.field,
+      m2mStaging?.getDerivedOrigin
+    )
+    const sig = JSON.stringify([cascadeParentLabels, cascadeParentFieldKeys, clearable])
     const cur = narrowedByRef.current
     if (cur && cur.sig === sig && cur.onChange === onChange) return cur.value
     const value = {
       labels: cascadeParentLabels,
       keys: cascadeParentFieldKeys,
-      onClear: (k: string) => onChange(k, null)
+      clearable,
+      onClear:
+        clearable.length > 0
+          ? (k: string) => {
+              if (clearable.includes(k)) onChange(k, null)
+            }
+          : undefined
     }
     narrowedByRef.current = { sig, onChange, value }
     return value
@@ -1365,6 +1393,17 @@ export const FieldRow = memo(function FieldRow({
         </div>
       )}
       {counter && <FieldCounter value={draft[field.field]} config={counter} />}
+      {error && (
+        // The message under the field: a red border alone never said WHY (Service End before
+        // Start, b01-N5). The form's summary at the top lists it too.
+        <p
+          role='alert'
+          data-field-error={field.field}
+          className='text-[11.5px] leading-snug text-red-600 dark:text-red-400'
+        >
+          {error}
+        </p>
+      )}
       {!error && softWarning && (
         // A soft (warning-only) rule the value breaks: said here, never blocks the save.
         <p

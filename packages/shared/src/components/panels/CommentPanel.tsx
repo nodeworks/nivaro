@@ -774,7 +774,8 @@ export function CommentPanel({
   title,
   defaultExpanded,
   queuedComments,
-  onQueueComment
+  onQueueComment,
+  onUnsentDraft
 }: {
   collection: string
   item: string | number
@@ -782,6 +783,9 @@ export function CommentPanel({
   defaultExpanded?: boolean
   queuedComments?: string[]
   onQueueComment?: (text: string) => void
+  /** A new record: the text still in the box (not Queued yet), so Create can
+   *  post it too instead of dropping it (army5 b01-N13). */
+  onUnsentDraft?: (text: string) => void
 }) {
   const client = useNivaroClient()
   const { userId } = useItemEditAuth()
@@ -797,6 +801,11 @@ export function CommentPanel({
     }
   }, [defaultExpanded])
   const [draft, setDraft] = useState('')
+  const onUnsentDraftRef = useRef(onUnsentDraft)
+  onUnsentDraftRef.current = onUnsentDraft
+  useEffect(() => {
+    onUnsentDraftRef.current?.(draft)
+  }, [draft])
   // AI text cleanup (#217): one click fixes grammar/clarity, meaning kept.
   const [cleaning, setCleaning] = useState(false)
   const cleanDraft = async () => {

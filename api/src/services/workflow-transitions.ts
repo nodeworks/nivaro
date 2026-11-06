@@ -483,9 +483,21 @@ export async function buildTransitionEventPayload(args: {
   // Suspended / redacted owners are left out of what people are told ("It is
   // now waiting on …") and of who is mailed — they cannot act (army4 a14-4).
   // Owner resolution keeps them, so owner-gaps still lists such a step.
+  // ASSIGNED owners only (army5 b13-N1): the binding's creator fallback keeps
+  // a record in the requester's queue, it is no claim to approve — mails said
+  // "waiting on … Kristina Davison (the requester)" and "you own Warehouse
+  // Submission". The flows mail the creator / contacts off their own item
+  // read, so the requester is still told.
   const owners = newStateObj
     ? await activeOwnersOnly(
-        await resolveStateOwners(newStateObj.id, instance.id, instance.collection, instance.item)
+        await resolveStateOwners(
+          newStateObj.id,
+          instance.id,
+          instance.collection,
+          instance.item,
+          db,
+          { skipFallback: true }
+        )
       )
     : []
   // Who the record was waiting on BEFORE this move (the state it left) —
@@ -790,6 +802,9 @@ export async function emitWorkflowStartEvent(opts: {
       opts.userId ?? undefined,
       { orderKey: `${opts.collection}:${opts.item}` }
     )
+    // An IR created straight into Engineering Review with nobody to approve it
+    // tells the administrators (and its creator) instead of waiting silently.
+    void noticeGapFor(state, payload)
     import('../hooks/notification-subscriptions.js')
       .then(async ({ fireWorkflowStateSubscriptions }) =>
         fireWorkflowStateSubscriptions({
@@ -803,6 +818,80 @@ export async function emitWorkflowStartEvent(opts: {
         })
       )
       .catch(() => {})
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * A manual move whose target is skipped all the way back to where the record
+ * already is (army5 b06-N6: Send Back to an ownerless Finance Review bounced
+ * straight back to Warehouse Submission, wrote a "Warehouse Submission →
+ * Warehouse Submission" history row and mailed "Sent back … is now Warehouse
+ * Submission"). Refused before anything is written: 409, no history, no mail.
+ */
+export class TransitionNoTargetError extends Error {
+  statusCode = 409
+  code = 'NO_TARGET_OWNERS'
+}
+
+/** Pure: the refusal's sentence. `noOwners` = the target skips for want of owners. */
+export function noTargetMessage(targetLabel: string, noOwners: boolean, reason?: string | null) {
+  return noOwners
+    ? `${targetLabel} has no reviewers for this request, so it can't be sent there.`
+    : `${targetLabel} is skipped for this request${reason ? ` (${reason})` : ''}, so it can't be sent there.`
+}
+
+/** Pure: does a manual move land back where it started only because its
+ *  target was skipped? A deliberate self-loop (target = current) is fine. */
+export function bouncesBack(
+  previousState: string | null,
+  nominalTarget: string,
+  resolvedTarget: string
+): boolean {
+  if (!previousState) return false
+  const up = (v: string) => String(v).toUpperCase()
+  return up(resolvedTarget) === up(previousState) && up(nominalTarget) !== up(previousState)
+}
+
+/** Payload owners → ids (the payload builder already left out the fallback
+ *  and inactive people). */
+function payloadOwnerIds(payload: Record<string, unknown>): string[] {
+  const owners = (payload.owners ?? []) as Array<{ id?: unknown }>
+  return owners.map((o) => String(o.id ?? '')).filter(Boolean)
+}
+
+/** The owner-gap notice for the state a payload entered (owner-gap-notice.ts). */
+async function noticeGapFor(
+  state: WorkflowState | null,
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (!state) return
+  try {
+    const { noticeOwnerGap } = await import('./owner-gap-notice.js')
+    await noticeOwnerGap({
+      state: state as unknown as Parameters<typeof noticeOwnerGap>[0]['state'],
+      actingOwners: payloadOwnerIds(payload).map((id) => ({ id })),
+      friendlyId: String(payload.friendly_id ?? payload.subject_item ?? ''),
+      subjectCollection: String(payload.subject_collection ?? payload.collection),
+      subjectItem: String(payload.subject_item ?? payload.item)
+    })
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Retire the owner pings the move made stale (waiting-pings.ts). */
+async function retirePingsFor(payload: Record<string, unknown>, movedAt: Date): Promise<void> {
+  try {
+    const { retireWaitingPings } = await import('./waiting-pings.js')
+    await retireWaitingPings({
+      collection: String(payload.subject_collection ?? payload.collection),
+      item: String(payload.subject_item ?? payload.item),
+      friendlyId: String(payload.friendly_id ?? ''),
+      stillOwnerIds: payloadOwnerIds(payload),
+      movedAt
+    })
   } catch {
     /* best effort */
   }
@@ -1207,6 +1296,35 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
   )
   const newState = resolvedTarget?.id ?? transition.to_state
 
+  // A person's move that would only come back to where the record is: refuse
+  // it, say why (army5 b06-N6). Auto transitions keep their own rules.
+  if (opts.source !== 'auto' && bouncesBack(previousState, nominalTarget, newState)) {
+    const target = (await db<WorkflowState>('nivaro_workflow_states')
+      .where({ id: nominalTarget })
+      .first()) as WorkflowState | undefined
+    const subject = await resolvePipelineSubject(instance.collection, instance.item)
+    const detail = target
+      ? await evaluateSkipCriteriaDetailed(
+          target.id,
+          await fetchPipelineRecord(instance.collection, instance.item),
+          instance.id,
+          subject.collection,
+          subject.itemId,
+          db
+        ).catch(() => ({ skipped: false, reasons: [] as string[] }))
+      : { skipped: false, reasons: [] as string[] }
+    const noOwners =
+      detail.reasons.some((r) => /no owner/i.test(r)) ||
+      (detail.reasons.length === 0 && !!target && coerceBool(target.skip_if_no_owners))
+    throw new TransitionNoTargetError(
+      noTargetMessage(
+        target?.label ?? 'That step',
+        !!noOwners,
+        detail.reasons.find((r) => !/no owner/i.test(r)) ?? null
+      )
+    )
+  }
+
   // Blocking actions (e.g. an ERP order submission) run BEFORE anything mutates:
   // a failure throws TransitionBlockedError and the record stays in its
   // current state — no order number, no state change.
@@ -1248,6 +1366,9 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         })
   const behalfStored =
     onBehalfOf != null && (await hasColumn('nivaro_workflow_history', 'on_behalf_of'))
+
+  // Pings written before this moment belong to the states the record left.
+  const movedAt = new Date()
 
   await db('nivaro_workflow_instances')
     .where({ id: instance.id })
@@ -1367,7 +1488,7 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
       onBehalfOf: behalfStored ? onBehalfOf : null,
       enteredPrevAt
     })
-    const fire = () =>
+    const fire = () => {
       withChainStep(historyStep, () =>
         emitTrigger(
           'workflow-transition',
@@ -1379,6 +1500,15 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
           { orderKey: `${instance.collection}:${instance.item}` }
         )
       )
+      // Where the record came to rest (an auto chain's last hop only): the
+      // "Waiting on you" pings of people who no longer own it retire, and a
+      // step nobody can act on tells the administrators (army5 b06-N3,
+      // b02-N2/b13-N1).
+      if (payload.final_in_chain !== false) {
+        void retirePingsFor(payload, movedAt)
+        void noticeGapFor(newStateObj ?? null, payload)
+      }
+    }
     // Inside an auto chain (runAutoTransitions) the event waits until the
     // chain settles, so each hop can say whether it was the last one.
     if (opts.deferEvents) opts.deferEvents.push({ payload, fire })

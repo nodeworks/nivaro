@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import { noteDerivedWrite } from './request-trace.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 function parseJson<T>(v: string | null | undefined): T | null {
   if (!v) return null
@@ -773,6 +774,56 @@ export function bustRollupContributorCache(): void {
  * Skips the write when the recomputed total matches the current value.
  * Never throws: a recalc failure must not break the write that triggered it.
  */
+/**
+ * Round half away from zero to `scale` decimal places, as the screen's number
+ * formatting does. Float noise is dropped first (15 significant digits), so a
+ * sum that is a half-cent in decimal (301.515) rounds up even though its double
+ * is 301.51499999999999.
+ */
+export function roundToScale(v: number, scale: number): number {
+  if (!Number.isFinite(v) || !Number.isInteger(scale) || scale < 0 || scale > 15) return v
+  const clean = Number(Math.abs(v).toPrecision(15))
+  const text = String(clean)
+  const r = text.includes('e')
+    ? Math.round(clean * 10 ** scale) / 10 ** scale
+    : Number(`${Math.round(Number(`${text}e${scale}`))}e-${scale}`)
+  return v < 0 && r !== 0 ? -r : r
+}
+
+const DECIMAL_TYPES = new Set(['decimal', 'numeric', 'money', 'smallmoney'])
+const scaleCache = new Map<string, Promise<number | null>>()
+
+/** The scale of a decimal / numeric / money column; null for any other type or when unknown. */
+export function decimalScaleOf(collection: string, column: string): Promise<number | null> {
+  const key = `${currentTenantKey()}\u0001${collection.toLowerCase()}\u0001${column.toLowerCase()}`
+  let hit = scaleCache.get(key)
+  if (!hit) {
+    hit = (async () => {
+      const res = (await db.raw(
+        'SELECT TOP 1 DATA_TYPE AS t, NUMERIC_SCALE AS s FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
+        [collection, column]
+      )) as
+        | { recordset?: Array<{ t?: unknown; s?: unknown }> }
+        | Array<{ t?: unknown; s?: unknown }>
+      const row = (Array.isArray(res) ? res : res.recordset)?.[0]
+      const type = String(row?.t ?? '').toLowerCase()
+      if (!DECIMAL_TYPES.has(type) || row?.s == null) return null
+      const n = Number(row.s)
+      return Number.isInteger(n) ? n : null
+    })().catch(() => {
+      scaleCache.delete(key)
+      return null
+    })
+    scaleCache.set(key, hit)
+  }
+  return hit
+}
+
+/** Forget learnt column scales (tests; a column altered at run time). */
+export function clearDecimalScaleCache(): void {
+  scaleCache.clear()
+}
+
 // A stored rollup can itself feed another stored rollup (lines → order total
 // → project total). The parent write here
 // is RAW, so nothing downstream would ever notice it; cascade explicitly,
@@ -793,11 +844,16 @@ export async function recalcRollupsForParent(
         .first(...(cols.length ? cols : ['id']))) as Record<string, unknown> | undefined
       if (!matchesParentFilter(parent, entry.parentFilter)) return
     }
-    const total = await computeRollupTotal(
+    const rawTotal = await computeRollupTotal(
       { sources: entry.sources },
       parentId,
       entry.parentCollection
     )
+
+    // Rounded like the screen rounds it before it reaches a decimal column (army 5 b01-N3:
+    // 3 x 100.505 bound as the double 301.51499999999999 stored 301.51; the page showed 301.52).
+    const scale = await decimalScaleOf(entry.parentCollection, entry.rollupField)
+    const total = scale == null || rawTotal == null ? rawTotal : roundToScale(rawTotal, scale)
 
     const current = (await db(entry.parentCollection)
       .where({ id: parentId })

@@ -5,10 +5,12 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 import { db } from '../../../db/index.js'
 import {
   bustRollupContributorCache,
+  clearDecimalScaleCache,
   getRollupContributors,
   type RollupContributorEntry,
   recalcAffectedRollups,
-  recalcRollupsForParent
+  recalcRollupsForParent,
+  roundToScale
 } from '../../../services/rollups.js'
 
 function fieldsChain(rows: unknown[]) {
@@ -358,5 +360,82 @@ describe('parent_filter', () => {
     )
     expect(matchesParentFilter(undefined, f)).toBe(false)
     expect(matchesParentFilter({ workflow_type: 2 }, undefined)).toBe(true)
+  })
+})
+
+describe('stored rollups round like the screen (army 5 b01-N3)', () => {
+  const entry: RollupContributorEntry = {
+    parentCollection: 'units',
+    parentFk: 'unit',
+    rollupField: 'total_cost',
+    sources: [rollupSource()]
+  }
+  const withScale = (t: string | null, scale: number | null) => {
+    ;(db as unknown as { raw: unknown }).raw = vi.fn(async () =>
+      t == null ? [] : [{ t, s: scale }]
+    )
+  }
+
+  afterEach(() => {
+    clearDecimalScaleCache()
+    delete (db as unknown as { raw?: unknown }).raw
+  })
+
+  it('3 x 100.505 is written as 301.52 into a decimal(18,2) column, not 301.51', async () => {
+    withScale('decimal', 2)
+    const update = vi.fn().mockResolvedValue(1)
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === 'unit_workflows') return aggregateChain(100.505 * 3) as never
+      if (table === 'units') return parentChain(301.51, 'total_cost', update, []) as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+    await recalcRollupsForParent(entry, 'u1')
+    expect(update).toHaveBeenCalledWith({ total_cost: 301.52 })
+  })
+
+  it('does not rewrite a total that already holds the rounded value', async () => {
+    withScale('numeric', 2)
+    const update = vi.fn().mockResolvedValue(1)
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === 'unit_workflows') return aggregateChain(301.515) as never
+      if (table === 'units') return parentChain(301.52, 'total_cost', update, []) as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+    await recalcRollupsForParent(entry, 'u1')
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('a float column, or a type that cannot be read, is written unrounded', async () => {
+    for (const [t, sc] of [
+      ['float', null],
+      [null, null]
+    ] as const) {
+      clearDecimalScaleCache()
+      withScale(t, sc)
+      const update = vi.fn().mockResolvedValue(1)
+      vi.mocked(db).mockImplementation((table: unknown) => {
+        if (table === 'unit_workflows') return aggregateChain(10.125) as never
+        if (table === 'units') return parentChain(0, 'total_cost', update, []) as never
+        throw new Error(`unexpected table ${String(table)}`)
+      })
+      await recalcRollupsForParent(entry, 'u1')
+      expect(update).toHaveBeenCalledWith({ total_cost: 10.125 })
+    }
+  })
+})
+
+describe('roundToScale', () => {
+  it.each([
+    [100.505 * 3, 2, 301.52],
+    [301.514, 2, 301.51],
+    [1.005, 2, 1.01],
+    [-1.005, 2, -1.01],
+    [2.5, 0, 3],
+    [101.50999999999999, 2, 101.51],
+    [0.0000001, 2, 0],
+    [12345678.125, 2, 12345678.13],
+    [7, 4, 7]
+  ])('roundToScale(%f, %i) = %f', (v, s, want) => {
+    expect(roundToScale(v, s)).toBe(want)
   })
 })

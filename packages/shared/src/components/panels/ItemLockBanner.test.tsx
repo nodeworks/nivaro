@@ -645,6 +645,30 @@ describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
     expect(lock?.acquired).toBe(true)
   })
 
+  it('a take-over into a clean form lets the lock go within ~2 s (b09-N5)', async () => {
+    vi.useFakeTimers()
+    const { client, calls } = fakeClient(() => ({ data: null }))
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <DirtyProbe dirty={false} />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      await lock?.takeOver()
+    })
+    expect(lock?.acquired).toBe(true)
+    expect(said(calls, 'DELETE')).toHaveLength(0)
+    await act(async () => {
+      vi.advanceTimersByTime(2_000)
+    })
+    await flush()
+    expect(said(calls, 'DELETE')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+  })
+
   it('a lock lost while clean is not taken back by the heartbeat', async () => {
     vi.useFakeTimers()
     let held = true

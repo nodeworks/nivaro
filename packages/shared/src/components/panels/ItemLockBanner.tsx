@@ -631,6 +631,7 @@ export function useItemLock(
   // while holding the lock — let it go, quietly. A short wait first: typing
   // again right after Save keeps the lock instead of dropping and re-taking
   // it. The next real edit claims it again (lazy mode).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `acquired` re-arms the release after a take-over
   useEffect(() => {
     if (!enabled || !lazy || !collection || !item || dirty !== false) return
     if (!acquiredRef.current) return
@@ -645,7 +646,9 @@ export function useItemLock(
         .catch(() => {})
     }, CLEAN_RELEASE_MS)
     return () => clearTimeout(t)
-  }, [enabled, lazy, collection, item, dirty, client, stopHeartbeat, userId])
+    // `acquired` re-arms it: a take-over (or any late acquire) into a form that is already clean
+    // never changed `dirty`, so the lock lingered 22-25 s until the lease ran out (b09-N5).
+  }, [enabled, lazy, collection, item, dirty, acquired, client, stopHeartbeat, userId])
 
   // #2131: the same person's other window (a popped-out record, another tab)
   // just released the lock while this one still edits — take it straight back.

@@ -5,7 +5,9 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { runAnomalyChecks, SENSITIVITY_DESCRIPTIONS } from '../services/anomaly-detect.js'
 import {
+  METRIC_CHECK_JOBS,
   parseJsonSafe,
+  ruleLastCheckedAt,
   runMetricAlertChecks,
   runMetricAlertDigest
 } from '../services/metric-alerts.js'
@@ -181,7 +183,35 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
       })
       .orderBy('r.created_at', 'desc')
       .limit(500)) as Array<Record<string, unknown>>
-    return reply.send({ data: rows.map(formatRule) })
+    // When each rule was last checked (newest completed check run after its
+    // last save) — null reads "Not checked yet", never "Within threshold".
+    const runs = new Map<
+      string,
+      { started_at: Date | string | null; finished_at: Date | string | null }
+    >()
+    if (rows.length > 0) {
+      try {
+        const latest = (await db('nivaro_job_runs')
+          .whereIn('job_id', Object.values(METRIC_CHECK_JOBS))
+          .where('status', 'completed')
+          .groupBy('job_id')
+          .select('job_id')
+          .max({ started_at: 'started_at', finished_at: 'finished_at' })) as Array<{
+          job_id: string
+          started_at: Date | null
+          finished_at: Date | null
+        }>
+        for (const r of latest) runs.set(String(r.job_id), r)
+      } catch {
+        /* no run history: every rule reads not checked yet */
+      }
+    }
+    return reply.send({
+      data: rows.map((r) => ({
+        ...formatRule(r),
+        last_checked_at: ruleLastCheckedAt(r as Parameters<typeof ruleLastCheckedAt>[0], runs)
+      }))
+    })
   })
 
   app.post('/rules', { preHandler: requireAuth }, async (req, reply) => {

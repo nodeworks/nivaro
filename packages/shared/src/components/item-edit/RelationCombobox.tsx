@@ -122,7 +122,13 @@ export function RelationCombobox({
   /** The parent fields whose current values narrow this picker (cascade
    *  filters). When the narrowed list is EMPTY the panel says which parents
    *  did it and offers to clear one — instead of a blank "No results". */
-  narrowedBy?: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
+  narrowedBy?: {
+    labels: string[]
+    keys: string[]
+    /** Keys offered for clearing; absent = all of `keys`. */
+    clearable?: string[]
+    onClear?: (key: string) => void
+  }
   /** When the filtered option set has EXACTLY one option and the field is
    *  empty, pick it automatically (options.auto_select_single). Two or more
    *  options — or zero — leave the field blank; an existing value is never
@@ -677,19 +683,21 @@ export function RelationCombobox({
                     </p>
                     {narrowedBy.onClear && (
                       <div className='mt-1.5 flex flex-wrap gap-1.5'>
-                        {narrowedBy.keys.map((k, i) => (
-                          <button
-                            key={k}
-                            type='button'
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              narrowedBy.onClear?.(k)
-                            }}
-                            className='rounded-md border border-border bg-background px-2 py-0.5 text-[11.5px] font-medium text-foreground transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                          >
-                            Clear {narrowedBy.labels[i] ?? k}
-                          </button>
-                        ))}
+                        {narrowedBy.keys.map((k, i) =>
+                          narrowedBy.clearable && !narrowedBy.clearable.includes(k) ? null : (
+                            <button
+                              key={k}
+                              type='button'
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                narrowedBy.onClear?.(k)
+                              }}
+                              className='rounded-md border border-border bg-background px-2 py-0.5 text-[11.5px] font-medium text-foreground transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                            >
+                              Clear {narrowedBy.labels[i] ?? k}
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>

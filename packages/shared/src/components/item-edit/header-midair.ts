@@ -101,6 +101,50 @@ export function restoredDraftCollisions(args: {
   return out
 }
 
+/**
+ * The conflicts of a server 409 MIDAIR_COLLISION the person still has to
+ * decide. Dropped:
+ * - an echo: the record already holds exactly what this save carries — a
+ *   double-clicked Save's second request met the first one (army5 b01-N1,
+ *   "Theirs == Mine"); nothing would be overwritten;
+ * - a field the person already decided (Keep mine / Take theirs on a restored
+ *   draft's flag, or in the dialog) while the record still holds the value
+ *   they decided against (REVIEW-R5 M4). A newer save of that field by
+ *   someone else asks again.
+ */
+export function conflictsNeedingPerson(args: {
+  conflicts: HeaderConflict[]
+  payload: Record<string, unknown>
+  /** field → the record's value the person decided against */
+  decided: ReadonlyMap<string, unknown>
+}): HeaderConflict[] {
+  return args.conflicts.filter((c) => {
+    if (c.field in args.payload && sameValue(args.payload[c.field], c.current_value)) return false
+    if (args.decided.has(c.field) && sameValue(args.decided.get(c.field), c.current_value))
+      return false
+    return true
+  })
+}
+
+/**
+ * Every field the 409'd save carried already holds that value on the record
+ * (an echo of the person's own earlier save): the save has nothing left to
+ * write and counts as done — no retry, no dialog, no second revision.
+ */
+export function saveIsEcho(args: {
+  conflicts: HeaderConflict[]
+  payload: Record<string, unknown>
+}): boolean {
+  const fields = Object.keys(args.payload).filter((k) => !k.startsWith('_'))
+  if (fields.length === 0) return false
+  const echoed = new Set(
+    args.conflicts
+      .filter((c) => c.field in args.payload && sameValue(args.payload[c.field], c.current_value))
+      .map((c) => c.field)
+  )
+  return fields.every((k) => echoed.has(k))
+}
+
 /** A 409-shaped error so a client-found collision takes the save's one
  *  mid-air path (midairCollisionOf → the Theirs / Mine dialog). */
 export function clientMidairError(conflicts: HeaderConflict[], latest: number | null): Error {

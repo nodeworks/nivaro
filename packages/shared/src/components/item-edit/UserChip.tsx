@@ -66,6 +66,67 @@ function useDismissOnOutside(
   }, [active])
 }
 
+/** "JB" for Joseph Berger. A redacted account (name "Redacted Redacted") or an
+ *  unreadable name has no initials — the disc shows a person glyph instead of
+ *  a row of identical "RR" chips (b11-N10). */
+export function rosterInitials(name: string | null | undefined): string {
+  const n = String(name ?? '').trim()
+  if (!n || /^redacted\b/i.test(n)) return ''
+  return n
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+}
+
+/** The name to show: the roster row's own, else the person's card (first + last). */
+export function rosterName(
+  rowName: string | null | undefined,
+  card: { first_name?: string | null; last_name?: string | null } | null | undefined
+): string {
+  const own = String(rowName ?? '').trim()
+  if (own) return own
+  return [card?.first_name, card?.last_name].filter(Boolean).join(' ').trim()
+}
+
+function RosterAvatar({
+  user,
+  avatarCls
+}: {
+  user: { id: string; name: string }
+  avatarCls: string
+}) {
+  const client = useOptionalNivaroClient()
+  // Same ['user-card'] entry the photo and the roster rows read: no extra request.
+  const { data: card } = useQuery({
+    ...userCardQuery(client, user.id),
+    enabled: !!client && !!user.id && !String(user.name ?? '').trim(),
+    staleTime: 30 * 60_000,
+    retry: false
+  })
+  const name = rosterName(user.name, card)
+  const initials = rosterInitials(name)
+  const redacted = /^redacted\b/i.test(name)
+  return (
+    <span
+      className='inline-flex'
+      data-tip={redacted ? 'Former user (account redacted)' : name || undefined}
+    >
+      <UserAvatar
+        userId={user.id}
+        className='h-6 w-6 border-2 border-white dark:border-slate-900'
+        fallback={
+          <span data-copy-skip aria-hidden='true' className={avatarCls}>
+            {initials || <User className='h-3 w-3' aria-hidden />}
+          </span>
+        }
+      />
+    </span>
+  )
+}
+
 // Compact owners — no label, tiny inline style, used inside SummaryStrip
 /** Stacked avatar cluster (+N) with a hover/pinnable portal roster whose rows
  *  are UserChips — the single user-display primitive for owners/user lists.
@@ -121,14 +182,6 @@ export function UserRosterCluster({
       !!anchorRef.current?.contains(t),
     () => setOpen(null)
   )
-  const initials = (n: string) =>
-    n
-      .split(' ')
-      .map((p) => p[0])
-      .filter(Boolean)
-      .slice(0, 2)
-      .join('')
-      .toUpperCase()
   if (users.length === 0)
     return (
       <span className='text-[11px] text-slate-400' data-roster-empty>
@@ -154,16 +207,7 @@ export function UserRosterCluster({
     >
       <span className='flex -space-x-2'>
         {shown.map((o) => (
-          <UserAvatar
-            key={o.id}
-            userId={o.id}
-            className='h-6 w-6 border-2 border-white dark:border-slate-900'
-            fallback={
-              <span data-copy-skip aria-hidden='true' className={avatarCls}>
-                {initials(o.name)}
-              </span>
-            }
-          />
+          <RosterAvatar key={o.id} user={o} avatarCls={avatarCls} />
         ))}
       </span>
       {extra > 0 && (
@@ -240,7 +284,11 @@ export function OwnersInlineCompact({
   // RESOLVED owners for the record's current state (owner groups + manual
   // adds + delegation) — the per-item /owners endpoint only returns raw
   // manually-assigned rows, which is usually empty.
-  const { data: owners = [], isLoading } = useQuery<Array<{ id: string; name: string }>>({
+  const {
+    data: owners = [],
+    isLoading,
+    isFetching
+  } = useQuery<Array<{ id: string; name: string }>>({
     queryKey: ['pipeline-owners-resolved', collection, itemId],
     queryFn: () =>
       client!
@@ -249,9 +297,15 @@ export function OwnersInlineCompact({
         )
         .then((r) => r.data?.[itemId] ?? []),
     enabled: !!client && !!collection && !!itemId && itemId !== 'new',
-    staleTime: 30_000
+    staleTime: 30_000,
+    // Keep this RECORD's last answer while a move re-asks (the tile used to go
+    // blank for ~2 s after Submit) — never another record's (b01-N15).
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[1] === collection && String(prevQuery?.queryKey[2]) === String(itemId)
+        ? prev
+        : undefined
   })
-  if (isLoading)
+  if (isLoading || (isFetching && owners.length === 0))
     return (
       <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] inline-block' />
     )

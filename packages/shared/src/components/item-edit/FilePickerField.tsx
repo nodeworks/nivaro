@@ -24,6 +24,19 @@ import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSRelation } from './types'
 
+/** The name a file shows by: its title, with the stored file's extension when the title lacks one
+ *  ("Quote" → "Quote.pdf"), else the stored name. Client-side only (b01-N11). */
+export function fileDisplayName(
+  file: { title?: string | null; filename_download?: string | null } | null | undefined
+): string {
+  const title = (file?.title ?? '').trim()
+  const stored = (file?.filename_download ?? '').trim()
+  if (!title) return stored
+  const ext = /\.([A-Za-z0-9]{1,8})$/.exec(stored)?.[1]
+  if (!ext) return title
+  return new RegExp(`\\.${ext}$`, 'i').test(title) ? title : `${title}.${ext}`
+}
+
 interface NivaroFile {
   id: string
   filename_download: string
@@ -222,7 +235,7 @@ function FileBrowserPanel({
                     data-file-name
                     className='text-[10px] text-slate-500 truncate w-full text-center leading-tight'
                   >
-                    {f.title || f.filename_download}
+                    {fileDisplayName(f)}
                   </span>
                 </button>
               )
@@ -377,7 +390,7 @@ export function FilePickerField({
                 setPreview({
                   id: fileId!,
                   url: getUrl(fileId!),
-                  name: file?.title || file?.filename_download || fileId!,
+                  name: fileDisplayName(file) || fileId!,
                   type: file?.type ?? null,
                   size: file?.filesize ?? null
                 })
@@ -396,7 +409,7 @@ export function FilePickerField({
             <div className='flex items-center gap-1'>
               {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
               <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
-                {hasPending ? pendingFile!.name : file?.title || file?.filename_download || fileId}
+                {hasPending ? pendingFile!.name : fileDisplayName(file) || fileId}
               </p>
               {/* Dead link: the row exists but the bytes are gone — stamped by
                   the file-integrity sweep / verify route. */}
@@ -798,7 +811,7 @@ export function FileM2MField({
                     setPreview({
                       id,
                       url: getUrl(id),
-                      name: f?.title || f?.filename_download || id,
+                      name: fileDisplayName(f) || id,
                       type: f?.type ?? null,
                       size: f?.filesize ?? null
                     })
@@ -819,7 +832,7 @@ export function FileM2MField({
                       setPreview({
                         id,
                         url: getUrl(id),
-                        name: f?.title || f?.filename_download || id,
+                        name: fileDisplayName(f) || id,
                         type: f?.type ?? null,
                         size: f?.filesize ?? null
                       })
@@ -827,7 +840,7 @@ export function FileM2MField({
                     data-file-name
                     className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline'
                   >
-                    {f?.title || f?.filename_download || id}
+                    {fileDisplayName(f) || id}
                   </button>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                     {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}

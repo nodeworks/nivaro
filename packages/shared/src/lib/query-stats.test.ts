@@ -62,6 +62,24 @@ describe('statValue', () => {
       statValue({ query: { value_field: 'finished_at' }, format: 'date' }, rows, [])
     ).toBeNull()
   })
+  it('a query stat with no numeric row is no figure, not $0 (army 5 b04-N-1)', () => {
+    // project-type-budgets-summary: no target rows for 2026 / Zone 1
+    expect(statValue({ query: { value_field: 'budget' } }, rows, [])).toBeNull()
+    expect(
+      statValue({ query: { value_field: 'budget' } }, rows, [
+        { project_type: 'Power', budget: null }
+      ])
+    ).toBeNull()
+    expect(fmtStat(null, 'currency', 'No CAPEX target set')).toBe('No CAPEX target set')
+    // a real zero still reads 0
+    expect(statValue({ query: { value_field: 'n' } }, rows, [{ n: 0 }])).toBe(0)
+  })
+  it('a field tile whose rows all lack the field is no figure; no rows at all is 0', () => {
+    expect(statValue({ field: 'missing' }, rows, null)).toBeNull()
+    expect(statValue({ field: 'budget' }, [{ budget: null }, { budget: '' }], null)).toBeNull()
+    expect(statValue({ field: 'budget' }, [], null)).toBe(0)
+    expect(statValue({ field: 'v', row_match: { k: 'z' } }, [{ k: 'a', v: 1 }], null)).toBe(0)
+  })
 })
 
 describe('fmtStat', () => {

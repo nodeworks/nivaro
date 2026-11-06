@@ -104,6 +104,159 @@ async function readReviewValues(
   return out
 }
 
+type RelationRow = {
+  many_collection: string
+  many_field: string
+  one_collection: string | null
+  one_field: string | null
+  junction_field: string | null
+}
+
+function optionsOf(raw: unknown): Record<string, unknown> {
+  const v = typeof raw === 'string' ? parseJson(raw) : raw
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+}
+
+/**
+ * army5 b01-N2: the line grid narrows a line's Category by the record's
+ * Project (the grid's `parent_cascades`, stored on the record's O2M field —
+ * its field options or a layout placement's override options). The Submit
+ * dialog listed every category. This resolves those rules against the
+ * transitioning record exactly like the grid does (InlineTableField
+ * fieldCascadeFilters over GET /data-model/resolve-cascade): a direct FK on
+ * the picked collection → `{col: {_eq}}`, a junction → `_exists_junction`.
+ * Rules from every layout are unioned (curation, not security). Fail-open:
+ * any failure reads as "no narrowing".
+ */
+async function gridParentFilters(
+  database: typeof db,
+  args: {
+    recordCollection: string
+    itemId: string
+    alias: string
+    /** required m2o child field → the collection its picker lists */
+    m2oFields: Map<string, string>
+  }
+): Promise<Map<string, Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>()
+  const { recordCollection, itemId, alias, m2oFields } = args
+  if (m2oFields.size === 0) return out
+  const optionSources: unknown[] = []
+  const fieldRows = (await database('nivaro_fields')
+    .where({ collection: recordCollection, field: alias })
+    .select('collection', 'field', 'options')) as Array<Record<string, unknown>>
+  for (const r of fieldRows)
+    if (r.field === alias && r.collection === recordCollection) optionSources.push(r.options)
+  const layoutIds = (
+    (await database('nivaro_collection_layouts')
+      .where({ collection: recordCollection })
+      .select('id', 'collection')) as Array<Record<string, unknown>>
+  )
+    .filter((l) => l.collection === recordCollection)
+    .map((l) => l.id)
+  if (layoutIds.length > 0) {
+    const placements = (await database('nivaro_layout_field_assignments')
+      .whereIn('layout_id', layoutIds as never)
+      .where({ field: alias })
+      .select('field', 'overrides')) as Array<Record<string, unknown>>
+    for (const p of placements)
+      if (p.field === alias) optionSources.push(optionsOf(p.overrides).options)
+  }
+  const rules = new Map<string, { parent_field: string; child_field: string }>()
+  for (const src of optionSources) {
+    const cascades = optionsOf(src).parent_cascades
+    if (!Array.isArray(cascades)) continue
+    for (const c of cascades as Array<Record<string, unknown>>) {
+      const parent = c?.parent_field
+      const child = c?.child_field
+      if (typeof parent !== 'string' || !IDENTIFIER_RE.test(parent)) continue
+      if (typeof child !== 'string' || !m2oFields.has(child)) continue
+      rules.set(`${parent}|${child}`, { parent_field: parent, child_field: child })
+    }
+  }
+  if (rules.size === 0) return out
+  const parents = [...new Set([...rules.values()].map((r) => r.parent_field))]
+  const rec = (await database(recordCollection).where({ id: itemId }).first(parents)) as
+    | Record<string, unknown>
+    | undefined
+  if (!rec) return out
+  const childTargets = [...new Set([...rules.values()].map((r) => m2oFields.get(r.child_field)))]
+  const relCols = ['many_collection', 'many_field', 'one_collection', 'one_field', 'junction_field']
+  const relSeen = new Set<string>()
+  const rels = [
+    ...((await database('nivaro_relations')
+      .whereIn('many_collection', [recordCollection, ...childTargets] as never)
+      .select(relCols)) as RelationRow[]),
+    ...((await database('nivaro_relations')
+      .whereIn('one_collection', childTargets as never)
+      .select(relCols)) as RelationRow[])
+  ].filter((r) => {
+    const k = `${r.many_collection}.${r.many_field}`
+    if (relSeen.has(k)) return false
+    relSeen.add(k)
+    return true
+  })
+  const junctions = [
+    ...new Set(
+      rels
+        .filter((r) => r.junction_field != null && childTargets.includes(r.one_collection ?? ''))
+        .map((r) => r.many_collection)
+    )
+  ]
+  const juncRels =
+    junctions.length > 0
+      ? ((await database('nivaro_relations')
+          .whereIn('many_collection', junctions as never)
+          .select(relCols)) as RelationRow[])
+      : []
+  const clauses = new Map<string, Array<Record<string, unknown>>>()
+  for (const rule of rules.values()) {
+    const value = rec[rule.parent_field]
+    if (value == null || value === '') continue
+    const childTarget = m2oFields.get(rule.child_field)
+    const parentTarget = rels.find(
+      (r) =>
+        r.many_collection === recordCollection &&
+        r.many_field === rule.parent_field &&
+        r.junction_field == null
+    )?.one_collection
+    if (!childTarget || !parentTarget) continue
+    let clause: Record<string, unknown> | null = null
+    const direct = rels.find(
+      (r) =>
+        r.many_collection === childTarget &&
+        r.one_collection === parentTarget &&
+        r.junction_field == null
+    )
+    if (direct) clause = { [direct.many_field]: { _eq: value } }
+    else {
+      for (const r1 of rels) {
+        if (r1.one_collection !== childTarget || r1.junction_field == null) continue
+        const r2 = juncRels.find(
+          (r) => r.many_collection === r1.many_collection && r.many_field === r1.junction_field
+        )
+        if (r2?.one_collection === parentTarget) {
+          clause = {
+            _exists_junction: {
+              table: r1.many_collection,
+              self_fk: r1.many_field,
+              filter_fk: r1.junction_field,
+              value
+            }
+          }
+          break
+        }
+      }
+    }
+    if (!clause) continue
+    const list = clauses.get(rule.child_field) ?? []
+    list.push(clause)
+    clauses.set(rule.child_field, list)
+  }
+  for (const [field, list] of clauses) out.set(field, list.length === 1 ? list[0] : { _and: list })
+  return out
+}
+
 /** Business collections only — a waiver list is never read off a nivaro_* table. */
 function queryCollectionAllowed(name: unknown): name is string {
   return typeof name === 'string' && IDENTIFIER_RE.test(name) && !/^nivaro_/i.test(name)
@@ -163,6 +316,15 @@ export interface RequirementFieldMeta {
    *  e.g. an order id waived for lines whose warehouse is auto-submitted.
    *  Always resolved to a concrete list here (see OptionalWhenQuery). */
   optional_when?: OptionalWhenRule
+  /** army5 b01-N2: the narrowing the line grid's own picker applies, resolved
+   *  against the transitioning record (the grid's `parent_cascades`, e.g.
+   *  project → category). The dialog ANDs it into its options read. Curation,
+   *  not security. */
+  option_filter?: Record<string, unknown>
+  /** The child field's own `dependency_config.cascade_filters` — the dialog
+   *  builds them per row (buildCascadeFilter) from the row's values and
+   *  `cascade_values`. Only shipped when every parent is a plain column. */
+  cascade_filters?: Array<Record<string, unknown>>
 }
 
 export interface RequirementRow {
@@ -172,6 +334,8 @@ export interface RequirementRow {
   values: Record<string, unknown>
   /** Read-only context values for the entry's display_fields. */
   display: Record<string, unknown>
+  /** The row's values for the parents its fields' cascade_filters read. */
+  cascade_values?: Record<string, unknown>
 }
 
 export interface RequirementBlockResult {
@@ -340,14 +504,20 @@ export async function evaluateTransitionRequirements(
         ? entry.title
         : 'Required before continuing'
 
-    let fieldInfoRows: Array<{ field: string; label: string | null; type: string | null }> = []
+    let fieldInfoRows: Array<{
+      field: string
+      label: string | null
+      type: string | null
+      dependency_config?: unknown
+    }> = []
     try {
       fieldInfoRows = (await database('nivaro_fields')
         .where({ collection })
-        .select('field', 'label', 'type')) as Array<{
+        .select('field', 'label', 'type', 'dependency_config')) as Array<{
         field: string
         label: string | null
         type: string | null
+        dependency_config?: unknown
       }>
     } catch {
       fieldInfoRows = []
@@ -566,9 +736,35 @@ export async function evaluateTransitionRequirements(
     // Alias fields are not real columns — keep them out of the child SELECT.
     const columnDisplayFields = displayFields.filter((f) => !m2mByField.has(f))
 
+    // army5 b01-N2: a required m2o's own cascade_filters (dependency_config)
+    // ride along when every parent is a plain column of the child row — the
+    // dialog narrows that row's picker by the row's own values.
+    const cascadeParents = new Set<string>()
+    for (const meta of fieldMeta) {
+      if (meta.kind !== 'm2o') continue
+      const rules = optionsOf(nivaroFieldByField.get(meta.field)?.dependency_config).cascade_filters
+      if (!Array.isArray(rules) || rules.length === 0) continue
+      const ok = (rules as Array<Record<string, unknown>>).every((r) => {
+        const p = r?.parent_field
+        if (typeof p !== 'string' || !IDENTIFIER_RE.test(p)) return false
+        if (m2mByField.has(p)) return false
+        const t = nivaroFieldByField.get(p)?.type
+        return !!t && !['alias', 'o2m', 'm2m', 'm2a', 'files', 'translations'].includes(t)
+      })
+      if (!ok) continue
+      meta.cascade_filters = rules as Array<Record<string, unknown>>
+      for (const r of rules as Array<{ parent_field: string }>) cascadeParents.add(r.parent_field)
+    }
+
     const templateFields = extractTemplateFields(displayTemplate)
     const selectFields = [
-      ...new Set(['id', ...scalarRequired, ...columnDisplayFields, ...templateFields])
+      ...new Set([
+        'id',
+        ...scalarRequired,
+        ...columnDisplayFields,
+        ...templateFields,
+        ...cascadeParents
+      ])
     ]
 
     let childRows: Array<Record<string, unknown>> = []
@@ -741,6 +937,36 @@ export async function evaluateTransitionRequirements(
       }
     }
 
+    // army5 b01-N2: the grid's parent → line cascades (project → category).
+    if (recordCollection && IDENTIFIER_RE.test(recordCollection)) {
+      const alias = childRels.find(
+        (r) =>
+          r.many_collection === collection &&
+          r.many_field === fkField &&
+          r.junction_field == null &&
+          r.one_collection === recordCollection
+      )?.one_field
+      const m2oRequired = new Map(
+        scalarRequired.filter((f) => m2oByField.has(f)).map((f) => [f, m2oByField.get(f) as string])
+      )
+      if (alias && IDENTIFIER_RE.test(alias) && m2oRequired.size > 0) {
+        try {
+          const filters = await gridParentFilters(database, {
+            recordCollection,
+            itemId,
+            alias,
+            m2oFields: m2oRequired
+          })
+          for (const meta of fieldMeta) {
+            const f = filters.get(meta.field)
+            if (f) meta.option_filter = f
+          }
+        } catch (err) {
+          logger.warn({ err, collection }, 'transition requirements: grid cascade read failed')
+        }
+      }
+    }
+
     const rows: RequirementRow[] = childRows.map((row) => {
       const values: Record<string, unknown> = {}
       for (const f of scalarRequired) values[f] = row[f] ?? null
@@ -758,7 +984,16 @@ export async function evaluateTransitionRequirements(
       }
       let label = displayTemplate ? resolveDisplayValue(row, displayTemplate) : ''
       if (!label) label = `#${String(row.id)}`
-      return { id: row.id, label, complete: !incompleteIds.has(row.id), values, display }
+      const cascadeValues: Record<string, unknown> = {}
+      for (const p of cascadeParents) cascadeValues[p] = row[p] ?? null
+      return {
+        id: row.id,
+        label,
+        complete: !incompleteIds.has(row.id),
+        values,
+        display,
+        ...(cascadeParents.size > 0 ? { cascade_values: cascadeValues } : {})
+      }
     })
 
     // Optional prefill map {childField: recordField} — resolve the record's
@@ -900,7 +1135,11 @@ async function evaluateRecordFieldsEntry(
           'junction_field'
         )) as RelRow[]
       for (const c of companions) {
-        if (!rels.some((r) => r.many_collection === c.many_collection && r.many_field === c.many_field))
+        if (
+          !rels.some(
+            (r) => r.many_collection === c.many_collection && r.many_field === c.many_field
+          )
+        )
           rels.push(c)
       }
     }
@@ -916,7 +1155,8 @@ async function evaluateRecordFieldsEntry(
   >()
   for (const f of requiredFields) {
     const m2o = rels.find(
-      (r) => r.many_collection === recordCollection && r.many_field === f && r.junction_field == null
+      (r) =>
+        r.many_collection === recordCollection && r.many_field === f && r.junction_field == null
     )
     if (m2o?.one_collection) {
       m2oByField.set(f, m2o.one_collection)
@@ -968,7 +1208,10 @@ async function evaluateRecordFieldsEntry(
         .select(cfg.junctionField)) as Array<Record<string, unknown>>
       m2mValues.set(
         f,
-        rows.map((r) => r[cfg.junctionField]).filter((v) => v != null).map(String)
+        rows
+          .map((r) => r[cfg.junctionField])
+          .filter((v) => v != null)
+          .map(String)
       )
     } catch (err) {
       if (strict) throw err
@@ -1037,7 +1280,7 @@ async function evaluateRecordFieldsEntry(
         .first('title', 'filename_download')) as
         | { title?: string | null; filename_download?: string | null }
         | undefined
-      return row ? (row.title || row.filename_download || null) : null
+      return row ? row.title || row.filename_download || null : null
     } catch {
       return null
     }
@@ -1053,7 +1296,9 @@ async function evaluateRecordFieldsEntry(
       if (meta.kind === 'files') {
         const ids = Array.isArray(raw) ? raw : []
         display[f] = await Promise.all(
-          ids.slice(0, 50).map(async (id) => ({ id: String(id), name: (await fileName(id)) ?? String(id) }))
+          ids
+            .slice(0, 50)
+            .map(async (id) => ({ id: String(id), name: (await fileName(id)) ?? String(id) }))
         )
         continue
       }

@@ -2405,8 +2405,8 @@ export async function resolveCollectionSource(
   // A source that DOES filter by SLA keeps the original serial behaviour
   // exactly: it has to know the surviving ids before anything downstream runs.
   const slaPromise: Promise<Record<string, SlaBatchEntry>> = ids.length
-    ? span('queue:sla', () =>
-        computeStatusBatch(
+    ? span('queue:sla', async () => {
+        const base = await computeStatusBatch(
           source.collection as string,
           ids,
           binding
@@ -2421,7 +2421,23 @@ export async function resolveCollectionSource(
               )
             : undefined
         )
-      )
+        // A record whose addendum is in flight shows the addendum's state, so
+        // its SLA clock and Aging come from the ADDENDUM's instance too, not
+        // from the workflow instance that just went back to Completed
+        // (army 5 b08-N1: Aging 0.6 h on a month-old approval).
+        const viaIds = ids.filter((id) => activeAddendums.has(id))
+        if (viaIds.length === 0) return base
+        const addIds = viaIds.map((id) => activeAddendums.get(id)?.addendum_id as string)
+        const addMap = await computeStatusBatch(ADDENDUM_COLLECTION, addIds).catch(
+          () => ({}) as Record<string, SlaBatchEntry>
+        )
+        const merged = { ...base }
+        viaIds.forEach((id, i) => {
+          const e = addMap[addIds[i]]
+          if (e) merged[id] = e
+        })
+        return merged
+      })
     : Promise.resolve({})
   const slaNarrows = !!source.sla_filter
   let slaMap: Record<string, SlaBatchEntry> = {}
@@ -2655,7 +2671,7 @@ export async function resolveCollectionSource(
     return {
       collection: source.collection as string,
       item_id: id,
-      label: labels[`${source.collection}:${id}`] ?? id,
+      label: labels[`${source.collection}:${id}`] || `#${id}`,
       state: stateById.get(id)?.key ?? null,
       state_id: stateById.get(id)?.id ?? null,
       state_color: stateById.get(id)?.color ?? null,
@@ -3029,7 +3045,7 @@ export async function resolveApprovalsSource(
     items.push({
       collection: r.collection,
       item_id: String(r.item),
-      label: labels[`${r.collection}:${r.item}`] ?? String(r.item),
+      label: labels[`${r.collection}:${r.item}`] || `#${r.item}`,
       state: 'pending_approval',
       state_color: null,
       owners,
@@ -3155,7 +3171,7 @@ export async function resolveOwnedBySource(
     const item: QueueItem = {
       collection: inst.collection,
       item_id: inst.item,
-      label: labels[`${inst.collection}:${inst.item}`] ?? inst.item,
+      label: labels[`${inst.collection}:${inst.item}`] || `#${inst.item}`,
       state: inst.state_key,
       state_color: inst.state_color,
       owners: owners.map((o) => ({ id: o.id, name: userDisplayName(o) })),

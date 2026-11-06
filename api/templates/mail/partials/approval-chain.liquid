@@ -1,5 +1,8 @@
 {%- comment -%}
-Vertical chain of states: done (who/when) · current (owners) · upcoming.
+Vertical chain of states: done (who/when) · current (owners) · upcoming ·
+skipped · canceled (the step a record was canceled from, by whom) · not
+reached (after a cancel). `no_approver` on the current step = nobody can act
+on it yet and an administrator has been told (owner-gap-notice.ts).
 Usage: {% render 'partials/approval-chain', chain: approval_chain %}
 {%- endcomment -%}
 {%- if chain and chain.size > 0 -%}
@@ -10,7 +13,9 @@ Usage: {% render 'partials/approval-chain', chain: approval_chain %}
     <td width="22" style="padding:5px 8px 5px 2px;vertical-align:top;">
       {%- if s.status == 'done' -%}
       <span style="display:inline-block;width:16px;height:16px;border-radius:8px;background-color:#16a34a;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:700;line-height:16px;text-align:center;">&#10003;</span>
-      {%- elsif s.status == 'skipped' -%}
+      {%- elsif s.status == 'canceled' -%}
+      <span style="display:inline-block;width:16px;height:16px;border-radius:8px;background-color:#dc2626;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:700;line-height:16px;text-align:center;">&#10005;</span>
+      {%- elsif s.status == 'skipped' or s.status == 'not_reached' -%}
       <span style="display:inline-block;width:16px;height:16px;border-radius:8px;border:2px dashed #cbd5e1;box-sizing:border-box;"></span>
       {%- elsif s.status == 'current' -%}
       <span style="display:inline-block;width:16px;height:16px;border-radius:8px;background-color:#172940;border:2px solid #00ceff;box-sizing:border-box;"></span>
@@ -18,10 +23,13 @@ Usage: {% render 'partials/approval-chain', chain: approval_chain %}
       <span style="display:inline-block;width:16px;height:16px;border-radius:8px;border:2px solid #cbd5e1;box-sizing:border-box;"></span>
       {%- endif -%}
     </td>
-    <td style="padding:5px 0;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.35;color:{% if s.status == 'upcoming' or s.status == 'skipped' %}#94a3b8{% else %}#1e293b{% endif %};{% if s.status == 'current' %}font-weight:700;{% endif %}{% if s.status == 'skipped' %}text-decoration:line-through;{% endif %}">
+    <td style="padding:5px 0;vertical-align:top;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.35;color:{% if s.status == 'upcoming' or s.status == 'skipped' or s.status == 'not_reached' %}#94a3b8{% else %}#1e293b{% endif %};{% if s.status == 'current' %}font-weight:700;{% endif %}{% if s.status == 'skipped' %}text-decoration:line-through;{% endif %}">
       {{ s.label }}{% if s.status == 'skipped' %} <span style="text-decoration:none;color:#94a3b8;">&middot; skipped{% if s.skip_reason %}: {{ s.skip_reason }}{% endif %}</span>{% endif %}
+      {%- if s.status == 'not_reached' %} <span style="color:#94a3b8;">&middot; not reached</span>{% endif -%}
+      {%- if s.status == 'canceled' %} <span style="font-weight:400;color:#b91c1c;">&middot; canceled{% if s.by %} by {{ s.by }}{% endif %}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
       {%- if s.status == 'done' and s.by %} <span style="font-weight:400;color:#64748b;">&middot; {{ s.by }}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
       {%- if s.status == 'current' and s.owners.size > 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {{ s.owners | join: ', ' }}</span>{% endif -%}
+      {%- if s.status == 'current' and s.no_approver and s.owners.size == 0 %} <span style="font-weight:400;color:#b45309;">&middot; no approver is set for this step yet, an administrator has been told</span>{% endif -%}
       {%- if s.status == 'upcoming' and s.owners.size > 0 %} <span style="color:#94a3b8;">&middot; next: {{ s.owners | join: ', ' }}</span>{% endif -%}
     </td>
   </tr>

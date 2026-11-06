@@ -356,6 +356,15 @@ export function RecordLiveSync({
         ['erp-submissions', collection, itemId],
         ['record-integrations', collection, itemId]
       ])
+    // Header figures and "= 5 lines · …" captions are sums over this record's
+    // lines and links: a remote write to the record OR its lines (a `$` aspect)
+    // leaves them stale until the next reload (b09-N1 / b06-N10 / b01-N7).
+    void qc.invalidateQueries({
+      predicate: (q) =>
+        (q.queryKey[0] === 'child-summary' || q.queryKey[0] === 'field-lineage') &&
+        q.queryKey[1] === collection &&
+        String(q.queryKey[2]) === String(itemId)
+    })
     // A `$` aspect says a related surface moved, not the record's columns.
     if (batch.aspectsOnly) return
     // A raw bulk write (#1875, item '*') may include this record: refetch it

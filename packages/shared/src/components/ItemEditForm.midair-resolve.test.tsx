@@ -73,7 +73,9 @@ function makeServer(opts: { draft?: Record<string, unknown> } = {}) {
         return {
           data: {
             layout: { id: 7, name: 'Workflow', slug: 'workflow' },
-            groups: [{ id: 1, key: 'basic', label: 'Basic Info', type: 'tab', icon: null, sort: 0 }],
+            groups: [
+              { id: 1, key: 'basic', label: 'Basic Info', type: 'tab', icon: null, sort: 0 }
+            ],
             assignments: [
               { field: 'description', sort: 0, group_key: 'basic', is_visible: true },
               { field: 'title', sort: 1, group_key: 'basic', is_visible: true }
@@ -393,11 +395,16 @@ describe('ItemEditForm restored draft vs a newer save (army5 b09)', () => {
     await act(async () => m.save())
     await settle(() => !!dialog())
     pickMine('Description')
-    await applyAndSettle(m, 1)
+    await applyAndSettle(m, 2)
+    // The draft's own base stays armed (REVIEW-R5 M4): the server judges the
+    // save from it, the decided field settles without a second dialog and the
+    // write lands on the newer revision.
     const ps = patches(m.calls)
-    expect(ps).toHaveLength(1)
-    expect(ps[0]._body?.description).toBe('A S3')
-    expect(ps[0]._body?._base_revision).toBe(11)
+    expect(ps).toHaveLength(2)
+    expect(ps[0]._body?._base_revision).toBe(10)
+    expect(ps[1]._body?.description).toBe('A S3')
+    expect(ps[1]._body?._base_revision).toBe(11)
+    expect(dialog()).toBeFalsy()
     expect(m.row.description).toBe('A S3')
   })
 
@@ -422,5 +429,151 @@ describe('ItemEditForm restored draft vs a newer save (army5 b09)', () => {
     expect(dialog()).toBeFalsy()
     expect(patches(m.calls)[0]._body?.description).toBe('A S3')
     expect(m.row.description).toBe('A S3')
+  })
+})
+
+// REVIEW-R5 M4: deciding the flagged field must not drop the draft's base for
+// the rest of the draft — a restored field the restore could not compare (no
+// base in the draft) still meets the server's mid-air check.
+const dialogCards = () =>
+  [...(dialog()?.querySelectorAll('div.rounded-md') ?? [])]
+    .map((d) => d.querySelector('p')?.textContent)
+    .filter(Boolean)
+
+describe('ItemEditForm restored draft keeps its base until saved (REVIEW-R5 M4)', () => {
+  const twoFieldDraft = () =>
+    storedDraft({
+      fields: { description: 'A S3', title: 'T S3' },
+      // title has no base: JSON dropped an undefined one
+      base: { description: 'A' },
+      base_revision: 10
+    })
+
+  it('Take theirs on the flagged field, then Save: the unflagged stale field gets a 409', async () => {
+    const m = await openWithDraft(twoFieldDraft(), { description: 'A B5', title: 'T B5' })
+    const take = host.querySelector('[data-remote-take-theirs]') as HTMLButtonElement | null
+    expect(take).toBeTruthy()
+    await act(async () => take?.click())
+    await settle(() => input('description')?.value === 'A B5')
+    await act(async () => m.save())
+    await settle(() => !!dialog())
+    expect(dialog()).toBeTruthy()
+    const ps = patches(m.calls)
+    expect(ps).toHaveLength(1)
+    expect(ps[0]._body?._base_revision).toBe(10)
+    expect(dialogCards()).toEqual(['Title'])
+    // Nothing written over the newer save.
+    expect(m.row.title).toBe('T B5')
+    expect(m.row.description).toBe('A B5')
+  })
+
+  it('Keep mine on the flagged field: only the undecided field is asked about', async () => {
+    const m = await openWithDraft(twoFieldDraft(), { description: 'A B5', title: 'T B5' })
+    const keep = host.querySelector('[data-remote-keep-mine]') as HTMLButtonElement | null
+    expect(keep).toBeTruthy()
+    await act(async () => keep?.click())
+    await act(async () => m.save())
+    await settle(() => !!dialog())
+    expect(dialog()).toBeTruthy()
+    expect(dialogCards()).toEqual(['Title'])
+    expect(m.row.title).toBe('T B5')
+    expect(m.row.description).toBe('A B5')
+  })
+
+  it('Keep mine on the only restored field saves without a second dialog', async () => {
+    const m = await openWithDraft(storedDraft({ base_revision: 10 }), { description: 'A B5' })
+    const keep = host.querySelector('[data-remote-keep-mine]') as HTMLButtonElement | null
+    await act(async () => keep?.click())
+    await act(async () => m.save())
+    await settle(() => patches(m.calls).length >= 2, 100)
+    const ps = patches(m.calls)
+    expect(ps).toHaveLength(2)
+    expect(ps[0]._body?._base_revision).toBe(10)
+    expect(ps[1]._body?._base_revision).toBe(11)
+    expect(dialog()).toBeFalsy()
+    expect(m.row.description).toBe('A S3')
+  })
+})
+
+// army5 b01-N1 (regression): a double-clicked Save met its own first request
+// as "Someone else changed this record" (Theirs == Mine).
+describe('ItemEditForm double Save (army5 b01-N1)', () => {
+  it('two Save presses back to back send ONE PATCH and no dialog', async () => {
+    const m = await mount()
+    await type('description', 'A S2')
+    await settle(() => m.calls.some((c) => c._path === '/revisions'))
+    await act(async () => {
+      m.save()
+      m.save()
+    })
+    await settle(() => patches(m.calls).length > 0)
+    // Let the closing toast land inside this test (its timer must not leak).
+    await settle(() => vi.mocked(toast.success).mock.calls.length > 0, 250)
+    expect(patches(m.calls)).toHaveLength(1)
+    expect(dialog()).toBeFalsy()
+    expect(m.row.description).toBe('A S2')
+  })
+
+  it('a 409 whose current value equals mine is an echo: done, no dialog, no rewrite', async () => {
+    const m = await mount()
+    await type('description', 'A S2')
+    await settle(() => m.calls.some((c) => c._path === '/revisions'))
+    // The first click's save landed with the same value (another request).
+    m.client.otherSave({ description: 'A S2' })
+    await act(async () => m.save())
+    await settle(() => vi.mocked(toast.success).mock.calls.length > 0, 250)
+    expect(dialog()).toBeFalsy()
+    expect(patches(m.calls)).toHaveLength(1)
+    expect(m.row.description).toBe('A S2')
+  })
+})
+
+// army5 b02-N7: the first Save of an edit whose LINE is refused said a green
+// "Changes saved", cleared the form and stored nothing for the line.
+describe('ItemEditForm refused line on Save (army5 b02-N7)', () => {
+  it('keeps the form dirty, names the refusal and sends no success toast', async () => {
+    vi.mocked(toast.error).mockClear()
+    const m = await openWithDraft(
+      storedDraft({
+        base_revision: 10,
+        pending_edits: { 'workflow_lines.workflow': { '162952': { quantity: 999999999 } } }
+      })
+    )
+    const real = m.client.request
+    m.client.request = vi.fn(async (cmd: Cmd) => {
+      if (cmd._path.startsWith('/items/workflow_lines/162952') && (cmd._method ?? '') === 'PATCH') {
+        m.calls.push(cmd)
+        throw Object.assign(new Error('Request failed with status 400'), {
+          status: 400,
+          response: {
+            message: 'Total must be smaller than 10,000,000,000',
+            code: 'VALIDATION_RULE_FAILED'
+          }
+        })
+      }
+      return real(cmd)
+    }) as typeof real
+    // The previous test's save toast fires 1.2 s after its save; let it land
+    // before clearing so it is not counted here.
+    await act(async () => new Promise((r) => setTimeout(r, 1300)))
+    vi.mocked(toast.success).mockClear()
+    await act(async () => m.save())
+    await settle(() => vi.mocked(toast.error).mock.calls.length > 0, 300)
+    // The line write names its parent (army5 b02-N9: the record's History).
+    expect(
+      m.calls.some(
+        (c) => c._path === '/items/workflow_lines/162952?parent_collection=workflows&parent_id=1'
+      )
+    ).toBe(true)
+    expect(vi.mocked(toast.success)).not.toHaveBeenCalled()
+    const msg = String(vi.mocked(toast.error).mock.calls[0]?.[0] ?? '')
+    expect(msg).toContain('Not everything saved')
+    expect(msg).toContain('Total must be smaller than 10,000,000,000')
+    // The record's own field saved; the line edit is still staged and the
+    // form still says it has unsaved work (its recovery draft is kept).
+    expect(m.row.description).toBe('A S3')
+    expect(m.calls.some((c) => c._method === 'DELETE' && c._path === '/drafts/workflows/1')).toBe(
+      false
+    )
   })
 })

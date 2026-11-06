@@ -124,11 +124,20 @@ const compactCatTick = (v: unknown): string => {
 }
 // Thin ticks so dense category axes stay legible (~12 labels max) instead of
 // smearing every label into an unreadable strip.
+// With more than ~5 categories the labels are angled so every one shows ("every
+// other project type" was labelled before); past 12 they are thinned.
 const catAxisProps = (count: number) => ({
   interval: count > 12 ? Math.ceil(count / 12) - 1 : 0,
   tickFormatter: compactCatTick,
-  minTickGap: 4
+  minTickGap: 4,
+  ...(count > 5 && count <= 12 ? { angle: -35, textAnchor: 'end' as const, height: 56 } : {})
 })
+// Horizontal bars: names stay on one line (truncated, full text in the tooltip)
+// instead of wrapping into a column that loses its spaces.
+const compactYTick = (v: unknown): string => {
+  const raw = String(v ?? '')
+  return raw.length > 22 ? `${raw.slice(0, 21)}…` : raw
+}
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
@@ -3312,7 +3321,7 @@ const WidgetCard = memo(function WidgetCard({
                   <ComposedChart
                     data={series}
                     layout={horizontal ? 'vertical' : 'horizontal'}
-                    margin={{ top: 6, right: 8, left: horizontal ? 30 : -10, bottom: 0 }}
+                    margin={{ top: 6, right: 8, left: horizontal ? 10 : -10, bottom: 0 }}
                   >
                     {horizontal ? (
                       <>
@@ -3322,7 +3331,9 @@ const WidgetCard = memo(function WidgetCard({
                           dataKey='dim'
                           tick={{ fontSize: 10 }}
                           stroke='#94a3b8'
-                          width={90}
+                          tickFormatter={compactYTick}
+                          interval={0}
+                          width={140}
                         />
                       </>
                     ) : (

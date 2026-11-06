@@ -4,7 +4,7 @@ import { createContext, useContext, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
-import { cn, titleCase, toLocalDateString } from '../../lib/utils'
+import { choiceLabel, cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { useChangePulse } from './GroupSection'
 import {
   applyDisplayTemplate,
@@ -566,7 +566,21 @@ function SummaryFieldValueInner({
     }
   }
 
-  return <span className='truncate text-slate-700 dark:text-slate-200'>{String(val)}</span>
+  // A choice shows its label ("In progress"), not its stored key ("in_progress") — b02-N8.
+  const choice = summaryChoiceLabel(field.options, val)
+  return (
+    <span className='truncate text-slate-700 dark:text-slate-200'>{choice ?? String(val)}</span>
+  )
+}
+
+/** The label of the select choice a stored value names; null when the field has no such choice. */
+export function summaryChoiceLabel(options: unknown, val: unknown): string | null {
+  if (val === null || val === undefined || typeof val === 'object') return null
+  const parsed = parseJson<{ choices?: Array<{ text?: string; value?: unknown }> }>(
+    options as never
+  )
+  const hit = parsed?.choices?.find((c) => c && String(c.value) === String(val))
+  return hit?.text != null ? choiceLabel(hit.text) : null
 }
 
 const RICH_TEXT_IFACES = new Set([

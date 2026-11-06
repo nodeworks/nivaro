@@ -220,6 +220,47 @@ const ERP_XML_ENTITIES: Record<string, string> = {
   amp: '&',
   '#39': "'"
 }
+/** The line's × — labelled, and for a SAVED line a two-step: the first click arms it for 3 s
+ *  ("Click again to delete"), the second deletes (b09-N7). A staged (unsaved) line goes at once. */
+export function DeleteLineButton({
+  saved,
+  onDelete
+}: {
+  saved: boolean
+  onDelete: (e: React.MouseEvent) => void
+}) {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), 3000)
+    return () => clearTimeout(t)
+  }, [armed])
+  return (
+    <button
+      type='button'
+      aria-label={armed ? 'Click again to delete this line' : 'Delete line'}
+      data-tip={armed ? 'Click again to delete' : 'Delete line'}
+      data-armed={armed ? '' : undefined}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (saved && !armed) {
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onDelete(e)
+      }}
+      className={
+        armed
+          ? 'rounded bg-red-50 p-0.5 text-red-600 dark:bg-red-900/20 dark:text-red-400'
+          : 'rounded p-0.5 text-slate-300 hover:text-red-500'
+      }
+    >
+      <X className='h-3 w-3' />
+    </button>
+  )
+}
+
 /** Amber outline + triangle around a display value the cascade sweep flagged
  *  stale, with an INSTANT hover tooltip (pointer-events-none body portal —
  *  native `title` waits on the OS timer, inline text squishes in cells). */
@@ -8722,13 +8763,10 @@ export function InlineTableField({
                                     />
                                   )}
                                   {!readOnly && (
-                                    <button
-                                      type='button'
-                                      onClick={(e) => deleteRow(row, e)}
-                                      className='rounded p-0.5 text-slate-300 hover:text-red-500'
-                                    >
-                                      <X className='h-3 w-3' />
-                                    </button>
+                                    <DeleteLineButton
+                                      saved={id != null && !String(id).startsWith('pending')}
+                                      onDelete={(e) => deleteRow(row, e)}
+                                    />
                                   )}
                                 </>
                               )}
@@ -9546,16 +9584,13 @@ export function InlineTableField({
                                   <History className='h-3 w-3' />
                                 </button>
                               )}
-                              <button
-                                type='button'
-                                onClick={(e) => {
+                              <DeleteLineButton
+                                saved={false}
+                                onDelete={(e) => {
                                   e.stopPropagation()
                                   staging?.removeRow(relatedCollection, manyField, ri)
                                 }}
-                                className='rounded p-0.5 text-slate-400 hover:text-red-500'
-                              >
-                                <X className='h-3 w-3' />
-                              </button>
+                              />
                             </div>
                           )}
                         </td>

@@ -481,11 +481,22 @@ export async function nextSequenceValue(
   try {
     await db('nivaro_sequences').insert({ id: seqKey, next_val: 1 })
     return 1
-  } catch {
+  } catch (err) {
+    // Only a key violation is the race (another create inserted the row first); any other
+    // failure is that failure, not "numbering is not ready" (REVIEW-R5 L1).
+    if (!isKeyViolation(err)) throw err
     const raced = await increment()
     if (raced != null) return raced
     throw sequenceUnseededError(collection, field)
   }
+}
+
+/** SQL Server 2627 (PRIMARY KEY / UNIQUE constraint) or 2601 (unique index). */
+export function isKeyViolation(err: unknown): boolean {
+  const e = err as { number?: unknown; originalError?: { info?: { number?: unknown } } } | null
+  const n = Number(e?.number ?? e?.originalError?.info?.number)
+  if (n === 2627 || n === 2601) return true
+  return /violation of (primary|unique) key|duplicate key/i.test(String((err as Error)?.message))
 }
 
 /** 503 SEQUENCE_UNSEEDED — the counter row is missing for a field that already holds ids. */
@@ -513,14 +524,36 @@ export function sequenceUnseededError(
  * (CM22-15960005587) that would jump the counter into the billions.
  */
 async function assertSequenceUnused(db: Knex, collection: string, field: string): Promise<void> {
+  // `<> ''` only on a text column: against a decimal or uniqueidentifier it is a
+  // conversion error (the first create answered 500), and on an int it read 0 as unused
+  // (REVIEW-R5 L1). Any other type — or one that cannot be told — counts any value.
+  const text = TEXT_TYPES.has(await columnDataType(db, collection, field))
   const rows = (await db.raw(
-    // '' inline, not bound: a bound value is nvarchar and would convert a
-    // varchar column (gotchas: never seek its index).
-    "SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''",
-    [collection, field, field]
+    text
+      ? // '' inline, not bound: a bound value is nvarchar and would convert a
+        // varchar column (gotchas: never seek its index).
+        "SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''"
+      : 'SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL',
+    text ? [collection, field, field] : [collection, field]
   )) as { recordset?: unknown[] } | unknown[]
   const found = Array.isArray(rows) ? rows : rows.recordset
   if (found?.length) throw sequenceUnseededError(collection, field)
+}
+
+const TEXT_TYPES = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext'])
+
+/** The column's SQL type name, lowercased; '' when it cannot be read. */
+async function columnDataType(db: Knex, collection: string, field: string): Promise<string> {
+  try {
+    const res = (await db.raw(
+      'SELECT TOP 1 DATA_TYPE AS t FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
+      [collection, field]
+    )) as { recordset?: Array<{ t?: unknown }> } | Array<{ t?: unknown }>
+    const rows = Array.isArray(res) ? res : res.recordset
+    return String(rows?.[0]?.t ?? '').toLowerCase()
+  } catch {
+    return ''
+  }
 }
 
 function seqValueFor(

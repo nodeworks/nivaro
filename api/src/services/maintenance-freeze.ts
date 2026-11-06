@@ -17,13 +17,22 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 
-/** Paths whose writes stay open during maintenance (sign-in, the switch itself, …). */
+/** Paths whose writes stay open during maintenance (sign-in, telemetry heartbeats, …). */
 export function maintenanceExemptPath(url: string): boolean {
   return (
     url.startsWith('/api/auth') ||
-    // Turning maintenance off (and its message) is a settings write.
-    url.startsWith('/api/settings') ||
+    // Settings (the maintenance switch itself) are NOT exempt by path (REVIEW-R5 L2): an
+    // admin-role static token (LinX) could switch maintenance off. The person who may turn
+    // it off — an administrator on their own session — passes as the exempt caller.
     url.startsWith('/api/rum') ||
+    // Quiet background telemetry (army 5 b11-N7: 503s from these during the staging
+    // window). Each writes only its own telemetry table, never business data:
+    // user_presence (the presence row, pinned to that one collection),
+    // nivaro_page_views, nivaro_session_recordings/_events, nivaro_record_views.
+    /^\/api\/items\/user_presence(\/|\?|$)/.test(url) ||
+    /^\/api\/analytics\/pageview(\/[^/?]+)?(\?|$)/.test(url) ||
+    /^\/api\/session-recordings(\/[^/?]+\/(events|end))?(\?|$)/.test(url) ||
+    /^\/api\/record-views\/[^/?]+\/[^/?]+\/touch(\?|$)/.test(url) ||
     // Chaos Stop all (#2861) must work during maintenance (operators, and the phone push).
     url.startsWith('/api/chaos/stop-all') ||
     // The render peer (#2789) renders for another process's request, which

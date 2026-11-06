@@ -1,5 +1,5 @@
 import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { useItemNavigation } from '../../context'
 import type { StoredDraft } from '../../lib/draft-store'
 import { formatRelative, titleCase } from '../../lib/utils'
@@ -51,6 +51,13 @@ export function DraftRecoveryBanner({
   renderValue
 }: DraftRecoveryBannerProps) {
   const [open, setOpen] = useState(false)
+  // "from 2 minutes ago" must move while the offer sits open — it said "from
+  // just now" two minutes later (army5 b09-N3b).
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
   const itemNav = useItemNavigation()
   const fields = Object.entries(draft.fields ?? {})
   const created = createdId !== null

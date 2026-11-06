@@ -92,6 +92,18 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+/** Who made a widget alert (the server only lets its maker change it). */
+function alertOwner(a: object): string | null {
+  return (a as { created_by?: string | null }).created_by ?? null
+}
+
+/** A read-only on / off for a switch the viewer may not flip. */
+function OnOff({ on }: { on: boolean }) {
+  return (
+    <span className='text-[11.5px] text-slate-500 dark:text-slate-400'>{on ? 'On' : 'Off'}</span>
+  )
+}
+
 function CountBadge({ n, tone }: { n: number; tone?: 'red' | 'cyan' | 'violet' | 'teal' }) {
   if (!n) return null
   const tones: Record<string, string> = {
@@ -953,6 +965,9 @@ export function AlertManagerView({
               // dump.
               const open = openLogByRule[rule.id]
               const paused = rule.status !== 'active'
+              // Set by GET /rules: the newest check run after the rule's last save.
+              const lastChecked = (rule as { last_checked_at?: string | null }).last_checked_at
+              const checkedAgo = lastChecked ? fmtRelative(lastChecked) : null
               return (
                 <tr
                   key={rule.id}
@@ -993,8 +1008,21 @@ export function AlertManagerView({
                           {fmtRelative(open.fired_at) ? ` · ${fmtRelative(open.fired_at)}` : ''}
                         </span>
                       </span>
-                    ) : (
+                    ) : !lastChecked ? (
+                      // No check has run since the rule was saved: an alert
+                      // that never ran must not read as healthy (army5 b11-N1).
                       <span className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
+                        <span
+                          aria-hidden
+                          className='h-1.5 w-1.5 rounded-full border border-slate-400 dark:border-slate-500'
+                        />
+                        Not checked yet
+                      </span>
+                    ) : (
+                      <span
+                        className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-slate-400'
+                        data-tip={checkedAgo ? `Checked ${checkedAgo}` : undefined}
+                      >
                         <span aria-hidden className='h-1.5 w-1.5 rounded-full bg-emerald-500/70' />
                         Within threshold
                       </span>
@@ -1392,35 +1420,51 @@ export function AlertManagerView({
                   </div>
                 </td>
                 <td className={tdCls}>
-                  <ToggleSwitch
-                    checked={!!a.delivery_inapp}
-                    onChange={(v) => patchReportAlert(a, { delivery_inapp: v })}
-                  />
+                  {canEditRule(alertOwner(a)) ? (
+                    <ToggleSwitch
+                      checked={!!a.delivery_inapp}
+                      onChange={(v) => patchReportAlert(a, { delivery_inapp: v })}
+                    />
+                  ) : (
+                    <OnOff on={!!a.delivery_inapp} />
+                  )}
                 </td>
                 <td className={tdCls}>
-                  <ToggleSwitch
-                    checked={!!a.delivery_email}
-                    onChange={(v) => patchReportAlert(a, { delivery_email: v })}
-                  />
+                  {canEditRule(alertOwner(a)) ? (
+                    <ToggleSwitch
+                      checked={!!a.delivery_email}
+                      onChange={(v) => patchReportAlert(a, { delivery_email: v })}
+                    />
+                  ) : (
+                    <OnOff on={!!a.delivery_email} />
+                  )}
                 </td>
                 <td className={cn(tdCls, 'text-[11.5px] text-slate-400')}>
                   {fmtDateTime(a.last_fired)}
                 </td>
                 <td className={tdCls}>
-                  <ToggleSwitch
-                    checked={!!a.is_active}
-                    onChange={(v) => patchReportAlert(a, { is_active: v })}
-                  />
+                  {canEditRule(alertOwner(a)) ? (
+                    <ToggleSwitch
+                      checked={!!a.is_active}
+                      onChange={(v) => patchReportAlert(a, { is_active: v })}
+                    />
+                  ) : (
+                    <OnOff on={!!a.is_active} />
+                  )}
                 </td>
                 <td className={tdCls}>
-                  <button
-                    type='button'
-                    title='Delete'
-                    className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
-                    onClick={() => deleteReportAlert(a)}
-                  >
-                    <Trash2 className='h-3.5 w-3.5' />
-                  </button>
+                  {/* Someone else's alert: the server refuses changes (403), so
+                      none are offered (army5 b16-N4). */}
+                  {canEditRule(alertOwner(a)) && (
+                    <button
+                      type='button'
+                      title='Delete'
+                      className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
+                      onClick={() => deleteReportAlert(a)}
+                    >
+                      <Trash2 className='h-3.5 w-3.5' />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

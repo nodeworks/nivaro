@@ -78,7 +78,7 @@ vi.mock('../../../middleware/workspace.js', async (orig) => ({
   fetchDefaultWorkspaceId: vi.fn(async () => 'WS-DEFAULT')
 }))
 
-import { updateOne } from '../../../services/items.js'
+import { sameStoredValue, updateOne } from '../../../services/items.js'
 
 const ben = { id: 'U-BEN', role: 'ADMIN' } as never
 const asCaller = { isAdmin: false } as never
@@ -133,5 +133,83 @@ describe('a line PATCH with a stale base revision', () => {
         asCaller
       )
     ).rejects.toBe(REACHED)
+  })
+})
+
+describe('a newer save that left the field holding what this PATCH writes (b01-N1)', () => {
+  it('is no conflict: a double-clicked Save does not collide with itself', async () => {
+    // The first click saved 104 as revision 9002; the second click (same base 9001) sends 104.
+    rec.revisions = [{ id: 9002, delta: JSON.stringify({ quantity: 104 }), data: null }]
+    await expect(
+      updateOne(
+        ben,
+        'workflow_line_items',
+        '475838',
+        { quantity: 104, _base_revision: 9001 },
+        asCaller
+      )
+    ).rejects.toBe(REACHED)
+    // a numeric string and a decimal from the database are the same value
+    rec.row = { id: 475838, quantity: 104.5 }
+    rec.revisions = [{ id: 9003, delta: JSON.stringify({ quantity: 104.5 }), data: null }]
+    await expect(
+      updateOne(
+        ben,
+        'workflow_line_items',
+        '475838',
+        { quantity: '104.50', _base_revision: 9001 },
+        asCaller
+      )
+    ).rejects.toBe(REACHED)
+  })
+
+  it('names only the fields that really differ', async () => {
+    rec.row = { id: 475838, quantity: 104, description: 'same' }
+    rec.revisions = [
+      { id: 9002, delta: JSON.stringify({ quantity: 104, description: 'same' }), data: null }
+    ]
+    const err = (await updateOne(
+      ben,
+      'workflow_line_items',
+      '475838',
+      { quantity: 103, description: 'same', _base_revision: 9001 },
+      asCaller
+    ).catch((e) => e)) as { statusCode?: number; conflicts?: unknown[] }
+    expect(err.statusCode).toBe(409)
+    expect(err.conflicts).toEqual([{ field: 'quantity', current_value: 104 }])
+  })
+})
+
+describe('sameStoredValue', () => {
+  it.each([
+    [104, 104],
+    [104, '104'],
+    [301.51, '301.51'],
+    [301.5, '301.50'],
+    [null, undefined],
+    [null, ''],
+    [true, 1],
+    [false, 'false'],
+    [new Date('2026-11-06T00:00:00Z'), '2026-11-06'],
+    [new Date('2026-11-06T15:30:00Z'), '2026-11-06T15:30:00.000Z'],
+    ['{"a":1,"b":[2]}', { b: [2], a: 1 }],
+    ['ABCDEF01-2345-6789-ABCD-EF0123456789', 'abcdef01-2345-6789-abcd-ef0123456789'],
+    ['Line 1', 'Line 1']
+  ])('%j equals %j', (a, b) => {
+    expect(sameStoredValue(a, b)).toBe(true)
+  })
+
+  it.each([
+    [104, 103],
+    [104, null],
+    ['', 0],
+    [true, 0],
+    [new Date('2026-11-06T00:00:00Z'), '2026-11-07'],
+    ['{"a":1}', { a: 2 }],
+    ['Line 1', 'line 1'],
+    ['abc', { a: 1 }],
+    [0.1, 0.2]
+  ])('%j differs from %j', (a, b) => {
+    expect(sameStoredValue(a, b)).toBe(false)
   })
 })

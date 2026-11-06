@@ -59,3 +59,28 @@ export function keepValuesPatch(changes: SideEffectChange[]): Record<string, unk
   for (const c of changes) out[c.field] = c.from
   return out
 }
+
+/** At most this many row writes (or rehearsals) in flight from one dialog
+ *  (REVIEW-R5 M5): each is a full update in its own transaction holding row
+ *  locks, and a Submit with 40–80 lines sent them all at once. */
+export const ROW_WRITE_CONCURRENCY = 5
+
+/** Run `tasks` with at most `limit` in flight; results in task order. A task
+ *  that throws rejects the whole run, like Promise.all — callers catch inside
+ *  each task. */
+export async function runPooled<T>(
+  tasks: ReadonlyArray<() => Promise<T>>,
+  limit = ROW_WRITE_CONCURRENCY
+): Promise<T[]> {
+  const out = new Array<T>(tasks.length)
+  let next = 0
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++
+      out[i] = await tasks[i]()
+    }
+  }
+  const n = Math.max(1, Math.min(limit, tasks.length))
+  await Promise.all(Array.from({ length: n }, worker))
+  return out
+}

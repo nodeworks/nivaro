@@ -730,3 +730,131 @@ describe('evaluateTransitionRequirements — record_fields skip_when', () => {
     ).rejects.toThrow('read failed: warehouses')
   })
 })
+
+// army5 b01-N2: the Submit dialog's Category picker listed every category;
+// the line grid narrows it by the record's Project (parent_cascades).
+describe('evaluateTransitionRequirements — grid cascade narrowing (army5 b01-N2)', () => {
+  const baseRelations = [
+    {
+      many_collection: 'order_lines',
+      many_field: 'order',
+      one_collection: 'orders',
+      one_field: 'lines',
+      junction_field: null
+    },
+    {
+      many_collection: 'order_lines',
+      many_field: 'category',
+      one_collection: 'categories',
+      one_field: null,
+      junction_field: null
+    },
+    {
+      many_collection: 'orders',
+      many_field: 'project',
+      one_collection: 'projects',
+      one_field: null,
+      junction_field: null
+    }
+  ]
+  const cascades = { parent_cascades: [{ parent_field: 'project', child_field: 'category' }] }
+  async function run(
+    tables: Record<string, Array<Record<string, unknown>>>,
+    fieldsConfig: Array<Record<string, unknown>> = [
+      { field: 'category', label: 'Category', type: 'integer' }
+    ]
+  ) {
+    const dbMock = fakeDb({
+      nivaro_fields: fieldsConfig,
+      nivaro_collection_layouts: [{ id: 7, collection: 'orders' }],
+      nivaro_layout_field_assignments: [
+        { field: 'lines', overrides: JSON.stringify({ options: cascades }) }
+      ],
+      orders: [{ id: 'order-1', project: 42 }],
+      order_lines: [{ id: 1, category: null, zone: 3 }],
+      categories: [],
+      ...tables
+    })
+    const result = await evaluateTransitionRequirements(
+      dbMock as unknown as Parameters<typeof evaluateTransitionRequirements>[0],
+      JSON.stringify([
+        { type: 'child_fields', collection: 'order_lines', fk_field: 'order', fields: ['category'] }
+      ]),
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+    const block = result?.[0]
+    if (block?.type !== 'child_fields') throw new Error('expected a child_fields block')
+    return block
+  }
+
+  it('a junction between the picked and the parent collection → _exists_junction on the record value', async () => {
+    const block = await run({
+      nivaro_relations: [
+        ...baseRelations,
+        {
+          many_collection: 'categories_projects',
+          many_field: 'categories_id',
+          one_collection: 'categories',
+          one_field: 'projects',
+          junction_field: 'projects_id'
+        },
+        {
+          many_collection: 'categories_projects',
+          many_field: 'projects_id',
+          one_collection: 'projects',
+          one_field: null,
+          junction_field: 'categories_id'
+        }
+      ]
+    })
+    expect(block.fields[0].option_filter).toEqual({
+      _exists_junction: {
+        table: 'categories_projects',
+        self_fk: 'categories_id',
+        filter_fk: 'projects_id',
+        value: 42
+      }
+    })
+  })
+
+  it('a direct FK on the picked collection → {fk: {_eq: value}}', async () => {
+    const block = await run({
+      nivaro_relations: [
+        ...baseRelations,
+        {
+          many_collection: 'categories',
+          many_field: 'project',
+          one_collection: 'projects',
+          one_field: null,
+          junction_field: null
+        }
+      ]
+    })
+    expect(block.fields[0].option_filter).toEqual({ project: { _eq: 42 } })
+  })
+
+  it('no cascade configured → no filter (and nothing breaks)', async () => {
+    const block = await run({
+      nivaro_relations: baseRelations,
+      nivaro_layout_field_assignments: [{ field: 'lines', overrides: '{}' }]
+    })
+    expect(block.fields[0].option_filter).toBeUndefined()
+  })
+
+  it("ships the field's own cascade_filters with the row's parent values", async () => {
+    const rules = [{ parent_field: 'zone', filter_column: 'zone' }]
+    const block = await run({ nivaro_relations: baseRelations }, [
+      {
+        field: 'category',
+        label: 'Category',
+        type: 'integer',
+        dependency_config: JSON.stringify({ cascade_filters: rules })
+      },
+      { field: 'zone', label: 'Zone', type: 'integer' }
+    ])
+    expect(block.fields[0].cascade_filters).toEqual(rules)
+    expect(block.rows[0].cascade_values).toEqual({ zone: 3 })
+  })
+})

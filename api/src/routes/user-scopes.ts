@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { runPersonalConfigWrite } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -19,8 +19,9 @@ import {
  * /scope-dimensions        — admin CRUD for the dimension registry
  * /scope-dimensions/:id/coverage — live auto-resolution preview per collection
  * /users/me/scopes         — the caller's defaults + restrictions (+ dimension list)
+ *                            (also GET /user-scopes/mine)
  * PUT /users/me/scopes/:dimension        — self-edit DEFAULT values only
- * GET/PUT /user-scopes/:userId           — admin: both modes for any user
+ * GET/PUT /user-scopes/:userId           — admin: both modes for any user (uuid, else 400)
  */
 
 const MODE = new Set(['default', 'restrict'])
@@ -226,12 +227,17 @@ export async function userScopesRoutes(app: FastifyInstance) {
 
   // ── Own scopes ──────────────────────────────────────────────────────────────
 
-  app.get('/users/me/scopes', { preHandler: requireAuth }, async (req) => {
+  const ownScopes = async (req: FastifyRequest) => {
     // Read fresh: a self-edit made on another replica does not move the tenant-wide config
     // epoch (below), so this process's 60 s copy of the person's rows may be older than it.
     bustUserScopeCache(req.user!.id)
     return { data: await describeUserScopes(req.user!.id) }
-  })
+  }
+  app.get('/users/me/scopes', { preHandler: requireAuth }, ownScopes)
+  // The spelling callers guess (army 5 b11-N9: a service account's GET /user-scopes/mine
+  // reached the admin route as userId "mine" and answered 500 with the SQL text). Static,
+  // so it wins over /user-scopes/:userId; any signed-in caller reads their own.
+  app.get('/user-scopes/mine', { preHandler: requireAuth }, ownScopes)
 
   // Self-edit is DEFAULTS ONLY — restrictions are admin-set.
   app.put<{ Params: { dimension: string }; Body: { values?: unknown } }>(
@@ -271,9 +277,12 @@ export async function userScopesRoutes(app: FastifyInstance) {
 
   // ── Admin: any user, both modes ─────────────────────────────────────────────
 
+  /** Admin routes that name a person: an administrator, and a uuid (else 400, b11-N9). */
+  const adminUserId = [requireAdmin, requireUuidUserId]
+
   app.get<{ Params: { userId: string } }>(
     '/user-scopes/:userId',
-    { preHandler: requireAdmin },
+    { preHandler: adminUserId },
     async (req) => {
       return { data: await describeUserScopes(req.params.userId) }
     }
@@ -285,7 +294,7 @@ export async function userScopesRoutes(app: FastifyInstance) {
   app.post<{
     Params: { userId: string }
     Body: { dimension?: string; values?: unknown }
-  }>('/user-scopes/:userId/impact', { preHandler: requireAdmin }, async (req, reply) => {
+  }>('/user-scopes/:userId/impact', { preHandler: adminUserId }, async (req, reply) => {
     const b = req.body ?? {}
     const dims = await listScopeDimensions(false)
     const dim = dims.find((d) => d.name === b.dimension)
@@ -433,7 +442,7 @@ export async function userScopesRoutes(app: FastifyInstance) {
   app.put<{
     Params: { userId: string }
     Body: { dimension?: string; mode?: string; values?: unknown }
-  }>('/user-scopes/:userId', { preHandler: requireAdmin }, async (req, reply) => {
+  }>('/user-scopes/:userId', { preHandler: adminUserId }, async (req, reply) => {
     const b = req.body ?? {}
     const mode = String(b.mode ?? '')
     if (!MODE.has(mode))
@@ -467,4 +476,14 @@ export async function userScopesRoutes(app: FastifyInstance) {
     })
     return reply.send({ data: { saved: true, values } })
   })
+}
+
+const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A person's id is a uuid: anything else is a 400, never a SQL conversion error (b11-N9). */
+async function requireUuidUserId(req: FastifyRequest, reply: FastifyReply) {
+  const userId = (req.params as { userId?: string } | undefined)?.userId
+  if (!USER_ID_RE.test(String(userId ?? ''))) {
+    return reply.code(400).send({ error: 'userId must be a user id', code: 'INVALID_USER_ID' })
+  }
 }

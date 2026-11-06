@@ -2274,6 +2274,26 @@ export function QueueWorklist({
     if (s.page) setPage(s.page)
     pendingScrollRef.current = stash.scroll ?? 0
   }, [displayReady, queueId])
+  // army 5 b16-N3 — a dashboard link carries ?scope=all|mine so "Your
+  // worklists" opens the scope the number was counted in (not an empty My
+  // Items). Applied once after the default view landed, then dropped like
+  // ?owner= so a reload or a saved view starts clean.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on ready
+  useEffect(() => {
+    if (!displayReady || typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const wanted = params.get('scope')
+    if (wanted !== 'all' && wanted !== 'mine') return
+    params.delete('scope')
+    const qs = params.toString()
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
+    )
+    setScope(wanted)
+    setPage(1)
+  }, [displayReady])
   // #638 — a link from someone's profile (Working on → Open in queue) arrives
   // as ?owner=<user id>: show every record in the queue that person owns.
   // Applied once after the default view landed, then dropped from the URL so

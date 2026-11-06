@@ -4,6 +4,7 @@ import {
   fetchLatestRevisions,
   incrementGuarded,
   LATEST_BATCH,
+  lineLabelOf,
   noteLineReads,
   RowBaseBook,
   rowBaseBookFor,
@@ -301,5 +302,22 @@ describe('noteLineReads + rowBaseBookFor (M1 for every grid kind on the record f
     const stop = noteLineReads(qc, client, '7')
     expect(await rowBaseBookFor(client, 'parts').peek('4')).toBe(44)
     stop()
+  })
+})
+
+// army5 b09-N6: the collision dialog said "Line 1" for a forecast year.
+describe('lineLabelOf', () => {
+  it('a line number wins', () => {
+    expect(lineLabelOf([{ id: 5, line_number: 3, year: 2027 }], '5')).toBe('Line 3')
+  })
+  it("a row without a line number uses the caller's label, then its year", () => {
+    expect(lineLabelOf([{ id: 5, year: 2027 }], '5', null, () => '2027 forecast')).toBe(
+      '2027 forecast'
+    )
+    expect(lineLabelOf([{ id: 5, year: 2027 }], '5')).toBe('Year 2027')
+  })
+  it('falls back to the position, then the id', () => {
+    expect(lineLabelOf([{ id: 4 }, { id: 5 }], '5')).toBe('Line 2')
+    expect(lineLabelOf([], '9')).toBe('Row 9')
   })
 })

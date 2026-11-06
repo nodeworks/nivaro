@@ -330,6 +330,43 @@ export function matchesShowWhen(
 }
 
 const CATALOG_LIMIT = 2000
+/** The largest line money value the server stores: decimal(12,2) money
+ *  columns (the same bound the server's numeric fit check and the line
+ *  "must be smaller than 10,000,000,000" rules hold). Mirrored here — the
+ *  shared package has no export of the API's limit. */
+export const MAX_LINE_MONEY = 9_999_999_999.99
+
+/** Why a typed quantity cannot be taken as it stands (null = fine): the
+ *  same check commitQty makes, with "Whole numbers only" for a decimal on a
+ *  whole-number column. */
+export function qtyEntryProblem(raw: string, qtyType: string | null | undefined): string | null {
+  const n = Number(raw)
+  if (isIntegerFieldType(qtyType) && raw.trim() !== '' && !Number.isNaN(n) && !Number.isInteger(n))
+    return 'Whole numbers only'
+  const check = checkNumberEntry(raw, { type: qtyType, min: 0, label: 'Quantity' })
+  return check.ok ? null : check.message
+}
+
+/** The first refusal a line's computed columns (qty × price …) would meet:
+ *  the line's validation rule on that column, else the money column's fit. */
+export function lineComputeError(args: {
+  compute: Record<string, string>
+  probe: Record<string, unknown>
+  ruleError: (field: string, value: unknown, row: Record<string, unknown>) => string | null
+  labelOf: (field: string) => string
+}): string | null {
+  const probe = { ...args.probe }
+  for (const [dst, formula] of Object.entries(args.compute)) {
+    const v = evalClientFormula(formula, probe)
+    if (v === null) continue
+    probe[dst] = v
+    const ruleErr = args.ruleError(dst, v, probe)
+    if (ruleErr) return ruleErr
+    if (Math.abs(v) > MAX_LINE_MONEY)
+      return `${args.labelOf(dst)} would be ${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} — too large to save`
+  }
+  return null
+}
 
 export function CatalogPickerField({
   relatedCollection,
@@ -355,6 +392,12 @@ export function CatalogPickerField({
   const catalogLocked = config.catalog_locked_fields ?? []
   const { isAdmin } = useItemEditAuth()
   const isNew = parentId === 'new'
+  // Direct line writes name their parent so a price / qty / delete shows in
+  // the RECORD's History too (army5 b02-N9).
+  const parentQs =
+    parentCollection && !isNew
+      ? `?parent_collection=${encodeURIComponent(parentCollection)}&parent_id=${encodeURIComponent(parentId)}`
+      : ''
   const qtyField = config.qty_field ?? 'quantity'
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -1765,6 +1808,24 @@ export function CatalogPickerField({
     return payload
   }
 
+  /** What a quantity makes of the line's computed columns (qty × price …),
+   *  judged before staging (army5 b02-N7): the line's own validation rules on
+   *  those columns, and the money column's fit — otherwise 999,999,999 × $13.67
+   *  staged fine and the record's Save failed on the line. */
+  function lineTotalError(
+    catalogId: string,
+    qty: number,
+    catalogRow: Record<string, unknown>,
+    line: Record<string, unknown>
+  ): string | null {
+    return lineComputeError({
+      compute: config.compute_fields ?? {},
+      probe: { ...buildRowPayload(catalogId, qty, catalogRow), ...line, [qtyField]: qty },
+      ruleError: childRuleError,
+      labelOf: (f) => childFields.find((x) => x.field === f)?.label || titleCase(f)
+    })
+  }
+
   async function commitQty(
     catalogId: string,
     raw: string,
@@ -1791,7 +1852,8 @@ export function CatalogPickerField({
         (isNew ? undefined : savedByCatalogId.get(catalogId)) ??
         (idx !== undefined ? pendingRows[idx] : undefined) ??
         {}
-      const ruleErr = childRuleError(qtyField, qty, line)
+      const ruleErr =
+        childRuleError(qtyField, qty, line) ?? lineTotalError(catalogId, qty, catalogRow, line)
       if (ruleErr) {
         setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'error', message: ruleErr } }))
         return
@@ -1864,7 +1926,7 @@ export function CatalogPickerField({
       const existing = savedByCatalogId.get(catalogId)
       if (qty === 0) {
         if (existing?.id != null)
-          await client.request(del(`/items/${relatedCollection}/${existing.id}`))
+          await client.request(del(`/items/${relatedCollection}/${existing.id}${parentQs}`))
       } else if (existing?.id != null) {
         const payload = buildRowPayload(catalogId, qty, catalogRow, rel)
         // Manually-edited columns survive qty commits; formulas re-run over the
@@ -1878,10 +1940,10 @@ export function CatalogPickerField({
         }
         const merged = { ...existing, ...payload }
         const { id: _id, ...body } = merged
-        await client.request(patch(`/items/${relatedCollection}/${existing.id}`, body))
+        await client.request(patch(`/items/${relatedCollection}/${existing.id}${parentQs}`, body))
       } else {
         await client.request(
-          post(`/items/${relatedCollection}`, {
+          post(`/items/${relatedCollection}${parentQs}`, {
             [manyField]: parentId,
             ...buildRowPayload(catalogId, qty, catalogRow, rel)
           })
@@ -1933,7 +1995,7 @@ export function CatalogPickerField({
     setSavingIds((p) => new Set(p).add(catalogId))
     try {
       const { id: _id, ...body } = recompute(existing)
-      await client.request(patch(`/items/${relatedCollection}/${existing.id}`, body))
+      await client.request(patch(`/items/${relatedCollection}/${existing.id}${parentQs}`, body))
       qc.invalidateQueries({ queryKey: ['o2m-rows', relatedCollection, manyField, parentId] })
     } catch {
       /* retry on next edit */
@@ -2003,6 +2065,14 @@ export function CatalogPickerField({
         onChange={(e) => setEditing((p) => ({ ...p, [catalogId]: e.target.value }))}
         onBlur={(e) => {
           const v = e.target.value
+          // A refused entry keeps what was typed, with the reason under the
+          // box — 2.05 on a whole-number quantity emptied the row on Tab
+          // (army5 b01-N10).
+          const pre = qtyEntryProblem(v, qtyFieldType)
+          if (pre) {
+            setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'error', message: pre } }))
+            return
+          }
           setEditing((p) => {
             const n = { ...p }
             delete n[catalogId]

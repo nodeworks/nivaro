@@ -62,6 +62,7 @@ import {
   draftHasContent,
   draftKey,
   draftMatchesPrefill,
+  keepDraftSavedAt,
   loadDraft,
   markDraftCreated,
   prefillSignature,
@@ -201,6 +202,14 @@ import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderS
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
 import { HighlightedCode } from './item-edit/HighlightedCode'
 import {
+  clientMidairError,
+  conflictsNeedingPerson,
+  resolveHeaderCollision,
+  restoredDraftCollisions,
+  saveIsEcho,
+  staleDraftConflicts
+} from './item-edit/header-midair'
+import {
   applyDisplayTemplate,
   type CascadeRule,
   getCascadeFilters,
@@ -236,12 +245,6 @@ import {
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
-import {
-  clientMidairError,
-  resolveHeaderCollision,
-  restoredDraftCollisions,
-  staleDraftConflicts
-} from './item-edit/header-midair'
 import { LineCollisionDialog, MidairCollisionDialog } from './item-edit/MidairCollisionDialog'
 import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
 import {
@@ -2167,24 +2170,39 @@ function ItemEditFormView({
     noFieldWrite?: boolean
     /** The save had no step beyond the record's own fields. */
     onlyMain?: boolean
+    /** A line (child row) write was refused: what is staged stays staged,
+     *  the form stays dirty and no green "Changes saved" (army5 b02-N7). */
+    childFailed?: boolean
+    /** "Line 1: <refusal>" for each refused line edit / delete. */
+    childErrors?: string[]
   }>({ hidden: null, linkProblems: [] })
   // Set by the header mid-air dialog for the retry it starts (read once).
   const keptTheirsRef = useRef(0)
+  // The last save left a refused line staged (army5 b02-N7).
+  const childRefusedRef = useRef(false)
   // A restored draft's fields someone else saved since the draft was taken
   // (field → the value it had when the draft was made). Save stops on any of
   // them that still carries the stale value (army5 b09 HIGH).
   const restoreGuardRef = useRef<Map<string, unknown>>(new Map())
   // The save base came from a restored draft (not from this form's own read).
   const draftBaseOverrideRef = useRef(false)
+  // The draft last stored / restored here — the same work keeps its saved_at.
+  const lastPersistedDraftRef = useRef<StoredDraft | null>(null)
+  // Fields the person already decided in a mid-air choice (field → the
+  // record's value they decided against). A server 409 that names only such
+  // fields — still holding that value — or echoes of this save is retried
+  // against the newer revision without asking again (conflictsNeedingPerson).
+  const decidedConflictsRef = useRef<Map<string, unknown>>(new Map())
   // "Keep mine" / "Take theirs" on a restored field: that field is decided.
-  // With every flagged field decided, the save goes against the form's own
-  // (newer) base again — the draft's older one would only ask a second time.
-  const settleRestoreGuard = (field: string) => {
+  // The save KEEPS the draft's own base revision until it lands (REVIEW-R5
+  // M4): a restored field the restore could not compare (no base in the
+  // draft, or the form's read was older than the server) must still meet the
+  // server's mid-air check — dropping the draft base let a stale value
+  // overwrite a newer save with no 409. The decided field does not ask twice:
+  // its 409 is settled by decidedConflictsRef.
+  const settleRestoreGuard = (field: string, theirs: unknown) => {
     if (!restoreGuardRef.current.delete(field)) return
-    if (restoreGuardRef.current.size === 0 && draftBaseOverrideRef.current) {
-      draftBaseOverrideRef.current = false
-      baseRevisionOverrideRef.current = null
-    }
+    decidedConflictsRef.current.set(field, theirs)
   }
   // A create an older server answered with no row and no id: the record
   // exists, so the form is replaced by a plain note — never a second Save.
@@ -2194,6 +2212,7 @@ function ItemEditFormView({
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
   useEffect(() => {
     setRecordGone(null)
+    childRefusedRef.current = false
   }, [collection, itemId])
   const {
     data: fetchedItemData,
@@ -2296,8 +2315,12 @@ function ItemEditFormView({
     conflicts: Array<{ field: string; current_value: unknown }>
     latest: number
     mine: Record<string, unknown>
+    /** Found by the restored-draft check on the client (no request sent). */
+    clientFound?: boolean
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
+  // A pressed Save is on its way (handleSave → saveMut settles).
+  const saveStartedRef = useRef(false)
   // Mid-air for LINES (a10-3): the revision each staged line edit is based on,
   // keyed `<rc>:<rowId>`. Taken when the row is first staged (or handed in by
   // the grid from when its editor opened — `__base_revision` on queueEdit),
@@ -2651,6 +2674,12 @@ function ItemEditFormView({
 
   // ── Pending comments (new records) ────────────────────────────────────────
   const [pendingComments, setPendingComments] = useState<string[]>([])
+  // A new record's comment box text not Queued yet: Create posts it too
+  // (army5 b01-N13 — it was silently dropped).
+  const unsentCommentRef = useRef('')
+  const noteUnsentComment = useCallback((text: string) => {
+    unsentCommentRef.current = text
+  }, [])
   const handleQueueComment = useCallback((text: string) => {
     setPendingComments((prev) => [...prev, text])
   }, [])
@@ -3635,7 +3664,9 @@ function ItemEditFormView({
     initialDataRef.current = itemData
     draftRef.current = itemData
     setDraft(itemData)
-    setIsDirty(false)
+    // A save whose line was refused keeps that line staged: adopting the
+    // saved record must not mark the form clean over it (army5 b02-N7).
+    setIsDirty(childRefusedRef.current)
     // biome-ignore lint/correctness/useExhaustiveDependencies: authUserId only attributes the ghost
   }, [itemData])
 
@@ -3833,30 +3864,34 @@ function ItemEditFormView({
       }
       const obj = <T,>(m: Map<string, T>, conv: (v: T) => unknown) =>
         Object.fromEntries([...m.entries()].map(([k, v]) => [k, conv(v)]))
-      const stored: StoredDraft = {
-        key: recoveryKey,
-        collection,
-        item_id: isNew ? 'new' : String(itemId),
-        user_id: authUserId || 'anon',
-        saved_at: new Date().toISOString(),
-        fields,
-        base: baseVals,
-        base_updated_at:
-          (base.date_updated as string | undefined) ??
-          (base.updated_at as string | undefined) ??
-          null,
-        ...(isNew
-          ? {}
-          : { base_revision: baseRevisionOverrideRef.current ?? baseRevisionLatestRef.current }),
-        pending_rows: obj(pendingO2MRows, (r) => r) as StoredDraft['pending_rows'],
-        pending_edits: obj(pendingO2MEdits, (e) =>
-          Object.fromEntries(e)
-        ) as StoredDraft['pending_edits'],
-        pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
-        m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
-        m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
-        ...(isNew ? { prefill_sig: prefillSig } : {})
-      }
+      const stored: StoredDraft = keepDraftSavedAt(
+        {
+          key: recoveryKey,
+          collection,
+          item_id: isNew ? 'new' : String(itemId),
+          user_id: authUserId || 'anon',
+          saved_at: new Date().toISOString(),
+          fields,
+          base: baseVals,
+          base_updated_at:
+            (base.date_updated as string | undefined) ??
+            (base.updated_at as string | undefined) ??
+            null,
+          ...(isNew
+            ? {}
+            : { base_revision: baseRevisionOverrideRef.current ?? baseRevisionLatestRef.current }),
+          pending_rows: obj(pendingO2MRows, (r) => r) as StoredDraft['pending_rows'],
+          pending_edits: obj(pendingO2MEdits, (e) =>
+            Object.fromEntries(e)
+          ) as StoredDraft['pending_edits'],
+          pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
+          m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
+          m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
+          ...(isNew ? { prefill_sig: prefillSig } : {})
+        },
+        lastPersistedDraftRef.current
+      )
+      lastPersistedDraftRef.current = stored
       if (!draftHasContent(stored)) {
         void deleteDraft(recoveryKey)
         if (authUserId && serverDraftRef.current) {
@@ -3919,12 +3954,15 @@ function ItemEditFormView({
     // offer can sit open while a live update lands): such a field is flagged
     // and Save stops on it with the Theirs / Mine dialog — the restore must
     // never put an old value over a newer save silently (army5 b09 HIGH).
+    // Re-persisting the same work keeps its original time (b09-N3b).
+    lastPersistedDraftRef.current = d
     const stale = staleDraftConflicts({
       fields: d.fields,
       base: d.base,
       current: initialDataRef.current
     })
     restoreGuardRef.current = new Map(stale.map((c) => [c.field, d.base[c.field]]))
+    decidedConflictsRef.current = new Map()
     if (stale.length > 0) {
       setRemoteChanges((cur) => {
         const out = { ...cur }
@@ -6055,7 +6093,8 @@ function ItemEditFormView({
   const headerRegistryActions = useRecordHeaderActions(
     collection,
     isNew || designOn ? null : String(itemId),
-    viewingAddendum ? null : draft
+    viewingAddendum ? null : draft,
+    { fieldsLocked: !!editLockMessage && !editLockPartial }
   )
   const [headerRegistryPick, setHeaderRegistryPick] = useState<AvailableBulkAction | null>(null)
 
@@ -8476,30 +8515,43 @@ function ItemEditFormView({
       )
       return
     }
+    // One save at a time (army5 b01-N1): a double-click's second press came
+    // in while the first still awaited the change-reason preflight (before
+    // the mutation was pending) and sent a second PATCH on the same base —
+    // which met the first one as "Someone else changed this record".
+    // Released when the save settles (saveMut onSettled) or stops early.
+    if (saveStartedRef.current || saveMut.isPending) return
     if (!validateAll()) return
+    saveStartedRef.current = true
     void (async () => {
-      const collectionChallenge = await preflightChangeReason()
-      const layoutChallenge = layoutConfirmChallenge()
-      // One prompt: the collection's (its preset reasons) naming every field asked about.
-      const challenge =
-        collectionChallenge && layoutChallenge
-          ? {
-              ...collectionChallenge,
-              fields_changed: [
-                ...new Set([
-                  ...collectionChallenge.fields_changed,
-                  ...layoutChallenge.fields_changed
-                ])
-              ]
-            }
-          : (collectionChallenge ?? layoutChallenge)
-      if (challenge) {
-        setCrChallenge(challenge)
-        return
+      let started = false
+      try {
+        started = await startSave()
+      } finally {
+        if (!started) saveStartedRef.current = false
       }
-      nudgeRecommended()
-      saveMut.mutate()
     })()
+  }
+  async function startSave(): Promise<boolean> {
+    const collectionChallenge = await preflightChangeReason()
+    const layoutChallenge = layoutConfirmChallenge()
+    // One prompt: the collection's (its preset reasons) naming every field asked about.
+    const challenge =
+      collectionChallenge && layoutChallenge
+        ? {
+            ...collectionChallenge,
+            fields_changed: [
+              ...new Set([...collectionChallenge.fields_changed, ...layoutChallenge.fields_changed])
+            ]
+          }
+        : (collectionChallenge ?? layoutChallenge)
+    if (challenge) {
+      setCrChallenge(challenge)
+      return false
+    }
+    nudgeRecommended()
+    saveMut.mutate()
+    return true
   }
 
   // ── Save / delete ──────────────────────────────────────────────────────────
@@ -8544,6 +8596,14 @@ function ItemEditFormView({
       // A change-reason 422 from any queued row PATCH pauses the save; the
       // dialog retries the whole mutation with the reason applied to every row.
       let flushChallenge: ChangeReasonChallenge | null = null
+      // The restored-draft check stopped the save before any request.
+      let clientFoundCollision = false
+      // Child writes name their parent so a line's price / qty / delete shows
+      // in the RECORD's History too (army5 b02-N9; routes/items.ts takes
+      // parent_collection + parent_id on POST / PATCH / DELETE).
+      const parentQs = isNew
+        ? ''
+        : `?parent_collection=${encodeURIComponent(collection)}&parent_id=${encodeURIComponent(String(itemId))}`
 
       // Staged M2M/M2A/file links ride in the record's own create/update body
       // (item-edit/staged-links.ts) — one write, so nothing after it can lose
@@ -8802,11 +8862,43 @@ function ItemEditFormView({
             guard: restoreGuardRef.current,
             current: initialDataRef.current
           })
-          if (staleRestore.length > 0)
-            throw clientMidairError(staleRestore, baseRevisionLatestRef.current)
-          const r = await client.request<WriteAnswer>(
-            patch(`/items/${collection}/${itemId}`, payload)
-          )
+          if (staleRestore.length > 0) {
+            clientFoundCollision = true
+            // While the restored draft's base is armed the retry keeps it
+            // (REVIEW-R5 M4): the dialog re-arms the same revision.
+            throw clientMidairError(
+              staleRestore,
+              baseRevisionOverrideRef.current ?? baseRevisionLatestRef.current
+            )
+          }
+          let r: WriteAnswer | null = null
+          try {
+            r = await client.request<WriteAnswer>(patch(`/items/${collection}/${itemId}`, payload))
+          } catch (first) {
+            const echo = midairCollisionOf(first)
+            if (
+              !echo ||
+              echo.latest <= 0 ||
+              conflictsNeedingPerson({
+                conflicts: echo.conflicts,
+                payload,
+                decided: decidedConflictsRef.current
+              }).length > 0
+            )
+              throw first
+            // Nothing anyone must decide (army5 b01-N1 double-click echo,
+            // REVIEW-R5 M4 decided fields): the newer revision is the base.
+            baseRevisionOverrideRef.current = echo.latest
+            draftBaseOverrideRef.current = false
+            if (!saveIsEcho({ conflicts: echo.conflicts, payload })) {
+              r = await client.request<WriteAnswer>(
+                patch(`/items/${collection}/${itemId}`, {
+                  ...payload,
+                  _base_revision: echo.latest
+                })
+              )
+            }
+          }
           noteWriteAnswer(r)
           savedId = itemId
         } else {
@@ -8835,9 +8927,22 @@ function ItemEditFormView({
         const coll = midairCollisionOf(err)
         if (coll) {
           updateStep('main', { status: 'error', error: 'Someone else changed this record' })
+          // Only what the person still has to decide (echoes and fields
+          // already decided are not asked again).
+          const ask = conflictsNeedingPerson({
+            conflicts: coll.conflicts,
+            payload,
+            decided: decidedConflictsRef.current
+          })
+          const conflicts = ask.length > 0 ? ask : coll.conflicts
           const mine: Record<string, unknown> = {}
-          for (const c of coll.conflicts) mine[c.field] = payload[c.field]
-          setCollision({ conflicts: coll.conflicts, latest: coll.latest, mine })
+          for (const c of conflicts) mine[c.field] = payload[c.field]
+          setCollision({
+            conflicts,
+            latest: coll.latest,
+            mine,
+            ...(clientFoundCollision ? { clientFound: true } : {})
+          })
           throw err
         }
         // No connection (#1678): keep the pressed Save in the outbox and send
@@ -8996,9 +9101,11 @@ function ItemEditFormView({
       }
 
       // ── Comments (new only) ────────────────────────────────────────────────
-      if (isNew && pendingComments.length > 0) {
+      const leftover = isNew ? unsentCommentRef.current.trim() : ''
+      const commentsToPost = leftover ? [...pendingComments, leftover] : pendingComments
+      if (isNew && commentsToPost.length > 0) {
         await Promise.all(
-          pendingComments.map((text) =>
+          commentsToPost.map((text) =>
             client.request(post('/comments', { collection, item: savedId, text })).catch(() => {})
           )
         )
@@ -9054,7 +9161,7 @@ function ItemEditFormView({
             body._change_reason = changeReasonRef.current
           const base = await lineBaseFor(rc, rowId)
           const ok = await client
-            .request(patch(`/items/${rc}/${rowId}`, withRowBaseRevision(body, base)))
+            .request(patch(`/items/${rc}/${rowId}${parentQs}`, withRowBaseRevision(body, base)))
             .then(() => true)
             .catch(() => false)
           if (ok) {
@@ -9124,7 +9231,7 @@ function ItemEditFormView({
               let res: { data: { id: unknown } } | null = null
               try {
                 res = await client.request<{ data: { id: unknown } }>(
-                  post(`/items/${rc}`, {
+                  post(`/items/${rc}${parentQs}`, {
                     ...cleanData,
                     [mf]: savedId,
                     // The record's change reason covers the lines it stages
@@ -9194,7 +9301,10 @@ function ItemEditFormView({
           }
           if (nestedFailures > 0)
             problems.push(`${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`)
-          if (problems.length > 0) saveNoticeRef.current.linkProblems.push(problems.join('. '))
+          if (problems.length > 0) {
+            saveNoticeRef.current.linkProblems.push(problems.join('. '))
+            saveNoticeRef.current.childFailed = true
+          }
           updateStep(
             stepId,
             problems.length > 0
@@ -9210,6 +9320,7 @@ function ItemEditFormView({
           remainingO2MRows.set(key, rowList)
           updateStep(stepId, { status: 'error', error: errMsg(err) })
           saveNoticeRef.current.linkProblems.push(errMsg(err))
+          saveNoticeRef.current.childFailed = true
         }
       }
 
@@ -9250,7 +9361,9 @@ function ItemEditFormView({
                 cleanChanges._change_reason = changeReasonRef.current
               const base = await lineBaseFor(rc, rowId)
               await client
-                .request(patch(`/items/${rc}/${rowId}`, withRowBaseRevision(cleanChanges, base)))
+                .request(
+                  patch(`/items/${rc}/${rowId}${parentQs}`, withRowBaseRevision(cleanChanges, base))
+                )
                 .then(() => {
                   o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
                   rowBaseBookFor(client, rc).forget(rowId)
@@ -9280,7 +9393,16 @@ function ItemEditFormView({
                       error: `${label} was changed by someone else — pick which value wins`
                     })
                   } else {
-                    updateStep(stepId, { status: 'error', error: errMsg(err) })
+                    // A refused line (validation rule, field fit …): named on
+                    // the step AND in the closing message, never a green
+                    // "Changes saved" over it (army5 b02-N7).
+                    const refusal = `${lineLabelOf(savedLines, rowId)}: ${errMsg(err)}`
+                    saveNoticeRef.current.childFailed = true
+                    saveNoticeRef.current.childErrors = [
+                      ...(saveNoticeRef.current.childErrors ?? []),
+                      refusal
+                    ]
+                    updateStep(stepId, { status: 'error', error: refusal })
                   }
                 })
             }
@@ -9367,6 +9489,7 @@ function ItemEditFormView({
         if (!hasErr && nestedFailures === 0) {
           updateStep(stepId, { status: 'done' })
         } else if (!hasErr) {
+          saveNoticeRef.current.childFailed = true
           updateStep(stepId, {
             status: 'error',
             error: `${nestedFailures} nested row${nestedFailures !== 1 ? 's' : ''} failed`
@@ -9390,9 +9513,15 @@ function ItemEditFormView({
         let hasErr = false
         await Promise.all(
           [...dels].map(async (rowId) => {
-            await client.request(del(`/items/${rc}/${rowId}`)).catch((err) => {
+            await client.request(del(`/items/${rc}/${rowId}${parentQs}`)).catch((err) => {
               hasErr = true
-              updateStep(stepId, { status: 'error', error: errMsg(err) })
+              const refusal = `${lineLabelOf(cachedGridRows(rc, key.split('.')[1]), rowId)} not removed: ${errMsg(err)}`
+              saveNoticeRef.current.childFailed = true
+              saveNoticeRef.current.childErrors = [
+                ...(saveNoticeRef.current.childErrors ?? []),
+                refusal
+              ]
+              updateStep(stepId, { status: 'error', error: refusal })
             })
             updateStep(stepId, (s) => ({
               progress: { done: (s.progress?.done ?? 0) + 1, total: dels.size }
@@ -9531,6 +9660,7 @@ function ItemEditFormView({
       changeReasonRef.current = null
       baseRevisionOverrideRef.current = null
       restoreGuardRef.current = new Map()
+      decidedConflictsRef.current = new Map()
       draftBaseOverrideRef.current = false
       if (!isNew) {
         // The offline outbox: what this save carried (or the form had taken
@@ -9545,13 +9675,19 @@ function ItemEditFormView({
         announceRecordTabs(authUserId, 'saved', collection, id)
       }
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
-      setIsDirty(false)
+      // A refused line keeps its staged edit: the form stays dirty (and its
+      // recovery draft stays) so the person sees the unsaved line and can fix
+      // it — never a clean form over work that did not land (army5 b02-N7).
+      const childFailed = !isNew && saveNoticeRef.current.childFailed === true
+      childRefusedRef.current = childFailed
+      if (!childFailed) setIsDirty(false)
       // The persisted recovery draft is spent — remove it now rather than on
       // the debounce, since a created record navigates away immediately.
-      if (!isNew) void deleteDraft(recoveryKey)
+      if (!isNew && !childFailed) void deleteDraft(recoveryKey)
       setM2mLinks(new Map())
       setM2mUnlinks(new Map())
       setPendingComments([])
+      unsentCommentRef.current = ''
       setPendingTasks([])
       // Invalidate O2M row queries for every relation that had pending changes
       const o2mKeysToInvalidate = new Set([
@@ -9584,6 +9720,10 @@ function ItemEditFormView({
       // The header's "Edited … by …" names this save, not the one before it
       // (RecordLiveSync refreshes it only for other people's writes).
       void qc.invalidateQueries({ queryKey: ['last-touch', collection, String(id)] })
+      // Header captions ("= 301.51 − ∅", Unallocated, line rollups) read the
+      // saved lines: refresh them with the save (army5 b09-N1, save half).
+      void qc.invalidateQueries({ queryKey: ['field-lineage', collection, String(id)] })
+      void qc.invalidateQueries({ queryKey: ['child-summary', collection, String(id)] })
       // The Notes thread gains entries from the save itself (change reasons,
       // rule/hook writes, integration pushes) — some land seconds later.
       invalidateRecordNotes(qc, collection, String(id))
@@ -9611,9 +9751,21 @@ function ItemEditFormView({
       const noun = colMeta?.singular || titleCase(collection)
       // Auto-close dialog after brief success display
       setTimeout(() => {
-        setSaveDialogOpen(false)
+        // A refused line: the dialog stays open on its error steps ("Saved
+        // with errors"), and the closing message names the refusal.
+        if (!notice.childFailed) setSaveDialogOpen(false)
         const why = notice.hidden?.reason ? ` (${notice.hidden.reason})` : ''
-        if (notice.hidden) {
+        if (notice.childFailed) {
+          // Line creates name their refusals in linkProblems (below).
+          const errs = notice.childErrors ?? []
+          if (errs.length > 0 || notice.linkProblems.length === 0)
+            toast.error(
+              errs.length > 0
+                ? `Not everything saved — ${errs.join(' · ')}`
+                : 'Not everything saved — some lines did not save',
+              { duration: 20_000 }
+            )
+        } else if (notice.hidden) {
           toast.warning(
             isNew
               ? `${noun} ${id} was created, but it’s outside what you can see${why}.`
@@ -9647,6 +9799,9 @@ function ItemEditFormView({
         }
         onSaved?.(id)
       }, 1200)
+    },
+    onSettled: () => {
+      saveStartedRef.current = false
     },
     onError: (err) => {
       // Nothing was created: what is on the form is still the person's draft.
@@ -10314,7 +10469,7 @@ function ItemEditFormView({
   const fieldAffordancesRaw = {
     remoteChanges,
     dismissRemoteChange: (field: string) => {
-      if (remoteChanges[field]?.conflict) settleRestoreGuard(field)
+      if (remoteChanges[field]?.conflict) settleRestoreGuard(field, remoteChanges[field]?.theirs)
       setRemoteChanges((cur) => {
         if (!(field in cur)) return cur
         const next = { ...cur }
@@ -10325,7 +10480,7 @@ function ItemEditFormView({
     takeRemoteChange: (field: string) => {
       const ch = remoteChanges[field]
       if (!ch?.conflict) return
-      settleRestoreGuard(field)
+      settleRestoreGuard(field, ch.theirs)
       undoTo(field, ch.theirs ?? null)
       setRemoteChanges((cur) => {
         const next = { ...cur }
@@ -10463,6 +10618,7 @@ function ItemEditFormView({
           defaultExpanded={commentsSlot?.default_expanded ?? false}
           queuedComments={isNew ? pendingComments : undefined}
           onQueueComment={isNew ? handleQueueComment : undefined}
+          onUnsentDraft={isNew ? noteUnsentComment : undefined}
         />
       )
     }
@@ -11280,6 +11436,7 @@ function ItemEditFormView({
             item={itemId}
             queuedComments={isNew ? pendingComments : undefined}
             onQueueComment={isNew ? handleQueueComment : undefined}
+            onUnsentDraft={isNew ? noteUnsentComment : undefined}
           />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -11720,6 +11877,7 @@ function ItemEditFormView({
             item={itemId}
             queuedComments={isNew ? pendingComments : undefined}
             onQueueComment={isNew ? handleQueueComment : undefined}
+            onUnsentDraft={isNew ? noteUnsentComment : undefined}
           />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -11892,6 +12050,7 @@ function ItemEditFormView({
             defaultExpanded={false}
             queuedComments={isNew ? pendingComments : undefined}
             onQueueComment={isNew ? handleQueueComment : undefined}
+            onUnsentDraft={isNew ? noteUnsentComment : undefined}
           />
         )}
         {showWorkflow && <WorkflowPanel collection={collection} item={itemId} />}
@@ -13720,13 +13879,23 @@ function ItemEditFormView({
                                         return next
                                       })
                                       keptTheirsRef.current = r.theirs.length
-                                      for (const c of collision.conflicts)
+                                      for (const c of collision.conflicts) {
                                         restoreGuardRef.current.delete(c.field)
-                                      // A client-found collision may not know the
-                                      // revision (0): then the form's own base.
-                                      baseRevisionOverrideRef.current =
-                                        collision.latest > 0 ? collision.latest : null
-                                      draftBaseOverrideRef.current = false
+                                        decidedConflictsRef.current.set(c.field, c.current_value)
+                                      }
+                                      if (collision.clientFound && draftBaseOverrideRef.current) {
+                                        // The restored draft's base stays armed
+                                        // (REVIEW-R5 M4): the server still judges
+                                        // every restored field the client could
+                                        // not compare; these decided ones settle
+                                        // without asking again.
+                                      } else {
+                                        // A client-found collision may not know the
+                                        // revision (0): then the form's own base.
+                                        baseRevisionOverrideRef.current =
+                                          collision.latest > 0 ? collision.latest : null
+                                        draftBaseOverrideRef.current = false
+                                      }
                                       setCollision(null)
                                       setTimeout(() => saveMut.mutate(), 0)
                                     }}

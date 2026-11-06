@@ -269,7 +269,14 @@ export async function runMetricAlertChecks(
   frequency: 'hourly' | 'daily' | 'weekly' | 'all' = 'all',
   /** Only rules whose definition reads this source type (the 5-minute probe cron passes 'external_api_slo'). */
   opts: { sourceType?: MetricSource['type'] } = {}
-): Promise<{ evaluated: number; fired: number; resolved: number; skipped: number }> {
+): Promise<{
+  /** Rules this pass looked at (active rule + definition, matching frequency / source). */
+  checked: number
+  evaluated: number
+  fired: number
+  resolved: number
+  skipped: number
+}> {
   const q = db('nivaro_metric_alert_rules as r')
     .join('nivaro_metric_definitions as d', 'd.id', 'r.definition_id')
     .where('r.status', 'active')
@@ -289,11 +296,12 @@ export async function runMetricAlertChecks(
   if (frequency !== 'all') q.where('r.check_frequency', frequency)
   const rules = (await q) as RuleRow[]
 
-  const results = { evaluated: 0, fired: 0, resolved: 0, skipped: 0 }
+  const results = { checked: 0, evaluated: 0, fired: 0, resolved: 0, skipped: 0 }
 
   for (const rule of rules) {
     const source = parseJsonSafe<MetricSource>(rule.metric_source)
     if (opts.sourceType && source?.type !== opts.sourceType) continue
+    results.checked++
     if (!source) {
       results.skipped++
       continue
@@ -344,6 +352,51 @@ export async function runMetricAlertChecks(
   }
 
   return results
+}
+
+/** The job outcome line for a check pass: "checked 3, fired 1". */
+export function metricCheckOutcome(r: {
+  checked: number
+  fired: number
+  resolved: number
+  skipped: number
+}): string {
+  return `checked ${r.checked}, fired ${r.fired}, resolved ${r.resolved}, skipped ${r.skipped}`
+}
+
+/** The cron job that checks rules of each frequency (server.ts). */
+export const METRIC_CHECK_JOBS: Record<string, string> = {
+  hourly: 'metric-alerts-hourly',
+  daily: 'metric-alerts-daily',
+  weekly: 'metric-alerts-weekly'
+}
+
+/**
+ * Pure: when a rule was last checked — the newest COMPLETED run of the job
+ * for its frequency, but only one that started after the rule was last
+ * saved (a run before the edit judged other settings). Null = not checked
+ * yet, which the alerts page shows as such instead of "Within threshold"
+ * (army5 b11-N1). Paused / archived rules are not checked.
+ */
+export function ruleLastCheckedAt(
+  rule: {
+    status?: string | null
+    check_frequency?: string | null
+    updated_at?: Date | string | null
+    created_at?: Date | string | null
+  },
+  runs: Map<string, { started_at: Date | string | null; finished_at: Date | string | null }>
+): string | null {
+  if (rule.status !== 'active') return null
+  const job = METRIC_CHECK_JOBS[String(rule.check_frequency ?? '')]
+  const run = job ? runs.get(job) : undefined
+  if (!run?.started_at) return null
+  const started = new Date(run.started_at).getTime()
+  const savedRaw = rule.updated_at ?? rule.created_at
+  const saved = savedRaw ? new Date(savedRaw).getTime() : Number.NaN
+  if (Number.isFinite(saved) && started < saved) return null
+  const at = run.finished_at ?? run.started_at
+  return new Date(at).toISOString()
 }
 
 const OPERATOR_LABELS: Record<string, string> = {

@@ -49,6 +49,7 @@ import {
   readOne,
   rehearseCreate,
   rehearseUpdate,
+  serverBuiltFilter,
   updateOne,
   upsertInfoOf,
   upsertKeysOf
@@ -1105,16 +1106,22 @@ export async function itemsRoutes(app: FastifyInstance) {
           'id'
         ])
         if (!parent) return null
+        // The FK is the server's key, not the caller's filter (REVIEW-R5 M1): a child policy
+        // without it must not 403 the chip. Rows that come back without it (the caller may
+        // not read the FK) are not counted, exactly as the record's to-many list shows none.
         return readItems(
           req.user!,
           manyCollection,
-          { filter: { [manyField]: { _eq: id } }, limit: 1000 },
+          { filter: serverBuiltFilter({ [manyField]: { _eq: id } }), limit: 1000 },
           req,
           req.workspaceId ?? undefined
         )
       })
       if (!read) return reply.code(404).send({ error: 'Not found' })
-      const rows = read.data
+      const fkLower = manyField.toLowerCase()
+      const rows = (read.data as Record<string, unknown>[]).filter((r) =>
+        Object.keys(r).some((k) => k.toLowerCase() === fkLower && r[k] != null)
+      )
       const positiveOnly = body.positive_only !== false
       const contributing: Array<{ id: string; value: number }> = []
       let total = 0

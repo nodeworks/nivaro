@@ -101,7 +101,8 @@ import {
   type NormalizedRollup,
   parseRollupFormula,
   type RollupSource,
-  recalcAffectedRollups
+  recalcAffectedRollups,
+  roundToScale
 } from './rollups.js'
 import {
   applyRowLocksOnWrite,
@@ -636,6 +637,36 @@ function assertNoSensitivePaths(
 }
 
 /**
+ * Filter nodes the SERVER built to fetch related rows for a read the caller is
+ * already allowed (the FK a to-many expansion or a child summary names) —
+ * REVIEW-R5 M1. assertReadableSystemPaths does not judge their own keys against
+ * the caller's field list: a child policy that leaves its FK out made the whole
+ * PARENT read answer 403. Every key a caller supplied is still judged. Object
+ * identity only, so nothing a request sends can be marked.
+ */
+const serverBuiltFilterNodes = new WeakSet<object>()
+
+/** The 403 assertReadableSystemPaths throws (a plain Error carrying the code). */
+export function isFieldNotReadable(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'FIELD_NOT_READABLE'
+}
+
+/** Mark a filter node as server-built (see serverBuiltFilterNodes). Returns the node. */
+export function serverBuiltFilter<T extends Record<string, unknown>>(node: T): T {
+  serverBuiltFilterNodes.add(node)
+  return node
+}
+
+/** Calculated fields (read formulas and rollups, stored or not) of a collection, lowercased. */
+async function calculatedFieldNames(collection: string): Promise<Set<string>> {
+  return new Set(
+    (await getComputedFields(collection))
+      .filter((f) => f.computed_type === 'read' || f.computed_type === 'rollup')
+      .map((f) => f.field.toLowerCase())
+  )
+}
+
+/**
  * Every filter, sort and condition path that reaches a system table may name
  * only columns the caller can read there — on the table itself and through a
  * relation hop into it (`created_by.role`). A filter is an oracle: matching on
@@ -659,6 +690,8 @@ async function assertReadableSystemPaths(
       return
     }
     if (!f || typeof f !== 'object') return
+    // A node the server built (the FK it fetches children by) is not the caller's ask.
+    if (serverBuiltFilterNodes.has(f)) return
     for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
       if (k === '_and' || k === '_or' || k === '_some' || k === '_none') walk(v, prefix)
       else if (k.startsWith('_') || k.startsWith('$')) continue
@@ -721,6 +754,21 @@ async function assertReadableSystemPaths(
         bad.add(segs.slice(0, i + 1).join('.'))
         break
       }
+      // REVIEW-R5 M3 (narrow part): through a hop into a business collection the caller has
+      // NO read policy on, a calculated field (read formula or rollup) is refused —
+      // `filter[vendor][po_total]` ranked vendors by spend for a role that cannot read
+      // vendors at all. Plain columns there keep their existing behaviour.
+      if (
+        i > 0 &&
+        !judged &&
+        allowed !== null &&
+        allowed.length === 0 &&
+        !isSystemCollection(current) &&
+        (await calculatedFieldNames(current)).has(String(hop?.column ?? seg).toLowerCase())
+      ) {
+        bad.add(segs.slice(0, i + 1).join('.'))
+        break
+      }
       if (last) break
       // A middle segment the checker cannot follow is refused: the compiler
       // either errors on it or joins something this check never saw.
@@ -777,6 +825,78 @@ function resolveFilterHop(
     if (eq(r.one_field, k)) return { next: r.many_collection, column: r.one_field ?? seg }
   }
   return null
+}
+
+/**
+ * Whether a stored value and an incoming value are the same value (mid-air
+ * collision check, b01-N1): numbers and numeric strings by value, bits as
+ * booleans, dates by instant, JSON text by content, ids case-insensitively,
+ * and null / undefined / '' as one "empty". Anything uncertain is different.
+ */
+export function sameStoredValue(stored: unknown, incoming: unknown): boolean {
+  const empty = (v: unknown) => v === null || v === undefined || v === ''
+  if (empty(stored) || empty(incoming)) return empty(stored) && empty(incoming)
+  if (typeof stored === 'boolean' || typeof incoming === 'boolean') {
+    const bit = (v: unknown) =>
+      v === true || v === 1 || v === '1' || v === 'true'
+        ? 1
+        : v === false || v === 0 || v === '0' || v === 'false'
+          ? 0
+          : null
+    const a = bit(stored)
+    return a !== null && a === bit(incoming)
+  }
+  if (stored instanceof Date || incoming instanceof Date) {
+    const t = (v: unknown) =>
+      v instanceof Date ? v.getTime() : typeof v === 'string' ? Date.parse(v) : Number.NaN
+    const a = t(stored)
+    return Number.isFinite(a) && a === t(incoming)
+  }
+  const numeric = (v: unknown) =>
+    typeof v === 'number'
+      ? v
+      : typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v)
+        ? Number(v)
+        : null
+  const na = numeric(stored)
+  const nb = numeric(incoming)
+  if (na !== null && nb !== null) return Math.abs(na - nb) <= 1e-9 * Math.max(1, Math.abs(na))
+  const json = (v: unknown) => {
+    if (typeof v === 'string') {
+      const t = v.trim()
+      if (!(t.startsWith('{') || t.startsWith('['))) return undefined
+      try {
+        return JSON.parse(t) as unknown
+      } catch {
+        return undefined
+      }
+    }
+    return typeof v === 'object' ? v : undefined
+  }
+  const ja = json(stored)
+  const jb = json(incoming)
+  if (ja !== undefined || jb !== undefined) {
+    return ja !== undefined && jb !== undefined && stableJson(ja) === stableJson(jb)
+  }
+  if (typeof stored === 'string' && typeof incoming === 'string') {
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (uuid.test(stored) && uuid.test(incoming))
+      return stored.toLowerCase() === incoming.toLowerCase()
+    return stored === incoming
+  }
+  return false
+}
+
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
 }
 
 // ─── Change-reason requirement ───────────────────────────────────────────────
@@ -1239,6 +1359,30 @@ interface ComputedFieldRow {
   computed_formula: string | null
   computed_type: string | null
   computed_store: boolean | number
+  type?: string | null
+  options?: unknown
+}
+
+/**
+ * The decimal places a read-computed number is rounded to (army 5 b03-N10:
+ * forecast_left = requisition_amount - forecast_total read 101.50999999999999 in the
+ * API and in mail). A decimal / currency field: its `precision` (or `digits` /
+ * `decimals`) option, else 2. A float only when it says so or is a currency.
+ * Anything else (integers, text, a float with no format) is left as computed.
+ */
+export function readComputedScale(f: { type?: string | null; options?: unknown }): number | null {
+  const opts = ((f.options && typeof f.options === 'object'
+    ? f.options
+    : parseJson<Record<string, unknown>>(f.options as string)) ?? {}) as Record<string, unknown>
+  const explicit = [opts.precision, opts.digits, opts.decimals].find(
+    (v) => v !== null && v !== undefined && v !== '' && Number.isInteger(Number(v))
+  )
+  const scale = explicit === undefined ? null : Math.min(15, Math.max(0, Number(explicit)))
+  const type = String(f.type ?? '').toLowerCase()
+  const currency = opts.format === 'currency' || type === 'currency' || type === 'money'
+  if (type === 'decimal' || type === 'numeric' || currency) return scale ?? 2
+  if (type === 'float' || type === 'double' || type === 'real') return scale
+  return null
 }
 
 /**
@@ -1251,7 +1395,14 @@ async function getComputedFields(collection: string): Promise<ComputedFieldRow[]
     const rows = (await db('nivaro_fields')
       .where({ collection })
       .whereNotNull('computed_formula')
-      .select('field', 'computed_formula', 'computed_type', 'computed_store')) as ComputedFieldRow[]
+      .select(
+        'field',
+        'computed_formula',
+        'computed_type',
+        'computed_store',
+        'type',
+        'options'
+      )) as ComputedFieldRow[]
     return rows
   } catch {
     // Column may not exist yet before migration runs — non-fatal.
@@ -1284,10 +1435,14 @@ export async function applyReadComputedFields(
   )
   if (!readFields.length && !rollupFields.length) return
 
+  const scales = readFields.map((f) => readComputedScale(f))
   for (const item of items) {
-    for (const f of readFields) {
-      item[f.field] = evalFormula(f.computed_formula as string, item)
-    }
+    readFields.forEach((f, i) => {
+      const v = evalFormula(f.computed_formula as string, item)
+      const scale = scales[i]
+      item[f.field] =
+        scale != null && typeof v === 'number' && Number.isFinite(v) ? roundToScale(v, scale) : v
+    })
   }
 
   // Virtual rollups aggregate related rows — batched per FIELD across the
@@ -3198,6 +3353,7 @@ async function assertFilterableFields(
         named.add(String(one.path[0]))
     }
   }
+  await assertRelationPathsExist(collection, filter, sort, conditions)
   if (named.size === 0) return
   await assertNamedFieldsExist(collection, named, rels)
   const computed = (await getComputedFields(collection)).filter(
@@ -3220,6 +3376,83 @@ async function assertFilterableFields(
     ),
     { statusCode: 400, code: 'FIELD_NOT_FILTERABLE', fields: blocked.map((f) => f.field) }
   )
+}
+
+/**
+ * The last segment of a relation path in a filter, sort or condition
+ * (`project.division`, `{project: {division: …}}`) must be a field of the
+ * collection the path lands on: it reached SQL and answered 500 "Invalid column
+ * name 'division'" (army 5 b16-N8). Refused as 400 UNKNOWN_FIELD naming the
+ * path. A hop this check cannot follow (an M2A, a `$` path) is left to the
+ * compilers and the other gates, as before.
+ */
+async function assertRelationPathsExist(
+  collection: string,
+  filter: Record<string, unknown>,
+  sort: string[],
+  conditions: Array<FilterCondition | OrCondition> | undefined
+): Promise<void> {
+  const paths: string[][] = []
+  const walk = (f: unknown, prefix: string[]) => {
+    if (Array.isArray(f)) {
+      for (const c of f) walk(c, prefix)
+      return
+    }
+    if (!f || typeof f !== 'object') return
+    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+      if (k === '_and' || k === '_or' || k === '_some' || k === '_none') walk(v, prefix)
+      else if (k.startsWith('_') || k.startsWith('$')) continue
+      else {
+        const path = [...prefix, ...k.split('.')]
+        paths.push(path)
+        walk(v, path)
+      }
+    }
+  }
+  walk(filter, [])
+  for (const s of sort) paths.push((s.startsWith('-') ? s.slice(1) : s).split('.'))
+  for (const c of conditions ?? []) {
+    const list = 'or' in c ? c.or : [c]
+    for (const one of list) {
+      const p = (one as { path?: unknown })?.path
+      if (Array.isArray(p)) paths.push(p.map(String))
+    }
+  }
+  const seen = new Set<string>()
+  for (const segs of paths) {
+    if (segs.length < 2 || segs.some((s) => !s || s.startsWith('$'))) continue
+    // `collection.column` names the root's own column (assertNamedFieldsExist judges it).
+    if (segs.length === 2 && segs[0].toLowerCase() === collection.toLowerCase()) continue
+    const key = segs.join('.').toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    let current = collection
+    let followed = true
+    for (const seg of segs.slice(0, -1)) {
+      const hop = resolveFilterHop(seg, current, await getRelsForCollection(current))
+      if (!hop) {
+        followed = false
+        break
+      }
+      current = hop.next
+    }
+    if (!followed) continue
+    try {
+      await assertNamedFieldsExist(
+        current,
+        new Set([segs[segs.length - 1]]),
+        await getRelsForCollection(current)
+      )
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== 'UNKNOWN_FIELD') throw err
+      const path = segs.join('.')
+      throw Object.assign(new Error(`Unknown field ${path}`), {
+        statusCode: 400,
+        code: 'UNKNOWN_FIELD',
+        fields: [path]
+      })
+    }
+  }
 }
 
 /**
@@ -3737,7 +3970,7 @@ async function expandToMany(
             user,
             plan.child,
             fields,
-            { [plan.fk]: { _in: ids.slice(i, i + 500) } },
+            serverBuiltFilter({ [plan.fk]: { _in: ids.slice(i, i + 500) } }),
             workspaceId,
             depth + 1
           )
@@ -3746,6 +3979,9 @@ async function expandToMany(
             const raw = r[plan.fk]
             const parent =
               raw && typeof raw === 'object' ? (raw as Record<string, unknown>).id : raw
+            // A child policy without the FK returns the row without it: the caller may not
+            // learn which parent it belongs to, so it is not attached anywhere.
+            if (parent == null) continue
             push(parent, r)
           }
         }
@@ -3784,8 +4020,15 @@ async function expandToMany(
         }
       }
     } catch (err) {
-      // No read permission on the related collection: the lists stay empty.
-      if (!(err instanceof ForbiddenError) && !(err instanceof CollectionNotFoundError)) throw err
+      // No read permission on the related collection (or a field the read had to name is
+      // outside the caller's list, REVIEW-R5 M1): the lists stay empty, the parent read stands.
+      if (
+        !(err instanceof ForbiddenError) &&
+        !(err instanceof CollectionNotFoundError) &&
+        !isFieldNotReadable(err)
+      )
+        throw err
+      byParent.clear()
     }
     for (const it of items) it[plan.alias] = byParent.get(String(it.id)) ?? []
   }
@@ -3866,7 +4109,12 @@ async function expandM2A(
         }
       } catch (err) {
         // Unreadable (or no longer present) — its links read `item: null`.
-        if (!(err instanceof ForbiddenError) && !(err instanceof CollectionNotFoundError)) throw err
+        if (
+          !(err instanceof ForbiddenError) &&
+          !(err instanceof CollectionNotFoundError) &&
+          !isFieldNotReadable(err)
+        )
+          throw err
         continue
       }
       found.set(c, rows)
@@ -6726,11 +6974,17 @@ export async function updateOne(
           // unparseable delta — treat conservatively as touching nothing
         }
       }
-      const overlap = [...callerFields].filter((f) => theirFields.has(f))
+      const touched = [...callerFields].filter((f) => theirFields.has(f))
+      const currentRow =
+        touched.length > 0
+          ? ((await db(collection).where({ id }).first()) as Record<string, unknown> | undefined)
+          : undefined
+      // A field the newer save left holding exactly what this payload writes is no conflict
+      // (army 5 b01-N1: a double-clicked Save collided with itself, Theirs == Mine).
+      const overlap = touched.filter(
+        (f) => !currentRow || !(f in currentRow) || !sameStoredValue(currentRow[f], data[f])
+      )
       if (overlap.length > 0) {
-        const currentRow = (await db(collection).where({ id }).first()) as
-          | Record<string, unknown>
-          | undefined
         const err = new Error(
           `Someone else changed ${overlap.join(', ')} since you loaded this record`
         ) as Error & {

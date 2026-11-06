@@ -620,6 +620,9 @@ function TaskForm({
           <div className='mb-1 flex items-center justify-between gap-2'>
             <Label className='text-[11px]'>
               {d.mode === 'team' ? 'Team' : d.mode === 'agent' ? 'Agent' : 'Assignee'}
+              <span aria-hidden className='ml-0.5 text-red-500' data-task-required>
+                *
+              </span>
             </Label>
             <span className='flex items-center gap-2'>
               {(['person', 'team', 'agent'] as const)
@@ -724,16 +727,34 @@ function TaskForm({
         >
           Cancel
         </Button>
-        <Button
-          type='button'
-          size='sm'
-          className='h-7 text-[12px]'
-          disabled={!d.title.trim() || !who || busy}
-          onClick={() => onSubmit(d)}
-          data-task-submit
+        {/* A disabled button takes no hover: the reason rides the wrapper (b09-N8). */}
+        <span
+          className='inline-flex'
+          data-tip={
+            busy
+              ? undefined
+              : !d.title.trim()
+                ? 'Write what needs to be done first'
+                : !who
+                  ? d.mode === 'team'
+                    ? 'Pick a team first'
+                    : d.mode === 'agent'
+                      ? 'Pick an agent first'
+                      : 'Pick an assignee first'
+                  : undefined
+          }
         >
-          {busy ? 'Saving…' : submitLabel}
-        </Button>
+          <Button
+            type='button'
+            size='sm'
+            className='h-7 text-[12px]'
+            disabled={!d.title.trim() || !who || busy}
+            onClick={() => onSubmit(d)}
+            data-task-submit
+          >
+            {busy ? 'Saving…' : submitLabel}
+          </Button>
+        </span>
       </div>
     </div>
   )

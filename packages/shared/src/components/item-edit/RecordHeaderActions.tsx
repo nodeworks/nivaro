@@ -36,7 +36,14 @@ import { invalidateRecordQueries } from './RecordLiveSync'
 export function useRecordHeaderActions(
   collection: string,
   itemId: string | null,
-  values: Record<string, unknown> | null | undefined
+  values: Record<string, unknown> | null | undefined,
+  opts: {
+    /** The record's state edit lock leaves NO field open to this person: an
+     *  action that writes fields (Put On Hold) would only be refused, so it is
+     *  not offered (army5 b06 a07). A partial lock keeps them — its open
+     *  fields are what such actions write, and the server judges each write. */
+    fieldsLocked?: boolean
+  } = {}
 ): AvailableBulkAction[] {
   const client = useNivaroClient()
   const enabled = !!itemId && itemId !== 'new'
@@ -69,11 +76,13 @@ export function useRecordHeaderActions(
     enabled: enabled && guardFields.length > 0,
     staleTime: 0
   })
+  const fieldsLocked = opts.fieldsLocked === true
   return useMemo(() => {
-    if (guardFields.length > 0 && !guardRow) return candidates.filter((a) => !a.guard?.length)
+    const offered = fieldsLocked ? candidates.filter((a) => a.kind !== 'update_fields') : candidates
+    if (guardFields.length > 0 && !guardRow) return offered.filter((a) => !a.guard?.length)
     const merged = { ...(guardRow ?? {}), ...(values ?? {}) }
-    return candidates.filter((a) => guardMatches(a.guard, merged) !== false)
-  }, [candidates, guardFields, guardRow, values])
+    return offered.filter((a) => guardMatches(a.guard, merged) !== false)
+  }, [candidates, guardFields, guardRow, values, fieldsLocked])
 }
 
 function iconFor(a: AvailableBulkAction) {

@@ -128,6 +128,19 @@ function dateBoundsFor(field: { validation_rules?: unknown }): { min?: string; m
 
 /** Memoized: rows pass it stable props, so a row re-render that changes
  *  nothing about this field's control skips it. */
+/** Input cap: the form-only `options.max_length` (a soft server rule the form
+ *  still holds people to, b01-N4) when it is tighter than the column's own. */
+function formMaxLength(field: {
+  max_length?: number | null
+  options?: unknown
+}): number | undefined {
+  const col = columnMaxLength(field)
+  const o = parseJson<{ max_length?: number }>(field.options as never)
+  const opt = Number(o?.max_length)
+  if (Number.isFinite(opt) && opt > 0) return col != null ? Math.min(col, opt) : opt
+  return col ?? undefined
+}
+
 export const FieldRenderer = memo(function FieldRenderer({
   field,
   value,
@@ -152,7 +165,13 @@ export const FieldRenderer = memo(function FieldRenderer({
   cascadeFilter?: Record<string, unknown>
   requiredParentLabel?: string | null
   /** Cascade parents currently narrowing an M2O picker (see RelationCombobox). */
-  narrowedBy?: { labels: string[]; keys: string[]; onClear?: (key: string) => void }
+  narrowedBy?: {
+    labels: string[]
+    keys: string[]
+    /** Keys offered for clearing; absent = all of `keys`. */
+    clearable?: string[]
+    onClear?: (key: string) => void
+  }
   onCountChange?: (count: number) => void
   displayOnly?: boolean
   prefillParentId?: string
@@ -662,7 +681,7 @@ export const FieldRenderer = memo(function FieldRenderer({
     return (
       <Textarea
         rows={4}
-        maxLength={columnMaxLength(field) ?? undefined}
+        maxLength={formMaxLength(field)}
         value={strVal}
         onChange={(e) => onChange(e.target.value)}
         placeholder={field.placeholder ?? undefined}
@@ -1072,7 +1091,7 @@ export const FieldRenderer = memo(function FieldRenderer({
   })()
   const input = (
     <Input
-      maxLength={mask ? undefined : (columnMax ?? undefined)}
+      maxLength={mask ? undefined : formMaxLength(field)}
       value={mask ? applyInputMask(mask, strVal).display : strVal}
       onChange={(e) => {
         if (mask) {

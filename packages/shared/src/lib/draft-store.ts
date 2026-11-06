@@ -195,3 +195,31 @@ export function draftHasContent(d: StoredDraft): boolean {
     Object.values(d.m2m_unlinks ?? {}).some((x) => x.length > 0)
   )
 }
+
+/** The person's work in a draft (never its timestamps or bases). */
+function draftContentSig(d: StoredDraft): string {
+  return JSON.stringify([
+    d.fields ?? {},
+    d.pending_rows ?? {},
+    d.pending_edits ?? {},
+    d.pending_deletes ?? {},
+    d.m2m_links ?? {},
+    d.m2m_unlinks ?? {}
+  ])
+}
+
+/**
+ * Keep the ORIGINAL saved_at when a draft is stored again with the same work
+ * in it (army5 b09-N3b): restoring a draft and leaving again re-persisted it
+ * with a fresh stamp, so the next offer said "from just now" for edits made
+ * minutes earlier. Any change to the work stamps it anew.
+ */
+export function keepDraftSavedAt(
+  next: StoredDraft,
+  prev: StoredDraft | null | undefined
+): StoredDraft {
+  if (!prev?.saved_at || prev.key !== next.key) return next
+  return draftContentSig(prev) === draftContentSig(next)
+    ? { ...next, saved_at: prev.saved_at }
+    : next
+}

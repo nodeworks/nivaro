@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
+import { buildCascadeFilter, type CascadeRule } from '../item-edit/helpers'
 import { extractTemplateFields, renderDisplayTemplate } from '../pipeline/relations'
 import { Button } from '../ui/button'
 import {
@@ -29,6 +30,7 @@ import {
   keepValuesPatch,
   overwrittenBySideEffect,
   type RehearsalReport,
+  runPooled,
   type SideEffectChange
 } from './requirement-side-effects'
 
@@ -58,6 +60,11 @@ export interface TransitionRequirementFieldMeta {
    *  integrated warehouse (the integration returns the id; the server autofills
    *  it after submit). */
   optional_when?: { field: string; in: Array<string | number>; placeholder?: string }
+  /** army5 b01-N2: the line grid's own narrowing (its parent_cascades, e.g.
+   *  project → category), resolved by the server against the record. */
+  option_filter?: Record<string, unknown>
+  /** The field's own dependency_config cascade_filters, built per row. */
+  cascade_filters?: CascadeRule[]
 }
 
 export interface TransitionRequirementRow {
@@ -67,6 +74,8 @@ export interface TransitionRequirementRow {
   values: Record<string, unknown>
   /** Read-only context values for the entry's display_fields. */
   display: Record<string, unknown>
+  /** The row's values for the parents its fields' cascade_filters read. */
+  cascade_values?: Record<string, unknown>
 }
 
 export interface TransitionRequirementEntry {
@@ -416,7 +425,31 @@ export function relatedOptionLabel(
   return id ? `#${id}` : ''
 }
 
-function useRelatedOptions(collection: string | undefined): Array<{ id: string; label: string }> {
+/** The options filter for one picker (army5 b01-N2): the grid's narrowing the
+ *  server resolved AND the field's own cascade built from this row's values
+ *  — the same compiler the form's pickers use (buildCascadeFilter). */
+export function requirementOptionFilter(
+  meta: Pick<TransitionRequirementFieldMeta, 'option_filter' | 'cascade_filters'>,
+  rowValues?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const parts: Record<string, unknown>[] = []
+  if (meta.option_filter && Object.keys(meta.option_filter).length > 0)
+    parts.push(meta.option_filter)
+  if (meta.cascade_filters?.length) {
+    const { filter } = buildCascadeFilter({
+      rules: meta.cascade_filters,
+      parentValue: (p) => rowValues?.[p]
+    })
+    if (filter && Object.keys(filter).length > 0) parts.push(filter)
+  }
+  if (parts.length === 0) return undefined
+  return parts.length === 1 ? parts[0] : { _and: parts }
+}
+
+function useRelatedOptions(
+  collection: string | undefined,
+  filter?: Record<string, unknown>
+): Array<{ id: string; label: string }> {
   const client = useNivaroClient()
   // Same key + shape as RelationCombobox's read, so the cache is shared.
   const { data: colMeta, isPending: metaPending } = useQuery<{ display_template?: string }>({
@@ -431,15 +464,17 @@ function useRelatedOptions(collection: string | undefined): Array<{ id: string; 
   })
   const template = colMeta?.display_template ?? null
   const tmplFields = template ? extractTemplateFields(template).join(',') : undefined
+  const filterKey = filter ? JSON.stringify(filter) : ''
   const { data = [] } = useQuery({
-    queryKey: ['req-related-options', collection, template ?? ''],
+    queryKey: ['req-related-options', collection, template ?? '', filterKey],
     queryFn: () =>
       client
         .request<{ data: Array<Record<string, unknown>> }>(
           get(`/items/${collection}`, {
             limit: 500,
             picker: '1',
-            ...(tmplFields ? { fields: tmplFields } : {})
+            ...(tmplFields ? { fields: tmplFields } : {}),
+            ...(filterKey ? { filter: filterKey } : {})
           })
         )
         .then((r) =>
@@ -463,16 +498,22 @@ function useRelatedOptions(collection: string | undefined): Array<{ id: string; 
 function M2MPickCell({
   meta,
   selected,
-  onChange
+  onChange,
+  rowValues
 }: {
   meta: TransitionRequirementFieldMeta
   selected: string[]
   onChange: (ids: string[]) => void
+  /** The row's values (cascade parents) — absent for record-level fields. */
+  rowValues?: Record<string, unknown>
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const options = useRelatedOptions(meta.related_collection)
+  const options = useRelatedOptions(
+    meta.related_collection,
+    requirementOptionFilter(meta, rowValues)
+  )
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -547,16 +588,22 @@ function M2MPickCell({
 function M2OPickCell({
   meta,
   selected,
-  onChange
+  onChange,
+  rowValues
 }: {
   meta: TransitionRequirementFieldMeta
   selected: string
   onChange: (id: string) => void
+  /** The row's values (cascade parents) — absent for record-level fields. */
+  rowValues?: Record<string, unknown>
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const options = useRelatedOptions(meta.related_collection)
+  const options = useRelatedOptions(
+    meta.related_collection,
+    requirementOptionFilter(meta, rowValues)
+  )
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -799,7 +846,7 @@ export function TransitionRequirementsDialog({
   /** Rehearse every child row's write; the values each would replace. A
    *  rehearsal that fails says nothing (the real write reports its own). */
   const rehearseSideEffects = async () => {
-    const jobs: Array<Promise<NonNullable<typeof sideEffects>[number] | null>> = []
+    const jobs: Array<() => Promise<NonNullable<typeof sideEffects>[number] | null>> = []
     for (const entry of payload) {
       if (entry.type !== 'child_fields') continue
       const metaOf = (field: string) =>
@@ -809,7 +856,7 @@ export function TransitionRequirementsDialog({
         const sent = scalarRowChanges(entry, row)
         if (Object.keys(sent).length === 0) continue
         const rk = rowKey(entry.collection, row.id)
-        jobs.push(
+        jobs.push(() =>
           client
             .request<RehearsalReport>(
               forMove({
@@ -835,7 +882,8 @@ export function TransitionRequirementsDialog({
         )
       }
     }
-    return (await Promise.all(jobs)).filter((x): x is NonNullable<typeof x> => x != null)
+    // Bounded (REVIEW-R5 M5): one rehearsal per line, ROW_WRITE_CONCURRENCY at a time.
+    return (await runPooled(jobs)).filter((x): x is NonNullable<typeof x> => x != null)
   }
 
   const handleSubmit = async (decision?: 'apply' | 'keep') => {
@@ -855,12 +903,13 @@ export function TransitionRequirementsDialog({
           : {}
       setSideEffects(null)
     }
-    const results = await Promise.all(
+    // Bounded like the rehearsals (REVIEW-R5 M5): ROW_WRITE_CONCURRENCY writes at a time.
+    const results = await runPooled(
       payload.flatMap((entry) => {
         if (entry.type === 'record_fields') {
           const rk = recordEntryKey(entry)
           return [
-            (async () => {
+            async () => {
               const current = values[rk] ?? {}
               const saved = savedRef.current[rk] ?? {}
               const changed: Record<string, unknown> = {}
@@ -875,7 +924,8 @@ export function TransitionRequirementsDialog({
                   const was = Array.isArray(saved[f.field]) ? (saved[f.field] as string[]) : []
                   const add = cur.filter((v) => !was.includes(v))
                   const remove = was.filter((v) => !cur.includes(v))
-                  if (add.length > 0 || remove.length > 0) linkChanges.push({ meta: f, add, remove })
+                  if (add.length > 0 || remove.length > 0)
+                    linkChanges.push({ meta: f, add, remove })
                   continue
                 }
                 if (current[f.field] !== saved[f.field]) {
@@ -926,10 +976,10 @@ export function TransitionRequirementsDialog({
                 const resp = (err as { response?: { error?: string } })?.response
                 return { rk, ok: false as const, error: resp?.error ?? 'Failed to save' }
               }
-            })()
+            }
           ]
         }
-        return entry.rows.map(async (row) => {
+        return entry.rows.map((row) => async () => {
           const rk = rowKey(entry.collection, row.id)
           const current = values[rk] ?? {}
           const saved = savedRef.current[rk] ?? {}
@@ -1131,7 +1181,11 @@ export function TransitionRequirementsDialog({
                               ids={Array.isArray(v) ? v : typeof v === 'string' && v ? [v] : []}
                               initialNames={fileNamesOf(entry.display[f.field])}
                               onChange={(ids) =>
-                                setFieldValue(rk, f.field, f.kind === 'files' ? ids : (ids[0] ?? ''))
+                                setFieldValue(
+                                  rk,
+                                  f.field,
+                                  f.kind === 'files' ? ids : (ids[0] ?? '')
+                                )
                               }
                             />
                           ) : entry.copy_to_lines?.[f.field] ? (
@@ -1295,6 +1349,7 @@ export function TransitionRequirementsDialog({
                                           : []
                                       }
                                       onChange={(ids) => setFieldValue(rk, f.field, ids)}
+                                      rowValues={{ ...row.cascade_values, ...values[rk] }}
                                     />
                                   ) : isWaived(rk, f) ? (
                                     <Input
@@ -1314,6 +1369,7 @@ export function TransitionRequirementsDialog({
                                           : ''
                                       }
                                       onChange={(id) => setFieldValue(rk, f.field, id)}
+                                      rowValues={{ ...row.cascade_values, ...values[rk] }}
                                     />
                                   ) : (
                                     <Input

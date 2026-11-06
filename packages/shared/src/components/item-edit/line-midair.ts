@@ -61,16 +61,26 @@ export function resolveLineCollision(
 }
 
 /** "Line 3" for a row: its line number when the grid's rows carry one, else
- *  its position, else its id. */
+ *  the row's own label (the caller's — e.g. the grid's display template —
+ *  or a `year` column: a forecast grid's rows are years, and "Line 1" named
+ *  the wrong thing, army5 b09-N6), else its position, else its id. */
 export function lineLabelOf(
   rows: Array<Record<string, unknown>>,
   rowId: string,
-  orderField?: string | null
+  orderField?: string | null,
+  rowLabel?: (row: Record<string, unknown>) => string | null | undefined
 ): string {
   const i = rows.findIndex((r) => String(r.id) === String(rowId))
   const row = i >= 0 ? rows[i] : undefined
   const n = row?.[orderField || 'line_number'] ?? row?.line_number
   if (n != null && n !== '') return `Line ${String(n)}`
+  if (row) {
+    const own = rowLabel?.(row)?.trim()
+    if (own) return own
+    const year = row.year
+    if ((typeof year === 'number' || typeof year === 'string') && /^\d{4}$/.test(String(year)))
+      return `Year ${String(year)}`
+  }
   return i >= 0 ? `Line ${i + 1}` : `Row ${rowId}`
 }
 

@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
+import type { DocsIndexSection } from './docs-search.js'
 import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { excerpt, searchTerms } from './help-video-search-rank.js'
 import { stripHtmlToText } from './latest-comment.js'
@@ -22,7 +23,7 @@ import { fastLike, onMssql, type TextKind, textKindOf } from './search-like.js'
  * - files: services/file-access.ts readableFileIds (a file follows where it
  *   is used) plus the private-render marker; help-video files never appear.
  * - help videos: searchHelpVideos (published + the library's visibility rule).
- * - docs: the docs index audience (admin sections for admins only).
+ * - docs: administrators only, until sections are marked for end users (audience 'user', R13).
  * - chat: canSeeRoom on the channel's room; channel NAMES only (never message
  *   text, never DMs or group DMs).
  * - config: admin-only config for administrators only (services/config-search);
@@ -374,6 +375,18 @@ async function configHits(phrase: string, cap: number, isAdmin: boolean): Promis
   return configKeywordHits(phrase, { isAdmin, limit: cap })
 }
 
+const endUserCache = new WeakMap<object, DocsIndexSection[]>()
+
+/** The docs sections a non-administrator may find: those marked for end users only. */
+export function endUserSections(index: DocsIndexSection[]): DocsIndexSection[] {
+  let hit = endUserCache.get(index)
+  if (!hit) {
+    hit = index.filter((sec) => (sec.audience as string) === 'user')
+    endUserCache.set(index, hit)
+  }
+  return hit
+}
+
 export const defaultExtraDeps: ExtraDeps = {
   commentRows,
   noteRows,
@@ -423,7 +436,12 @@ export const defaultExtraDeps: ExtraDeps = {
   },
   async docs(q, admin, limit) {
     const { loadDocsIndex, rankDocs } = await import('./docs-search.js')
-    const { hits } = rankDocs(await loadDocsIndex(), q, { admin, limit })
+    const index = await loadDocsIndex()
+    // Decision R13 (army 5 b16-N5, default): people outside administration get no developer
+    // docs in search. Only a section marked for end users (`audience: 'user'`) reaches them;
+    // `all` (overview / user guide / collaboration, which describe admin screens and APIs)
+    // counts as admin until the sections are given their audiences.
+    const { hits } = rankDocs(admin ? index : endUserSections(index), q, { admin: true, limit })
     return hits.map((d) => ({
       kind: 'doc',
       id: d.id,

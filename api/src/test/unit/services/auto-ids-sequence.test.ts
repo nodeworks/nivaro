@@ -10,6 +10,10 @@ function fakeDb(opts: {
   seq?: Record<string, number>
   populated?: boolean
   insertFails?: boolean
+  /** The error a failing insert throws (default: a PRIMARY KEY violation). */
+  insertError?: Error
+  /** The column's SQL type (INFORMATION_SCHEMA DATA_TYPE); null = cannot be read. */
+  type?: string | null
   onInsert?: (seq: Record<string, number>) => void
 }) {
   const seq: Record<string, number> = { ...(opts.seq ?? {}) }
@@ -21,6 +25,10 @@ function fakeDb(opts: {
       if (seq[id] == null) return []
       seq[id] += 1
       return [{ next_val: seq[id] }]
+    }
+    if (text.startsWith('SELECT TOP 1 DATA_TYPE')) {
+      if (opts.type === null) throw new Error('metadata read failed')
+      return [{ t: opts.type ?? 'varchar' }]
     }
     if (text.startsWith('SELECT TOP 1 1')) return opts.populated ? [{ hit: 1 }] : []
     throw new Error(`unexpected sql ${text}`)
@@ -39,7 +47,7 @@ function fakeDb(opts: {
       async insert(row: { id: string; next_val: number }) {
         if (opts.insertFails) {
           opts.onInsert?.(seq)
-          throw new Error('Violation of PRIMARY KEY constraint')
+          throw opts.insertError ?? new Error('Violation of PRIMARY KEY constraint')
         }
         seq[row.id] = row.next_val
       }
@@ -85,7 +93,7 @@ describe('nextSequenceValue', () => {
   it('probes with TOP 1 on the populated path only', async () => {
     const { db, sql } = fakeDb({ populated: true })
     await nextSequenceValue(db, 'workflows', 'workflow_id').catch(() => {})
-    const probe = sql.find((s) => s.startsWith('SELECT TOP 1'))
+    const probe = sql.find((s) => s.startsWith('SELECT TOP 1 1'))
     expect(probe).toBe("SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''")
   })
 
@@ -98,6 +106,69 @@ describe('nextSequenceValue', () => {
       }
     })
     expect(await nextSequenceValue(db, 'widgets', 'code')).toBe(2)
+  })
+})
+
+describe('the unused-field probe by column type (REVIEW-R5 L1)', () => {
+  const probeOf = (sql: string[]) => sql.find((s) => s.startsWith('SELECT TOP 1 1'))
+
+  it.each([
+    'decimal',
+    'numeric',
+    'int',
+    'bigint',
+    'uniqueidentifier'
+  ])("a %s field is probed with IS NOT NULL only (no <> '' conversion)", async (type) => {
+    const { db, sql } = fakeDb({ populated: false, type })
+    expect(await nextSequenceValue(db, 'widgets', 'code')).toBe(1)
+    expect(probeOf(sql)).toBe('SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL')
+  })
+
+  it.each([
+    'varchar',
+    'nvarchar',
+    'char',
+    'NVARCHAR'
+  ])('a %s field keeps the empty-string test', async (type) => {
+    const { db, sql } = fakeDb({ populated: false, type })
+    await nextSequenceValue(db, 'widgets', 'code')
+    expect(probeOf(sql)).toBe("SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''")
+  })
+
+  it('a populated decimal field is refused as unseeded, not a 500', async () => {
+    const { db } = fakeDb({ populated: true, type: 'decimal' })
+    await expect(nextSequenceValue(db, 'widgets', 'code')).rejects.toMatchObject({
+      code: 'SEQUENCE_UNSEEDED'
+    })
+  })
+
+  it('a type that cannot be read falls back to IS NOT NULL', async () => {
+    const { db, sql } = fakeDb({ populated: false, type: null })
+    expect(await nextSequenceValue(db, 'widgets', 'code')).toBe(1)
+    expect(probeOf(sql)).toBe('SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL')
+  })
+})
+
+describe('the first-use insert race (REVIEW-R5 L1)', () => {
+  it('a key violation by number (2627 / 2601) is the race', async () => {
+    for (const number of [2627, 2601]) {
+      const { db } = fakeDb({
+        populated: false,
+        insertFails: true,
+        insertError: Object.assign(new Error('x'), { number }),
+        onInsert: (s) => {
+          s['widgets.code'] = 1
+        }
+      })
+      expect(await nextSequenceValue(db, 'widgets', 'code')).toBe(2)
+    }
+  })
+
+  it('a transient insert failure is rethrown as itself, not SEQUENCE_UNSEEDED', async () => {
+    const boom = Object.assign(new Error('Connection lost - read ECONNRESET'), { code: 'ESOCKET' })
+    const { db } = fakeDb({ populated: false, insertFails: true, insertError: boom })
+    const err = await nextSequenceValue(db, 'widgets', 'code').catch((e) => e)
+    expect(err).toBe(boom)
   })
 })
 

@@ -369,6 +369,97 @@ function useTransitionSettle(queryKey: readonly unknown[]) {
   return { settling, settle }
 }
 
+/** A transition that goes to a step sorting BEFORE the current one (a send back). */
+function isSendBack(
+  tx: Pick<PipelineTransition, 'to_state'>,
+  states: Array<Pick<PipelineState, 'id' | 'sort'>>,
+  currentStateId: string | null | undefined
+): boolean {
+  if (!currentStateId) return false
+  const cur = states.find(
+    (st) => String(st.id).toUpperCase() === String(currentStateId).toUpperCase()
+  )
+  const to = states.find((st) => String(st.id).toUpperCase() === String(tx.to_state).toUpperCase())
+  return !!cur && !!to && to.sort < cur.sort
+}
+
+/** Is a send back on offer in these answers (decides whether the chain is read)? */
+function hasSendBackOffer(
+  data:
+    | {
+        states?: Array<Pick<PipelineState, 'id' | 'sort'>>
+        instance?: { current_state?: string | null } | null
+        available_transitions?: Array<Pick<PipelineTransition, 'to_state'>>
+      }
+    | null
+    | undefined
+): boolean {
+  if (!data?.instance) return false
+  return (data.available_transitions ?? []).some((t) =>
+    isSendBack(t, data.states ?? [], data.instance?.current_state)
+  )
+}
+
+/**
+ * Send-back buttons whose target is a chain step this record SKIPPED (no owner, or its skip
+ * rule matched) are hidden: pressing one parks the record on a step nobody works (b06-N6).
+ * Forward moves and sends back to steps that were on the path stay.
+ */
+export function withoutSkippedSendBacks<T extends Pick<PipelineTransition, 'to_state'>>(
+  txs: T[],
+  states: Array<Pick<PipelineState, 'id' | 'sort'>>,
+  currentStateId: string | null | undefined,
+  skipped: Map<string, string[]> | null | undefined
+): T[] {
+  if (!skipped || skipped.size === 0) return txs
+  const skippedUp = new Set([...skipped.keys()].map((k) => String(k).toUpperCase()))
+  return txs.filter(
+    (t) =>
+      !(skippedUp.has(String(t.to_state).toUpperCase()) && isSendBack(t, states, currentStateId))
+  )
+}
+
+/**
+ * What a finished move says: "Submit — now Waiting on manager approval", not "Transition
+ * executed" (b09-N9). When the answer's state is the one the record was already in, "Nothing
+ * moved" (the move was a no-op: no owner, skipped, or a twin of an earlier press).
+ */
+export function transitionToastText(
+  data:
+    | {
+        instance?: { current_state?: string | null } | null
+        states?: Array<Pick<PipelineState, 'id' | 'label'>>
+        available_transitions?: Array<Pick<PipelineTransition, 'id' | 'label' | 'to_state'>>
+        all_transitions?: Array<Pick<PipelineTransition, 'id' | 'label' | 'to_state'>>
+      }
+    | null
+    | undefined,
+  transitionId: string,
+  answer: unknown
+): string {
+  const tx = [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+    (t) => t.id === transitionId
+  )
+  const body = (
+    answer as {
+      data?: {
+        instance?: { current_state?: string | null }
+        new_state?: { id?: string; label?: string } | null
+      }
+    } | null
+  )?.data
+  const newId = body?.new_state?.id ?? body?.instance?.current_state ?? null
+  const toLabel =
+    body?.new_state?.label ??
+    (tx ? data?.states?.find((st) => st.id === tx.to_state)?.label : undefined) ??
+    null
+  const before = data?.instance?.current_state ?? null
+  if (before && newId && String(before) === String(newId)) return 'Nothing moved'
+  if (tx?.label && toLabel) return `${tx.label} — now ${toLabel}`
+  if (toLabel) return `Moved to ${toLabel}`
+  return tx?.label ? `${tx.label} done` : 'Transition executed'
+}
+
 /** Header Owners tile + owner panels read these — a move changes who owns the record. */
 function invalidateOwnerReads(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -2117,7 +2208,8 @@ function PipelinePanelInner({
           get(`/pipelines/instance/${collection}/${item}/owners/all`)
         )
         .then((r) => r.data ?? null),
-    enabled: expanded && !!data?.instance,
+    // Also when a send back is on offer: its target may be a chain step this record skipped.
+    enabled: (expanded || hasSendBackOffer(data)) && !!data?.instance,
     staleTime: 30_000
   })
   const onPathIds = useMemo(() => {
@@ -2166,7 +2258,7 @@ function PipelinePanelInner({
           ...(reviewed ? { reviewed: true } : {})
         })
       ),
-    onSuccess: () => {
+    onSuccess: (res, variables) => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums')
         queryClient.invalidateQueries({ queryKey: ['addendums'] })
@@ -2182,7 +2274,7 @@ function PipelinePanelInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success('Transition executed')
+      toast.success(transitionToastText(data, variables.transition_id, res))
     },
     onError: (err: unknown, variables) => {
       // The twin of a press already being applied (another tab, a retried
@@ -2306,7 +2398,12 @@ function PipelinePanelInner({
       : null
   const visibleTransitions = instance?.completed_at
     ? (escapeTransitions ?? [])
-    : (transitions ?? [])
+    : withoutSkippedSendBacks(
+        transitions ?? [],
+        states ?? [],
+        instance?.current_state,
+        skippedStates
+      )
   const hasTransitions = visibleTransitions.length > 0
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
@@ -2834,6 +2931,25 @@ function PipelineTransitionButtonsInner({
         ),
     staleTime: 10_000
   })
+  // Same key as the panel's chain read: shared cache, fetched here only for a send back's sake.
+  const { data: chainOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
+    queryKey: ['pipeline-all-owners', collection, item],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AllOwnersEntry> | null }>(
+          get(`/pipelines/instance/${collection}/${item}/owners/all`)
+        )
+        .then((r) => r.data ?? null),
+    enabled: hasSendBackOffer(data),
+    staleTime: 30_000
+  })
+  const skippedChain = useMemo(() => {
+    if (!chainOwners) return null
+    const out = new Map<string, string[]>()
+    for (const [id, e] of Object.entries(chainOwners))
+      if (e.skipped) out.set(id, e.skip_reasons ?? [])
+    return out
+  }, [chainOwners])
   const executeTransition = useMutation({
     mutationFn: ({
       transition_id,
@@ -2852,7 +2968,7 @@ function PipelineTransitionButtonsInner({
           ...(reviewed ? { reviewed: true } : {})
         })
       ),
-    onSuccess: () => {
+    onSuccess: (res, variables) => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums')
         queryClient.invalidateQueries({ queryKey: ['addendums'] })
@@ -2868,7 +2984,7 @@ function PipelineTransitionButtonsInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success('Transition executed')
+      toast.success(transitionToastText(data, variables.transition_id, res))
     },
     onError: (err: unknown, variables) => {
       // The twin of a press already being applied (another tab, a retried
@@ -2959,11 +3075,16 @@ function PipelineTransitionButtonsInner({
   if (!data?.binding || !data?.instance) return null
   // Completed instances keep only escape hatches from their terminal state
   // (Uncancel) — everything else would 400 server-side.
-  const transitions = (data.available_transitions ?? []).filter(
-    (t) =>
-      !data.instance!.completed_at ||
-      (t.from_state &&
-        String(t.from_state).toUpperCase() === String(data.instance!.current_state).toUpperCase())
+  const transitions = withoutSkippedSendBacks(
+    (data.available_transitions ?? []).filter(
+      (t) =>
+        !data.instance!.completed_at ||
+        (t.from_state &&
+          String(t.from_state).toUpperCase() === String(data.instance!.current_state).toUpperCase())
+    ),
+    data.states ?? [],
+    data.instance.current_state,
+    data.instance.completed_at ? null : skippedChain
   )
   if (transitions.length === 0) return null
   const stateById = new Map((data.states ?? []).map((s) => [s.id, s]))

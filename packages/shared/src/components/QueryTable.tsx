@@ -99,6 +99,11 @@ export interface QueryTableColumn {
   empty_label?: string
   /** Cap a long text column (px); the full text shows on hover. */
   max_width?: number
+  /** Totals footer: when NO row holds a number in this column, the total is
+   *  "no figure" (—), not 0. Default on for currency columns — a column of
+   *  missing CAPEX targets totalled "$0" beside rows that said "—" (army 5
+   *  b04-N-1). false keeps the 0. */
+  null_when_empty?: boolean
 }
 
 export interface QueryTableConfig {
@@ -220,6 +225,9 @@ const MONTH_LABELS = [
   'Dec'
 ]
 
+/** The spend-date key the spend procedures give rows with no usable date. */
+export const UNDATED_KEY = 'Undated'
+
 /** Pivot long (key…, 'yyyy-MM', value) rows into one row per key tuple with
  *  month columns for `year`, one folded column per other year, and a total. */
 export function pivotQueryRows(
@@ -230,6 +238,7 @@ export function pivotQueryRows(
 ): { rows: Array<Record<string, unknown>>; columns: QueryTableColumn[] } {
   const byKey = new Map<string, Record<string, unknown>>()
   const otherYears = new Set<string>()
+  let hasUndated = false
   for (const r of rows) {
     const key = pivot.key_fields.map((f) => String(r[f] ?? '')).join('|')
     let out = byKey.get(key)
@@ -240,7 +249,17 @@ export function pivotQueryRows(
     }
     const date = String(r[pivot.date_field] ?? '')
     const m = /^(\d{4})-(\d{2})/.exec(date)
-    if (!m) continue
+    if (!m) {
+      // Spend the procedures bucket 'Undated' (other spend with no year) gets
+      // its own column and counts in the total — it used to drop out of the
+      // grid entirely (army 5 b05-N6). Any other non-date key still skips.
+      if (date !== UNDATED_KEY) continue
+      const v = Number(r[pivot.value_field]) || 0
+      hasUndated = true
+      out.undated = (Number(out.undated) || 0) + v
+      if (pivot.total !== false) out.total = (Number(out.total) || 0) + v
+      continue
+    }
     const val = Number(r[pivot.value_field]) || 0
     if (Number(m[1]) === resolvedYear) {
       const monthIdx = Number(m[2]) - 1
@@ -286,6 +305,9 @@ export function pivotQueryRows(
       sum: true,
       ...tint
     })),
+    ...(hasUndated
+      ? [{ field: 'undated', label: 'Undated', format: 'currency' as const, sum: true, ...tint }]
+      : []),
     ...(pivot.total !== false
       ? [
           {
@@ -301,6 +323,41 @@ export function pivotQueryRows(
       : [])
   ]
   return { rows: [...byKey.values()], columns }
+}
+
+/** A cell value that counts as a number in a total (null / '' never do —
+ *  Number(null) is 0). */
+const isNumericValue = (v: unknown): boolean =>
+  v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
+
+/**
+ * The totals footer's values: every column's field (and stack) summed over the
+ * rows. A column no row holds a number in totals to null when it is money (or
+ * opts in with `null_when_empty`), so the footer says "—" like its rows; a
+ * formula over it (`{{carAmount}} * 100 / {{budget}}`) then reads no figure too.
+ */
+export function queryTableTotals(
+  rows: Array<Record<string, unknown>>,
+  columns: QueryTableColumn[]
+): Record<string, unknown> {
+  const t: Record<string, unknown> = {}
+  const sum = (f: string, nullWhenEmpty: boolean) => {
+    let any = false
+    let acc = 0
+    for (const r of rows) {
+      if (!isNumericValue(r[f])) continue
+      any = true
+      acc += Number(r[f])
+    }
+    // A field shared by two columns stays a number if either keeps its 0.
+    t[f] = any || !nullWhenEmpty || t[f] === 0 ? acc : null
+  }
+  for (const c of columns) {
+    const nullWhenEmpty = c.null_when_empty ?? c.format === 'currency'
+    if (c.field) sum(c.field, nullWhenEmpty)
+    if (c.stack) sum(c.stack, nullWhenEmpty)
+  }
+  return t
 }
 
 /**
@@ -630,20 +687,7 @@ export function QueryTable({
 
   // Totals: sum plain numeric columns, then run formulas over the sums.
   let totals: Record<string, unknown> | null = null
-  if (config?.totals) {
-    const t: Record<string, unknown> = {}
-    const sumField = (f: string) => {
-      t[f] = effective.reduce((acc, r) => {
-        const n = Number(r[f])
-        return Number.isFinite(n) ? acc + n : acc
-      }, 0)
-    }
-    for (const c of columns) {
-      if (c.field) sumField(c.field)
-      if (c.stack) sumField(c.stack)
-    }
-    totals = t
-  }
+  if (config?.totals) totals = queryTableTotals(effective, columns)
 
   const isNumeric = (c: QueryTableColumn) => c.format && c.format !== 'text'
 

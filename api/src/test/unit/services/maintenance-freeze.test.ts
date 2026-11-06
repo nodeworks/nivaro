@@ -74,7 +74,6 @@ describe('maintenanceExemptPath', () => {
   it('keeps sign-in, the switch, MCP protocol, presence and GraphQL (judged inside) open', () => {
     for (const p of [
       '/api/auth/login',
-      '/api/settings',
       '/api/mcp',
       '/api/mcp?live=1',
       '/api/graphql',
@@ -85,6 +84,42 @@ describe('maintenanceExemptPath', () => {
       '/api/items/batch-read'
     ])
       expect(maintenanceExemptPath(p), p).toBe(true)
+  })
+
+  it('keeps quiet background telemetry writes open (army 5 b11-N7)', () => {
+    for (const p of [
+      '/api/items/user_presence',
+      '/api/items/user_presence/1',
+      '/api/items/user_presence?fields=id',
+      '/api/analytics/pageview',
+      '/api/analytics/pageview/42',
+      '/api/session-recordings',
+      '/api/session-recordings/abc-1/events',
+      '/api/session-recordings/abc-1/end',
+      '/api/record-views/workflows/372955/touch'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(true)
+  })
+
+  it('pins the telemetry exemptions to those writes only', () => {
+    for (const p of [
+      // settings are no longer exempt by path (REVIEW-R5 L2)
+      '/api/settings',
+      '/api/settings/instance-overrides',
+      // a collection that merely starts with the name, or another collection
+      '/api/items/user_presence_log',
+      '/api/items/user_presences/1',
+      '/api/items/workflows',
+      '/api/items/USER_PRESENCE/1',
+      '/api/analytics/pageviews/stats',
+      '/api/analytics/pageview/1/extra',
+      '/api/session-recordings/abc-1',
+      '/api/session-recordings/abc-1/notes',
+      '/api/session-recordings/abc-1/clips',
+      '/api/record-views/workflows/1/seen',
+      '/api/record-views/workflows/1/touch/x'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
   })
 
   it('freezes record writes on every surface', () => {
@@ -142,8 +177,10 @@ describe('root freeze hook covers every route plugin', () => {
     await app.register(
       async (f) => {
         f.post('/items/:c', async () => ({ ok: 'core' }))
+        f.patch('/items/:c/:id', async () => ({ ok: 'core' }))
         f.get('/items/:c', async () => ({ ok: 'read' }))
         f.post('/auth/login', async () => ({ ok: 'auth' }))
+        f.patch('/settings', async () => ({ ok: 'settings' }))
       },
       { prefix: '/api' }
     )
@@ -178,6 +215,36 @@ describe('root freeze hook covers every route plugin', () => {
     const res = await app.inject({ method: 'POST', url, payload: {} })
     expect(res.statusCode).toBe(503)
     expect(res.json()).toMatchObject({ code: 'MAINTENANCE' })
+  })
+
+  it('refuses a settings write (the maintenance switch) from an admin token (REVIEW-R5 L2)', async () => {
+    for (const caller of [
+      { isAdmin: true, authMethod: 'token', account_kind: 'integration' },
+      { isAdmin: true, authMethod: 'token' },
+      { isAdmin: false, authMethod: 'session' }
+    ]) {
+      state.caller = caller
+      const res = await app.inject({ method: 'PATCH', url: '/api/settings', payload: {} })
+      expect(res.statusCode).toBe(503)
+    }
+  })
+
+  it('lets a signed-in human admin switch maintenance off', async () => {
+    state.caller = HUMAN_ADMIN
+    const res = await app.inject({ method: 'PATCH', url: '/api/settings', payload: {} })
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('lets a presence heartbeat through but still refuses workflows (b11-N7)', async () => {
+    state.caller = { isAdmin: false, authMethod: 'session' }
+    const ok = await app.inject({
+      method: 'PATCH',
+      url: '/api/items/user_presence/1',
+      payload: {}
+    })
+    expect(ok.statusCode).toBe(200)
+    const no = await app.inject({ method: 'POST', url: '/api/items/workflows', payload: {} })
+    expect(no.statusCode).toBe(503)
   })
 
   it('lets a signed-in human admin write', async () => {

@@ -13,6 +13,7 @@ import {
   renderNotificationTemplate
 } from '../services/notification-templates.js'
 import { can, getAllowedFields } from '../services/permissions.js'
+import { isInactivePerson } from '../services/pipeline-engine.js'
 import { computeDelta } from '../services/revisions.js'
 import { canSeeRecord } from '../services/sla-visibility.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -433,7 +434,7 @@ async function fireSubscriptionNotifications(
       if (Object.keys(delta).length === 0) return
     }
     // Find all active subscriptions matching this collection+event
-    const subs = await db('nivaro_notification_subscriptions as ns')
+    const allSubs = await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
       .where({ 'ns.collection': collection, 'ns.is_active': true })
       .where((qb) => {
@@ -450,8 +451,13 @@ async function fireSubscriptionNotifications(
         'ns.notify_inapp',
         'ns.notify_email',
         'u.email',
-        'u.first_name'
+        'u.first_name',
+        'u.last_name',
+        'u.status',
+        'u.is_redacted'
       )
+    // Suspended / redacted people are told nothing (army5 b06-N4).
+    const subs = activeSubscribers(allSubs)
 
     const now = new Date()
 
@@ -831,6 +837,19 @@ async function fireSubscriptionNotifications(
   }
 }
 
+/** Pure: subscription rows whose person can still be told — suspended /
+ *  archived / redacted people (isInactivePerson) left out. */
+export function activeSubscribers<
+  T extends {
+    status?: string | null
+    is_redacted?: boolean | number | null
+    first_name?: string | null
+    last_name?: string | null
+  }
+>(rows: T[]): T[] {
+  return rows.filter((r) => !isInactivePerson(r))
+}
+
 /**
  * A state subscription saved by the legacy sync is labelled with the state's
  * KEY ("Workflow state: waiting_on_manager_approval"); people know the state
@@ -845,9 +864,12 @@ export function stateMarkerLabel(
   stateLabel: string
 ): string | null {
   if (!label) return null
-  const m = /^(.*): ([a-z0-9]+(?:_[a-z0-9]+)+)$/.exec(label)
+  // One-word keys too ("started", "completed", "canceled" — army5 b13-N2).
+  const m = /^(.*): ([a-z0-9]+(?:_[a-z0-9]+)*)$/.exec(label)
   if (!m) return label
   if (m[2] === stateKey && stateLabel) return `${m[1]}: ${stateLabel}`
+  // Another one-word tail is left as written — it may be a person's own word.
+  if (!m[2].includes('_')) return label
   const words = m[2].replace(/_/g, ' ')
   return `${m[1]}: ${words.charAt(0).toUpperCase()}${words.slice(1)}`
 }
@@ -953,7 +975,7 @@ export async function fireWorkflowStateSubscriptions(opts: {
     // The instance's own record (an addendum) — owners resolve against it.
     const instanceRef = { collection: opts.collection, item: opts.item }
     opts = { ...opts, collection: subject.collection, item: subject.itemId }
-    const subs = await db('nivaro_notification_subscriptions as ns')
+    const allSubs = await db('nivaro_notification_subscriptions as ns')
       .join('nivaro_users as u', 'ns.user', 'u.id')
       .where({
         'ns.collection': opts.collection,
@@ -971,8 +993,14 @@ export async function fireWorkflowStateSubscriptions(opts: {
         'ns.notify_inapp',
         'ns.notify_email',
         'u.email',
-        'u.first_name'
+        'u.first_name',
+        'u.last_name',
+        'u.status',
+        'u.is_redacted'
       )
+    // Suspended / redacted people are told nothing — a state subscription
+    // mailed a suspended person directly (army5 b06-N4).
+    const subs = activeSubscribers(allSubs)
     if (subs.length === 0) return
 
     const relevant = subs.filter(
