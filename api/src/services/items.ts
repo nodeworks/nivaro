@@ -674,6 +674,9 @@ const JUNCTION_SEG = '\u0000link'
 async function farHasOwnField(collection: string, seg: string): Promise<boolean> {
   const k = seg.toLowerCase()
   if ([...(await getActualColumns(collection))].some((c) => c.toLowerCase() === k)) return true
+  // A calculated / virtual field of that name is the far collection's own too.
+  if ((await calculatedFieldNames(collection)).has(k)) return true
+  if ((await primeVirtualSql(collection)).has(seg)) return true
   return (await getRelsForCollection(collection)).some(
     (r) => (r.many_collection ?? '').toLowerCase() === collection.toLowerCase() && r.many_field.toLowerCase() === k
   )
@@ -772,12 +775,10 @@ async function assertReadableSystemPaths(
           current = hop.junction
           continue
         }
-        if (
-          hop.farLeg &&
-          seg.toLowerCase() === hop.farLeg.toLowerCase() &&
-          !(await farHasOwnField(current, seg))
-        ) {
-          if (last) break // the far row's id
+        // Exactly the compiler's rule (unwrapJunctionLeg matches the key as written).
+        if (hop.farLeg && seg === hop.farLeg && !(await farHasOwnField(current, seg))) {
+          // As the last segment it folds to the far row's `id`, which every reader may filter.
+          if (last) break
           continue
         }
       }
