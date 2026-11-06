@@ -577,3 +577,20 @@ describe('ItemEditForm refused line on Save (army5 b02-N7)', () => {
     )
   })
 })
+
+describe('ItemEditForm baseline = the revision the form opened on (army6 b09 BLOCKER)', () => {
+  it('a colleague save the form never saw, made before the first keystroke, still collides', async () => {
+    const m = await mount()
+    // The baseline is read when the record opens, not when it turns dirty.
+    await settle(() => m.calls.some((c) => c._path === '/revisions'))
+    // Someone else saves; this tab misses the live update (no socket here).
+    m.client.otherSave({ description: 'A B8' })
+    await type('description', 'A S6')
+    await act(async () => m.save())
+    await settle(() => !!dialog())
+    expect(dialog()).toBeTruthy()
+    expect(m.row.description).toBe('A B8')
+    const sent = patches(m.calls)[0]?._body as Record<string, unknown> | undefined
+    expect(typeof sent?._base_revision).toBe('number')
+  })
+})

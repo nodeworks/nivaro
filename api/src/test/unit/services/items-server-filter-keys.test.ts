@@ -342,3 +342,24 @@ describe('army 6: an M2M cascade filter names a junction column under _some', ()
     ).rejects.toMatchObject({ statusCode: 400, code: 'UNKNOWN_FIELD' })
   })
 })
+
+describe('army 6: the field-policy check follows an M2M alias onto its junction row', () => {
+  it('a narrowed role may filter through the junction FK (the Unit Type picker shape)', async () => {
+    perm.byCollection = { vendors: ['id', 'name', 'divisions'], divisions: ['id', 'name'] }
+    for (const filter of [
+      { divisions: { _some: { division: { _eq: 2 } } } },
+      { divisions: { _some: { division: { name: { _eq: 'Zone 1' } } } } },
+      { 'divisions.division': { _eq: 2 } }
+    ])
+      await expect(readItems(someone, 'vendors', { filter } as never)).resolves.toBeTruthy()
+  })
+
+  it('a far field the policy hides is still refused through the junction', async () => {
+    perm.byCollection = { vendors: ['id', 'name', 'divisions'], divisions: ['id'] }
+    await expect(
+      readItems(someone, 'vendors', {
+        filter: { divisions: { _some: { division: { name: { _eq: 'Zone 1' } } } } }
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 403, code: 'FIELD_NOT_READABLE' })
+  })
+})

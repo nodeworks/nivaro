@@ -739,9 +739,22 @@ async function assertReadableSystemPaths(
     // `$state`, `$aging`… are virtual paths with their own gates.
     if (String(segs[0] ?? '').startsWith('$')) continue
     let current = collection
+    let junction: string | undefined
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
       const last = i === segs.length - 1
+      // After an M2M alias the compilers stand on the JUNCTION row when the
+      // next segment is one of its columns (`project_types._some.project_types_id.active`,
+      // `divisions.divisions_id`) — judging it on the far collection refused every
+      // M2M cascade picker (army 6 b02).
+      if (junction) {
+        const jRels = await getRelsForCollection(junction)
+        const onJunction =
+          !!resolveFilterHop(seg, junction, jRels) ||
+          [...(await getActualColumns(junction))].some((c) => c.toLowerCase() === seg.toLowerCase())
+        if (onJunction) current = junction
+        junction = undefined
+      }
       // The hop the compilers would take from here (case-insensitive like the
       // database, the `_id`-less FK alias, M2M through the junction).
       const hop = last ? null : resolveFilterHop(seg, current, await getRelsForCollection(current))
@@ -777,6 +790,7 @@ async function assertReadableSystemPaths(
         break
       }
       current = hop.next
+      junction = hop.junction
     }
   }
   if (bad.size === 0) return

@@ -2619,9 +2619,11 @@ function ItemEditFormView({
         )
         .then((r) => r.data)
         .catch(() => ({ latest: null })),
-    // Only a SAVE compares against it — a record nobody edits never needs the
-    // read (a scan of the record's history on every open, on every tab).
-    enabled: !isNew && !!itemId && isDirty,
+    // Read when the record opens, NOT at the first keystroke (army 6 b09
+    // BLOCKER): a form that missed a live update and was first edited after a
+    // colleague's save took that save as its baseline, and its own save then
+    // wrote over the newer value with no 409. One small read per open.
+    enabled: !isNew && !!itemId,
     // The baseline only moves when the form adopts the server's values (its
     // own save, a remote change it took in) — those invalidate it. Refetching
     // on its own (stale + window focus) moved it past another tab's save while
@@ -8841,7 +8843,27 @@ function ItemEditFormView({
       })
       if (changeReasonRef.current) payload._change_reason = changeReasonRef.current
       if (!isNew) {
-        const base = baseRevisionOverrideRef.current ?? baseRevisionData?.latest ?? null
+        // A save made before the open-time baseline arrived waits for it: a
+        // PATCH with no _base_revision skips the mid-air check entirely.
+        const base =
+          baseRevisionOverrideRef.current ??
+          baseRevisionData?.latest ??
+          (
+            await qc
+              .fetchQuery<{ latest: number | null }>({
+                queryKey: ['collision-base', collection, itemId],
+                queryFn: () =>
+                  client
+                    .request<{ data: { latest: number | null } }>(
+                      get('/revisions', { collection, item: itemId, latest_only: '1' })
+                    )
+                    .then((r) => r.data)
+                    .catch(() => ({ latest: null })),
+                staleTime: Number.POSITIVE_INFINITY
+              })
+              .catch(() => null)
+          )?.latest ??
+          null
         if (base != null) payload._base_revision = base
       }
       lastSavePayloadRef.current = payload
