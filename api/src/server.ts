@@ -63,6 +63,7 @@ import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
+import { maintenanceFreezeHook } from './services/maintenance-freeze.js'
 import { markMcpInnerRequest } from './services/mcp-config.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
@@ -739,6 +740,10 @@ export async function buildServer() {
   setPulseApp(app)
 
   // ─── Routes ───────────────────────────────────────────────────────────────
+  // Maintenance write freeze — on the ROOT, before any route plugin, so it
+  // covers registerRoutes, GraphQL mutations (judged in the handler), the
+  // legacy compat paths and every extension route (services/maintenance-freeze.ts).
+  app.addHook('preHandler', maintenanceFreezeHook)
   await app.register(presencePublicRoutes, { prefix: '/api/presence' })
   await bootPhase('Routes', async () => {
     await app.register(registerRoutes, { prefix: '/api' })

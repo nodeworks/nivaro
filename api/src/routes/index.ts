@@ -331,55 +331,10 @@ export async function registerRoutes(app: FastifyInstance) {
   // #2759 — how long a cache-missing custom query / widget read takes, so a known-slow one can
   // offer "Run in background" (services/background-runs.ts).
   app.addHook('onResponse', noteReadDuration(app))
-  // Maintenance mode: instance-wide write freeze (admins exempt, reads fine).
-  // Auth stays open so admins can get in to turn it off.
-  app.addHook('preHandler', async (req, reply) => {
-    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
-    const url = req.url
-    if (
-      url.startsWith('/api/auth') ||
-      url.startsWith('/api/settings') ||
-      url.startsWith('/api/rum') ||
-      // Chaos Stop all (#2861) must work during maintenance (operators, and the phone push).
-      url.startsWith('/api/chaos/stop-all') ||
-      // The render peer (#2789) renders for another process's request, which
-      // that process already judged; it carries a bearer, never a person.
-      url.startsWith('/api/internal/render/') ||
-      // Teams calls the bot with a Connector JWT, never a person; the route judges its own
-      // activities (message/install stay answerable, invokes say "in maintenance" themselves).
-      url.startsWith('/api/teams/messages') ||
-      // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
-      url.startsWith('/api/items/batch-read') ||
-      url.startsWith('/api/users/cards') ||
-      // Activity sentence labels (migration 516): a read carrying the page's refs.
-      url.startsWith('/api/activity/labels') ||
-      // The layout editor canvas's draft field rows: a read carrying placements.
-      /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
-      // The MCP endpoint only carries protocol messages; each tool call inside it is its
-      // own API request, judged by this hook on its own method and path.
-      url === '/api/mcp' ||
-      url.startsWith('/api/mcp?')
-    )
-      return
-    const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(
-      '../services/security.js'
-    )
-    const maint = await maintenanceState()
-    if (!maint.on) return
-    // This app-level hook runs BEFORE the routes' own authenticate
-    // preHandler, so identity isn't resolved yet — resolve it here (only
-    // while maintenance is actually on) so admins stay exempt.
-    if (!req.user) {
-      const { authenticate } = await import('../middleware/authenticate.js')
-      await authenticate(req, reply).catch(() => {})
-    }
-    if (req.isAdmin) return
-    return reply.code(503).send({
-      error: `${(maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim()} ${MAINTENANCE_EXPLAINER}`,
-      code: 'MAINTENANCE',
-      until: maint.until
-    })
-  })
+  // Maintenance mode's write freeze is NOT here any more: it is one root
+  // preHandler (services/maintenance-freeze.ts, added in server.ts before any
+  // route plugin) so it also covers GraphQL mutations, the legacy compat paths
+  // and extension routes — siblings of this plugin that a hook here never saw.
 
   // Collection/field metadata is cached in-process (services/collections.ts) to
   // keep schema lookups off the hot path. Any successful write to a route that

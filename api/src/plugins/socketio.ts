@@ -87,7 +87,7 @@ import {
   PAGE_AT_KEY,
   type PageAtData
 } from '../services/realtime-board.js'
-import { emitToTenant } from '../services/record-events.js'
+import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import { noteRealtimeEmit } from '../services/request-trace.js'
 import {
@@ -788,7 +788,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // (services/presence-changed.ts; adaptive 2–3 s); the first change of a quiet tenant still
   // goes out at once.
   const presenceChanged = createPresenceChangedCoalescer((tenant, payload) =>
-    emitToTenant(tenant, 'presence:changed', payload as unknown as Record<string, unknown>)
+    emitToSignedIn(tenant, 'presence:changed', payload as unknown as Record<string, unknown>)
   )
   presenceNoter = (tenant, userId) => presenceChanged.note(tenant, userId)
 
@@ -1343,9 +1343,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     let authenticatedUser: User | null = null
     /** Cloud: an authenticated socket joins its tenant's `all` room, where
      *  tenant-wide notices (owners:changed, access:changed — record-events.ts)
-     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: nothing to join. */
+     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: the plain `all` room, which
+     *  carries only signals for fully signed-in sockets (emitToSignedIn: presence:changed) —
+     *  an anonymous or access-pending socket never joins it. */
     const joinTenantAllRoom = async () => {
-      if (!process.env.CLOUD_META_DB_URL) return
+      if (!process.env.CLOUD_META_DB_URL) {
+        socket.join(TENANT_ALL_ROOM)
+        return
+      }
       const t = await socketTenant(socket).catch(() => null)
       if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
     }

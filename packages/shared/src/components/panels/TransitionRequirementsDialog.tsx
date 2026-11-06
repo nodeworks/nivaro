@@ -13,7 +13,8 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, titleCase } from '../../lib/utils'
+import { extractTemplateFields, renderDisplayTemplate } from '../pipeline/relations'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -24,6 +25,12 @@ import {
   DialogTitle
 } from '../ui/dialog'
 import { Input } from '../ui/input'
+import {
+  keepValuesPatch,
+  overwrittenBySideEffect,
+  type RehearsalReport,
+  type SideEffectChange
+} from './requirement-side-effects'
 
 /** Names the move a save is for (api services/requirement-writes.ts). */
 const REQUIREMENTS_FOR_HEADER = 'x-nivaro-requirements-for'
@@ -382,6 +389,72 @@ function DropPanel({
   )
 }
 
+// ─── Related-record options ──────────────────────────────────────────────────
+// Labelled the way every other picker labels them: the related collection's
+// display template (categories: "{{core_category.name}} - {{sub_category.name}}"),
+// then the usual name-like columns. The dialog used to read name/title/label
+// only, so a collection labelled through its relations listed bare ids
+// ("57", "58" … "245") and nobody could tell which one they picked (army5 b09).
+
+/** One option's label: template → name-like column → "#id". */
+export function relatedOptionLabel(
+  template: string | null | undefined,
+  row: Record<string, unknown>
+): string {
+  const id = String(row.id ?? '')
+  if (template) {
+    const text = renderDisplayTemplate(template, row).trim()
+    // A template whose parts are all empty renders only its separators.
+    if (/[\p{L}\p{N}]/u.test(text)) return text
+  }
+  const plain = renderDisplayTemplate(null, {
+    ...row,
+    short_name: undefined
+  }).trim()
+  if (plain && plain !== id) return plain
+  if (row.short_name != null && row.short_name !== '') return String(row.short_name)
+  return id ? `#${id}` : ''
+}
+
+function useRelatedOptions(collection: string | undefined): Array<{ id: string; label: string }> {
+  const client = useNivaroClient()
+  // Same key + shape as RelationCombobox's read, so the cache is shared.
+  const { data: colMeta, isPending: metaPending } = useQuery<{ display_template?: string }>({
+    queryKey: ['col-meta', collection],
+    queryFn: () =>
+      client
+        .request<{ data: { display_template?: string } }>(get(`/collections/${collection}`))
+        .then((r) => r.data ?? {}),
+    enabled: !!collection,
+    staleTime: 300_000,
+    retry: false
+  })
+  const template = colMeta?.display_template ?? null
+  const tmplFields = template ? extractTemplateFields(template).join(',') : undefined
+  const { data = [] } = useQuery({
+    queryKey: ['req-related-options', collection, template ?? ''],
+    queryFn: () =>
+      client
+        .request<{ data: Array<Record<string, unknown>> }>(
+          get(`/items/${collection}`, {
+            limit: 500,
+            picker: '1',
+            ...(tmplFields ? { fields: tmplFields } : {})
+          })
+        )
+        .then((r) =>
+          (r.data ?? [])
+            .map((row) => ({ id: String(row.id), label: relatedOptionLabel(template, row) }))
+            .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+        )
+        .catch(() => [] as Array<{ id: string; label: string }>),
+    // The template decides `fields`: wait for it (a miss just means none).
+    enabled: !!collection && !metaPending,
+    staleTime: 300_000
+  })
+  return data
+}
+
 // ─── M2M multi-select cell ───────────────────────────────────────────────────
 // Compact per-row multi-picker for m2m required fields (e.g. per-line
 // supporting warehouses) — options from the related collection, toggled ids
@@ -396,27 +469,10 @@ function M2MPickCell({
   selected: string[]
   onChange: (ids: string[]) => void
 }) {
-  const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const { data: options = [] } = useQuery({
-    queryKey: ['req-m2m-options', meta.related_collection],
-    queryFn: () =>
-      client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${meta.related_collection}`, { limit: 500 })
-        )
-        .then((r) =>
-          (r.data ?? []).map((row) => ({
-            id: String(row.id),
-            label: String(row.name ?? row.title ?? row.label ?? row.short_name ?? row.id)
-          }))
-        )
-        .catch(() => [] as Array<{ id: string; label: string }>),
-    enabled: !!meta.related_collection,
-    staleTime: 300_000
-  })
+  const options = useRelatedOptions(meta.related_collection)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -497,27 +553,10 @@ function M2OPickCell({
   selected: string
   onChange: (id: string) => void
 }) {
-  const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const { data: options = [] } = useQuery({
-    queryKey: ['req-m2m-options', meta.related_collection],
-    queryFn: () =>
-      client
-        .request<{ data: Array<Record<string, unknown>> }>(
-          get(`/items/${meta.related_collection}`, { limit: 500 })
-        )
-        .then((r) =>
-          (r.data ?? []).map((row) => ({
-            id: String(row.id),
-            label: String(row.name ?? row.title ?? row.label ?? row.short_name ?? row.id)
-          }))
-        )
-        .catch(() => [] as Array<{ id: string; label: string }>),
-    enabled: !!meta.related_collection,
-    staleTime: 300_000
-  })
+  const options = useRelatedOptions(meta.related_collection)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -726,8 +765,96 @@ export function TransitionRequirementsDialog({
     payload.find((e): e is TransitionRequirementEntry => e.type === 'child_fields' && !!e.review)
       ?.review_message ?? null
 
-  const handleSubmit = async () => {
+  // A pick that also replaces values a line already had (army5 b09): the
+  // rows' writes are rehearsed first, and these wait on the person's choice.
+  const [sideEffects, setSideEffects] = useState<Array<{
+    rk: string
+    rowLabel: string
+    changes: Array<SideEffectChange & { label: string; format?: 'currency' | 'number' }>
+  }> | null>(null)
+  // "Keep current values": per row, the values its write also carries.
+  const keepRef = useRef<Record<string, Record<string, unknown>>>({})
+
+  /** The scalar values a child row's write would carry (same rules as the
+   *  write below: m2m via junctions, waived fields never sent). */
+  const scalarRowChanges = (
+    entry: TransitionRequirementEntry,
+    row: TransitionRequirementRow
+  ): Record<string, unknown> => {
+    const rk = rowKey(entry.collection, row.id)
+    const current = values[rk] ?? {}
+    const saved = savedRef.current[rk] ?? {}
+    const changed: Record<string, unknown> = {}
+    for (const f of entry.fields) {
+      if (f.kind === 'm2m' || isWaived(rk, f)) continue
+      if (current[f.field] !== saved[f.field])
+        changed[f.field] =
+          f.kind === 'm2o'
+            ? String(current[f.field] ?? '') || null
+            : coerceForPatch(String(current[f.field] ?? ''), f.type)
+    }
+    return changed
+  }
+
+  /** Rehearse every child row's write; the values each would replace. A
+   *  rehearsal that fails says nothing (the real write reports its own). */
+  const rehearseSideEffects = async () => {
+    const jobs: Array<Promise<NonNullable<typeof sideEffects>[number] | null>> = []
+    for (const entry of payload) {
+      if (entry.type !== 'child_fields') continue
+      const metaOf = (field: string) =>
+        entry.display_fields.find((f) => f.field === field) ??
+        entry.fields.find((f) => f.field === field)
+      for (const row of entry.rows) {
+        const sent = scalarRowChanges(entry, row)
+        if (Object.keys(sent).length === 0) continue
+        const rk = rowKey(entry.collection, row.id)
+        jobs.push(
+          client
+            .request<RehearsalReport>(
+              forMove({
+                _method: 'PATCH',
+                _path: `/items/${entry.collection}/${row.id}`,
+                _params: { dry_run: '1' },
+                _body: sent
+              } as unknown as Command<RehearsalReport>)
+            )
+            .then((report) => {
+              const changes = overwrittenBySideEffect(report, sent)
+              if (changes.length === 0) return null
+              return {
+                rk,
+                rowLabel: row.label,
+                changes: changes.map((c) => {
+                  const m = metaOf(c.field)
+                  return { ...c, label: m?.label ?? titleCase(c.field), format: m?.format }
+                })
+              }
+            })
+            .catch(() => null)
+        )
+      }
+    }
+    return (await Promise.all(jobs)).filter((x): x is NonNullable<typeof x> => x != null)
+  }
+
+  const handleSubmit = async (decision?: 'apply' | 'keep') => {
     setSubmitting(true)
+    if (!decision) {
+      keepRef.current = {}
+      const found = await rehearseSideEffects()
+      if (found.length > 0) {
+        setSideEffects(found)
+        setSubmitting(false)
+        return
+      }
+    } else {
+      keepRef.current =
+        decision === 'keep'
+          ? Object.fromEntries((sideEffects ?? []).map((s) => [s.rk, keepValuesPatch(s.changes)]))
+          : {}
+      setSideEffects(null)
+    }
     const results = await Promise.all(
       payload.flatMap((entry) => {
         if (entry.type === 'record_fields') {
@@ -835,6 +962,12 @@ export function TransitionRequirementsDialog({
           if (Object.keys(changed).length === 0 && m2mChanges.length === 0) {
             return { rk, ok: true as const }
           }
+          // "Keep current values": what the pick would have replaced rides
+          // along, so the server leaves it as it is.
+          if (Object.keys(changed).length > 0) {
+            for (const [k, v] of Object.entries(keepRef.current[rk] ?? {}))
+              if (!(k in changed)) changed[k] = v
+          }
           try {
             if (Object.keys(changed).length > 0) {
               await client.request(forMove(patch(`/items/${entry.collection}/${row.id}`, changed)))
@@ -933,6 +1066,30 @@ export function TransitionRequirementsDialog({
               <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400' />
               Values changed since your last attempt — review the highlighted rows.
             </p>
+          )}
+          {sideEffects && (
+            <div
+              data-req-side-effects
+              className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300'
+            >
+              <p className='flex items-center gap-2 font-medium'>
+                <AlertCircle className='h-3.5 w-3.5 shrink-0' />
+                Your choices also change values these lines already have
+              </p>
+              <ul className='mt-1.5 space-y-0.5 pl-5'>
+                {sideEffects.flatMap((s) =>
+                  s.changes.map((c) => (
+                    <li key={`${s.rk}:${c.field}`}>
+                      {s.rowLabel} · {c.label}: {fmtDisplay(c.from, c.format) || '—'} →{' '}
+                      <span className='font-medium'>{fmtDisplay(c.to, c.format) || '—'}</span>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <p className='mt-1.5 text-[11.5px] text-amber-700/90 dark:text-amber-300/80'>
+                Keep the current values, or apply every change.
+              </p>
+            </div>
           )}
           {reviewMessage && !isRetry && (
             <p className='flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400'>
@@ -1205,14 +1362,24 @@ export function TransitionRequirementsDialog({
           <Button
             type='button'
             variant='outline'
-            onClick={onClose}
+            onClick={sideEffects ? () => setSideEffects(null) : onClose}
             disabled={submitting || executing}
           >
-            Cancel
+            {sideEffects ? 'Back' : 'Cancel'}
           </Button>
+          {sideEffects && (
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() => void handleSubmit('keep')}
+              disabled={submitting || executing}
+            >
+              Keep current values
+            </Button>
+          )}
           <Button
             type='button'
-            onClick={handleSubmit}
+            onClick={() => void handleSubmit(sideEffects ? 'apply' : undefined)}
             disabled={submitting || executing || hasEmpty}
           >
             {submitting || executing ? (
@@ -1220,6 +1387,8 @@ export function TransitionRequirementsDialog({
                 <Loader2 className='h-3.5 w-3.5 animate-spin' />
                 {submitting && phase === 'save' ? 'Saving…' : 'Submitting…'}
               </span>
+            ) : sideEffects ? (
+              'Apply all changes'
             ) : (
               'Submit'
             )}

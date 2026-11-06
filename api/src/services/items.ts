@@ -639,15 +639,18 @@ function assertNoSensitivePaths(
  * Every filter, sort and condition path that reaches a system table may name
  * only columns the caller can read there — on the table itself and through a
  * relation hop into it (`created_by.role`). A filter is an oracle: matching on
- * a column reveals it as surely as selecting it. Business collections keep
- * their existing behaviour here.
+ * a column reveals it as surely as selecting it. A business collection whose
+ * read policy lists fields is judged by that list the same way (calculated
+ * fields included); one with no read policy keeps its existing behaviour here.
  */
 async function assertReadableSystemPaths(
   user: User,
   collection: string,
   filter: Record<string, unknown>,
   sort: string[],
-  conditions: Array<FilterCondition | OrCondition> | undefined
+  conditions: Array<FilterCondition | OrCondition> | undefined,
+  /** The caller's field list on `collection` when already known (saves the lookup). */
+  rootAllowed?: string[] | null
 ): Promise<void> {
   const paths: string[][] = []
   const walk = (f: unknown, prefix: string[]) => {
@@ -684,6 +687,7 @@ async function assertReadableSystemPaths(
   if (await isAdminRole(user)) return
 
   const fieldsFor = new Map<string, Promise<string[] | null>>()
+  if (rootAllowed !== undefined) fieldsFor.set(collection, Promise.resolve(rootAllowed))
   const allowedIn = (c: string) => {
     let hit = fieldsFor.get(c)
     if (!hit) {
@@ -694,10 +698,13 @@ async function assertReadableSystemPaths(
   }
   const readable = (allowed: string[] | null, col: string) =>
     allowed === null ||
+    allowed.includes('*') ||
     col.toLowerCase() === 'id' ||
     allowed.some((f) => f.toLowerCase() === col.toLowerCase())
   const bad = new Set<string>()
   for (const segs of paths) {
+    // `$state`, `$aging`… are virtual paths with their own gates.
+    if (String(segs[0] ?? '').startsWith('$')) continue
     let current = collection
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
@@ -705,12 +712,14 @@ async function assertReadableSystemPaths(
       // The hop the compilers would take from here (case-insensitive like the
       // database, the `_id`-less FK alias, M2M through the junction).
       const hop = last ? null : resolveFilterHop(seg, current, await getRelsForCollection(current))
-      if (isSystemCollection(current)) {
-        const allowed = await allowedIn(current)
-        if (!readable(allowed, hop?.column ?? seg)) {
-          bad.add(segs.slice(0, i + 1).join('.'))
-          break
-        }
+      const allowed = await allowedIn(current)
+      // A business collection is judged by its policy's own field list (army 5 b10: a role
+      // allowed vendors `id,name` sorted and filtered by `po_total`, ranking vendors by
+      // spend). A collection with no read policy (empty list) keeps its old behaviour here.
+      const judged = isSystemCollection(current) || (allowed !== null && allowed.length > 0)
+      if (judged && !readable(allowed, hop?.column ?? seg)) {
+        bad.add(segs.slice(0, i + 1).join('.'))
+        break
       }
       if (last) break
       // A middle segment the checker cannot follow is refused: the compiler
@@ -1358,6 +1367,22 @@ async function splitVirtualFields(
   return { select: [...kept, ...extras], requested: select, extras }
 }
 
+/**
+ * The computed fields a read may fill in, judged by the caller's field list.
+ * `requested` undefined means a `*` read, which computes every virtual field —
+ * for a field-limited caller that must be the fields its policy lists, never
+ * all of them: a `*` read by a role allowed only `id,name` returned every
+ * virtual rollup and read formula of the collection (army 5 b10, vendors
+ * `po_total` / `unbilled_total`, divisions `test`).
+ */
+function computedFieldsFor(
+  requested: string[] | undefined,
+  allowedFields: string[] | null
+): string[] | undefined {
+  if (allowedFields === null || allowedFields.includes('*')) return requested
+  return (requested ?? allowedFields).filter((f) => allowedFields.includes(f))
+}
+
 function dropExtras(rows: Record<string, unknown>[], extras: string[]): void {
   if (extras.length === 0) return
   for (const row of rows) for (const k of extras) delete row[k]
@@ -1642,11 +1667,15 @@ function isEmptyValue(v: unknown): boolean {
  */
 async function applyInheritedFields(
   collection: string,
-  items: Record<string, unknown>[]
+  items: Record<string, unknown>[],
+  /** The caller's field list: a field outside it is never filled from an ancestor. */
+  allowedFields: string[] | null = null
 ): Promise<void> {
   if (!items.length) return
 
-  const fields = await getInheritableFields(collection)
+  const fields = (await getInheritableFields(collection)).filter(
+    (f) => allowedFields === null || allowedFields.includes('*') || allowedFields.includes(f)
+  )
   if (!fields.length) return
 
   let config: TreeConfig | null = null
@@ -1967,6 +1996,10 @@ async function expandRelations(
     // Workspace scope and row-level security
     await applyWorkspaceScope(relQ, relCollection, workspaceId)
     if (rowFilter) applyRowFilter(relQ, rowFilter, user)
+    // User Scopes (zones…), exactly as the primary read applies them: an M2O target outside
+    // the caller's scope stays a bare id (army 5 b15 — `workflows_divisions?fields=
+    // workflows_id.*` returned every National workflow to a Zone 1-3 creator).
+    await applyUserScopes(relQ, relCollection, user)
 
     // #2444 — a list page's flat expansion (display labels): the statement without its id
     // list keys the row cache, so only ids not seen within the last seconds are read. Rows
@@ -4208,7 +4241,14 @@ export async function readItems(
   })
   // Before the cursor plan: a keyset over a credential is an oracle too.
   assertNoSensitivePaths(collection, filter, query.sort ?? [], conditions)
-  await assertReadableSystemPaths(user, collection, filter, query.sort ?? [], conditions)
+  await assertReadableSystemPaths(
+    user,
+    collection,
+    filter,
+    query.sort ?? [],
+    conditions,
+    allowedFields
+  )
   // A cursor walk sorts by the caller's columns and then by id; everything
   // below reads `sort`, so it is settled here.
   const keyset =
@@ -4751,12 +4791,17 @@ export async function readItems(
 
   // Inherited field values (tree collections) — before computed fields so
   // formulas see effective values. Adds `_inherited` sidecar per row.
-  await span('inherited-fields', () => applyInheritedFields(collection, data))
+  await span('inherited-fields', () => applyInheritedFields(collection, data, allowedFields))
 
   // Apply read-time computed fields (scoped to the explicit field selection when present)
   await span(
     'computed-fields',
-    () => applyReadComputedFields(collection, data, virtualSplit.requested),
+    () =>
+      applyReadComputedFields(
+        collection,
+        data,
+        computedFieldsFor(virtualSplit.requested, allowedFields)
+      ),
     `${data.length} rows`
   )
   dropExtras(data, virtualSplit.extras)
@@ -5132,8 +5177,12 @@ export async function readOne(
 
   if (item) {
     item = await decryptItemFields(collection, item)
-    await applyInheritedFields(collection, [item])
-    await applyReadComputedFields(collection, [item], virtualSplit.requested)
+    await applyInheritedFields(collection, [item], allowedFields)
+    await applyReadComputedFields(
+      collection,
+      [item],
+      computedFieldsFor(virtualSplit.requested, allowedFields)
+    )
     dropExtras([item], virtualSplit.extras)
     if (oneState.wantsState) await attachRecordState(collection, [item])
     if (oneInstance.instance)

@@ -157,6 +157,28 @@ export function emitToTenant(
   }
 }
 
+/**
+ * Like emitToTenant, but only to sockets FULLY signed in — never to an anonymous socket or one
+ * whose person is still in the new-user flow (access pending). For signals that name people
+ * (presence:changed carries user ids, army 5 b10). Self-hosted, a fully signed-in socket joins
+ * the plain TENANT_ALL_ROOM (plugins/socketio.ts joinTenantAllRoom); cloud, the tenant's.
+ */
+export function emitToSignedIn(
+  tenant: string,
+  event: string,
+  payload: Record<string, unknown>
+): void {
+  try {
+    const io = getIo()
+    if (!io) return
+    if (process.env.CLOUD_META_DB_URL) {
+      if (tenant) io.to(tenantScopedRoom(TENANT_ALL_ROOM, tenant)).emit(event, payload)
+    } else io.to(TENANT_ALL_ROOM).emit(event, payload)
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** A payload-free notice to every socket of the CURRENT tenant (announcements, flags, config). */
 export function announceToTenant(event: string, payload: Record<string, unknown> = {}): void {
   emitToTenant(currentTenantKey(), event, { at: Date.now(), ...payload })

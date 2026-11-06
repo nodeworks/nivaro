@@ -236,6 +236,12 @@ import {
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
 import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
+import {
+  clientMidairError,
+  resolveHeaderCollision,
+  restoredDraftCollisions,
+  staleDraftConflicts
+} from './item-edit/header-midair'
 import { LineCollisionDialog, MidairCollisionDialog } from './item-edit/MidairCollisionDialog'
 import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
 import {
@@ -2155,7 +2161,31 @@ function ItemEditFormView({
     linkProblems: string[]
     /** Lines whose staged edit met someone else's newer save (a10-3). */
     lineConflicts?: number
+    /** Header fields the person left on THEIRS in the mid-air dialog (b09). */
+    keptTheirs?: number
+    /** The record itself got no PATCH (no field left to write). */
+    noFieldWrite?: boolean
+    /** The save had no step beyond the record's own fields. */
+    onlyMain?: boolean
   }>({ hidden: null, linkProblems: [] })
+  // Set by the header mid-air dialog for the retry it starts (read once).
+  const keptTheirsRef = useRef(0)
+  // A restored draft's fields someone else saved since the draft was taken
+  // (field → the value it had when the draft was made). Save stops on any of
+  // them that still carries the stale value (army5 b09 HIGH).
+  const restoreGuardRef = useRef<Map<string, unknown>>(new Map())
+  // The save base came from a restored draft (not from this form's own read).
+  const draftBaseOverrideRef = useRef(false)
+  // "Keep mine" / "Take theirs" on a restored field: that field is decided.
+  // With every flagged field decided, the save goes against the form's own
+  // (newer) base again — the draft's older one would only ask a second time.
+  const settleRestoreGuard = (field: string) => {
+    if (!restoreGuardRef.current.delete(field)) return
+    if (restoreGuardRef.current.size === 0 && draftBaseOverrideRef.current) {
+      draftBaseOverrideRef.current = false
+      baseRevisionOverrideRef.current = null
+    }
+  }
   // A create an older server answered with no row and no id: the record
   // exists, so the form is replaced by a plain note — never a second Save.
   const [createdOutOfView, setCreatedOutOfView] = useState<{ reason: string | null } | null>(null)
@@ -2578,6 +2608,9 @@ function ItemEditFormView({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false
   })
+  // Read by the draft persister (an effect that does not re-run on it).
+  const baseRevisionLatestRef = useRef<number | null>(null)
+  baseRevisionLatestRef.current = baseRevisionData?.latest ?? null
 
   // ── Save progress dialog ───────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
@@ -3812,6 +3845,9 @@ function ItemEditFormView({
           (base.date_updated as string | undefined) ??
           (base.updated_at as string | undefined) ??
           null,
+        ...(isNew
+          ? {}
+          : { base_revision: baseRevisionOverrideRef.current ?? baseRevisionLatestRef.current }),
         pending_rows: obj(pendingO2MRows, (r) => r) as StoredDraft['pending_rows'],
         pending_edits: obj(pendingO2MEdits, (e) =>
           Object.fromEntries(e)
@@ -3879,6 +3915,42 @@ function ItemEditFormView({
     const r = recoveryRef.current
     if (r.state !== 'offer') return
     const d = r.draft
+    // Someone else may have saved a field since the draft was taken (the
+    // offer can sit open while a live update lands): such a field is flagged
+    // and Save stops on it with the Theirs / Mine dialog — the restore must
+    // never put an old value over a newer save silently (army5 b09 HIGH).
+    const stale = staleDraftConflicts({
+      fields: d.fields,
+      base: d.base,
+      current: initialDataRef.current
+    })
+    restoreGuardRef.current = new Map(stale.map((c) => [c.field, d.base[c.field]]))
+    if (stale.length > 0) {
+      setRemoteChanges((cur) => {
+        const out = { ...cur }
+        for (const c of stale)
+          out[c.field] = {
+            was: d.base[c.field],
+            by: null,
+            at: new Date().toISOString(),
+            theirs: c.current_value,
+            conflict: true
+          }
+        return out
+      })
+      toast.warning(
+        stale.length === 1
+          ? 'Someone saved a field your draft also changed — Save will ask which value wins'
+          : `Someone saved ${stale.length} fields your draft also changed — Save will ask which value wins`,
+        { duration: 10_000 }
+      )
+    }
+    // Save against the revision the draft was made on, so the server's
+    // mid-air check judges it too.
+    if (typeof d.base_revision === 'number' && d.base_revision > 0) {
+      baseRevisionOverrideRef.current = d.base_revision
+      draftBaseOverrideRef.current = true
+    }
     const next = { ...draftRef.current, ...d.fields }
     draftRef.current = next
     setDraft(next)
@@ -8456,7 +8528,12 @@ function ItemEditFormView({
       // What a save did that the steps alone do not say: the record landed but
       // its writer cannot see it (a User Scope hides it), or links it carried
       // did not land. Read by onSuccess for the closing message.
-      saveNoticeRef.current = { hidden: null, linkProblems: [] }
+      saveNoticeRef.current = {
+        hidden: null,
+        linkProblems: [],
+        keptTheirs: keptTheirsRef.current
+      }
+      keptTheirsRef.current = 0
       function noteWriteAnswer(r: WriteAnswer | null | undefined) {
         const meta = r?.meta
         if (!meta) return
@@ -8533,13 +8610,20 @@ function ItemEditFormView({
         .filter(([, d]) => d.size > 0)
         .map(([k]) => k)
 
-      // Detail strings — count only fields that actually changed
+      // Detail strings — count only fields that actually changed. Counted from
+      // the same synchronous mirror the payload is built from (draftRef), never
+      // the render's `draft`: a retry started right after a setDraft (the
+      // mid-air dialog) read a stale `draft` and said "No field changes" while
+      // the payload carried a field (army5 b09).
+      const draftForCount = draftRef.current
       const changedCount = isNew
-        ? allFields.filter((f) => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draft)
-            .length
+        ? allFields.filter(
+            (f) => !SYSTEM_FIELDS.has(f.field) && !f.readonly && f.field in draftForCount
+          ).length
         : allFields.filter((f) => {
-            if (SYSTEM_FIELDS.has(f.field) || f.readonly || !(f.field in draft)) return false
-            return !valuesEqual(draft[f.field], initialDataRef.current[f.field])
+            if (SYSTEM_FIELDS.has(f.field) || f.readonly || !(f.field in draftForCount))
+              return false
+            return !valuesEqual(draftForCount[f.field], initialDataRef.current[f.field])
           }).length
       const mainDetail = isNew
         ? `${changedCount} field${changedCount !== 1 ? 's' : ''} set`
@@ -8631,6 +8715,7 @@ function ItemEditFormView({
           : [])
       ]
       setSaveSteps(steps)
+      saveNoticeRef.current.onlyMain = steps.length === 1
       remainingO2MRowsRef.current = new Map()
       setSaveDialogOpen(true)
 
@@ -8712,6 +8797,13 @@ function ItemEditFormView({
           if (newId == null) throw new CreatedOutOfViewError()
           savedId = String(newId)
         } else if (Object.keys(payload).some((k) => !k.startsWith('_'))) {
+          const staleRestore = restoredDraftCollisions({
+            payload,
+            guard: restoreGuardRef.current,
+            current: initialDataRef.current
+          })
+          if (staleRestore.length > 0)
+            throw clientMidairError(staleRestore, baseRevisionLatestRef.current)
           const r = await client.request<WriteAnswer>(
             patch(`/items/${collection}/${itemId}`, payload)
           )
@@ -8722,6 +8814,7 @@ function ItemEditFormView({
           // alone are not a change: a reason collected for a LINE edit rode
           // along here and produced a no-op update on the record (activity row,
           // "was updated" watch email) while only a child row had moved.
+          saveNoticeRef.current.noFieldWrite = true
           savedId = itemId
         }
         updateStep('main', { status: 'done' })
@@ -9437,6 +9530,8 @@ function ItemEditFormView({
       }
       changeReasonRef.current = null
       baseRevisionOverrideRef.current = null
+      restoreGuardRef.current = new Map()
+      draftBaseOverrideRef.current = false
       if (!isNew) {
         // The offline outbox: what this save carried (or the form had taken
         // over) is no longer pending.
@@ -9530,6 +9625,16 @@ function ItemEditFormView({
           toast.warning(
             `Saved, except ${notice.lineConflicts} ${notice.lineConflicts === 1 ? 'line' : 'lines'} someone else changed — pick which value wins`,
             { duration: 10_000 }
+          )
+        } else if (!isNew && notice.keptTheirs) {
+          // The mid-air dialog's retry: say what happened to the fields the
+          // person left on THEIRS — never a plain "Changes saved" when
+          // nothing of theirs was written over (army5 b09).
+          const n = notice.keptTheirs
+          toast.success(
+            notice.noFieldWrite && notice.onlyMain
+              ? `Kept the newer ${n === 1 ? 'value' : 'values'} — nothing of yours left to save`
+              : `Changes saved — kept the newer ${n === 1 ? 'value' : 'values'} for ${n} ${n === 1 ? 'field' : 'fields'}`
           )
         } else toast.success(isNew ? 'Record created' : 'Changes saved')
         if (notice.linkProblems.length > 0) {
@@ -10208,16 +10313,19 @@ function ItemEditFormView({
   }
   const fieldAffordancesRaw = {
     remoteChanges,
-    dismissRemoteChange: (field: string) =>
+    dismissRemoteChange: (field: string) => {
+      if (remoteChanges[field]?.conflict) settleRestoreGuard(field)
       setRemoteChanges((cur) => {
         if (!(field in cur)) return cur
         const next = { ...cur }
         delete next[field]
         return next
-      }),
+      })
+    },
     takeRemoteChange: (field: string) => {
       const ch = remoteChanges[field]
       if (!ch?.conflict) return
+      settleRestoreGuard(field)
       undoTo(field, ch.theirs ?? null)
       setRemoteChanges((cur) => {
         const next = { ...cur }
@@ -13586,18 +13694,39 @@ function ItemEditFormView({
                                     }}
                                     onCancel={() => setCollision(null)}
                                     onResolve={(takeTheirs) => {
-                                      // 'theirs' fields adopt the newer value in the
-                                      // draft; the retry then writes only what the
-                                      // person explicitly kept, against the new base.
-                                      for (const c of collision.conflicts) {
-                                        if (takeTheirs.has(c.field)) {
-                                          setDraft((prev) => ({
-                                            ...prev,
-                                            [c.field]: c.current_value
-                                          }))
-                                        }
-                                      }
-                                      baseRevisionOverrideRef.current = collision.latest
+                                      // The retry goes out against the NEWER base,
+                                      // which disarms the server's mid-air check —
+                                      // so the resolved values go into the
+                                      // synchronous mirrors the payload is built
+                                      // from (draftRef + its baseline) right here.
+                                      // A setDraft alone left draftRef on MINE and
+                                      // the retry wrote over a THEIRS pick (army5
+                                      // b09). THEIRS fields equal their new
+                                      // baseline and are not sent; MINE fields are.
+                                      const r = resolveHeaderCollision({
+                                        draft: draftRef.current,
+                                        initial: initialDataRef.current,
+                                        conflicts: collision.conflicts,
+                                        mine: collision.mine,
+                                        takeTheirs
+                                      })
+                                      draftRef.current = r.draft
+                                      initialDataRef.current = r.initial
+                                      setDraft(r.draft)
+                                      for (const f of r.theirs) userTouchedRef.current.delete(f)
+                                      setRemoteChanges((cur) => {
+                                        const next = { ...cur }
+                                        for (const c of collision.conflicts) delete next[c.field]
+                                        return next
+                                      })
+                                      keptTheirsRef.current = r.theirs.length
+                                      for (const c of collision.conflicts)
+                                        restoreGuardRef.current.delete(c.field)
+                                      // A client-found collision may not know the
+                                      // revision (0): then the form's own base.
+                                      baseRevisionOverrideRef.current =
+                                        collision.latest > 0 ? collision.latest : null
+                                      draftBaseOverrideRef.current = false
                                       setCollision(null)
                                       setTimeout(() => saveMut.mutate(), 0)
                                     }}

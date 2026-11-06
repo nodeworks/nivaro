@@ -24,6 +24,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { markBootPhase } from '../services/boot-phases.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { type LiveIdentity, liveOperation, liveQuery } from '../services/live-query.js'
+import { maintenanceRefusal } from '../services/maintenance-freeze.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
 import { checkBind, type SocketBind, sha } from '../services/socket-access.js'
 import { inSocketTenant, socketTenant } from '../services/socket-tenant.js'
@@ -421,6 +422,15 @@ export async function graphqlPlugin(
     // row the api-logger writes for it.
     const gqlStamp = describeOperation(schema, document, body.operationName)
     ;(req as unknown as { __nvrGql?: GraphQLStamp }).__nvrGql = gqlStamp
+
+    // Maintenance write freeze: queries stay open, a mutation is refused unless
+    // a signed-in administrator sends it (services/maintenance-freeze.ts; the
+    // root hook leaves this path to us because only here is the operation known).
+    if (
+      getOperationAST(document, body.operationName)?.operation === 'mutation' &&
+      (await maintenanceRefusal(req, reply, { graphql: true }))
+    )
+      return reply
 
     // M8: introspection (the whole collection + field list) only for a signed-in caller.
     const validationErrors = validate(

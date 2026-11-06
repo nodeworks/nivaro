@@ -361,6 +361,34 @@ query {
   }
 }`
     },
+    { type: 'h3', text: 'Reading record states from an integration' },
+    {
+      type: 'p',
+      text: "A partner that polls the state of known records asks for those records by id and selects `workflow_instance` on them — one query for the whole list, in a fixed number of database reads. `currentState.externalLabel` is the state name partners were told (the value a collection's old state column used to hold; it falls back to `label` when no external name is set), `key` is the stable identifier to code against, and `isTerminal` says the record's pipeline has finished. Records the caller cannot read are left out and a record running no pipeline answers `workflow_instance: null`, so map results by `id`. Select only what you need: `history` and `availableTransitions` cost extra reads."
+    },
+    {
+      type: 'pre',
+      code: `query {
+  workflows(filter: { id: { _in: ["372960", "372959"] } }, limit: 500) {
+    id
+    workflow_instance {
+      currentState { key label externalLabel isTerminal }
+      startedAt
+      completedAt
+      enteredAt
+    }
+  }
+  inventory_request(filter: { id: { _in: ["1201", "1202"] } }, limit: 500) {
+    id
+    workflow_instance {
+      currentState { key label externalLabel isTerminal }
+      startedAt
+      completedAt
+      enteredAt
+    }
+  }
+}`
+    },
     { type: 'h3', text: 'Filtering on the link itself' },
     {
       type: 'p',

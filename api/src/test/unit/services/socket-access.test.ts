@@ -250,7 +250,16 @@ describe('room gates (#1720)', () => {
     const ctx = { tenantNames: ['T-A', 'acme'] }
     expect(await roomStillAllowed(ANA, 't:T-A:all', notAdmin, ctx)).toBe(true)
     expect(await roomStillAllowed(ANA, 't:T-B:all', notAdmin, ctx)).toBe(false)
-    expect(await roomStillAllowed(ANA, 'all', notAdmin, ctx)).toBe(false)
+    // Self-hosted the bare `all` room is every fully signed-in socket (presence:changed,
+    // army 5 b10); in cloud a bare `all` is no tenant's and is left.
+    expect(await roomStillAllowed(ANA, 'all', notAdmin, ctx)).toBe(true)
+    vi.stubEnv('CLOUD_META_DB_URL', 'postgres://meta')
+    try {
+      expect(await roomStillAllowed(ANA, 'all', notAdmin, ctx)).toBe(false)
+      expect(await roomStillAllowed(ANA, 't:T-A:all', notAdmin, ctx)).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
   it('gates watch:conformance (and any watch room) for administrators', async () => {
     expect(await roomStillAllowed(ANA, 't:A:watch:conformance', notAdmin)).toBe(false)

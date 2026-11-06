@@ -427,7 +427,11 @@ export async function roomStillAllowed(
   const { tenant: roomTenant, room } = splitTenantRoom(scopedRoom)
   try {
     // The tenant-wide notice room (record-events.ts TENANT_ALL_ROOM): own tenant only.
-    if (room === 'all') return !!roomTenant && (ctx.tenantNames ?? []).includes(roomTenant)
+    // Self-hosted the bare `all` room is every fully signed-in socket (emitToSignedIn).
+    if (room === 'all')
+      return roomTenant
+        ? (ctx.tenantNames ?? []).includes(roomTenant)
+        : !process.env.CLOUD_META_DB_URL
     // Live operations pages (ops-live.ts): the topic's own gate — admin topics (readiness,
     // broadcasts, issue:<id>) for administrators, the rest for anyone signed in.
     if (room.startsWith('ops:')) {

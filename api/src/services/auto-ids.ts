@@ -458,25 +458,69 @@ export async function nextSequenceValue(
   const seqKey = `${collection}.${field}`
 
   // MSSQL atomic increment: UPDATE OUTPUT
-  const rows = (await db.raw(
-    `UPDATE nivaro_sequences SET next_val = next_val + 1 OUTPUT INSERTED.next_val WHERE id = ?`,
-    [seqKey]
-  )) as { recordset?: Array<{ next_val: number }> } | Array<{ next_val: number }>
-
-  const recordset = Array.isArray(rows) ? rows : rows.recordset
-
-  let seqVal: number
-  if (!recordset?.[0]) {
-    // First use — insert then use 1
-    await db('nivaro_sequences')
-      .insert({ id: seqKey, next_val: 2 })
-      .catch(() => {})
-    seqVal = 1
-  } else {
-    seqVal = recordset[0].next_val
+  const increment = async (): Promise<number | null> => {
+    const rows = (await db.raw(
+      `UPDATE nivaro_sequences SET next_val = next_val + 1 OUTPUT INSERTED.next_val WHERE id = ?`,
+      [seqKey]
+    )) as { recordset?: Array<{ next_val: number }> } | Array<{ next_val: number }>
+    const recordset = Array.isArray(rows) ? rows : rows.recordset
+    return recordset?.[0] ? Number(recordset[0].next_val) : null
   }
 
-  return seqVal
+  const seqVal = await increment()
+  if (seqVal != null) return seqVal
+
+  // No counter row. Only a field that has never held a value may start at 1:
+  // a populated field means the counter was lost (a restored/cloned database —
+  // nivaro_sequences is regenerated, never copied) and 1 would mint a wrong,
+  // possibly duplicate, human id. Refuse until the counter is seeded.
+  await assertSequenceUnused(db, collection, field)
+
+  // First use — insert then use 1. A concurrent first use that won the insert
+  // owns 1: take the next value from its row instead of a second 1.
+  try {
+    await db('nivaro_sequences').insert({ id: seqKey, next_val: 1 })
+    return 1
+  } catch {
+    const raced = await increment()
+    if (raced != null) return raced
+    throw sequenceUnseededError(collection, field)
+  }
+}
+
+/** 503 SEQUENCE_UNSEEDED — the counter row is missing for a field that already holds ids. */
+export function sequenceUnseededError(
+  collection: string,
+  field: string
+): Error & { statusCode: number; code: string } {
+  return Object.assign(
+    new Error(
+      'Numbering for new records is not ready yet, so this record was not saved. Try again in a few minutes.'
+    ),
+    {
+      statusCode: 503,
+      code: 'SEQUENCE_UNSEEDED',
+      sequence: `${collection}.${field}`
+    }
+  )
+}
+
+/**
+ * Throws SEQUENCE_UNSEEDED when `collection.field` already holds a value.
+ * Runs only on the missing-counter path. TOP 1 on IS NOT NULL seeks an index
+ * on the field when there is one; without one the scan stops at the first
+ * populated row. Never seeds from MAX — legacy values carry outliers
+ * (CM22-15960005587) that would jump the counter into the billions.
+ */
+async function assertSequenceUnused(db: Knex, collection: string, field: string): Promise<void> {
+  const rows = (await db.raw(
+    // '' inline, not bound: a bound value is nvarchar and would convert a
+    // varchar column (gotchas: never seek its index).
+    "SELECT TOP 1 1 AS hit FROM ?? WHERE ?? IS NOT NULL AND ?? <> ''",
+    [collection, field, field]
+  )) as { recordset?: unknown[] } | unknown[]
+  const found = Array.isArray(rows) ? rows : rows.recordset
+  if (found?.length) throw sequenceUnseededError(collection, field)
 }
 
 function seqValueFor(
@@ -504,7 +548,10 @@ export async function peekSequenceValue(
   const row = (await db('nivaro_sequences')
     .where({ id: `${collection}.${field}` })
     .first('next_val')) as { next_val?: number | string } | undefined
-  return row?.next_val != null ? Number(row.next_val) + 1 : 1
+  if (row?.next_val != null) return Number(row.next_val) + 1
+  // A dry run answers what the real create would: refused when unseeded.
+  await assertSequenceUnused(db, collection, field)
+  return 1
 }
 
 export async function applyAutoIdsExt(

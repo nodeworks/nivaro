@@ -26,6 +26,10 @@ export interface StoredDraft {
   base: Record<string, unknown>
   /** The record's own updated-at at capture time, when it exposes one. */
   base_updated_at: string | null
+  /** The record revision the draft was made on (army5 b09): a restore saves
+   *  against it, so someone else's newer save meets the mid-air check.
+   *  Absent on drafts stored by older builds. */
+  base_revision?: number | null
   pending_rows: Record<string, Record<string, unknown>[]>
   pending_edits: Record<string, Record<string, Record<string, unknown>>>
   pending_deletes: Record<string, string[]>

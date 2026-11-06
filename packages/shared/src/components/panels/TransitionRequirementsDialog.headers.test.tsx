@@ -14,7 +14,12 @@ import {
 // locked against edits still takes the values its own move asks for (the
 // server checks the move, api services/requirement-writes.ts).
 
-type Cmd = { _method: string; _path: string; _headers?: Record<string, string> }
+type Cmd = {
+  _method: string
+  _path: string
+  _headers?: Record<string, string>
+  _params?: Record<string, unknown>
+}
 
 let host: HTMLDivElement
 let root: Root
@@ -77,7 +82,13 @@ async function submit(transitionId?: string) {
     button.click()
   })
   expect(onSubmitted).toHaveBeenCalled()
-  return calls.filter((c) => c._method === 'PATCH')
+  // The rehearsal (?dry_run=1, army5 b09) names the move too.
+  const rehearsals = calls.filter((c) => c._method === 'PATCH' && c._params?.dry_run)
+  expect(rehearsals).toHaveLength(1)
+  expect(rehearsals[0]._headers).toEqual(
+    transitionId ? { 'x-nivaro-requirements-for': transitionId } : undefined
+  )
+  return calls.filter((c) => c._method === 'PATCH' && !c._params?.dry_run)
 }
 
 describe('TransitionRequirementsDialog saves', () => {
