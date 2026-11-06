@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-06T14:31:07.198Z",
+  "generated_at": "2026-11-06T18:57:52.664Z",
   "releases": [
+    {
+      "version": "0.3.69",
+      "tag": "v0.3.69",
+      "date": "2026-11-06T13:57:37-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "army round 5 — record form saves, server filters, rollup rounding, budget totals",
+              "hash": "4b0c64bdf"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "army round 5 blockers — field policy, M2O scope, conflict resolve, cutover holes",
+              "hash": "37b76fbe7"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.68",
       "tag": "v0.3.68",
-      "date": "2026-11-06T09:30:50-05:00",
+      "date": "2026-11-06T09:31:07-05:00",
       "sections": [
         {
           "label": "Fixed",
