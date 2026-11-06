@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-05T13:12:06.798Z",
+  "generated_at": "2026-11-06T14:31:07.198Z",
   "releases": [
+    {
+      "version": "0.3.68",
+      "tag": "v0.3.68",
+      "date": "2026-11-06T09:30:50-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "go-live fixes from the army round 4 staging test",
+              "hash": "ab8a0d190"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.67",
       "tag": "v0.3.67",
-      "date": "2026-11-05T08:11:52-05:00",
+      "date": "2026-11-05T08:12:06-05:00",
       "sections": [
         {
           "label": "Added",
