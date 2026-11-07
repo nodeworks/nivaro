@@ -748,6 +748,12 @@ export interface OwnerResolutionOptions {
   skipFallback?: boolean
 }
 
+/** A step's owners: the assigned ones (groups, instance owners), else the
+ *  binding's fallback user — never both. */
+export function ownersOrFallback<T>(assigned: T[], fallback: () => T[]): T[] {
+  return assigned.length > 0 ? assigned : fallback()
+}
+
 export async function resolveStateOwnersBatch(
   requests: OwnerResolutionRequest[],
   database: typeof db = db,
@@ -1194,17 +1200,20 @@ export async function resolveStateOwnersBatch(
     return owner ? [owner] : []
   }
 
+  // The binding's fallback user (the creator on IRs) owns a step ONLY when
+  // nobody else does — a group or an instance owner. Unioning it into every
+  // step listed the requester beside the real approvers (Rob 2026-11-07,
+  // FDX24INV-37438); a step no group covers still lands with them.
+  const withFallback = (req: OwnerResolutionRequest, assigned: ResolvedOwner[]) =>
+    dedupeOwners(ownersOrFallback(assigned, () => fallbackOwnersFor(req)))
   const combinedByKey = new Map<string, ResolvedOwner[]>()
   for (const req of withoutGroups) {
-    combinedByKey.set(req.key, dedupeOwners([...instanceOwnersFor(req), ...fallbackOwnersFor(req)]))
+    combinedByKey.set(req.key, withFallback(req, instanceOwnersFor(req)))
   }
   for (const req of withGroups) {
     const winning = winningGroupsByKey.get(req.key) ?? []
     const baseOwners = winning.flatMap((g) => groupUsersByGroup.get(g.id) ?? [])
-    combinedByKey.set(
-      req.key,
-      dedupeOwners([...baseOwners, ...instanceOwnersFor(req), ...fallbackOwnersFor(req)])
-    )
+    combinedByKey.set(req.key, withFallback(req, [...baseOwners, ...instanceOwnersFor(req)]))
   }
 
   // Delegation substitution only ever applied to withGroups requests — see the
