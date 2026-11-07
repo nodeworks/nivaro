@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-07T16:44:52.402Z",
+  "generated_at": "2026-11-07T17:17:27.374Z",
   "releases": [
+    {
+      "version": "0.3.78",
+      "tag": "v0.3.78",
+      "date": "2026-11-07T12:17:12-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "item-actions",
+              "text": "admin_only flag hides an action from non-admins",
+              "hash": "b9d13bc18"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "do not pre-fill filters from a person's default scopes",
+              "hash": "626b47ea7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner fallback user owns a step only when nobody else does",
+              "hash": "a2c5809d2"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.77",
       "tag": "v0.3.77",
-      "date": "2026-11-07T11:44:35-05:00",
+      "date": "2026-11-07T11:44:52-05:00",
       "sections": [
         {
           "label": "Fixed",
