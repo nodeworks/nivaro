@@ -262,8 +262,13 @@ async function recordLabelsFor(
   for (const [collection, items] of byCollection) {
     const word = await collectionWord(collection).catch(() => collection)
     const readable = await can(user, 'read', collection).catch(() => false)
-    const resolved = readable
-      ? await recordHeadlines(collection, [...items]).catch(() => new Map<string, RecordHeadline>())
+    // Only records the caller can still see today (row filter, User Scopes):
+    // a notification about a record since moved out of scope keeps the noun.
+    const seen = readable
+      ? await visibleRecordIds(user, collection, [...items]).catch(() => new Set<string>())
+      : new Set<string>()
+    const resolved = seen.size
+      ? await recordHeadlines(collection, [...seen]).catch(() => new Map<string, RecordHeadline>())
       : new Map<string, RecordHeadline>()
     for (const id of items) {
       const h = resolved.get(id)

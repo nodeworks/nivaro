@@ -7,7 +7,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const h = vi.hoisted(() => ({
   rows: [] as Array<Record<string, unknown>>,
-  users: [] as Array<Record<string, unknown>>
+  users: [] as Array<Record<string, unknown>>,
+  /** visibleRecordIds hides every record (the caller lost scope). */
+  hideAll: false
 }))
 
 vi.mock('../../../db/index.js', async () => {
@@ -64,6 +66,12 @@ vi.mock('../../../services/notification-target.js', async (orig) => ({
 vi.mock('../../../services/permissions.js', async (orig) => ({
   ...(await orig<object>()),
   can: vi.fn(async (_u: unknown, _a: string, collection: string) => collection !== 'secret_things')
+}))
+vi.mock('../../../services/sla-visibility.js', async (orig) => ({
+  ...(await orig<object>()),
+  visibleRecordIds: vi.fn(async (_u: unknown, _c: string, ids: string[]) =>
+    h.hideAll ? new Set<string>() : new Set(ids)
+  )
 }))
 vi.mock('../../../services/record-headline.js', async (orig) => ({
   ...(await orig<object>()),
@@ -135,6 +143,17 @@ describe('notification rows name their record (M48)', () => {
     expect(by.get(3)).toMatchObject({ record_label: null, record_collection_label: 'Workflow' })
     // a collection the caller may not read: no label resolved
     expect(by.get(4)).toMatchObject({ record_label: null })
+  })
+
+  it('a record the caller can no longer see keeps only the noun (security review)', async () => {
+    h.hideAll = true
+    try {
+      const r = await app.inject({ url: '/notifications', headers: { 'x-user': PAT } })
+      const by = new Map((r.json().data as Array<Record<string, unknown>>).map((x) => [x.id, x]))
+      expect(by.get(1)).toMatchObject({ record_label: null, record_collection_label: 'Workflow' })
+    } finally {
+      h.hideAll = false
+    }
   })
 
   it('isBareHeadline spots the row-id fallback', () => {
