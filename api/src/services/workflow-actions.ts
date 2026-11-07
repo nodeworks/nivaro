@@ -87,6 +87,20 @@ interface ContextQueryDef {
   sort?: string
 }
 
+/** One child-row writeback (on_success_children / on_failure_children). */
+export interface ChildWriteback {
+  collection: string
+  fk_field: string
+  field: string
+  value_template: string
+  /** Only rows whose field is still null (default true). */
+  only_empty?: boolean
+  /** A template that renders empty writes NULL instead of being skipped —
+   *  for clearing a stale error once a later submit succeeds. */
+  clear_when_empty?: boolean
+  junction_filter?: { junction: string; fk_to_row: string; field: string; value: unknown }
+}
+
 export interface TransitionActionDef {
   type: string
   external_api: number | string
@@ -105,15 +119,13 @@ export interface TransitionActionDef {
    *  updates only rows where the target field is still null (user-entered
    *  values are never overwritten); `junction_filter` narrows to rows with a
    *  matching junction row (same shape as context junction_filter). */
-  on_success_children?: Array<{
-    collection: string
-    fk_field: string
-    field: string
-    value_template: string
-    only_empty?: boolean
-    junction_filter?: { junction: string; fk_to_row: string; field: string; value: unknown }
-  }>
+  on_success_children?: ChildWriteback[]
   on_failure?: { set?: Record<string, string> }
+  /** Child-row writebacks applied after a FAILED call (or a payload that
+   *  would not render) — e.g. mark each submitted line `error` with the
+   *  partner's message. Same shape as on_success_children; `error` is in
+   *  scope. Usually `only_empty: false`, since a status is overwritten. */
+  on_failure_children?: ChildWriteback[]
   /** Detect 200-with-error-body responses (some ERPs do this) — when a `when`
    *  rule matches, the submission records as FAILED with the mined message
    *  even though the HTTP status was 2xx. See ResponseErrorConfig. */
@@ -1063,16 +1075,9 @@ export async function runTransitionActions(opts: {
           .update({ obligation_id: obligationId })
           .catch(() => {})
       }
-      await applyWriteback(
-        collection,
-        item,
-        action.on_failure?.set,
-        {
-          ...scope,
-          error: String(err)
-        },
-        writes
-      )
+      const failScope = { ...scope, error: String(err) }
+      await applyWriteback(collection, item, action.on_failure?.set, failScope, writes)
+      await applyChildWritebacks(action.on_failure_children, item, failScope, writes)
       continue
     }
 
@@ -1271,6 +1276,7 @@ export async function runTransitionActions(opts: {
     const postScope = { ...scope, response: responseBody, responses, error }
     if (status === 'failed') {
       await applyWriteback(collection, item, action.on_failure?.set, postScope, writes)
+      await applyChildWritebacks(action.on_failure_children, item, postScope, writes)
       if (action.blocking === true) {
         // Abort the transition: the caller keeps the record in its current
         // state and surfaces the error. on_failure writebacks (a status column
@@ -1317,7 +1323,7 @@ export async function runTransitionActions(opts: {
 const CHILD_WRITEBACK_CAP = 1000
 
 async function applyChildWritebacks(
-  entries: TransitionActionDef['on_success_children'],
+  entries: ChildWriteback[] | undefined,
   itemId: string,
   scope: Record<string, unknown>,
   w: ActionWriteCtx
@@ -1332,7 +1338,10 @@ async function applyChildWritebacks(
       continue
     try {
       const rendered = (await engine.parseAndRender(String(e.value_template ?? ''), scope)).trim()
-      if (rendered === '') continue // nothing to write — never blank children out
+      // Nothing to write — never blank children out, unless the entry exists
+      // to clear (a stale error once a later submit landed).
+      if (rendered === '' && e.clear_when_empty !== true) continue
+      const value: string | null = rendered === '' ? null : rendered
       let q = db(e.collection).where({ [e.fk_field]: itemId })
       if (e.only_empty !== false) q = q.whereNull(e.field)
       const jf = e.junction_filter
@@ -1359,7 +1368,7 @@ async function applyChildWritebacks(
           writer,
           e.collection,
           r.id,
-          { [e.field]: rendered },
+          { [e.field]: value },
           w.reason
         )
         if (path !== 'failed') n++

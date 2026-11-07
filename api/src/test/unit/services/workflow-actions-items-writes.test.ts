@@ -184,6 +184,92 @@ describe('transition action writebacks go through the items service', () => {
       _change_reason: 'transition-action: Submit'
     })
   })
+
+  it('on_failure_children marks every child row with the error (blocking or not)', async () => {
+    vi.mocked(callExternalApi).mockResolvedValueOnce({
+      status: 400,
+      body: { message: 'projectId not valid' },
+      ok: false
+    } as never)
+    const res = await run(
+      [
+        {
+          ...push,
+          blocking: true,
+          on_success_children: [
+            {
+              collection: 'order_lines',
+              fk_field: 'order',
+              field: 'order_status',
+              value_template: 'requested',
+              only_empty: false
+            }
+          ],
+          on_failure_children: [
+            {
+              collection: 'order_lines',
+              fk_field: 'order',
+              field: 'order_status',
+              value_template: 'error',
+              only_empty: false
+            },
+            {
+              collection: 'order_lines',
+              fk_field: 'order',
+              field: 'order_error',
+              value_template: '{{ error | truncate: 480 }}',
+              only_empty: false
+            }
+          ]
+        }
+      ],
+      { tables: { order_lines: [{ id: 11 }, { id: 12 }] } }
+    )
+    expect(res.blockedError).toMatch(/submission failed/)
+    const childCalls = vi.mocked(updateOne).mock.calls.filter((c) => c[1] === 'order_lines')
+    expect(childCalls.map((c) => [c[2], Object.keys(c[3] as object)[0]])).toEqual([
+      [11, 'order_status'],
+      [12, 'order_status'],
+      [11, 'order_error'],
+      [12, 'order_error']
+    ])
+    expect((childCalls[0][3] as Record<string, unknown>).order_status).toBe('error')
+    expect(String((childCalls[2][3] as Record<string, unknown>).order_error)).not.toBe('')
+  })
+
+  it('clear_when_empty writes NULL for an empty render; without it the row is left alone', async () => {
+    await run(
+      [
+        {
+          ...push,
+          on_success_children: [
+            {
+              collection: 'order_lines',
+              fk_field: 'order',
+              field: 'order_error',
+              value_template: '',
+              only_empty: false,
+              clear_when_empty: true
+            },
+            {
+              collection: 'order_lines',
+              fk_field: 'order',
+              field: 'note',
+              value_template: '',
+              only_empty: false
+            }
+          ]
+        }
+      ],
+      { tables: { order_lines: [{ id: 11 }] } }
+    )
+    const childCalls = vi.mocked(updateOne).mock.calls.filter((c) => c[1] === 'order_lines')
+    expect(childCalls).toHaveLength(1)
+    expect(childCalls[0][3]).toEqual({
+      order_error: null,
+      _change_reason: 'transition-action: Submit'
+    })
+  })
 })
 
 describe('create_record goes through the items service', () => {
