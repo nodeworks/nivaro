@@ -198,6 +198,16 @@ async function runDeploy(cfg, project, ref, sha, label, { before, deploy, variab
     log(`${label}: ${deploy} already succeeded for this commit — not run again`)
     return d
   }
+  // Production deploys run on their own since go-live (rules on_success / needs): the
+  // job is already queued or running when the build finishes — wait for it instead.
+  if (['created', 'pending', 'running', 'waiting_for_resource', 'preparing'].includes(d.status)) {
+    if (variables?.length) throw new StageError(`${label}: ${deploy} already started on its own — it cannot take ${variables.map((v) => v.key).join(', ')}`)
+    log(`${label}: ${deploy} runs on its own (automatic deploy) — waiting for it`)
+    const auto = await waitJob(cfg, project, d.id, `${label} ${deploy}`, { minutes })
+    if (auto.status !== 'success') throw new StageError(`${label}: ${deploy} ${auto.status} — the deploy script rolled back (${auto.web_url})`)
+    log(`${label}: ${deploy} passed`)
+    return auto
+  }
   if (d.status !== 'manual') throw new StageError(`${label}: ${deploy} is ${d.status}, expected a manual job waiting to be played`)
   log(`${label}: playing ${deploy}${variables?.length ? ` with ${variables.map((v) => `${v.key}=${v.value}`).join(' ')}` : ''}`)
   const played = gitlab(cfg, 'POST', `/projects/${enc(project)}/jobs/${d.id}/play`, variables?.length ? { job_variables_attributes: variables } : {})
