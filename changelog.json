@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-07T08:55:40.698Z",
+  "generated_at": "2026-11-07T14:58:09.728Z",
   "releases": [
+    {
+      "version": "0.3.76",
+      "tag": "v0.3.76",
+      "date": "2026-11-07T09:57:54-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "army round 7 — record form, search, dashboards, report caches, page widgets",
+              "hash": "559649cdd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "promote-production waits for the automatic production deploy",
+              "hash": "80e053b28"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.75",
       "tag": "v0.3.75",
-      "date": "2026-11-07T03:55:26-05:00",
+      "date": "2026-11-07T03:55:40-05:00",
       "sections": [
         {
           "label": "Fixed",
