@@ -1065,9 +1065,15 @@ export function AlertManagerView({
                           />
                           Firing
                         </span>
+                        {/* The viewer's reading now, in their scope — the stored
+                            value is the first fire's, with nobody's scope (army 8 b11). */}
                         <span className='font-mono text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'>
-                          {fmtMetric(open.metric_value, rule.definition?.unit)}
-                          {fmtRelative(open.fired_at) ? ` · ${fmtRelative(open.fired_at)}` : ''}
+                          {open.current_value != null
+                            ? `${fmtMetric(open.current_value, rule.definition?.unit)} now`
+                            : fmtMetric(open.metric_value, rule.definition?.unit)}
+                          {fmtRelative(open.fired_at)
+                            ? ` · fired ${fmtRelative(open.fired_at)}`
+                            : ''}
                         </span>
                       </span>
                     ) : !lastChecked ? (
@@ -1354,7 +1360,7 @@ export function AlertManagerView({
           <DataTable
             headers={[
               'Alert rule',
-              { label: 'Reading', width: 168 },
+              { label: 'Reading when fired', width: 168 },
               { label: 'Fired', width: 150 },
               { label: 'Resolved', width: 150 },
               { label: 'Open for', width: 92, align: 'right' }
@@ -1401,6 +1407,15 @@ export function AlertManagerView({
                       unit={entry.definition_unit}
                       breaching={isOpen}
                     />
+                    {isOpen && entry.current_value != null && (
+                      <span
+                        data-alert-current
+                        className='mt-0.5 block font-mono text-[10.5px] tabular-nums text-slate-500 dark:text-slate-400'
+                      >
+                        {fmtMetric(entry.current_value, entry.definition_unit ?? undefined)} now, as
+                        you see it
+                      </span>
+                    )}
                   </td>
                   <td className={tdCls}>
                     <TimeCell value={entry.fired_at} />

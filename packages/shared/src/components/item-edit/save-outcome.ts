@@ -82,7 +82,7 @@ export function saveClosingMessage(
     const n = notice.lineConflicts
     return {
       kind: 'warning',
-      text: `Saved, except ${n} ${n === 1 ? 'line' : 'lines'} someone else changed — pick which value wins`,
+      text: `Saved, except ${n} ${n === 1 ? 'row' : 'rows'} someone else changed — pick which value wins`,
       duration: 10_000
     }
   }

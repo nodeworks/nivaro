@@ -214,7 +214,22 @@ type PivotData = {
   truncated_cols: number
 }
 
-const CHART_COLORS = [BRAND, '#172940', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#64748b']
+// Ten distinct series colours after the brand, every one ≥3:1 against white, the dark
+// page (#0d0d0d) and dark cards (slate-800) — army 8 b14: a 9-slice donut wrapped a
+// 7-colour list (two pairs of states shared a colour) and navy #172940 was ~1.3:1 in
+// dark mode, so two slices vanished. Muted hues, no teal (Rob: teal reads badly in dark).
+export const CHART_COLORS = [
+  BRAND,
+  '#4f7cac', // steel blue
+  '#c2703d', // copper
+  '#6b9a5b', // sage
+  '#c4525a', // soft red
+  '#8a6fb0', // dusty violet
+  '#7a8699', // slate
+  '#b5658e', // rose
+  '#5f7f3a', // olive
+  '#9c7b56' // tan
+]
 const DATE_PRESETS: Array<{ id: string; label: string }> = [
   { id: '', label: 'All time' },
   { id: 'this_month', label: 'This month' },
@@ -402,8 +417,14 @@ function resolveRangeDates(range: ReportDateRange | null): { start: string; end:
   }
 }
 
-function fmtCell(v: unknown, format?: ReportColumnFormat, decimals?: number): string {
+/** Legacy workflows that never got a number ride as a made-up 'undefined-NNNN'
+ *  id (the active-timeline proc, army 8 N-B4) — a table cell says what it is. */
+export const NO_WORKFLOW_NUMBER = 'No workflow number'
+const MADE_UP_WORKFLOW_ID = /^undefined-\d+$/
+
+export function fmtCell(v: unknown, format?: ReportColumnFormat, decimals?: number): string {
   if (v == null || v === '') return '—'
+  if (typeof v === 'string' && MADE_UP_WORKFLOW_ID.test(v)) return NO_WORKFLOW_NUMBER
   if (format === 'date' || format === 'datetime') {
     const d = new Date(String(v))
     if (Number.isNaN(d.getTime())) return String(v)

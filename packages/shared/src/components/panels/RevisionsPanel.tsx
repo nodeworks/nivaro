@@ -190,7 +190,10 @@ function useFieldMeta(collection: string, enabled: boolean): FieldMetaMap {
       if (f.field.startsWith('__')) continue
       map.set(f.field, {
         label: f.label || titleCase(f.field.replace(/_/g, ' ')),
-        system: AUDIT_FIELDS.has(f.field),
+        // Hidden fields are machine columns (e.g. the retired "workflow_state
+        // (legacy)" a save still writes) — folded with the system fields, not
+        // listed among what a person changed (army8 b01).
+        system: AUDIT_FIELDS.has(f.field) || f.hidden === true,
         // layout_assigned is only stamped when the collection HAS an active
         // layout — absent means there's no layout to be off of.
         onLayout: f.layout_assigned !== false,

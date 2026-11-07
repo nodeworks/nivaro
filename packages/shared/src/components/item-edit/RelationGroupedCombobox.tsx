@@ -5,6 +5,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, matchesAllTokens } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
+import { NAMELESS_LABEL } from './option-disambiguate'
 import { useStaleTip } from './RelationCombobox'
 
 type Item = Record<string, unknown>
@@ -46,6 +47,33 @@ export function RelationGroupedCombobox({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+
+  // Escape closes the list and focus leaving the picker closes it — an open
+  // list must never sit over the next field (army8 b01, same as
+  // RelationCombobox). Window capture so a hosting sheet keeps its Escape.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const a = document.activeElement
+      if (a !== document.body && !(a && rootRef.current?.contains(a))) return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as Node | null
+      if (t && t !== document.body && !rootRef.current?.contains(t)) setOpen(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    document.addEventListener('focusin', onFocus)
+    return () => {
+      window.removeEventListener('keydown', onKey, true)
+      document.removeEventListener('focusin', onFocus)
+    }
+  }, [open])
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 30)
@@ -224,7 +252,7 @@ export function RelationGroupedCombobox({
     const o = item[optionField] as Item | null
     const gl = g ? applyDisplayTemplate(groupTmpl, g) : null
     const ol = o ? applyDisplayTemplate(optionTmpl, o) : null
-    return [gl, ol].filter(Boolean).join(' — ') || `#${String(item.id)}`
+    return [gl, ol].filter(Boolean).join(' — ') || NAMELESS_LABEL
   }
 
   // Trigger button label: "GroupLabel — OptionLabel"
@@ -242,8 +270,11 @@ export function RelationGroupedCombobox({
   return (
     <div ref={rootRef} className='relative' {...staleTip.bind}>
       <button
+        ref={triggerRef}
         type='button'
         disabled={disabled}
+        aria-haspopup='listbox'
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
@@ -275,6 +306,10 @@ export function RelationGroupedCombobox({
               ref={inputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              // Enter never submits the form around the picker.
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.preventDefault()
+              }}
               placeholder='Search…'
               className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
             />
@@ -312,7 +347,7 @@ export function RelationGroupedCombobox({
                   {String(value) === pinnedId && <Check className='h-2.5 w-2.5 text-white' />}
                 </div>
                 <span className='min-w-0 flex-1 truncate'>
-                  {pinnedItem ? labelOf(pinnedItem) : `#${pinnedId}`}
+                  {pinnedItem ? labelOf(pinnedItem) : 'Loading…'}
                 </span>
                 <span className='shrink-0 rounded bg-nvr-cyan/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:text-foreground'>
                   {pinned?.tag ?? 'Default'}

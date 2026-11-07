@@ -376,6 +376,15 @@ export function RecordLiveSync({
       ])
       return
     }
+    // Army 8 b09: a collapsed section's summary strip ("Forecasts TOTAL $0.00") and the
+    // plan grid's status chip read this record's line queries — a grid that is not on screen
+    // has no live rows feed, so a remote write to the record (its rollups moved because a
+    // line did) refreshes them here. Compare series (the forecast status) follow the rows.
+    void qc.invalidateQueries({
+      predicate: (q) =>
+        (q.queryKey[0] === 'o2m-rows' && String(q.queryKey[3]) === String(itemId)) ||
+        q.queryKey[0] === 'o2m-compare'
+    })
     // The form's field notes ("was X · who") follow this mark, and only for
     // the fields this write named (live-record-marks.ts).
     markLiveRecordWrite(

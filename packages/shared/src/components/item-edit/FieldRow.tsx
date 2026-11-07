@@ -20,6 +20,7 @@ import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { cn, titleCase } from '../../lib/utils'
+import { requiredByRules } from '../../lib/validation-rules'
 import { GlossaryLabel } from '../ai/GlossaryText'
 import { FieldSourceInfo, useFieldSource } from '../ConfigReadBack'
 import { Label } from '../ui/label'
@@ -92,7 +93,7 @@ const RELATION_INTERFACES = new Set([
 
 const FILE_INTERFACES = new Set(['file', 'file-image', 'files-m2m', 'files', 'image'])
 
-function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
+export function isAiEligible(field: { type?: string; interface?: string | null }): boolean {
   const iface = field.interface ?? ''
   if (
     RELATION_INTERFACES.has(iface) ||
@@ -101,6 +102,9 @@ function isAiEligible(field: { type?: string; interface?: string | null }): bool
     iface.endsWith('-m2m')
   )
     return false
+  // A number is never written by the AI button, whatever input draws it (army 8 b14: a
+  // forecast showed "January AI … December AI" — decimal fields on the plain input).
+  if (NUMERIC_TYPES.has(field.type ?? '')) return false
   if (TEXTUAL_TYPES.has(field.type ?? '') || TEXTUAL_INTERFACES.has(iface)) return true
   // Fallback: no interface + scalar type → renders as text Input
   if (!iface && field.type && !NUMERIC_TYPES.has(field.type)) return true
@@ -183,11 +187,13 @@ export function lineageSummary(data: LineageData | undefined, noun = 'rows'): st
   // #15 — a computed figure's derivation: the formula with its inputs
   // substituted ("= 3,401 − 3,394").
   if (data && (data.kind === 'write' || data.kind === 'read') && data.formula) {
+    // An empty input reads as 0 — the sum it feeds counts it as 0 — never
+    // the "∅" symbol ("= 301.52 − ∅", army8 b01).
     const fmt = (v: unknown) =>
       typeof v === 'number'
         ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
         : v == null || v === ''
-          ? '∅'
+          ? '0'
           : String(v)
     const expr = data.formula
       .replace(/item\.([A-Za-z_][A-Za-z0-9_]*)/g, (_m, k: string) => fmt(data.inputs?.[k]))
@@ -1110,7 +1116,9 @@ export const FieldRow = memo(function FieldRow({
           {label !== '' && (
             <Label id={labelId} data-field-label className='text-sm font-medium'>
               <GlossaryLabel text={label} collection={collection} />
-              {field.required && <span className='ml-0.5 text-destructive'>*</span>}
+              {(field.required || requiredByRules(field.validation_rules, draft)) && (
+                <span className='ml-0.5 text-destructive'>*</span>
+              )}
               {fieldIsRecommended(field) && <RecommendedMarker />}
             </Label>
           )}

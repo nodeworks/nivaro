@@ -58,6 +58,7 @@ import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
+import { landingState } from './landing-state'
 import { SlaClockLine } from './SlaClock'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
 
@@ -1605,6 +1606,15 @@ function OwnersSection({
   const groupOwners = currentStateId
     ? (allOwners?.[currentStateId]?.owners ?? []).filter((o) => !manualUserIds.has(o.id))
     : []
+  // Owners of the current step who cannot act (suspended, redacted, out of
+  // office) — marked in the roster so a creator never counts on them
+  // (army8 b02: a suspended approver was listed like any other).
+  const unavailableById = new Map(
+    (currentStateId ? (allOwners?.[currentStateId]?.unavailable ?? []) : []).map((u) => [
+      String(u.id).toUpperCase(),
+      u
+    ])
+  )
 
   // A record in its first step with nobody resolved is with the person who
   // created it — "Back with Mark Lee" after a send-back — not "No owners".
@@ -1746,6 +1756,30 @@ function OwnersSection({
                 className='-mx-2 flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-white/5'
               >
                 <OwnerPersonButton userId={o.id} name={name} email={o.email} initials={initials} />
+                {(() => {
+                  const u = unavailableById.get(String(o.id).toUpperCase())
+                  if (!u) return null
+                  return (
+                    <span
+                      data-owner-unavailable={u.reason}
+                      className={cn(
+                        'shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium',
+                        u.delegate
+                          ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                          : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300'
+                      )}
+                      data-tip={
+                        u.delegate
+                          ? `${name} is ${REASON_WORD[u.reason] ?? u.reason} — ${u.delegate.name} covers`
+                          : `${name} is ${REASON_WORD[u.reason] ?? u.reason} and can't approve this step`
+                      }
+                    >
+                      {u.delegate
+                        ? `${REASON_WORD[u.reason] ?? u.reason} · ${u.delegate.name} covers`
+                        : (REASON_WORD[u.reason] ?? u.reason)}
+                    </span>
+                  )
+                })()}
                 {o.queue_only ? (
                   <span
                     className='shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
@@ -1870,6 +1904,42 @@ function OwnersSection({
 }
 
 // ─── Approval Chain View ──────────────────────────────────────────────────────
+
+/**
+ * The confirm panel's target, as the record will actually land (army 8
+ * b06-N-U): a forward move into states the engine will pass through names
+ * where it goes and why, instead of the transition's nominal target.
+ */
+function confirmLanding(
+  pendingTx: PipelineTransition | null | undefined,
+  currentState: PipelineState | null | undefined,
+  states: PipelineState[] | undefined,
+  chain: Record<string, AllOwnersEntry> | null | undefined
+) {
+  if (!pendingTx || !states?.length) return null
+  const byId = new Map(states.map((s) => [String(s.id).toUpperCase(), s]))
+  const to = byId.get(String(pendingTx.to_state).toUpperCase())
+  const fromSort = Number(currentState?.sort)
+  // Skips apply going forward; a send back lands where it says.
+  if (!to || !Number.isFinite(fromSort) || !(Number(to.sort) > fromSort)) return null
+  const l = landingState(String(pendingTx.to_state), states, chain)
+  return l && l.skipped.length > 0 ? l : null
+}
+
+function LandingNote({ landing }: { landing: ReturnType<typeof landingState<PipelineState>> }) {
+  if (!landing || landing.skipped.length === 0) return null
+  const names = landing.skipped.map((s) => s.state.label)
+  const reason = landing.skipped.find((s) => s.reasons.length > 0)?.reasons[0]
+  return (
+    <p data-confirm-skips className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
+      Goes straight to <span className='font-medium'>{landing.state.label}</span> —{' '}
+      {names.length === 1
+        ? names[0]
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`}{' '}
+      {names.length === 1 ? 'is' : 'are'} skipped{reason ? ` (${reason})` : ''}.
+    </p>
+  )
+}
 
 interface AllOwnersEntry {
   state: PipelineState
@@ -2422,7 +2492,8 @@ function PipelinePanelInner({
         )
         .then((r) => r.data ?? null),
     // Also when a send back is on offer: its target may be a chain step this record skipped.
-    enabled: (expanded || hasSendBackOffer(data)) && !!data?.instance,
+    // And while a move is being confirmed: the panel names where it really lands.
+    enabled: (expanded || hasSendBackOffer(data) || !!pendingTransition) && !!data?.instance,
     staleTime: 30_000
   })
   const onPathIds = useMemo(() => {
@@ -2598,6 +2669,8 @@ function PipelinePanelInner({
     ? (transitions ?? []).find((t) => t.id === pendingTransition)
     : null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
+  const landing = confirmLanding(pendingTx, currentState, states, pathOwners)
+  const landedState = landing?.state ?? pendingToState
   // A completed instance normally shows no actions — EXCEPT escape hatches
   // authored FROM the terminal state the record sits in (Uncancel). Mirrors
   // the server guard exactly: any other transition would 400.
@@ -2717,14 +2790,15 @@ function PipelinePanelInner({
         {pendingTx && (
           <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
         )}
-        {currentState && pendingToState && (
+        {currentState && landedState && (
           <div className='ml-auto flex items-center gap-1.5'>
             <StateBadge label={currentState.label} color={currentState.color} small />
             <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
-            <StateBadge label={pendingToState.label} color={pendingToState.color} small />
+            <StateBadge label={landedState.label} color={landedState.color} small />
           </div>
         )}
       </div>
+      <LandingNote landing={landing} />
       <ApprovalBriefStrip collection={collection} item={item} />
       <ForwardMoveWarning lines={forwardWarning} />
       <input
@@ -3185,7 +3259,8 @@ function PipelineTransitionButtonsInner({
           get(`/pipelines/instance/${collection}/${item}/owners/all`)
         )
         .then((r) => r.data ?? null),
-    enabled: hasSendBackOffer(data),
+    // Also while a move is being confirmed: the panel names where it really lands.
+    enabled: hasSendBackOffer(data) || !!pendingTransition,
     staleTime: 30_000
   })
   const skippedChain = useMemo(() => {
@@ -3336,6 +3411,8 @@ function PipelineTransitionButtonsInner({
   const currentState = data.instance.current_state_obj ?? null
   const pendingTx = pendingTransition ? transitions.find((t) => t.id === pendingTransition) : null
   const pendingToState = pendingTx ? stateById.get(pendingTx.to_state) : null
+  const landing = confirmLanding(pendingTx, currentState, data.states ?? [], chainOwners)
+  const landedState = landing?.state ?? pendingToState
   const byLabel = new Map<string, PipelineTransition[]>()
   for (const tx of transitions) {
     const l = byLabel.get(tx.label) ?? []
@@ -3509,14 +3586,15 @@ function PipelineTransitionButtonsInner({
             {pendingTx && (
               <span className='text-[12px] font-medium text-slate-700'>{pendingTx.label}</span>
             )}
-            {currentState && pendingToState && (
+            {currentState && landedState && (
               <div className='ml-auto flex items-center gap-1.5'>
                 <StateBadge label={currentState.label} color={currentState.color} small />
                 <ArrowRight className='h-3 w-3 shrink-0 text-slate-300' />
-                <StateBadge label={pendingToState.label} color={pendingToState.color} small />
+                <StateBadge label={landedState.label} color={landedState.color} small />
               </div>
             )}
           </div>
+          <LandingNote landing={landing} />
           <ApprovalBriefStrip collection={collection} item={item} />
           <ForwardMoveWarning lines={forwardWarning} />
           <input

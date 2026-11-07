@@ -230,6 +230,7 @@ export function ProfileFieldsCard() {
 
 export function NotificationRulesCard() {
   const client = useNivaroClient()
+  const rulesAuth = useItemEditAuth()
   const qc = useQueryClient()
   const { data: prefs } = useQuery({
     queryKey: ['nvr-profile-prefs'],
@@ -521,6 +522,7 @@ export function NotificationRulesCard() {
         </div>
         <NotificationRulesEditor
           subject='person'
+          isAdmin={rulesAuth.isAdmin}
           value={np}
           inherited={roleDefaults?.role ? roleDefaults.rules : null}
           inheritedName={roleDefaults?.role?.name ?? null}

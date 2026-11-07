@@ -213,6 +213,16 @@ function AssigneePicker({
   )
   const others = (found.data ?? []).filter((p) => !recordIds.has(String(p.id).toUpperCase()))
   const allIds = [...shownRecord, ...others].map((p) => p.id)
+  // The highlighted row is ours, not cmdk's: the list arrives after the typing
+  // (server search), and cmdk kept highlighting a row that had gone — Enter
+  // on the one remaining match did nothing (army8 b09). Keep the highlight on
+  // a listed person, else the first.
+  const [active, setActive] = useState('')
+  const listedKey = allIds.join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the listed ids
+  useEffect(() => {
+    setActive((cur) => (allIds.includes(cur) ? cur : (allIds[0] ?? '')))
+  }, [listedKey])
   // Picker load hints (#410): open-task counts per person.
   const { data: openCounts } = useQuery<Record<string, number>>({
     queryKey: ['task-open-counts', allIds.join(',')],
@@ -281,7 +291,7 @@ function AssigneePicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent className='w-[300px] p-0' align='start'>
-        <Command shouldFilter={false}>
+        <Command shouldFilter={false} value={active} onValueChange={setActive}>
           <CommandInput
             placeholder='Search people…'
             className='h-8 text-[12px]'
@@ -749,11 +759,25 @@ function TaskForm({
             size='sm'
             className='h-7 text-[12px]'
             disabled={!d.title.trim() || !who || busy}
+            aria-describedby={!busy && d.title.trim() && !who ? 'task-submit-why' : undefined}
             onClick={() => onSubmit(d)}
             data-task-submit
           >
             {busy ? 'Saving…' : submitLabel}
           </Button>
+          {!busy && d.title.trim() && !who && (
+            <span
+              id='task-submit-why'
+              className='ml-2 text-[11.5px] text-slate-500 dark:text-slate-400'
+              data-task-submit-why
+            >
+              {d.mode === 'team'
+                ? 'Pick a team first'
+                : d.mode === 'agent'
+                  ? 'Pick an agent first'
+                  : 'Pick an assignee first'}
+            </span>
+          )}
         </span>
       </div>
     </div>

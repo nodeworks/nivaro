@@ -15,7 +15,7 @@ import { DrillTag, useDrillWindows } from '../../chaos/DrillTag'
 import { useDismissRows, useSignalAction, useSnooze } from './api'
 import { canDrill, RowDrill } from './drill'
 import { DismissButton, SnoozeMenu } from './SnoozeMenu'
-import { ageOf, agoText, exactTime, TONE_FILL, TONE_SOFT, TONE_TEXT } from './tone'
+import { ageOf, agoText, exactTime, plainDetail, TONE_FILL, TONE_SOFT, TONE_TEXT } from './tone'
 import type { ActionResult, RowView, SignalAction, SignalView } from './types'
 
 /** Actions the server runs for many rows at once — a group can bulk these. */
@@ -113,7 +113,7 @@ export function SignalCard({
             {signal.error
               ? signal.error
               : top
-                ? `${top.title}${top.detail ? ` — ${top.detail}` : ''}`
+                ? `${top.title}${top.detail ? ` — ${plainDetail(top.detail)}` : ''}`
                 : signal.description}
           </span>
         </span>
@@ -504,9 +504,13 @@ function SignalRowView({
           {row.detail && (
             <p
               className='mt-0.5 line-clamp-2 break-words text-[12px] leading-snug text-muted-foreground'
-              data-tip={row.detail.length > 140 ? row.detail.slice(0, 900) : undefined}
+              data-tip={
+                row.detail.length > 140 || plainDetail(row.detail) !== row.detail.trim()
+                  ? row.detail.slice(0, 900)
+                  : undefined
+              }
             >
-              {row.detail}
+              {plainDetail(row.detail)}
             </p>
           )}
           {/* Under the title on narrower screens; its own column on wide ones. */}

@@ -84,3 +84,42 @@ export function exactTime(iso: string | null | undefined): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '' : `${d.toLocaleString()} · ${d.toISOString()}`
 }
+
+const ISO_STAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g
+const UUID_RE = /:?\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
+
+/**
+ * A problem line as people read it (army 8 b14): raw ISO stamps ("since
+ * 2025-01-06T19:24:11.000Z") become a local date and time, a JSON error wrapper
+ * (`{"message":"import_forecasts - "}`) becomes its message, and record / type
+ * UUIDs inside a partner's error text are dropped. The raw text stays in the tip.
+ */
+export function plainDetail(text: string | null | undefined): string {
+  let t = String(text ?? '').trim()
+  if (!t) return ''
+  if (t.startsWith('{') && t.endsWith('}')) {
+    try {
+      const o = JSON.parse(t) as Record<string, unknown>
+      const msg = o.message ?? o.error ?? o.detail
+      if (typeof msg === 'string' && msg.trim()) t = msg.trim().replace(/\s*-\s*$/, '')
+    } catch {
+      /* not JSON — keep the text */
+    }
+  }
+  t = t.replace(ISO_STAMP_RE, (iso) => {
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        })
+  })
+  return t
+    .replace(UUID_RE, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}

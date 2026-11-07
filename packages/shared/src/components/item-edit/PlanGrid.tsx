@@ -393,6 +393,21 @@ export function PlanGridField(props: {
     enabled: !!compareSeries && !isNew
   })
   const compare: CompareSeriesData | null = compareSeries && !isNew ? (compareQ.data ?? null) : null
+  // The status chip ("No forecast" / "Matches invoiced") is judged from the saved rows: a
+  // save (this tab's or someone else's, which the live rows feed brings in) re-reads it. Army 8
+  // b01/b06/b09: the chip said "No forecast" above a saved row until a reload.
+  const compareRefetch = compareQ.refetch
+  const compareSeenRowsAtRef = useRef(0)
+  useEffect(() => {
+    if (!rowsUpdatedAt || !compareSeries || isNew) return
+    if (compareSeenRowsAtRef.current === 0) {
+      compareSeenRowsAtRef.current = rowsUpdatedAt
+      return
+    }
+    if (rowsUpdatedAt === compareSeenRowsAtRef.current) return
+    compareSeenRowsAtRef.current = rowsUpdatedAt
+    void compareRefetch()
+  }, [rowsUpdatedAt, compareRefetch, compareSeries, isNew])
 
   const splitBase = useMemo(() => {
     if (!config.split_endpoint || isNew) return null
@@ -1466,6 +1481,7 @@ export function PlanGridField(props: {
                           <PlanCell
                             key={c}
                             row={r}
+                            rowLabel={r.cat != null ? catLabel(String(r.cat)) : undefined}
                             col={c}
                             closed={isClosed(b.key, c)}
                             prov={provOf(r, c)}
@@ -1670,6 +1686,9 @@ type PlanCellProvenance = Record<
 
 function PlanCell(props: {
   row: PlanRow
+  /** The row's line within its block (a category) — the accessible name carries it so two
+   *  rows' "November 2026" inputs read apart (army 8 b03). */
+  rowLabel?: string
   col: string
   closed: boolean
   locked: boolean
@@ -1682,7 +1701,19 @@ function PlanCell(props: {
   onMove: (uid: string, col: string, dRow: number, dCol: number) => void
   onPaste: (row: PlanRow, col: string, text: string) => void
 }) {
-  const { row, col, closed, locked, lockedTip, prov, cellKey, onCommit, onMove, onPaste } = props
+  const {
+    row,
+    rowLabel,
+    col,
+    closed,
+    locked,
+    lockedTip,
+    prov,
+    cellKey,
+    onCommit,
+    onMove,
+    onPaste
+  } = props
   const value = num(row.values[col])
   const provTip = prov
     ? `${monthLabelLong(col)} · changed ${formatRelative(prov.at)} by ${prov.who}${
@@ -1737,7 +1768,7 @@ function PlanCell(props: {
       {notch}
       <input
         data-pg-cell={`${row.uid}:${col}`}
-        aria-label={`${monthLabelLong(col)} ${row.key}`}
+        aria-label={`${monthLabelLong(col)} ${row.key}${rowLabel ? ` · ${rowLabel}` : ''}`}
         inputMode='decimal'
         value={text ?? (value === 0 ? '' : fmtFigure(value))}
         placeholder='—'

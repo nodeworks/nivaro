@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
+import { useBackCloses } from '../../lib/back-closes'
 import { patch, post } from '../../lib/commands'
 import { cn, formatDate, formatDateTime } from '../../lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
@@ -45,6 +46,9 @@ export interface ReviewListEnrichRow {
   can_act?: boolean
   /** Why the row can't be decided (e.g. an approval is final) — the View only hint. */
   reason?: string | null
+  /** The note the row's current decision carried (a rejection's reason) —
+   *  shown under the group header so the person acting on it sees why. */
+  note?: string | null
 }
 
 export interface ReviewListConfig {
@@ -316,6 +320,9 @@ export function ReviewListWidget({
     option: ReviewListStatusOption
   } | null>(null)
   const [noteText, setNoteText] = useState('')
+  // Browser Back closes the confirm instead of leaving the record page
+  // (army 8 b07-N5) — the same rule as the Invoice Approvals dialogs.
+  useBackCloses(() => setNoteAsk(null), noteAsk != null)
 
   const groups = useMemo(() => {
     const built = data ? buildGroups(data, config.aggregate_sum) : []
@@ -482,6 +489,9 @@ export function ReviewListWidget({
           const viewOnlyReason =
             group.rows.map((r) => enrichFor(r.id)?.reason).find((v) => !!v) ??
             'Only the workflow contact chain (or the PO requestor for invalid holds) can decide this'
+          // The reason behind the group's decision (a rejection), when the
+          // enrich endpoint carries one (army 8 b07-N14).
+          const decisionNote = group.rows.map((r) => enrichFor(r.id)?.note?.trim()).find((v) => !!v) ?? null
           const name = groupName(group, groupMetaCols)
           const badge = group.mixedStatus
             ? { label: 'Mixed', color: null }
@@ -611,6 +621,15 @@ export function ReviewListWidget({
                     })}
                 </span>
               </div>
+              {decisionNote && (
+                <p
+                  data-review-decision-note
+                  className='border-t border-slate-100 px-3 py-1.5 text-[11.5px] text-red-700 dark:border-border dark:text-red-300'
+                >
+                  <span className='font-medium'>Reason:</span>{' '}
+                  <span className='whitespace-pre-line'>{decisionNote}</span>
+                </p>
+              )}
               {groupErrors[group.key] && (
                 <p className='flex items-center gap-1 px-3 pb-2 text-[11px] text-red-600'>
                   <AlertCircle className='h-3 w-3 shrink-0' />

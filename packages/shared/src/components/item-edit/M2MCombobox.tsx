@@ -7,7 +7,7 @@ import { get } from '../../lib/commands'
 import { compareByMatch } from '../../lib/picker-rank'
 import { useRecordReader } from '../../lib/record-loader'
 import { useOnlineUsers } from '../../lib/use-online-users'
-import { cn, userOptionFilter } from '../../lib/utils'
+import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
 
 /** Initials from a rendered user label ("Jane Doe (jane@x)" → "JD"). */
@@ -163,32 +163,19 @@ export function M2MCombobox({
     if (tokens.length === 0) return null
     return ['id', ...tokens].join(',')
   })()
-  const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: [
-      'm2m-options',
-      relatedCollection,
-      search,
-      filterParam,
-      serverSort ?? '',
-      templateNestedFields ?? ''
-    ],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${relatedCollection}`, {
-            limit: 200,
-            search: search || undefined,
-            filter: filterParam,
-            picker: '1',
-            // A dotted display template ({{core_category.name}}) needs the
-            // nested expansion — a bare row only carries the FK id.
-            ...(templateNestedFields ? { fields: templateNestedFields } : {}),
-            ...(serverSort ? { sort: serverSort } : {})
-          })
-        )
-        .then((r) => r.data ?? []),
+  const {
+    options,
+    isLoading: isLoadingOptions,
+    localSearch
+  } = useM2MOptions({
+    client,
+    relatedCollection,
+    search,
+    filterParam,
+    serverSort,
+    templateNestedFields,
     enabled: open && !!relatedCollection,
-    staleTime: filterParam ? 0 : 30_000
+    labelOf: getLabel
   })
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
@@ -406,8 +393,8 @@ export function M2MCombobox({
               <CommandGroup>
                 {!isLoadingOptions &&
                   (serverSort
-                    ? [...options]
-                    : [...options].sort((a, b) =>
+                    ? [...narrowM2MOptions(options, search, localSearch, getLabel)]
+                    : [...narrowM2MOptions(options, search, localSearch, getLabel)].sort((a, b) =>
                         compareByMatch(getLabel(a), getLabel(b), search, optionSort === '-label')
                       )
                   ).map((opt) => {
@@ -459,6 +446,96 @@ export function M2MCombobox({
       </Popover>
     </div>
   )
+}
+
+// ─── Option list (both M2M pickers) ────────────────────────────────────────────
+
+/** A picker's options. When the whole unsearched list fits in one page (a
+ *  short lookup: funding years, categories) typing narrows THAT list by its
+ *  labels here — the server's text search never reads a number-keyed row's
+ *  label, so "2026" found nothing in a Funding Year list showing 2026
+ *  (army8 b09). Longer lists search on the server as before. The caller
+ *  narrows by label when `localSearch` is true (see narrowM2MOptions).
+ *  When the labels match nothing, the server search answers instead: it
+ *  also reads the collection's search fields (an Expenditure Type typed by
+ *  its Oracle code — army8 review M2). */
+function useM2MOptions(args: {
+  client: ReturnType<typeof useNivaroClient>
+  relatedCollection: string | null | undefined
+  search: string
+  filterParam: string | undefined
+  serverSort: string | undefined
+  templateNestedFields: string | null
+  enabled: boolean
+  labelOf: (o: Record<string, unknown>) => string
+}): { options: Record<string, unknown>[]; isLoading: boolean; localSearch: boolean } {
+  const { client, relatedCollection, search, filterParam, serverSort, templateNestedFields } = args
+  const fetchOptions = (text: string) =>
+    client
+      .request<{ data: Record<string, unknown>[] }>(
+        get(`/items/${relatedCollection}`, {
+          limit: M2M_OPTION_PAGE,
+          search: text || undefined,
+          filter: filterParam,
+          picker: '1',
+          // A dotted display template ({{core_category.name}}) needs the
+          // nested expansion — a bare row only carries the FK id.
+          ...(templateNestedFields ? { fields: templateNestedFields } : {}),
+          ...(serverSort ? { sort: serverSort } : {})
+        })
+      )
+      .then((r) => r.data ?? [])
+  const keyFor = (text: string) => [
+    'm2m-options',
+    relatedCollection,
+    text,
+    filterParam,
+    serverSort ?? '',
+    templateNestedFields ?? ''
+  ]
+  const staleTime = filterParam ? 0 : 30_000
+  const { data: base, isFetching: baseFetching } = useQuery<Record<string, unknown>[]>({
+    queryKey: keyFor(''),
+    queryFn: () => fetchOptions(''),
+    enabled: args.enabled,
+    staleTime
+  })
+  const askServer = m2mAsksServer(base, search, args.labelOf)
+  const { data: searched, isFetching: searching } = useQuery<Record<string, unknown>[]>({
+    queryKey: keyFor(search),
+    queryFn: () => fetchOptions(search),
+    enabled: args.enabled && askServer,
+    staleTime
+  })
+  if (!askServer)
+    return { options: base ?? [], isLoading: !base && baseFetching, localSearch: !!search }
+  return { options: searched ?? [], isLoading: !searched && searching, localSearch: false }
+}
+
+const M2M_OPTION_PAGE = 200
+
+/** Whether typed text goes to the server search: always for a list longer
+ *  than one page; for a fully read list only when no label matches. */
+export function m2mAsksServer<T>(
+  base: T[] | undefined,
+  search: string,
+  labelOf: (o: T) => string
+): boolean {
+  if (!search.trim()) return false
+  if (!base || base.length >= M2M_OPTION_PAGE) return true
+  return narrowM2MOptions(base, search, true, labelOf).length === 0
+}
+
+/** The listed options for what is typed: narrowed by label when the whole
+ *  list was read once (useM2MOptions `localSearch`). */
+export function narrowM2MOptions<T>(
+  options: T[],
+  search: string,
+  localSearch: boolean,
+  labelOf: (o: T) => string
+): T[] {
+  if (!localSearch || !search.trim()) return options
+  return options.filter((o) => matchesAllTokens(labelOf(o), search))
 }
 
 // ─── M2MSingleSelectCombobox (max_values=1) ────────────────────────────────────
@@ -548,32 +625,19 @@ export function M2MSingleSelectCombobox({
     if (tokens.length === 0) return null
     return ['id', ...tokens].join(',')
   })()
-  const { data: options = [], isFetching: isLoadingOptions } = useQuery<Record<string, unknown>[]>({
-    queryKey: [
-      'm2m-options',
-      relatedCollection,
-      search,
-      filterParam,
-      serverSort ?? '',
-      templateNestedFields ?? ''
-    ],
-    queryFn: () =>
-      client
-        .request<{ data: Record<string, unknown>[] }>(
-          get(`/items/${relatedCollection}`, {
-            limit: 200,
-            search: search || undefined,
-            filter: filterParam,
-            picker: '1',
-            // A dotted display template ({{core_category.name}}) needs the
-            // nested expansion — a bare row only carries the FK id.
-            ...(templateNestedFields ? { fields: templateNestedFields } : {}),
-            ...(serverSort ? { sort: serverSort } : {})
-          })
-        )
-        .then((r) => r.data ?? []),
+  const {
+    options,
+    isLoading: isLoadingOptions,
+    localSearch
+  } = useM2MOptions({
+    client,
+    relatedCollection,
+    search,
+    filterParam,
+    serverSort,
+    templateNestedFields,
     enabled: open && !!relatedCollection,
-    staleTime: filterParam ? 0 : 30_000
+    labelOf: getLabel
   })
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
@@ -624,8 +688,9 @@ export function M2MSingleSelectCombobox({
   const isSingleStale = singleAvailabilityData !== undefined && singleAvailabilityData.length === 0
   const singleStaleTip = useStaleTip(isSingleStale)
 
-  const tmpl = colMeta?.display_template ?? null
+  // Reads colMeta, not a const declared below: useM2MOptions calls it first.
   function getLabel(item: Record<string, unknown>) {
+    const tmpl = colMeta?.display_template ?? null
     return tmpl
       ? applyDisplayTemplate(tmpl, item)
       : String(item.name ?? item.title ?? item.label ?? item.id ?? '')
@@ -750,7 +815,7 @@ export function M2MSingleSelectCombobox({
               )}
               {!isLoadingOptions && (
                 <CommandGroup>
-                  {[...options]
+                  {[...narrowM2MOptions(options, search, localSearch, getLabel)]
                     .sort((a, b) =>
                       serverSort
                         ? 0

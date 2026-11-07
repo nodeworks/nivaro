@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  footerSum,
   gridPriceValue,
   issuesAfterLinesChanged,
   isUnpricedLine,
+  refusedQtyNote,
   savedLinesSignature
 } from './CatalogPickerField'
 
@@ -76,5 +78,27 @@ describe('gridPriceValue', () => {
         lookup: () => 6810
       })
     ).toBe('BATTERY 6V')
+  })
+})
+
+describe('refusedQtyNote (army8 b02: the box kept showing the refused 2.5)', () => {
+  it('names what was typed beside the reason', () => {
+    expect(refusedQtyNote('Whole numbers only', ' 2.5 ')).toBe('Whole numbers only — 2.5 not used')
+    expect(refusedQtyNote("Quantity can't be negative", '-1')).toBe(
+      "Quantity can't be negative — -1 not used"
+    )
+    expect(refusedQtyNote('Quantity must be a number', '')).toBe('Quantity must be a number')
+  })
+})
+
+describe('footerSum (army8 b12: TOTAL $0.00 beside rows that each showed a total)', () => {
+  it('adds the live formula for rows whose computed total is not stored yet', () => {
+    const rows = [
+      { quantity: 3, price: 13.41, total: 40.23 },
+      { quantity: 4, price: 2.75 },
+      { quantity: 1, price: 10.92, total: '' }
+    ]
+    expect(footerSum(rows, 'total', { total: 'price * quantity' })).toBeCloseTo(62.15, 2)
+    expect(footerSum(rows, 'quantity')).toBe(8)
   })
 })

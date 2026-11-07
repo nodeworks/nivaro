@@ -100,6 +100,7 @@ export function AiMemoryCard() {
                 <>
                   <input
                     value={editing.text}
+                    aria-label='Edit this note'
                     maxLength={MAX_CHARS}
                     onChange={(e) => setEditing({ id: n.id, text: e.target.value })}
                     onKeyDown={(e) => {
@@ -164,6 +165,7 @@ export function AiMemoryCard() {
               if (e.key === 'Enter') add()
             }}
             placeholder='e.g. I work Zone 3 inventory requests'
+            aria-label='New note for the assistant'
             className='min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] dark:border-border dark:bg-background'
             data-ai-memory-input
           />

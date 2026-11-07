@@ -223,6 +223,7 @@ function PlayerInner({
   startedRef.current = started
   const [userRate, setUserRate] = useState(1)
   const [captions, setCaptions] = useState(true)
+  const hasCaptions = (edits?.captions ?? []).some((c) => !!c?.text?.trim())
   const [captionStyle, setCaptionStyle] = useCaptionStyle(edits ? captionLookOf(edits) : undefined)
   const [fileDurMs, setFileDurMs] = useState(0)
   const [checking, setChecking] = useState(false)
@@ -1154,21 +1155,27 @@ function PlayerInner({
             </span>
             <span className='flex-1' />
             <SpeedButton value={userRate} onChange={setUserRate} />
-            <button
-              type='button'
-              aria-pressed={captions}
-              aria-label='Captions'
-              data-tip={captions ? 'Hide captions (C)' : 'Show captions (C)'}
-              onClick={() => setCaptions((x) => !x)}
-              className={`${iconButton} ${captions ? `bg-slate-100 dark:bg-white/10 ${inkStrong}` : inkMuted}`}
-            >
-              <Captions className='h-4 w-4' />
-            </button>
-            <CaptionSettingsButton
-              style={captionStyle}
-              onChange={setCaptionStyle}
-              className={`${iconButton} ${inkMuted}`}
-            />
+            {/* A video with no captions offers no Captions button (army 8 b14: it showed
+                pressed on four videos whose captions were empty, and nothing ever appeared). */}
+            {hasCaptions && (
+              <>
+                <button
+                  type='button'
+                  aria-pressed={captions}
+                  aria-label='Captions'
+                  data-tip={captions ? 'Hide captions (C)' : 'Show captions (C)'}
+                  onClick={() => setCaptions((x) => !x)}
+                  className={`${iconButton} ${captions ? `bg-slate-100 dark:bg-white/10 ${inkStrong}` : inkMuted}`}
+                >
+                  <Captions className='h-4 w-4' />
+                </button>
+                <CaptionSettingsButton
+                  style={captionStyle}
+                  onChange={setCaptionStyle}
+                  className={`${iconButton} ${inkMuted}`}
+                />
+              </>
+            )}
             {!live && (dto.download_urls || dto.transcript_url) && (
               <DownloadMenu
                 urls={dto.download_urls}

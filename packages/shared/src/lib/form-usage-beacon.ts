@@ -174,7 +174,9 @@ export class RefusalTally {
       const required =
         kind === 'required' ||
         (kind == null &&
-          (msg === 'This field is required' || /^At least one .+ is required$/.test(msg)))
+          (msg === 'This field is required' ||
+            msg === 'Add at least one line' ||
+            /^At least one .+ is required$/.test(msg)))
       if (required) t.required++
       else t.invalid++
     }

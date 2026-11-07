@@ -1,6 +1,6 @@
-import { UserAvatar } from '../UserAvatar'
 import { useState } from 'react'
 import { cn } from '../../lib/utils'
+import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 // Compact owner display: overlapping initial avatars (Linear/GitHub assignee
@@ -11,6 +11,30 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 export interface OwnerLike {
   id: string
   name: string
+  /** An owner who cannot act — the row says why it counts as unowned. */
+  inactive?: 'suspended' | 'former'
+}
+
+const INACTIVE_LABEL: Record<NonNullable<OwnerLike['inactive']>, string> = {
+  suspended: 'suspended',
+  former: 'former user'
+}
+
+/** "Joseph Paolillo (suspended)" — a name as a screen reader and the roster read it. Pure. */
+export function ownerText(o: OwnerLike): string {
+  return o.inactive ? `${o.name} (${INACTIVE_LABEL[o.inactive]})` : o.name
+}
+
+function InactiveTag({ owner }: { owner: OwnerLike }) {
+  if (!owner.inactive) return null
+  return (
+    <span
+      data-owner-inactive={owner.inactive}
+      className='ml-1 shrink-0 rounded bg-slate-100 px-1 py-px text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+    >
+      {INACTIVE_LABEL[owner.inactive]}
+    </span>
+  )
 }
 
 // Hand-tuned pairs (bg / ink) that hold up on both themes — avatars keep their
@@ -92,13 +116,17 @@ export function OwnerAvatars({
           type='button'
           onClick={(e) => e.stopPropagation()}
           aria-label={`${owners.length} owner${owners.length === 1 ? '' : 's'}: ${owners
-            .map((o) => o.name)
+            .map(ownerText)
             .join(', ')}`}
           className='group/owners flex items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
         >
           <span className='flex items-center transition-[gap]'>
             {visible.map((o, i) => (
-              <Avatar key={o.id} owner={o} className={cn(i > 0 && '-ml-1.5')} />
+              <Avatar
+                key={o.id}
+                owner={o}
+                className={cn(i > 0 && '-ml-1.5', o.inactive && 'opacity-50 grayscale')}
+              />
             ))}
             {overflow > 0 && (
               <span className='-ml-1.5 inline-flex h-[22px] min-w-[22px] shrink-0 items-center justify-center rounded-full bg-slate-100 px-1 text-[9px] font-semibold text-slate-600 ring-2 ring-white dark:bg-muted dark:text-slate-300 dark:ring-card'>
@@ -107,8 +135,23 @@ export function OwnerAvatars({
             )}
           </span>
           {owners.length === 1 && (
-            <span className='ml-1.5 truncate text-[12px] text-slate-600 group-hover/owners:text-slate-800 dark:text-slate-300'>
-              {owners[0].name}
+            <span className='ml-1.5 flex min-w-0 items-center'>
+              <span
+                className={cn(
+                  'truncate text-[12px] text-slate-600 group-hover/owners:text-slate-800 dark:text-slate-300',
+                  owners[0].inactive && 'line-through decoration-slate-400'
+                )}
+              >
+                {owners[0].name}
+              </span>
+              <InactiveTag owner={owners[0]} />
+            </span>
+          )}
+          {owners.length > 1 && owners.some((o) => o.inactive) && (
+            <span className='ml-1.5 text-[10px] text-slate-500 dark:text-slate-400'>
+              {owners.every((o) => o.inactive)
+                ? 'none can act'
+                : `${owners.filter((o) => o.inactive).length} can’t act`}
             </span>
           )}
         </button>
@@ -128,6 +171,7 @@ export function OwnerAvatars({
               <span className='truncate text-[12px] text-slate-700 dark:text-slate-200'>
                 {o.name}
               </span>
+              <InactiveTag owner={o} />
             </div>
           ))}
         </div>

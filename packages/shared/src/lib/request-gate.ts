@@ -1,5 +1,5 @@
 import type { Command, NivaroClient } from '@nivaro/sdk'
-import { noteOwnWriteFromCommand } from './own-writes'
+import { isRehearsalCommand, noteOwnWriteFromCommand } from './own-writes'
 import {
   claimIdentityCall,
   isIdentityRead,
@@ -477,7 +477,9 @@ export function withGetCoalescing(
       // Live hooks (lib/live.ts) drop events for records this tab just wrote —
       // noted before sending (the event can beat the response) and again with
       // the response so a create's new id counts.
-      noteOwnWriteFromCommand(c._method, c._path, c._body)
+      // A rehearsal (?dry_run=1) writes nothing: it opens no note.
+      const rehearsal = isRehearsalCommand(c._path, c._params)
+      if (!rehearsal) noteOwnWriteFromCommand(c._method, c._path, c._body)
       // A write that may change configuration drops settled answers, both now
       // and when it lands (a read sent meanwhile must not settle).
       const busts = !cannotChangeConfig(c)
@@ -487,7 +489,7 @@ export function withGetCoalescing(
         writeEpoch++
       })
       return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
-        noteOwnWriteFromCommand(c._method, c._path, c._body, res)
+        if (!rehearsal) noteOwnWriteFromCommand(c._method, c._path, c._body, res)
         return res
       })
     }

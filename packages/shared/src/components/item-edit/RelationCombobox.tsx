@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, Loader2, Search, X } from 'lucide-react'
 import type { CSSProperties } from 'react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useItemEditAuth, useNivaroClient, useStaleFieldReporter } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -26,11 +26,17 @@ function labelInitials(label: string): string {
   )
 }
 
-import { cn, userOptionFilter } from '../../lib/utils'
+import { cn, matchesAllTokens, userOptionFilter } from '../../lib/utils'
 import { applyDisplayTemplate } from './helpers'
-import { collidingIds, disambiguators } from './option-disambiguate'
+import {
+  collidingIds,
+  disambiguators,
+  isNamelessLabel,
+  NAMELESS_LABEL
+} from './option-disambiguate'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
 import { narrowLocally, useLatestSearch } from './picker-search'
+import { RelatedMissingLabel, retryRelatedRead } from './related-missing'
 
 /**
  * Instant hover tooltip for a picker whose committed value failed its
@@ -162,10 +168,60 @@ export function RelationCombobox({
   const debouncedQuery = useLatestSearch(query, searchBusy)
   const inputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const listId = useId()
+  // The keyboard-highlighted option (index into the pinned + listed options).
+  const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 30)
     else setQuery('')
+  }, [open])
+
+  const closeAndRefocus = () => {
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  // Escape closes the list (army8 b01 HIGH: it did nothing, the open list hung
+  // over the next field and the next click picked a row under it). Listened
+  // on WINDOW in the capture phase so it runs before a hosting sheet's own
+  // Escape handler (Radix listens on document, capture) — Escape closes the
+  // list, not the sheet around it. Only the picker holding focus answers, so
+  // a facet picker inside this panel closes alone.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const a = document.activeElement
+      const mine =
+        a === document.body ||
+        !!(a && (panelRef.current?.contains(a) || rootRef.current?.contains(a)))
+      if (!mine) return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open])
+
+  // Focus moving anywhere outside the picker (Tab, a click into another
+  // field, a screen reader jump) closes the list: an open list must never sit
+  // over the next field waiting to swallow its click.
+  useEffect(() => {
+    if (!open) return
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as Element | null
+      if (!t || t === document.body) return
+      if (t.closest?.('[data-nvr-combobox-panel]')) return
+      if (rootRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('focusin', onFocus)
+    return () => document.removeEventListener('focusin', onFocus)
   }, [open])
 
   useEffect(() => {
@@ -457,7 +513,10 @@ export function RelationCombobox({
   }, [autoSelectSingle, disabled, isEmpty, collection, filterStr])
 
   const tmpl = effectiveTemplate
-  const selectedLabel = value && selected ? applyDisplayTemplate(tmpl, selected) : null
+  const selectedRaw = value && selected ? applyDisplayTemplate(tmpl, selected) : null
+  // A value whose row renders no name says so in words — never "#5331".
+  const selectedLabel =
+    selectedRaw === null ? null : isNamelessLabel(selectedRaw) ? NAMELESS_LABEL : selectedRaw
   // The answer on screen is for what is typed now — otherwise the previous
   // answer, narrowed by the newer text until the server replies.
   const optionsSettled = !isPlaceholderData && query === debouncedQuery
@@ -520,6 +579,129 @@ export function RelationCombobox({
   const showLoader = !!value && isLoadingSelected && !selected
   const staleTip = useStaleTip(isStale)
 
+  // The listed options, in display order. Rows whose display fields are all
+  // empty are left out (nothing to recognise them by — army8 b01 "#5331" and
+  // the "-" projects); the field's current value always stays listed. When NO
+  // row has a name (a role whose access leaves out the label field) they all
+  // stay, listed as "Unnamed record" and still pickable — an empty picker
+  // would leave the field impossible to fill (army8 review M1).
+  const anyNamed = useMemo(
+    () => (data ?? []).some((item) => !isNamelessLabel(applyDisplayTemplate(tmpl, item))),
+    [data, tmpl]
+  )
+  const listOptions = useMemo(
+    () =>
+      (serverSort
+        ? [...shownOptions]
+        : [...shownOptions].sort((a, b) =>
+            compareByMatch(
+              applyDisplayTemplate(tmpl, a),
+              applyDisplayTemplate(tmpl, b),
+              query,
+              optionSort === '-label'
+            )
+          )
+      )
+        .filter((item) => !pinnedId || String(item.id) !== pinnedId)
+        .filter(
+          (item) =>
+            !anyNamed ||
+            String(item.id) === String(value) ||
+            !isNamelessLabel(applyDisplayTemplate(tmpl, item))
+        ),
+    [shownOptions, serverSort, tmpl, query, optionSort, pinnedId, value, anyNamed]
+  )
+  // The pinned (Default) row is offered while the box is empty, and while
+  // typing only when the text matches it — otherwise it sat at index 0 above
+  // the match and Enter wrote the default (army8 review H1).
+  const pinnedLabel =
+    pinnedItem && !isNamelessLabel(applyDisplayTemplate(tmpl, pinnedItem))
+      ? applyDisplayTemplate(tmpl, pinnedItem)
+      : NAMELESS_LABEL
+  const pinnedShown =
+    !!pinnedId &&
+    (!query.trim() ||
+      matchesAllTokens(
+        `${pinnedItem ? pinnedLabel : ''} ${pinned?.tag ?? 'Default'}`,
+        query.replace(/[-_/]+/g, ' ')
+      ))
+  const navOffset = pinnedShown ? 1 : 0
+  const navCount = navOffset + listOptions.length
+  const active = activeIndex >= navCount ? navCount - 1 : activeIndex
+  // Typing highlights the first listed match so Enter picks it (the pinned
+  // row only when nothing else is listed); an empty box highlights nothing
+  // (Enter then picks only a sole option).
+  useEffect(() => {
+    setActiveIndex(open && query.trim() ? navOffset : -1)
+  }, [open, query, navOffset])
+  const optionDomId = (i: number) => `${listId}-opt-${i}`
+  const pickPinned = () => {
+    const id = pinnedItem?.id ?? pinned?.id
+    if (!isSamePick(value, id)) onChange(id)
+    closeAndRefocus()
+  }
+  const pickItem = (item: Item) => {
+    if (!isSamePick(value, item.id)) onChange(item.id)
+    closeAndRefocus()
+  }
+  const pickAt = (i: number) => {
+    if (i < 0 || i >= navCount) return
+    if (i < navOffset) pickPinned()
+    else pickItem(listOptions[i - navOffset])
+  }
+  useEffect(() => {
+    if (!open || active < 0) return
+    const el = panelRef.current?.querySelector(`[data-nav-index="${active}"]`) as
+      | (HTMLElement & { scrollIntoView?: (o?: ScrollIntoViewOptions) => void })
+      | null
+    el?.scrollIntoView?.({ block: 'nearest' })
+  }, [open, active])
+  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (navCount > 0) setActiveIndex(active < 0 ? 0 : Math.min(active + 1, navCount - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (navCount > 0) setActiveIndex(active <= 0 ? 0 : active - 1)
+    } else if (e.key === 'Home' && navCount > 0 && !query) {
+      e.preventDefault()
+      setActiveIndex(0)
+    } else if (e.key === 'End' && navCount > 0 && !query) {
+      e.preventDefault()
+      setActiveIndex(navCount - 1)
+    } else if (e.key === 'Enter') {
+      // Never submits a surrounding form. Picks the highlighted option, or the
+      // only one left (a typed project number that leaves one match).
+      e.preventDefault()
+      if (active >= 0) pickAt(active)
+      else if (navCount === 1) pickAt(0)
+    } else if (e.key === 'Tab') {
+      // The panel is portaled to the end of the page: move focus back to the
+      // trigger first so Tab continues to the NEXT FIELD, not off the page.
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+  }
+  const onTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault()
+      setOpen(true)
+    } else if (
+      !open &&
+      e.key.length === 1 &&
+      e.key !== ' ' &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey
+    ) {
+      // Typing on a closed picker opens it with that text searched.
+      e.preventDefault()
+      setOpen(true)
+      setQuery(e.key)
+    }
+  }
+
   // Report upward. Deliberately AFTER availability has resolved: reporting
   // `false` while the probe is in flight would clear a real flag on every
   // re-render.
@@ -547,11 +729,15 @@ export function RelationCombobox({
     // mouse events, so a locked-but-stale field would never show the hint.
     <div ref={rootRef} className='relative' {...staleTip.bind}>
       <button
+        ref={triggerRef}
         type='button'
         disabled={disabled}
+        aria-haspopup='listbox'
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={onTriggerKeyDown}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 disabled:pointer-events-none disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
         )}
       >
@@ -561,7 +747,7 @@ export function RelationCombobox({
           <span
             className={cn(
               'flex items-center gap-1.5 truncate min-w-0',
-              !selectedLabel && 'text-muted-foreground'
+              (!selectedLabel || selectedLabel === NAMELESS_LABEL) && 'text-muted-foreground'
             )}
           >
             {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
@@ -576,6 +762,7 @@ export function RelationCombobox({
         portalEl &&
         createPortal(
           <div
+            ref={panelRef}
             data-nvr-combobox-panel=''
             style={panelStyle}
             className={cn(
@@ -612,6 +799,12 @@ export function RelationCombobox({
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onSearchKeyDown}
+                role='combobox'
+                aria-expanded
+                aria-autocomplete='list'
+                aria-controls={`${listId}-list`}
+                aria-activedescendant={active >= 0 ? optionDomId(active) : undefined}
                 placeholder='Search…'
                 className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
               />
@@ -623,13 +816,14 @@ export function RelationCombobox({
                 />
               )}
             </div>
-            <div className='max-h-52 overflow-y-auto py-1'>
+            <div id={`${listId}-list`} role='listbox' className='max-h-52 overflow-y-auto py-1'>
               {!!value && !disabled && (
                 <button
                   type='button'
+                  tabIndex={-1}
                   onClick={() => {
                     clearByUser()
-                    setOpen(false)
+                    closeAndRefocus()
                   }}
                   className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-slate-500 hover:bg-muted border-b border-slate-100 dark:text-slate-400 dark:border-border'
                 >
@@ -637,16 +831,21 @@ export function RelationCombobox({
                   Clear selection
                 </button>
               )}
-              {pinnedId && (
+              {pinnedShown && (
                 <button
                   type='button'
+                  tabIndex={-1}
+                  id={optionDomId(0)}
+                  role='option'
+                  aria-selected={String(value) === pinnedId}
+                  data-nav-index={0}
                   data-nvr-pinned-option
-                  onClick={() => {
-                    const id = pinnedItem?.id ?? pinned?.id
-                    if (!isSamePick(value, id)) onChange(id)
-                    setOpen(false)
-                  }}
-                  className='flex w-full items-center gap-2 border-b border-slate-100 bg-nvr-cyan/5 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border'
+                  onClick={pickPinned}
+                  onMouseMove={() => active !== 0 && setActiveIndex(0)}
+                  className={cn(
+                    'flex w-full items-center gap-2 border-b border-slate-100 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border',
+                    active === 0 ? 'bg-nvr-cyan/10' : 'bg-nvr-cyan/5'
+                  )}
                 >
                   <div
                     className={cn(
@@ -659,9 +858,7 @@ export function RelationCombobox({
                     {String(value) === pinnedId && <Check className='h-2.5 w-2.5 text-white' />}
                   </div>
                   <span className='min-w-0 flex-1 truncate'>
-                    {pinnedItem
-                      ? applyDisplayTemplate(tmpl, pinnedItem) || `#${pinnedId}`
-                      : `#${pinnedId}`}
+                    {pinnedItem === undefined ? 'Loading…' : pinnedLabel}
                   </span>
                   <span className='shrink-0 rounded bg-nvr-cyan/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:text-foreground'>
                     {pinned?.tag ?? 'Default'}
@@ -672,10 +869,12 @@ export function RelationCombobox({
                 <div className='flex items-center justify-center py-4'>
                   <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
                 </div>
-              ) : shownOptions.length === 0 && !optionsSettled ? (
+              ) : listOptions.length === 0 && !optionsSettled ? (
                 <p className='px-3 py-2 text-[13px] text-muted-foreground'>Searching…</p>
-              ) : shownOptions.length === 0 ? (
-                narrowedBy && narrowedBy.labels.length > 0 && !query.trim() ? (
+              ) : listOptions.length === 0 ? (
+                pinnedShown && query.trim() ? null : narrowedBy &&
+                  narrowedBy.labels.length > 0 &&
+                  !query.trim() ? (
                   <div className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'>
                     <p>
                       No options for{' '}
@@ -710,69 +909,65 @@ export function RelationCombobox({
                   </p>
                 )
               ) : (
-                (serverSort
-                  ? [...shownOptions]
-                  : [...shownOptions].sort((a, b) =>
-                      compareByMatch(
-                        applyDisplayTemplate(tmpl, a),
-                        applyDisplayTemplate(tmpl, b),
-                        query,
-                        optionSort === '-label'
-                      )
-                    )
-                )
-                  .filter((item) => !pinnedId || String(item.id) !== pinnedId)
-                  .map((item) => {
-                    const label = applyDisplayTemplate(tmpl, item) || `#${item.id}`
-                    const sel = String(item.id) === String(value)
-                    return (
-                      <button
-                        key={String(item.id)}
-                        type='button'
-                        onClick={() => {
-                          if (!isSamePick(value, item.id)) onChange(item.id)
-                          setOpen(false)
-                        }}
-                        className='flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted'
+                listOptions.map((item, i) => {
+                  const raw = applyDisplayTemplate(tmpl, item)
+                  const label = isNamelessLabel(raw) ? NAMELESS_LABEL : raw
+                  const sel = String(item.id) === String(value)
+                  const nav = i + navOffset
+                  return (
+                    <button
+                      key={String(item.id)}
+                      type='button'
+                      tabIndex={-1}
+                      id={optionDomId(nav)}
+                      role='option'
+                      aria-selected={sel}
+                      data-nav-index={nav}
+                      onClick={() => pickItem(item)}
+                      onMouseMove={() => active !== nav && setActiveIndex(nav)}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted',
+                        active === nav && 'bg-muted'
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                          sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                        )}
                       >
-                        <div
-                          className={cn(
-                            'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                            sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
-                          )}
+                        {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                      </div>
+                      {isUserCollection && (
+                        <UserAvatar
+                          userId={item.id as string}
+                          className='h-4 w-4'
+                          fallback={
+                            <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                              {labelInitials(label)}
+                            </span>
+                          }
+                        />
+                      )}
+                      {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
+                        <span
+                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                          data-tip='Online now'
+                        />
+                      )}
+                      {/* The typed words marked in the label (lib/search-text.ts). */}
+                      <SearchHighlight text={label} query={query} />
+                      {dupDetail.has(String(item.id)) && (
+                        <span
+                          className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
+                          data-option-detail
                         >
-                          {sel && <Check className='h-2.5 w-2.5 text-white' />}
-                        </div>
-                        {isUserCollection && (
-                          <UserAvatar
-                            userId={item.id as string}
-                            className='h-4 w-4'
-                            fallback={
-                              <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
-                                {labelInitials(label)}
-                              </span>
-                            }
-                          />
-                        )}
-                        {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
-                          <span
-                            className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
-                            data-tip='Online now'
-                          />
-                        )}
-                        {/* The typed words marked in the label (lib/search-text.ts). */}
-                        <SearchHighlight text={label} query={query} />
-                        {dupDetail.has(String(item.id)) && (
-                          <span
-                            className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
-                            data-option-detail
-                          >
-                            {dupDetail.get(String(item.id))}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })
+                          {dupDetail.get(String(item.id))}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })
               )}
             </div>
             {!isLoadingOptions && (
@@ -915,7 +1110,7 @@ export function RelatedItemLabel({
     const tokens = [...displayTemplate.matchAll(/\{\{([^}]+)\}\}/g)].map((m) => m[1].trim())
     return tokens.length > 0 ? ['id', ...tokens].join(',') : null
   })()
-  const { data, isLoading } = useQuery<Record<string, unknown>>({
+  const { data, isLoading, error } = useQuery<Record<string, unknown>>({
     queryKey: ['relation-single', collection, String(id), nestedFields ?? ''],
     queryFn: () =>
       isFiles
@@ -931,10 +1126,13 @@ export function RelatedItemLabel({
             Record<string, unknown>
           >),
     enabled: !!id && !!collection,
-    staleTime: 60_000
+    staleTime: 60_000,
+    retry: retryRelatedRead
   })
   if (isLoading) return <Loader2 className='h-3 w-3 animate-spin text-slate-400' />
-  if (!data) return <span>{String(id ?? '')}</span>
+  // A row the reader can't open says why in words (refused / not found /
+  // failed to load) — never its raw id (army8 b01 "Find a Unit 273025").
+  if (!data) return id == null || id === '' ? null : <RelatedMissingLabel error={error} />
   if (isFiles) {
     const label = (data.title ||
       data.filename_download ||
@@ -942,5 +1140,8 @@ export function RelatedItemLabel({
       String(id)) as string
     return <span>{label}</span>
   }
-  return <span>{applyDisplayTemplate(displayTemplate, data)}</span>
+  const text = applyDisplayTemplate(displayTemplate, data)
+  if (isNamelessLabel(text))
+    return <span className='italic text-muted-foreground'>{NAMELESS_LABEL}</span>
+  return <span>{text}</span>
 }

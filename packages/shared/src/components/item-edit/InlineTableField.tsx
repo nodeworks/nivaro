@@ -132,6 +132,7 @@ import {
   useReimportHandler
 } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { isOwnWrite } from '../../lib/own-writes'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
@@ -4264,7 +4265,10 @@ export function InlineTableField({
   }
   const wroteRecently = (id: string, now: number) => {
     const ts = localWritesRef.current.get(id)
-    return !!ts && now - ts < LOCAL_WRITE_GRACE_MS
+    if (ts && now - ts < LOCAL_WRITE_GRACE_MS) return true
+    // A write this TAB made outside the grid (the Submit dialog setting a line's Category,
+    // army 8 b09) is this person's own too — never "changed by others".
+    return isOwnWrite(relatedCollection, id)
   }
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per rows fetch (rowsUpdatedAt); the rest are read fresh from refs/closure
   useEffect(() => {
@@ -4972,6 +4976,10 @@ export function InlineTableField({
     const allRows = [...rows, ...pendingRows]
     const pendingEditRows = [...pendingEdits.values()]
     const addendumRows = addendumO2MEntries.flatMap((e) => e.rows)
+    // The open line editor's draft too: a NEW line's auto-filled relation
+    // fields (Oracle Cat., Exp. Type) showed their raw ids ("3", "1") until
+    // the line was saved (army8 b01).
+    if (editState?.draft) addendumRows.push(editState.draft)
     for (const [field, rel] of m2oRelMap) {
       if (!rel.one_collection) continue
       const rowIds = allRows
@@ -4990,7 +4998,7 @@ export function InlineTableField({
       if (ids.length) result.set(rel.one_collection, ids)
     }
     return result
-  }, [rows, pendingRows, pendingEdits, m2oRelMap, addendumO2MEntries])
+  }, [rows, pendingRows, pendingEdits, m2oRelMap, addendumO2MEntries, editState?.draft])
 
   // For relation-grouped fields, track which collection needs group/option expansion
   const m2oGroupedConfig = useMemo(() => {
@@ -5089,6 +5097,9 @@ export function InlineTableField({
       return result
     },
     enabled: m2oLookupIds.size > 0,
+    // A new id joining the set (a line editor auto-fill) keeps the labels
+    // already known on screen while the new one loads.
+    placeholderData: (prev) => prev,
     staleTime: 60_000
   })
 

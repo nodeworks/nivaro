@@ -21,7 +21,11 @@ export interface QuickCreateConfig {
     /** '$parent.<field>' (parent draft value) or a literal — hidden seed, no input.
      *  When `field` is a many-to-many alias on the target, the seed becomes its
      *  links: a scalar ('$parent.funding_year') links one record, an array
-     *  ('$parent.funding_years') links each (#799). */
+     *  ('$parent.funding_years') links each (#799). With `required: true` a
+     *  '$parent.' seed must be filled on the form before Create is offered —
+     *  `label` names it ("Pick Zone on the form first"). Without it a record
+     *  could be created outside its creator's own scope and vanish from the
+     *  picker (army8 b01: a unit made before Zone/Region were picked). */
     from?: unknown
   }>
 }
@@ -83,8 +87,10 @@ export function QuickCreateButton({
     }
     return from
   }
+  const missingSeeds = missingRequiredSeeds(seedFields, resolveSeed)
 
   async function create() {
+    if (missingSeeds.length > 0) return
     for (const f of inputFields) {
       if (f.required && !(values[f.field] ?? '').trim()) {
         setError(`${f.label ?? titleCase(f.field)} is required`)
@@ -108,12 +114,22 @@ export function QuickCreateButton({
       if (v !== '') payload[f.field] = v
     }
     try {
-      const created = await client.request<{ data: { id: unknown } }>(
-        post(`/items/${targetCollection}`, payload)
-      )
+      const created = await client.request<{
+        data: { id: unknown }
+        meta?: { readable?: boolean }
+      }>(post(`/items/${targetCollection}`, payload))
       const id = created.data?.id
       if (id == null) throw new Error('Created record returned no id')
       qc.invalidateQueries({ queryKey: ['relation-opts', targetCollection] })
+      if (created.meta?.readable === false) {
+        // Saved, but outside what this person may see: selecting it would
+        // leave a blank picker and a raw number in the summary.
+        setError(
+          `Created, but it is outside what you can see, so it can't be selected here. Ask an administrator to check your access.`
+        )
+        setValues({})
+        return
+      }
       onCreated(id)
       setOpen(false)
       setValues({})
@@ -145,6 +161,16 @@ export function QuickCreateButton({
           <p className='mb-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
             {config.title ?? `New ${titleCase(targetCollection)}`}
           </p>
+          {missingSeeds.length > 0 && (
+            <p
+              data-quick-create-missing
+              className='mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11.5px] leading-snug text-amber-800 dark:border-amber-500/40 dark:bg-[#2a2113] dark:text-amber-300'
+            >
+              Pick {joinWords(missingSeeds)} on the form first — the new{' '}
+              {(config.label ?? titleCase(targetCollection)).replace(/^New\s+/i, '').toLowerCase()}{' '}
+              takes {missingSeeds.length === 1 ? 'it' : 'them'} from there.
+            </p>
+          )}
           <div className='flex flex-col gap-2'>
             {inputFields.map((f) => (
               <label key={f.field} className='flex flex-col gap-1'>
@@ -155,6 +181,18 @@ export function QuickCreateButton({
                 <input
                   value={values[f.field] ?? ''}
                   onChange={(e) => setValues((p) => ({ ...p, [f.field]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    // Enter creates; it never submits the record form around it.
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      void create()
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setOpen(false)
+                      setError(null)
+                    }
+                  }}
                   className='h-8 rounded border border-input bg-background px-2 text-[13px] outline-none focus:border-nvr-cyan'
                 />
               </label>
@@ -175,7 +213,7 @@ export function QuickCreateButton({
             <button
               type='button'
               // Wait for the target's relations so a many-to-many seed is sent as links.
-              disabled={saving || (seedFields.length > 0 && !m2mAliases)}
+              disabled={saving || missingSeeds.length > 0 || (seedFields.length > 0 && !m2mAliases)}
               onClick={() => void create()}
               className='inline-flex h-7 items-center gap-1 rounded bg-nvr-cyan px-2.5 text-[12px] font-medium text-white hover:brightness-110 disabled:opacity-50'
             >
@@ -187,6 +225,25 @@ export function QuickCreateButton({
       )}
     </div>
   )
+}
+
+/** Labels of required '$parent.' seeds the form has not filled yet. */
+export function missingRequiredSeeds(
+  seeds: QuickCreateConfig['fields'],
+  resolve: (from: unknown) => unknown
+): string[] {
+  return seeds
+    .filter((f) => f.required && typeof f.from === 'string' && f.from.startsWith('$parent.'))
+    .filter((f) => {
+      const v = resolve(f.from)
+      return v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
+    })
+    .map((f) => f.label ?? titleCase(String(f.from).slice('$parent.'.length)))
+}
+
+function joinWords(words: string[]): string {
+  if (words.length <= 1) return words[0] ?? ''
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
 }
 
 /** A seed value as related ids: one id, an id array, or `{id}` objects. */

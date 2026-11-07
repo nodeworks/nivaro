@@ -1322,6 +1322,9 @@ export function liveCrossFieldErrors(
   return out
 }
 
+/** A required lines grid with no lines. */
+export const REQUIRED_LINES_MESSAGE = 'Add at least one line'
+
 /** Whether every field the form shows is locked for this person (a07-4) —
  *  hidden, system and unassigned fields aside. A form with nothing shown is
  *  not "all locked" (still loading). */
@@ -7364,11 +7367,16 @@ function ItemEditFormView({
       .map((field) => {
         const meta = allFields.find((f) => f.field === field)
         const message = validationErrors[field]
+        // A lines grid is known on the form by its step/section ("PO / REQ
+        // Lines"), not by the relation's own label ("Workflow Lines").
+        const where = locationFor(field)
+        const linesLabel =
+          message === REQUIRED_LINES_MESSAGE && where && where !== 'General' ? where : null
         return {
           field,
-          label: meta?.label || titleCase(field),
+          label: linesLabel ?? (meta?.label || titleCase(field)),
           message: message === 'This field is required' ? 'Required' : message,
-          location: locationFor(field)
+          location: where
         }
       })
   }, [validationErrors, allFields, groupedMap, groups, hasTabs, allSteps, fieldLayoutOrder])
@@ -8278,7 +8286,9 @@ function ItemEditFormView({
               ).length
             : 0
           if (n !== undefined && n === 0 && onScreen === 0)
-            errs[f.field] = `At least one ${f.label || titleCase(f.field)} item is required`
+            // Plain words, not the table's name ("At least one Workflow Lines
+            // item is required" — army8 b01); the summary row names the step.
+            errs[f.field] = REQUIRED_LINES_MESSAGE
         } else if (
           relations.some((r) => r.one_collection === collection && r.one_field === f.field)
         ) {
@@ -8394,6 +8404,27 @@ function ItemEditFormView({
   // (parent draft or queued O2M row edits touching flagged fields), prompt
   // BEFORE any write starts — otherwise the server 422 arrives mid-save with
   // other steps already committed. The server check remains the backstop.
+  /** Staged lines whose row has a newer revision than the one their edit is based on —
+   *  their PATCH answers 409 (MIDAIR_COLLISION) before any change-reason rule is judged. */
+  async function staleStagedLines(rc: string, rowIds: string[]): Promise<Set<string>> {
+    const stale = new Set<string>()
+    const based = rowIds.filter((id) => o2mBaseRevRef.current.has(`${rc}:${id}`))
+    if (based.length === 0) return stale
+    try {
+      const bases = await Promise.all(
+        based.map((id) => o2mBaseRevRef.current.get(`${rc}:${id}`) ?? Promise.resolve(null))
+      )
+      const latest = await fetchLatestRevisions(client, rc, based)
+      based.forEach((id, i) => {
+        const base = bases[i]
+        const now = latest.get(id)
+        if (base != null && now != null && now > base) stale.add(id)
+      })
+    } catch {
+      /* unknown — the reason is asked as before; the save still meets the 409 */
+    }
+    return stale
+  }
   async function preflightChangeReason(): Promise<ChangeReasonChallenge | null> {
     if (changeReasonRef.current) return null
     const targets: Array<{
@@ -8423,10 +8454,23 @@ function ItemEditFormView({
         // a reconcile, an applied proposal) needs no second justification.
         if (typeof ch._change_reason === 'string' && ch._change_reason.trim()) continue
         const fields = Object.keys(ch).filter((k) => !k.startsWith('__') && k !== '_change_reason')
-        for (const k of fields) changed.add(k)
         if (fields.length) rows.push({ rowId: String(rowId), fields })
       }
-      if (changed.size) targets.push({ collection: rc, changedFields: [...changed], rows })
+      // Army 8 b03/b09: a staged line someone else saved since it was staged meets the
+      // mid-air check first (409 → the Theirs / Mine chooser) — asking its reason now made the
+      // person justify a change that was then refused. Such lines are left out here; the
+      // chooser's re-save asks the reason if "Mine" wins and the save still needs one.
+      const stale = await staleStagedLines(rc, rows.map((r) => r.rowId))
+      for (const r of rows) {
+        if (stale.has(r.rowId)) continue
+        for (const k of r.fields) changed.add(k)
+      }
+      if (changed.size)
+        targets.push({
+          collection: rc,
+          changedFields: [...changed],
+          rows: rows.filter((r) => !stale.has(r.rowId))
+        })
     }
     for (const t of targets) {
       try {
@@ -12309,6 +12353,7 @@ function ItemEditFormView({
         <AccessDeniedPanel
           collection={collection}
           itemId={String(itemId)}
+          noun={colMeta?.singular}
           // Prefer the host's back action: it knows the app's history and a
           // sane fallback route. Raw history.back() is the last resort, and on
           // a cold direct load (denied link pasted into a new tab) it would

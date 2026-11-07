@@ -1,7 +1,19 @@
 // Picker options that render the same label ("CEG 1" twice) get a secondary
 // detail so a person can tell them apart. Pure — unit-tested directly.
 
-import { titleCase } from '../../lib/utils'
+import { formatDateTime, titleCase } from '../../lib/utils'
+
+/** A rendered option label with no letter or digit in it ("", "-", " / ") —
+ *  the row's display fields are all empty. Such a row has nothing a person
+ *  can recognise it by, so pickers never offer it (army8 b01: a nameless
+ *  location listed as "#5331" was picked by a stray click and saved as a
+ *  ship-to). */
+export function isNamelessLabel(label: string | null | undefined): boolean {
+  return !/[\p{L}\p{N}]/u.test(label ?? '')
+}
+
+/** What a picker shows for a value whose row renders no name. Never the id. */
+export const NAMELESS_LABEL = 'Unnamed record'
 
 /** Ids of options whose label is shared with at least one other option. */
 export function collidingIds(
@@ -29,20 +41,28 @@ const SKIP = new Set([
   'created_at',
   'updated_at',
   'created_by',
-  'updated_by'
+  'updated_by',
+  'created',
+  'changed',
+  'modified'
 ])
 const PREFERRED = /(^|_)(system_id|code|number|no|key|name|type|status)$/i
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
 
 function readable(v: unknown): string | null {
   if (v === null || v === undefined || typeof v === 'object') return null
   const s = String(v).trim()
-  return s === '' ? null : s
+  if (s === '') return null
+  // A raw ISO timestamp is not something a person reads (army8 b01:
+  // "Created: 2026-09-07T10:32:53.821Z").
+  return ISO_TIMESTAMP.test(s) ? formatDateTime(s) : s
 }
 
 /** For each group of same-label rows, the one column that best tells them
  *  apart (most distinct values; then names like system_id, then text over
  *  bare numbers, which are usually foreign keys) and each row's value of it,
- *  as "System Id: 4471". Rows of a group nothing separates get `#id`.
+ *  as "System Id: 4471". Rows of a group nothing separates get "Same name · 1 of 2".
  *  Returns id → detail text. */
 export function disambiguators(
   groups: Array<Array<Record<string, unknown>>>,
@@ -70,10 +90,16 @@ export function disambiguators(
           (preferred !== best.preferred ? preferred : text && !best.text))
       if (better) best = { key, distinct, preferred, text }
     }
-    for (const r of rows) {
+    rows.forEach((r, i) => {
       const id = String(r.id)
-      out.set(id, best ? `${titleCase(best.key)}: ${readable(r[best.key])}` : `#${id}`)
-    }
+      // Nothing tells them apart: say so in words, never the internal id.
+      out.set(
+        id,
+        best
+          ? `${titleCase(best.key)}: ${readable(r[best.key])}`
+          : `Same name · ${i + 1} of ${rows.length}`
+      )
+    })
   }
   return out
 }

@@ -243,7 +243,44 @@ export function M2OSummaryValue({ collection, id }: { collection: string; id: un
 // ─── O2MSummary ───────────────────────────────────────────────────────────────
 
 const O2M_LABEL_FALLBACKS = ['name', 'title', 'label', 'subject', 'description', 'line_number']
-const O2M_AMOUNT_FIELDS = ['amount', 'total', 'cost', 'price', 'quantity']
+const O2M_MONEY_FIELDS = ['amount', 'total', 'cost']
+
+const asNumber = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+/** What a child row's summary amount is, and whether it is money. A line's
+ *  money is its amount / total / cost; a row that has none of those yet (a
+ *  seeded or new line whose total is only the live formula) counts as
+ *  price × quantity. A unit PRICE alone is never summed — 8 lines read
+ *  "$117.15", the sum of their unit prices, where they totalled $1,568.60
+ *  (army8 b12). With no money at all, the quantities are counted. */
+export function o2mAmountOf(rows: Array<Record<string, unknown>>): {
+  currency: boolean
+  of: (row: Record<string, unknown>) => number | null
+} | null {
+  const money = O2M_MONEY_FIELDS.find((f) => rows.some((r) => asNumber(r[f]) !== null))
+  const priced = rows.some((r) => asNumber(r.price) !== null && asNumber(r.quantity) !== null)
+  if (money || priced)
+    return {
+      currency: true,
+      of: (r) => {
+        const own = money ? asNumber(r[money]) : null
+        if (own !== null) return own
+        const p = asNumber(r.price)
+        const q = asNumber(r.quantity)
+        return p !== null && q !== null ? Math.round(p * q * 100) / 100 : null
+      }
+    }
+  if (rows.some((r) => asNumber(r.quantity) !== null))
+    return { currency: false, of: (r) => asNumber(r.quantity) }
+  return null
+}
 const O2M_PREVIEW = 4
 const O2M_FETCH_LIMIT = 200
 
@@ -458,23 +495,14 @@ function O2MSummary({
     return <span className='italic text-[11px] text-slate-400 dark:text-slate-500'>None yet</span>
 
   const capped = (savedRows?.length ?? 0) >= O2M_FETCH_LIMIT
-  const amountField = O2M_AMOUNT_FIELDS.find((f) =>
-    rows.some(
-      (r) =>
-        typeof r[f] === 'number' ||
-        (typeof r[f] === 'string' && r[f] !== '' && !Number.isNaN(Number(r[f])))
-    )
-  )
+  const amount = o2mAmountOf(rows)
   // Only claim a total when nothing was cut off — a sum over the first 200 of
   // more rows is a wrong number, which is worse than no number.
   const total =
-    amountField && !capped
-      ? rows.reduce((acc, r) => {
-          const n = Number(r[amountField])
-          return acc + (Number.isFinite(n) ? n : 0)
-        }, 0)
+    amount && !capped
+      ? Math.round(rows.reduce((acc, r) => acc + (amount.of(r) ?? 0), 0) * 100) / 100
       : null
-  const isCurrency = amountField ? amountField !== 'quantity' : false
+  const isCurrency = amount?.currency ?? false
 
   return (
     <span className='block'>
@@ -511,11 +539,10 @@ function O2MSummary({
                   `Row ${i + 1}`
                 ))}
             </span>
-            {amountField && row[amountField] !== null && row[amountField] !== undefined && (
+            {amount && amount.of(row) !== null && (
               <span className='shrink-0 tabular-nums'>
                 {(() => {
-                  const n = Number(row[amountField])
-                  if (!Number.isFinite(n)) return String(row[amountField])
+                  const n = amount.of(row) as number
                   return isCurrency
                     ? n.toLocaleString(undefined, {
                         style: 'currency',

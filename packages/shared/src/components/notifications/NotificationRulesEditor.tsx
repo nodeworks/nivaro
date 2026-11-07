@@ -104,6 +104,18 @@ export const NOTIFY_RULE_CATS: Array<{ key: string; label: string; help: string 
   }
 ]
 
+/** Categories only administrators can ever receive (army 8 b16): chaos drills
+ *  reach admins and chaos operators, audit-log pattern alerts are defined and
+ *  subscribed to on admin-only screens. A business user's rules leave them out. */
+export const ADMIN_ONLY_RULE_CATS: ReadonlySet<string> = new Set(['chaos', 'audit'])
+
+/** The categories a person's rules list (pure). Roles always list every one. */
+export function ruleCatsFor(subject: 'person' | 'role', isAdmin: boolean) {
+  return subject === 'role' || isAdmin
+    ? NOTIFY_RULE_CATS
+    : NOTIFY_RULE_CATS.filter((c) => !ADMIN_ONLY_RULE_CATS.has(c.key))
+}
+
 const MATRIX_KEYS = ['inapp', 'push', 'teams', 'email', 'quiet_override'] as const
 const STEPS = ['push_after_min', 'email_after_min'] as const
 const hasQuiet = (r?: NotifyRulesValue | null) =>
@@ -202,6 +214,8 @@ export interface NotificationRulesEditorProps {
   subject: 'person' | 'role'
   teams?: { available: boolean; linked: boolean; header?: ReactNode } | null
   extraColumn?: { header: ReactNode; cell: (cat: string, label: string) => ReactNode } | null
+  /** A person's own rules: whether they are an administrator (admin-only categories). */
+  isAdmin?: boolean
 }
 
 export function NotificationRulesEditor({
@@ -214,9 +228,11 @@ export function NotificationRulesEditor({
   saving,
   subject,
   teams,
-  extraColumn
+  extraColumn,
+  isAdmin = true
 }: NotificationRulesEditorProps) {
   const eff = mergeNotifyRulesClient(value, inherited)
+  const cats = ruleCatsFor(subject, isAdmin)
   const [quietStart, setQuietStart] = useState<string | null>(null)
   const [quietEnd, setQuietEnd] = useState<string | null>(null)
   const effStart = quietStart ?? eff.quiet_start ?? ''
@@ -418,7 +434,7 @@ export function NotificationRulesEditor({
           </tr>
         </thead>
         <tbody>
-          {NOTIFY_RULE_CATS.map((c) => {
+          {cats.map((c) => {
             const row = eff.matrix?.[c.key] ?? {}
             const fromRole = (k: keyof RulesMatrixRow) =>
               showRole && layerAt(value, inherited, (r) => r?.matrix?.[c.key]?.[k]) === 'role'
@@ -570,7 +586,7 @@ export function NotificationRulesEditor({
             </tr>
           </thead>
           <tbody>
-            {NOTIFY_RULE_CATS.map((c) => {
+            {cats.map((c) => {
               const rule = eff.escalation?.[c.key] ?? {}
               return (
                 <tr key={c.key} className='border-t border-slate-100 dark:border-border'>

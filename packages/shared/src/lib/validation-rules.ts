@@ -66,6 +66,39 @@ export function formatPhone(stored: unknown): string {
   return n.valid && n.stored ? n.display : String(stored ?? '')
 }
 
+/** Whether a field's own validation rules make it required for this record
+ *  right now: a hard `required` rule, or a `required_if` whose condition
+ *  holds on the record (e.g. "required on create": field id, op null). The
+ *  form marks such a field with * like a required field — army8 b02: Default
+ *  Expenditure Type was refused at Create with no * on its label. Soft rules
+ *  never mark. */
+export function requiredByRules(rules: unknown, record: Record<string, unknown>): boolean {
+  let list: unknown = rules
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list)
+    } catch {
+      return false
+    }
+  }
+  if (!Array.isArray(list)) return false
+  return list.some((r) => {
+    if (!r || typeof r !== 'object') return false
+    const rule = r as {
+      type?: string
+      field?: string
+      op?: string
+      value?: unknown
+      soft?: boolean
+    }
+    if (rule.soft) return false
+    if (rule.type === 'required') return true
+    if (rule.type === 'required_if' && rule.field)
+      return conditionMatches(record[rule.field], String(rule.op ?? 'eq'), rule.value)
+    return false
+  })
+}
+
 /** Evaluate one field validation rule against a value. Returns an error message
  *  or null. Shared by useNivaroForm (headless) and ItemEditForm (admin). */
 function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {

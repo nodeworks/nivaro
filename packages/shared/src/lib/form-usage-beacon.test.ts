@@ -131,12 +131,13 @@ describe('refused saves (#3185)', () => {
     t.note({ title: 'This field is required', lines: 'At least one Line item is required' })
     t.note({ 'not a field': 'x' })
     t.note({ amount: 'Too big' }, 'invalid')
+    t.note({ lines: 'Add at least one line' })
     expect(t.take()).toEqual({
-      tries: 3,
+      tries: 4,
       fields: {
         title: { required: 2, invalid: 0 },
         amount: { required: 0, invalid: 2 },
-        lines: { required: 1, invalid: 0 }
+        lines: { required: 2, invalid: 0 }
       }
     })
     expect(t.take()).toBeNull()

@@ -41,9 +41,12 @@ const CLAIM_RETRY_MS = 15_000
 /** A form that turned clean lets its lock go after this long (a10-4) — typing
  *  again right after Save keeps it instead of dropping and re-taking it. */
 const CLEAN_RELEASE_MS = 1_500
-/** After a take-over the taker keeps the lock this long on a clean form (army6 M28):
- *  the clean release handed it straight back to the person just displaced. */
-export const TAKEOVER_HOLD_MS = 60_000
+/** After a take-over the taker keeps the lock this long on a clean form (army6 M28): the
+ *  1.5 s clean release handed it straight back to the person just displaced. One heartbeat
+ *  is enough — the server now tells the displaced tab it was taken over (it never re-claims
+ *  on its own), and a taker who has not typed by then gets the lock back on their first
+ *  edit. Army 8 b09: a full minute kept the other person's Save disabled for no edit. */
+export const TAKEOVER_HOLD_MS = 10_000
 
 /** What a person whose lock moved to someone else while they were not
  *  holding it is told: a forced take-over says so (a10-6); otherwise the lock
@@ -1129,7 +1132,8 @@ export function ItemLockBanner({
     >
       <Lock className='h-4 w-4 shrink-0 text-amber-500' />
       <span className='min-w-0 flex-1'>
-        <span className='font-medium'>{name}</span> is editing {noun} — {readOnlyText}
+        <span className='font-medium'>{name}</span> is editing {noun} — {readOnlyText} until the
+        lock is released.
         {lockHolder.idle_minutes != null && lockHolder.idle_minutes >= 2 && (
           <span
             className='ml-1.5 rounded bg-amber-100 px-1 py-px text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-200'
@@ -1138,8 +1142,7 @@ export function ItemLockBanner({
           >
             idle {lockHolder.idle_minutes}m
           </span>
-        )}{' '}
-        until the lock is released.
+        )}
         {lockHolder.note && (
           <span className='mt-0.5 block text-[12.5px] text-amber-800/90 dark:text-amber-200/90'>
             “{lockHolder.note}”

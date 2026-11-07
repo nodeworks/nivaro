@@ -28,9 +28,11 @@ import { InboundRequestPopover } from './integrations/InboundRequest'
 import { FileM2MField } from './item-edit/FilePickerField'
 import { useFieldTouches } from './item-edit/HeaderFreshness'
 import { richTextToPlain } from './item-edit/helpers'
+import { isNamelessLabel, NAMELESS_LABEL } from './item-edit/option-disambiguate'
 import { PersonalDefaultMark } from './item-edit/PersonalDefaultControl'
 import { evaluateDisplayFormula, usePlacementTextContext } from './item-edit/placement-behaviour'
 import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
+import { RelatedMissingLabel } from './item-edit/related-missing'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
 import type { CMSRelation } from './item-edit/types'
 import { UserChip } from './item-edit/UserChip'
@@ -253,19 +255,25 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     staleTime: 10 * 60_000,
     retry: false
   })
-  const { data: row, isPending } = useQuery({
+  const {
+    data: row,
+    isPending,
+    error
+  } = useQuery({
     queryKey: ['rrv-related', collection, String(id)],
-    queryFn: () => readRow(collection, id as string | number).catch(() => null),
+    queryFn: () => readRow(collection, id as string | number),
     enabled: id != null && !!meta,
     staleTime: 60_000,
     retry: false
   })
   if (id == null) return <Empty />
-  if (!row && (isPending || !meta))
+  if (!row && !error && (isPending || !meta))
     return (
       <span className='inline-block h-3.5 w-20 animate-pulse rounded bg-slate-100 align-middle dark:bg-[hsl(var(--nvr-skeleton))]' />
     )
-  if (!row) return <span className='text-slate-400'>#{String(id)}</span>
+  // Never the raw id (army8 b01 "Find a Unit #273025"); a gone or failed read
+  // is not worded as an access problem (army8 review M8).
+  if (!row) return <RelatedMissingLabel error={error} />
   let label = ''
   const template = meta?.display_template
   if (template) {
@@ -295,7 +303,7 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
       }
     }
   }
-  if (!label) label = `#${String(id)}`
+  if (isNamelessLabel(label)) label = NAMELESS_LABEL
   if (!drill) return <>{label}</>
   return (
     <button

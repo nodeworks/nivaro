@@ -347,6 +347,37 @@ export function qtyEntryProblem(raw: string, qtyType: string | null | undefined)
   return check.ok ? null : check.message
 }
 
+/** A footer total over the picked rows. A row whose computed column is not
+ *  stored yet (a seeded or new line — its cell shows the live formula) adds
+ *  what its cell shows, not 0: the footer read "TOTAL 6,749 $0.00" beside
+ *  rows that each showed a total (army8 b12). */
+export function footerSum(
+  rows: Array<Record<string, unknown>>,
+  col: string,
+  compute?: Record<string, string>
+): number {
+  const total = rows.reduce((acc, row) => {
+    const stored = row[col]
+    const v =
+      stored != null && stored !== ''
+        ? stored
+        : compute?.[col]
+          ? evalClientFormula(compute[col], row)
+          : null
+    const n = Number(v)
+    return acc + (v != null && Number.isFinite(n) ? n : 0)
+  }, 0)
+  return Math.round(total * 1e6) / 1e6
+}
+
+/** The note under a refused quantity box: the reason and what was typed
+ *  ("Whole numbers only — 2.5 not used"). The box itself shows the quantity
+ *  that still counts. */
+export function refusedQtyNote(reason: string, typed: string): string {
+  const t = typed.trim()
+  return t ? `${reason} — ${t} not used` : reason
+}
+
 /** The first refusal a line's computed columns (qty × price …) would meet:
  *  the line's validation rule on that column, else the money column's fit. */
 export function lineComputeError(args: {
@@ -2175,12 +2206,22 @@ export function CatalogPickerField({
         onChange={(e) => setEditing((p) => ({ ...p, [catalogId]: e.target.value }))}
         onBlur={(e) => {
           const v = e.target.value
-          // A refused entry keeps what was typed, with the reason under the
-          // box — 2.05 on a whole-number quantity emptied the row on Tab
+          // A refused entry goes back to the quantity that counts, and the
+          // reason under the box names what was typed: the box kept showing
+          // 2.5 while the line total used 1 (army8 b02). Never emptied —
+          // 2.05 on a whole-number quantity emptied the row on Tab once
           // (army5 b01-N10).
           const pre = qtyEntryProblem(v, qtyFieldType)
           if (pre) {
-            setQtyIssue((p) => ({ ...p, [catalogId]: { kind: 'error', message: pre } }))
+            setEditing((p) => {
+              const n = { ...p }
+              delete n[catalogId]
+              return n
+            })
+            setQtyIssue((p) => ({
+              ...p,
+              [catalogId]: { kind: 'error', message: refusedQtyNote(pre, v) }
+            }))
             return
           }
           setEditing((p) => {
@@ -3126,10 +3167,11 @@ export function CatalogPickerField({
                     return !(rowDbId != null && queuedDeletes.has(rowDbId))
                   })
                   const sumOf = (col: string): number =>
-                    liveEntries.reduce((acc, e) => {
-                      const n = Number(e.row[col])
-                      return acc + (Number.isFinite(n) ? n : 0)
-                    }, 0)
+                    footerSum(
+                      liveEntries.map((e) => e.row),
+                      col,
+                      config.compute_fields
+                    )
                   const fmtFor = (col: string): 'currency' | 'number' =>
                     (config.field_formats?.[col] as 'currency' | 'number') ?? 'number'
                   const cell = (col: string) => (

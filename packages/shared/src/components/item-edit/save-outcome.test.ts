@@ -49,7 +49,7 @@ describe('saveClosingMessage', () => {
 
   it('line conflicts, kept-theirs and hidden records keep their own wording', () => {
     expect(saveClosingMessage({ ...base, lineConflicts: 1 }, edit)?.text).toBe(
-      'Saved, except 1 line someone else changed — pick which value wins'
+      'Saved, except 1 row someone else changed — pick which value wins'
     )
     expect(
       saveClosingMessage({ ...base, keptTheirs: 2, noFieldWrite: true, onlyMain: true }, edit)?.text

@@ -107,7 +107,8 @@ function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
   const actor = actorOf(ev)
   if (actor && selfId && actor.toUpperCase() === selfId.toUpperCase()) return true
   const collection = typeof ev.collection === 'string' ? ev.collection : ''
-  return collection !== '' && ev.item != null && isOwnWrite(collection, ev.item as string)
+  const fields = Array.isArray(ev.changed_fields) ? (ev.changed_fields as string[]) : null
+  return collection !== '' && ev.item != null && isOwnWrite(collection, ev.item as string, fields)
 }
 
 /**

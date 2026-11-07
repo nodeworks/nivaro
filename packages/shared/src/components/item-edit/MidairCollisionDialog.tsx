@@ -169,7 +169,7 @@ export function LineCollisionDialog({
   fieldLabel,
   onCancel,
   onResolve,
-  intro = 'These line values were saved by someone else after you changed them. Pick which value wins for each — the rest of your changes are saved.',
+  intro = 'These values were saved by someone else after you changed them. Pick which value wins for each — the rest of your changes are saved.',
   cancelLabel = 'Decide later'
 }: {
   lines: LineCollision[]

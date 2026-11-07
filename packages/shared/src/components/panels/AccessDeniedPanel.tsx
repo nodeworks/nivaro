@@ -33,16 +33,35 @@ export function explainMissing(err: unknown): boolean {
   return status === 404
 }
 
+/**
+ * What the panel calls the record: the collection's singular label when the host knows it
+ * ("Invoice"), else the table key made readable ("inventory_request" → "inventory request",
+ * "invoices" → "invoice"). Never the row id or the raw key (army 8 b14: the panel read
+ * "invoices · #5715898" — a database row id people cannot use). Exported for tests.
+ */
+export function recordNoun(collection: string, singular?: string | null): string {
+  const s = singular?.trim()
+  if (s) return s.toLowerCase()
+  const words = collection.replace(/_/g, ' ').trim()
+  if (/ies$/i.test(words)) return words.replace(/ies$/i, 'y')
+  if (/[^su]s$/i.test(words)) return words.slice(0, -1)
+  return words || 'record'
+}
+
 export function AccessDeniedPanel({
   collection,
   itemId,
+  noun: nounProp,
   onBack
 }: {
   collection: string
   itemId: string
+  /** The collection's singular label ("Invoice") — names the record in the title. */
+  noun?: string | null
   /** Host-provided back action (e.g. navigate(-1)); renders a button when set. */
   onBack?: () => void
 }) {
+  const noun = recordNoun(collection, nounProp)
   const client = useNivaroClient()
   const [requested, setRequested] = useState(false)
   const requestAccess = useMutation({
@@ -78,10 +97,14 @@ export function AccessDeniedPanel({
           </span>
           <div>
             <h2 className='text-[15px] font-semibold text-slate-800 dark:text-slate-100'>
-              {notFound ? 'Record not found' : "You can't view this record"}
+              {notFound
+                ? `${noun.charAt(0).toUpperCase()}${noun.slice(1)} not found`
+                : `You can't view this ${noun}`}
             </h2>
-            <p className='break-all text-[12px] text-slate-500 dark:text-slate-400'>
-              {collection.replace(/_/g, ' ')} · #{itemId}
+            <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+              {notFound
+                ? 'The link may be wrong, or it was removed.'
+                : 'It is outside what your access lets you see.'}
             </p>
           </div>
         </div>

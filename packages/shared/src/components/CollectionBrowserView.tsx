@@ -47,6 +47,7 @@ import {
   startBulkProgress,
   useBulkProgressFeed
 } from '../lib/bulk-progress'
+import { warmPageLookups } from '../lib/cbv-page-warm'
 import { del, get, patch, post } from '../lib/commands'
 import {
   DATE_FILTER_OPS,
@@ -93,6 +94,7 @@ import {
   readListLinkFromLocation,
   sanitizeCbvLinkState
 } from '../lib/list-link'
+import { rememberedListPage, rememberListPage } from '../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
@@ -106,7 +108,6 @@ import {
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
-import { warmPageLookups } from '../lib/cbv-page-warm'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import {
@@ -159,6 +160,7 @@ import {
 } from './cbv/export-rows'
 import { FormulaColumnAdder } from './cbv/FormulaColumnAdder'
 import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
+import { rowFocusTarget, tabStopRowKey } from './cbv/row-focus'
 import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
 import { dropUnknownField, isFilterRefusal, unknownFieldsOf } from './cbv/unknown-fields'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
@@ -4333,7 +4335,15 @@ export function CollectionBrowserView({
   const [sharedSplit] = useState(() =>
     sharedLink ? splitRiskFilter((sharedLink.f ?? []) as unknown as ActiveFilter[]) : null
   )
-  const [page, setPage] = useState(sharedLink?.p ?? 1)
+  // Back from a record lands on the page the person left (army 8 b14) — remembered per
+  // history entry (lib/list-page-memory.ts); a shared link states its own page.
+  const [restoredPage] = useState(() =>
+    sharedLink ? null : rememberedListPage(`cbv:${collection}`)
+  )
+  const [page, setPage] = useState(sharedLink?.p ?? restoredPage ?? 1)
+  useEffect(() => {
+    rememberListPage(`cbv:${collection}`, page)
+  }, [collection, page])
   // #2447 — cursors that reach the next pages of the current list (forgotten on any change).
   const cursorBookRef = useRef(createCursorBook())
   const [search, setSearch] = useState(sharedLink ? (sharedLink.q ?? '') : initialSearch)
@@ -4532,7 +4542,10 @@ export function CollectionBrowserView({
   const colsRef = useRef<HTMLDivElement>(null)
   const tableScrollRef = useRef<HTMLDivElement>(null)
   // A shared link IS the view: the collection / role default view never lands over it.
-  const defaultAppliedRef = useRef(!!sharedLink)
+  // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
+  // counted, not those records further narrowed by a saved default view.
+  const deepLinked = !sharedLink && (initialConditions?.length ?? 0) > 0
+  const defaultAppliedRef = useRef(!!sharedLink || deepLinked)
   const { isAdmin } = useItemEditAuth()
 
   // Reset ONLY when the collection actually changes. A plain [collection]
@@ -4695,8 +4708,10 @@ export function CollectionBrowserView({
     const hasSeedMaterial =
       Object.values(scopes?.defaults ?? {}).some((v) => v.length > 0) ||
       Object.values(scopes?.restricted ?? {}).some((v) => v.length > 0)
-    // A shared link states its quick filters exactly — no scope defaults on top.
-    if (!scopes || effQuickFilters.length === 0 || !hasSeedMaterial || sharedLink) {
+    // A shared link states its quick filters exactly — no scope defaults on top. A deep
+    // link's context neither (its count was taken without them); RESTRICTED scopes still
+    // apply server-side.
+    if (!scopes || effQuickFilters.length === 0 || !hasSeedMaterial || sharedLink || deepLinked) {
       setScopeGateOpen(true)
       return
     }
@@ -6349,7 +6364,11 @@ export function CollectionBrowserView({
     defaultAppliedRef.current = true
     // A default for the viewer's role (#672) wins over the collection default.
     const def = views.find((v) => v.role_default) ?? views.find((v) => v.is_default)
-    if (def && activeViewId == null) applyView(def)
+    if (def && activeViewId == null) {
+      applyView(def)
+      // The default view landing on a restored list keeps the page Back returned to.
+      if (restoredPage) setPage(restoredPage)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [views, nonHidden])
   // ── Export presets (#85): named server-side exports (xlsx/csv) ────────────
@@ -6719,6 +6738,59 @@ export function CollectionBrowserView({
     const group = `record:${collection}:${String(id)}`
     return intentProps(group, () => prefetchRecord(qc, client, collection, String(id), { group }))
   }
+  // A row opens like a link (army 8 b14: rows had no link — no keyboard open, no Cmd/
+  // middle-click new tab): Enter opens it, Cmd/Ctrl-click and middle-click open the
+  // record's own address in a new tab (Shift-click is left alone — on a list with bulk
+  // selection people expect it to extend a selection, army8 review M9). Clicks inside a
+  // cell control (a checkbox, a filter chip, a menu) stop at that control as before.
+  // ONE row is in the tab order (roving tab stop, see tabRowKey): Tab reaches the list
+  // once and moves on to the pager; Arrow Up/Down, Home and End move between rows.
+  const rowOpenProps = (id: string | number) => {
+    const intent = rowIntent(id)
+    return {
+      ...intent,
+      tabIndex: String(id) === tabRowKey ? 0 : -1,
+      'data-row-open': '',
+      onFocus: (e: React.FocusEvent<HTMLElement>) => {
+        intent.onFocus()
+        if (e.target === e.currentTarget) setRowFocusKey(String(id))
+      },
+      onClick: (e: React.MouseEvent<HTMLElement>) => {
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault()
+          window.open(urlFor({ collection, itemId: String(id) }), '_blank', 'noopener')
+          return
+        }
+        openRow(id)
+      },
+      onAuxClick: (e: React.MouseEvent<HTMLElement>) => {
+        if (e.button !== 1) return
+        e.preventDefault()
+        window.open(urlFor({ collection, itemId: String(id) }), '_blank', 'noopener')
+      },
+      onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          openRow(id)
+          return
+        }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+        e.preventDefault()
+        const rows = [
+          ...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>(
+            ':scope > [data-row-open]'
+          ) ?? [])
+        ]
+        const to = rowFocusTarget(rows.length, rows.indexOf(e.currentTarget), e.key)
+        const next = to === null ? null : rows[to]
+        if (next) {
+          next.focus()
+          next.scrollIntoView?.({ block: 'nearest' })
+        }
+      }
+    }
+  }
   const openRow = (id: string | number) => {
     if (searchLogRef.current?.key === `${collection}\u0000${appliedSearch}`) {
       void logSearchOpen(client, searchLogRef.current.id, {
@@ -6916,6 +6988,10 @@ export function CollectionBrowserView({
     }
     return out
   })()
+  // The row that holds the list's one tab stop: the last row focused while it is still
+  // listed, else the first row (army8 review M9: every row was a Tab stop, 50 before the pager).
+  const [rowFocusKey, setRowFocusKey] = useState<string | null>(null)
+  const tabRowKey = tabStopRowKey(renderList, rowFocusKey)
 
   const leftPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'left').map((c) => c.key)
   const rightPinnedKeys = orderedCols.filter((c) => pinOf(c.key) === 'right').map((c) => c.key)
@@ -9383,8 +9459,7 @@ export function CollectionBrowserView({
                         <tr
                           key={String(id)}
                           {...askDrag({ collection, id: String(id) })}
-                          onClick={() => openRow(id)}
-                          {...rowIntent(id)}
+                          {...rowOpenProps(id)}
                           data-row-key={String(id)}
                           title={
                             rowChanges.titleFor(String(id)) ??
@@ -9394,7 +9469,7 @@ export function CollectionBrowserView({
                           }
                           data-picker-excluded={pickerExcluded ? '' : undefined}
                           style={enterStyle}
-                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
+                          className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
                           } ${pickerExcluded ? PICKER_EXCLUDED_ROW_CLASS : ''}`}
                         >

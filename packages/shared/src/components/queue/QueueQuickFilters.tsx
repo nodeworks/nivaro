@@ -102,19 +102,25 @@ export function QueueQuickFilters({
     >
       {defs.map((def) => {
         const selected = draft[def.key] ?? []
-        const badge = def.restricted
-          ? {
-              label: 'restricted',
-              cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-              title: `Options limited to your restricted ${def.placeholder} scope`
-            }
-          : seededKeys.has(def.key) && selected.length > 0
+        // A value picked from a default reads "your default" even when the options are
+        // also limited (army 8: "RESTRICTED" beside a person's own default zone read as
+        // their whole access); limited options alone read "your access".
+        const badge =
+          seededKeys.has(def.key) && selected.length > 0
             ? {
                 label: 'your default',
                 cls: 'bg-nvr-cyan/[0.12] text-[#0284a8] dark:text-nvr-cyan',
-                title: `Pre-selected from your default ${def.placeholder} scope — adjust freely`
+                title: `Pre-selected from your default ${def.placeholder} — change it freely.${
+                  def.restricted ? ' The list shows only the ones you have access to.' : ''
+                }`
               }
-            : null
+            : def.restricted
+              ? {
+                  label: 'your access',
+                  cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+                  title: `The ${def.placeholder} list shows only the ones you have access to.`
+                }
+              : null
         const set = (vals: string[]) => {
           setDraft((d) => ({ ...d, [def.key]: vals }))
           // Removing a facet's last value (its ✕) applies at once — a cleared

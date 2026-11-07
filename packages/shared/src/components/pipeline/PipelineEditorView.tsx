@@ -5394,6 +5394,8 @@ interface OwnerGapCluster {
   } | null
   /** Why no group matches, in words (#2012); absent on older servers. */
   reason?: string
+  /** `sample_items` by their display template ("CR26INV-37438"); absent on older servers. */
+  sample_labels?: string[]
 }
 
 interface HygieneFinding {
@@ -6036,10 +6038,16 @@ export function OwnerGapsCard({
               {totalUnowned > 0 && (
                 <span className='flex items-center gap-1.5 text-slate-700 dark:text-foreground'>
                   <span className='h-1.5 w-1.5 rounded-full bg-amber-500' />
-                  <span className='font-semibold tabular-nums'>{totalUnowned}</span> unowned record
-                  {totalUnowned === 1 ? '' : 's'} across{' '}
+                  <span className='font-semibold tabular-nums'>{totalUnowned}</span> record
+                  {totalUnowned === 1 ? '' : 's'} with no owner group across{' '}
                   <span className='font-semibold tabular-nums'>{clusters.length}</span> combination
                   {clusters.length === 1 ? '' : 's'}
+                  <span
+                    className='ml-1 text-[11px] font-normal text-slate-500 dark:text-muted-foreground'
+                    data-tip='Queues may still list an owner for these: when no group covers a step, the record’s creator stands in as a fallback owner.'
+                  >
+                    (the creator may still stand in)
+                  </span>
                 </span>
               )}
               {(dead?.group_seats ?? 0) > 0 && (
@@ -6189,10 +6197,10 @@ export function OwnerGapsCard({
                             </span>
                           )}
                           <span
-                            className='ml-auto max-w-[180px] truncate text-[10.5px] text-slate-400'
-                            data-tip={g.sample_items.join(', ')}
+                            className='ml-auto max-w-[220px] truncate text-[10.5px] text-slate-400'
+                            data-tip={(g.sample_labels ?? g.sample_items).join(', ')}
                           >
-                            e.g. {g.sample_items.slice(0, 3).join(', ')}
+                            e.g. {(g.sample_labels ?? g.sample_items).slice(0, 3).join(', ')}
                           </span>
                           <Button
                             size='sm'

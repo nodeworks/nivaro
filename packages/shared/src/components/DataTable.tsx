@@ -54,6 +54,30 @@ export interface Column<T = Record<string, unknown>> {
   render?: (row: T, index: number) => React.ReactNode
 }
 
+/** Plain text of a header node (strings, numbers, nested elements). */
+function nodeText(node: React.ReactNode): string {
+  if (node == null || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (typeof node === 'object' && 'props' in node)
+    return nodeText((node as { props?: { children?: React.ReactNode } }).props?.children)
+  return ''
+}
+
+/**
+ * What a column's pin button calls it for a screen reader — the header a
+ * person sees ("REQ $"), never the field path ("extra.requisition_amount",
+ * army 8 b08-N3). A header with no text falls back to the path's last part
+ * in words. Pure.
+ */
+export function pinColumnName(col: { key: string; header: React.ReactNode }): string {
+  const text = nodeText(col.header).replace(/\s+/g, ' ').trim()
+  if (text) return text
+  const leaf = col.key.split('.').pop() ?? col.key
+  const words = leaf.replace(/_/g, ' ').trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : col.key
+}
+
 export interface FilterDef {
   key: string
   placeholder: string
@@ -1257,7 +1281,7 @@ export function DataTable<T = Record<string, unknown>>({
                                 e.stopPropagation()
                                 cyclePin(col.key)
                               }}
-                              aria-label={`Pin column ${col.key}`}
+                              aria-label={`Pin column ${pinColumnName(col)}`}
                               title={
                                 columnPins?.[col.key] === 'left'
                                   ? 'Pinned left — click to pin right'

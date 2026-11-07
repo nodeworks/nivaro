@@ -141,9 +141,10 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { dedupeChooserKeys } from './column-chooser'
+import { groupSumPathsFor } from './group-sums'
 import { stateAspectEffect, statsOutrunRows } from './live-state-aspect'
-import { pathHeader } from './path-label'
 import { OwnerAvatars } from './OwnerAvatars'
+import { pathHeader } from './path-label'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
@@ -190,6 +191,8 @@ export interface QueueWorklistProps {
 interface QueueOwner {
   id: string
   name: string
+  /** Set by the server for an owner who cannot act (army 8 b08-N4). */
+  inactive?: 'suspended' | 'former'
 }
 
 export interface QueueItemRow {
@@ -1005,20 +1008,8 @@ export function QueueWorklist({
   // sums) in the items response, rows per group on expand. Kanban still groups
   // the full set client-side.
   const serverGrouped = view === 'table' && !!groupBy
-  // Numeric extra columns get a per-group sum in the header.
-  const groupSumPaths = (() => {
-    const paths = new Set<string>()
-    for (const m of queue?.extra_field_meta ?? []) {
-      if (m.aggregate && m.aggregate !== 'count') paths.add(m.path)
-    }
-    for (const src of queue?.sources ?? []) {
-      for (const [p, cfg] of Object.entries(src.column_formats ?? {})) {
-        if (cfg?.type === 'number') paths.add(p)
-      }
-      if (src.type === 'addendums') paths.add('cost_impact')
-    }
-    return [...paths].slice(0, 12)
-  })()
+  // Numeric extra columns get a per-group sum in the header — never ids or years.
+  const groupSumPaths = groupSumPathsFor(queue)
 
   const apiFilters = (() => {
     const out: Record<string, unknown> = {}
@@ -1632,16 +1623,23 @@ export function QueueWorklist({
     const outrun = statsOutrunRows({
       liveTotal: liveStats.total,
       rowsTotal: data?.total,
-      table: view === 'table' && !serverGrouped,
+      // Grouped tables too (army 8 b08-N6): their headers count the whole set, and
+      // nothing else re-read them — "37 of 38" with the strip at 38 for minutes.
+      table: view === 'table',
       busy: selectedCountRef.current > 0 || draggingRef.current
     })
     if (!outrun) return
     liveRefetchRef.current = true
     // This scope's rows only; if nothing was refetched (query paused or not mounted) the
     // quiet flag must not linger into the next person-driven page change.
-    void qc.invalidateQueries({ queryKey: ['queue-items', queueId, scope] }).finally(() => {
-      liveRefetchRef.current = false
-    })
+    // Grouped: the headers AND the open groups' rows (keyed 'group-rows').
+    void qc
+      .invalidateQueries({
+        queryKey: serverGrouped ? ['queue-items', queueId] : ['queue-items', queueId, scope]
+      })
+      .finally(() => {
+        liveRefetchRef.current = false
+      })
   }, [liveStatsAt])
   // Aging chips follow the other active filters (army 6 L38). With an aging
   // chip itself on, the filtered buckets would zero the other chips, so they
@@ -1691,11 +1689,14 @@ export function QueueWorklist({
   }, [dataUpdatedAt])
 
   // Any completed refetch clears the pending-updates pill — the data on screen
-  // is current again, however the refetch was triggered.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on data identity
+  // is current again, however the refetch was triggered. Keyed on the fetch
+  // time, not the data object (army 8 b08-N6): a re-read that came back equal
+  // keeps the SAME object (structural sharing), so the pill outlived refreshes,
+  // Clear and page turns.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on each completed read
   useEffect(() => {
     setPendingUpdates(0)
-  }, [data])
+  }, [dataUpdatedAt])
 
   function refreshPendingUpdates() {
     qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
@@ -4724,7 +4725,14 @@ export function QueueWorklist({
               <input
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
+                // Enter saves, like every other name box (army 8 b08-N2).
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+                  e.preventDefault()
+                  if (saveName.trim() && !saveViewMut.isPending) saveViewMut.mutate()
+                }}
                 placeholder='View name'
+                aria-label='View name'
                 className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
               />
               {/* Sharing a view with everyone is the queue owner's or an

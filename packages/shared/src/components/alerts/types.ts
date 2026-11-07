@@ -76,6 +76,10 @@ export interface MetricAlertLogEntry {
   rule_operator?: string
   definition_name?: string
   definition_unit?: string
+  /** Open alerts only: the reading as the viewer sees it now (their scope);
+   *  null = could not be read as them. `metric_value` is the first fire's. */
+  current_value?: number | null
+  current_at?: string
 }
 
 export interface AnomalyDefinition {

@@ -13,7 +13,7 @@ import {
   useLiveRecord,
   useLiveRecordEvent
 } from './live'
-import { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
+import { clearOwnWrites, isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
 import { type CollectionUpdateEvent, type RealtimeAdapter, RealtimeContext } from './realtime'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -85,6 +85,109 @@ describe('own writes', () => {
     vi.advanceTimersByTime(1500)
     expect(isOwnWrite('short', '1')).toBe(false)
     vi.useRealTimers()
+  })
+
+  // Army 8 b09 H8: the viewer's read-only child-summary POST opened a 6 s "mine" window on the
+  // record, and the other person's real save inside it was dropped as an echo.
+  it('a read-like POST under a record (child-summary, auto-id-preview, clone) notes nothing', () => {
+    clearOwnWrites()
+    noteOwnWriteFromCommand('POST', '/items/workflows/372978/child-summary', { fields: ['x'] })
+    noteOwnWriteFromCommand('POST', '/items/workflows/auto-id-preview', {})
+    noteOwnWriteFromCommand('POST', '/items/workflows/372978/clone', {})
+    noteOwnWriteFromCommand('POST', '/items/workflows/batch-read', { ids: ['372978'] })
+    expect(isOwnWrite('workflows', '372978')).toBe(false)
+    expect(isOwnWrite('workflows', '372978', ['description'])).toBe(false)
+  })
+
+  it('a record PATCH is own only for the fields it wrote; another field by someone else gets through', () => {
+    clearOwnWrites()
+    noteOwnWriteFromCommand('PATCH', '/items/workflows/372978', {
+      quantity: 5,
+      _change_reason: 'why'
+    })
+    // The echo (server may add derived columns): own.
+    expect(isOwnWrite('workflows', '372978', ['quantity', 'amount'])).toBe(true)
+    // A server that names no fields: own (back-compat).
+    expect(isOwnWrite('workflows', '372978')).toBe(true)
+    // Someone else's save of another field, or a comment, inside the window: not own.
+    expect(isOwnWrite('workflows', '372978', ['description'])).toBe(false)
+    expect(isOwnWrite('workflows', '372978', ['$comments'])).toBe(false)
+    expect(isOwnWrite('workflows', '372978', ['$lock'])).toBe(false)
+  })
+
+  it("a comment / task / transition is own only as its aspect — the other person's header save still shows", () => {
+    clearOwnWrites()
+    noteOwnWriteFromCommand('POST', '/comments', { collection: 'workflows', item: '372978' })
+    expect(isOwnWrite('workflows', '372978', ['$comments'])).toBe(true)
+    expect(isOwnWrite('workflows', '372978', ['description'])).toBe(false)
+    noteOwnWriteFromCommand('POST', '/tasks', { collection: 'workflows', item: '1' })
+    expect(isOwnWrite('workflows', '1', ['$tasks'])).toBe(true)
+    expect(isOwnWrite('workflows', '1', ['status'])).toBe(false)
+    noteOwnWriteFromCommand('POST', '/pipelines/instance/orders/3/transition', { comment: 'go' })
+    expect(isOwnWrite('orders', '3', ['$state'])).toBe(true)
+    expect(isOwnWrite('orders', '3', ['total'])).toBe(false)
+  })
+
+  it("the response leg only adds a create's id — it never re-opens the note", () => {
+    vi.useFakeTimers()
+    clearOwnWrites()
+    noteOwnWriteFromCommand('PATCH', '/items/workflows/1', { description: 'a' })
+    vi.advanceTimersByTime(5000)
+    noteOwnWriteFromCommand(
+      'PATCH',
+      '/items/workflows/1',
+      { description: 'a' },
+      { data: { id: 1 } }
+    )
+    vi.advanceTimersByTime(1500)
+    expect(isOwnWrite('workflows', '1', ['description'])).toBe(false)
+    noteOwnWriteFromCommand('POST', '/items/workflows', { description: 'b' }, { data: { id: 55 } })
+    expect(isOwnWrite('workflows', 55)).toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('a delete, a body-less write and a batch update are noted; two writes widen one note', () => {
+    clearOwnWrites()
+    noteOwnWriteFromCommand('DELETE', '/items/workflows/9')
+    expect(isOwnWrite('workflows', '9', ['anything'])).toBe(true)
+    noteOwnWriteFromCommand('PATCH', '/items/workflows/10')
+    expect(isOwnWrite('workflows', '10', ['anything'])).toBe(true)
+    noteOwnWriteFromCommand('POST', '/items/lines/batch', {
+      update: [
+        { id: 1, qty: 2 },
+        { id: 2, price: 3 }
+      ]
+    })
+    expect(isOwnWrite('lines', '1', ['qty'])).toBe(true)
+    expect(isOwnWrite('lines', '1', ['price'])).toBe(false)
+    expect(isOwnWrite('lines', '2', ['price'])).toBe(true)
+    noteOwnWriteFromCommand('PATCH', '/items/lines/1', { price: 4 })
+    expect(isOwnWrite('lines', '1', ['qty'])).toBe(true)
+    expect(isOwnWrite('lines', '1', ['price'])).toBe(true)
+  })
+
+  it("live: the other person's save of another field arrives while this tab's own write is fresh", () => {
+    clearOwnWrites()
+    const { rt, push } = fakeAdapter()
+    const batches: LiveBatch[] = []
+    function Probe() {
+      useLiveRecord('workflows', '372978', (b) => batches.push(b))
+      return null
+    }
+    act(() =>
+      root.render(createElement(RealtimeContext.Provider, { value: rt }, createElement(Probe)))
+    )
+    noteOwnWriteFromCommand('POST', '/comments', { collection: 'workflows', item: '372978' })
+    noteOwnWriteFromCommand('PATCH', '/items/workflows/372978', { quantity: 5 })
+    act(() => {
+      push({ collection: 'workflows', item: '372978', changed_fields: ['$comments'] })
+      push({ collection: 'workflows', item: '372978', changed_fields: ['quantity', 'amount'] })
+      push({ collection: 'workflows', item: '372978', changed_fields: ['description'] })
+      vi.advanceTimersByTime(300)
+    })
+    expect(batches).toHaveLength(1)
+    expect(batches[0].changedFields).toEqual(['description'])
+    expect(batches[0].own).toBe(false)
   })
 })
 

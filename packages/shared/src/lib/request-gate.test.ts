@@ -360,3 +360,59 @@ describe('withGetCoalescing speed kept (no regression from the write epoch)', ()
     expect(calls.filter((x) => x._method === 'GET')).toHaveLength(1)
   })
 })
+
+import { clearOwnWrites, isOwnWrite } from './own-writes'
+
+describe('withGetCoalescing own-write notes (army 8 b09 H8)', () => {
+  it("a read-only POST under a record (child-summary) never marks the record as this tab's write", async () => {
+    clearOwnWrites()
+    const { client } = fakeClient(() => ({ data: { lines: 2 } }))
+    const c = withGetCoalescing(client)
+    await c.request({
+      _method: 'POST',
+      _path: '/items/workflows/372978/child-summary',
+      _body: { relations: ['lines'] }
+    } as never)
+    expect(isOwnWrite('workflows', '372978', ['description'])).toBe(false)
+    expect(isOwnWrite('workflows', '372978')).toBe(false)
+  })
+
+  it('a record PATCH marks only its own fields; a comment only the $comments aspect', async () => {
+    clearOwnWrites()
+    const { client } = fakeClient(() => ({ data: { id: 372978 } }))
+    const c = withGetCoalescing(client)
+    await c.request({
+      _method: 'PATCH',
+      _path: '/items/workflows/372978',
+      _body: { description: 'A S1' }
+    } as never)
+    await c.request({
+      _method: 'POST',
+      _path: '/comments',
+      _body: { collection: 'workflows', item: '372978', body: 'note' }
+    } as never)
+    expect(isOwnWrite('workflows', '372978', ['description'])).toBe(true)
+    expect(isOwnWrite('workflows', '372978', ['$comments'])).toBe(true)
+    // The other person's save of a different field in the same window is not an echo.
+    expect(isOwnWrite('workflows', '372978', ['requisition_amount'])).toBe(false)
+  })
+
+  it('a rehearsal (PATCH ?dry_run=1) writes nothing, so it notes nothing (army 8 review)', async () => {
+    clearOwnWrites()
+    const { client } = fakeClient(() => ({ dry_run: true, changes: [] }))
+    const c = withGetCoalescing(client)
+    await c.request({
+      _method: 'PATCH',
+      _path: '/items/workflow_lines/88',
+      _params: { dry_run: '1' },
+      _body: { qty: 4 }
+    } as never)
+    await c.request({
+      _method: 'PATCH',
+      _path: '/items/workflow_lines/89?dry_run=true',
+      _body: { qty: 5 }
+    } as never)
+    expect(isOwnWrite('workflow_lines', '88', ['qty'])).toBe(false)
+    expect(isOwnWrite('workflow_lines', '89', ['qty'])).toBe(false)
+  })
+})

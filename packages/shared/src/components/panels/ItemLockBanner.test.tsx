@@ -646,7 +646,7 @@ describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
     expect(lock?.acquired).toBe(true)
   })
 
-  it('a take-over into a clean form keeps the lock a minute, then lets it go (army6 M28, b09-N5)', async () => {
+  it('a take-over into a clean form keeps the lock one heartbeat, then lets it go (army6 M28, army8 b09)', async () => {
     vi.useFakeTimers()
     const { client, calls } = fakeClient(() => ({ data: null }))
     act(() =>
@@ -669,7 +669,7 @@ describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
     await flush()
     expect(said(calls, 'DELETE')).toHaveLength(0)
     expect(lock?.acquired).toBe(true)
-    // Still clean a minute later: it goes, and the typing gate is back.
+    // Still clean a heartbeat later: it goes, and the typing gate is back.
     await act(async () => {
       vi.advanceTimersByTime(TAKEOVER_HOLD_MS)
     })

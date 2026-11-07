@@ -237,6 +237,38 @@ describe('ReviewListWidget names the group, not its raw key', () => {
     expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Reject')).toBe(false)
   })
 
+  it('a rejected invoice shows the reason the decision carried (army 8 b07-N14)', async () => {
+    await render('rejected', {
+      1: { can_act: false, note: 'Work not completed.' },
+      2: { can_act: false, note: 'Work not completed.' }
+    })
+    const note = host.querySelector('[data-review-decision-note]')
+    expect(note?.textContent).toBe('Reason: Work not completed.')
+    // one line per group, not per row
+    expect(host.querySelectorAll('[data-review-decision-note]')).toHaveLength(1)
+  })
+
+  it('no reason line when the enrich endpoint carries none', async () => {
+    await render('rejected')
+    expect(host.querySelector('[data-review-decision-note]')).toBeNull()
+  })
+
+  it('browser Back closes the confirm instead of leaving the page (army 8 b07-N5)', async () => {
+    await render(null)
+    const approve = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve')!
+    await act(async () => {
+      approve.click()
+    })
+    expect(host.querySelector('[data-review-confirm="approved"]')).not.toBeNull()
+    // opening pushed a marked history entry; Back pops it and closes the confirm
+    expect((window.history.state as { nvrDialog?: string })?.nvrDialog).toMatch(/^nvr-dialog-/)
+    await act(async () => {
+      window.history.back()
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(host.querySelector('[data-review-confirm="approved"]')).toBeNull()
+  })
+
   it('a calendar date shows its own day (2026-11-04 → Nov 4, 2026)', async () => {
     await render(null)
     expect(host.textContent).toContain('Nov 4, 2026')
