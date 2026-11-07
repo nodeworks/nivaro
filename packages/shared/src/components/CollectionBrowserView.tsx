@@ -106,6 +106,7 @@ import {
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
+import { warmPageLookups } from '../lib/cbv-page-warm'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
 import { rowPresenceKey, useRowPresence } from '../lib/presence-hooks'
 import {
@@ -114,7 +115,7 @@ import {
   fetchCascadeRelations
 } from '../lib/quick-filter-cascade'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
-import { copyWhenReady, friendlyIdOf, shareableRecordId } from '../lib/record-ref'
+import { copyWhenReady, friendlyIdOf, rowMenuRef, shareableRecordId } from '../lib/record-ref'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
@@ -127,7 +128,7 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
-import { loadUserCard } from '../lib/user-cards'
+import { loadUserCard, userCardQuery } from '../lib/user-cards'
 import { cn, humanHours } from '../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
@@ -818,10 +819,14 @@ export function RowActionsMenu({
   onAfterTransition,
   row,
   bulkEnabledKeys,
-  disabled = false
+  disabled = false,
+  label
 }: {
   collection: string
   id: string | number
+  /** The host's friendly label for the record (a queue row's "PW26-76166"): what the
+   *  menu names it by and Copy ID copies; else the row's friendly id (army 7 N7). */
+  label?: string | null
   hasPipeline: boolean
   onOpen: () => void
   /** Optional — item hidden when absent (hosts without a peek sheet). */
@@ -845,6 +850,13 @@ export function RowActionsMenu({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { isAdmin } = useItemEditAuth()
+  const ref = rowMenuRef({
+    label,
+    meta: qc.getQueryData<CollectionMeta>(['cbv-collection-meta', collection]),
+    row,
+    id,
+    collection
+  })
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -1211,7 +1223,7 @@ export function RowActionsMenu({
           if (r) setPos({ x: r.right - 176, y: r.bottom + 4 })
           setOpen((o) => !o)
         }}
-        aria-label={`Actions for ${id}`}
+        aria-label={`Actions for ${ref.name}`}
         data-tip={disabled ? 'Turn off bulk mode to use a row’s own actions' : undefined}
         className='inline-flex h-6 items-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-slate-100 dark:disabled:hover:border-slate-700 dark:disabled:hover:text-slate-300'
       >
@@ -1505,11 +1517,12 @@ export function RowActionsMenu({
                   </>
                 )}
                 {divider}
-                {item('Copy ID', () => {
-                  setOpen(false)
-                  void navigator.clipboard?.writeText(String(id))
-                  toast.success('ID copied')
-                })}
+                {ref.copy != null &&
+                  item('Copy ID', () => {
+                    setOpen(false)
+                    void navigator.clipboard?.writeText(ref.copy ?? '')
+                    toast.success('ID copied')
+                  })}
                 {item('Copy link', () => {
                   setOpen(false)
                   void copyRecordLink(client, qc, collection, row, id, urlFor)
@@ -5189,6 +5202,7 @@ export function CollectionBrowserView({
     data: itemsRes,
     isLoading,
     isFetching,
+    isPlaceholderData,
     dataUpdatedAt,
     refetch,
     error
@@ -5201,6 +5215,9 @@ export function CollectionBrowserView({
     refetchInterval: bc.live_events === 'off' ? 30_000 : false,
     retry: false
   })
+  // The prefetched page's relation labels + dotted columns are warmed with it, or Next paints the
+  // rows, then their placeholders fill a second later (assigned below, once the columns are known).
+  const warmPageRef = useRef<(pageRows: Array<Record<string, unknown>>) => void>(() => {})
   // #2448 — idle next page: once this page is in and another exists, fetch it while the
   // browser is idle so paging forward paints at once (the normal refetch replaces it).
   // Not while a search is applied: a searched page is a scan of every searched column, so
@@ -5217,7 +5234,11 @@ export function CollectionBrowserView({
       !!itemsRes &&
       page * effPageSize < (itemsRes.total ?? 0),
     queryKey: itemsPageKey(page + 1),
-    queryFn: () => fetchItemsPage(page + 1)
+    queryFn: () =>
+      fetchItemsPage(page + 1).then((res) => {
+        warmPageRef.current(res.data ?? [])
+        return res
+      })
   })
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
@@ -5835,22 +5856,23 @@ export function CollectionBrowserView({
     [dottedCols, aliasPathByField, formulaPaths]
   )
   const rowIdsKey = rows.map((r) => String(r.id)).join(',')
+  const fetchResolved = (idsKey: string) =>
+    client
+      .request<{
+        data: {
+          rows: Record<string, Record<string, { value: string; ids?: string[] }>>
+          targets?: Record<string, string | null>
+        }
+      }>(
+        get(`/items/${collection}/resolve-paths`, {
+          ids: idsKey,
+          paths: resolveList.join(',')
+        })
+      )
+      .then((r) => r.data ?? { rows: {}, targets: {} })
   const { data: resolvedData } = useQuery({
     queryKey: ['cbv-resolved', collection, rowIdsKey, resolveList.join(',')],
-    queryFn: () =>
-      client
-        .request<{
-          data: {
-            rows: Record<string, Record<string, { value: string; ids?: string[] }>>
-            targets?: Record<string, string | null>
-          }
-        }>(
-          get(`/items/${collection}/resolve-paths`, {
-            ids: rowIdsKey,
-            paths: resolveList.join(',')
-          })
-        )
-        .then((r) => r.data ?? { rows: {}, targets: {} }),
+    queryFn: () => fetchResolved(rowIdsKey),
     enabled: rows.length > 0 && resolveList.length > 0,
     staleTime: 30_000,
     retry: false
@@ -5874,6 +5896,19 @@ export function CollectionBrowserView({
     return { target, id: String(ids[0]) }
   }
   const isResolvedCol = (key: string) => key.includes('.') || key in aliasPathByField
+  warmPageRef.current = (pageRows) =>
+    warmPageLookups({
+      qc,
+      collection,
+      rows: pageRows,
+      columns: effectiveColumns,
+      relations,
+      resolveList,
+      isResolvedCol,
+      fetchResolved,
+      fetchRelation: (target, id) => fetchRelationRow(client, target, id),
+      userCardQuery: (id) => userCardQuery(client, id)
+    })
 
   // ── Column-level filters (all server-side via conditions) ─────────────────
   type ColFilterKind =
@@ -7392,13 +7427,28 @@ export function CollectionBrowserView({
                     label: 'Peek',
                     run: () => recordDrill.push([{ collection, itemId: String(cellMenu.row.id) }])
                   },
-                  {
-                    label: 'Copy ID',
-                    run: () => {
-                      void navigator.clipboard?.writeText(String(cellMenu.row.id))
-                      toast.success('ID copied')
-                    }
-                  },
+                  // The friendly id, never the row id (army 7 N7); none = nothing to copy.
+                  ...(rowMenuRef({
+                    meta,
+                    row: cellMenu.row,
+                    id: cellMenu.row.id as string | number
+                  }).copy != null
+                    ? [
+                        {
+                          label: 'Copy ID',
+                          run: () => {
+                            void navigator.clipboard?.writeText(
+                              rowMenuRef({
+                                meta,
+                                row: cellMenu.row,
+                                id: cellMenu.row.id as string | number
+                              }).copy ?? ''
+                            )
+                            toast.success('ID copied')
+                          }
+                        }
+                      ]
+                    : []),
                   {
                     label: 'Copy link',
                     run: () => {
@@ -8802,10 +8852,15 @@ export function CollectionBrowserView({
           className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'
         >
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
-              paginate/sort/filter visibly does something */}
+              paginate/sort/filter visibly does something. Only while the rows on screen are
+              the PREVIOUS key's: a page already painted from cache (the idle-prefetched next
+              page, a poll, a live refresh) refreshes under the progress bar alone — dimming it
+              made Next/Prev flash twice. */}
           {isFetching && !isLoading && (
+            <div className='cbv-progress pointer-events-none absolute inset-x-0 top-0 z-[6] h-[3px] overflow-hidden' />
+          )}
+          {isFetching && !isLoading && isPlaceholderData && (
             <>
-              <div className='cbv-progress pointer-events-none absolute inset-x-0 top-0 z-[6] h-[3px] overflow-hidden' />
               <div className='cbv-overlay nvr-fade-in pointer-events-none absolute inset-0 z-[5] flex items-start justify-center bg-white/40 pt-24 dark:bg-slate-950/35'>
                 <span className='nvr-pop-in flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300'>
                   <RotateCw aria-hidden className='h-3.5 w-3.5 animate-spin text-[#00a5cc]' />
