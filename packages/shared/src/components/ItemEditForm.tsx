@@ -390,6 +390,22 @@ import { type InputBinding, WidgetSlot } from './WidgetSlot'
 const DESIGN_RAIL_TOGGLE =
   'border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-500 hover:bg-slate-200/70 hover:text-slate-700 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:hover:text-slate-300'
 
+/** Header text for a saved record (army 6 M52). A display template that
+ *  renders to nothing readable (only spaces / punctuation) falls back to the
+ *  record's name or title, then "<Singular> (no number)" — never the row id. */
+export function recordHeadingText(
+  rendered: string,
+  row: Record<string, unknown> | null | undefined,
+  singular: string
+): string {
+  if (/[\p{L}\p{N}]/u.test(rendered)) return rendered.trim()
+  for (const k of ['name', 'title', 'label']) {
+    const v = row?.[k]
+    if (typeof v === 'string' && /[\p{L}\p{N}]/u.test(v)) return v.trim()
+  }
+  return `${singular} (no number)`
+}
+
 function parseSummaryFields(raw: string[] | string | null | undefined): SummaryEntry[] | undefined {
   if (!raw) return undefined
   if (Array.isArray(raw)) return raw as SummaryEntry[]
@@ -2859,6 +2875,9 @@ function ItemEditFormView({
           if (field) {
             if (notPersonStageRef.current === 0) {
               // The person's own pick: no longer prefill, so what it derives is their work.
+              // It is no longer DERIVED either (M9, army 6): a Zone the Region default filled
+              // and the person then changed narrows the Region list again.
+              derivedOriginRef.current.delete(field)
               pdQuietRef.current.delete(field)
               pdQuietRuleLinksRef.current.delete(k)
               pdPersonChangeRef.current(field)
@@ -2888,6 +2907,7 @@ function ItemEditFormView({
         if (crossFillInFlightRef.current === 0 && notPersonStageRef.current === 0) {
           const field = stagingKeyToFieldRef.current.get(k)
           if (field) {
+            derivedOriginRef.current.delete(field)
             pdQuietRef.current.delete(field)
             pdQuietRuleLinksRef.current.delete(k)
             pdPersonChangeRef.current(field)
@@ -3971,7 +3991,8 @@ function ItemEditFormView({
         for (const c of stale)
           out[c.field] = {
             was: d.base[c.field],
-            by: null,
+            // army6 L44: name the person whose save the draft now meets (P3 request).
+            by: lastTouchRef.current?.user_name ?? null,
             at: new Date().toISOString(),
             theirs: c.current_value,
             conflict: true
@@ -4032,6 +4053,16 @@ function ItemEditFormView({
         .catch(() => {})
     setRecovery({ state: 'none' })
   }, [recoveryKey, authUserId, client, collection, isNew, itemId])
+  // M7 (army 6): the person ignored an older-draft offer and started typing. Newer work wins:
+  // the offer closes and this form's edits are stored again (the persist effect skips while
+  // an offer is open, so a second unsaved record was lost). An offer for a draft that was
+  // already created stays — it warns about a duplicate.
+  useEffect(() => {
+    if (recovery.state !== 'offer' || recovery.createdId != null) return
+    if (!isDirty || userTouchedRef.current.size === 0) return
+    setRecovery({ state: 'none' })
+    toast('Your newer changes replace the older draft')
+  }, [recovery, isDirty])
 
   // New records: stamp the resolved layout's default_values onto the draft,
   // once, filling only keys the draft doesn't already have a value for.
@@ -4764,6 +4795,14 @@ function ItemEditFormView({
                 v = src[c]
                 if (v !== null && v !== undefined && v !== '') break
               }
+              // M8 (army 6): an EMPTY source value never wipes a value another source filled
+              // (a project with no Default Expenditure Type over its project type's default).
+              // It still clears what an earlier pick on THIS field brought in.
+              if (v === null || v === undefined || v === '') {
+                const cur = draftRef.current[target]
+                const curEmpty = cur === null || cur === undefined || cur === ''
+                if (!curEmpty && fillSourceRef.current.get(target)?.source !== field) continue
+              }
               patch[target] = v ?? null
             }
             // A re-derive (restored draft) never replaces a value already there.
@@ -5035,6 +5074,9 @@ function ItemEditFormView({
       // actually different (the phantom-dirty report).
       if (valuesEqual(draftRef.current[field], value)) return
       userTouchedRef.current.add(field)
+      // M9 (army 6): a hand-edited field is no longer derived from another pick, so the
+      // pick that filled it narrows by it again (Zone changed → Region list = that zone).
+      if (crossFillInFlightRef.current === 0) derivedOriginRef.current.delete(field)
       relockOnEditRef.current?.()
       fieldEditSeqRef.current.set(field, ++ruleSeqRef.current)
       const next = { ...draftRef.current, [field]: value }
@@ -5439,7 +5481,20 @@ function ItemEditFormView({
 
   // Adding a row to a required grid clears its error without waiting for the
   // next full validation pass (grids never call handleFieldChange).
+  // army6 M1: only when there is something to clear. These effects run after
+  // every keystroke; a state update queued each time — even one that hands
+  // back `prev` — stays pending until React's scheduler gets a turn, and while
+  // fast typing starves it React counts each keystroke's commit as a nested
+  // update. Past 50 it throws "Maximum update depth exceeded" from the next
+  // setDraft: that keystroke is lost (the Description box "drops characters").
+  // biome-ignore lint/correctness/useExhaustiveDependencies: validationErrors is read to skip a no-op update, not a trigger
   useEffect(() => {
+    if (
+      !Object.keys(validationErrors).some(
+        (f) => o2mAliasFields.has(f) && (o2mEffectiveCounts[f] ?? 0) > 0
+      )
+    )
+      return
     setValidationErrors((prev) => {
       let changed = false
       const next = { ...prev }
@@ -5459,7 +5514,10 @@ function ItemEditFormView({
   // rule-filled Shipping Location stayed listed as "Required" while the field
   // showed it (and Create then saved fine). Alias fields have no draft value
   // and are judged by the count effects above.
+  // Skips the update when nothing is satisfied (army6 M1, see above).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: validationErrors is read to skip a no-op update, not a trigger
   useEffect(() => {
+    if (dropSatisfiedRequired(validationErrors, draft) === validationErrors) return
     setValidationErrors((prev) => dropSatisfiedRequired(prev, draft))
   }, [draft])
 
@@ -6902,7 +6960,7 @@ function ItemEditFormView({
     const heading =
       itemTitle && itemTitle !== (colMeta?.display_name ?? '')
         ? itemTitle
-        : `${singularTitle} ${String(itemId ?? '')}`
+        : `${colMeta?.singular || colMeta?.display_name || titleCase(collection ?? '')} (no number)`
     const text = `${heading}\n${window.location.href}\n\n${lines.join('\n')}`
     await navigator.clipboard.writeText(text).then(
       () => toast.success('Summary copied'),
@@ -9790,7 +9848,7 @@ function ItemEditFormView({
         } else if (notice.hidden) {
           toast.warning(
             isNew
-              ? `${noun} ${id} was created, but it’s outside what you can see${why}.`
+              ? `The new ${noun.toLowerCase()} was created, but it’s outside what you can see${why}.`
               : `Saved, but this ${noun.toLowerCase()} is now outside what you can see${why}.`,
             { duration: 15_000 }
           )
@@ -9810,10 +9868,13 @@ function ItemEditFormView({
               ? `Kept the newer ${n === 1 ? 'value' : 'values'} — nothing of yours left to save`
               : `Changes saved — kept the newer ${n === 1 ? 'value' : 'values'} for ${n} ${n === 1 ? 'field' : 'fields'}`
           )
+        } else if (!isNew && notice.noFieldWrite && notice.onlyMain) {
+          // L43 (army 6): no request was sent — never "Changes saved".
+          toast('Nothing to save — no changes')
         } else toast.success(isNew ? 'Record created' : 'Changes saved')
         if (notice.linkProblems.length > 0) {
           toast.error(
-            `${isNew ? `${noun} ${id} was created` : 'Saved'}, but some parts did not save: ${[
+            `${isNew ? `The new ${noun.toLowerCase()} was created` : 'Saved'}, but some parts did not save: ${[
               ...new Set(notice.linkProblems)
             ].join(' · ')}`,
             { duration: 20_000 }
@@ -12168,7 +12229,11 @@ function ItemEditFormView({
     if (isNew || !documentTitle || designOn) return
     const t =
       itemData && colMeta?.display_template
-        ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
+        ? recordHeadingText(
+            applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>),
+            itemData as Record<string, unknown>,
+            colMeta?.singular || colMeta?.display_name || titleCase(collection ?? '')
+          )
         : (colMeta?.display_name ?? titleCase(collection ?? ''))
     if (!t) return
     const prev = document.title
@@ -12291,9 +12356,15 @@ function ItemEditFormView({
 
   const title = colMeta?.display_name ?? titleCase(collection ?? '')
   const singularTitle = colMeta?.singular || title
+  // M52 (army 6): a display template that renders empty falls back to the
+  // record's name, then "<Singular> (no number)" — never the row id.
   const itemTitle =
     !isNew && itemData && colMeta?.display_template
-      ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
+      ? recordHeadingText(
+          applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>),
+          itemData as Record<string, unknown>,
+          singularTitle
+        )
       : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
@@ -12551,7 +12622,11 @@ function ItemEditFormView({
                                               }`}
                                             >
                                               <span key={completeness.pct} className='nvr-fade-in'>
-                                                {completeness.pct}% complete
+                                                {/* army6 I14: required fields, not the work ("100% complete" read
+                                                    as done with money still left to forecast). */}
+                                                {completeness.pct >= 100
+                                                  ? 'Required fields complete'
+                                                  : `${completeness.pct}% of required fields`}
                                                 {completeness.issues > 0
                                                   ? ` · ${completeness.issues} issue${completeness.issues === 1 ? '' : 's'}`
                                                   : ''}
@@ -13732,6 +13807,16 @@ function ItemEditFormView({
                                               // Summary mode has nothing to save — the button would
                                               // only contradict the "read-only" strip.
                                               readMode && !isNew && 'hidden',
+                                              // L29 (army 6): a record this person cannot change
+                                              // (step-locked, every field locked, gone) shows no
+                                              // Save. Another editor's lock keeps it, disabled.
+                                              !isNew &&
+                                                !isDirty &&
+                                                !lockReadOnly &&
+                                                (everyFieldLocked ||
+                                                  !!recordGone ||
+                                                  (!!editLockMessage && !editLockPartial)) &&
+                                                'hidden',
                                               justSaved &&
                                                 'bg-emerald-500 hover:bg-emerald-500 text-white'
                                             )}

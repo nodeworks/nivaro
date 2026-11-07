@@ -10,6 +10,7 @@ import {
   describeHops,
   describeUserScopes,
   listScopeDimensions,
+  resolveScopeLabelsForUsers,
   scopeHopsFor
 } from '../services/user-scopes.js'
 
@@ -231,7 +232,27 @@ export async function userScopesRoutes(app: FastifyInstance) {
     // Read fresh: a self-edit made on another replica does not move the tenant-wide config
     // epoch (below), so this process's 60 s copy of the person's rows may be older than it.
     bustUserScopeCache(req.user!.id)
-    return { data: await describeUserScopes(req.user!.id) }
+    const described = await describeUserScopes(req.user!.id)
+    // Army 6 D8 / M36: an administrator who also carries a User Scope gets
+    // scoped reports, exports and timelines like anyone else — say so. `admin`
+    // and `access_scope_label` ("National", "Zone 1, Zone 2") are additive; the
+    // label is the restricted values' display names, only worked out for admins.
+    const admin = req.isAdmin === true
+    let accessScopeLabel: string | null = null
+    if (admin) {
+      const dims = Object.keys(described.restricted ?? {}).filter(
+        (d) => (described.restricted[d] ?? []).length > 0
+      )
+      if (dims.length > 0) {
+        const labels = await resolveScopeLabelsForUsers([req.user!.id], dims).catch(
+          () => new Map<string, Map<string, string[]>>()
+        )
+        const mine = labels.get(String(req.user!.id))
+        const names = dims.flatMap((d) => mine?.get(d) ?? [])
+        accessScopeLabel = names.length > 0 ? [...new Set(names)].join(', ') : null
+      }
+    }
+    return { data: { ...described, admin, access_scope_label: accessScopeLabel } }
   }
   app.get('/users/me/scopes', { preHandler: requireAuth }, ownScopes)
   // The spelling callers guess (army 5 b11-N9: a service account's GET /user-scopes/mine

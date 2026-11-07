@@ -13,7 +13,10 @@ vi.mock('../../lib/column-probe.js', () => ({ hasColumn: async () => false }))
 const labelsAsUser = vi.hoisted(() => vi.fn())
 const legacyLabels = vi.hoisted(() => vi.fn(async () => ({})))
 vi.mock('../ai-link-labels.js', () => ({ linkLabelsAsUser: labelsAsUser }))
-vi.mock('../queues.js', () => ({ getLabels: legacyLabels }))
+vi.mock('../queues.js', () => ({
+  getLabels: legacyLabels,
+  missingRecordLabel: (c: string) => `No ${c} number`
+}))
 vi.mock('./open-work.js', () => ({
   liveOpenWork: async () => undefined,
   openWorkFor: async () => ({ index: undefined, liveOnly: false })
@@ -208,7 +211,7 @@ describe('attention titles are labelled as the caller', () => {
     expect(items.find((i) => i.kind === 'sla_breached')?.title).toBe('Pump failure')
   })
 
-  it('falls back to #id for a record the caller cannot read', async () => {
+  it('a record the caller cannot read gets a friendly fallback, never its row id', async () => {
     labelsAsUser.mockResolvedValue({})
     const index: OpenWorkIndex = {
       as_of: Date.now(),
@@ -240,7 +243,7 @@ describe('attention titles are labelled as the caller', () => {
       userId: 'U-1',
       collectionLabel: new Map()
     })
-    expect(items.find((i) => i.kind === 'sla_breached')?.title).toBe('#7')
+    expect(items.find((i) => i.kind === 'sla_breached')?.title).toBe('No wo number')
   })
 })
 

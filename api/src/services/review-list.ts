@@ -26,6 +26,7 @@ export const consoleLogger: Logger = {
 export const IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 const MAX_PATH_HOPS = 4
+const MAX_PREFIX_LEN = 12
 const MAX_LOOKUP_MATCH_PAIRS = 3
 const LOOKUP_TUPLE_CHUNK_SIZE = 100
 const LOOKUP_QUERY_LIMIT = 500
@@ -55,8 +56,24 @@ export interface LookupSpec {
  * (composite-match related column) is present — `label` is required on the
  * lookup form since there's no field name to fall back to. */
 export type ColumnSpec =
-  | { field: string; label?: string; format?: ColumnFormat; color?: string }
+  | {
+      field: string
+      label?: string
+      format?: ColumnFormat
+      color?: string
+      role?: GroupMetaRole
+      prefix?: string
+    }
   | { label: string; format?: ColumnFormat; color?: string; lookup: LookupSpec }
+
+/** A group_meta entry may NAME its group instead of rendering as a chip:
+ * `title` leads the group header and the decision confirm ("Approve invoice
+ * #INV-1 · ACME?"), `subtitle` follows it. Without one the header leads with
+ * the raw group key — for invoices that was the Fusion composite id (army 6
+ * H16). Being group_meta, the field is fetched and read-gated like any other
+ * configured column. */
+export const GROUP_META_ROLES = ['title', 'subtitle'] as const
+export type GroupMetaRole = (typeof GROUP_META_ROLES)[number]
 
 /** ColumnSpec after normalizeColumnSpecs assigns a key: always has `field`.
  * For a lookup entry, `field` is the synthesized
@@ -72,6 +89,8 @@ export interface NormalizedColumnSpec {
   format?: ColumnFormat
   color?: string
   lookup?: LookupSpec
+  role?: GroupMetaRole
+  prefix?: string
 }
 
 /** Minimal shape shared by any widget config that walks a relation path from
@@ -103,9 +122,23 @@ export interface ReviewListConfig extends PathWalkConfig {
   aggregate_sum_format?: ColumnFormat | null
   group_meta?: Array<string | ColumnSpec>
   line_columns?: Array<string | ColumnSpec>
+  /** What one group is ("invoice") and one row is ("line") in the header and
+   *  the confirm; unset = no noun / "row". */
+  group_noun?: string | null
+  row_noun?: string | null
   status: {
     field: string
-    options: Array<{ value: string; label: string; color: string }>
+    /** `label` is the button (a verb: "Approve"); `status_label` is the state
+     *  a badge shows once decided ("Approved"), else the label. A
+     *  `confirm_notice` replaces the confirm's generic last line (who is told,
+     *  whether it can be undone). */
+    options: Array<{
+      value: string
+      label: string
+      color: string
+      status_label?: string | null
+      confirm_notice?: string | null
+    }>
     /** Badge shown when the status value is empty (e.g. "Unreviewed"). */
     empty_label?: string | null
     empty_color?: string | null
@@ -140,6 +173,8 @@ export interface ReviewListResult {
       label: string
       format: ColumnFormat | null
       color: string | null
+      role?: GroupMetaRole
+      prefix?: string
     }>
     line_columns: Array<{
       field: string
@@ -422,11 +457,36 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
       if (spec.color !== undefined && (typeof spec.color !== 'string' || !spec.color)) {
         return `${key}[${i}].color must be a non-empty string`
       }
+      if (spec.role !== undefined) {
+        if (key !== 'group_meta' || !hasField)
+          return `${key}[${i}].role is only for group_meta field columns`
+        if (!GROUP_META_ROLES.includes(spec.role as GroupMetaRole))
+          return `${key}[${i}].role must be one of: ${GROUP_META_ROLES.join(', ')}`
+      }
+      if (
+        spec.prefix !== undefined &&
+        (typeof spec.prefix !== 'string' || spec.prefix.length > MAX_PREFIX_LEN)
+      ) {
+        return `${key}[${i}].prefix must be a string of at most ${MAX_PREFIX_LEN} characters`
+      }
     }
     return null
   }
   const metaError = columnSpecError('group_meta')
   if (metaError) return metaError
+  if (Array.isArray(c.group_meta)) {
+    for (const role of GROUP_META_ROLES) {
+      const n = (c.group_meta as unknown[]).filter(
+        (e) => !!e && typeof e === 'object' && (e as { role?: unknown }).role === role
+      ).length
+      if (n > 1) return `group_meta may name at most one ${role}`
+    }
+  }
+  for (const key of ['group_noun', 'row_noun'] as const) {
+    const v = c[key]
+    if (v !== undefined && v !== null && (typeof v !== 'string' || !v || v.length > 40))
+      return `${key} must be a non-empty string of at most 40 characters`
+  }
   const lineError = columnSpecError('line_columns')
   if (lineError) return lineError
 
@@ -465,6 +525,18 @@ export function validateReviewListConfig(raw: unknown, relations: RelRow[]): str
       return `status.options[${i}].color must be a non-empty string`
     if (seenValues.has(o.value)) return `status.options[${i}].value is a duplicate`
     seenValues.add(o.value)
+    if (
+      o.status_label !== undefined &&
+      o.status_label !== null &&
+      (typeof o.status_label !== 'string' || !o.status_label || o.status_label.length > 60)
+    )
+      return `status.options[${i}].status_label must be a non-empty string of at most 60 characters`
+    if (
+      o.confirm_notice !== undefined &&
+      o.confirm_notice !== null &&
+      (typeof o.confirm_notice !== 'string' || !o.confirm_notice || o.confirm_notice.length > 400)
+    )
+      return `status.options[${i}].confirm_notice must be a non-empty string of at most 400 characters`
   }
   if (
     status.stamp_user_field !== undefined &&
@@ -1020,7 +1092,10 @@ export async function resolveReviewListRows(
     field: spec.field,
     label: spec.label || labelByField.get(spec.field) || spec.field,
     format: spec.format ?? null,
-    color: spec.color ?? null
+    color: spec.color ?? null,
+    // Only when set: a column without a role keeps its old shape.
+    ...(spec.role ? { role: spec.role } : {}),
+    ...(spec.prefix ? { prefix: spec.prefix } : {})
   })
 
   return {

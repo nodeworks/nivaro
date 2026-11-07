@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, ExternalLink } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 interface ReqDialogState {
   payload: TransitionRequirementsPayload
   transitionId: string
+  /** The note the move was asked with — the requirements retry sends it again. */
+  comment?: string
   revision: number
 }
 
@@ -23,6 +25,7 @@ import {
 import { Badge } from '../ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { OwnerAvatars } from './OwnerAvatars'
+import { needsTransitionNote, useTransitionNote } from './transition-note'
 
 interface QueueOwner {
   id: string
@@ -51,10 +54,23 @@ interface InstanceState {
   color: string | null
 }
 
-interface InstanceTransition {
+export interface InstanceTransition {
   id: string
   label: string | null
   to_state: string
+  /** Per-transition list-menu gate: false = form-only (Approve), never offered here. */
+  in_row_menu?: boolean
+  /** 'required' = the move needs a note (Send Back, Cancel). */
+  comment_mode?: string | null
+}
+
+/**
+ * The moves the Peek sheet offers: the row-menu set (army6 H7). Form-only moves
+ * (Approve, typically) need the full record in front of the approver; an older
+ * server that omits the flag offers everything, as the row menu does.
+ */
+export function peekTransitions<T extends { in_row_menu?: boolean }>(list: T[] | undefined): T[] {
+  return (list ?? []).filter((t) => t.in_row_menu !== false)
 }
 
 interface InstanceData {
@@ -136,9 +152,16 @@ export function QueueItemSheet({
   const { open: openItemPage } = useItemNavigation()
   const [commentText, setCommentText] = useState('')
   const [reqDialog, setReqDialog] = useState<ReqDialogState | null>(null)
+  // army6 H7 — nothing moves on one click: a move without a note asks
+  // "Move X to Y?" inline first; Send Back / Cancel ask for their note.
+  const [confirmMove, setConfirmMove] = useState<InstanceTransition | null>(null)
+  const transitionNote = useTransitionNote()
 
   const collection = item?.collection
   const itemId = item?.item_id
+  // A confirm belongs to one record: Next / another row drops it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on record change only
+  useEffect(() => setConfirmMove(null), [collection, itemId])
 
   const { data: instance } = useQuery<InstanceData | null>({
     queryKey: ['queue-sheet-instance', collection, itemId],
@@ -160,19 +183,22 @@ export function QueueItemSheet({
   })
 
   const transitionMut = useMutation({
-    mutationFn: (transitionId: string) =>
+    mutationFn: ({ transitionId, comment }: { transitionId: string; comment?: string }) =>
       client.request(
         post(`/pipelines/instance/${collection}/${itemId}/transition`, {
-          transition_id: transitionId
+          transition_id: transitionId,
+          ...(comment ? { comment } : {})
         })
       ),
     onSuccess: () => {
       setReqDialog(null)
+      setConfirmMove(null)
       qc.invalidateQueries({ queryKey: ['queue-sheet-instance', collection, itemId] })
       refetchItems()
       toast.success('Transitioned')
     },
-    onError: (err: unknown, transitionId) => {
+    onError: (err: unknown, { transitionId, comment }) => {
+      setConfirmMove(null)
       // 422 requirements gate → open the fill-in dialog instead of erroring
       // (same flow PipelinePanel runs on the item page).
       const requirements = transitionRequirementsFromError(err)
@@ -180,6 +206,7 @@ export function QueueItemSheet({
         setReqDialog((prev) => ({
           payload: requirements,
           transitionId,
+          comment,
           revision: (prev?.revision ?? 0) + 1
         }))
         return
@@ -208,8 +235,30 @@ export function QueueItemSheet({
       void qc.invalidateQueries({ queryKey: ['queue-sheet-comments', collection, itemId] })
   })
 
-  const transitions = instance?.available_transitions ?? []
+  const transitions = peekTransitions(instance?.available_transitions)
+  // A live update that takes the move away (someone else moved it) drops its confirm.
+  const pendingMove =
+    confirmMove && transitions.some((t) => t.id === confirmMove.id) ? confirmMove : null
   const stateById = new Map((instance?.states ?? []).map((s) => [s.id, s]))
+  const moveLabel = (t: InstanceTransition) => {
+    const target = stateById.get(t.to_state)
+    return t.label || target?.label || target?.key || 'Move'
+  }
+  const targetLabel = (t: InstanceTransition) => {
+    const target = stateById.get(t.to_state)
+    return target?.label || target?.key || t.label || 'the next step'
+  }
+  const startMove = async (t: InstanceTransition) => {
+    if (transitionMut.isPending) return
+    if (needsTransitionNote(t)) {
+      setConfirmMove(null)
+      const comment = await transitionNote.ask(moveLabel(t))
+      if (!comment) return
+      transitionMut.mutate({ transitionId: t.id, comment })
+      return
+    }
+    setConfirmMove(t)
+  }
 
   return (
     <Sheet open={!!item} onOpenChange={onOpenChange}>
@@ -306,22 +355,54 @@ export function QueueItemSheet({
                     Transitions
                   </p>
                   <div className='flex flex-wrap gap-1.5'>
-                    {transitions.map((t) => {
-                      const target = stateById.get(t.to_state)
-                      return (
+                    {transitions.map((t) => (
+                      <button
+                        key={t.id}
+                        type='button'
+                        disabled={transitionMut.isPending}
+                        aria-pressed={pendingMove?.id === t.id}
+                        onClick={() => void startMove(t)}
+                        className={cn(
+                          'flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] font-medium text-slate-700 hover:border-nvr-cyan hover:text-nvr-navy disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:text-nvr-cyan',
+                          pendingMove?.id === t.id && 'border-nvr-cyan'
+                        )}
+                      >
+                        {moveLabel(t)}
+                        <ArrowRight className='h-3 w-3 text-slate-400' />
+                      </button>
+                    ))}
+                  </div>
+                  {pendingMove && (
+                    <div
+                      role='alertdialog'
+                      aria-label='Confirm move'
+                      data-peek-confirm
+                      className='mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-amber-500/10'
+                    >
+                      <p className='text-[12.5px] text-slate-700 dark:text-slate-200'>
+                        Move <span className='font-semibold'>{item.label}</span> to{' '}
+                        <span className='font-semibold'>{targetLabel(pendingMove)}</span>?
+                      </p>
+                      <div className='mt-2 flex gap-2'>
                         <button
-                          key={t.id}
                           type='button'
                           disabled={transitionMut.isPending}
-                          onClick={() => transitionMut.mutate(t.id)}
-                          className='flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] font-medium text-slate-700 hover:border-nvr-cyan hover:text-nvr-navy disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-200 dark:hover:text-nvr-cyan'
+                          onClick={() => transitionMut.mutate({ transitionId: pendingMove.id })}
+                          className='h-7 rounded-md bg-nvr-cyan px-3 text-[12px] font-semibold text-white disabled:opacity-50'
                         >
-                          {t.label || target?.label || target?.key || 'Move'}
-                          <ArrowRight className='h-3 w-3 text-slate-400' />
+                          {transitionMut.isPending ? 'Moving…' : 'Confirm'}
                         </button>
-                      )
-                    })}
-                  </div>
+                        <button
+                          type='button'
+                          disabled={transitionMut.isPending}
+                          onClick={() => setConfirmMove(null)}
+                          className='h-7 rounded-md border border-slate-200 bg-white px-3 text-[12px] text-slate-600 hover:bg-muted disabled:opacity-50 dark:border-border dark:bg-card dark:text-slate-300'
+                        >
+                          Keep
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -399,11 +480,17 @@ export function QueueItemSheet({
           payload={reqDialog.payload}
           transitionId={reqDialog.transitionId}
           isRetry={reqDialog.revision > 1}
-          onSubmitted={() => transitionMut.mutate(reqDialog.transitionId)}
+          onSubmitted={() =>
+            transitionMut.mutate({
+              transitionId: reqDialog.transitionId,
+              comment: reqDialog.comment
+            })
+          }
           executing={transitionMut.isPending}
           onClose={() => setReqDialog(null)}
         />
       )}
+      {transitionNote.dialog}
     </Sheet>
   )
 }

@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import type { User } from '../types.js'
 import { stripAiMemory } from './ai-memory.js'
 import { chainFields } from './chain-columns.js'
@@ -495,12 +496,14 @@ export async function listUsers(
       // AND across whitespace-separated terms, OR across columns, so a full
       // name ("Jane Doe") matches — a single %Jane Doe% never hits any one
       // column and made every multi-word search return nothing.
+      // army6 L34: `%`, `_` and `[` are literal text here ("%_" listed everyone).
       for (const term of search.trim().split(/\s+/)) {
+        const pattern = likeContains(term)
         qb.where((inner) => {
           inner
-            .orWhere('first_name', 'like', `%${term}%`)
-            .orWhere('last_name', 'like', `%${term}%`)
-            .orWhere('email', 'like', `%${term}%`)
+            .orWhere('first_name', 'like', pattern)
+            .orWhere('last_name', 'like', pattern)
+            .orWhere('email', 'like', pattern)
         })
       }
     }

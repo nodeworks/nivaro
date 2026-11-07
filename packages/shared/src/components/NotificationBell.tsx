@@ -70,6 +70,42 @@ export interface BellNotification {
   revision_id?: number | null
   /** #2365 — the sender asked for an explicit acknowledgement. */
   ack?: { required: boolean; at: string | null; by: string | null } | null
+  /** Army 6 M48 — the record's friendly id ("CR26-81410"); null when nothing
+   *  names it (or the reader can't read the collection). Never a row id. */
+  record_label?: string | null
+  /** The collection's singular name ("Workflow"). */
+  record_collection_label?: string | null
+}
+
+/**
+ * The header of a bell group (army 6 M48: it read "WORKFLOWS · 372960", the
+ * row id). A record row: "Workflow CR26-81410" — the collection's singular
+ * name and the record's friendly id, or the name alone when nothing names the
+ * record. Non-record rows: the target's label only (its item is an internal
+ * id). Chat: "Chat". Nothing for rows about nowhere in particular. Pure.
+ */
+export function bellGroupLabel(
+  first:
+    | Pick<
+        BellNotification,
+        'target_label' | 'kind' | 'collection' | 'record_label' | 'record_collection_label'
+      >
+    | null
+    | undefined
+): string | null {
+  if (!first) return null
+  if (first.target_label && first.kind !== 'record') return first.target_label
+  if (String(first.collection ?? '') === '__chat__') return 'Chat'
+  if (!first.collection) return null
+  const word =
+    first.record_collection_label?.trim() ||
+    (() => {
+      const w = String(first.collection).replace(/_/g, ' ').trim()
+      return w ? w.charAt(0).toUpperCase() + w.slice(1) : null
+    })()
+  const label = first.record_label?.trim()
+  if (word && label) return `${word} ${label}`
+  return label || word || null
 }
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
@@ -734,18 +770,10 @@ export function NotificationBell({
                     // The group's target = its newest row's (rows share collection + item).
                     const target = resolveNotificationTargetFor(g.rows[0], routes)
                     const hasRecord = !!target
-                    // Header label: the target's kind for non-record rows, the
-                    // collection · item for record rows, nothing for rows about
-                    // nowhere in particular (broadcasts).
-                    const first = g.rows[0]
-                    const groupLabel =
-                      first?.target_label && first?.kind !== 'record'
-                        ? `${first.target_label}${g.item ? ` · ${g.item}` : ''}`
-                        : String(g.collection) === '__chat__'
-                          ? 'Chat'
-                          : g.collection
-                            ? `${String(g.collection).replace(/_/g, ' ')}${g.item ? ` · ${g.item}` : ''}`
-                            : null
+                    // Header label (bellGroupLabel): "Workflow CR26-81410" for record
+                    // rows, the target's kind otherwise — never a row id.
+                    const first = g.rows.find((r) => r.record_label) ?? g.rows[0]
+                    const groupLabel = bellGroupLabel(first)
                     return (
                       <div
                         key={g.key}

@@ -18,6 +18,7 @@ vi.mock('../../../db/index.js', () => ({
     const q: any = {
       join: () => q,
       where: () => q,
+      whereNot: () => q,
       orderBy: () => q,
       select: async () =>
         table === 'nivaro_workflow_transitions'
@@ -51,7 +52,14 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
   resolveFilterValues: async () => new Map()
 }))
 
-import { gapMessage, isStallProne, noticeOwnerGap } from '../../../services/owner-gap-notice.js'
+import {
+  creatorActsIn,
+  creatorOfRow,
+  gapMessage,
+  isStaleGapSubject,
+  isStallProne,
+  noticeOwnerGap
+} from '../../../services/owner-gap-notice.js'
 
 const ER = {
   id: 'S-ER',
@@ -128,5 +136,88 @@ describe('noticeOwnerGap', () => {
     env.transitions = [{ from_state: 'S-ER', allow_creator: true, auto_trigger: false }]
     expect(await noticeOwnerGap(args)).toBeNull()
     expect(env.notified).toEqual([])
+  })
+})
+
+describe('creatorActsIn (army 6 M44)', () => {
+  const t = [
+    { from_state: 'S-ER', allow_creator: false, auto_trigger: false },
+    { from_state: 'S-WS', allow_creator: true, auto_trigger: false },
+    { from_state: 'S-OS', allow_creator: true, auto_trigger: true }
+  ]
+  it("a step whose manual way out the creator may take is the requester's move", () => {
+    expect(creatorActsIn({ ...ER, id: 's-ws' }, t)).toBe(true)
+    expect(creatorActsIn(ER, t)).toBe(false)
+    // an automatic creator route is not a move a person makes
+    expect(creatorActsIn({ ...ER, id: 'S-OS' }, t)).toBe(false)
+  })
+  it('never the start or a finished state', () => {
+    expect(creatorActsIn({ ...ER, id: 'S-WS', is_initial: true }, t)).toBe(false)
+    expect(creatorActsIn({ ...ER, id: 'S-WS', is_terminal: 1 }, t)).toBe(false)
+  })
+})
+
+describe('creatorOfRow', () => {
+  it('reads creator (workflows) or user_created (IRs) and the created date', () => {
+    expect(
+      creatorOfRow({
+        user_created: 'AAAAAAAA-0000-0000-0000-00000000C0DE',
+        date_created: '2026-11-07T15:00:00Z'
+      })
+    ).toEqual({
+      id: 'AAAAAAAA-0000-0000-0000-00000000C0DE',
+      created_at: '2026-11-07T15:00:00.000Z'
+    })
+    expect(
+      creatorOfRow({ creator: 'BBBBBBBB-0000-0000-0000-00000000C0DE', created: null })
+    ).toEqual({ id: 'BBBBBBBB-0000-0000-0000-00000000C0DE', created_at: null })
+    expect(creatorOfRow({ creator: 7 })).toBeNull()
+    expect(creatorOfRow(undefined)).toBeNull()
+  })
+})
+
+describe('isStaleGapSubject (army 6 L31)', () => {
+  it('a notice about a step the record has left is stale; the current one is not', () => {
+    const fid = 'CM26INV-37423'
+    expect(
+      isStaleGapSubject(
+        'No approver: CM26INV-37423 in Engineering Review',
+        fid,
+        'Warehouse Submission'
+      )
+    ).toBe(true)
+    expect(
+      isStaleGapSubject(
+        'No approver yet: CM26INV-37423 in Engineering Review',
+        fid,
+        'Warehouse Submission'
+      )
+    ).toBe(true)
+    expect(
+      isStaleGapSubject(
+        'No approver: CM26INV-37423 in Engineering Review',
+        fid,
+        'Engineering Review'
+      )
+    ).toBe(false)
+    // another record, another kind of row
+    expect(isStaleGapSubject('No approver: CM26INV-374230 in X', fid, null)).toBe(false)
+    expect(isStaleGapSubject('Waiting on you: CM26INV-37423', fid, null)).toBe(false)
+  })
+})
+
+describe('noticeOwnerGap dedupe', () => {
+  it('an archived notice does not stop a new one (the record came back)', async () => {
+    env.notified.length = 0
+    env.existing = undefined // the query only finds OPEN notices
+    env.transitions = [{ from_state: 'S-ER', allow_creator: false, auto_trigger: false }]
+    const r = await noticeOwnerGap({
+      state: ER,
+      actingOwners: [],
+      friendlyId: 'CM26INV-37423',
+      subjectCollection: 'inventory_request',
+      subjectItem: '37806'
+    })
+    expect(r?.told).toBe(2)
   })
 })

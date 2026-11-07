@@ -1602,11 +1602,32 @@ export async function searchCollectionPage(
   return { data, total: typeof r.total === 'number' ? r.total : null }
 }
 
-/** Registered non-system collections the caller's role may read. */
+/** True when a collection's `browser_config.global_search` is false: it never takes part in
+ *  global search (records, exact ids, tab counts and pages, meaning matches, Cmd+K) for anyone
+ *  (army 6 D5 — legacy support tickets). Its own list and record pages are unaffected. */
+export function excludedFromGlobalSearch(browserConfig: unknown): boolean {
+  let cfg: unknown = browserConfig
+  if (typeof cfg === 'string') {
+    try {
+      cfg = JSON.parse(cfg)
+    } catch {
+      return false
+    }
+  }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false
+  const v = (cfg as { global_search?: unknown }).global_search
+  return v === false || v === 'false' || v === 0
+}
+
+/** Registered non-system collections the caller's role may read and global search covers. */
 async function readableCollections(user: User): Promise<string[]> {
-  const collectionRows = await db('nivaro_collections').select('collection')
+  const collectionRows = (await db('nivaro_collections').select(
+    'collection',
+    'browser_config'
+  )) as Array<{ collection: string; browser_config: unknown }>
   const candidates = collectionRows
-    .map((c: { collection: string }) => c.collection)
+    .filter((c) => !excludedFromGlobalSearch(c.browser_config))
+    .map((c) => c.collection)
     .filter((c: string) => !c.toLowerCase().startsWith('nivaro_'))
   if (!user.role) return []
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()

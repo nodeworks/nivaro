@@ -40,13 +40,45 @@ export function friendlyIdOf(
   return f && row ? textOf(row[f]) : null
 }
 
-/** "CM26-79811" when the row names one, else "#371367". */
+const TEXT_FIELDS = ['title', 'name', 'label', 'subject', 'description']
+
+/** "workflows" → "workflow", "inventory_request" → "inventory request" (server twin: queues.ts recordNoun). */
+export function recordNoun(collection: string | null | undefined): string {
+  const base = String(collection || 'record')
+    .replace(/^nivaro_/, '')
+    .replace(/_/g, ' ')
+    .trim()
+    .toLowerCase()
+  if (/ies$/.test(base)) return `${base.slice(0, -3)}y`
+  if (/[^s]s$/.test(base)) return base.slice(0, -1)
+  return base || 'record'
+}
+
+/**
+ * What people read for a record, never its row id (army 6 M52; server twin
+ * queues.ts fillBlankLabels): the friendly id ("CM26-79811"), else
+ * "No workflow number · <the record's own text>", else "No workflow number".
+ * Empty only when there is no record at all.
+ */
 export function recordRefLabel(
   meta: RecordRefMeta | null | undefined,
   row: Record<string, unknown> | null | undefined,
-  id: string | number | null | undefined
+  id: string | number | null | undefined,
+  collection?: string | null
 ): string {
-  return friendlyIdOf(meta, row) ?? (id == null || id === '' ? '' : `#${id}`)
+  const friendly = friendlyIdOf(meta, row)
+  if (friendly) return friendly
+  if ((id == null || id === '') && !row) return ''
+  const base = `No ${recordNoun(collection)} number`
+  const text = row
+    ? TEXT_FIELDS.map((f) => textOf(row[f]))
+        .find((v) => v != null)
+        ?.replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    : undefined
+  if (!text) return base
+  return `${base} · ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`
 }
 
 function aliasFields(meta: RecordRefMeta | null | undefined): string[] {
@@ -140,4 +172,17 @@ export async function copyWhenReady(text: Promise<string>): Promise<void> {
     }
   }
   await clip.writeText(await text)
+}
+
+/** True for the "No workflow number…" stand-in — there is no id to copy or search by. */
+export function isNoNumberLabel(label: string | null | undefined): boolean {
+  return /^No [\w ]+ number( · |$)/.test(String(label ?? ''))
+}
+
+/** What "Copy ID" puts on the clipboard for a queue row: its friendly label,
+ *  never the row id; null when the record has no number (army 6 M52). */
+export function copyIdText(row: { label?: string | null }): string | null {
+  const label = String(row.label ?? '').trim()
+  if (!label || isNoNumberLabel(label)) return null
+  return label
 }

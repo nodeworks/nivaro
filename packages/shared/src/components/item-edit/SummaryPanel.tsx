@@ -247,8 +247,10 @@ const O2M_AMOUNT_FIELDS = ['amount', 'total', 'cost', 'price', 'quantity']
 const O2M_PREVIEW = 4
 const O2M_FETCH_LIMIT = 200
 
-/** What a child row is called. Display template first, then the usual names. */
-function o2mRowLabel(row: Record<string, unknown>, template: string | null): string {
+/** What a child row is called. Display template first, then the usual names;
+ *  null when the row carries none — never its row id (army6 M49: an IR's
+ *  Materials read "#163069 $9,430.54"). The caller names it by its item. */
+export function o2mRowLabel(row: Record<string, unknown>, template: string | null): string | null {
   if (template) {
     // A display template may reference a related record ("{{workflow.id}} ·
     // Line {{line_number}}"), and these rows are flat — the unresolved half
@@ -264,7 +266,34 @@ function o2mRowLabel(row: Record<string, unknown>, template: string | null): str
     const v = row[f]
     if (v !== null && v !== undefined && String(v).trim() !== '') return String(v).trim()
   }
-  return `#${String(row.id ?? '')}`
+  return null
+}
+
+const O2M_ITEM_FIELDS = ['cifa', 'item', 'catalog_item', 'product', 'part', 'material']
+const PEOPLE_COLLECTIONS = new Set(['nivaro_users', 'directus_users'])
+
+/** The M2O a child row is "about" (a material line's catalog item): a usual
+ *  item field first, else the first link that is not the parent FK or a
+ *  person. Null = none. */
+export function o2mItemRelation(
+  relations: CMSRelation[],
+  relatedCollection: string,
+  manyField: string
+): { field: string; collection: string } | null {
+  const m2os = relations.filter(
+    (r) =>
+      r.many_collection === relatedCollection &&
+      !!r.many_field &&
+      r.many_field !== manyField &&
+      !r.junction_field &&
+      !!r.one_collection &&
+      !PEOPLE_COLLECTIONS.has(r.one_collection)
+  )
+  const pick =
+    O2M_ITEM_FIELDS.map((f) => m2os.find((r) => r.many_field === f)).find(Boolean) ?? m2os[0]
+  return pick?.many_field && pick.one_collection
+    ? { field: pick.many_field, collection: pick.one_collection }
+    : null
 }
 
 /**
@@ -335,6 +364,18 @@ function O2MSummary({
   // relations array, and returning a different shape under it would hand
   // every other consumer the wrong data.
   const template = useDisplayTemplate(relatedCollection)
+  // The line's item (cifa → "311239 LEGRAND-NED DAAS RACK…") names a row the
+  // template and the usual names cannot. Same key and shape as the catalog
+  // picker's relations read.
+  const { data: childRelations = [] } = useQuery<CMSRelation[]>({
+    queryKey: ['collection-relations', relatedCollection],
+    queryFn: () =>
+      client
+        .request<{ data: unknown }>(get(`/collections/${relatedCollection}`))
+        .then((r) => (r.data as { relations?: CMSRelation[] })?.relations ?? []),
+    staleTime: 10 * 60_000
+  })
+  const itemRel = o2mItemRelation(childRelations, relatedCollection, manyField)
 
   // Saved rows minus staged deletes, plus staged rows — what a save would leave.
   const stagingKey = `${relatedCollection}.${manyField}`
@@ -395,7 +436,14 @@ function O2MSummary({
             key={String(row.id ?? i)}
             className='flex items-baseline justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400'
           >
-            <span className='truncate'>{o2mRowLabel(row, template ?? null)}</span>
+            <span className='truncate'>
+              {o2mRowLabel(row, template ?? null) ??
+                (itemRel && row[itemRel.field] != null && row[itemRel.field] !== '' ? (
+                  <M2OSummaryValue collection={itemRel.collection} id={row[itemRel.field]} />
+                ) : (
+                  `Row ${i + 1}`
+                ))}
+            </span>
             {amountField && row[amountField] !== null && row[amountField] !== undefined && (
               <span className='shrink-0 tabular-nums'>
                 {(() => {
@@ -626,7 +674,8 @@ const summaryText = (v: unknown): string => {
   if (typeof v === 'boolean') return v ? 'Yes' : 'No'
   if (typeof v === 'object') {
     const id = (v as Record<string, unknown>).id
-    if (id != null) return `#${String(id)}`
+    // Never a row id on screen (army6 M49).
+    if (id != null) return 'a linked record'
     return Array.isArray(v) ? `${v.length} items` : 'a value'
   }
   const s = String(v)
@@ -637,7 +686,7 @@ const summaryText = (v: unknown): string => {
 
 /** Display text for a related record — the rail's change tip must name the
  *  old vendor, not print its id. Two cached reads (meta for the template,
- *  then the row); an unresolvable id falls back to '#id'. */
+ *  then the row); an unresolvable id reads "a linked record" (never the id). */
 function useRelatedText(collection: string | null, id: unknown): string | null {
   const client = useNivaroClient()
   const readRow = useRecordReader()
@@ -660,11 +709,11 @@ function useRelatedText(collection: string | null, id: unknown): string | null {
     retry: false
   })
   if (!enabled) return null
-  if (!row) return `#${String(id)}`
+  if (!row) return 'a linked record'
   const t = applyDisplayTemplate(meta?.display_template, row).trim()
   if (t) return t
   for (const k of ['name', 'title', 'label', 'number', 'email']) if (row[k]) return String(row[k])
-  return `#${String(id)}`
+  return 'a linked record'
 }
 
 /** The amber "unsaved" dot beside a rail label, with a tip that reads

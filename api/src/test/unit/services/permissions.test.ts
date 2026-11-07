@@ -182,6 +182,93 @@ describe('getAllowedFields()', () => {
     const result = await getAllowedFields(user, 'read', 'articles')
     expect(result).toEqual([])
   })
+
+  // Army 6: the (role, action, collection) index hands '*' back first, so
+  // `.first()` with no ORDER BY took the wildcard's null (every field) over
+  // an exact policy's list. The fake returns rows in index order and only
+  // sorts when the query asks for the exact-first ORDER BY.
+  function mockPolicyRowsInIndexOrder(policies: Array<Record<string, unknown>>) {
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((table: unknown) => {
+      if (table === 'nivaro_roles')
+        return {
+          where: vi.fn().mockReturnThis(),
+          first: vi.fn().mockResolvedValue({ id: 'regular-role-id', admin_access: false })
+        } as unknown as ReturnType<typeof db>
+      let rows = [...policies].sort((a, b) =>
+        String(a.collection).localeCompare(String(b.collection))
+      )
+      const chain: Record<string, unknown> = {}
+      chain.where = vi.fn((w: unknown) => {
+        if (typeof w === 'function') {
+          const wanted: string[] = []
+          const qb = {
+            where: (o: { collection: string }) => (wanted.push(o.collection), qb),
+            orWhere: (o: { collection: string }) => (wanted.push(o.collection), qb)
+          }
+          ;(w as (q: typeof qb) => void)(qb)
+          rows = rows.filter((r) => wanted.includes(String(r.collection)))
+        } else if (w && typeof w === 'object') {
+          rows = rows.filter((r) =>
+            Object.entries(w as Record<string, unknown>).every(([k, v]) => r[k] === v)
+          )
+        }
+        return chain
+      })
+      chain.orderByRaw = vi.fn(() => {
+        rows = [...rows].sort(
+          (a, b) => (a.collection === '*' ? 1 : 0) - (b.collection === '*' ? 1 : 0)
+        )
+        return chain
+      })
+      chain.first = vi.fn(async () => rows[0])
+      return chain as unknown as ReturnType<typeof db>
+    })
+  }
+
+  it('an exact-collection policy wins over the role wildcard', async () => {
+    mockPolicyRowsInIndexOrder([
+      { id: 3672, role: 'regular-role-id', action: 'read', collection: '*', fields: null },
+      {
+        id: 458,
+        role: 'regular-role-id',
+        action: 'read',
+        collection: 'workflow_ids',
+        fields: JSON.stringify(['id'])
+      }
+    ])
+    const result = await getAllowedFields(makeRegularUser(), 'read', 'workflow_ids')
+    expect(result).toEqual(['id'])
+  })
+
+  it('the wildcard answers when there is no exact policy', async () => {
+    mockPolicyRowsInIndexOrder([
+      {
+        id: 3672,
+        role: 'regular-role-id',
+        action: 'read',
+        collection: '*',
+        fields: JSON.stringify(['id', 'name'])
+      },
+      { id: 9, role: 'regular-role-id', action: 'read', collection: 'other', fields: null }
+    ])
+    const result = await getAllowedFields(makeRegularUser(), 'read', 'workflow_ids')
+    expect(result).toEqual(['id', 'name'])
+  })
+
+  it('the row filter also comes from the exact policy, not the wildcard', async () => {
+    const own = [{ field: 'user_created', op: 'eq', value: '$CURRENT_USER' }]
+    mockPolicyRowsInIndexOrder([
+      { id: 3695, role: 'regular-role-id', action: 'read', collection: '*', row_filter: null },
+      {
+        id: 77,
+        role: 'regular-role-id',
+        action: 'read',
+        collection: 'support_tickets',
+        row_filter: JSON.stringify(own)
+      }
+    ])
+    expect(await getRowFilter(makeRegularUser(), 'read', 'support_tickets')).toEqual(own)
+  })
 })
 
 // ─── System tables (nivaro_* / directus_*) ───────────────────────────────────
@@ -252,6 +339,7 @@ describe('system tables', () => {
       return {
         where: vi.fn().mockReturnThis(),
         orWhere: vi.fn().mockReturnThis(),
+        orderByRaw: vi.fn().mockReturnThis(),
         first: vi.fn().mockResolvedValue(result),
         columnInfo: vi.fn().mockResolvedValue({
           id: {},

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { createOne, readItems, updateOne } from './items.js'
-import { can } from './permissions.js'
+import { can, isAdminRole } from './permissions.js'
 
 /**
  * AI action proposals — propose/approve/execute split.
@@ -493,6 +493,12 @@ export async function runAction(
   payload: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> = {}
+  // Proposal and plan writes run with no HTTP request, so before-hooks that
+  // tell a person from an import by `req` would let them through (army 6
+  // security review). The writer is a person: say so on the user they write as.
+  const writer = (await isAdminRole(user))
+    ? user
+    : ({ ...user, ai_non_admin: true } as User & { ai_non_admin: true })
   if (actionType === 'create_task') {
     const { createTask } = await import('./tasks.js')
     const { getApp } = await import('./io-holder.js')
@@ -541,7 +547,7 @@ export async function runAction(
     result = { dashboard_id: dashId, widgets: widgets.length }
   } else if (actionType === 'create_record') {
     const created = (await createOne(
-      user,
+      writer,
       collection,
       (payload.data as Record<string, unknown>) ?? {}
     )) as Record<string, unknown>
@@ -554,7 +560,7 @@ export async function runAction(
     const failedIds: string[] = []
     for (const id of ids) {
       try {
-        await updateOne(user, collection, id, { ...changes })
+        await updateOne(writer, collection, id, { ...changes })
         updated++
       } catch (err) {
         failedIds.push(id)

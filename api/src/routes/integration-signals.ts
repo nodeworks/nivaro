@@ -27,6 +27,7 @@ import {
   runSignalsCycle,
   type SignalAction,
   type SignalRow,
+  signalOpenCount,
   signalOwner
 } from '../services/integration-signals.js'
 import { resolveFriendlyIds } from '../services/workflow-transitions.js'
@@ -292,7 +293,7 @@ export async function integrationSignalsRoutes(app: FastifyInstance) {
         description: s.description,
         tab: s.tab,
         severity: settings.severity,
-        count: run ? Math.max(Number(run.count) - snoozed.length, rows.length) : rows.length,
+        count: signalOpenCount(run?.count, rows.length, snoozed.length),
         error: run?.error ?? null,
         last_run: run ? new Date(run.ran_at).toISOString() : null,
         thresholds: s.thresholds,

@@ -18,6 +18,12 @@ export interface ReviewListStatusOption {
   /** The confirm asks for a note and will not send without one. Every option
    *  is confirmed first either way; without this the note is optional. */
   require_note?: boolean
+  /** The state a badge shows once decided ("Approved"); `label` is the button
+   *  verb ("Approve"). Unset = the label. */
+  status_label?: string | null
+  /** The confirm's last line for this decision — who is told, whether it can
+   *  be taken back. Unset = the generic "Nothing changes until you confirm". */
+  confirm_notice?: string | null
 }
 
 export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime' | 'flag'
@@ -27,11 +33,18 @@ export interface ReviewListColumnSpec {
   label?: string
   format?: ReviewListColumnFormat
   color?: string
+  /** group_meta only: `title` names the group in its header and the confirm
+   *  (instead of the raw group key), `subtitle` follows it. */
+  role?: 'title' | 'subtitle'
+  /** Put before the value where it names the group ("#" → "#INV-1"). */
+  prefix?: string
 }
 
 export interface ReviewListEnrichRow {
   chips?: Array<{ label: string; tone?: 'ok' | 'warn' | 'danger' | 'neutral'; title?: string }>
   can_act?: boolean
+  /** Why the row can't be decided (e.g. an approval is final) — the View only hint. */
+  reason?: string | null
 }
 
 export interface ReviewListConfig {
@@ -53,6 +66,9 @@ export interface ReviewListConfig {
    *  whole invoice late. Groups missing the field keep the key order, last. */
   group_sort?: { field: string; direction?: 'asc' | 'desc' }
   line_columns?: Array<string | ReviewListColumnSpec>
+  /** What a group is ("invoice") and a row is ("line"); unset = none / "row". */
+  group_noun?: string | null
+  row_noun?: string | null
   status: {
     field: string
     options: ReviewListStatusOption[]
@@ -86,6 +102,8 @@ export interface ReviewListResult {
       label: string
       format?: ReviewListColumnFormat | null
       color?: string | null
+      role?: 'title' | 'subtitle'
+      prefix?: string
     }>
     line_columns: Array<{
       field: string
@@ -119,7 +137,11 @@ export function formatValue(v: unknown, format: ReviewListColumnFormat | null | 
   if (format === 'date' || format === 'datetime') {
     const d = new Date(v as string)
     if (Number.isNaN(d.getTime())) return String(v)
-    return format === 'date' ? formatDate(d) : formatDateTime(d)
+    // A calendar date goes to formatDate as the string it came in: a Date
+    // made from '2026-11-04T00:00:00.000Z' reads as Nov 3 west of UTC
+    // (army 6 M33: "Invoice date Nov 3" for 2026-11-04).
+    if (format === 'date') return formatDate(typeof v === 'string' ? v : d)
+    return formatDateTime(d)
   }
   return String(v)
 }
@@ -167,7 +189,8 @@ function statusDisplay(
       : { label: '—', color: null }
   }
   const match = status.options.find((o) => o.value === String(value))
-  if (match) return { label: match.label, color: match.color }
+  // A badge shows the state ("Rejected"), not the button verb ("Reject").
+  if (match) return { label: match.status_label || match.label, color: match.color }
   return { label: String(value), color: null }
 }
 
@@ -224,6 +247,39 @@ function groupSortValue(rows: ReviewListRow[], field: string, desc: boolean): nu
     if (best == null || (desc ? v > best : v < best)) best = v
   }
   return best
+}
+
+/** How one group is named: the group_meta `title` value (with its prefix)
+ *  and `subtitle` value, else the raw group key. */
+export function groupName(
+  group: { key: string; rows: ReviewListRow[] },
+  groupMeta: ReviewListResult['columns']['group_meta']
+): { title: string; subtitle: string | null } {
+  const first = group.rows[0]
+  const pick = (role: 'title' | 'subtitle') => {
+    const c = groupMeta.find((m) => m.role === role)
+    if (!c || !first) return null
+    const v = first.values[c.field]
+    if (v == null || v === '') return null
+    return `${c.prefix ?? ''}${formatValue(v, c.format)}`
+  }
+  return { title: pick('title') ?? (group.key || '—'), subtitle: pick('subtitle') }
+}
+
+/** "25 lines", "1 row". */
+export function countLabel(n: number, noun: string | null | undefined): string {
+  const word = noun?.trim() || 'row'
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+/** The confirm's question: "Approve invoice #INV-1 · ACME?". */
+export function confirmTitle(
+  option: ReviewListStatusOption,
+  name: { title: string; subtitle: string | null },
+  groupNoun: string | null | undefined
+): string {
+  const noun = groupNoun?.trim() ? `${groupNoun.trim()} ` : ''
+  return `${option.label} ${noun}${name.title}${name.subtitle ? ` · ${name.subtitle}` : ''}?`
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -423,6 +479,10 @@ export function ReviewListWidget({
           // Every row must be decidable by the caller for the buttons to show;
           // unknown (no enrich endpoint) = allowed, the endpoint still enforces.
           const canAct = group.rows.every((r) => enrichFor(r.id)?.can_act !== false)
+          const viewOnlyReason =
+            group.rows.map((r) => enrichFor(r.id)?.reason).find((v) => !!v) ??
+            'Only the workflow contact chain (or the PO requestor for invalid holds) can decide this'
+          const name = groupName(group, groupMetaCols)
           const badge = group.mixedStatus
             ? { label: 'Mixed', color: null }
             : statusDisplay(group.uniformStatus, config.status)
@@ -462,16 +522,26 @@ export function ReviewListWidget({
                   <ChevronRight
                     className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-90' : ''}`}
                   />
-                  <span className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-                    {group.key || '—'}
+                  <span
+                    className='text-[12px] font-medium text-slate-700 dark:text-slate-200'
+                    data-review-group-title
+                  >
+                    {name.title}
                   </span>
+                  {name.subtitle && (
+                    <span className='text-[11.5px] text-slate-500 dark:text-slate-400'>
+                      {name.subtitle}
+                    </span>
+                  )}
                   <span className='text-[11px] text-slate-400'>
-                    {group.count} row{group.count === 1 ? '' : 's'}
+                    {countLabel(group.count, config.row_noun)}
                     {group.sum != null
                       ? ` · ${formatValue(group.sum, config.aggregate_sum_format ?? 'number')}`
                       : ''}
                   </span>
                   {groupMetaCols.map((c) => {
+                    // A title / subtitle names the group above; not a chip too.
+                    if (c.role) return null
                     const v = firstRow.values[c.field]
                     if (c.format === 'flag') {
                       if (!isTruthyFlag(v)) return null
@@ -510,7 +580,8 @@ export function ReviewListWidget({
                   {!canAct && (
                     <span
                       className='text-[11px] text-slate-400'
-                      title='Only the workflow contact chain (or the PO requestor for invalid holds) can decide this'
+                      title={viewOnlyReason}
+                      data-review-view-only
                     >
                       View only
                     </span>
@@ -636,18 +707,27 @@ export function ReviewListWidget({
                 id='review-confirm-title'
                 className='text-[13px] font-medium text-slate-700 dark:text-slate-200'
               >
-                {noteAsk.option.label} {noteAsk.group.key || 'these rows'}?
+                {confirmTitle(
+                  noteAsk.option,
+                  groupName(noteAsk.group, groupMetaCols),
+                  config.group_noun
+                )}
               </p>
               <p className='mt-1 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] tabular-nums text-slate-600 dark:border-border dark:bg-white/[0.03] dark:text-slate-300'>
-                {noteAsk.group.count} row{noteAsk.group.count === 1 ? '' : 's'}
+                {countLabel(noteAsk.group.count, config.row_noun)}
                 {noteAsk.group.sum != null
                   ? ` · ${formatValue(noteAsk.group.sum, config.aggregate_sum_format ?? 'number')}`
                   : ''}
               </p>
-              <p className='mt-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
-                {noteAsk.option.require_note
-                  ? 'A reason is required for this decision. It is recorded with the record.'
-                  : 'Nothing changes until you confirm. A note is optional and is recorded with the decision.'}
+              <p
+                className='mt-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+                data-review-confirm-notice
+              >
+                {noteAsk.option.confirm_notice
+                  ? `${noteAsk.option.confirm_notice}${noteAsk.option.require_note ? ' A reason is required.' : ''}`
+                  : noteAsk.option.require_note
+                    ? 'A reason is required for this decision. It is recorded with the record.'
+                    : 'Nothing changes until you confirm. A note is optional and is recorded with the decision.'}
               </p>
               <textarea
                 value={noteText}

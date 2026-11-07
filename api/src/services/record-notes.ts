@@ -19,6 +19,7 @@ import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { hasFieldCommentColumns, recordCommentsOnly } from './field-comments.js'
 import { accountKindOf } from './machine-accounts.js'
 import { originOfRow } from './note-authorship.js'
+import { isO2mActivity } from './revision-fields.js'
 
 export interface NoteEntry {
   id: string
@@ -260,7 +261,7 @@ export async function loadRecordNotes(
     .where({ collection, item: String(item) })
     .select('id')) as Array<{ id: string }>
 
-  const [transitions, ownReasons, addendums] = await Promise.all([
+  const [transitions, ownActivity, addendums] = await Promise.all([
     instances.length
       ? (db('nivaro_workflow_history as h')
           .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
@@ -318,6 +319,11 @@ export async function loadRecordNotes(
       )
       .catch(() => [] as Array<Record<string, unknown>>) as Promise<Array<Record<string, unknown>>>
   ])
+
+  // A child row edited from this record's page leaves an `o2m-*` pointer row whose comment is
+  // machine JSON (child ids, a row snapshot with user uuids): not something anyone wrote, so
+  // never a note, never counted (army 6 H1 / L6). History shows it readable (revision-fields).
+  const ownReasons = ownActivity.filter((a) => !isO2mActivity(a.action, a.comment))
 
   // What the record's own reasoned changes actually touched.
   const ownChanged = new Map<string, string>()
@@ -390,6 +396,7 @@ export async function loadRecordNotes(
         }
       }
       for (const r of rows) {
+        if (isO2mActivity(null, r.comment)) continue
         childReasons.push({
           ...r,
           child: rc.collection,

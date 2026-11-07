@@ -4,12 +4,14 @@ import {
   type ActivityLabels,
   actionParts,
   activityLabelRefs,
+  activityPredicate,
   activityWhy,
   actorName,
   actorOf,
   collectionNouns,
   groupActivity,
   HIDDEN_RECORD,
+  o2mSentence,
   parseTransitionComment,
   renderActivityGroupSentence,
   renderActivitySentence
@@ -416,5 +418,54 @@ describe('helpers', () => {
     expect(req.refs).toEqual([{ collection: 'workflows', id: '1' }])
     expect(req.users.sort()).toEqual([PAT, ROB].sort())
     expect(req.fields).toEqual([{ collection: 'workflows', field: 'status' }])
+  })
+})
+
+// Army 6 H1: a child row edited from the record page reads as a sentence, never the JSON.
+describe('o2m rows', () => {
+  it('reads the server summary: collection · row: field from → to', () => {
+    expect(
+      o2mSentence({
+        verb: 'changed',
+        collection_label: 'Materials',
+        row_label: '110140',
+        changes: [{ field: 'qty', label: 'Quantity', from: '4', to: '5' }]
+      })
+    ).toBe('changed Materials · 110140: Quantity 4 → 5')
+    expect(o2mSentence({ verb: 'added', collection_label: 'Forecasts', row_label: '2026' })).toBe(
+      'added Forecasts · 2026'
+    )
+    expect(o2mSentence({ verb: 'removed', collection_label: 'Lines', row_label: null })).toBe(
+      'removed Lines'
+    )
+    expect(
+      o2mSentence({
+        verb: 'changed',
+        collection_label: 'Forecast',
+        row_label: '2026 · Goods',
+        changes: [{ field: 'december', label: 'Dec', from: '70', to: null }]
+      })
+    ).toBe('changed Forecast · 2026 · Goods: Dec 70 → —')
+  })
+
+  it('the predicate uses it and never prints the stored comment', () => {
+    const entry = {
+      action: 'o2m-update',
+      collection: 'workflows',
+      item: null,
+      comment: '{"child_collection":"forecasts","child_id":"7917874"}',
+      o2m: {
+        verb: 'changed' as const,
+        collection_label: 'Forecasts',
+        row_label: '2026',
+        changes: [{ field: 'december', label: 'December', from: '70', to: '60' }]
+      }
+    }
+    const s = activityPredicate(entry)
+    expect(s).toBe('changed Forecasts · 2026: December 70 → 60')
+    expect(s).not.toMatch(/child_id|7917874/)
+    expect(activityPredicate({ action: 'o2m-update', collection: 'workflows' })).toBe(
+      'changed related rows'
+    )
   })
 })

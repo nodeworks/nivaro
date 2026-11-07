@@ -223,15 +223,20 @@ export function liveNudgeDeps(app: FastifyInstance, req: FastifyRequest): NudgeD
       }))
     },
     label: async (collection, id) => {
+      const { fillBlankLabels, getLabels, missingRecordLabel } = await import('../queues.js')
       try {
-        const { getLabels } = await import('../queues.js')
         const labels = await getLabels(new Map([[collection, new Set([id])]]))
         const hit = Object.entries(labels).find(
           ([k]) => k.toUpperCase() === `${collection}:${id}`.toUpperCase()
         )
-        return hit?.[1] ?? `#${id}`
+        if (hit?.[1]?.trim()) return hit[1]
+        // No friendly id and a blank template: the record's own text, never
+        // its row id (army 6 M52).
+        const filled: Record<string, string> = {}
+        await fillBlankLabels(filled, collection, [id])
+        return filled[`${collection}:${id}`] ?? missingRecordLabel(collection)
       } catch {
-        return `#${id}`
+        return missingRecordLabel(collection)
       }
     },
     notify: async (userId, opts) => {

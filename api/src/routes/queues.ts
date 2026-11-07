@@ -39,6 +39,17 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
 // imports canReadQueue from this file).
 const FIELD_NAME_RE = /^[a-zA-Z0-9_]+$/
 
+/** Who may publish a saved queue view to everyone / a role: the queue's owner
+ *  or an administrator (army 6 L41). Anyone may keep a private view. */
+export function mayShareQueueView(
+  isAdmin: boolean,
+  queueOwner: string | null | undefined,
+  userId: string
+): boolean {
+  if (isAdmin) return true
+  return queueOwner != null && String(queueOwner).toUpperCase() === String(userId).toUpperCase()
+}
+
 /**
  * May a queue claim make the caller an owner of the record's current step?
  * Admins and the step's existing owners only — the Owners panel's rule. A
@@ -1045,6 +1056,16 @@ export async function queuesRoutes(app: FastifyInstance) {
     if (wantsDefault && !req.isAdmin && queue.owner !== req.user!.id) {
       return reply.code(403).send({ error: 'Only the queue owner can set the default view' })
     }
+    // Publishing a view to everyone (or to a role) is the queue owner's or an
+    // administrator's call, like the default (army 6 L41).
+    if (
+      (body.is_shared || (body.role != null && body.role !== '')) &&
+      !mayShareQueueView(!!req.isAdmin, queue.owner, req.user!.id)
+    ) {
+      return reply
+        .code(403)
+        .send({ error: 'Only the queue owner or an administrator can share a view' })
+    }
     if (wantsDefault) {
       await db('nivaro_queue_views')
         .where({ queue_id: id, is_default: true })
@@ -1123,6 +1144,16 @@ export async function queuesRoutes(app: FastifyInstance) {
     }
     if (body.is_shared !== undefined) {
       if (!canEditView) return reply.code(403).send({ error: 'Forbidden' })
+      if (body.is_shared) {
+        const q = (queueForDefault ??
+          ((await db<QueueRow>('nivaro_queues').where({ id: view.queue_id }).first()) as
+            | QueueRow
+            | undefined)) as QueueRow | undefined
+        if (!mayShareQueueView(!!req.isAdmin, q?.owner ?? null, req.user!.id))
+          return reply
+            .code(403)
+            .send({ error: 'Only the queue owner or an administrator can share a view' })
+      }
       patch.is_shared = !!body.is_shared
     }
     if (body.state !== undefined) {
@@ -1404,7 +1435,10 @@ export async function queuesRoutes(app: FastifyInstance) {
                 req.user!,
                 !!req.isAdmin,
                 scope,
-                parsedFilters as Record<string, unknown> | undefined
+                parsedFilters as Record<string, unknown> | undefined,
+                // Scope-only total (stats are never column-filtered): 0 on
+                // My Items = the person owns nothing, whatever the filters.
+                result.stats?.total ?? null
               )
             )
             .catch(() => null)

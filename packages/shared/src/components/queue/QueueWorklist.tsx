@@ -93,6 +93,7 @@ import {
   fetchCascadeRelations
 } from '../../lib/quick-filter-cascade'
 import { useOptionalRealtime } from '../../lib/realtime'
+import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
@@ -1630,6 +1631,15 @@ export function QueueWorklist({
     ? (liveStats.filtered_stats ?? null)
     : (data?.filtered_stats ?? null)
   const liveStateCounts = liveStatsNewer ? liveStats.state_counts : data?.state_counts
+  // Aging chips follow the other active filters (army 6 L38). With an aging
+  // chip itself on, the filtered buckets would zero the other chips, so they
+  // keep the counts they had just before it was picked.
+  const agingNow = (filteredStats ?? stats)?.aging
+  const agingBasisRef = useRef<typeof agingNow>(undefined)
+  if (!filterValues.aging_hours && agingNow) agingBasisRef.current = agingNow
+  const agingShown = filterValues.aging_hours
+    ? (agingBasisRef.current ?? stats?.aging)
+    : (agingNow ?? stats?.aging)
 
   // Rows on screen (live events match against them) + edit locks on them.
   visibleKeysRef.current = new Set(items.map((r) => `${r.collection}:${r.item_id}`))
@@ -2283,15 +2293,21 @@ export function QueueWorklist({
     if (!displayReady || typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const wanted = params.get('scope')
-    if (wanted !== 'all' && wanted !== 'mine') return
+    // army 6 L76 — a dashboard per-state row also carries ?state=<key>, so
+    // "Level 5 Approval 139" opens on those 139 rows. One-shot like ?scope=.
+    const wantedState = params.get('state')?.trim() || null
+    const scopeOk = wanted === 'all' || wanted === 'mine'
+    if (!scopeOk && !wantedState) return
     params.delete('scope')
+    params.delete('state')
     const qs = params.toString()
     window.history.replaceState(
       window.history.state,
       '',
       `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
     )
-    setScope(wanted)
+    if (scopeOk) setScope(wanted)
+    if (wantedState) setFilterValues((prev) => ({ ...prev, state: [wantedState] }))
     setPage(1)
   }, [displayReady])
   // #638 — a link from someone's profile (Working on → Open in queue) arrives
@@ -2387,7 +2403,7 @@ export function QueueWorklist({
       client.request<{ data: { id: number } }>(
         post(`/queues/${queueId}/views`, {
           name: saveName.trim(),
-          is_shared: saveShared || saveAsDefault,
+          is_shared: canManageQueueDefault && (saveShared || saveAsDefault),
           is_default: saveAsDefault,
           state: {
             scope,
@@ -4360,14 +4376,14 @@ export function QueueWorklist({
                 }}
               />
             </div>
-            {stats?.aging && stats.total > 0 && (
+            {agingShown && stats && stats.total > 0 && (
               <div className='flex items-center gap-1 text-[11px]' data-tip='Time in current state'>
                 {(
                   [
-                    ['0-1d', '0:24', stats.aging.d1],
-                    ['1-3d', '24:72', stats.aging.d3],
-                    ['3-7d', '72:168', stats.aging.d7],
-                    ['7d+', '168:', stats.aging.over]
+                    ['0-1d', '0:24', agingShown.d1],
+                    ['1-3d', '24:72', agingShown.d3],
+                    ['3-7d', '72:168', agingShown.d7],
+                    ['7d+', '168:', agingShown.over]
                   ] as Array<[string, string, number]>
                 ).map(([label, range, count]) => (
                   <button
@@ -4698,14 +4714,18 @@ export function QueueWorklist({
                 placeholder='View name'
                 className='mb-2 w-full rounded-md border border-slate-200 px-2 py-1.5 text-[12px] focus:border-nvr-cyan focus:outline-none dark:border-border dark:bg-card'
               />
-              <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-                <Checkbox
-                  checked={saveShared || saveAsDefault}
-                  disabled={saveAsDefault}
-                  onCheckedChange={(c) => setSaveShared(c === true)}
-                />
-                Share with everyone
-              </label>
+              {/* Sharing a view with everyone is the queue owner's or an
+                  administrator's call (army 6 L41) — the server refuses others. */}
+              {canManageQueueDefault && (
+                <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                  <Checkbox
+                    checked={saveShared || saveAsDefault}
+                    disabled={saveAsDefault}
+                    onCheckedChange={(c) => setSaveShared(c === true)}
+                  />
+                  Share with everyone
+                </label>
+              )}
               {canManageQueueDefault && (
                 <label className='mb-2 flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
                   <Checkbox
@@ -5058,10 +5078,17 @@ export function QueueWorklist({
                       : { label: 'Claim', run: () => claimMut.mutate(rowCtxMenu.row) }
                   ]
                 : []),
-              {
-                label: 'Copy ID',
-                run: () => void navigator.clipboard?.writeText(rowCtxMenu.row.item_id)
-              },
+              // The friendly id (PW26-76166), never the row id (army 6 M52);
+              // a record with no number has nothing to copy.
+              ...(copyIdText(rowCtxMenu.row)
+                ? [
+                    {
+                      label: 'Copy ID',
+                      run: () =>
+                        void navigator.clipboard?.writeText(copyIdText(rowCtxMenu.row) ?? '')
+                    }
+                  ]
+                : []),
               {
                 label: 'Copy link',
                 run: () =>

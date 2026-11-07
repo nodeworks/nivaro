@@ -12,6 +12,7 @@ import {
 } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
+import { describeError } from '../lib/error-message'
 import {
   explicitAllUrlParams,
   filterSelectionToSearch,
@@ -81,8 +82,12 @@ function LoadingRows() {
   )
 }
 
-function WidgetError({ error }: { error: unknown }) {
-  const msg = userErrorMessage(error, 'Failed to load widget data')
+function WidgetError({ error, unresolved }: { error: unknown; unresolved?: string[] }) {
+  // A refusal for a parameter the view needed reads as what is missing, never
+  // as the server's "Missing required parameter: projects" (M12).
+  const msg =
+    missingRowParamMessage(error, unresolved) ??
+    userErrorMessage(error, 'Failed to load widget data')
   return (
     <div className='flex h-full items-center justify-center p-3 text-[12px] text-amber-600 dark:text-amber-500'>
       {msg}
@@ -492,6 +497,9 @@ type QueryRowClick = {
  *  from the clicked row. */
 export interface QuerySheetDef {
   title?: string
+  /** What one row of the opening table is, plural ("projects"): a sheet
+   *  opened from the totals row is titled "Total of 9 projects". */
+  row_noun?: string
   width?: number | string
   config?: QueryWidgetConfig
   /** Figures above the tabs from a query of their own (same param tokens as a tab). */
@@ -534,6 +542,10 @@ export interface QueryWidgetConfig {
   stats?: QueryWidgetStat[]
   /** Sentence shown, as written, when the query returns no rows. */
   empty_label?: string
+  /** Set by a sheet opener (never stored): params whose '$row.' / '$rows.'
+   *  token found nothing in the opening row(s). A refusal naming one of them
+   *  reads as "this row has no …", never the server's raw parameter text. */
+  unresolved_params?: string[]
   /** Trailing action buttons per row (and totals row) opening nested sheets. */
   row_actions?: Array<{ label: string; sheet: QuerySheetDef }>
   /** Toolbar action buttons running a (write) custom query — params support
@@ -549,21 +561,31 @@ export interface QueryWidgetConfig {
   }>
 }
 
-function resolveSheetValue(
+/** Distinct non-empty `field` values of `rows`, comma-joined (undefined when none). */
+function joinRowField(rows: Array<Record<string, unknown>>, field: string): string | undefined {
+  const vals = [...new Set(rows.map((r) => r[field]).filter((x) => x != null && x !== ''))]
+  return vals.length ? vals.map(String).join(',') : undefined
+}
+
+export function resolveSheetValue(
   v: unknown,
   row: Record<string, unknown> | null,
   rows: Array<Record<string, unknown>>,
   effectiveParams: Record<string, unknown>,
   filterSel: Record<string, Array<Record<string, unknown>>>,
-  filterDefs: QueryWidgetFilter[] | undefined
+  filterDefs: QueryWidgetFilter[] | undefined,
+  /** Totals-row drill: the rows the total adds up (what is on screen). A
+   *  '$row.<field>' token then reads every one of them, comma-joined, so the
+   *  sheet covers exactly the rows the total covers (M12). */
+  totalOf?: Array<Record<string, unknown>> | null
 ): unknown {
   if (typeof v !== 'string') return v
-  if (v.startsWith('$row.')) return row?.[v.slice('$row.'.length)]
-  if (v.startsWith('$rows.')) {
-    const f = v.slice('$rows.'.length)
-    const vals = [...new Set(rows.map((r) => r[f]).filter((x) => x != null && x !== ''))]
-    return vals.length ? vals.join(',') : undefined
+  if (v.startsWith('$row.')) {
+    const f = v.slice('$row.'.length)
+    if (!row && totalOf) return joinRowField(totalOf, f)
+    return row?.[f]
   }
+  if (v.startsWith('$rows.')) return joinRowField(rows, v.slice('$rows.'.length))
   if (v.startsWith('$param.')) return effectiveParams[v.slice('$param.'.length)]
   if (v.startsWith('$filters.')) {
     const p = v.slice('$filters.'.length)
@@ -577,21 +599,55 @@ function resolveSheetValue(
 }
 
 /** Resolve a nested sheet config's params against the opening context;
- *  unresolved tokens are dropped (proc-side NULL = unfiltered). */
-function resolveSheetConfig(
+ *  unresolved tokens are dropped (proc-side NULL = unfiltered). Row tokens
+ *  that found nothing are named in `unresolved_params`. */
+export function resolveSheetConfig(
   config: QueryWidgetConfig,
   row: Record<string, unknown> | null,
   rows: Array<Record<string, unknown>>,
   effectiveParams: Record<string, unknown>,
   filterSel: Record<string, Array<Record<string, unknown>>>,
-  filterDefs: QueryWidgetFilter[] | undefined
+  filterDefs: QueryWidgetFilter[] | undefined,
+  totalOf?: Array<Record<string, unknown>> | null
 ): QueryWidgetConfig {
   const params: Record<string, unknown> = {}
+  const unresolved: string[] = []
   for (const [k, v] of Object.entries(config.params ?? {})) {
-    const r = resolveSheetValue(v, row, rows, effectiveParams, filterSel, filterDefs)
+    const r = resolveSheetValue(v, row, rows, effectiveParams, filterSel, filterDefs, totalOf)
     if (r !== undefined) params[k] = r
+    else if (typeof v === 'string' && (v.startsWith('$row.') || v.startsWith('$rows.')))
+      unresolved.push(k)
   }
-  return { ...config, params }
+  return { ...config, params, ...(unresolved.length ? { unresolved_params: unresolved } : {}) }
+}
+
+/** "Total of 9 projects": the title of a sheet opened from a totals row. The
+ *  noun is the sheet's `row_noun`, else read off its title's first
+ *  `{{<noun>_…}}` token (`{{project_id}}` → projects), else "rows". */
+export function totalSheetTitle(def: { title?: string; row_noun?: string }, count: number): string {
+  let plural = def.row_noun?.trim()
+  if (!plural) {
+    const tok = /\{\{\s*([a-z]+)_[\w.]*\s*\}\}/i.exec(def.title ?? '')?.[1]
+    plural = tok ? `${tok.toLowerCase()}s` : 'rows'
+  }
+  const noun = count === 1 && plural.endsWith('s') ? plural.slice(0, -1) : plural
+  return `Total of ${count.toLocaleString('en-US')} ${noun}`
+}
+
+/** A sheet tab's query refused for a parameter the opening row could not
+ *  fill: the plain sentence to show instead of the server's parameter text. */
+export function missingRowParamMessage(
+  error: unknown,
+  unresolved: string[] | undefined
+): string | null {
+  const d = describeError(error)
+  const text = [d.title, d.technical ?? ''].join(' ')
+  const m = /Missing required parameter:\s*([\w]+)/i.exec(text)
+  if (!m) return null
+  const what = titleCase(m[1]).toLowerCase()
+  return unresolved?.includes(m[1])
+    ? `Nothing to show: the row you opened has no ${what}.`
+    : `Choose ${what} to see this view.`
 }
 
 function SheetHeader({
@@ -648,19 +704,25 @@ type SheetRuntimeDef = Omit<QuerySheetDef, 'header'> & {
 function QuerySheet({
   def,
   row,
+  totalCount,
   onClose
 }: {
   def: SheetRuntimeDef
   row: Record<string, unknown> | null
+  /** Opened from the totals row: how many rows the total covers. */
+  totalCount?: number | null
   onClose: () => void
 }) {
   const [tab, setTab] = useState(def.initialTab ?? 0)
-  const title = def.title
-    ? def.title.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, f: string) => {
-        const v = row?.[f]
-        return v == null ? '' : String(v)
-      })
-    : 'Details'
+  const title =
+    !row && totalCount != null
+      ? totalSheetTitle(def, totalCount)
+      : def.title
+        ? def.title.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, f: string) => {
+            const v = row?.[f]
+            return v == null ? '' : String(v)
+          })
+        : 'Details'
   const w = typeof def.width === 'number' ? `${def.width}px` : (def.width ?? '90%')
   const active = def.resolvedTabs[tab]
   return (
@@ -1103,6 +1165,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const [sheetState, setSheetState] = useState<{
     def: SheetRuntimeDef
     row: Record<string, unknown> | null
+    totalCount?: number | null
   } | null>(null)
   const [filterSel, setFilterSel] = useState<Record<string, Array<Record<string, unknown>>>>(() =>
     defaultFilterSelection(cfg.filters)
@@ -1247,7 +1310,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     isPending,
     error,
     refetch,
-    isFetching
+    isFetching,
+    isPlaceholderData
   } = useQuery<CustomQueryEnvelope>({
     queryKey: ['page-renderer-query', cfg.query_slug, queryParamsJson],
     queryFn: () => {
@@ -1261,9 +1325,16 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       )
     },
     enabled: !!cfg.query_slug && scopeGateOpen,
-    staleTime: 60_000
+    staleTime: 60_000,
+    // A filter change (FY, zone) keeps the table on screen, dimmed, until the
+    // new answer lands: swapping it for the loader unmounted QueryTable and
+    // reset its view state — "Hide empty rows" switched itself off (L13).
+    // Only the same query's answer stands in; another slug starts fresh.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[1] === cfg.query_slug ? prev : undefined
   })
   const data = envelope?.data
+  const refetching = isPlaceholderData && isFetching
   const refreshNow = useCallback(() => {
     forceRefreshRef.current = true
     void refetch()
@@ -1390,7 +1461,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       stats={cfg.stats}
       rows={data ?? []}
       effectiveParams={effectiveParams}
-      loading={isLoading}
+      loading={isLoading || refetching}
+      zeroDash={!!cfg.table?.zero_dash}
     />
   ) : null
   if (isLoading)
@@ -1405,11 +1477,18 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     return (
       <div className='p-3'>
         {filterBar}
-        <WidgetError error={error} />
+        <WidgetError error={error} unresolved={cfg.unresolved_params} />
       </div>
     )
   const rc = cfg.row_click
-  const openSheet = (def: QuerySheetDef, row: Record<string, unknown> | null) => {
+  const openSheet = (
+    def: QuerySheetDef,
+    row: Record<string, unknown> | null,
+    // Totals-row drill: the rows on screen (searched / hide-empty) the total
+    // adds up. Without them (an older caller) the whole result stands in.
+    visibleRows?: Array<Record<string, unknown>>
+  ) => {
+    const totalOf = row ? null : (visibleRows ?? data ?? [])
     const resolve = (c: Record<string, unknown>) =>
       resolveSheetConfig(
         c as QueryWidgetConfig,
@@ -1417,7 +1496,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         data ?? [],
         effectiveParams,
         filterSel,
-        cfg.filters
+        cfg.filters,
+        totalOf
       ) as Record<string, unknown>
     const r = resolveSheetDef(def as SheetDefInput, resolve)
     const resolvedTabs: ResolvedSheetTab[] = r.resolvedTabs.map((t) => {
@@ -1447,7 +1527,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
           : null,
         initialTab: r.initialTab
       },
-      row
+      row,
+      totalCount: totalOf ? totalOf.length : null
     })
   }
   const handleRow = rc
@@ -1468,7 +1549,10 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const rowActions = cfg.row_actions?.length
     ? cfg.row_actions.map((a) => ({
         label: a.label,
-        onClick: (row: Record<string, unknown> | null) => openSheet(a.sheet, row)
+        onClick: (
+          row: Record<string, unknown> | null,
+          visibleRows?: Array<Record<string, unknown>>
+        ) => openSheet(a.sheet, row, visibleRows)
       }))
     : undefined
   return (
@@ -1483,29 +1567,35 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     >
       {filterBar}
       {statStrip}
-      <QueryTable
-        rows={data ?? []}
-        config={
-          // Current-month highlight only applies when the selected year param
-          // IS the current year — otherwise strip it.
-          cfg.table?.highlight_group && cfg.table.highlight_year_param
-            ? Number(
-                String(effectiveParams[cfg.table.highlight_year_param] ?? '').split(',')[0]
-              ) === new Date().getFullYear()
-              ? cfg.table
-              : { ...cfg.table, highlight_group: undefined }
-            : cfg.table
-        }
-        onRowClick={handleRow}
-        rowActions={rowActions}
-        emptyText={cfg.empty_label}
-        pivotYear={
-          cfg.table?.pivot?.year_param
-            ? Number(String(effectiveParams[cfg.table.pivot.year_param] ?? '').split(',')[0]) ||
-              undefined
-            : undefined
-        }
-      />
+      <div
+        data-qt-refetching={refetching ? '' : undefined}
+        aria-busy={refetching || undefined}
+        className={`transition-opacity ${refetching ? 'opacity-60' : ''} ${cfg.table?.sticky ? 'flex min-h-0 flex-1 flex-col' : ''}`.trim()}
+      >
+        <QueryTable
+          rows={data ?? []}
+          config={
+            // Current-month highlight only applies when the selected year param
+            // IS the current year — otherwise strip it.
+            cfg.table?.highlight_group && cfg.table.highlight_year_param
+              ? Number(
+                  String(effectiveParams[cfg.table.highlight_year_param] ?? '').split(',')[0]
+                ) === new Date().getFullYear()
+                ? cfg.table
+                : { ...cfg.table, highlight_group: undefined }
+              : cfg.table
+          }
+          onRowClick={handleRow}
+          rowActions={rowActions}
+          emptyText={cfg.empty_label}
+          pivotYear={
+            cfg.table?.pivot?.year_param
+              ? Number(String(effectiveParams[cfg.table.pivot.year_param] ?? '').split(',')[0]) ||
+                undefined
+              : undefined
+          }
+        />
+      </div>
       {rc?.picker && pickerRow && (
         <div
           className='fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-32'
@@ -1558,7 +1648,12 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         />
       )}
       {sheetState && (
-        <QuerySheet def={sheetState.def} row={sheetState.row} onClose={() => setSheetState(null)} />
+        <QuerySheet
+          def={sheetState.def}
+          row={sheetState.row}
+          totalCount={sheetState.totalCount}
+          onClose={() => setSheetState(null)}
+        />
       )}
       {actionRun && (
         <ActionRunDialog

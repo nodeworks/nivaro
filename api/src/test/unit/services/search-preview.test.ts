@@ -124,4 +124,26 @@ describe('previewFieldOrder', () => {
     const many = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`f${i}`, i]))
     expect(previewFieldOrder(many, Object.keys(many), null, [])).toHaveLength(6)
   })
+
+  // Army 6 L70: the Cmd+K preview of a workflow showed "Skip Forecast Cron false".
+  it('the fallback skips switches that are off and internal flags', () => {
+    const wf = [
+      { field: 'skip_forecast_cron', sort: 0 },
+      { field: 'is_automated', sort: 1 },
+      { field: 'rush', sort: 2 },
+      { field: 'name', sort: 3 },
+      { field: 'requisition_amount', sort: 4 }
+    ]
+    const row = {
+      id: 1,
+      skip_forecast_cron: false,
+      is_automated: true,
+      rush: false,
+      name: 'Fayette',
+      requisition_amount: 10
+    }
+    expect(previewFieldOrder(row, [], null, wf)).toEqual(['name', 'requisition_amount'])
+    // a layout's own header fields are the designer's choice and stay
+    expect(previewFieldOrder(row, ['skip_forecast_cron'], null, wf)).toEqual(['skip_forecast_cron'])
+  })
 })

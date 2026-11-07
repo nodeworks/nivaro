@@ -32,15 +32,16 @@ import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { SearchHighlight } from '../SearchHighlight'
 import { useOverflowTip } from '../TipLayer'
-import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { ColResizeHandle, fitWidth, ResetColumnsButton, useColumnWidths } from './catalog-columns'
 import { orderCatalogMatches, rowMatchesFields } from './catalog-search'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
 import {
   checkNumberEntry,
+  decimalPlacesProblem,
   isIntegerFieldType,
   lineRuleErrors,
+  MAX_LINE_MONEY,
   mergePendingQtyRow
 } from './line-qty'
 import { resolveM2MRelatedCollection } from './M2MCombobox'
@@ -330,11 +331,10 @@ export function matchesShowWhen(
 }
 
 const CATALOG_LIMIT = 2000
-/** The largest line money value the server stores: decimal(12,2) money
- *  columns (the same bound the server's numeric fit check and the line
- *  "must be smaller than 10,000,000,000" rules hold). Mirrored here — the
- *  shared package has no export of the API's limit. */
-export const MAX_LINE_MONEY = 9_999_999_999.99
+
+/** The largest line money value the server stores — one definition, in
+ *  line-qty.ts (the lines grid judges it too, army6 M4). */
+export { MAX_LINE_MONEY } from './line-qty'
 
 /** Why a typed quantity cannot be taken as it stands (null = fine): the
  *  same check commitQty makes, with "Whole numbers only" for a decimal on a
@@ -366,6 +366,73 @@ export function lineComputeError(args: {
       return `${args.labelOf(dst)} would be ${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} — too large to save`
   }
   return null
+}
+
+/** What a catalog grid cell shows for a catalog column that is copied onto
+ *  the line (`copy_fields` dst ← src): the related lookup that overrides that
+ *  copy (`related_columns[].copy_to` — the supporting warehouse's price)
+ *  first, as the line will be priced; else the catalog's own value (army6 L2:
+ *  the search grid showed Price "—" for items the warehouse prices, and the
+ *  price appeared only after the pick). */
+export function gridPriceValue(args: {
+  field: string
+  catalogValue: unknown
+  copyFields: Record<string, string> | undefined
+  related: Array<{ key: string; copy_to?: string | null }> | undefined
+  lookup: (key: string) => unknown
+}): unknown {
+  const targets = Object.entries(args.copyFields ?? {})
+    .filter(([, src]) => src === args.field)
+    .map(([dst]) => dst)
+  for (const dst of targets) {
+    for (const rc of args.related ?? []) {
+      if (rc.copy_to !== dst) continue
+      const v = args.lookup(rc.key)
+      if (v != null && v !== '') return v
+    }
+  }
+  return args.catalogValue
+}
+
+/** A content key of the saved lines as read (army6 L5): a fresh read that
+ *  differs from the last one means a save landed. */
+export function savedLinesSignature(
+  rows: Array<Record<string, unknown>>,
+  fields: string[]
+): string {
+  return rows
+    .map((r) => [r.id, ...fields.map((f) => r[f])].map((v) => String(v ?? '')).join('\u0001'))
+    .join('\u0002')
+}
+
+/** The quantity notes left once the saved lines changed (army6 L5): a refusal
+ *  ("Total would be … too large to save — still 2") was about what the box
+ *  held then, so it goes; an open "Remove this line?" ask stays. Same object
+ *  back when nothing goes. */
+export function issuesAfterLinesChanged<T extends { kind: string }>(
+  issues: Record<string, T>
+): Record<string, T> {
+  const keys = Object.keys(issues).filter((k) => issues[k].kind === 'error')
+  if (keys.length === 0) return issues
+  const next = { ...issues }
+  for (const k of keys) delete next[k]
+  return next
+}
+
+/** A picked line that would go out at $0 (army6 L3): a quantity, and the
+ *  line's money (its first computed column, else the copied price) is empty
+ *  or 0 — a catalog item with no price gives a $0.00 line in silence. */
+export function isUnpricedLine(
+  row: Record<string, unknown>,
+  qtyField: string,
+  moneyFields: string[]
+): boolean {
+  const qty = Number(row[qtyField])
+  if (!Number.isFinite(qty) || qty <= 0) return false
+  const money = moneyFields.find((f) => f in row)
+  if (!money) return false
+  const v = row[money]
+  return v === null || v === undefined || v === '' || Number(v) === 0
 }
 
 export function CatalogPickerField({
@@ -711,6 +778,40 @@ export function CatalogPickerField({
     enabled: !isNew,
     staleTime: 15_000
   })
+  // army6 L5: a save that changed the saved lines (this person's or anyone's)
+  // clears the refusals under the boxes — "too large to save — still 2" stayed
+  // after a later successful Save. Periodic re-reads with the same lines keep
+  // them.
+  const savedLinesSig = useMemo(
+    () =>
+      savedLinesSignature(childRows, [
+        config.item_field,
+        qtyField,
+        ...editableFields,
+        ...Object.keys(config.compute_fields ?? {})
+      ]),
+    [childRows, config.item_field, qtyField, editableFields, config.compute_fields]
+  )
+  const lastLinesSigRef = useRef<string | null>(null)
+  const qtyIssueRef = useRef(qtyIssue)
+  qtyIssueRef.current = qtyIssue
+  useEffect(() => {
+    const prev = lastLinesSigRef.current
+    lastLinesSigRef.current = savedLinesSig
+    if (prev === null || prev === savedLinesSig) return
+    const refused = Object.keys(qtyIssueRef.current).filter(
+      (k) => qtyIssueRef.current[k].kind === 'error'
+    )
+    setQtyIssue((p) => issuesAfterLinesChanged(p))
+    setCellIssue((p) => (Object.keys(p).length === 0 ? p : {}))
+    if (refused.length > 0)
+      setEditing((p) => {
+        if (!refused.some((k) => k in p)) return p
+        const n = { ...p }
+        for (const k of refused) delete n[k]
+        return n
+      })
+  }, [savedLinesSig])
   // #734 — with the outer form's O2M staging present, EVERY quantity commit
   // stages (new rows queue, saved rows queue an edit or a delete) and lands
   // with the record's Save; Cancel discards. Standalone hosts without
@@ -1589,7 +1690,16 @@ export function CatalogPickerField({
         return (
           <TruncText
             key={c.field}
-            text={fmtVal(pathValue(row, c.field), c.format)}
+            text={fmtVal(
+              gridPriceValue({
+                field: c.field,
+                catalogValue: pathValue(row, c.field),
+                copyFields: config.copy_fields,
+                related: config.related_columns,
+                lookup: (key) => relatedValue(key, id)
+              }),
+              c.format
+            )}
             highlight={c.format ? undefined : hl}
             {...catCols.box(c.field, def, cn('text-slate-500 dark:text-slate-400', extra))}
           />
@@ -2092,56 +2202,50 @@ export function CatalogPickerField({
     // A refused quantity says why right under its box, until the box is
     // focused again: the popover it used to open closed on the next click
     // anywhere, so 1.5 / -7 / 99999999999 seemed to snap back silently.
+    // The "Remove this line?" ask sits there too (army6 L1): as a popover it
+    // closed on Tab and the 0 silently went back to the old quantity.
     return (
-      <Popover open={issue?.kind === 'remove'} onOpenChange={(open) => !open && clearIssue()}>
-        <PopoverAnchor asChild>
-          <span className='inline-flex shrink-0 flex-col items-end'>
-            {input}
-            {issue?.kind === 'error' && (
-              <span
-                role='alert'
-                className='mt-0.5 flex max-w-[220px] items-start gap-1 text-right text-[11px] leading-snug text-red-600 dark:text-red-400'
-                data-catalog-qty-error
-              >
-                <AlertCircle className='mt-px h-3 w-3 shrink-0' />
-                {issue.message}
-                {qty && qty > 0 ? ` — still ${qty}` : ''}
-              </span>
-            )}
+      <span className='inline-flex shrink-0 flex-col items-end'>
+        {input}
+        {issue?.kind === 'error' && (
+          <span
+            role='alert'
+            className='mt-0.5 flex max-w-[220px] items-start gap-1 text-right text-[11px] leading-snug text-red-600 dark:text-red-400'
+            data-catalog-qty-error
+          >
+            <AlertCircle className='mt-px h-3 w-3 shrink-0' />
+            {issue.message}
+            {qty && qty > 0 ? ` — still ${qty}` : ''}
           </span>
-        </PopoverAnchor>
-        <PopoverContent
-          align='end'
-          side='bottom'
-          className='w-auto max-w-[260px] p-2.5 text-[12px]'
-        >
-          {issue?.kind === 'remove' && (
-            <div data-catalog-qty-remove>
-              <p className='text-slate-700 dark:text-slate-200'>Remove this line?</p>
-              <div className='mt-2 flex justify-end gap-1.5'>
-                <button
-                  type='button'
-                  onClick={clearIssue}
-                  className='h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
-                >
-                  Keep
-                </button>
-                <button
-                  type='button'
-                  onClick={() => {
-                    const row = issue.row
-                    clearIssue()
-                    void commitQty(catalogId, '0', row, { confirmedRemove: true })
-                  }}
-                  className='h-6 rounded bg-red-600 px-2 text-[11px] font-medium text-white hover:bg-red-700'
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
+        )}
+        {issue?.kind === 'remove' && (
+          <span
+            role='alert'
+            data-catalog-qty-remove
+            className='mt-1 flex max-w-[240px] flex-wrap items-center justify-end gap-1.5 text-right text-[11px] leading-snug text-slate-700 dark:text-slate-200'
+          >
+            <span>Remove this line?</span>
+            <button
+              type='button'
+              onClick={clearIssue}
+              className='h-6 rounded border border-slate-200 px-2 text-[11px] text-slate-600 hover:bg-muted dark:border-border dark:text-slate-300'
+            >
+              Keep
+            </button>
+            <button
+              type='button'
+              onClick={() => {
+                const row = issue.row
+                clearIssue()
+                void commitQty(catalogId, '0', row, { confirmedRemove: true })
+              }}
+              className='h-6 rounded bg-red-600 px-2 text-[11px] font-medium text-white hover:bg-red-700'
+            >
+              Remove
+            </button>
+          </span>
+        )}
+      </span>
     )
   }
 
@@ -2159,6 +2263,10 @@ export function CatalogPickerField({
         return n
       })
     const stored = row[field] == null ? '' : String(row[field])
+    const cellField = childFields.find((f) => f.field === field)
+    // A typed price keeps 2 decimals (army6 H5): the money columns are
+    // decimal(…,2), so 0.005 showed $0.02 and stored 0.01.
+    const moneyCell = !isIntegerFieldType(cellField?.type)
     // The reason sits under the box until it is focused again (see qtyInput).
     return (
       <span key={key} className='inline-flex shrink-0 flex-col items-end'>
@@ -2166,19 +2274,20 @@ export function CatalogPickerField({
           key={`${key}:${stored}`}
           type='number'
           min={0}
-          step='any'
+          step={moneyCell ? '0.01' : 'any'}
           defaultValue={stored}
           aria-invalid={!!issue || undefined}
           onFocus={clearIssue}
           onBlur={(ev) => {
             const raw = ev.target.value
             if (raw !== stored) {
-              const t = childFields.find((f) => f.field === field)
-              const check = checkNumberEntry(raw, {
-                type: t?.type,
-                label: t?.label || titleCase(field)
-              })
-              const err = check.ok ? childRuleError(field, check.value, row) : check.message
+              const t = cellField
+              const label = t?.label || titleCase(field)
+              const check = checkNumberEntry(raw, { type: t?.type, label })
+              const err = !check.ok
+                ? check.message
+                : ((moneyCell ? decimalPlacesProblem(raw, label) : null) ??
+                  childRuleError(field, check.value, row))
               if (err) {
                 ev.target.value = stored
                 setCellIssue((p) => ({ ...p, [key]: err }))
@@ -2976,6 +3085,30 @@ export function CatalogPickerField({
                           {fmtVal(shortfall.qty, 'number')} requested
                         </p>
                       )}
+                      {!isStagedDelete &&
+                        isUnpricedLine(
+                          {
+                            ...e.row,
+                            ...Object.fromEntries(
+                              computeCols
+                                .filter((c) => e.row[c] == null || e.row[c] === '')
+                                .map((c) => [
+                                  c,
+                                  evalClientFormula(config.compute_fields?.[c] ?? '', e.row)
+                                ])
+                            )
+                          },
+                          qtyField,
+                          computeCols.length > 0 ? computeCols : copyCols
+                        ) && (
+                          <p
+                            data-catalog-unpriced
+                            className='mt-1 flex items-center gap-1 pl-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+                          >
+                            <AlertTriangle className='h-3 w-3 shrink-0' />
+                            No catalog price: check the price or hand-price it
+                          </p>
+                        )}
                       {isStagedDelete && (
                         <p className='mt-1 pl-0.5 text-[11px] text-red-500'>
                           Removed — applies when you save

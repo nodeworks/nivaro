@@ -69,6 +69,19 @@ export interface QueryWidgetStat {
   requires_label?: string
 }
 
+/** The tile's value as shown. Under a `zero_dash` table a row-summed figure
+ *  of exactly 0 is "no figure": its Total row prints "—" for the same 0, so
+ *  the tile must not say "$0" beside it (army 6 L18). Query tiles (their own
+ *  source) and date/text tiles are left alone. */
+export function tileValue(
+  stat: QueryWidgetStat,
+  value: number | string | null,
+  zeroDash: boolean
+): number | string | null {
+  if (!zeroDash || stat.query || stat.format === 'date' || stat.format === 'text') return value
+  return value === 0 ? null : value
+}
+
 /** Colour roles that are neutral ink, not a hue: they colour the value but
  *  draw no accent stripe (a black stripe is the loudest mark in the strip). */
 const NEUTRAL_ACCENTS = new Set(['ink', 'muted'])
@@ -107,6 +120,7 @@ function StatBox({
   effectiveParams,
   loading,
   compact,
+  zeroDash,
   onFit
 }: {
   stat: QueryWidgetStat
@@ -114,6 +128,7 @@ function StatBox({
   effectiveParams: Record<string, unknown>
   loading: boolean
   compact: boolean
+  zeroDash: boolean
   onFit: (fits: boolean) => void
 }) {
   const client = useNivaroClient()
@@ -148,7 +163,10 @@ function StatBox({
   const reqField = stat.requires_field
   const unsupported =
     !!reqField && !loading && !rows.some((r) => r[reqField] != null && r[reqField] !== '')
-  const value = busy || noneReporting || unsupported ? null : statValue(stat, rows, qRows ?? null)
+  const value =
+    busy || noneReporting || unsupported
+      ? null
+      : tileValue(stat, statValue(stat, rows, qRows ?? null), zeroDash)
   const empty = !busy && (value === null || value === undefined || value === '')
   // Date / text tiles are context (when, which), not a measure: they sit
   // quieter than the money beside them and never take an accent.
@@ -309,12 +327,16 @@ export function QueryStatStrip({
   stats,
   rows,
   effectiveParams,
-  loading
+  loading,
+  zeroDash = false
 }: {
   stats: QueryWidgetStat[]
   rows: Array<Record<string, unknown>>
   effectiveParams: Record<string, unknown>
   loading: boolean
+  /** The table under the strip prints 0 as "—" (`zero_dash`): row-summed
+   *  tiles do the same, so tile and Total row never disagree. */
+  zeroDash?: boolean
 }) {
   // Balanced rows: as many columns as fit at MIN_TILE, then spread the tiles
   // evenly over the rows they need (8 tiles → 8, or 4 + 4 — never 6 + 2 with
@@ -365,6 +387,7 @@ export function QueryStatStrip({
           effectiveParams={effectiveParams}
           loading={loading}
           compact={compact}
+          zeroDash={zeroDash}
           onFit={reporterFor(s.label)}
         />
       ))}

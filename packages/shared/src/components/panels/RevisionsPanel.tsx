@@ -17,9 +17,11 @@ import { useNivaroClient } from '../../context'
 import {
   type ActivityActor,
   type ActivityLabels,
+  type ActivityO2m,
   activityPredicate,
   activityWhy,
-  actorName
+  actorName,
+  o2mSentence
 } from '../../lib/activity-sentence'
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
@@ -57,6 +59,8 @@ interface Revision {
   first_name: string | null
   last_name: string | null
   comment?: string | null
+  /** A child row edited from this record's page, summarised for this reader (army 6 H1). */
+  o2m?: ActivityO2m | null
   /** #3213 — made by an AI assistant through MCP: the badge text ("via Claude"). */
   via_agent?: string | null
   /** Migration 516 — who really did it when not simply the person (View-as, API key,
@@ -835,15 +839,20 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
       </>
     )
   } else if (revision.action?.startsWith('o2m-')) {
+    // "changed Materials · 110140: Quantity 4 → 5" — the server's per-reader summary. The
+    // stored comment is machine JSON (row ids, user uuids) and is never shown (army 6 H1).
     sentence = (
-      <>
-        {revision.action === 'o2m-create'
-          ? 'added'
-          : revision.action === 'o2m-delete'
-            ? 'removed'
-            : 'changed'}{' '}
-        related rows{revision.comment ? ` — ${revision.comment}` : ''}
-      </>
+      <span data-revision-o2m>
+        {revision.o2m
+          ? o2mSentence(revision.o2m)
+          : `${
+              revision.action === 'o2m-create'
+                ? 'added'
+                : revision.action === 'o2m-delete'
+                  ? 'removed'
+                  : 'changed'
+            } related rows`}
+      </span>
     )
   } else {
     // Any other event reads as a sentence (lib/activity-sentence), the record being this one.

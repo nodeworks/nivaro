@@ -37,7 +37,13 @@ vi.mock('../../../services/io-holder.js', () => ({
   })
 }))
 
-import { isOwnerPing, pingsToRetire, retireWaitingPings } from '../../../services/waiting-pings.js'
+import {
+  isOwnerPing,
+  pingsToRetire,
+  planPingRefresh,
+  retireWaitingPings,
+  waitingMessage
+} from '../../../services/waiting-pings.js'
 
 const MOVED = new Date('2026-11-06T17:00:00Z')
 const before = '2026-11-06T16:30:00Z'
@@ -156,5 +162,57 @@ describe('retireWaitingPings', () => {
         payload: { ids: [11], collection: 'workflows', item: '372960' }
       }
     ])
+  })
+})
+
+describe('planPingRefresh (army 6 L25)', () => {
+  const MOVED2 = new Date('2026-11-06T17:00:00Z')
+  const rows = [
+    {
+      id: 1,
+      recipient: 'U-TIM',
+      subject: 'Waiting on you: CR26-81410',
+      status: 'inbox',
+      timestamp: '2026-11-06T16:00:00Z'
+    },
+    {
+      id: 2,
+      recipient: 'U-ANA',
+      subject: 'Waiting on you: CR26-81410',
+      status: 'inbox',
+      timestamp: '2026-11-06T16:00:00Z'
+    },
+    {
+      id: 3,
+      recipient: 'U-OLD',
+      subject: 'Waiting on you: CR26-81410',
+      status: 'inbox',
+      timestamp: '2026-11-06T16:00:00Z'
+    },
+    {
+      id: 4,
+      recipient: 'U-KRIS',
+      subject: 'Sent back: CR26-81410',
+      status: 'inbox',
+      timestamp: '2026-11-06T16:00:00Z'
+    }
+  ]
+  it("a state change: the actor's still-owned ping is relabelled, other still-owners re-pinged", () => {
+    const r = planPingRefresh(rows, 'CR26-81410', ['U-TIM', 'U-ANA', 'U-KRIS'], MOVED2, {
+      stateChanged: true,
+      actorId: 'u-tim'
+    })
+    expect(r.relabel.map((x) => x.id)).toEqual([1])
+    expect(r.retire.map((x) => x.id).sort()).toEqual([2, 3])
+  })
+  it('no state change keeps the old rules', () => {
+    const r = planPingRefresh(rows, 'CR26-81410', ['U-TIM', 'U-ANA', 'U-KRIS'], MOVED2)
+    expect(r.relabel).toEqual([])
+    expect(r.retire.map((x) => x.id)).toEqual([3])
+  })
+  it('the relabelled text names the new step', () => {
+    expect(waitingMessage('CR26-81410', 'Waiting on Fusion Submission')).toBe(
+      'CR26-81410 is now Waiting on Fusion Submission and waiting on you.'
+    )
   })
 })

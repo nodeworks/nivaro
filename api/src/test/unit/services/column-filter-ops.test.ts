@@ -31,6 +31,23 @@ describe('queue column filter operators', () => {
     expect(m('between:2024-12-01..2024-12-31', 'Wed Dec 18 2024 10:04:03 GMT-0500')).toBe(true)
   })
 
+  it('reads a zoned timestamp as its America/New_York day (army 6 L37)', () => {
+    // 11/04 10 PM ET is 11/05 03:00 UTC: it is a 11/04 row, never "On 11/05"
+    expect(dayOfValue('2026-11-05T03:00:00.000Z')).toBe('2026-11-04')
+    expect(m('on:2026-11-05', '2026-11-05T03:00:00.000Z')).toBe(false)
+    expect(m('on:2026-11-04', '2026-11-05T03:00:00.000Z')).toBe(true)
+    expect(dayOfValue(new Date('2026-11-05T03:00:00.000Z'))).toBe('2026-11-04')
+    expect(dayOfValue('2026-11-05T03:00:00+00:00')).toBe('2026-11-04')
+  })
+
+  it('keeps a date-only value on its own day', () => {
+    expect(dayOfValue('2026-11-05')).toBe('2026-11-05')
+    // a SQL date column arrives as a Date at UTC midnight
+    expect(dayOfValue(new Date('2026-11-05T00:00:00.000Z'))).toBe('2026-11-05')
+    // a zone-less timestamp keeps its date part
+    expect(dayOfValue('2026-11-05 22:00')).toBe('2026-11-05')
+  })
+
   it('compares numbers through their display formatting', () => {
     expect(numberOfValue('$1,234.50')).toBe(1234.5)
     expect(m('num:gt:1000', '$1,234.50')).toBe(true)

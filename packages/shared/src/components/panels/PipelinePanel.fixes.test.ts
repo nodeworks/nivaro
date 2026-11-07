@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { latestSendBack, REFUSAL_FIX_ACTIONS, refusalCode, refusalFixFor } from './PipelinePanel'
+import {
+  briefWarnings,
+  FRESH_BUTTON_MS,
+  FreshButtonGuard,
+  latestSendBack,
+  REFUSAL_FIX_ACTIONS,
+  refusalCode,
+  refusalFixFor
+} from './PipelinePanel'
 
 const states = [
   { id: 'S-START', sort: 0 },
@@ -73,5 +81,61 @@ describe('refusal fix (army4 a15-2)', () => {
   it('any other refusal offers nothing', () => {
     expect(refusalFixFor(err('EDIT_LOCKED', 'sdk'), { transition_id: 'T1' })).toBeNull()
     expect(refusalFixFor(new Error('x'), { transition_id: 'T1' })).toBeNull()
+  })
+})
+
+describe('fresh transition buttons (army6 M19)', () => {
+  it('the first answer is the baseline: nothing on offer then is inert', () => {
+    const g = new FreshButtonGuard()
+    g.observe(['t-approve'], 0)
+    expect(g.press('t-approve', 1)).toBe(true)
+  })
+
+  it('a button that appears after a move is inert for the window; a double click cannot press it', () => {
+    const g = new FreshButtonGuard()
+    g.observe(['t-approve'], 0)
+    g.observe(['t-submit-wh'], 1000)
+    expect(g.timed('t-submit-wh', 1100)).toBe(true)
+    expect(g.press('t-submit-wh', 1100)).toBe(false)
+    // The press inside the window counts as the pointer being there: after the
+    // window it still needs the pointer to leave and come back.
+    expect(g.press('t-submit-wh', 1000 + FRESH_BUTTON_MS + 10)).toBe(false)
+    g.leave('t-submit-wh')
+    g.enter('t-submit-wh', 1000 + FRESH_BUTTON_MS + 20)
+    expect(g.press('t-submit-wh', 1000 + FRESH_BUTTON_MS + 30)).toBe(true)
+  })
+
+  it('a pointer resting on the new button must leave and re-enter; one that never was there needs only the window', () => {
+    const g = new FreshButtonGuard()
+    g.observe(['a'], 0)
+    g.observe(['a', 'b', 'c'], 100)
+    g.enter('b', 200)
+    const later = 100 + FRESH_BUTTON_MS + 50
+    expect(g.inert('b', later)).toBe(true)
+    expect(g.press('c', later)).toBe(true)
+    g.leave('b')
+    expect(g.press('b', later)).toBe(true)
+  })
+
+  it('ids compare case-blind and a gone button is forgotten', () => {
+    const g = new FreshButtonGuard()
+    g.observe(['A'], 0)
+    g.observe(['a', 'B'], 10)
+    expect(g.press('a', 20)).toBe(true)
+    g.observe(['a'], 30)
+    expect(g.inert('b', 40)).toBe(false)
+  })
+})
+
+describe('forward-move brief warnings (army6 D6)', () => {
+  it('only warn and danger lines make Submit ask', () => {
+    expect(
+      briefWarnings([
+        { label: 'Forecast', text: 'Over $55,000 — above the requisition', tone: 'warn' },
+        { label: 'Spend', text: 'ok', tone: 'ok' },
+        { label: 'X', text: 'y' }
+      ]).map((l) => l.label)
+    ).toEqual(['Forecast'])
+    expect(briefWarnings(null)).toEqual([])
   })
 })

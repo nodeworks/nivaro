@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import {
   CHANGED_SINCE_CAP,
   changedSince,
+  integrationProblems,
   integrationsSummary,
   listMyIntegrity,
   listOwnerAbsence,
@@ -159,6 +160,18 @@ export async function dashboardFeedRoutes(app: FastifyInstance) {
       return reply.send({ data })
     } catch (err) {
       req.log.warn({ err }, 'dashboard integrations failed')
+      return reply.code(503).send(UNAVAILABLE)
+    }
+  })
+
+  // The console's open-problem count (army 6 H10) — the tile and the console
+  // read one helper, so they cannot disagree.
+  app.get('/integration-problems', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const data = await integrationProblems(!!req.isAdmin)
+      return reply.send({ data })
+    } catch (err) {
+      req.log.warn({ err }, 'dashboard integration-problems failed')
       return reply.code(503).send(UNAVAILABLE)
     }
   })

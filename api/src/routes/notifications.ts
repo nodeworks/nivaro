@@ -59,7 +59,11 @@ import {
 } from '../services/notification-target.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
-import { type RecordHeadline, recordHeadlines } from '../services/record-headline.js'
+import {
+  collectionWord,
+  type RecordHeadline,
+  recordHeadlines
+} from '../services/record-headline.js'
 import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
@@ -227,18 +231,73 @@ async function senderNamesOf(rows: Array<Record<string, unknown>>): Promise<Map<
   return senderNames
 }
 
-/** Rows as the list answers them: serializeFor + `sender_name` (GET / and GET /:id). */
+/** Pure: is this headline the bare "<Singular> #<id>" fallback (a row id —
+ *  never shown to a person)? */
+export function isBareHeadline(label: string, word: string, id: string): boolean {
+  return label === `${word} #${id}` || label === id
+}
+
+/**
+ * Army 6 M48 — every row about a record carries how a person names it: the
+ * friendly id ("CR26-81410", "CM26INV-37423") as `record_label`, and the
+ * collection's singular name as `record_collection_label` ("Workflow"). The
+ * bell headed groups "WORKFLOWS · 372960" (the row id). The label resolves
+ * only for collections the caller may read TODAY (the bundle rule); a record
+ * nothing names gets no label (never its row id).
+ */
+async function recordLabelsFor(
+  rows: Array<Record<string, unknown>>,
+  user: Parameters<typeof can>[0]
+): Promise<Map<string, { label: string | null; word: string }>> {
+  const byCollection = new Map<string, Set<string>>()
+  for (const r of rows) {
+    const c = typeof r.collection === 'string' ? r.collection : ''
+    const i = r.item != null && String(r.item) !== '' ? String(r.item) : ''
+    if (!c || !i || /^(nivaro_|directus_|__)/i.test(c)) continue
+    const set = byCollection.get(c) ?? new Set<string>()
+    set.add(i)
+    byCollection.set(c, set)
+  }
+  const out = new Map<string, { label: string | null; word: string }>()
+  for (const [collection, items] of byCollection) {
+    const word = await collectionWord(collection).catch(() => collection)
+    const readable = await can(user, 'read', collection).catch(() => false)
+    const resolved = readable
+      ? await recordHeadlines(collection, [...items]).catch(() => new Map<string, RecordHeadline>())
+      : new Map<string, RecordHeadline>()
+    for (const id of items) {
+      const h = resolved.get(id)
+      const label = h && !isBareHeadline(h.label, h.collection_label, id) ? h.label : null
+      out.set(`${collection}:${id}`, { label, word })
+    }
+  }
+  return out
+}
+
+/** Rows as the list answers them: serializeFor + `sender_name` + the
+ *  record's friendly name (GET / and GET /:id). */
 async function listRows(
   rows: Array<Record<string, unknown>>,
-  userId: string,
+  user: Parameters<typeof can>[0] & { id: string },
   app: 'portal' | 'admin' | undefined
 ) {
-  const senderNames = await senderNamesOf(rows)
+  const userId = user.id
+  const [senderNames, labels] = await Promise.all([
+    senderNamesOf(rows),
+    recordLabelsFor(rows, user).catch(
+      () => new Map<string, { label: string | null; word: string }>()
+    )
+  ])
   return Promise.all(
-    rows.map(async (r) => ({
-      ...(await serializeFor(r, { recipientUserId: userId, app })),
-      sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null
-    }))
+    rows.map(async (r) => {
+      const named = labels.get(`${r.collection}:${r.item}`)
+      return {
+        ...(await serializeFor(r, { recipientUserId: userId, app })),
+        sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null,
+        record_label: named?.label ?? null,
+        record_collection_label: named?.word ?? null
+      }
+    })
   )
 }
 
@@ -345,7 +404,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
 
     const appQ = (req.query as { app?: string }).app
     const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
-    const data = await listRows(rows as Array<Record<string, unknown>>, userId, app)
+    const data = await listRows(rows as Array<Record<string, unknown>>, req.user!, app)
     // #1256 — `bundle=record`: rows of this page that name the same record
     // fold into one entry (label = the record's friendly id, lane = the most
     // urgent of its rows); bundled rows leave `data`. The page's `total` and
@@ -392,21 +451,19 @@ export async function notificationsRoutes(app: FastifyInstance) {
     // whatever page or filter the person is on.
     const pinned =
       page === 1 && q.status !== 'archived'
-        ? await Promise.all(
+        ? await listRows(
             (
-              await db('nivaro_notifications')
+              (await db('nivaro_notifications')
                 .where({ recipient: userId })
                 .whereNot('status', 'archived')
                 .where('detail', 'like', ACK_PENDING_LIKE)
                 .whereNot('detail', 'like', ACK_DONE_LIKE)
                 .orderBy('timestamp', 'desc')
                 .limit(20)
-                .select('*')
-            )
-              .filter((r) => ackPending((r as Record<string, unknown>).detail))
-              .map((r) =>
-                serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })
-              )
+                .select('*')) as Array<Record<string, unknown>>
+            ).filter((r) => ackPending(r.detail)),
+            req.user!,
+            app
           )
         : []
     return reply.send({ data, pinned, total, page, limit })
@@ -429,7 +486,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: 'Notification not found' })
     const appQ = (req.query as { app?: string }).app
     const app = appQ === 'portal' || appQ === 'admin' ? appQ : undefined
-    const [data] = await listRows([row], userId, app)
+    const [data] = await listRows([row], req.user!, app)
     return reply.send({ data })
   })
 

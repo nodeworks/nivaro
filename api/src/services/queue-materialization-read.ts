@@ -229,6 +229,7 @@ export function filterAndOrderNarrowRows(
  * on the JS path, matching the live path's post-filter stats semantics. */
 export function statsFromNarrowRows(rows: NarrowScanRow[]): QueueStats {
   const by_state: Record<string, number> = {}
+  const aging = { d1: 0, d3: 0, d7: 0, over: 0 }
   let unowned = 0
   let sla_warning = 0
   let sla_breached = 0
@@ -240,38 +241,109 @@ export function statsFromNarrowRows(rows: NarrowScanRow[]): QueueStats {
     if (r.sla_status === 'warning') sla_warning++
     if (r.sla_status === 'breached') sla_breached++
     if (r.at_risk) at_risk++
+    const h = r.aging_hours
+    if (h != null) {
+      if (h < 24) aging.d1++
+      else if (h < 72) aging.d3++
+      else if (h < 168) aging.d7++
+      else aging.over++
+    }
   }
-  return { total: rows.length, by_state, unowned, sla_warning, sla_breached, at_risk }
+  return { total: rows.length, by_state, unowned, sla_warning, sla_breached, at_risk, aging }
 }
 
-function computeSla(row: {
-  entered_state_at: Date | null
-  sla_duration_hours: number | null
-  sla_warning_pct: number | null
-  sla_business_hours_only: boolean
-  /** Cached per-record zone override (regional clock); null = instance default. */
-  sla_timezone?: string | null
-}): { status: 'ok' | 'warning' | 'breached' | null; aging_hours: number | null } {
-  // Aging (time in current state) is rule-independent — any row with an
-  // entered_state_at gets it. Only the status thresholds need rule params.
-  if (!row.entered_state_at) {
-    return { status: null, aging_hours: null }
+/**
+ * The aging chips (0-1d / 1-3d / 3-7d / 7d+) over a cache builder, in SQL:
+ * aging is calendar hours since entered_state_at (army 6 M25), so the
+ * buckets are plain date comparisons — the same edges as computeStats.
+ */
+async function agingFromBuilder(
+  qb: Knex.QueryBuilder,
+  now: Date = new Date()
+): Promise<{ d1: number; d3: number; d7: number; over: number }> {
+  const h = (n: number) => new Date(now.getTime() - n * 3_600_000)
+  const row = (await qb
+    .clone()
+    .whereNotNull('qi.entered_state_at')
+    .select(
+      db.raw(
+        `SUM(CASE WHEN qi.entered_state_at > ? THEN 1 ELSE 0 END) AS d1,
+         SUM(CASE WHEN qi.entered_state_at <= ? AND qi.entered_state_at > ? THEN 1 ELSE 0 END) AS d3,
+         SUM(CASE WHEN qi.entered_state_at <= ? AND qi.entered_state_at > ? THEN 1 ELSE 0 END) AS d7,
+         SUM(CASE WHEN qi.entered_state_at <= ? THEN 1 ELSE 0 END) AS over_7d`,
+        [h(24), h(24), h(72), h(72), h(168), h(168)]
+      )
+    )
+    .first()) as
+    | { d1: number | null; d3: number | null; d7: number | null; over_7d: number | null }
+    | undefined
+  return {
+    d1: Number(row?.d1 ?? 0),
+    d3: Number(row?.d3 ?? 0),
+    d7: Number(row?.d7 ?? 0),
+    over: Number(row?.over_7d ?? 0)
   }
-  const now = new Date()
+}
+
+export function computeSla(
+  row: {
+    entered_state_at: Date | null
+    sla_duration_hours: number | null
+    sla_warning_pct: number | null
+    sla_business_hours_only: boolean
+    /** Cached per-record zone override (regional clock); null = instance default. */
+    sla_timezone?: string | null
+  },
+  now: Date = new Date()
+): {
+  status: 'ok' | 'warning' | 'breached' | null
+  aging_hours: number | null
+  sla_elapsed_hours: number | null
+} {
+  // Aging (time in current state) is rule-independent — any row with an
+  // entered_state_at gets it, in CALENDAR hours (army 6 M25: business hours
+  // shown as days read "52d" for 218 days). The SLA status keeps its own
+  // clock (business hours for a business-hours rule) as sla_elapsed_hours.
+  if (!row.entered_state_at) {
+    return { status: null, aging_hours: null, sla_elapsed_hours: null }
+  }
+  const entered = new Date(row.entered_state_at)
+  const calendar = Math.max(0, (now.getTime() - entered.getTime()) / (1000 * 60 * 60))
   const elapsed = row.sla_business_hours_only
     ? businessHoursElapsed(
-        new Date(row.entered_state_at),
+        entered,
         now,
         row.sla_timezone ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone } : undefined
       )
-    : (now.getTime() - new Date(row.entered_state_at).getTime()) / (1000 * 60 * 60)
-  const aging_hours = Math.round(elapsed * 10) / 10
+    : calendar
+  const aging_hours = Math.round(calendar * 10) / 10
+  const sla_elapsed_hours = Math.round(elapsed * 10) / 10
   if (row.sla_duration_hours == null || row.sla_warning_pct == null) {
-    return { status: null, aging_hours }
+    return { status: null, aging_hours, sla_elapsed_hours }
   }
   const pctUsed = (elapsed / row.sla_duration_hours) * 100
   const status = pctUsed >= 100 ? 'breached' : pctUsed >= row.sla_warning_pct ? 'warning' : 'ok'
-  return { status, aging_hours }
+  return { status, aging_hours, sla_elapsed_hours }
+}
+
+/**
+ * An owner who can still act — the SQL twin of pipeline-engine's
+ * isInactivePerson: suspended / archived / deleted / inactive, redacted, or
+ * renamed "Redacted Redacted" people own nothing (army 6 L42). `ou` is the
+ * nivaro_users alias joined to `qio`.
+ */
+export const ACTIVE_OWNER_SQL = `(ou.status IS NULL OR LOWER(ou.status) NOT IN ('suspended', 'archived', 'deleted', 'inactive'))
+  AND (ou.is_redacted IS NULL OR ou.is_redacted = 0)
+  AND NOT (LOWER(COALESCE(ou.first_name, '')) = 'redacted' AND LOWER(COALESCE(ou.last_name, '')) = 'redacted')`
+
+/** Subquery body for whereExists / whereNotExists: the cache row `qi` has an
+ *  active owner. */
+function activeOwnerOf(this: Knex.QueryBuilder): void {
+  this.select('*')
+    .from('nivaro_queue_item_owners as qio')
+    .join('nivaro_users as ou', 'ou.id', 'qio.user_id')
+    .whereRaw('qio.queue_item_id = qi.id')
+    .whereRaw(ACTIVE_OWNER_SQL)
 }
 
 /** Most owner ids one queue read may filter by (one IN list, ~2100 parameter cap). */
@@ -620,9 +692,7 @@ function applyScope(
         .where('qio.user_id', user.id)
     })
   } else if (scope === 'unowned') {
-    qb.whereNotExists(function () {
-      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
-    })
+    qb.whereNotExists(activeOwnerOf)
   } else if (scope === 'claimed') {
     qb.where('qi.claimed_by', user.id)
   }
@@ -649,9 +719,7 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
     total += Number(r.n)
   }
   const unownedRow = (await baseFactory()
-    .whereNotExists(function () {
-      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
-    })
+    .whereNotExists(activeOwnerOf)
     .count('* as n')
     .first()) as { n: number }
   const atRiskRow = (await baseFactory().where('qi.at_risk', true).count('* as n').first()) as {
@@ -678,13 +746,15 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
     if (status === 'warning') sla_warning++
     if (status === 'breached') sla_breached++
   }
+  const aging = await agingFromBuilder(baseFactory())
   return {
     total,
     by_state,
     unowned: Number(unownedRow.n),
     sla_warning,
     sla_breached,
-    at_risk: Number(atRiskRow.n)
+    at_risk: Number(atRiskRow.n),
+    aging
   }
 }
 
@@ -716,9 +786,7 @@ export async function fetchMaterializedStats(
   }
   const unownedRow = (await scopeBase
     .clone()
-    .whereNotExists(function () {
-      this.select('*').from('nivaro_queue_item_owners as qio').whereRaw('qio.queue_item_id = qi.id')
-    })
+    .whereNotExists(activeOwnerOf)
     .count('* as n')
     .first()) as { n: number }
 
@@ -779,6 +847,7 @@ export async function fetchMaterializedStats(
     email: string
   }>
 
+  const aging = await agingFromBuilder(scopeBase)
   return {
     stats: {
       total: statsTotal,
@@ -786,7 +855,8 @@ export async function fetchMaterializedStats(
       unowned: Number(unownedRow.n),
       sla_warning,
       sla_breached,
-      at_risk: atRiskCount
+      at_risk: atRiskCount,
+      aging
     },
     availableValues: {
       collection: collectionsRow.map((r) => r.collection).sort(),
@@ -1029,7 +1099,7 @@ export async function fetchMaterializedQueueItems(
         'qi.sla_timezone',
         'qi.at_risk',
         db.raw(
-          'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'
+          `CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio JOIN nivaro_users ou ON ou.id = qio.user_id WHERE qio.queue_item_id = qi.id AND ${ACTIVE_OWNER_SQL}) THEN 1 ELSE 0 END AS has_owner`
         )
       )
     // No sort key (an sla_status / aging filter alone): the JS step keeps the
@@ -1111,9 +1181,9 @@ export async function fetchMaterializedQueueItems(
     if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
       base.orderBy(`qi.${sortKey}`, desc ? 'desc' : 'asc')
     } else if (sortKey === 'aging_hours' || sortKey === 'sla_status') {
-      // entered_state_at is a correct proxy for elapsed time on non-business-hours
-      // rules; for business_hours_only rules it's a documented approximation
-      // (see design spec) — exact values are computed below, per returned row.
+      // Aging is calendar hours since entered_state_at, so this order is exact
+      // for aging_hours; for sla_status on business_hours_only rules it stays
+      // the documented approximation (see design spec).
       // MSSQL has no boolean-scalar expressions usable directly in ORDER BY (T-SQL
       // rejects `col IS NULL` outside a predicate context), so nulls-last is done
       // via CASE WHEN — matching the CASE WHEN pattern already used for MSSQL-safe
@@ -1270,6 +1340,7 @@ export async function fetchMaterializedQueueItems(
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
       aging_hours: sla.aging_hours,
+      sla_elapsed_hours: sla.sla_elapsed_hours,
       state_entered_at: r.entered_state_at ? new Date(r.entered_state_at).toISOString() : null,
       claimed_by: r.claimed_by
         ? { id: r.claimed_by, name: claimantNameById.get(r.claimed_by) ?? '' }

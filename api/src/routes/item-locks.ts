@@ -261,6 +261,22 @@ export async function wasTakenOverFrom(
   }
 }
 
+/** Who force-took the lock from `me` (upper-cased id), when the notice is still live. */
+export async function takenOverBy(
+  app: FastifyInstance,
+  collection: string,
+  item: string,
+  me: string
+): Promise<string | null> {
+  const redis = (app as { redis?: FastifyInstance['redis'] }).redis
+  if (!redis) return null
+  try {
+    return ((await redis.get(forcedKey(collection, item, me))) as string | null) || null
+  } catch {
+    return null
+  }
+}
+
 /** The person took the lock back (or it went to them): the notice is spent. */
 function forgetForcedTakeover(app: FastifyInstance, collection: string, item: string, me: string) {
   const redis = (app as { redis?: FastifyInstance['redis'] }).redis
@@ -1043,12 +1059,19 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         // lock was taken over finds out, and without the holder it cannot show
         // the banner naming them — it would just stop beating and carry on
         // letting the person edit.
+        // army6 M28: the taker may already have let go (a clean form releases after a
+        // beat) — the lock is free, yet it was force-taken from this person. Say so, so
+        // their client does not quietly take it straight back.
+        const taker = existing ? null : await takenOverBy(app, collection, item, me)
         return reply.code(404).send({
           error: 'You do not hold a lock on this item',
           locked_by: existing?.user ?? null,
           locked_by_name: existing ? await lockHolderName(existing.user) : null,
           note: existing?.note ?? null,
-          taken_over: await wasTakenOverFrom(app, collection, item, me, existing?.user)
+          taken_over: existing
+            ? await wasTakenOverFrom(app, collection, item, me, existing.user)
+            : !!taker,
+          ...(taker ? { taken_over_by_name: await lockHolderName(taker) } : {})
         })
       }
 

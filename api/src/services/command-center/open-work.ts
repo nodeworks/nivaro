@@ -112,6 +112,44 @@ async function loadBindingsAndStates(): Promise<{
   }
 }
 
+const ADDENDUM_COLLECTION = 'nivaro_addendums'
+
+interface AddendumOverlayRow {
+  collection: string
+  parent_id: string
+  addendum_id: string
+  instance_id: string
+  template: string
+  state_id: string
+  created_at: Date | string | null
+}
+
+/** In-flight addendum instances of every addendum-enabled bound collection,
+ *  keyed `collection|PARENT_ID`. Active addendums are few — one query each. */
+async function addendumOverlay(collections: string[]): Promise<Map<string, AddendumOverlayRow>> {
+  const out = new Map<string, AddendumOverlayRow>()
+  const { getCollection } = await import('../collections.js')
+  const { activeAddendumInstancesForCollection } = await import('../addendum-summary.js')
+  for (const collection of collections) {
+    const meta = await getCollection(collection).catch(() => undefined)
+    if (!meta?.addendums_enabled) continue
+    const active = await activeAddendumInstancesForCollection(collection)
+    for (const [parent, a] of active) {
+      out.set(`${collection}|${U(parent)}`, {
+        collection,
+        parent_id: String(parent),
+        addendum_id: String(a.addendum_id),
+        instance_id: String(a.instance_id),
+        template: String(a.template),
+        state_id: String(a.state_id),
+        // The summary row carries no start; the SLA evaluator's entered_at fills it.
+        created_at: null
+      })
+    }
+  }
+  return out
+}
+
 const bindingKey = (collection: string, template: string) => `${collection}|${U(template)}`
 
 async function buildLive(): Promise<OpenWorkIndex> {
@@ -149,11 +187,35 @@ async function buildLive(): Promise<OpenWorkIndex> {
     >
   ])
   const truncated = openRows.length > OPEN_CAP
-  const rows = openRows
+  const ownRows = openRows
     .slice(0, OPEN_CAP)
     .filter(
       (r) => r.current_state && bound.has(bindingKey(String(r.collection), String(r.template)))
     )
+
+  // A record whose addendum is in flight sits in the ADDENDUM's state with the
+  // addendum's SLA — the queues' rule (army 6 M27: flow L1 58 vs queue 70). Its
+  // own instance row (if still open) gives way to the addendum's, keyed on the
+  // parent record so every viewer gate keeps judging the parent.
+  const overlay = await addendumOverlay(collections).catch(
+    () => new Map<string, AddendumOverlayRow>()
+  )
+  const viaAddendum = new Map<string, string>()
+  const rows: Array<Record<string, unknown>> = ownRows.filter(
+    (r) => !overlay.has(`${String(r.collection)}|${U(r.item)}`)
+  )
+  for (const [key, a] of overlay) {
+    if (!bound.has(bindingKey(a.collection, a.template))) continue
+    viaAddendum.set(key, a.addendum_id)
+    rows.push({
+      id: a.instance_id,
+      collection: a.collection,
+      template: a.template,
+      item: a.parent_id,
+      current_state: a.state_id,
+      started_at: a.created_at ?? null
+    })
+  }
 
   // Entered-at + SLA from the batch evaluator, one call per collection (instances passed in so
   // it does not read them again).
@@ -165,7 +227,29 @@ async function buildLive(): Promise<OpenWorkIndex> {
   for (const r of rows)
     byCollection.set(String(r.collection), [...(byCollection.get(String(r.collection)) ?? []), r])
   const { computeStatusBatch } = await import('../../routes/sla.js')
-  for (const [collection, list] of byCollection) {
+  for (const [collection, all] of byCollection) {
+    const list = all.filter((r) => !viaAddendum.has(`${collection}|${U(r.item)}`))
+    const added = all.filter((r) => viaAddendum.has(`${collection}|${U(r.item)}`))
+    if (added.length > 0) {
+      try {
+        const res = await computeStatusBatch(
+          ADDENDUM_COLLECTION,
+          added.map((r) => viaAddendum.get(`${collection}|${U(r.item)}`) as string)
+        )
+        for (const r of added) {
+          const e = res[viaAddendum.get(`${collection}|${U(r.item)}`) as string]
+          if (!e) continue
+          sla.set(`${collection}|${U(r.item)}`, {
+            entered: ms(e.entered_at as Date | string | null),
+            status: (e.status as OpenInstance['sla']) ?? null,
+            rem: e.remaining_hours ?? null
+          })
+        }
+      } catch {
+        /* addendum SLA unreadable — ages fall back to the addendum's start */
+      }
+    }
+    if (list.length === 0) continue
     try {
       const res = await computeStatusBatch(
         collection,
@@ -191,7 +275,7 @@ async function buildLive(): Promise<OpenWorkIndex> {
 
   const open: OpenInstance[] = rows.map((r) => {
     const s = sla.get(`${String(r.collection)}|${U(r.item)}`)
-    const started = ms(r.started_at as Date) ?? now
+    const started = ms(r.started_at as Date) ?? s?.entered ?? now
     return {
       instance_id: String(r.id),
       collection: String(r.collection),

@@ -166,15 +166,29 @@ function toInputValue(v: unknown): string {
 
 // Display-column formatting (entry.display_formats server hint): currency and
 // plain thousands-grouped numbers; anything non-numeric passes through raw.
-function fmtDisplay(v: unknown, format?: 'currency' | 'number'): string {
+export function fmtDisplay(v: unknown, format?: 'currency' | 'number'): string {
   const raw = toInputValue(v)
   if (!format || raw === '') return raw
   const n = Number(raw)
   if (Number.isNaN(n)) return raw
   if (format === 'currency') {
-    return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+    // Up to 4 decimals: a 100.505 price showed as $100.51 (army6 M2).
+    return n.toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4
+    })
   }
   return n.toLocaleString('en-US')
+}
+
+/** A column header: a label that is still the raw column name ("line_number")
+ *  reads as words ("Line Number") — army6 M2 / M30 headers. */
+export function columnLabel(f: Pick<TransitionRequirementFieldMeta, 'field' | 'label'>): string {
+  const label = (f.label ?? '').trim()
+  if (!label) return titleCase(f.field)
+  return /^[a-z0-9]+(_[a-z0-9]+)+$/.test(label) || label === f.field ? titleCase(label) : label
 }
 
 type FieldValue = string | string[]
@@ -449,7 +463,7 @@ export function requirementOptionFilter(
 function useRelatedOptions(
   collection: string | undefined,
   filter?: Record<string, unknown>
-): Array<{ id: string; label: string }> {
+): { options: Array<{ id: string; label: string }>; loaded: boolean } {
   const client = useNivaroClient()
   // Same key + shape as RelationCombobox's read, so the cache is shared.
   const { data: colMeta, isPending: metaPending } = useQuery<{ display_template?: string }>({
@@ -465,7 +479,7 @@ function useRelatedOptions(
   const template = colMeta?.display_template ?? null
   const tmplFields = template ? extractTemplateFields(template).join(',') : undefined
   const filterKey = filter ? JSON.stringify(filter) : ''
-  const { data = [] } = useQuery({
+  const { data = [], isSuccess } = useQuery({
     queryKey: ['req-related-options', collection, template ?? '', filterKey],
     queryFn: () =>
       client
@@ -487,7 +501,53 @@ function useRelatedOptions(
     enabled: !!collection && !metaPending,
     staleTime: 300_000
   })
-  return data
+  return { options: data, loaded: isSuccess }
+}
+
+const PLAIN_KEY = /^[A-Za-z][A-Za-z0-9_]*$/
+
+/** The parent a picker's options are narrowed by ("project"), read from its filter. */
+function filterParentName(filter: Record<string, unknown> | undefined): string | null {
+  let node: unknown = filter
+  let found: string | null = null
+  for (let depth = 0; depth < 6 && node && typeof node === 'object'; depth++) {
+    if (Array.isArray(node)) {
+      node = node[0]
+      continue
+    }
+    const entries = Object.entries(node as Record<string, unknown>)
+    const logical = entries.find(([k]) => k === '_and' || k === '_or')
+    const plain = entries.find(([k]) => PLAIN_KEY.test(k))
+    if (plain) {
+      if (plain[0] !== 'id') found = plain[0]
+      node = plain[1]
+    } else if (logical) node = logical[1]
+    else break
+  }
+  return found ? found.replace(/_id$/, '').replace(/_/g, ' ').toLowerCase() : null
+}
+
+function pluralNoun(label: string): string {
+  const w = label.trim().toLowerCase()
+  if (!w) return 'options'
+  if (/[^aeiou]y$/.test(w)) return `${w.slice(0, -1)}ies`
+  if (/(s|x|z|ch|sh)$/.test(w)) return `${w}es`
+  return `${w}s`
+}
+
+/**
+ * Why a requirement picker has nothing to offer (army6 M30): a project with no
+ * categories showed "No options" and nobody could tell why or what to do.
+ */
+export function emptyOptionsText(
+  meta: Pick<TransitionRequirementFieldMeta, 'label'>,
+  filter: Record<string, unknown> | undefined
+): string {
+  const noun = pluralNoun(meta.label)
+  const parent = filterParentName(filter)
+  if (parent)
+    return `This ${parent} has no ${noun} set up. Ask an administrator, or pick another ${parent}.`
+  return `No ${noun} are set up yet. Ask an administrator.`
 }
 
 // ─── M2M multi-select cell ───────────────────────────────────────────────────
@@ -510,10 +570,8 @@ function M2MPickCell({
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const options = useRelatedOptions(
-    meta.related_collection,
-    requirementOptionFilter(meta, rowValues)
-  )
+  const optionFilter = requirementOptionFilter(meta, rowValues)
+  const { options, loaded } = useRelatedOptions(meta.related_collection, optionFilter)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -575,7 +633,9 @@ function M2MPickCell({
             )
           })}
           {options.length === 0 && (
-            <p className='px-2.5 py-2 text-[11px] text-slate-400'>No options</p>
+            <p className='max-w-[18rem] px-2.5 py-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+              {loaded ? emptyOptionsText(meta, optionFilter) : 'Loading…'}
+            </p>
           )}
         </DropPanel>
       )}
@@ -600,10 +660,8 @@ function M2OPickCell({
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const options = useRelatedOptions(
-    meta.related_collection,
-    requirementOptionFilter(meta, rowValues)
-  )
+  const optionFilter = requirementOptionFilter(meta, rowValues)
+  const { options, loaded } = useRelatedOptions(meta.related_collection, optionFilter)
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
@@ -659,7 +717,9 @@ function M2OPickCell({
             )
           })}
           {options.length === 0 && (
-            <p className='px-2.5 py-2 text-[11px] text-slate-400'>No options</p>
+            <p className='max-w-[18rem] px-2.5 py-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
+              {loaded ? emptyOptionsText(meta, optionFilter) : 'Loading…'}
+            </p>
           )}
         </DropPanel>
       )}
@@ -867,14 +927,14 @@ export function TransitionRequirementsDialog({
               } as unknown as Command<RehearsalReport>)
             )
             .then((report) => {
-              const changes = overwrittenBySideEffect(report, sent)
+              const changes = overwrittenBySideEffect(report, sent, (f) => !!metaOf(f))
               if (changes.length === 0) return null
               return {
                 rk,
                 rowLabel: row.label,
                 changes: changes.map((c) => {
                   const m = metaOf(c.field)
-                  return { ...c, label: m?.label ?? titleCase(c.field), format: m?.format }
+                  return { ...c, label: m ? columnLabel(m) : titleCase(c.field), format: m?.format }
                 })
               }
             })
@@ -1282,13 +1342,13 @@ export function TransitionRequirementsDialog({
                         <th className='px-2.5 py-1.5 font-medium'>Row</th>
                         {displayFields.map((f) => (
                           <th key={f.field} className='px-2.5 py-1.5 font-medium'>
-                            {f.label}
+                            {columnLabel(f)}
                           </th>
                         ))}
                         {entry.fields.map((f) => (
                           <th key={f.field} className='w-40 px-2.5 py-1.5 font-medium'>
                             <span className='flex items-center gap-1.5'>
-                              {f.label}
+                              {columnLabel(f)}
                               {entry.rows.length > 1 && (
                                 <button
                                   type='button'

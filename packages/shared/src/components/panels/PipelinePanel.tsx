@@ -369,6 +369,214 @@ function useTransitionSettle(queryKey: readonly unknown[]) {
   return { settling, settle }
 }
 
+/** How long a button that newly appeared in the transition slot stays inert. */
+export const FRESH_BUTTON_MS = 1500
+
+/**
+ * Buttons that appear in the transition slot after the panel first showed its
+ * moves (the next step's "Submit to Warehouse" landing where "Approve" was, about
+ * a second after the approve) are inert for FRESH_BUTTON_MS, and — when the
+ * pointer was on them in that window — until it has left and come back. A double
+ * click on Approve can no longer press the step after it (army6 M19, army4 a15-8).
+ * Keyed by transition id; the first answer for a record is the baseline.
+ */
+export class FreshButtonGuard {
+  private seen: Set<string> | null = null
+  private fresh = new Map<string, { at: number; hovered: boolean; left: boolean }>()
+
+  /** Feed the ids on offer now. */
+  observe(ids: readonly string[], now: number): void {
+    const next = new Set(ids.map((id) => String(id).toUpperCase()))
+    if (this.seen)
+      for (const id of next)
+        if (!this.seen.has(id)) this.fresh.set(id, { at: now, hovered: false, left: false })
+    for (const id of [...this.fresh.keys()]) if (!next.has(id)) this.fresh.delete(id)
+    this.seen = next
+  }
+
+  /** The pointer is on the button. */
+  enter(id: string, now: number): void {
+    const f = this.fresh.get(String(id).toUpperCase())
+    if (f && !f.left && now - f.at < FRESH_BUTTON_MS) f.hovered = true
+  }
+
+  /** The pointer left the button. */
+  leave(id: string): void {
+    const f = this.fresh.get(String(id).toUpperCase())
+    if (f?.hovered) f.left = true
+  }
+
+  /** Still inert (no state change)? */
+  inert(id: string, now: number): boolean {
+    const f = this.fresh.get(String(id).toUpperCase())
+    if (!f) return false
+    return now - f.at < FRESH_BUTTON_MS || (f.hovered && !f.left)
+  }
+
+  /** A press: true = let it through. A press inside the window counts as the pointer being there. */
+  press(id: string, now: number): boolean {
+    const key = String(id).toUpperCase()
+    const f = this.fresh.get(key)
+    if (!f) return true
+    if (now - f.at < FRESH_BUTTON_MS) {
+      f.hovered = true
+      f.left = false
+      return false
+    }
+    if (f.hovered && !f.left) return false
+    this.fresh.delete(key)
+    return true
+  }
+
+  /** Inside its time window (drawn dimmed)? */
+  timed(id: string, now: number): boolean {
+    const f = this.fresh.get(String(id).toUpperCase())
+    return !!f && now - f.at < FRESH_BUTTON_MS
+  }
+
+  /** Any button still inside its time window? */
+  hasTimed(now: number): boolean {
+    for (const f of this.fresh.values()) if (now - f.at < FRESH_BUTTON_MS) return true
+    return false
+  }
+
+  reset(): void {
+    this.seen = null
+    this.fresh.clear()
+  }
+}
+
+/** Binds a FreshButtonGuard to a record's transition list (see FreshButtonGuard). */
+function useFreshTransitions(
+  ids: readonly string[] | null,
+  recordKey: string
+): {
+  /** Drawn dimmed: inside the time window (the hover rule has no look of its own). */
+  dimmed: (id: string) => boolean
+  press: (id: string) => boolean
+  bind: (id: string) => {
+    onPointerEnter: () => void
+    onPointerMove: () => void
+    onPointerLeave: () => void
+  }
+} {
+  const guardRef = useRef<FreshButtonGuard | null>(null)
+  if (!guardRef.current) guardRef.current = new FreshButtonGuard()
+  const guard = guardRef.current
+  const recordRef = useRef(recordKey)
+  if (recordRef.current !== recordKey) {
+    recordRef.current = recordKey
+    guard.reset()
+  }
+  const [, setTick] = useState(0)
+  const sig = ids ? ids.join(',') : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig is the ids' content
+  useMemo(() => {
+    if (ids) guard.observe(ids, Date.now())
+  }, [guard, sig])
+  // Re-render once the window ends so the dimmed look goes away.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig is the ids' content
+  useEffect(() => {
+    if (!guard.hasTimed(Date.now())) return
+    const t = setTimeout(() => setTick((n) => n + 1), FRESH_BUTTON_MS + 20)
+    return () => clearTimeout(t)
+  }, [guard, sig])
+  return {
+    dimmed: (id) => guard.timed(id, Date.now()),
+    press: (id) => guard.press(id, Date.now()),
+    bind: (id) => ({
+      onPointerEnter: () => guard.enter(id, Date.now()),
+      onPointerMove: () => guard.enter(id, Date.now()),
+      onPointerLeave: () => guard.leave(id)
+    })
+  }
+}
+
+type BriefLineView = { label: string; text: string; tone?: 'ok' | 'warn' | 'danger' | 'neutral' }
+type ApprovalBriefData = {
+  entered_at: string
+  days_in_state: number
+  revisions: number
+  field_changes: Array<{ field: string; old?: unknown; new: unknown }>
+  changed_total: number
+  comments: number
+  addendums: { count: number; cost_impact: number }
+  edited_by: string[]
+  lines?: BriefLineView[]
+} | null
+
+function approvalBriefKey(collection: string, item: string | number) {
+  return ['approval-brief', collection, String(item)] as const
+}
+
+function fetchApprovalBrief(
+  client: ReturnType<typeof useNivaroClient>,
+  collection: string,
+  item: string | number
+): Promise<ApprovalBriefData> {
+  return client
+    .request<{ data: ApprovalBriefData }>(
+      get(`/pipelines/instance/${collection}/${item}/approval-brief`)
+    )
+    .then((r) => r.data)
+}
+
+/** Brief lines that make a forward move ask first (army6 D6): tone warn or danger. */
+export function briefWarnings(lines: BriefLineView[] | null | undefined): BriefLineView[] {
+  return (lines ?? []).filter((l) => l.tone === 'warn' || l.tone === 'danger')
+}
+
+/** How long a forward move waits for the brief before it goes on without it. */
+const BRIEF_CHECK_MS = 4000
+
+/**
+ * Before a forward move with no note, read the record's approval brief: a line
+ * that warns (forecast over or short of the requisition) opens the confirm panel
+ * with "<move> anyway" — a warning, never a block. A brief that fails or is slow
+ * lets the move go on in one click, as before.
+ */
+function useForwardMoveCheck(collection: string, item: string) {
+  const client = useNivaroClient()
+  const queryClient = useQueryClient()
+  return useCallback(async (): Promise<BriefLineView[]> => {
+    try {
+      const data = await Promise.race([
+        queryClient.fetchQuery({
+          queryKey: approvalBriefKey(collection, item),
+          queryFn: () => fetchApprovalBrief(client, collection, item),
+          staleTime: 0,
+          retry: false
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), BRIEF_CHECK_MS))
+      ])
+      return briefWarnings(data?.lines)
+    } catch {
+      return []
+    }
+  }, [client, queryClient, collection, item])
+}
+
+/** The amber "check before you go on" block of a confirm panel opened by a brief warning. */
+function ForwardMoveWarning({ lines }: { lines: BriefLineView[] }) {
+  if (lines.length === 0) return null
+  return (
+    <div
+      data-forward-warning
+      className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+    >
+      {lines.map((l) => (
+        <p key={`${l.label}:${l.text}`}>
+          <span className='font-semibold'>{l.label ? `${l.label}: ` : ''}</span>
+          {l.text}
+        </p>
+      ))}
+      <p className='mt-1 text-[11.5px] text-amber-700/90 dark:text-amber-200/80'>
+        Check this before you go on. You can still continue.
+      </p>
+    </div>
+  )
+}
+
 /** A transition that goes to a step sorting BEFORE the current one (a send back). */
 function isSendBack(
   tx: Pick<PipelineTransition, 'to_state'>,
@@ -1946,27 +2154,8 @@ export function PipelinePanel({
 function ApprovalBriefStrip({ collection, item }: { collection: string; item: string | number }) {
   const client = useNivaroClient()
   const { data } = useQuery({
-    queryKey: ['approval-brief', collection, String(item)],
-    queryFn: () =>
-      client
-        .request<{
-          data: {
-            entered_at: string
-            days_in_state: number
-            revisions: number
-            field_changes: Array<{ field: string; old?: unknown; new: unknown }>
-            changed_total: number
-            comments: number
-            addendums: { count: number; cost_impact: number }
-            edited_by: string[]
-            lines?: Array<{
-              label: string
-              text: string
-              tone?: 'ok' | 'warn' | 'danger' | 'neutral'
-            }>
-          } | null
-        }>(get(`/pipelines/instance/${collection}/${item}/approval-brief`))
-        .then((r) => r.data),
+    queryKey: approvalBriefKey(collection, item),
+    queryFn: () => fetchApprovalBrief(client, collection, item),
     staleTime: 30_000,
     retry: false
   })
@@ -2096,6 +2285,9 @@ function PipelinePanelInner({
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
   const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
+  // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
+  const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
+  const checkForwardMove = useForwardMoveCheck(collection, String(item))
   // #1722 — "Kim is approving" for the others, while this panel's confirm or requirements
   // dialog is open; and the same notice from anyone else's.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
@@ -2152,9 +2344,25 @@ function PipelinePanelInner({
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
     if (mode !== 'optional' && mode !== 'required') {
+      // army6 D6 — a forward move whose brief warns (forecast over / left) asks first.
+      if (tx && !isSendBack(tx, data?.states ?? [], data?.instance?.current_state)) {
+        transitionBusyRef.current = true
+        let warnings: BriefLineView[] = []
+        try {
+          warnings = await checkForwardMove()
+        } finally {
+          transitionBusyRef.current = false
+        }
+        if (warnings.length > 0) {
+          setForwardWarning(warnings)
+          setPendingTransition(txId)
+          return
+        }
+      }
       runTransition({ transition_id: txId })
       return
     }
+    setForwardWarning([])
     setPendingTransition(txId)
   }
   // Same key as every other instance read on the page when no role preview is
@@ -2185,6 +2393,11 @@ function PipelinePanelInner({
         ),
     staleTime: 10_000
   })
+  // army6 M19 — a button that newly appears in the slot is inert for a beat.
+  const freshTx = useFreshTransitions(
+    data ? (data.available_transitions ?? []).map((t) => String(t.id)) : null,
+    `${collection}:${item}`
+  )
   useEffect(
     () =>
       queryClient.getQueryCache().subscribe((event) => {
@@ -2431,10 +2644,15 @@ function PipelinePanelInner({
             key={label}
             size='sm'
             variant={isActive ? 'default' : 'outline'}
-            className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5`}
+            className={`${small ? 'h-7 text-[11px]' : 'text-[12px]'} gap-1.5 data-[fresh=true]:opacity-60`}
             style={colorStyle(isActive)}
             disabled={executeTransition.isPending || settling}
-            onClick={() => trySetPending(tx.id)}
+            aria-disabled={freshTx.dimmed(tx.id) || undefined}
+            data-fresh={freshTx.dimmed(tx.id) || undefined}
+            {...freshTx.bind(tx.id)}
+            onClick={() => {
+              if (freshTx.press(tx.id)) void trySetPending(tx.id)
+            }}
           >
             {running && <Loader2 className='h-3 w-3 animate-spin' />}
             {label}
@@ -2508,6 +2726,7 @@ function PipelinePanelInner({
         )}
       </div>
       <ApprovalBriefStrip collection={collection} item={item} />
+      <ForwardMoveWarning lines={forwardWarning} />
       <input
         type='text'
         value={comment}
@@ -2552,7 +2771,9 @@ function PipelinePanelInner({
             <Loader2 className='h-3.5 w-3.5 animate-spin' />
           ) : (
             <>
-              <span>Confirm</span>
+              <span>
+                {forwardWarning.length > 0 && pendingTx ? `${pendingTx.label} anyway` : 'Confirm'}
+              </span>
               <Check className='h-3 w-3' />
             </>
           )}
@@ -2855,6 +3076,9 @@ function PipelineTransitionButtonsInner({
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
   // A refusal the caller can fix here (REFUSAL_FIX_ACTIONS), e.g. PRIORITY_REQUIRED.
   const [fixOffer, setFixOffer] = useState<RefusalFixOffer | null>(null)
+  // Brief lines that warned before a forward move (army6 D6): the confirm says "<move> anyway".
+  const [forwardWarning, setForwardWarning] = useState<BriefLineView[]>([])
+  const checkForwardMove = useForwardMoveCheck(collection, String(item))
   // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
   useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -2904,9 +3128,25 @@ function PipelineTransitionButtonsInner({
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
     if (mode !== 'optional' && mode !== 'required') {
+      // army6 D6 — a forward move whose brief warns (forecast over / left) asks first.
+      if (tx && !isSendBack(tx, data?.states ?? [], data?.instance?.current_state)) {
+        transitionBusyRef.current = true
+        let warnings: BriefLineView[] = []
+        try {
+          warnings = await checkForwardMove()
+        } finally {
+          transitionBusyRef.current = false
+        }
+        if (warnings.length > 0) {
+          setForwardWarning(warnings)
+          setPendingTransition(txId)
+          return
+        }
+      }
       runTransition({ transition_id: txId })
       return
     }
+    setForwardWarning([])
     setPendingTransition(txId)
   }
   const queryKey = ['pipeline-instance', collection, item]
@@ -2931,6 +3171,11 @@ function PipelineTransitionButtonsInner({
         ),
     staleTime: 10_000
   })
+  // army6 M19 — a button that newly appears in the slot is inert for a beat.
+  const freshTx = useFreshTransitions(
+    data ? (data.available_transitions ?? []).map((t) => String(t.id)) : null,
+    `${collection}:${item}`
+  )
   // Same key as the panel's chain read: shared cache, fetched here only for a send back's sake.
   const { data: chainOwners } = useQuery<Record<string, AllOwnersEntry> | null>({
     queryKey: ['pipeline-all-owners', collection, item],
@@ -3192,10 +3437,15 @@ function PipelineTransitionButtonsInner({
                   key={label}
                   size='sm'
                   variant={isActive ? 'default' : 'outline'}
-                  className='gap-1.5 text-[12px]'
+                  className='gap-1.5 text-[12px] data-[fresh=true]:opacity-60'
                   style={colorStyle(isActive)}
                   disabled={executeTransition.isPending || settling}
-                  onClick={() => trySetPending(tx.id)}
+                  aria-disabled={freshTx.dimmed(tx.id) || undefined}
+                  data-fresh={freshTx.dimmed(tx.id) || undefined}
+                  {...freshTx.bind(tx.id)}
+                  onClick={() => {
+                    if (freshTx.press(tx.id)) void trySetPending(tx.id)
+                  }}
                 >
                   {running && <Loader2 className='h-3 w-3 animate-spin' />}
                   {label}
@@ -3268,6 +3518,7 @@ function PipelineTransitionButtonsInner({
             )}
           </div>
           <ApprovalBriefStrip collection={collection} item={item} />
+          <ForwardMoveWarning lines={forwardWarning} />
           <input
             type='text'
             value={comment}
@@ -3313,7 +3564,11 @@ function PipelineTransitionButtonsInner({
                 <Loader2 className='h-3.5 w-3.5 animate-spin' />
               ) : (
                 <>
-                  <span>Confirm</span>
+                  <span>
+                    {forwardWarning.length > 0 && pendingTx
+                      ? `${pendingTx.label} anyway`
+                      : 'Confirm'}
+                  </span>
                   <Check className='h-3 w-3' />
                 </>
               )}

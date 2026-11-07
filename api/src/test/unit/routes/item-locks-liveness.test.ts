@@ -92,6 +92,7 @@ vi.mock('../../../services/items.js', () => ({
 
 import {
   itemLocksRoutes,
+  noteForcedTakeover,
   noteMasqueradeLock,
   releaseMasqueradeLocks
 } from '../../../routes/item-locks.js'
@@ -232,5 +233,49 @@ describe('View-as stop releases the locks that View-as took', () => {
     expect(sets.size).toBe(0)
     // A second stop (or another token) releases nothing.
     expect(await releaseMasqueradeLocks({ redis } as never, 'nvm_other', 'U-ETIEN')).toBe(0)
+  })
+})
+
+describe('a take-over the taker already let go of (army6 M28)', () => {
+  beforeEach(() => {
+    state.me = 'U-BERNARD'
+    state.lock = null
+  })
+
+  it("the displaced person's heartbeat says taken_over (with who), so it never re-claims", async () => {
+    const kv = new Map<string, string>()
+    const redis = {
+      get: async (k: string) => kv.get(k) ?? null,
+      set: async (k: string, v: string) => {
+        kv.set(k, v)
+        return 'OK'
+      },
+      del: async (k: string) => (kv.delete(k) ? 1 : 0)
+    }
+    const a = Fastify()
+    a.decorate('redis', redis as never)
+    await a.register(itemLocksRoutes, { prefix: '/api/item-locks' })
+    await noteForcedTakeover(a, 'workflows', '372961', 'U-BERNARD', 'U-ADMIN')
+    // The admin's clean form let the lock go: nobody holds it now.
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372961/heartbeat',
+      payload: { beat_ms: 10_000 }
+    })
+    expect(res.statusCode).toBe(404)
+    const body = res.json()
+    expect(body.locked_by).toBeNull()
+    expect(body.taken_over).toBe(true)
+    expect(body.taken_over_by_name).toBe('Etien Gjoni')
+
+    // Someone never taken over from gets the plain answer.
+    state.me = 'U-OTHER'
+    const plain = await a.inject({
+      method: 'POST',
+      url: '/api/item-locks/workflows/372961/heartbeat',
+      payload: { beat_ms: 10_000 }
+    })
+    expect(plain.json().taken_over).toBe(false)
+    expect(plain.json().taken_over_by_name).toBeUndefined()
   })
 })

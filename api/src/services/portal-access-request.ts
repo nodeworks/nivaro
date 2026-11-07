@@ -163,3 +163,56 @@ export async function notifyAdminsOfAccessRequest(
   }
   return told
 }
+
+/**
+ * army6 L46 — the vendor a request names, read by id on the server. The name
+ * shown to admins is the vendor's own name, never text the client sent. null
+ * when the id names no vendor. A database with no `vendors` table keeps the id
+ * and has no name to show.
+ */
+export async function vendorOf(id: Id | null): Promise<{ id: Id; name: string | null } | null> {
+  if (id == null) return null
+  if (!(await db.schema.hasTable('vendors').catch(() => false))) return { id, name: null }
+  const key = typeof id === 'number' || /^\d{1,15}$/.test(String(id)) ? Number(id) : String(id)
+  let row: { id: Id; name?: unknown } | undefined
+  try {
+    row = (await db('vendors').where('id', key).first('id', 'name')) as typeof row
+  } catch {
+    try {
+      // A vendors table with no name column: the id still counts.
+      row = (await db('vendors').where('id', key).first('id')) as typeof row
+    } catch {
+      return null
+    }
+  }
+  if (!row) return null
+  const name = typeof row.name === 'string' ? row.name.trim().slice(0, 500) : ''
+  return { id: row.id, name: name || null }
+}
+
+/** One authorization: the role, and either the zones it is limited to or every zone. */
+export type AuthorizationPlan =
+  | { ok: true; role: string; zones: Id[] | 'all' }
+  | { ok: false; error: string; code: string }
+
+/**
+ * army6 L45 — approving with every zone unticked used to grant unrestricted
+ * access by accident. "Every zone" must now be asked for (`all_zones: true`);
+ * otherwise at least one zone is required.
+ */
+export function planAuthorization(body: unknown): AuthorizationPlan {
+  const b = (body ?? {}) as Record<string, unknown>
+  const role = typeof b.role === 'string' ? b.role.trim() : ''
+  if (!role) return { ok: false, error: 'Choose a role.', code: 'ROLE_REQUIRED' }
+  if (b.all_zones === true) return { ok: true, role, zones: 'all' }
+  const zones = Array.isArray(b.zones)
+    ? [...new Set((b.zones as unknown[]).filter(isId))].slice(0, MAX_DIVISIONS)
+    : []
+  if (zones.length === 0)
+    return {
+      ok: false,
+      error: 'Pick at least one zone, or tick "All zones" to give access to every zone.',
+      code: 'ZONES_REQUIRED'
+    }
+  return { ok: true, role, zones }
+}

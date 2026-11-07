@@ -14,6 +14,8 @@ import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
 import {
+  isSnoozed,
+  loadActiveSnoozes,
   planChangedSnoozePrune,
   planStaleDismissalPrune,
   resolveThresholds,
@@ -65,6 +67,131 @@ export function getSignalAction(
   id: string
 ): { def: SignalActionHandler; owner: string } | undefined {
   return actions.get(id)
+}
+
+// ── open-problem count (one rule for the console and the dashboard tile) ────
+
+/**
+ * The figure a signal shows on the console: the evaluator's own count less
+ * what is snoozed, never below the rows actually on the board (the run counts
+ * every key, the board holds at most ROW_CAP). No run yet = the rows shown.
+ */
+export function signalOpenCount(
+  runCount: number | string | null | undefined,
+  shown: number,
+  snoozed: number
+): number {
+  if (runCount == null) return shown
+  return Math.max(Number(runCount) - snoozed, shown)
+}
+
+export interface ProblemSignal {
+  severity: 'critical' | 'warn'
+  count: number
+  error: string | null
+  shown: number
+  snoozed: number
+}
+
+export interface ProblemTotals {
+  /** Open problems across every signal that is a problem (errored ones excluded). */
+  total: number
+  /** The same, counting only critical signals. */
+  critical: number
+  /** Signals whose last evaluation failed. */
+  errored: number
+}
+
+/**
+ * The Firefight headline ("N problems · M critical"): a signal is a problem
+ * when it errored or has rows on the board or snoozed; an errored signal
+ * contributes no count (its snapshot is the last good one). The console's
+ * client reads the same rule off the GET answer; the dashboard tile reads
+ * this — so both say the same number (army 6 H10).
+ */
+export function summarizeProblems(list: ProblemSignal[]): ProblemTotals {
+  let total = 0
+  let critical = 0
+  let errored = 0
+  for (const s of list) {
+    if (!s.error && s.shown === 0 && s.snoozed === 0) continue
+    if (s.error) {
+      errored++
+      continue
+    }
+    total += s.count
+    if (s.severity === 'critical') critical += s.count
+  }
+  return { total, critical, errored }
+}
+
+export interface OpenProblemSummary extends ProblemTotals {
+  checked_at: string | null
+  /** Per problem signal — admins only; the dashboard strips it for others. */
+  signals: Array<{ id: string; label: string; severity: 'critical' | 'warn'; count: number }>
+}
+
+/**
+ * The console's open-problem figures without the row payloads: one COUNT per
+ * signal, and a payload read only for a signal that has an active snooze
+ * (snoozes are judged row by row). Reads the cron's snapshot, never evaluates.
+ */
+export async function openProblemSummary(now: Date = new Date()): Promise<OpenProblemSummary> {
+  const lastRuns = (await db.raw(
+    `SELECT r.signal, r.ran_at, r.count, r.error FROM nivaro_integration_signal_runs r
+      WHERE r.id IN (SELECT MAX(id) FROM nivaro_integration_signal_runs GROUP BY signal)`
+  )) as Array<{ signal: string; ran_at: Date; count: number; error: string | null }>
+  const runBy = new Map(lastRuns.map((r) => [r.signal, r]))
+  const snoozes = await loadActiveSnoozes()
+  const openCounts = (await db('nivaro_integration_signal_rows')
+    .whereNull('cleared_at')
+    .groupBy('signal')
+    .select('signal')
+    .count({ n: '*' })) as Array<{ signal: string; n: number | string }>
+  const openBy = new Map(openCounts.map((r) => [r.signal, Number(r.n)]))
+  const list: Array<ProblemSignal & { id: string; label: string }> = []
+  for (const s of listIntegrationSignals()) {
+    const settings = await resolveThresholds(s)
+    if (!settings.enabled) continue
+    const run = runBy.get(s.id)
+    const open = openBy.get(s.id) ?? 0
+    let snoozed = 0
+    if (open > 0 && snoozes.some((z) => z.signal === s.id)) {
+      const rows = (await db('nivaro_integration_signal_rows')
+        .where({ signal: s.id })
+        .whereNull('cleared_at')
+        .select('payload')) as Array<{ payload: string }>
+      for (const r of rows) {
+        try {
+          if (isSnoozed(JSON.parse(r.payload) as SignalRow, s.id, snoozes, now)) snoozed++
+        } catch {
+          // An unreadable payload counts as shown, like the console's own read.
+        }
+      }
+    }
+    const shown = open - snoozed
+    list.push({
+      id: s.id,
+      label: s.label,
+      severity: settings.severity,
+      count: signalOpenCount(run?.count, shown, snoozed),
+      error: run?.error ?? null,
+      shown,
+      snoozed
+    })
+  }
+  const checked = lastRuns.reduce<Date | null>(
+    (m, r) => (!m || new Date(r.ran_at) > m ? new Date(r.ran_at) : m),
+    null
+  )
+  return {
+    ...summarizeProblems(list),
+    checked_at: checked?.toISOString() ?? null,
+    signals: list
+      .filter((s) => !s.error && s.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .map((s) => ({ id: s.id, label: s.label, severity: s.severity, count: s.count }))
+  }
 }
 
 // ── snapshot diff (pure) ────────────────────────────────────────────────────

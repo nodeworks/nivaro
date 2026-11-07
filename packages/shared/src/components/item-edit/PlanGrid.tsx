@@ -183,6 +183,13 @@ export type ReconcileMode = 'next' | 'even' | 'weighted' | 'none'
  * holds the closed column alone. `targetRow: {}` is a row that does not exist
  * yet.
  */
+/** A query key of the record this grid belongs to (`['item', <collection>,
+ *  <id>, …]`) — the grid does not know its parent's collection, the id is
+ *  enough (army6 L27). */
+export function isParentItemKey(key: readonly unknown[], parentId: string): boolean {
+  return key[0] === 'item' && key.length >= 3 && String(key[2]) === String(parentId)
+}
+
 export function reconcilePatch(args: {
   row: Record<string, unknown>
   column: string
@@ -430,6 +437,22 @@ export function PlanGridField(props: {
   const pendingRows = staging?.getPendingRows(rc, mf) ?? []
   const pendingEdits = staging?.getPendingEdits(rc, mf)
   const pendingDeletes = staging?.getPendingDeletes(rc, mf)
+  // army6 L27: after the record's Save flushes this grid's staged rows, the
+  // header's figures read from the record (FORECAST STATUS stayed "Not judged
+  // yet" while the API said "Good") — read the record again, now and once
+  // more when the save's after-hooks have run.
+  const stagedCount = pendingRows.length + (pendingEdits?.size ?? 0) + (pendingDeletes?.size ?? 0)
+  const prevStagedCountRef = useRef(stagedCount)
+  useEffect(() => {
+    const prev = prevStagedCountRef.current
+    prevStagedCountRef.current = stagedCount
+    if (isNew || !(prev > 0 && stagedCount === 0)) return
+    const refreshParent = () =>
+      void qc.invalidateQueries({ predicate: (q) => isParentItemKey(q.queryKey, parentId) })
+    refreshParent()
+    const t = setTimeout(refreshParent, 2000)
+    return () => clearTimeout(t)
+  }, [stagedCount, isNew, parentId, qc])
 
   const rows: PlanRow[] = useMemo(() => {
     const out: PlanRow[] = []

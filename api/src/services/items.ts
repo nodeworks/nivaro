@@ -47,6 +47,11 @@ import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
+import {
+  createFilterScopeGate,
+  createRecordingGate,
+  type FilterScopeGate
+} from './filter-scope-gate.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import {
   helpVideoFileColumnsReady,
@@ -678,7 +683,9 @@ async function farHasOwnField(collection: string, seg: string): Promise<boolean>
   if ((await calculatedFieldNames(collection)).has(k)) return true
   if ((await primeVirtualSql(collection)).has(seg)) return true
   return (await getRelsForCollection(collection)).some(
-    (r) => (r.many_collection ?? '').toLowerCase() === collection.toLowerCase() && r.many_field.toLowerCase() === k
+    (r) =>
+      (r.many_collection ?? '').toLowerCase() === collection.toLowerCase() &&
+      r.many_field.toLowerCase() === k
   )
 }
 
@@ -1165,7 +1172,7 @@ async function assertKnownFields(collection: string, fields: string[]): Promise<
  * path (form, REST, GraphQL, extensions) instead of staying NULL. A value the
  * caller sent explicitly wins; a field with no physical column is skipped.
  */
-async function applyAuditSpecials(
+export async function applyAuditSpecials(
   collection: string,
   payload: Record<string, unknown>,
   user: User,
@@ -1192,6 +1199,12 @@ async function applyAuditSpecials(
       payload[f.field] = user.id
     } else if (specials.includes(wantDate)) {
       if (phase === 'create' && payload[f.field] != null) continue
+      now ??= new Date()
+      payload[f.field] = now
+    } else if (phase === 'create' && specials.includes('date-updated')) {
+      // A new row's "changed" is its creation instant, in UTC like `created` (army 6 M3):
+      // left to the column's GETDATE default it landed 5 h behind (Eastern written as UTC).
+      if (payload[f.field] != null) continue
       now ??= new Date()
       payload[f.field] = now
     }
@@ -2002,6 +2015,57 @@ async function withoutUnbuiltAliases(
   return {
     direct: split.direct.filter((f) => !gone.has(f)),
     nested: Object.fromEntries(Object.entries(split.nested).filter(([k]) => !gone.has(k)))
+  }
+}
+
+/**
+ * A deep `fields=` path whose middle segment is neither a relation nor a column of the
+ * collection it sits on (`project.division.short_name` where projects has no `division`)
+ * reached SQL as a column and answered 500 with the driver's text (army 6 N2). Refused as
+ * 400 UNKNOWN_FIELD naming the path. Only many-to-one hops are followed (the expansion that
+ * selects columns); a to-many alias, an M2A, `*`, a `$` projection or a real column ends the
+ * check and is left to the expansion exactly as before.
+ */
+export async function assertFieldPathsExist(
+  collection: string,
+  fields: string[] | undefined
+): Promise<void> {
+  if (!Array.isArray(fields)) return
+  for (const f of fields) {
+    if (typeof f !== 'string' || !f.includes('.')) continue
+    const segs = f.split('.')
+    let current = collection
+    for (let i = 0; i < segs.length - 1; i++) {
+      const seg = segs[i]
+      if (!seg || seg.includes('*') || seg.startsWith('$')) break
+      const rels = await getRelsForCollection(current)
+      const m2o = rels.find(
+        (r) => r.many_collection === current && r.many_field === seg && r.one_collection
+      )
+      if (m2o?.one_collection) {
+        current = m2o.one_collection
+        continue
+      }
+      const k = seg.toLowerCase()
+      const cur = current.toLowerCase()
+      const relationNamed = rels.some(
+        (r) =>
+          ((r.many_collection ?? '').toLowerCase() === cur &&
+            (r.many_field ?? '').toLowerCase() === k) ||
+          ((r.one_collection ?? '').toLowerCase() === cur &&
+            (r.one_field ?? '').toLowerCase() === k)
+      )
+      if (relationNamed) break
+      if (unbuiltAliases.get(`${getTenantId() ?? ''}:${current}`)?.has(seg)) break
+      const cols = await getActualColumns(current)
+      if ([...cols].some((c) => c.toLowerCase() === k)) break
+      const path = segs.slice(0, i + 1).join('.')
+      throw Object.assign(new Error(`Unknown field ${path}`), {
+        statusCode: 400,
+        code: 'UNKNOWN_FIELD',
+        fields: [path]
+      })
+    }
   }
 }
 
@@ -2817,7 +2881,8 @@ function unwrapJunctionLeg(
 export async function applyFilterToQuery(
   q: QB,
   filter: Record<string, unknown>,
-  collection: string
+  collection: string,
+  opts: { user?: User } = {}
 ): Promise<void> {
   const rels = await getRelsForCollection(collection)
   await primeRelCacheForFilter(filter, collection, rels)
@@ -2825,14 +2890,47 @@ export async function applyFilterToQuery(
   await primeVirtualFilters(filter)
   const fitted = cloneFilterTree(filter)
   await assertFilterCompiles(fitted, collection, rels)
-  applyFilters(q, fitted, collection, rels)
+  // With a caller, relation sub-filters are judged as them (H12); without one the
+  // caller of this function owns access (server-side checks, GraphQL nested lists).
+  const gate = opts.user ? await filterScopeGateFor(opts.user, fitted, collection, rels) : undefined
+  applyFilters(q, fitted, collection, rels, gate)
+}
+
+/**
+ * The caller's read gates for every collection a filter's relation sub-filters reach (H12).
+ * A dry compile with a recording gate names exactly the collections the real compile will
+ * ask about (knex builds EXISTS callbacks when the SQL is built), so the list cannot drift
+ * from the compiler; a collection it missed is denied by the real gate (fails closed).
+ * Undefined when the filter reaches no other collection.
+ */
+async function filterScopeGateFor(
+  user: User,
+  filter: Record<string, unknown>,
+  collection: string,
+  rels: CMSRelation[]
+): Promise<FilterScopeGate | undefined> {
+  if (!user) return undefined
+  const recorder = createRecordingGate()
+  try {
+    const dry = db(collection).select(db.raw('1'))
+    applyFilters(dry, filter, collection, rels, recorder)
+    dry.toSQL()
+  } catch {
+    /* the real compile reports it; anything unrecorded is denied */
+  }
+  if (recorder.seen.size === 0) return undefined
+  const gate = createFilterScopeGate(user)
+  await gate.prime(recorder.seen)
+  return gate
 }
 
 function applyFilters(
   q: QB,
   filter: Record<string, unknown>,
   collection: string,
-  rels: CMSRelation[]
+  rels: CMSRelation[],
+  /** The caller's read gates for every collection a sub-filter reaches (H12). */
+  gate?: FilterScopeGate
 ): void {
   for (const [key, value] of Object.entries(filter)) {
     // ── Pipeline state ───────────────────────────────────────────────────────
@@ -2875,7 +2973,7 @@ function applyFilters(
     if (key === '_and' && Array.isArray(value)) {
       q.where((sub) => {
         for (const clause of value as Record<string, unknown>[]) {
-          sub.where((inner) => applyFilters(inner, clause, collection, rels))
+          sub.where((inner) => applyFilters(inner, clause, collection, rels, gate))
         }
       })
       continue
@@ -2884,7 +2982,7 @@ function applyFilters(
     if (key === '_or' && Array.isArray(value)) {
       q.where((sub) => {
         for (const clause of value as Record<string, unknown>[]) {
-          sub.orWhere((inner) => applyFilters(inner, clause, collection, rels))
+          sub.orWhere((inner) => applyFilters(inner, clause, collection, rels, gate))
         }
       })
       continue
@@ -2914,7 +3012,8 @@ function applyFilters(
           // or fall back to applying filters without relation awareness if not cached.
           // We prime the cache before the query so nested relations work too.
           const relatedRels = relCache.get(relatedCollection) ?? []
-          applyFilters(this, nestedFilter, relatedCollection, relatedRels)
+          gate?.apply(this, relatedCollection)
+          applyFilters(this, nestedFilter, relatedCollection, relatedRels, gate)
         })
       }
       continue
@@ -2942,6 +3041,8 @@ function applyFilters(
               this.select(db.raw('1'))
                 .from(manyCollection)
                 .whereRaw('??.?? = ??.??', [manyCollection, manyField, collection, 'id'])
+              // A child the caller cannot read is not "there" to match on.
+              gate?.apply(this, manyCollection)
               if (idOp) applyOneFilterOp(this, `${manyCollection}.id`, idOp, idVal)
             }
           if (op === '_null') {
@@ -2970,7 +3071,8 @@ function applyFilters(
           this.select(db.raw('1'))
             .from(manyCollection)
             .whereRaw('??.?? = ??.??', [manyCollection, manyField, collection, 'id'])
-          applyFilters(this, innerFilter, manyCollection, manyRels)
+          gate?.apply(this, manyCollection)
+          applyFilters(this, innerFilter, manyCollection, manyRels, gate)
         }
 
         if (hasSome) {
@@ -3001,6 +3103,14 @@ function applyFilters(
               this.select(db.raw('1'))
                 .from(junction)
                 .whereRaw('??.?? = ??.??', [junction, fkToParent, collection, 'id'])
+              // The far record must be one the caller may read (only joined when it narrows).
+              if (gate && !gate.isOpen(otherCollection))
+                this.whereExists(function (this: QB) {
+                  this.select(db.raw('1'))
+                    .from(otherCollection)
+                    .whereRaw('??.?? = ??.??', [otherCollection, 'id', junction, fkToOther])
+                  gate.apply(this, otherCollection)
+                })
               if (idOp) applyOneFilterOp(this, `${junction}.${fkToOther}`, idOp, idVal)
             }
           if (op === '_null') {
@@ -3047,10 +3157,11 @@ function applyFilters(
               this.select(db.raw('1'))
                 .from(otherCollection)
                 .whereRaw('??.?? = ??.??', [otherCollection, 'id', junction, fkToOther])
-              applyFilters(this, targetFilter, otherCollection, otherRels)
+              gate?.apply(this, otherCollection)
+              applyFilters(this, targetFilter, otherCollection, otherRels, gate)
             })
           if (linkFilter && typeof linkFilter === 'object')
-            applyFilters(this, linkFilter as Record<string, unknown>, junction, junctionRels)
+            applyFilters(this, linkFilter as Record<string, unknown>, junction, junctionRels, gate)
         }
 
         if (hasSome) {
@@ -3340,7 +3451,8 @@ function applyPlannedCondition(
   collection: string,
   plan: NonNullable<PathPlan>,
   op: string,
-  value: unknown
+  value: unknown,
+  gate?: FilterScopeGate
 ) {
   const build = (qb: Knex.QueryBuilder, idx: number, fromTable: string) => {
     if (idx >= plan.hops.length) {
@@ -3359,10 +3471,16 @@ function applyPlannedCondition(
       this.select(db.raw('1')).from(target)
       if (hop.kind === 'm2o') this.whereRaw('??.?? = ??.??', [target, 'id', fromTable, hop.fk])
       else this.whereRaw('??.?? = ??.??', [target, hop.childFk, fromTable, 'id'])
+      gate?.apply(this, target)
       build(this, idx + 1, target)
     })
   }
   build(q as unknown as Knex.QueryBuilder, 0, collection)
+}
+
+/** The collections a condition's hops read (each EXISTS target). */
+function planTargets(plan: NonNullable<PathPlan>): string[] {
+  return plan.hops.map((h) => (h.kind === 'm2o' ? h.to : h.child))
 }
 
 export type OrCondition = { or: FilterCondition[] }
@@ -3649,7 +3767,9 @@ export async function applyConditions(
   conditions: Array<FilterCondition | OrCondition>,
   collection: string,
   /** The reader — only the `$unseen` path needs it (their own watermarks). */
-  userId?: string | null
+  userId?: string | null,
+  /** The caller's read gates: every relation hop is narrowed to rows they may read (H12). */
+  gate?: FilterScopeGate
 ) {
   for (const cond of conditions) {
     // OR group: each branch is a normal path condition; the group ANDs with
@@ -3669,7 +3789,10 @@ export async function applyConditions(
         }
         if (sub.path[0].startsWith('$')) continue
         const plan = await planConditionPath(collection, sub.path)
-        if (plan) branches.push({ kind: 'path', plan, op: sub.op, value: sub.value })
+        if (plan) {
+          await gate?.prime(planTargets(plan))
+          branches.push({ kind: 'path', plan, op: sub.op, value: sub.value })
+        }
       }
       if (branches.length === 0) continue
       const { applyRuleConditions } = await import('../routes/at-risk.js')
@@ -3678,7 +3801,7 @@ export async function applyConditions(
           this.orWhere(function () {
             if (b.kind === 'risk')
               applyRiskRules(this as QB, collection, b.rules, applyRuleConditions)
-            else applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value)
+            else applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value, gate)
           })
         }
       })
@@ -3868,7 +3991,8 @@ export async function applyConditions(
     }
     const plan = await planConditionPath(collection, cond.path)
     if (!plan) continue
-    applyPlannedCondition(q, collection, plan, cond.op, cond.value)
+    await gate?.prime(planTargets(plan))
+    applyPlannedCondition(q, collection, plan, cond.op, cond.value, gate)
   }
 }
 
@@ -4570,6 +4694,7 @@ export async function readItems(
   noteReadShape(collection, filter, sort, conditions, fields)
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
+  await assertFieldPathsExist(collection, fields)
   const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
     collection,
     parseFieldExpansion(fields)
@@ -4671,6 +4796,14 @@ export async function readItems(
   }
 
   const fittedFilter = await compileFilterGates(collection, filter, sort, conditions, rels)
+  // Every relation sub-filter is judged as the caller (H12): primed before the sync compile.
+  const subGate =
+    Object.keys(fittedFilter).length && !labelIds
+      ? await filterScopeGateFor(user, fittedFilter, collection, rels)
+      : undefined
+  // A page without a sort of its own is ordered by the primary key (M16): `(SELECT NULL)`
+  // let SQL Server hand back a different order per page, so paging repeated and lost rows.
+  const pkOrder = sort.length === 0 && (await getActualColumns(collection)).has('id')
 
   // limit=-1 is Directus convention for "all records". Passing -1 to Knex MSSQL
   // generates SELECT TOP(-1) which is invalid SQL — treat as 1000-row cap instead.
@@ -4699,7 +4832,8 @@ export async function readItems(
     })
   }
 
-  if (Object.keys(fittedFilter).length && !labelIds) applyFilters(q, fittedFilter, collection, rels)
+  if (Object.keys(fittedFilter).length && !labelIds)
+    applyFilters(q, fittedFilter, collection, rels, subGate)
 
   // `search_rank` (services/list-search-rank.ts) orders by match quality FIRST, so the caller's
   // sort waits until the searched columns are known (the search block below).
@@ -4709,8 +4843,10 @@ export async function readItems(
       await applySorts(q, sort, collection, rels)
     } else if (!(collection === 'nivaro_users' && search && orderByPeopleRelevance(q, search))) {
       // A people search with no sort of its own ranks by name (services/people-search-rank.ts);
-      // anything else: MSSQL requires ORDER BY when OFFSET is used.
-      q.orderByRaw('(SELECT NULL)')
+      // anything else by the primary key, so pages never overlap (M16). MSSQL requires an
+      // ORDER BY with OFFSET: a table without an `id` column keeps `(SELECT NULL)`.
+      if (pkOrder) q.orderBy(`${collection}.id`, 'asc')
+      else q.orderByRaw('(SELECT NULL)')
     }
   }
   if (!rankSearch) await applyListOrder()
@@ -4723,7 +4859,7 @@ export async function readItems(
     whereNotHelpVideoFile(countQ, `${collection}.id`)
   }
   if (Object.keys(fittedFilter).length && !labelIds)
-    applyFilters(countQ, fittedFilter, collection, rels)
+    applyFilters(countQ, fittedFilter, collection, rels, subGate)
 
   // Row-level workspace isolation (no-op when no workspaceId passed or no column)
   await applyWorkspaceScope(q, collection, workspaceId)
@@ -4741,8 +4877,10 @@ export async function readItems(
   await applyUserScopes(countQ, collection, user)
 
   if (conditions?.length) {
-    await applyConditions(q, conditions, collection, user?.id)
-    await applyConditions(countQ, conditions, collection, user?.id)
+    // Relational condition hops are judged as the caller too (H12).
+    const condGate = user ? createFilterScopeGate(user) : undefined
+    await applyConditions(q, conditions, collection, user?.id, condGate)
+    await applyConditions(countQ, conditions, collection, user?.id, condGate)
   }
   // Rows after the cursor — the page only; the count is of the whole set.
   if (keyset) applyKeyset(q, collection, keyset)
@@ -5389,6 +5527,7 @@ export async function readOne(
   }
 
   const baseFields = allowedFields ?? ['*']
+  await assertFieldPathsExist(collection, fields)
   const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
     collection,
     parseFieldExpansion(fields ?? baseFields)

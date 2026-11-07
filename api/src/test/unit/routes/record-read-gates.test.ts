@@ -43,6 +43,11 @@ vi.mock('../../../services/chain-columns.js', () => ({
   hasChainColumns: vi.fn(async () => false),
   chainFields: vi.fn(async () => ({}))
 }))
+// Provenance reads through bounded-sql with the builder's SQL; here that SQL is the table name.
+vi.mock('../../../services/bounded-sql.js', () => ({
+  StatementCancelled: class extends Error {},
+  boundedRaw: vi.fn(async (table: string) => state.tables[table] ?? [])
+}))
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => false) }))
 vi.mock('../../../services/queues.js', () => ({ getLabels: vi.fn(async () => ({})) }))
 vi.mock('../../../db/index.js', () => {
@@ -70,7 +75,12 @@ vi.mock('../../../db/index.js', () => {
       fn(b)
       return b
     }
-    b.first = async () => rows()[0]
+    b.first = () => {
+      // Awaited directly (most routes) or handed to bounded-sql via toSQL() (provenance).
+      const one: any = Promise.resolve(rows()[0])
+      one.toSQL = () => ({ sql: table, bindings: [] })
+      return one
+    }
     // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
     b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(rows()).then(res, rej)

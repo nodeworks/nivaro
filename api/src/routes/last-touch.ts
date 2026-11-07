@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { boundedRaw, StatementCancelled } from '../services/bounded-sql.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
 
@@ -12,6 +14,25 @@ async function recordReadable(req: FastifyRequest, collection: string, id: strin
     () => null
   )
   return !!row
+}
+
+/** army6 M40: provenance answered in 13–17 s on a forecast and kept running after
+ *  the page was left. Every statement now shares one budget and is cancelled on
+ *  the server when it runs out; what was not found in time is simply left out. */
+export const PROVENANCE_BUDGET_MS = 3_000
+
+/** The first row of a knex query, cancelled on the server past `timeoutMs`.
+ *  null when nothing matched OR the time ran out. */
+async function firstWithin<T>(qb: Knex.QueryBuilder, timeoutMs: number): Promise<T | null> {
+  if (timeoutMs <= 0) return null
+  const { sql, bindings } = qb.toSQL()
+  try {
+    const rows = await boundedRaw<T>(sql, bindings, { timeoutMs })
+    return rows[0] ?? null
+  } catch (err) {
+    if (err instanceof StatementCancelled) return null
+    throw err
+  }
 }
 
 /**
@@ -87,25 +108,35 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       // outrank it. Per-collection read logging can write a 'read' row
       // milliseconds before the create lands (the reported false 'likely
       // imported' on a form-created record), and lock heartbeats are noise.
+      const deadline = Date.now() + PROVENANCE_BUDGET_MS
+      const left = () => deadline - Date.now()
       const activityChained = await hasChainColumns('nivaro_activity')
-      const first = (await db('nivaro_activity as a')
-        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-        .where({ 'a.collection': collection, 'a.item': String(id) })
-        .whereNotIn('a.action', ['read', 'lock-acquire', 'lock-release'])
-        .orderBy('a.id', 'asc')
-        .first(
-          ...(activityChained ? ['a.chain_id'] : []),
-          'a.id',
-          'a.action',
-          'a.timestamp',
-          'a.comment',
-          'a.legacy_id',
-          'a.user',
-          'u.first_name',
-          'u.last_name',
-          'u.email',
-          'u.status'
-        )) as
+      // Earliest first in the (collection, item, timestamp) index's own order,
+      // so the read is a TOP 1 seek, not a sort of every row the record has.
+      const first = (await firstWithin(
+        db('nivaro_activity as a')
+          .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+          .where({ 'a.collection': collection, 'a.item': String(id) })
+          .whereNotIn('a.action', ['read', 'lock-acquire', 'lock-release'])
+          .orderBy([
+            { column: 'a.timestamp', order: 'asc' },
+            { column: 'a.id', order: 'asc' }
+          ])
+          .first(
+            ...(activityChained ? ['a.chain_id'] : []),
+            'a.id',
+            'a.action',
+            'a.timestamp',
+            'a.comment',
+            'a.legacy_id',
+            'a.user',
+            'u.first_name',
+            'u.last_name',
+            'u.email',
+            'u.status'
+          ),
+        left()
+      )) as
         | {
             id: number
             action: string
@@ -128,7 +159,8 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       // this collection within seconds of the create — the only kind the
       // chain-less history can name. Session auth = a browser form, which
       // stays "Manual"; token / API-key auth = an integration or script.
-      const api = first.action === 'create' ? await inboundCreateCall(collection, first) : null
+      const api =
+        first.action === 'create' ? await inboundCreateCall(collection, first, left) : null
       let origin = 'Manual'
       if (first.legacy_id != null) origin = 'Legacy import'
       else if (api) {
@@ -148,13 +180,15 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       else {
         // An extension breadcrumb (namespaced "<ext>:<action>") stamped on
         // this record around creation names the pipeline that made it.
-        const ext = (await db('nivaro_activity')
-          .where({ collection, item: String(id) })
-          .where('action', 'like', '%:%')
-          .whereRaw('ABS(DATEDIFF(second, timestamp, ?)) < 120', [new Date(first.timestamp)])
-          .orderBy('id', 'asc')
-          .first('action')
-          .catch(() => null)) as { action: string } | null | undefined
+        const ext = (await firstWithin(
+          db('nivaro_activity')
+            .where({ collection, item: String(id) })
+            .where('action', 'like', '%:%')
+            .whereRaw('ABS(DATEDIFF(second, timestamp, ?)) < 120', [new Date(first.timestamp)])
+            .orderBy('id', 'asc')
+            .first('action'),
+          left()
+        ).catch(() => null)) as { action: string } | null | undefined
         if (ext) origin = `Integration (${String(ext.action).split(':')[0]})`
       }
       return reply.send({
@@ -203,7 +237,8 @@ interface InboundCreateCall {
  *  same caller's write to this collection within ±5s of the activity row. */
 async function inboundCreateCall(
   collection: string,
-  first: { id: number; timestamp: Date; user: string | null; chain_id?: string | null }
+  first: { id: number; timestamp: Date; user: string | null; chain_id?: string | null },
+  left: () => number
 ): Promise<InboundCreateCall | null> {
   try {
     const cols = [
@@ -224,27 +259,35 @@ async function inboundCreateCall(
         .whereIn('l.method', ['POST', 'PUT'])
     let row: Record<string, unknown> | undefined
     if (stamped && first.chain_id) {
-      row = (await base()
-        .where('l.chain_id', first.chain_id)
-        .whereNull('l.chain_parent')
-        .orderBy('l.id', 'asc')
-        .first(...cols, 'l.chain_id')) as Record<string, unknown> | undefined
+      row =
+        (await firstWithin<Record<string, unknown>>(
+          base()
+            .where('l.chain_id', first.chain_id)
+            .whereNull('l.chain_parent')
+            .orderBy('l.id', 'asc')
+            .first(...cols, 'l.chain_id'),
+          left()
+        )) ?? undefined
     }
     if (!row && first.user) {
       const at = new Date(first.timestamp)
-      row = (await base()
-        .where('l.user', first.user)
-        .whereBetween('l.created_at', [
-          new Date(at.getTime() - 5000),
-          new Date(at.getTime() + 5000)
-        ])
-        .where((w) =>
-          w
-            .where('l.path', 'like', `/api/items/${collection}%`)
-            .orWhere('l.path', 'like', '%/graphql%')
-        )
-        .orderBy('l.id', 'desc')
-        .first(...cols, ...(stamped ? ['l.chain_id'] : []))) as Record<string, unknown> | undefined
+      row =
+        (await firstWithin<Record<string, unknown>>(
+          base()
+            .where('l.user', first.user)
+            .whereBetween('l.created_at', [
+              new Date(at.getTime() - 5000),
+              new Date(at.getTime() + 5000)
+            ])
+            .where((w) =>
+              w
+                .where('l.path', 'like', `/api/items/${collection}%`)
+                .orWhere('l.path', 'like', '%/graphql%')
+            )
+            .orderBy('l.id', 'desc')
+            .first(...cols, ...(stamped ? ['l.chain_id'] : [])),
+          left()
+        )) ?? undefined
     }
     if (!row) return null
     let body: unknown = null

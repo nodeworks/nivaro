@@ -93,6 +93,26 @@ async function outOfViewMeta(
   return { id, readable: false, reason }
 }
 
+/**
+ * field → [before, after] for a child row edited from its parent's page (army 6 H1): only
+ * fields both reads carry (each read was the caller's own), the primary key never.
+ */
+export function childChanges(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown> | null
+): Record<string, [unknown, unknown]> {
+  const out: Record<string, [unknown, unknown]> = {}
+  if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return out
+  for (const [k, v] of Object.entries(after)) {
+    if (k === 'id' || !(k in before)) continue
+    const was = before[k]
+    if (v !== null && typeof v === 'object' && !(v instanceof Date)) continue
+    if (was !== null && typeof was === 'object' && !(was instanceof Date)) continue
+    if (JSON.stringify(was ?? null) !== JSON.stringify(v ?? null)) out[k] = [was ?? null, v ?? null]
+  }
+  return out
+}
+
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   // A value the caller sent (an id, a filter value, a field) that the column
   // cannot hold: their mistake, not a server fault (never in the global handler).
@@ -104,6 +124,18 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
     return reply
       .code(valueRefusal.status)
       .send({ error: valueRefusal.message, code: valueRefusal.code })
+  }
+  // Defence in depth for a read naming a field no check caught (army 6 N2): the driver's
+  // "Invalid column name 'x'" is the caller's unknown field, never a 500 carrying SQL text.
+  if (
+    reply.request.method === 'GET' &&
+    (err as { statusCode?: unknown })?.statusCode == null &&
+    /\bInvalid column name\b/i.test(String((err as { message?: unknown })?.message ?? ''))
+  ) {
+    return reply.code(400).send({
+      error: 'A requested field does not exist on this collection',
+      code: 'UNKNOWN_FIELD'
+    })
   }
   if (err instanceof CollectionNotFoundError) {
     const code = (err as { code?: string }).code
@@ -1919,6 +1951,14 @@ export async function itemsRoutes(app: FastifyInstance) {
     // Edit locks are enforced: a person may not save over a record someone else holds the lock on.
     const lockRefused = await editLockRefusal(req, collection, id)
     if (lockRefused) return reply.code(lockRefused.status).send(lockRefused.body)
+    // A child row edited from its parent's page: its values before, read as the caller, so
+    // the parent's history can say "Qty 3 → 4" (army 6 H1) — never a column they cannot see.
+    const childBefore =
+      parentCollection && parentId
+        ? (((await readOne(req.user!, collection, id, req.workspaceId ?? undefined).catch(
+            () => null
+          )) ?? null) as Record<string, unknown> | null)
+        : null
     try {
       const outcome: CreateOutcome = {}
       const item = await updateOne(
@@ -1936,7 +1976,14 @@ export async function itemsRoutes(app: FastifyInstance) {
           user: req.user!.id,
           collection: parentCollection,
           item: parentId,
-          comment: JSON.stringify({ child_collection: collection, child_id: id, snapshot: item }),
+          // A pointer for the parent's history (revision-fields.ts makes it readable per
+          // reader); record notes and the Comments thread never show it (record-notes.ts).
+          comment: JSON.stringify({
+            child_collection: collection,
+            child_id: id,
+            snapshot: item,
+            changes: childChanges(childBefore, item as Record<string, unknown> | null)
+          }),
           req
         })
       }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { chainFields } from '../services/chain-columns.js'
+import { getFields } from '../services/collections.js'
 import { applyWorkspaceScope, applyWriteComputedFields } from '../services/items.js'
 import { applyRowFilter, getRowFilter } from '../services/permissions.js'
 import { getAiCollectionSettings } from './ai-validation.js'
@@ -60,14 +61,46 @@ export class CapValidationError extends Error {
   violations: CapViolation[]
 
   constructor(violations: CapViolation[]) {
+    // The sentence a person reads: the rule's own words and the figures
+    // (army6 I15 — "Aggregate cap exceeded … (25500 exceeds cap of 25000)"
+    // was jargon with raw numbers). The code stays VALIDATION_CAP_EXCEEDED.
     super(
-      `Aggregate cap exceeded: ${violations
+      violations
         .map((v) => v.explanation)
         .join('; ')
-        .slice(0, 1000)}`
+        .slice(0, 1000)
     )
     this.violations = violations
   }
+}
+
+/** "$25,500.00" for a currency field, "25,500" / "25,500.5" otherwise. */
+export function formatCapFigure(n: number, currency: boolean): string {
+  const r = Math.round(n * 100) / 100
+  return currency
+    ? r.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+    : r.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+/** "<rule message>: the total would be $25,500.00, over its $25,000.00 cap". */
+export function capExplanation(
+  message: string,
+  total: number,
+  cap: number,
+  currency: boolean
+): string {
+  const head = message.trim().replace(/[.:;]\s*$/, '')
+  const figures = `the total would be ${formatCapFigure(total, currency)}, over its ${formatCapFigure(cap, currency)} cap`
+  return head ? `${head}: ${figures}` : figures.charAt(0).toUpperCase() + figures.slice(1)
+}
+
+async function isCurrencyField(collection: string, field: string): Promise<boolean> {
+  const fields = await getFields(collection).catch(() => [])
+  const opts = (fields.find((f) => f.field === field)?.options ?? null) as Record<
+    string,
+    unknown
+  > | null
+  return !!opts && (opts.format === 'currency' || typeof opts.currency === 'string')
 }
 
 let _app: FastifyInstance | null = null
@@ -219,8 +252,12 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const before = existingSum + Number(currentRow?.[rule.sum_field] ?? 0)
   if (currentId != null && total <= before + 0.005) return
 
-  const round2 = (n: number) => Math.round(n * 100) / 100
-  const explanation = `${rule.message} (${round2(total)} exceeds cap of ${round2(cap)})`
+  const explanation = capExplanation(
+    rule.message,
+    total,
+    cap,
+    await isCurrencyField(ctx.collection, rule.sum_field)
+  )
 
   if (rule.severity === 'block') {
     throw new CapValidationError([{ rule: 'sum_cap', field: rule.sum_field, explanation }])
@@ -230,7 +267,7 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
     const item = currentId != null ? String(currentId) : null
     await notifyValidationWarning(
       ctx.user.id,
-      `Aggregate cap warning: ${ctx.collection}`,
+      'A total is over its cap',
       explanation,
       ctx.collection,
       item

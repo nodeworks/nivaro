@@ -10,6 +10,7 @@ import { recordReplayRoot } from '../services/chain-roots.js'
 import { applyRequestFilters, cleanLogFilter, type LogGroup } from '../services/log-filters.js'
 import { queryIsReplayable } from '../services/secret-mask.js'
 import { LOCAL_LOG_DAYS } from '../services/telemetry-store.js'
+import { pathTemplate } from '../services/traffic-entities.js'
 import {
   ROLLUP_WINDOW_DAYS,
   rollupDataFrom,
@@ -18,6 +19,11 @@ import {
   rollupsEnabled,
   rollupTotals
 } from '../services/traffic-rollups.js'
+
+/** A View-as (masquerade) session-recording upload: refused by design, never a problem row. */
+export function isViewAsRecordingUpload(r: Record<string, unknown>): boolean {
+  return r.auth === 'masquerade' && /\/session-recordings(\/|$)/.test(String(r.path ?? ''))
+}
 
 // The parser lives in lib/ now (the Traffic Map's caller panel shares it); kept here for callers.
 export { parseRefusal }
@@ -888,9 +894,12 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       return [...out.values()]
     }
     const aggFolded = fold(agg, () => '')
-    const pathsFolded = fold(paths, (r) => `${r.method} ${r.path}`).sort(
-      (x, y) => Number(y.calls) - Number(x.calls)
-    )
+    // army6 M54: a card lists ROUTES ("POST /api/session-recordings/:id/events"),
+    // never a raw path with a record id or uuid in it — paths are folded per template.
+    const pathsFolded = fold(
+      paths.map((r) => ({ ...r, path: pathTemplate(String(r.path ?? '')) })),
+      (r) => `${r.method} ${r.path}`
+    ).sort((x, y) => Number(y.calls) - Number(x.calls))
 
     const userIds = [
       ...new Set(aggFolded.filter((r) => r.auth !== 'api_key' && r.user).map((r) => String(r.user)))
@@ -970,7 +979,13 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
           max_ms: Number(r.max_ms ?? 0),
           last_at: r.last_at,
           last_error: e
-            ? { at: e.created_at, status: e.status, method: e.method, path: e.path, error: e.error }
+            ? {
+                at: e.created_at,
+                status: e.status,
+                method: e.method,
+                path: pathTemplate(String(e.path ?? '')),
+                error: e.error
+              }
             : null,
           top_paths: topPaths.get(k) ?? []
         }
@@ -1030,6 +1045,9 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     }
     const groups = new Map<string, Group>()
     for (const r of rows) {
+      // army6 M54: a View-as tab's session-recording upload is refused by design
+      // (nothing is recorded as someone else) — not a failing integration.
+      if (isViewAsRecordingUpload(r)) continue
       const parsed = parseRefusal(r.error, Number(r.status))
       const known = r.api_key_id != null || r.user != null
       const who =
@@ -1060,7 +1078,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         count: 1,
         first_at: r.created_at,
         last_at: r.created_at,
-        sample: { method: String(r.method), path: String(r.path) },
+        sample: { method: String(r.method), path: pathTemplate(String(r.path ?? '')) },
         ips: ip ? [ip] : [],
         user_agent: r.user_agent ? String(r.user_agent) : null
       })

@@ -1,5 +1,14 @@
 import { ExternalLink } from 'lucide-react'
-import { memo, useContext, useEffect, useRef, useState } from 'react'
+import {
+  type ChangeEvent,
+  type ComponentProps,
+  memo,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react'
 import {
   fieldDrilldownConfig,
   RelationPathDataContext,
@@ -139,6 +148,74 @@ function formMaxLength(field: {
   const opt = Number(o?.max_length)
   if (Number.isFinite(opt) && opt > 0) return col != null ? Math.min(col, opt) : opt
   return col ?? undefined
+}
+
+/**
+ * army6 M1: a text box that never throws away what was typed. The box owns its text while
+ * the form catches up: a render that has not caught up yet (or a keystroke whose form update
+ * React refused — fast typing that starves React's scheduler makes it throw "Maximum update
+ * depth exceeded" from the form's setDraft) leaves the typed text in place, and the next key
+ * or leaving the box sends it. A value that changes from outside (live update, Take theirs,
+ * a rule, Revert) still replaces the text, exactly as a controlled box would.
+ */
+export function useKeptText<E extends HTMLInputElement | HTMLTextAreaElement>(
+  value: string,
+  commit: (v: string) => void
+) {
+  const ref = useRef<E>(null)
+  // The text the box and the form last agreed on.
+  const agreedRef = useRef(value)
+  const valueRef = useRef(value)
+  valueRef.current = value
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || value === agreedRef.current) return
+    agreedRef.current = value
+    if (el.value !== value) el.value = value
+  }, [value])
+  const send = (v: string) => {
+    if (v === agreedRef.current) return
+    commit(v) // may throw: the box keeps the text; the next key or blur sends it again
+    agreedRef.current = v
+    // The form refused it (locked, read-only, design mode): show what the form holds, as a
+    // controlled box would. Runs after React's own flush of this event's updates.
+    queueMicrotask(() => {
+      const el = ref.current
+      if (!el || agreedRef.current !== v || valueRef.current === v) return
+      agreedRef.current = valueRef.current
+      el.value = valueRef.current
+    })
+  }
+  return {
+    ref,
+    defaultValue: value,
+    onChange: (e: ChangeEvent<E>) => send(e.target.value),
+    onBlur: (e: { target: E }) => send(e.target.value)
+  }
+}
+
+function KeptInput({
+  value,
+  commit,
+  ...rest
+}: Omit<ComponentProps<typeof Input>, 'value' | 'onChange' | 'defaultValue' | 'ref'> & {
+  value: string
+  commit: (v: string) => void
+}) {
+  const kept = useKeptText<HTMLInputElement>(value, commit)
+  return <Input {...rest} {...kept} />
+}
+
+function KeptTextarea({
+  value,
+  commit,
+  ...rest
+}: Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange' | 'defaultValue' | 'ref'> & {
+  value: string
+  commit: (v: string) => void
+}) {
+  const kept = useKeptText<HTMLTextAreaElement>(value, commit)
+  return <Textarea {...rest} {...kept} />
 }
 
 export const FieldRenderer = memo(function FieldRenderer({
@@ -679,11 +756,11 @@ export const FieldRenderer = memo(function FieldRenderer({
 
   if (iface === 'textarea') {
     return (
-      <Textarea
+      <KeptTextarea
         rows={4}
         maxLength={formMaxLength(field)}
         value={strVal}
-        onChange={(e) => onChange(e.target.value)}
+        commit={onChange}
         placeholder={field.placeholder ?? undefined}
       />
     )
@@ -691,10 +768,10 @@ export const FieldRenderer = memo(function FieldRenderer({
 
   if (iface === 'wysiwyg' || iface === 'markdown') {
     return (
-      <Textarea
+      <KeptTextarea
         rows={6}
         value={strVal}
-        onChange={(e) => onChange(e.target.value)}
+        commit={onChange}
         placeholder={field.placeholder ?? undefined}
         className='font-mono text-sm'
       />
@@ -1089,19 +1166,21 @@ export const FieldRenderer = memo(function FieldRenderer({
     const maxRule = Array.isArray(rules) ? rules.find((r) => r?.type === 'max') : null
     return maxRule && Number.isFinite(Number(maxRule.value)) ? Number(maxRule.value) : columnMax
   })()
-  const input = (
+  const input = mask ? (
     <Input
-      maxLength={mask ? undefined : formMaxLength(field)}
-      value={mask ? applyInputMask(mask, strVal).display : strVal}
+      value={applyInputMask(mask, strVal).display}
       onChange={(e) => {
-        if (mask) {
-          const { clean } = applyInputMask(mask, e.target.value)
-          onChange(clean || null)
-        } else {
-          onChange(e.target.value || null)
-        }
+        const { clean } = applyInputMask(mask, e.target.value)
+        onChange(clean || null)
       }}
       placeholder={field.placeholder ?? mask ?? undefined}
+    />
+  ) : (
+    <KeptInput
+      maxLength={formMaxLength(field)}
+      value={strVal}
+      commit={(v) => onChange(v || null)}
+      placeholder={field.placeholder ?? undefined}
     />
   )
   // Character counter (#183): shows once past 60% of the limit — unless the

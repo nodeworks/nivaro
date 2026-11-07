@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatRelative, titleCase } from '../../lib/utils'
+import type { CMSField } from '../item-edit/types'
 
 /**
  * Data-integrity findings for THIS record, from the latest completed
@@ -78,6 +79,45 @@ export function useRecordIntegrity(collection: string, itemId: string, enabled =
   return { data: live ?? stored, checking }
 }
 
+/** Window event a Fix (or its Undo) sends with the rows it wrote, so a lines
+ *  grid stamps them as this tab's own writes (army6 M5: after a Fix the grid
+ *  said "1 line changed by others · changed by <the person who fixed it>"). */
+export const OWN_RECORD_WRITES_EVENT = 'nvr:own-record-writes'
+
+export interface OwnRecordWrites {
+  writes: Array<{ collection: string; id: string }>
+}
+
+/** The rows a proposal writes (update/delete with an id, a pick's target). */
+export function ownWritesOf(p: {
+  writes?: unknown[]
+  pick?: { collection: string; item_id: string } | null
+}): OwnRecordWrites['writes'] {
+  const out: OwnRecordWrites['writes'] = []
+  for (const w of p.writes ?? []) {
+    const x = w as { collection?: unknown; item_id?: unknown } | null
+    if (x && typeof x.collection === 'string' && x.item_id != null && x.item_id !== '')
+      out.push({ collection: x.collection, id: String(x.item_id) })
+  }
+  if (p.pick?.collection && p.pick.item_id)
+    out.push({ collection: p.pick.collection, id: String(p.pick.item_id) })
+  return out
+}
+
+function announceOwnWrites(writes: OwnRecordWrites['writes']) {
+  if (writes.length === 0 || typeof window === 'undefined') return
+  window.dispatchEvent(
+    new CustomEvent<OwnRecordWrites>(OWN_RECORD_WRITES_EVENT, { detail: { writes } })
+  )
+}
+
+/** What a finding's field is called on screen: its label (a lines grid's
+ *  "PO / REQ Lines"), never the raw field name ("workflow_lines"). */
+export function findingFieldLabel(field: string, fields: CMSField[] | undefined): string {
+  const f = fields?.find((x) => x.field === field)
+  return f?.label?.trim() || titleCase(field)
+}
+
 /** Findings grouped by the layout field they belong to — a line finding
  *  ("Line 3: Category is empty…") lands on its grid alias. */
 export function integrityByField(findings: Finding[] | undefined): Map<string, Finding[]> {
@@ -145,6 +185,17 @@ export function RecordIntegrityBanner({
   // replaces them. Reported 2026-09-14: the sweep view lagged days behind the
   // record — lines fixed since still read as broken. See useRecordIntegrity.
   const { data, checking } = useRecordIntegrity(collection, itemId)
+  // Labels for the finding headings — the same cached field config the form
+  // and its grids read.
+  const { data: fieldCfg } = useQuery<CMSField[]>({
+    queryKey: ['field-config', collection, null],
+    queryFn: () =>
+      client
+        .request<{ data: CMSField[] }>(get(`/field-config/${collection}`))
+        .then((r) => r.data ?? []),
+    enabled: !!data?.findings?.length,
+    staleTime: 60_000
+  })
 
   const invalidateRecord = () => {
     void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })
@@ -206,9 +257,10 @@ export function RecordIntegrityBanner({
                 <button
                   type='button'
                   onClick={() => onJumpToField?.(f.field)}
-                  className='shrink-0 font-mono text-[11px] text-amber-700 underline decoration-dotted underline-offset-2 dark:text-amber-300'
+                  data-integrity-field={f.field}
+                  className='shrink-0 text-[11.5px] font-medium text-amber-700 underline decoration-dotted underline-offset-2 dark:text-amber-300'
                 >
-                  {f.field}
+                  {findingFieldLabel(f.field, fieldCfg)}
                 </button>
                 <span className='min-w-0 flex-1 text-amber-800 dark:text-amber-200/90'>
                   {f.message}
@@ -275,6 +327,7 @@ function ProposalPicker({
   const [result, setResult] = useState<{ text: string; undo: unknown[] } | null>(null)
   const [undoLeft, setUndoLeft] = useState(0)
   const [err, setErr] = useState<string | null>(null)
+  const [lastApplied, setLastApplied] = useState<Proposal | null>(null)
 
   const proposals = useMemo(() => [...(data ?? []), ...extra], [data, extra])
 
@@ -296,6 +349,8 @@ function ProposalPicker({
       ),
     onSuccess: (r, p) => {
       setErr(null)
+      announceOwnWrites(ownWritesOf(p))
+      setLastApplied(p)
       const d = r.data
       const failed = d.failed?.length ?? 0
       setResult({
@@ -314,6 +369,7 @@ function ProposalPicker({
     mutationFn: (writes: unknown[]) =>
       client.request<{ data: ApplyResult }>(post(`${base}/fix`, { ...body, undo: writes })),
     onSuccess: () => {
+      if (lastApplied) announceOwnWrites(ownWritesOf(lastApplied))
       setResult({ text: 'Undone.', undo: [] })
       onApplied()
     },

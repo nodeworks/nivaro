@@ -315,6 +315,10 @@ async function roleAllowedFields(
     .where((qb) => {
       qb.where({ collection }).orWhere({ collection: '*' })
     })
+    // An exact-collection policy wins over the wildcard, as in roleCan: the
+    // (role, action, collection) index sorts '*' first, so without this a
+    // role holding a '*' row had every explicit field list ignored (army 6).
+    .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
     .first()
 
   if (!policy) return []

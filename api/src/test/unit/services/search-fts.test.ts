@@ -15,6 +15,7 @@ import {
   ftsColumns,
   ftsCondition,
   ftsSearchCondition,
+  isPartialAnswer,
   normalizeSearchQuery,
   searchAnswerCache,
   searchAnswerKey
@@ -145,6 +146,23 @@ describe('searchAnswerCache', () => {
     expect(load).toHaveBeenCalledTimes(1)
     await searchAnswerCache.get({ user: { id: 'other', role: 'r1' }, q: 'pump' }, load)
     expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  // Army 6 H13: a cut answer (2 of 6 calls as Virginia, one served from the cache in 97 ms)
+  // read as a confident "nothing matches". It is answered once and never reused.
+  it('never reuses a cut (partial) answer; a full one is reused', async () => {
+    const load = vi
+      .fn<() => Promise<{ records: number[]; partial?: string[] }>>()
+      .mockResolvedValueOnce({ records: [], partial: ['workflows', 'people'] })
+      .mockResolvedValue({ records: [7] })
+    const first = await searchAnswerCache.get({ user: ann, q: '134365' }, load)
+    expect(first.partial).toEqual(['workflows', 'people'])
+    const second = await searchAnswerCache.get({ user: ann, q: '134365' }, load)
+    expect(second).toEqual({ records: [7] })
+    await searchAnswerCache.get({ user: ann, q: '134365' }, load)
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(isPartialAnswer({ partial: [] })).toBe(false)
+    expect(isPartialAnswer(null)).toBe(false)
   })
 
   it('never remembers a failed search', async () => {

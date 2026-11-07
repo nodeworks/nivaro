@@ -26,7 +26,12 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can, getAllowedFields } from './permissions.js'
-import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
+import {
+  activeOwnersOnly,
+  parseJson,
+  type ResolvedOwner,
+  resolveStateOwnersBatch
+} from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
   addendumLabel,
@@ -449,10 +454,17 @@ export interface QueueItem {
   /** Historical-P80 stuck prediction. */
   predicted_risk?: boolean
   predicted_note?: string | null
+  /** CALENDAR hours since the record entered its current state — the Aging
+   *  column, chips and filter on every queue (army 6 M25). */
   aging_hours: number | null
-  /** When the record entered its current state (ISO); aging_hours may count
-   *  business hours only, so this is the real moment. */
+  /** The SLA clock's elapsed hours (business hours for a business-hours rule)
+   *  — what sla_status was judged on. Absent on sources with no SLA batch. */
+  sla_elapsed_hours?: number | null
+  /** When the record entered its current state (ISO). */
   state_entered_at?: string | null
+  /** Every owner listed is suspended / redacted ("Redacted Redacted") — the
+   *  record counts as unowned (army 6 L42); the names still show. */
+  no_active_owner?: boolean
   claimed_by: QueueOwner | null
   extra?: Record<string, unknown>
   /** Related-record ids per relation extra-field path — powers drill-down. */
@@ -565,7 +577,7 @@ export function computeStatsFromIdMeta(
   let unowned = 0
   let at_risk = 0
   for (const item of hydratedScoped) {
-    if (item.owners.length === 0) unowned++
+    if (isUnowned(item)) unowned++
     if (item.at_risk) at_risk++
   }
   return { total, by_state, unowned, sla_warning, sla_breached, at_risk }
@@ -596,13 +608,45 @@ export function mergeSourceResults(results: QueueItem[][]): QueueItem[] {
   return out
 }
 
+/** No owner who can still act: nobody listed, or only suspended / redacted
+ *  people (army 6 L42 — 9 approvals owned by "Redacted Redacted" read owned). */
+export function isUnowned(item: Pick<QueueItem, 'owners' | 'no_active_owner'>): boolean {
+  return item.owners.length === 0 || item.no_active_owner === true
+}
+
+/**
+ * Marks `no_active_owner` on items whose every owner is inactive — one
+ * batched people read for the whole set (activeOwnersOnly). Best-effort: a
+ * failed lookup leaves the items as they were.
+ */
+export async function markInactiveOwners(
+  items: QueueItem[],
+  activeOnly: (owners: Array<{ id: string }>) => Promise<Array<{ id: string }>> = activeOwnersOnly
+): Promise<void> {
+  const ids = new Map<string, { id: string }>()
+  for (const it of items)
+    for (const o of it.owners) ids.set(String(o.id).toUpperCase(), { id: o.id })
+  if (ids.size === 0) return
+  let active: Set<string>
+  try {
+    active = new Set((await activeOnly([...ids.values()])).map((o) => String(o.id).toUpperCase()))
+  } catch {
+    return
+  }
+  if (active.size === ids.size) return
+  for (const it of items) {
+    if (it.owners.length === 0) continue
+    if (!it.owners.some((o) => active.has(String(o.id).toUpperCase()))) it.no_active_owner = true
+  }
+}
+
 export function applyScopeFilter(
   items: QueueItem[],
   scope: QueueScope,
   userId: string
 ): QueueItem[] {
   if (scope === 'all') return items
-  if (scope === 'unowned') return items.filter((i) => i.owners.length === 0)
+  if (scope === 'unowned') return items.filter(isUnowned)
   if (scope === 'claimed') return items.filter((i) => i.claimed_by?.id === userId)
   return items.filter((i) => i.owners.some((o) => o.id === userId))
 }
@@ -638,6 +682,21 @@ export interface QueueGroupSummary {
   at_risk: number
   /** Per requested numeric extra column: the sum over the group's rows. */
   sums: Record<string, number>
+}
+
+/**
+ * Calendar hours since `enteredAt` (one decimal), or null when unknown — the
+ * queue's Aging on every source (army 6 M25). The SLA batch's elapsed_hours
+ * counts business hours for a business-hours rule and is NOT aging.
+ */
+export function calendarAgingHours(
+  enteredAt: Date | string | null | undefined,
+  now: number = Date.now()
+): number | null {
+  if (enteredAt == null) return null
+  const t = new Date(enteredAt).getTime()
+  if (!Number.isFinite(t)) return null
+  return Math.round(Math.max(0, (now - t) / 3_600_000) * 10) / 10
 }
 
 function agingBucketOf(hours: number | null): string {
@@ -1165,7 +1224,7 @@ export function computeStats(items: QueueItem[]): QueueStats {
   for (const item of items) {
     const key = item.state ?? 'none'
     by_state[key] = (by_state[key] ?? 0) + 1
-    if (item.owners.length === 0) unowned++
+    if (isUnowned(item)) unowned++
     if (item.sla_status === 'warning') sla_warning++
     if (item.sla_status === 'breached') sla_breached++
     if (item.at_risk) at_risk++
@@ -1514,6 +1573,90 @@ export function applyQueueConditions(q: ConditionBuilder, conditions: QueueCondi
 // ─── Labels ───────────────────────────────────────────────────────────────────
 
 const LABEL_CANDIDATES = ['title', 'name', 'label', 'subject']
+
+// ── Record labels with no friendly id (army 6 M52) ───────────────────────────
+// A record whose friendly id is empty and whose display template renders
+// blank used to show its ROW id ("#360291"). People never see row ids: the
+// label falls back to the record's own text (title / name / description),
+// else "No workflow number".
+
+/** "workflows" → "workflow", "inventory_request" → "inventory request". */
+export function recordNoun(collection: string, collectionLabel?: string | null): string {
+  const base = String(collectionLabel || collection || 'record')
+    .replace(/^nivaro_/, '')
+    .replace(/_/g, ' ')
+    .trim()
+    .toLowerCase()
+  if (/ies$/.test(base)) return `${base.slice(0, -3)}y`
+  if (/[^s]s$/.test(base)) return base.slice(0, -1)
+  return base || 'record'
+}
+
+/** The label of a record with no number and no text: "No workflow number". */
+export function missingRecordLabel(collection: string, collectionLabel?: string | null): string {
+  return `No ${recordNoun(collection, collectionLabel)} number`
+}
+
+/** A region-like row with no name: "Unnamed division". */
+export function unnamedRecordLabel(collection: string, collectionLabel?: string | null): string {
+  return `Unnamed ${recordNoun(collection, collectionLabel)}`
+}
+
+const isBlankLabel = (v: unknown) => v == null || String(v).trim() === ''
+const FALLBACK_TEXT_FIELDS = ['title', 'name', 'label', 'subject', 'description']
+
+/** "No workflow number · IG Net2.0 Circuit Engineer 2H 2025" — text trimmed to 60. */
+export function fallbackRecordLabel(collection: string, text?: string | null): string {
+  const t = String(text ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const base = missingRecordLabel(collection)
+  if (!t) return base
+  return `${base} · ${t.length > 60 ? `${t.slice(0, 59)}…` : t}`
+}
+
+/**
+ * Fills every blank label of `ids` in `labels` (keys `collection:id`) with
+ * the record's own text, else "No <noun> number" — one read of the text
+ * columns the collection really has. Rows that do not exist stay absent.
+ * Best-effort: a failed read leaves the plain "No <noun> number".
+ */
+export async function fillBlankLabels(
+  labels: Record<string, string>,
+  collection: string,
+  ids: string[]
+): Promise<void> {
+  const blank = ids.filter((id) => isBlankLabel(labels[`${collection}:${id}`]))
+  if (blank.length === 0) return
+  let texts = new Map<string, string>()
+  try {
+    if (collection !== ADDENDUM_COLLECTION && !isSystemCollection(collection)) {
+      const fieldRows = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
+        field: string
+      }>
+      const have = new Set(fieldRows.map((f) => f.field))
+      const cols = FALLBACK_TEXT_FIELDS.filter((f) => have.has(f))
+      if (cols.length > 0 && have.has('id')) {
+        const rows = (await selectInChunks(blank, 2000, (chunk) =>
+          db(collection)
+            .whereIn('id', chunk)
+            .select(['id', ...cols])
+        )) as Array<Record<string, unknown>>
+        texts = new Map(
+          rows.map((r) => {
+            const hit = cols.map((c) => r[c]).find((v) => !isBlankLabel(v))
+            return [String(r.id), hit == null ? '' : String(hit)]
+          })
+        )
+      }
+    }
+  } catch {
+    /* plain "No <noun> number" below */
+  }
+  for (const id of blank)
+    labels[`${collection}:${id}`] = fallbackRecordLabel(collection, texts.get(id))
+}
 
 /** Render {{field}}-template labels for a set of ids of one collection. Template
  *  fields are limited to REAL columns of the collection (dotted tokens render
@@ -2645,6 +2788,7 @@ export async function resolveCollectionSource(
     slaMap = slaResolved
     fillIdMetaSla()
   }
+  await fillBlankLabels(labels, source.collection as string, ids)
   const addendumMap = await addendumMapPromise
   const fulfilmentMap = await fulfilmentPromise.catch(() => null)
   const sendBackMap = await sendBackPromise.catch(() => new Map())
@@ -2664,14 +2808,20 @@ export async function resolveCollectionSource(
   }
   const { predictStuck } = await import('./predictive-sla.js')
 
+  const now = Date.now()
   const items = ids.map((id) => {
     const prediction = durationStats
-      ? predictStuck(durationStats, stateById.get(id)?.id, slaMap[id]?.elapsed_hours ?? null)
+      ? predictStuck(
+          durationStats,
+          stateById.get(id)?.id,
+          calendarAgingHours(slaMap[id]?.entered_at, now) ?? slaMap[id]?.elapsed_hours ?? null
+        )
       : { predicted: false, p80_hours: null, note: null }
     return {
       collection: source.collection as string,
       item_id: id,
-      label: labels[`${source.collection}:${id}`] || `#${id}`,
+      label:
+        labels[`${source.collection}:${id}`] || missingRecordLabel(source.collection as string),
       state: stateById.get(id)?.key ?? null,
       state_id: stateById.get(id)?.id ?? null,
       state_color: stateById.get(id)?.color ?? null,
@@ -2682,7 +2832,9 @@ export async function resolveCollectionSource(
       at_risk_rule: atRiskMap[id] ? { id: atRiskMap[id].rule_id, name: atRiskMap[id].rule } : null,
       predicted_risk: prediction.predicted,
       predicted_note: prediction.note,
-      aging_hours: slaMap[id]?.elapsed_hours ?? null,
+      aging_hours:
+        calendarAgingHours(slaMap[id]?.entered_at, now) ?? slaMap[id]?.elapsed_hours ?? null,
+      sla_elapsed_hours: slaMap[id]?.elapsed_hours ?? null,
       state_entered_at: slaMap[id]?.entered_at
         ? new Date(slaMap[id].entered_at as unknown as string).toISOString()
         : null,
@@ -2853,7 +3005,8 @@ export async function resolveAddendumsSource(
     return {
       collection: ADDENDUM_COLLECTION,
       item_id: id,
-      label: labels[`${ADDENDUM_COLLECTION}:${id}`] ?? r.title ?? id,
+      label:
+        labels[`${ADDENDUM_COLLECTION}:${id}`] ?? (r.title ? `Addendum "${r.title}"` : 'Addendum'),
       state: r.state_key,
       state_id: r.state_id,
       state_color: r.state_color,
@@ -2861,7 +3014,8 @@ export async function resolveAddendumsSource(
       sla_status: sla?.status ?? null,
       at_risk: false,
       at_risk_color: null,
-      aging_hours: sla?.elapsed_hours ?? null,
+      aging_hours: calendarAgingHours(sla?.entered_at) ?? sla?.elapsed_hours ?? null,
+      sla_elapsed_hours: sla?.elapsed_hours ?? null,
       state_entered_at: sla?.entered_at
         ? new Date(sla.entered_at as unknown as string).toISOString()
         : null,
@@ -3023,6 +3177,7 @@ export async function resolveApprovalsSource(
     byCollection.get(r.collection)!.add(r.item)
   }
   const labels = await getLabels(byCollection)
+  for (const [c, set] of byCollection) await fillBlankLabels(labels, c, [...set])
 
   const now = Date.now()
   const items: QueueItem[] = []
@@ -3045,7 +3200,7 @@ export async function resolveApprovalsSource(
     items.push({
       collection: r.collection,
       item_id: String(r.item),
-      label: labels[`${r.collection}:${r.item}`] || `#${r.item}`,
+      label: labels[`${r.collection}:${r.item}`] || missingRecordLabel(r.collection),
       state: 'pending_approval',
       state_color: null,
       owners,
@@ -3158,6 +3313,7 @@ export async function resolveOwnedBySource(
       addendumIds.length > 0 ? loadAddendums(addendumIds) : Promise.resolve(new Map())
     ])
   )
+  for (const [c, set] of byCollection) await fillBlankLabels(labels, c, [...set])
 
   const itemsByUser = new Map<string, QueueItem[]>(userIds.map((u) => [u, []]))
   for (const { inst, owners, mine } of owned) {
@@ -3171,7 +3327,7 @@ export async function resolveOwnedBySource(
     const item: QueueItem = {
       collection: inst.collection,
       item_id: inst.item,
-      label: labels[`${inst.collection}:${inst.item}`] || `#${inst.item}`,
+      label: labels[`${inst.collection}:${inst.item}`] || missingRecordLabel(inst.collection),
       state: inst.state_key,
       state_color: inst.state_color,
       owners: owners.map((o) => ({ id: o.id, name: userDisplayName(o) })),
@@ -3397,6 +3553,7 @@ export async function fetchQueueItems(
   const batches = results.map((r) => r.items)
 
   const merged = mergeSourceResults(batches)
+  await markInactiveOwners(merged)
   const claims = await span('queue:claims', () => getClaims(queueId))
   const withClaims = attachClaims(merged, claims)
   const scoped = applyScopeFilter(withClaims, scope, user.id)

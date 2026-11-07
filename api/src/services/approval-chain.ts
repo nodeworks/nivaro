@@ -1,5 +1,10 @@
 import { db } from '../db/index.js'
-import type { GapStateRow } from './owner-gap-notice.js'
+import {
+  creatorActsInState,
+  type GapStateRow,
+  type Requester,
+  recordRequester
+} from './owner-gap-notice.js'
 import { activeOwnersOnly, resolveStateOwnersBatch } from './pipeline-engine.js'
 
 /**
@@ -29,6 +34,10 @@ export interface ChainStep {
   /** The current step waits on nobody who can act and nobody else can move it
    *  (owner-gap-notice.ts) — the mail says no approver is set yet. */
   no_approver?: boolean
+  /** The current step has no assigned owner and is the requester's own move
+   *  (allow_creator) — the mail says "waiting on you (requester)" to them and
+   *  "waiting on <name> (requester)" to everyone else (army 6 M44). */
+  requester?: { name: string; email: string | null } | null
 }
 
 export interface StepStatusInput {
@@ -104,6 +113,18 @@ export async function buildApprovalChain(
     actedAt.set(h.from_state, { by: u ? nameOf(u) : null, at: new Date(h.timestamp).toISOString() })
   }
   const visited = new Set(chain.history.map((h) => h.to_state))
+  // Who started it, when no history row says (army 6 N1: an IR auto-starts
+  // into Engineering Review, so "✓ Started" had no name and no date while
+  // workflows show "✓ Started · Kristina Davison, Nov 6"): the record's
+  // creator and its created date.
+  let requester: Requester | null | undefined
+  const requesterOf = async () => {
+    if (requester === undefined)
+      requester = await recordRequester(instance.collection, String(instance.item)).catch(
+        () => null
+      )
+    return requester
+  }
 
   // A canceled (rejected…) record: the step it left for the escape state, and
   // who moved it there — the LAST entry into the current state.
@@ -167,6 +188,18 @@ export async function buildApprovalChain(
       skip_reason: status === 'skipped' ? (e.skip_reasons[0] ?? null) : null
     }
     if ((status === 'current' || status === 'upcoming') && !terminal) ownerStepState.set(step, s.id)
+    if (
+      status === 'done' &&
+      !step.by &&
+      (s.is_initial === true || s.is_initial === 1) &&
+      !actedAt.get(s.id)?.by
+    ) {
+      const r = await requesterOf()
+      if (r) {
+        step.by = r.name
+        step.at = step.at ?? r.created_at
+      }
+    }
     steps.push(step)
   }
   // Only the NEXT upcoming state carries owners — a long tail of names is noise.
@@ -180,7 +213,7 @@ export async function buildApprovalChain(
       seenUpcoming = true
     }
   }
-  await nameActingOwners(instance, ownerStepState, chain.states)
+  await nameActingOwners(instance, ownerStepState, chain.states, requesterOf)
   return steps
 }
 
@@ -194,7 +227,8 @@ export async function buildApprovalChain(
 async function nameActingOwners(
   instance: { id: string; collection: string; item: string },
   stepState: Map<ChainStep, string>,
-  states: ReadonlyArray<{ id: string }>
+  states: ReadonlyArray<{ id: string }>,
+  requesterOf: () => Promise<Requester | null> = async () => null
 ): Promise<void> {
   if (stepState.size === 0) return
   try {
@@ -229,6 +263,13 @@ async function nameActingOwners(
           .then((m) => m.stalledStates(states as unknown as GapStateRow[]))
           .catch(() => new Set<string>())
         if (stalled.has(String(id).toUpperCase())) step.no_approver = true
+        else {
+          const st = states.find((x) => sameId(x.id, id)) as GapStateRow | undefined
+          if (st && (await creatorActsInState(st))) {
+            const r = await requesterOf()
+            if (r) step.requester = { name: r.name, email: r.email }
+          }
+        }
       }
     }
   } catch {

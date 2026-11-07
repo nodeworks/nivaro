@@ -448,13 +448,17 @@ async function applyNestedListArgs(
   q: Knex.QueryBuilder,
   collection: string,
   args: { filter?: Record<string, unknown>; sort?: string[]; limit?: number; offset?: number },
-  m2oOf: (field: string) => string | undefined
+  m2oOf: (field: string) => string | undefined,
+  user?: User
 ): Promise<void> {
+  // The caller's relation sub-filters are scope-gated like REST (army 6 H12):
+  // a nested list filter must not test rows the caller cannot read.
   if (args.filter && Object.keys(args.filter).length)
     await applyFilterToQuery(
       q,
       translateVirtualKeys(args.filter) as Record<string, unknown>,
-      collection
+      collection,
+      { user }
     )
   const joined = new Set<string>()
   for (const raw of args.sort ?? []) {
@@ -1068,7 +1072,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       await assertNestedArgsAllowed(ctx, otherCol, gate, args, m2oOfOther, (c) =>
                         timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
-                      await applyNestedListArgs(q, otherCol, args as never, m2oOfOther)
+                      await applyNestedListArgs(q, otherCol, args as never, m2oOfOther, ctx.user as User)
                       const rows = (await q) as Array<Record<string, unknown>>
                       if (!chargeNestedRows(ctx, rows.length)) return []
                       return rows.map(({ __junction_id, ...target }) => ({
@@ -1114,7 +1118,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       await assertNestedArgsAllowed(ctx, manyCol, gate, args, m2oOfMany, (c) =>
                         timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
-                      await applyNestedListArgs(q, manyCol, args as never, m2oOfMany)
+                      await applyNestedListArgs(q, manyCol, args as never, m2oOfMany, ctx.user as User)
                       const rows = (await q) as Array<Record<string, unknown>>
                       if (!chargeNestedRows(ctx, rows.length)) return []
                       return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows

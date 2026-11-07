@@ -1216,3 +1216,108 @@ describe('validateReviewListConfig — lookup columns', () => {
     )
   })
 })
+
+// Army 6 H16: a group can be NAMED by one of its group_meta columns (the
+// invoice number) instead of the raw group key (the Fusion composite id).
+describe('validateReviewListConfig — group naming + decision copy', () => {
+  const named = (over: Record<string, unknown> = {}) => ({
+    ...(baseValidConfig() as Record<string, unknown>),
+    group_noun: 'invoice',
+    row_noun: 'line',
+    group_meta: [
+      { field: 'number', label: 'Invoice', role: 'title', prefix: '#' },
+      { field: 'purchase_order.number', label: 'PO', role: 'subtitle' }
+    ],
+    status: {
+      field: 'review_status',
+      options: [
+        {
+          value: 'approved',
+          label: 'Approve',
+          color: 'green',
+          status_label: 'Approved',
+          confirm_notice: 'The requestor is told. An approval is final.'
+        }
+      ]
+    },
+    ...over
+  })
+
+  it('accepts a title, a subtitle, nouns, a status label and a confirm notice', () => {
+    expect(validateReviewListConfig(named(), RELATIONS)).toBeNull()
+  })
+
+  it('refuses an unknown role, two titles, a role on a line column, a long prefix', () => {
+    expect(
+      validateReviewListConfig(
+        named({ group_meta: [{ field: 'number', role: 'hero' }] }),
+        RELATIONS
+      )
+    ).toMatch(/role must be one of/)
+    expect(
+      validateReviewListConfig(
+        named({
+          group_meta: [
+            { field: 'number', role: 'title' },
+            { field: 'invoice_id', role: 'title' }
+          ]
+        }),
+        RELATIONS
+      )
+    ).toMatch(/at most one title/)
+    expect(
+      validateReviewListConfig(
+        named({ line_columns: [{ field: 'number', role: 'title' }] }),
+        RELATIONS
+      )
+    ).toMatch(/only for group_meta/)
+    expect(
+      validateReviewListConfig(
+        named({ group_meta: [{ field: 'number', role: 'title', prefix: 'x'.repeat(13) }] }),
+        RELATIONS
+      )
+    ).toMatch(/prefix/)
+  })
+
+  it('refuses empty nouns and empty option copy', () => {
+    expect(validateReviewListConfig(named({ row_noun: '' }), RELATIONS)).toMatch(/row_noun/)
+    expect(
+      validateReviewListConfig(
+        named({
+          status: {
+            field: 'review_status',
+            options: [{ value: 'a', label: 'A', color: 'green', confirm_notice: '' }]
+          }
+        }),
+        RELATIONS
+      )
+    ).toMatch(/confirm_notice/)
+  })
+
+  it('a column without a role keeps its old shape; a titled column carries role + prefix', async () => {
+    const config: ReviewListConfig = {
+      ...invoicesConfig,
+      group_meta: [{ field: 'number', label: 'Invoice', role: 'title', prefix: '#' }],
+      line_columns: ['line_item_number']
+    }
+    vi.mocked(getCollection).mockResolvedValueOnce({
+      display_template: '{{first_name}} {{last_name}}'
+    } as unknown as Awaited<ReturnType<typeof getCollection>>)
+    const db = makeDb(invoicesResolver, [])
+    const result = await resolveReviewListRows(
+      db as unknown as Parameters<typeof resolveReviewListRows>[0],
+      config,
+      '373944'
+    )
+    expect(result.columns.group_meta).toEqual([
+      { field: 'number', label: 'Invoice', format: null, color: null, role: 'title', prefix: '#' }
+    ])
+    expect(result.columns.line_columns[0]).toEqual({
+      field: 'line_item_number',
+      label: 'line_item_number',
+      format: null,
+      color: null
+    })
+    expect(result.rows[0].values.number).toBe('INV-1')
+  })
+})

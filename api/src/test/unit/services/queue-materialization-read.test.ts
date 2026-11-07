@@ -175,7 +175,8 @@ describe('statsFromNarrowRows', () => {
       unowned: 1,
       sla_warning: 1,
       sla_breached: 1,
-      at_risk: 1
+      at_risk: 1,
+      aging: expect.any(Object)
     })
   })
 })

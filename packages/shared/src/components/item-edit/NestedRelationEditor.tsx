@@ -83,6 +83,14 @@ function parseSaveError(err: unknown): string {
   return 'Save failed'
 }
 
+/** A remaining-to-allocate figure to the cent: float sums (0.1 + 0.2) and
+ *  3-decimal inputs never show past 2 decimals (army6 L2). */
+export function roundCents(n: number): number {
+  if (!Number.isFinite(n)) return n
+  const r = Math.round((n + Math.sign(n) * Number.EPSILON) * 100) / 100
+  return Object.is(r, -0) ? 0 : r
+}
+
 export function NestedRelationEditor({
   parentCollection,
   relationField,
@@ -443,7 +451,8 @@ export function NestedRelationEditor({
         editingKey === 'new' ? Number(draft[hint.sum_field]) || 0 : 0
       )
     : 0
-  const remaining = cap - sum
+  // Money to the cent (army6 L2): "remaining: -301.515" read 3 decimals.
+  const remaining = roundCents(cap - sum)
 
   if (relationsLoading && !matchCollection) return null
   if (!grandCollection || (!fkField && !matchCollection)) return null

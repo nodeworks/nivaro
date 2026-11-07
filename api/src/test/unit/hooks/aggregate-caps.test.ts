@@ -6,7 +6,9 @@ vi.mock('../../../hooks/ai-validation.js', () => ({ getAiCollectionSettings: vi.
 import { db } from '../../../db/index.js'
 import {
   CapValidationError,
+  capExplanation,
   evaluateSumCapRule,
+  formatCapFigure,
   isSumCapRule,
   registerAggregateCapHooks,
   type SumCapRule
@@ -569,5 +571,34 @@ describe('registerAggregateCapHooks', () => {
     ).resolves.toBeUndefined()
 
     expect(dbFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('cap messages a person reads (army6 I15)', () => {
+  it('names the figures as money, with no "Aggregate cap" jargon', () => {
+    const text = capExplanation(
+      'Forecasts cannot exceed the workflow amount (sum of the lines)',
+      25500,
+      25000,
+      true
+    )
+    expect(text).toBe(
+      'Forecasts cannot exceed the workflow amount (sum of the lines): the total would be $25,500.00, over its $25,000.00 cap'
+    )
+    const err = new CapValidationError([{ rule: 'sum_cap', field: 'total', explanation: text }])
+    expect(err.message).toBe(text)
+    expect(err.message).not.toContain('Aggregate cap')
+    expect(err.code).toBe('VALIDATION_CAP_EXCEEDED')
+  })
+
+  it('plain numbers for a field that is not money; a rule with no message still reads', () => {
+    expect(formatCapFigure(18000, false)).toBe('18,000')
+    expect(formatCapFigure(10.005, false)).toBe('10.01')
+    expect(capExplanation('', 18000, 15000, false)).toBe(
+      'The total would be 18,000, over its 15,000 cap'
+    )
+    expect(capExplanation('Too much.', 2, 1, false)).toBe(
+      'Too much: the total would be 2, over its 1 cap'
+    )
   })
 })

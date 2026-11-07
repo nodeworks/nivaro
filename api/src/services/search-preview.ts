@@ -32,6 +32,8 @@ export interface SearchPreview {
 
 const SKIP = new Set(['id', 'user_created', 'user_updated', 'date_created', 'date_updated'])
 const UPDATED_AT = ['date_updated', 'updated_at', 'modified_at', 'date_modified']
+/** Housekeeping switches no reader looks a record up by (skip_forecast_cron, is_automated…). */
+const INTERNAL_FLAG = /^(skip|is|has|disable|disabled|hide|no|allow)_|_(flag|cron|enabled)$/i
 
 function parseList(raw: unknown): string[] {
   try {
@@ -66,6 +68,9 @@ export function previewFieldOrder(
   if (!fromHeader) for (const f of templateFields(template)) push(f)
   if (!fromHeader && out.length < 3) {
     for (const f of [...fields].sort((a, b) => (a.sort ?? 999) - (b.sort ?? 999))) {
+      // The fallback picks "the first visible fields": never a switch that is off, nor an
+      // internal flag ("Skip Forecast Cron false" in the Cmd+K preview, army 6 L70).
+      if (row[f.field] === false || INTERNAL_FLAG.test(f.field)) continue
       if (visible.has(f.field)) push(f.field)
     }
   }

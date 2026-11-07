@@ -2350,9 +2350,12 @@ export function DisplayPrefsCard() {
             ]}
           />
         </label>
-        <label className='flex cursor-pointer items-center gap-1.5'>
+        {/* army6 L75: an explicit id + label pair, so assistive tech names it. */}
+        <label htmlFor='pref-compact-numbers' className='flex cursor-pointer items-center gap-1.5'>
           <input
+            id='pref-compact-numbers'
             type='checkbox'
+            aria-label='Compact numbers (1.2M)'
             checked={nf.compact === true}
             onChange={(e) => save.mutate({ number_format: { ...nf, compact: e.target.checked } })}
             className='rounded'

@@ -24,8 +24,10 @@ import {
   existingIds,
   notifyAdminsOfAccessRequest,
   parseAccessRequestBody,
+  planAuthorization,
   sameRequest,
-  storedRequest
+  storedRequest,
+  vendorOf
 } from '../services/portal-access-request.js'
 import { writeRevision } from '../services/revisions.js'
 import { ownTeamsFacts } from '../services/teams-bot/profile.js'
@@ -714,6 +716,105 @@ export async function usersRoutes(app: FastifyInstance) {
     }
   )
 
+  // POST /users/:id/authorize {role, zones?, all_zones?, dimension?} — approve an
+  // access request in ONE call (army6 L45): the zone limit and the role land
+  // together in one transaction, so a half-applied approval (role granted, zone
+  // limit lost) cannot happen. With no zones, "every zone" must be asked for.
+  app.post<{ Params: { id: string } }>(
+    '/:id/authorize',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { id } = req.params
+      if (!UUID_RE.test(id))
+        return reply.code(400).send({ error: 'Not a user id', code: 'INVALID_USER_ID' })
+      const plan = planAuthorization(req.body)
+      if (!plan.ok) return reply.code(400).send({ error: plan.error, code: plan.code })
+      const role = await db('nivaro_roles').where({ id: plan.role }).first('id')
+      if (!role)
+        return reply.code(400).send({ error: 'That role no longer exists.', code: 'ROLE_UNKNOWN' })
+      const previousUser = safeUser(await getUser(id))
+      if (!previousUser) return reply.code(404).send({ error: 'Not found' })
+      const { bustUserScopeCache, listScopeDimensions } = await import('../services/user-scopes.js')
+      const dims = await listScopeDimensions(false)
+      const asked = (req.body as { dimension?: unknown } | null)?.dimension
+      const dim =
+        (typeof asked === 'string' ? dims.find((d) => d.name === asked) : null) ??
+        dims.find((d) => d.target_collection === 'divisions') ??
+        null
+      if (plan.zones !== 'all' && !dim)
+        return reply.code(400).send({
+          error: 'Zone limits are not set up on this instance.',
+          code: 'NO_ZONE_DIMENSION'
+        })
+      const zones =
+        plan.zones === 'all' ? null : await existingIds(dim!.target_collection, plan.zones)
+      if (zones && zones.length === 0)
+        return reply.code(400).send({ error: 'None of those zones exist.', code: 'ZONES_UNKNOWN' })
+
+      await db.transaction(async (trx) => {
+        if (dim) {
+          const where = { user: id, dimension: dim.name, mode: 'restrict' }
+          const existing = await trx('nivaro_user_scopes').where(where).first('id')
+          if (zones === null) {
+            // Every zone was asked for explicitly: no limit row stays behind.
+            if (existing) await trx('nivaro_user_scopes').where({ id: existing.id }).del()
+          } else if (existing) {
+            await trx('nivaro_user_scopes')
+              .where({ id: existing.id })
+              .update({ values: JSON.stringify(zones), updated_at: new Date() })
+          } else {
+            await trx('nivaro_user_scopes').insert({
+              ...where,
+              values: JSON.stringify(zones),
+              updated_at: new Date()
+            })
+          }
+        }
+        await trx('nivaro_users')
+          .where({ id })
+          .update({ role: role.id, status: 'active', updated_at: new Date() })
+      })
+      bustUserScopeCache(id)
+
+      const user = safeUser(await getUser(id))
+      const activityId = await logActivity({
+        action: 'update',
+        user: req.user!.id,
+        collection: 'nivaro_users',
+        item: id,
+        comment:
+          zones === null
+            ? 'authorized: every zone'
+            : `authorized: ${zones.length} zone${zones.length === 1 ? '' : 's'}`,
+        req
+      })
+      if (activityId && user) {
+        const { stripAiMemory } = await import('../services/ai-memory.js')
+        const userData = stripAiMemory(user) as unknown as Record<string, unknown>
+        const prevData = stripAiMemory(previousUser) as unknown as Record<string, unknown>
+        await writeRevision({
+          activity: activityId,
+          collection: 'nivaro_users',
+          item: id,
+          data: userData,
+          delta: Object.fromEntries(
+            Object.entries(userData).filter(
+              ([k, v]) => JSON.stringify(prevData[k]) !== JSON.stringify(v)
+            )
+          )
+        })
+      }
+      return reply.send({
+        data: {
+          authorized: true,
+          role: role.id,
+          zones: zones ?? 'all',
+          dimension: dim?.name ?? null
+        }
+      })
+    }
+  )
+
   // POST /users/me/access-request — a provisional account (the role
   // nivaro_settings.new_user_role hands to a first sign-in) submits why it
   // needs access. The request lives in preferences.access_request (what the
@@ -728,13 +829,13 @@ export async function usersRoutes(app: FastifyInstance) {
     // the person's scope values.
     const asked = parsed.value
     const divisions = await existingIds('divisions', asked.divisions)
-    const vendorOk =
-      asked.vendor != null && (await existingIds('vendors', [asked.vendor])).length > 0
+    // army6 L46: the vendor's name is read by id here, never taken from the body.
+    const vendor = await vendorOf(asked.vendor)
     const next = {
       ...asked,
       divisions,
-      vendor: vendorOk ? asked.vendor : null,
-      vendor_name: vendorOk ? asked.vendor_name : null
+      vendor: vendor ? asked.vendor : null,
+      vendor_name: vendor?.name ?? null
     }
 
     const me = req.user!.id

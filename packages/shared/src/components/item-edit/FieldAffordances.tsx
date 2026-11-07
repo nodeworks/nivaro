@@ -805,6 +805,22 @@ function FieldContextMenu({
  * it is set, asks once before letting the local user type into the same
  * field — a soft lock: editable, never blocking.
  */
+// Records this tab holds the edit lock on by a take-over (army6 M28). Holding the
+// lock means nobody else can type into the record, so a "<name> is typing here —
+// edit anyway?" marker there is stale: the taker types at once.
+const takeOverHolds = new Set<string>()
+
+/** ItemLockBanner says when this tab holds a record's lock by take-over, and when not. */
+export function noteTakeOverHold(key: string, held: boolean): void {
+  if (held) takeOverHolds.add(key)
+  else takeOverHolds.delete(key)
+}
+
+/** Whether this tab holds any record's lock by take-over (exported for tests). */
+export function holdsLockByTakeOver(): boolean {
+  return takeOverHolds.size > 0
+}
+
 export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>) {
   const [editor, setEditor] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
@@ -832,7 +848,7 @@ export function usePresenceSoftLock(wrapperRef: RefObject<HTMLDivElement | null>
 
   const onFocusCapture = useCallback(
     (e: React.FocusEvent) => {
-      if (!editor || confirmedRef.current) return
+      if (!editor || confirmedRef.current || holdsLockByTakeOver()) return
       const t = e.target as HTMLElement
       if (!t.matches('input, textarea, select, [contenteditable="true"], [role="combobox"]')) return
       pendingTargetRef.current = t

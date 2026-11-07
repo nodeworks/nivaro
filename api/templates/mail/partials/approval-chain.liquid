@@ -3,8 +3,12 @@ Vertical chain of states: done (who/when) · current (owners) · upcoming ·
 skipped · canceled (the step a record was canceled from, by whom) · not
 reached (after a cancel). `no_approver` on the current step = nobody can act
 on it yet and an administrator has been told (owner-gap-notice.ts).
-Usage: {% render 'partials/approval-chain', chain: approval_chain %}
+`requester` on the current step = nobody is assigned and it is the
+requester's own move: "waiting on you (requester)" when `me` (the
+recipient's address) is theirs, else "waiting on <name> (requester)".
+Usage: {% render 'partials/approval-chain', chain: approval_chain, me: recipient_email %}
 {%- endcomment -%}
+{%- assign me_l = me | downcase -%}
 {%- if chain and chain.size > 0 -%}
 <p style="margin:0 0 8px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#7a90a6;">Approval path</p>
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
@@ -29,6 +33,7 @@ Usage: {% render 'partials/approval-chain', chain: approval_chain %}
       {%- if s.status == 'canceled' %} <span style="font-weight:400;color:#b91c1c;">&middot; canceled{% if s.by %} by {{ s.by }}{% endif %}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
       {%- if s.status == 'done' and s.by %} <span style="font-weight:400;color:#64748b;">&middot; {{ s.by }}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
       {%- if s.status == 'current' and s.owners.size > 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {{ s.owners | join: ', ' }}</span>{% endif -%}
+      {%- if s.status == 'current' and s.requester and s.owners.size == 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {% if me_l != '' and me_l == s.requester.email %}<strong style="color:#1e293b;">you</strong> (requester){% else %}{{ s.requester.name }} (requester){% endif %}</span>{% endif -%}
       {%- if s.status == 'current' and s.no_approver and s.owners.size == 0 %} <span style="font-weight:400;color:#b45309;">&middot; no approver is set for this step yet, an administrator has been told</span>{% endif -%}
       {%- if s.status == 'upcoming' and s.owners.size > 0 %} <span style="color:#94a3b8;">&middot; next: {{ s.owners | join: ', ' }}</span>{% endif -%}
     </td>

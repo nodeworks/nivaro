@@ -6,7 +6,15 @@ import { describe, expect, it, vi } from 'vitest'
 const env = vi.hoisted(() => ({
   chain: null as unknown,
   users: [] as Array<Record<string, unknown>>,
-  stalled: new Set<string>()
+  stalled: new Set<string>(),
+  creatorActs: false,
+  assigned: null as null | Array<Record<string, unknown>>,
+  requester: null as null | {
+    id: string
+    name: string
+    email: string | null
+    created_at: string | null
+  }
 }))
 
 vi.mock('../../../db/index.js', () => ({
@@ -27,7 +35,9 @@ vi.mock('../../../services/pipeline-chain.js', () => ({
   computeStateChain: async () => env.chain
 }))
 vi.mock('../../../services/owner-gap-notice.js', () => ({
-  stalledStates: async () => env.stalled
+  stalledStates: async () => env.stalled,
+  creatorActsInState: async () => env.creatorActs,
+  recordRequester: async () => env.requester
 }))
 const KIM = { id: 'U-KIM', first_name: 'Kim', last_name: 'Lee', email: 'k@x' }
 const JOE = { id: 'U-JOE', first_name: 'Joseph', last_name: 'Paolillo', email: 'j@x' }
@@ -35,7 +45,9 @@ const REQ = { id: 'U-REQ', first_name: 'Peter', last_name: 'Moniz', email: 'p@x'
 vi.mock('../../../services/pipeline-engine.js', () => ({
   // assigned owners only: the requester fallback is not returned with skipFallback
   resolveStateOwnersBatch: async (reqs: Array<{ key: string }>, _db: unknown, o: any) =>
-    new Map(reqs.map((r) => [r.key, o?.skipFallback ? [KIM, JOE] : [KIM, JOE, REQ]])),
+    new Map(
+      reqs.map((r) => [r.key, env.assigned ?? (o?.skipFallback ? [KIM, JOE] : [KIM, JOE, REQ])])
+    ),
   activeOwnersOnly: async (owners: Array<{ id: string }>) => owners.filter((x) => x.id !== JOE.id)
 }))
 
@@ -118,7 +130,103 @@ describe('buildApprovalChain (mail)', () => {
   })
 })
 
+describe('buildApprovalChain (army 6)', () => {
+  it('N1: an auto-started record names its creator and created date on Started', async () => {
+    env.users = []
+    env.stalled = new Set()
+    env.creatorActs = false
+    env.requester = {
+      id: 'U-REQ',
+      name: 'Peter Moniz',
+      email: 'p@x',
+      created_at: '2026-11-07T15:00:00.000Z'
+    }
+    env.chain = {
+      currentStateId: 'ER',
+      states: [st('S', 'started', 0, { is_initial: true }), st('ER', 'engineering_review', 1)],
+      history: [{ from_state: 'S', to_state: 'ER', timestamp: '2026-11-07T15:00:01Z', user: null }],
+      entries: { S: entry, ER: entry }
+    }
+    const steps = await buildApprovalChain('I-1')
+    expect(steps.find((s) => s.key === 'started')).toMatchObject({
+      status: 'done',
+      by: 'Peter Moniz',
+      at: '2026-11-07T15:00:01.000Z'
+    })
+  })
+
+  it('N1: a named starter is kept', async () => {
+    env.users = [{ id: 'U-K', first_name: 'Kristina', last_name: 'Davison', email: 'k@x' }]
+    env.chain = {
+      currentStateId: 'ER',
+      states: [st('S', 'started', 0, { is_initial: true }), st('ER', 'engineering_review', 1)],
+      history: [
+        { from_state: 'S', to_state: 'ER', timestamp: '2026-11-06T16:00:00Z', user: 'U-K' }
+      ],
+      entries: { S: entry, ER: entry }
+    }
+    const steps = await buildApprovalChain('I-1')
+    expect(steps.find((s) => s.key === 'started')?.by).toBe('Kristina Davison')
+  })
+
+  it("M44: an ownerless step that is the requester's move names the requester", async () => {
+    env.users = []
+    env.stalled = new Set()
+    env.creatorActs = true
+    env.requester = { id: 'U-REQ', name: 'Peter Moniz', email: 'p@x', created_at: null }
+    env.chain = {
+      currentStateId: 'WS',
+      states: [st('S', 'started', 0, { is_initial: true }), st('WS', 'warehouse_submission', 1)],
+      history: [{ from_state: 'S', to_state: 'WS', timestamp: '2026-11-06T16:00:00Z', user: null }],
+      entries: { S: entry, WS: { ...entry, owners: [] } }
+    }
+    env.assigned = [] // nobody assigned
+    const steps = await buildApprovalChain('I-1')
+    env.assigned = null
+    const ws = steps.find((s) => s.key === 'warehouse_submission')
+    expect(ws).toMatchObject({ status: 'current', owners: [] })
+    expect(ws?.requester).toEqual({ name: 'Peter Moniz', email: 'p@x' })
+    expect(ws?.no_approver).toBeUndefined()
+    env.creatorActs = false
+    env.requester = null
+  })
+})
+
 describe('approval-chain partial', () => {
+  it('M44: "waiting on you (requester)" to the requester, their name to others', async () => {
+    const chain = [
+      {
+        status: 'current',
+        label: 'Warehouse Submission',
+        owners: [],
+        requester: { name: 'Peter Moniz', email: 'peter_moniz@x.test' }
+      }
+    ]
+    const mine = await renderMailTemplate('workflow_transition', {
+      friendly_id: 'CM26INV-37423',
+      to_state: { label: 'Warehouse Submission' },
+      approval_chain: chain,
+      creator_acts: true,
+      requester: { name: 'Peter Moniz', email: 'peter_moniz@x.test' },
+      owners: [],
+      recipient_email: 'Peter_Moniz@x.test'
+    })
+    expect(mine).toContain('(requester)')
+    expect(mine).toMatch(/waiting on <strong[^>]*>you<\/strong> \(requester\)/)
+    expect(mine).toContain('It is now waiting on <strong>you</strong>')
+    const theirs = await renderMailTemplate('workflow_transition', {
+      friendly_id: 'CM26INV-37423',
+      to_state: { label: 'Warehouse Submission' },
+      approval_chain: chain,
+      creator_acts: true,
+      requester: { name: 'Peter Moniz', email: 'peter_moniz@x.test' },
+      owners: [],
+      recipient_email: 'admin@x.test'
+    })
+    expect(theirs).toContain('waiting on Peter Moniz (requester)')
+    expect(theirs).toContain('It is now waiting on Peter Moniz, the requester.')
+  })
+
   it('renders canceled, not reached and no approver lines', async () => {
     const html = await renderMailTemplate('workflow_canceled', {
       friendly_id: 'CR26-81411',

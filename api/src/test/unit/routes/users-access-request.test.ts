@@ -39,6 +39,10 @@ vi.mock('../../../services/portal-access-request.js', async (orig) => ({
   existingIds: vi.fn(async (table: string, ids: Array<string | number>) =>
     ids.filter((v) => (table === 'divisions' ? ['1', '2', '3'] : ['753']).includes(String(v)))
   ),
+  // army6 L46: the vendor's name comes from the vendors table, not the body.
+  vendorOf: vi.fn(async (id: string | number | null) =>
+    String(id) === '753' ? { id: 753, name: 'Acme Fiber Supply' } : null
+  ),
   notifyAdminsOfAccessRequest: vi.fn(async () => {
     state.notified++
     return 2
@@ -140,5 +144,12 @@ describe('POST /me/access-request', () => {
     const data = JSON.parse(res.body).data
     expect(data.access_request.vendor).toBeNull()
     expect(data.access_request.vendor_name).toBeNull()
+  })
+
+  it('stores the vendor’s own name, never the text the client sent (army6 L46)', async () => {
+    const res = await submit({ ...body, vendor_name: 'x'.repeat(400) })
+    const data = JSON.parse(res.body).data
+    expect(data.access_request.vendor).toBe(753)
+    expect(data.access_request.vendor_name).toBe('Acme Fiber Supply')
   })
 })

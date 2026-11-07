@@ -47,17 +47,52 @@ export function pingsToRetire(
   stillOwnerIds: Iterable<string>,
   movedAt: Date
 ): PingRow[] {
+  return planPingRefresh(rows, friendlyId, stillOwnerIds, movedAt).retire
+}
+
+/**
+ * Pure: what a move does to the record's open owner pings.
+ *  - `retire`: pings to people who no longer own the state; and, when the
+ *    move CHANGED the state, the "Waiting on you" pings of still-owners other
+ *    than the actor — the flow pings them again naming the new step (army 6
+ *    L25: Tim kept "… is now Waiting on Level 5 Approval" after moving it to
+ *    Fusion Submission, which he also owns).
+ *  - `relabel`: the actor's own "Waiting on you" ping when they still own the
+ *    new state — the flow leaves the actor out, so their row stays and only
+ *    its text moves to the new step.
+ */
+export function planPingRefresh(
+  rows: PingRow[],
+  friendlyId: string,
+  stillOwnerIds: Iterable<string>,
+  movedAt: Date,
+  opts: { stateChanged?: boolean; actorId?: string | null } = {}
+): { retire: PingRow[]; relabel: PingRow[] } {
   const keep = new Set([...stillOwnerIds].map((id) => String(id).toUpperCase()))
   const cut = movedAt.getTime()
-  return rows.filter((r) => {
-    if (r.status === 'archived') return false
-    if (!isOwnerPing(r.subject, friendlyId)) return false
-    if (keep.has(String(r.recipient).toUpperCase())) return false
+  const retire: PingRow[] = []
+  const relabel: PingRow[] = []
+  for (const r of rows) {
+    if (r.status === 'archived') continue
+    if (!isOwnerPing(r.subject, friendlyId)) continue
     const t = r.timestamp ? new Date(r.timestamp).getTime() : Number.NaN
     // A ping with no readable time is left alone; one written at or after the
     // move belongs to the move.
-    return Number.isFinite(t) && t < cut
-  })
+    if (!(Number.isFinite(t) && t < cut)) continue
+    if (!keep.has(String(r.recipient).toUpperCase())) {
+      retire.push(r)
+      continue
+    }
+    if (!opts.stateChanged || !String(r.subject ?? '').startsWith('Waiting on you: ')) continue
+    if (opts.actorId && sameId(opts.actorId, r.recipient)) relabel.push(r)
+    else retire.push(r)
+  }
+  return { retire, relabel }
+}
+
+/** The "Waiting on you" ping's message — the same words the flows write. */
+export function waitingMessage(friendlyId: string, stateLabel: string): string {
+  return `${friendlyId} is now ${stateLabel} and waiting on you.`.slice(0, 500)
 }
 
 export async function retireWaitingPings(opts: {
@@ -68,6 +103,12 @@ export async function retireWaitingPings(opts: {
   stillOwnerIds: Iterable<string>
   /** When the move was written: later pings belong to it. */
   movedAt: Date
+  /** The move entered a different state (not a self-loop / re-save). */
+  stateChanged?: boolean
+  /** Who moved it — the flows never ping the actor, so their row is relabelled. */
+  actorId?: string | null
+  /** Label of the state the record is in now. */
+  stateLabel?: string | null
 }): Promise<number> {
   try {
     const rows = (await db('nivaro_notifications')
@@ -76,7 +117,21 @@ export async function retireWaitingPings(opts: {
       .where('timestamp', '<', opts.movedAt)
       .select('id', 'recipient', 'subject', 'status', 'timestamp')
       .limit(500)) as PingRow[]
-    const retire = pingsToRetire(rows, opts.friendlyId, opts.stillOwnerIds, opts.movedAt)
+    const { retire, relabel } = planPingRefresh(
+      rows,
+      opts.friendlyId,
+      opts.stillOwnerIds,
+      opts.movedAt,
+      { stateChanged: !!opts.stateChanged && !!opts.stateLabel, actorId: opts.actorId ?? null }
+    )
+    if (relabel.length > 0 && opts.stateLabel)
+      await db('nivaro_notifications')
+        .whereIn(
+          'id',
+          relabel.map((r) => Number(r.id))
+        )
+        .update({ message: waitingMessage(opts.friendlyId, opts.stateLabel) })
+        .catch(() => {})
     if (retire.length === 0) return 0
     const now = new Date()
     const ids = retire.map((r) => Number(r.id))

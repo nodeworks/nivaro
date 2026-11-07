@@ -24,6 +24,7 @@ import {
   daysBetween,
   describeConditionRule,
   fieldBlockers,
+  integrationProblems,
   isSendBackEdge,
   onboardingSteps,
   pickUnavailable,
@@ -659,5 +660,52 @@ describe('tallyCollection', () => {
     expect(computeStatusBatch).toHaveBeenCalledTimes(1)
     expect(tally.open.get('Z1')).toBe(2)
     expect(tally.breached.get('Z1')).toBe(1)
+  })
+})
+
+describe('integrationProblems (army 6 H10)', () => {
+  const summary = {
+    total: 10966,
+    critical: 10201,
+    errored: 1,
+    checked_at: '2026-11-06T12:00:00.000Z',
+    signals: [
+      {
+        id: 'core:obligation-missing',
+        label: 'Never sent',
+        severity: 'critical' as const,
+        count: 9870
+      },
+      {
+        id: 'efp:mdsi-never',
+        label: 'MDSi never submitted',
+        severity: 'critical' as const,
+        count: 331
+      }
+    ]
+  }
+
+  it('answers admins the console figures with the signal names (no ids)', async () => {
+    const out = await integrationProblems(true, async () => summary)
+    expect(out).toEqual({
+      total: 10966,
+      critical: 10201,
+      errored: 1,
+      checked_at: '2026-11-06T12:00:00.000Z',
+      signals: [
+        { label: 'Never sent', severity: 'critical', count: 9870 },
+        { label: 'MDSi never submitted', severity: 'critical', count: 331 }
+      ]
+    })
+  })
+
+  it('answers everyone else the counts only', async () => {
+    const out = await integrationProblems(false, async () => summary)
+    expect(out).toEqual({
+      total: 10966,
+      critical: 10201,
+      errored: 1,
+      checked_at: '2026-11-06T12:00:00.000Z'
+    })
   })
 })

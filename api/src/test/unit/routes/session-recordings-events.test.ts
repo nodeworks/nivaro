@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 const h = vi.hoisted(() => ({
+  masqueradeAdmin: null as string | null,
   recording: null as Record<string, unknown> | null,
   existing: null as Record<string, unknown> | null,
   inserts: [] as unknown[],
@@ -37,8 +38,9 @@ vi.mock('../../../db/index.js', () => {
 })
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async () => undefined,
-  requireAuth: async (req: { user?: unknown }) => {
+  requireAuth: async (req: { user?: unknown; masqueradeAdminId?: string }) => {
     req.user = { id: 'U1' }
+    if (h.masqueradeAdmin) req.masqueradeAdminId = h.masqueradeAdmin
   },
   requireAdmin: async () => undefined
 }))
@@ -69,6 +71,7 @@ async function post(body: unknown) {
 beforeEach(() => {
   h.recording = { id: REC, user: 'U1', byte_size: 0, truncated: false, ended_at: null }
   h.existing = null
+  h.masqueradeAdmin = null
   h.inserts = []
   h.updates = []
   scheduleReplayIndex.mockClear()
@@ -111,5 +114,15 @@ describe('POST /session-recordings/:id/events', () => {
     const res = await post({ seq: 0, events: [{ type: 3, timestamp: 1 }] })
     expect(res.statusCode).toBe(403)
     expect(h.inserts).toHaveLength(0)
+  })
+
+  // army6 M54: a tab that began recording as the admin, then switched to View-as.
+  it('answers 204 (stores nothing) for a View-as upload to the admin’s own recording', async () => {
+    h.recording = { id: REC, user: 'ADMIN', byte_size: 0, truncated: false, ended_at: null }
+    h.masqueradeAdmin = 'ADMIN'
+    const res = await post({ seq: 1, events: [{ type: 3, timestamp: 1 }] })
+    expect(res.statusCode).toBe(204)
+    expect(h.inserts).toEqual([])
+    expect(h.updates).toEqual([])
   })
 })

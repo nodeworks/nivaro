@@ -19,6 +19,12 @@ import { selectInChunks } from './db-batch.js'
 import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
 import { originFields } from './note-authorship.js'
+import {
+  creatorActsInState,
+  type GapStateRow,
+  recordRequester,
+  retireGapNotices
+} from './owner-gap-notice.js'
 import { activeOwnersOnly, nextSkipTransition, resolveStateOwners } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
@@ -583,6 +589,41 @@ export async function buildTransitionEventPayload(args: {
   // "Kim Lee, for Beth Ross" when a delegate stood in for an out-of-office
   // owner (#645) — every template that prints actor_name reads it that way.
   const actorName = actingForLabel(actorSelfName, principalName)
+  // Who acts when the entered step has no assigned owner (army 6 M44): an IR at
+  // Warehouse Submission with no WS owner group is the REQUESTER's move
+  // (allow_creator) — the mail says "waiting on you" and they get the ping,
+  // without becoming an owner (owners / owner_emails / the gap notice stay
+  // assigned owners only).
+  const requester = await recordRequester(subject.collection, subject.itemId).catch(() => null)
+  const creatorActs =
+    !!newStateObj &&
+    owners.length === 0 &&
+    !!requester?.email &&
+    (await creatorActsInState(newStateObj as unknown as GapStateRow))
+  const isInitial = !!newStateObj && coerceBool(newStateObj.is_initial)
+  const ownerEmails = owners
+    .map((o) => o.email)
+    .filter(Boolean)
+    .join(',')
+  // May the creator do anything where the record now sits? Their draft (the
+  // initial state), their own move, or a step they own outright. A courtesy
+  // ping to a creator who can't act goes to FYI, never Needs you (L30).
+  const creatorCanAct =
+    creatorActs ||
+    isInitial ||
+    (!!requester && owners.some((o) => String(o.id).toUpperCase() === requester.id.toUpperCase()))
+  const previousOwnerEmails = previousOwners
+    .map((o) => o.email)
+    .filter(Boolean)
+    .join(',')
+  // A cancel / reject tells the people it was waiting on (M45: an IR canceled
+  // in Engineering Review told nobody). Empty for every other move.
+  const escaped =
+    !!newStateObj &&
+    !!prevStateObj &&
+    String(prevStateObj.id ?? prevStateObj.key) !== String(newStateObj.id) &&
+    /cancel|reject|abandon/i.test(newStateObj.key ?? '')
+  const commentIsHuman = !!args.comment && !MACHINE_COMMENT.test(args.comment)
   return {
     record_card: recordCard,
     approval_chain: approvalChain,
@@ -615,7 +656,12 @@ export async function buildTransitionEventPayload(args: {
     transitioned_at: (args.asOf ?? new Date()).toISOString(),
     // Machine stamps (state-merge, legacy sync, instance migration…) are
     // provenance, not something to quote back to a person.
-    comment_is_human: !!args.comment && !MACHINE_COMMENT.test(args.comment),
+    comment_is_human: commentIsHuman,
+    // In-app texts have no conditionals: " Reason: <note>" when a person
+    // wrote one, else empty (L26 — the cancel notice said nothing of why).
+    comment_note: commentIsHuman ? ` Reason: ${String(args.comment).trim()}`.slice(0, 300) : '',
+    // Who did it, for in-app texts: a person's name, else "The portal".
+    actor_display: actorName || 'The portal',
     days_in_previous_state: enteredPrevAt
       ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 86_400_000) * 10) / 10
       : null,
@@ -629,37 +675,80 @@ export async function buildTransitionEventPayload(args: {
         }
       : null,
     owners,
-    owner_emails: owners
-      .map((o) => o.email)
-      .filter(Boolean)
-      .join(','),
+    owner_emails: ownerEmails,
+    // M44: the requester when the step is their move and nobody is assigned.
+    creator_acts: creatorActs,
+    requester:
+      requester && (creatorActs || creatorCanAct)
+        ? { name: requester.name, email: requester.email }
+        : null,
+    creator_can_act: creatorCanAct,
+    // `lane` for a courtesy notification op to the creator (L30).
+    creator_lane: creatorCanAct ? 'needs_you' : 'fyi',
+    // Who a "Waiting on you" ping goes to: the assigned owners, else the
+    // requester when it is their move.
+    // A finished record waits on nobody (its terminal owners are told, not asked).
+    waiting_on_emails:
+      newStateObj && coerceBool(newStateObj.is_terminal)
+        ? ''
+        : ownerEmails || (creatorActs ? (requester?.email ?? '') : ''),
+    cancel_notify_emails: escaped ? previousOwnerEmails : '',
     previous_owners: previousOwners,
     // A plain transition is its own chain; flushChainEvents overwrites these
     // for the hops of an auto chain.
     final_in_chain: true,
     chain_final_state: null,
     chain_length: 1,
-    previous_owner_emails: previousOwners
-      .map((o) => o.email)
-      .filter(Boolean)
-      .join(','),
+    previous_owner_emails: previousOwnerEmails,
     // Per-address "why me" for a mail op that sends one email per
     // recipient (`split`): owners of the new state; the creator / contacts
     // get theirs added by buildTransitionPayloadFromHistory / the flow's
     // item-read step via recipientReasonsFor(). Lower-cased keys.
-    recipient_reasons: Object.fromEntries(
-      owners
-        .filter((o) => o.email)
-        .map((o) => [
-          o.email.toLowerCase(),
-          `you own ${newStateObj?.label ? `"${newStateObj.label}"` : 'this state'} for this record`
-        ])
-    ),
+    recipient_reasons: recipientReasons({
+      owners,
+      stateLabel: newStateObj?.label ?? null,
+      requesterEmail: creatorActs ? (requester?.email ?? null) : null,
+      // Only a cancel / reject mails the owners of the step it left.
+      previousOwners: escaped ? previousOwners : [],
+      previousLabel: prevStateObj?.label ?? null
+    }),
     entered_previous_state_at: enteredPrevAt ? enteredPrevAt.toISOString() : null,
     hours_in_previous_state: enteredPrevAt
       ? Math.round(((Date.now() - enteredPrevAt.getTime()) / 3_600_000) * 10) / 10
       : null
   }
+}
+
+/**
+ * Pure: the per-address "why me" lines of a transition mail (lower-cased
+ * keys). New owners first; then the requester when the step is their move
+ * (M44); then the owners of the state it LEFT — a cancel mails them, and the
+ * footer said "your notification rules for 'Workflow'" instead of why
+ * (army 6 L66). An earlier reason is never overridden.
+ */
+export function recipientReasons(args: {
+  owners: Array<{ email?: string | null }>
+  stateLabel: string | null
+  requesterEmail: string | null
+  previousOwners: Array<{ email?: string | null }>
+  previousLabel: string | null
+}): Record<string, string> {
+  const out: Record<string, string> = {}
+  const put = (email: string | null | undefined, why: string) => {
+    if (!email) return
+    const k = email.trim().toLowerCase()
+    if (k && !(k in out)) out[k] = why
+  }
+  const here = args.stateLabel ? `"${args.stateLabel}"` : 'this state'
+  for (const o of args.owners) put(o.email, `you own ${here} for this record`)
+  put(
+    args.requesterEmail,
+    `it is waiting on you: you requested it, and you are the one who moves it on from ${here}`
+  )
+  const left = args.previousLabel ? `"${args.previousLabel}"` : 'the step it left'
+  for (const o of args.previousOwners)
+    put(o.email, `you were an approver on ${left} for this record`)
+  return out
 }
 
 /**
@@ -881,20 +970,37 @@ async function noticeGapFor(
   }
 }
 
-/** Retire the owner pings the move made stale (waiting-pings.ts). */
+/** Retire the owner pings the move made stale (waiting-pings.ts), and the
+ *  "No approver" notices about a step the record has left (L31). */
 async function retirePingsFor(payload: Record<string, unknown>, movedAt: Date): Promise<void> {
+  const collection = String(payload.subject_collection ?? payload.collection)
+  const item = String(payload.subject_item ?? payload.item)
+  const friendlyId = String(payload.friendly_id ?? '')
+  const from = payload.from_state as { key?: string; label?: string } | null
+  const to = payload.to_state as { key?: string; label?: string } | null
   try {
     const { retireWaitingPings } = await import('./waiting-pings.js')
+    // The requester keeps their "Waiting on you" while the step is still theirs.
+    const requester = payload.creator_acts
+      ? await recordRequester(collection, item).catch(() => null)
+      : null
     await retireWaitingPings({
-      collection: String(payload.subject_collection ?? payload.collection),
-      item: String(payload.subject_item ?? payload.item),
-      friendlyId: String(payload.friendly_id ?? ''),
-      stillOwnerIds: payloadOwnerIds(payload),
-      movedAt
+      collection,
+      item,
+      friendlyId,
+      stillOwnerIds: [...payloadOwnerIds(payload), ...(requester ? [requester.id] : [])],
+      movedAt,
+      stateChanged: !!from && !!to && from.key !== to.key,
+      actorId: typeof payload.user_id === 'string' ? payload.user_id : null,
+      stateLabel: to?.label ?? null
     })
   } catch {
     /* best effort */
   }
+  if (from)
+    await retireGapNotices({ collection, item, friendlyId, currentLabel: to?.label ?? null }).catch(
+      () => 0
+    )
 }
 
 async function resolvePreviousState(instance: WorkflowInstance): Promise<string | null> {

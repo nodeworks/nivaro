@@ -1,5 +1,5 @@
-import { onOwnersChanged } from '../db/owner-signal.js'
 import { db } from '../db/index.js'
+import { onOwnersChanged } from '../db/owner-signal.js'
 import { selectInChunks } from './db-batch.js'
 import { getLabels } from './queues.js'
 
@@ -80,6 +80,26 @@ function reasonOf(u: { email?: string | null; is_redacted?: unknown }): Inactive
   if (u.is_redacted === true || u.is_redacted === 1) return 'redacted'
   if (/^Redacted_/i.test(email)) return 'anonymised'
   return 'suspended'
+}
+
+/**
+ * army6 M55 — how a person is named on the Inactive people tab. An anonymised or
+ * redacted account's own name and email ARE the anonymisation stand-in
+ * ("Redacted Redacted · Redacted_<uuid>@redact…"): it reads "Former user" with no
+ * email, as exports already do.
+ */
+export function inactivePersonLabel(u: {
+  id?: unknown
+  first_name?: unknown
+  last_name?: unknown
+  email?: string | null
+  is_redacted?: unknown
+}): { name: string; email: string | null; reason: InactiveReason } {
+  const reason = reasonOf(u)
+  if (reason === 'redacted' || reason === 'anonymised')
+    return { name: 'Former user', email: null, reason }
+  const name = [u.first_name, u.last_name].filter(Boolean).join(' ')
+  return { name: name || String(u.email ?? 'Unnamed person'), email: u.email ?? null, reason }
 }
 
 function titleCase(s: string): string {
@@ -407,13 +427,14 @@ export async function scanInactiveUserLinks(opts: { fresh?: boolean } = {}) {
   const users: InactiveUserLinks[] = rows
     .map((u) => {
       const links = (byUser.get(String(u.id).toUpperCase()) ?? []).sort((a, b) => b.count - a.count)
+      const who = inactivePersonLabel(u as Parameters<typeof inactivePersonLabel>[0])
       return {
         user: {
           id: String(u.id),
-          name: [u.first_name, u.last_name].filter(Boolean).join(' ') || String(u.email ?? u.id),
-          email: (u.email as string | null) ?? null,
+          name: who.name,
+          email: who.email,
           status: (u.status as string | null) ?? null,
-          reason: reasonOf(u as { email?: string; is_redacted?: unknown }),
+          reason: who.reason,
           last_access: u.last_access ? new Date(u.last_access as string).toISOString() : null
         },
         total: links.reduce((a, l) => a + l.count, 0),
@@ -594,7 +615,10 @@ const personName = (r: {
   first_name?: string | null
   last_name?: string | null
   email?: string | null
-}) => [r.first_name, r.last_name].filter(Boolean).join(' ') || String(r.email ?? '')
+}) =>
+  /^Redacted_/i.test(String(r.email ?? ''))
+    ? 'Former user'
+    : [r.first_name, r.last_name].filter(Boolean).join(' ') || String(r.email ?? '')
 
 /** 'project.project_type.name' reads as Project Type: the hop before the leaf names the thing. */
 const dimensionLabel = (path: string) => {

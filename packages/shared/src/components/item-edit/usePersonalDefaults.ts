@@ -242,18 +242,27 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     }
   }, [])
 
+  // What publish() last handed to state (state changes only through publish).
+  const publishedLedgerRef = useRef(ledger)
+  const publishedHintsRef = useRef(hints)
   const publish = useCallback(() => {
     if (!mountedRef.current) return
-    setLedger((prev) => {
-      const next = ledgerRef.current
-      if (prev.size === next.size && [...next].every(([k, v]) => prev.get(k) === v)) return prev
-      return new Map(next)
-    })
-    setHints((prev) => {
-      const next = hintsRef.current
-      if (prev.size === next.size && [...next].every(([k, v]) => prev.get(k) === v)) return prev
-      return new Map(next)
-    })
+    // army6 M1: no state update at all when nothing changed. This runs after every keystroke
+    // on a new form; even an update that hands back `prev` stays queued until React's
+    // scheduler runs, and fast typing that starves it makes React count each keystroke as a
+    // nested update — past 50 the next keystroke's setDraft throws and the character is lost.
+    const same = <V>(a: Map<string, V>, b: Map<string, V>) =>
+      a.size === b.size && [...b].every(([k, v]) => a.get(k) === v)
+    if (!same(publishedLedgerRef.current, ledgerRef.current)) {
+      const next = new Map(ledgerRef.current)
+      publishedLedgerRef.current = next
+      setLedger(next)
+    }
+    if (!same(publishedHintsRef.current, hintsRef.current)) {
+      const next = new Map(hintsRef.current)
+      publishedHintsRef.current = next
+      setHints(next)
+    }
   }, [])
 
   const currentValue = useCallback((field: string): unknown => {

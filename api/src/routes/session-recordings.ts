@@ -290,6 +290,11 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         | { id: string; user: string; byte_size: number; truncated: boolean; ended_at: Date | null }
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Recording not found' })
+      // army6 M54: a tab that started recording as the admin and then switched to
+      // View-as keeps uploading to the admin's recording. Nothing is stored (the
+      // recording belongs to someone else), but it is not a failure either: 204,
+      // so it never shows on Integrations › Inbound as a refused call.
+      if (rec.user !== req.user!.id && req.masqueradeAdminId) return reply.code(204).send()
       // Only the recording's own user appends to it
       if (rec.user !== req.user!.id) return reply.code(403).send({ error: 'Forbidden' })
       if (rec.truncated || rec.ended_at) {

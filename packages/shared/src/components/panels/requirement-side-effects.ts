@@ -33,17 +33,43 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+/**
+ * Bookkeeping columns every write stamps (army6 M2): a Category pick asked to
+ * confirm "Changed: 2026-11-06T16:02:14.065Z → …". The server's own stamp is
+ * never a value the person chose, so it is never asked about.
+ */
+export const AUDIT_FIELDS: ReadonlySet<string> = new Set([
+  'changed',
+  'created',
+  'modified',
+  'date_created',
+  'date_updated',
+  'date_modified',
+  'created_at',
+  'updated_at',
+  'modified_at',
+  'user_created',
+  'user_updated',
+  'created_by',
+  'updated_by',
+  'modified_by'
+])
+
 /** The rehearsal's changes to fields the dialog did not send, over a value
- *  the row already held. */
+ *  the row already held. `known` (when given) limits them to fields the
+ *  dialog shows — a column it has no meta for means nothing to the person. */
 export function overwrittenBySideEffect(
   report: RehearsalReport | null | undefined,
-  sent: Record<string, unknown>
+  sent: Record<string, unknown>,
+  known?: (field: string) => boolean
 ): SideEffectChange[] {
   if (!report || report.ok === false || !Array.isArray(report.changes)) return []
   const out: SideEffectChange[] = []
   for (const c of report.changes) {
     if (!c || typeof c.field !== 'string') continue
     if (c.field in sent || c.field.startsWith('_')) continue
+    if (AUDIT_FIELDS.has(c.field.toLowerCase())) continue
+    if (known && !known(c.field)) continue
     if (blank(c.from) || same(c.from, c.to)) continue
     out.push({ field: c.field, from: c.from, to: c.to })
   }

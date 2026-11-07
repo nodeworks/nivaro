@@ -12,8 +12,20 @@ const meta = { friendly_id_field: 'workflow_id' }
 describe('record refs (#776)', () => {
   it('names a record by its friendly id, else #id', () => {
     expect(recordRefLabel(meta, { id: 7, workflow_id: 'CM26-7' }, 7)).toBe('CM26-7')
-    expect(recordRefLabel(meta, { id: 7, workflow_id: '' }, 7)).toBe('#7')
-    expect(recordRefLabel({}, { id: 7 }, 7)).toBe('#7')
+    // never the row id (army 6 M52)
+    expect(recordRefLabel(meta, { id: 7, workflow_id: '' }, 7, 'workflows')).toBe(
+      'No workflow number'
+    )
+    expect(recordRefLabel({}, { id: 7 }, 7)).toBe('No record number')
+    expect(
+      recordRefLabel(
+        meta,
+        { id: 360291, workflow_id: null, description: 'IG Net2.0 Circuit Engineer 2H 2025 ' },
+        360291,
+        'workflows'
+      )
+    ).toBe('No workflow number · IG Net2.0 Circuit Engineer 2H 2025')
+    expect(recordRefLabel({}, null, 5, 'inventory_request')).toBe('No inventory request number')
     expect(recordRefLabel(null, null, null)).toBe('')
   })
 

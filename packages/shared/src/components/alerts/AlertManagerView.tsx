@@ -46,6 +46,49 @@ import type {
 } from './types'
 import { fmtDateTime, fmtMetric, OPERATOR_LABELS } from './types'
 
+/** A report's filter bar entry (nivaro_report_defs.global_filters.filter_bar). */
+export interface ReportFilterBarEntry {
+  field?: string | null
+  label?: string | null
+  options?: { collection?: string | null } | null
+}
+
+/**
+ * How a widget alert's scope names a filter (no-internal-ids #25: the Scope
+ * column read "divisions: Zone 1", "funding_years: 2026" — field keys). The
+ * report's own filter-bar label wins ("Zone", "Funding Year"): an alert filter
+ * names the bar entry by its field or by the collection it picks from. Else
+ * the key in words ("Funding years"). Pure.
+ */
+export function alertFilterLabel(
+  field: string,
+  filterBar: ReadonlyArray<ReportFilterBarEntry> | null | undefined
+): string {
+  const hit = (filterBar ?? []).find(
+    (f) => f && (f.field === field || f.options?.collection === field) && f.label
+  )
+  if (hit?.label) return hit.label
+  const words = String(field ?? '')
+    .replace(/_/g, ' ')
+    .trim()
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Filter'
+}
+
+/** "Zone: Zone 1 · Funding Year: 2026" — or "All data". Pure. */
+export function alertScopeText(
+  filters: ReadonlyArray<{
+    field: string
+    values: Array<string | number>
+    labels?: string[]
+  }> | null,
+  filterBar: ReadonlyArray<ReportFilterBarEntry> | null | undefined
+): string {
+  if (!filters?.length) return 'All data'
+  return filters
+    .map((f) => `${alertFilterLabel(f.field, filterBar)}: ${(f.labels ?? f.values).join(', ')}`)
+    .join(' · ')
+}
+
 /**
  * AlertManagerView — the full alert-manager surface as a headless shared
  * component over the nivaro metric-alert engine:
@@ -493,6 +536,25 @@ export function AlertManagerView({
     enabled: !widgetTabsHidden,
     queryFn: () =>
       raw<{ data: ReportAlertRow[] }>('GET', '/metric-alerts/report-alerts').then((r) => r.data)
+  })
+  // The reports' filter bars name each alert filter the way the report does.
+  const needBars = reportAlerts.some((a) => (a.filters ?? []).length > 0)
+  const { data: reportBars } = useQuery({
+    queryKey: ['nvr-ma-report-filter-bars'],
+    enabled: !widgetTabsHidden && needBars,
+    staleTime: 300_000,
+    queryFn: () =>
+      raw<{
+        data: Array<{
+          id: string
+          global_filters?: { filter_bar?: ReportFilterBarEntry[] | null } | null
+        }>
+      }>('GET', '/report-studio')
+        .then(
+          (r) =>
+            new Map((r.data ?? []).map((d) => [String(d.id), d.global_filters?.filter_bar ?? []]))
+        )
+        .catch(() => new Map<string, ReportFilterBarEntry[]>())
   })
   const { data: reportAlertLog = [], isLoading: loadingReportLog } = useQuery({
     queryKey: ['nvr-ma-report-alerts-log'],
@@ -1401,11 +1463,7 @@ export function AlertManagerView({
                   )}
                 </td>
                 <td className={cn(tdCls, 'text-[11.5px] text-slate-400')}>
-                  {(a.filters ?? []).length
-                    ? (a.filters ?? [])
-                        .map((f) => `${f.field}: ${(f.labels ?? f.values).join(', ')}`)
-                        .join(' · ')
-                    : 'All data'}
+                  {alertScopeText(a.filters, reportBars?.get(String(a.report)))}
                 </td>
                 <td className={tdCls}>
                   <div className='flex flex-wrap gap-1'>

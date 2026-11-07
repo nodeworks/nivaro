@@ -19,6 +19,8 @@ function bodyOf(err: unknown): ErrorBody | null {
 }
 
 const NESTED = /^([A-Za-z0-9_]+)\[([^\]]*)\]:\s*/
+/** An HTTP status phrase, not a reason ('Bad Request', 'Unprocessable Entity'). */
+const STATUS_PHRASE = /^(Bad Request|Unprocessable Entity|Conflict|Forbidden|Not Found|Error)$/
 const NOTHING_CHANGED = /\s+—\s+nothing was changed.*$/s
 
 /**
@@ -33,7 +35,11 @@ export function refusedFieldOf(
 ): { field: string; message: string } | null {
   const body = bodyOf(err)
   if (!body) return null
-  const text = String(body.error ?? body.message ?? '')
+  // The API's error body carries the status phrase in `error` ("Bad Request") and the
+  // reason in `message`; other answers put the reason in `error`. Read whichever holds the
+  // reason (army6 M4: a refused line read 'Bad Request', so nothing was marked).
+  const texts = [body.message, body.error].filter((t): t is string => typeof t === 'string')
+  const text = texts.find((t) => NESTED.test(t)) ?? texts.find((t) => !STATUS_PHRASE.test(t)) ?? ''
   const nested = NESTED.exec(text)
   if (nested && fields.has(nested[1])) {
     const reason = text.slice(nested[0].length).replace(NOTHING_CHANGED, '').trim()

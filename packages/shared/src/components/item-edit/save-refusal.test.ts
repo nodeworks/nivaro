@@ -48,3 +48,44 @@ describe('refusedFieldOf', () => {
     expect(refusedFieldOf(new Error('network'), fields)).toBeNull()
   })
 })
+
+describe('refusedFieldOf with the API error body (army6 M4)', () => {
+  it('reads the nested reason from `message` when `error` is the status phrase', () => {
+    // What POST /items/workflows answers for a line amount past the column's cap.
+    expect(
+      refusedFieldOf(
+        sdkErr({
+          statusCode: 400,
+          error: 'Bad Request',
+          message:
+            'workflow_lines[0]: Amount must be smaller than 10,000,000,000 — nothing was changed',
+          code: 'VALIDATION_RULE_FAILED',
+          violations: [
+            {
+              field: 'amount',
+              rule: 'number_range',
+              message: 'Amount must be smaller than 10,000,000,000'
+            }
+          ]
+        }),
+        fields
+      )
+    ).toEqual({
+      field: 'workflow_lines',
+      message: 'Line 1: Amount must be smaller than 10,000,000,000'
+    })
+  })
+
+  it('a record-level refusal with the status phrase still names its field', () => {
+    expect(
+      refusedFieldOf(
+        sdkErr({
+          error: 'Bad Request',
+          message: 'Description is too long',
+          field: 'description'
+        }),
+        fields
+      )
+    ).toEqual({ field: 'description', message: 'Description is too long' })
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkNumberEntry, isIntegerFieldType, mergePendingQtyRow } from './line-qty'
+import { checkNumberEntry, isIntegerFieldType, mergePendingQtyRow, zeroQtyColumn } from './line-qty'
 
 describe('checkNumberEntry', () => {
   it('takes a whole quantity on an integer column', () => {
@@ -79,5 +79,22 @@ describe('mergePendingQtyRow', () => {
   it('leaves non-editable copies to the payload', () => {
     const next = mergePendingQtyRow({ uom: 'EA', quantity: 1 }, { uom: 'BX', quantity: 2 }, [])
     expect(next.uom).toBe('BX')
+  })
+})
+
+// army6 L1: a PO line with qty 0 saved silently as a $0 line.
+describe('zeroQtyColumn', () => {
+  const cols = [
+    { field: 'quantity', label: 'Qty', type: 'integer' },
+    { field: 'price', label: 'Price', type: 'decimal' }
+  ]
+  it('names the quantity column when it reads 0', () => {
+    expect(zeroQtyColumn(cols, { quantity: 0 })).toBe('Qty')
+    expect(zeroQtyColumn(cols, { quantity: '0' })).toBe('Qty')
+  })
+  it('blank, non-zero and grids without a quantity column are quiet', () => {
+    expect(zeroQtyColumn(cols, { quantity: '' })).toBeNull()
+    expect(zeroQtyColumn(cols, { quantity: 3 })).toBeNull()
+    expect(zeroQtyColumn([{ field: 'january', type: 'decimal' }], { january: 0 })).toBeNull()
   })
 })

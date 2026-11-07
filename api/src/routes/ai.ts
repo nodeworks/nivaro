@@ -1460,6 +1460,18 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
   // The caller gathers the data; the SYSTEM PROMPT is a server-side template
   // (services/ai-brief.ts) — a caller can no longer set it. Per person: two
   // briefs at once and ten a minute; a provider failure answers 502.
+  /**
+   * How a briefing may count (army 6 M43: "Five workflows across your
+   * organization are severely overdue" — five was the query's row cap, and
+   * days over a state's average were called "over SLA").
+   */
+  const BRIEF_COUNT_RULES =
+    'Counting rules: quote a count only when the data states it as a count. The number of sample ' +
+    'rows shown is a row cap, never a total: say "among the ones shown" or name the stated count. ' +
+    "Time in a step compared with the step's average is NOT an SLA: call it slower than usual, " +
+    'never "overdue", "breached" or "over SLA" — use those words only for counts the data labels ' +
+    "as SLA. Unsubmitted drafts are nobody's approval work."
+
   app.post('/brief', { preHandler: authenticate }, async (req, reply) => {
     if (!(await aiFeatureEnabled('brief'))) {
       return reply.code(403).send({ error: 'AI briefings are disabled on this instance' })
@@ -1500,7 +1512,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       const message = await client.messages.create({
         model: summarizeModel,
         max_tokens: 512,
-        system: briefSystemPrompt(template),
+        system: `${briefSystemPrompt(template)}\n\n${BRIEF_COUNT_RULES}`,
         messages: [{ role: 'user', content: briefUserContent(context) }]
       })
       const briefText = message.content

@@ -390,6 +390,7 @@ async function allRegionLabels(source: CcRegionSource): Promise<Map<string, stri
   const hit = c.regionLabels.get(key)
   if (hit && Date.now() - hit.at < DETECT_TTL) return hit.rows
   const det = await detectPlacement()
+  const { unnamedRecordLabel } = await import('../queues.js')
   const rows = new Map<string, string>()
   try {
     const cols = ['id']
@@ -401,7 +402,12 @@ async function allRegionLabels(source: CcRegionSource): Promise<Map<string, stri
       const label = source.label_field
         ? r[columnOf(det.meta, source.collection, source.label_field)]
         : null
-      rows.set(String(r.id), label != null && String(label).trim() ? String(label) : `#${r.id}`)
+      rows.set(
+        String(r.id),
+        label != null && String(label).trim()
+          ? String(label)
+          : unnamedRecordLabel(source.collection)
+      )
     }
   } catch {
     /* labels degrade to ids */
@@ -414,6 +420,7 @@ async function allRegionLabels(source: CcRegionSource): Promise<Map<string, stri
 export async function regionCentroids(source?: CcRegionSource | null): Promise<RegionCentroid[]> {
   const src = source === undefined ? await resolveRegionSource() : source
   if (!src) return []
+  const { unnamedRecordLabel } = await import('../queues.js')
   const c = cache()
   const key = JSON.stringify(src)
   const hit = c.centroids.get(key)
@@ -452,7 +459,7 @@ export async function regionCentroids(source?: CcRegionSource | null): Promise<R
       rows = raw
         .map((r) => ({
           id: String(r.id),
-          label: labels.get(String(r.id)) ?? `#${r.id}`,
+          label: labels.get(String(r.id)) ?? unnamedRecordLabel(src.collection),
           lat: Number(r.lat),
           lng: Number(r.lng)
         }))
@@ -475,6 +482,7 @@ export async function readableRegions(
 ): Promise<Array<{ id: string; label: string }>> {
   const src = source === undefined ? await resolveRegionSource() : source
   if (!src) return []
+  const { unnamedRecordLabel } = await import('../queues.js')
   const c = cache()
   const key = `${String(user.id).toUpperCase()}|${user.role ?? ''}|${src.collection}`
   const hit = c.readable.get(key)
@@ -494,7 +502,7 @@ export async function readableRegions(
         const l = src.label_field ? r[src.label_field] : null
         return {
           id: String(r.id),
-          label: l != null && String(l).trim() ? String(l) : `#${r.id}`
+          label: l != null && String(l).trim() ? String(l) : unnamedRecordLabel(src.collection)
         }
       })
       rows.sort((a, z) => a.label.localeCompare(z.label))

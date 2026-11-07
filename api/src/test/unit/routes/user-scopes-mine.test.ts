@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // userId "mine" and answered 500 with the SQL conversion text.
 
 const who = vi.hoisted(() => ({ admin: false, signedIn: true }))
-const described = vi.hoisted(() => ({ ids: [] as string[] }))
+const described = vi.hoisted(() => ({
+  ids: [] as string[],
+  restricted: {} as Record<string, Array<string | number>>
+}))
 
 vi.mock('../../../middleware/authenticate.js', () => {
   const requireAuth = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -28,9 +31,12 @@ vi.mock('../../../services/user-scopes.js', () => ({
   describeHops: vi.fn(),
   describeUserScopes: vi.fn(async (id: string) => {
     described.ids.push(id)
-    return { user: id, scopes: [] }
+    return { user: id, scopes: [], restricted: described.restricted, defaults: {} }
   }),
   listScopeDimensions: vi.fn(async () => [{ name: 'zone' }]),
+  resolveScopeLabelsForUsers: vi.fn(async (ids: string[]) => {
+    return new Map([[ids[0], new Map([['division', ['National']]])]])
+  }),
   scopeHopsFor: vi.fn()
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
@@ -45,6 +51,7 @@ beforeEach(async () => {
   who.admin = false
   who.signedIn = true
   described.ids = []
+  described.restricted = {}
   app = Fastify()
   await app.register(userScopesRoutes, { prefix: '/api' })
   await app.ready()
@@ -78,6 +85,30 @@ describe('GET /api/user-scopes/mine', () => {
     const a = await app.inject({ method: 'GET', url: '/api/user-scopes/mine' })
     const b = await app.inject({ method: 'GET', url: '/api/users/me/scopes' })
     expect(a.json()).toEqual(b.json())
+  })
+})
+
+describe('GET /api/users/me/scopes: admin access scope label (army 6 D8 / M36)', () => {
+  it('an admin with a restriction is told which scope they carry', async () => {
+    who.admin = true
+    described.restricted = { division: [4] }
+    const res = await app.inject({ method: 'GET', url: '/api/users/me/scopes' })
+    expect(res.json().data.admin).toBe(true)
+    expect(res.json().data.access_scope_label).toBe('National')
+  })
+
+  it('an admin without a restriction gets no label', async () => {
+    who.admin = true
+    const res = await app.inject({ method: 'GET', url: '/api/users/me/scopes' })
+    expect(res.json().data.admin).toBe(true)
+    expect(res.json().data.access_scope_label).toBeNull()
+  })
+
+  it('a normal role answers admin false and no label', async () => {
+    described.restricted = { division: [4] }
+    const res = await app.inject({ method: 'GET', url: '/api/users/me/scopes' })
+    expect(res.json().data.admin).toBe(false)
+    expect(res.json().data.access_scope_label).toBeNull()
   })
 })
 

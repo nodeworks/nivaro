@@ -952,10 +952,31 @@ export interface NotifyUserResult {
   lane: NotificationLane | null
 }
 
+/**
+ * Core-only extras on top of the extension-kit options. `lane: 'fyi'` asks
+ * for an FYI row even when the recipient OWNS the record's state — the
+ * binding's creator fallback makes a requester the "owner" of a step nobody
+ * else owns, so a courtesy ping about it ("Sent back … to Engineering
+ * Review") landed in Needs you although they can do nothing there (army 6
+ * L30). A critical row and an acknowledgement request keep their lane.
+ */
+export type NotifyUserOptionsCore = NotifyUserOptions & { lane?: 'fyi' }
+
+/** Pure: the lane a row is written with. */
+export function finalLane(
+  computed: NotificationLane,
+  opts: { ack_required?: boolean; lane?: 'fyi' }
+): NotificationLane {
+  // An acknowledgement request is never FYI (#2365).
+  if (opts.ack_required) return computed === 'fyi' ? 'needs_you' : computed
+  if (opts.lane === 'fyi' && computed === 'needs_you') return 'fyi'
+  return computed
+}
+
 export async function notifyUser(
   app: FastifyInstance,
   userId: string,
-  opts: NotifyUserOptions
+  opts: NotifyUserOptionsCore
 ): Promise<NotifyUserResult> {
   const now = new Date()
   const decision = await decideDelivery(userId, opts, now)
@@ -986,8 +1007,7 @@ export async function notifyUser(
     collection: opts.collection,
     item: opts.item
   })
-  // An acknowledgement request is never FYI (#2365).
-  const lane = opts.ack_required && computedLane === 'fyi' ? 'needs_you' : computedLane
+  const lane = finalLane(computedLane, opts)
   const reasonText = (channel: DeliveryReason['channel']) =>
     decision.reasons.find((r) => r.channel === channel || r.channel === 'all')?.text
   // The delivery record starts from the decision (what was planned and why)
@@ -1037,7 +1057,8 @@ export async function notifyUser(
     sourceKind: opts.source?.kind ?? null,
     sender: opts.sender ?? null,
     category: decision.category,
-    ownsRecord,
+    // A row asked down to FYI is not "because you own this step".
+    ownsRecord: ownsRecord && lane !== 'fyi',
     inappLayer: decision.layers?.inapp ?? null
   })
   const catLabel = NOTIFY_CATEGORY_LABELS[decision.category]

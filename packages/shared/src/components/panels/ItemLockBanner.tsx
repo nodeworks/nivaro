@@ -7,6 +7,7 @@ import { del, get, post } from '../../lib/commands'
 import { idleState } from '../../lib/idle'
 import { updateTouches, useOptionalRealtime } from '../../lib/realtime'
 import { announceRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
+import { noteTakeOverHold } from '../item-edit/FieldAffordances'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -40,6 +41,9 @@ const CLAIM_RETRY_MS = 15_000
 /** A form that turned clean lets its lock go after this long (a10-4) — typing
  *  again right after Save keeps it instead of dropping and re-taking it. */
 const CLEAN_RELEASE_MS = 1_500
+/** After a take-over the taker keeps the lock this long on a clean form (army6 M28):
+ *  the clean release handed it straight back to the person just displaced. */
+export const TAKEOVER_HOLD_MS = 60_000
 
 /** What a person whose lock moved to someone else while they were not
  *  holding it is told: a forced take-over says so (a10-6); otherwise the lock
@@ -217,6 +221,15 @@ export function useItemLock(
   // The last 409 said the lock was force-taken from this person (a10-6):
   // the taker's name, else null.
   const lastTakenOverRef = useRef<string | null>(null)
+  // army6 M28 — when this tab took the lock over, and whether it has edited since.
+  const takeOverAtRef = useRef<number | null>(null)
+  const editedSinceTakeOverRef = useRef(false)
+  const holdKey = `${collection ?? ''}:${item ?? ''}`
+  const endTakeOverHold = useCallback(() => {
+    takeOverAtRef.current = null
+    editedSinceTakeOverRef.current = false
+    noteTakeOverHold(holdKey, false)
+  }, [holdKey])
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatRef.current) {
@@ -317,6 +330,20 @@ export function useItemLock(
               | undefined
             // Nobody holds it any more — another window of this person let it
             // go (#2131) or it lapsed: take it back rather than edit unlocked.
+            // army6 M28: force-taken from this person, and the taker has let go since —
+            // the lock is free, but quietly taking it back undid the take-over. Stop,
+            // say who took it; the next real edit claims it like any free lock.
+            if (status === 404 && !body?.locked_by && body?.taken_over === true) {
+              stopHeartbeat()
+              acquiredRef.current = false
+              setAcquired(false)
+              const by = (body as { taken_over_by_name?: string | null }).taken_over_by_name ?? null
+              lastTakenOverRef.current = by ?? 'Someone else'
+              toast.warning(
+                `${by ?? 'Someone else'} took over editing — your changes are still here; they save once you edit again`
+              )
+              return
+            }
             if (status === 404 && !body?.locked_by) {
               // …unless nothing is being edited: a clean form never re-takes
               // a lock on its own (a10-4) — the next real edit claims it.
@@ -635,20 +662,50 @@ export function useItemLock(
   useEffect(() => {
     if (!enabled || !lazy || !collection || !item || dirty !== false) return
     if (!acquiredRef.current) return
+    // army6 M28: just taken over and not edited yet — keep it a while; the clean
+    // release handed the lock straight back to the person displaced.
+    const at = takeOverAtRef.current
+    const wait =
+      at != null && !editedSinceTakeOverRef.current
+        ? Math.max(CLEAN_RELEASE_MS, at + TAKEOVER_HOLD_MS - Date.now())
+        : CLEAN_RELEASE_MS
     const t = setTimeout(() => {
       if (dirtyRef.current !== false || !acquiredRef.current) return
       stopHeartbeat()
       acquiredRef.current = false
       setAcquired(false)
+      endTakeOverHold()
       client
         .request(del(`/item-locks/${collection}/${item}/lock`))
         .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
         .catch(() => {})
-    }, CLEAN_RELEASE_MS)
+    }, wait)
     return () => clearTimeout(t)
     // `acquired` re-arms it: a take-over (or any late acquire) into a form that is already clean
     // never changed `dirty`, so the lock lingered 22-25 s until the lease ran out (b09-N5).
-  }, [enabled, lazy, collection, item, dirty, acquired, client, stopHeartbeat, userId])
+  }, [
+    enabled,
+    lazy,
+    collection,
+    item,
+    dirty,
+    acquired,
+    client,
+    stopHeartbeat,
+    userId,
+    endTakeOverHold
+  ])
+
+  // army6 M28 — the first real edit after a take-over: from then on the usual
+  // clean release applies (the edit is saved, or undone).
+  useEffect(() => {
+    if (dirty === true && takeOverAtRef.current != null) editedSinceTakeOverRef.current = true
+  }, [dirty])
+  // Lost the lock (taken, released, off screen): the take-over hold is over.
+  useEffect(() => {
+    if (!acquired && takeOverAtRef.current != null) endTakeOverHold()
+  }, [acquired, endTakeOverHold])
+  useEffect(() => () => noteTakeOverHold(holdKey, false), [holdKey])
 
   // #2131: the same person's other window (a popped-out record, another tab)
   // just released the lock while this one still edits — take it straight back.
@@ -850,9 +907,12 @@ export function useItemLock(
         post(`/item-locks/${collection}/${item}/lock/force`, { beat_ms: HEARTBEAT_MS })
       )
       toast.success('You now hold the edit lock')
+      takeOverAtRef.current = Date.now()
+      editedSinceTakeOverRef.current = false
+      noteTakeOverHold(holdKey, true)
       // The server already gave us the lock: refreshing it clears the holder
       // (so the read-only state lifts) and starts the heartbeat.
-      await acquire()
+      if (!(await acquire())) endTakeOverHold()
     } catch (err) {
       const msg =
         (err as { response?: { error?: string }; message?: string })?.response?.error ??
@@ -864,7 +924,7 @@ export function useItemLock(
     } finally {
       setTakingOver(false)
     }
-  }, [client, collection, item, acquire])
+  }, [client, collection, item, acquire, holdKey, endTakeOverHold])
 
   return {
     lockHolder,

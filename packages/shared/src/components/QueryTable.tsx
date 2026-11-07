@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp, ChevronsDownUp, ChevronsUpDown, Download, Search } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
 
 // Generic tabular renderer for custom-query rows (widget slots + page builder).
@@ -422,8 +422,16 @@ export function QueryTable({
   emptyLabel?: string
   /** The whole empty-state sentence, rendered as written (beats emptyLabel). */
   emptyText?: string
-  /** Trailing action buttons per row (and on the totals row, receiving null). */
-  rowActions?: Array<{ label: string; onClick: (row: Record<string, unknown> | null) => void }>
+  /** Trailing action buttons per row. On the totals row `row` is null and
+   *  `visibleRows` carries the rows the total adds up (after search,
+   *  hide-empty and grouping), so a drill covers exactly what is on screen. */
+  rowActions?: Array<{
+    label: string
+    onClick: (
+      row: Record<string, unknown> | null,
+      visibleRows?: Array<Record<string, unknown>>
+    ) => void
+  }>
 }) {
   // Sections whose open/closed state the user flipped away from the default.
   const [toggled, setToggled] = useState<Set<string>>(() => new Set())
@@ -601,18 +609,18 @@ export function QueryTable({
   const cellValue = (row: Record<string, unknown>, c: QueryTableColumn): unknown =>
     c.formula ? evalRowFormula(c.formula, row) : c.field ? row[c.field] : null
 
-  // Percent-of-total (#249): per-column sums, computed once per data change.
-  const colTotals = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const c of config?.columns ?? []) {
-      if (!c.percent_of_total || !c.field) continue
-      m.set(
-        c.field,
-        rows.reduce((a, r) => a + (Number(r[c.field as string]) || 0), 0)
-      )
-    }
-    return m
-  }, [rows, config])
+  // Percent-of-total (#249): per-column sums. Plain code, not a hook: this
+  // runs after the empty-rows early return, and the table now stays mounted
+  // while its query refetches (L13), so rows → none → rows must not change
+  // the hook count.
+  const colTotals = new Map<string, number>()
+  for (const c of config?.columns ?? []) {
+    if (!c.percent_of_total || !c.field) continue
+    colTotals.set(
+      c.field,
+      rows.reduce((a, r) => a + (Number(r[c.field as string]) || 0), 0)
+    )
+  }
 
   const progressCell = (row: Record<string, unknown>, c: QueryTableColumn) => {
     const value = Number(cellValue(row, c))
@@ -1412,7 +1420,8 @@ export function QueryTable({
                           <button
                             key={a.label}
                             type='button'
-                            onClick={() => a.onClick(null)}
+                            data-qt-total-action={a.label}
+                            onClick={() => a.onClick(null, effective)}
                             className='whitespace-nowrap rounded border border-[#a13ffb66] bg-[#a13ffb1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
                           >
                             {a.label}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { laneFromRow, notificationRowMeta } from '../../../services/notification-channels.js'
+import {
+  finalLane,
+  laneFromRow,
+  notificationRowMeta
+} from '../../../services/notification-channels.js'
 import { actionsFor } from '../../../services/notification-target.js'
 
 describe('laneFromRow', () => {
@@ -75,5 +79,21 @@ describe('actionsFor reply actions', () => {
       { category: 'workflow' }
     )
     expect(a.map((x) => x.key).sort()).toEqual(['complete', 'reply'])
+  })
+})
+
+describe('finalLane (army 6 L30: a courtesy ping asked down to FYI)', () => {
+  it('lane fyi turns an ownership "needs you" into FYI', () => {
+    expect(finalLane('needs_you', { lane: 'fyi' })).toBe('fyi')
+    expect(finalLane('fyi', { lane: 'fyi' })).toBe('fyi')
+    expect(finalLane('needs_you', {})).toBe('needs_you')
+  })
+  it('a critical row keeps its lane', () => {
+    expect(finalLane('critical', { lane: 'fyi' })).toBe('critical')
+  })
+  it('an acknowledgement request is never FYI, whatever was asked', () => {
+    expect(finalLane('fyi', { ack_required: true })).toBe('needs_you')
+    expect(finalLane('needs_you', { ack_required: true, lane: 'fyi' })).toBe('needs_you')
+    expect(finalLane('fyi', { ack_required: true, lane: 'fyi' })).toBe('needs_you')
   })
 })

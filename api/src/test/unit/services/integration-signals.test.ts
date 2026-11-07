@@ -10,7 +10,9 @@ import {
   ROW_CAP,
   registerIntegrationSignal,
   runSignalsCycle,
-  type SignalRow
+  type SignalRow,
+  signalOpenCount,
+  summarizeProblems
 } from '../../../services/integration-signals.js'
 
 // Only `resolveThresholds` needs faking (evaluateAll's own settings lookup) —
@@ -421,5 +423,30 @@ describe('pruneStaleDismissals', () => {
       (c) => c.table === 'nivaro_integration_signal_snoozes' && c.ops.some(([m]) => m === 'del')
     )
     expect(del?.ops[0]).toEqual(['whereIn', ['id', [2]]])
+  })
+})
+
+describe('signalOpenCount / summarizeProblems (army 6 H10: tile = console)', () => {
+  it('counts the run less snoozed, never below the rows shown', () => {
+    expect(signalOpenCount(9870, 500, 0)).toBe(9870)
+    expect(signalOpenCount(10, 2, 9)).toBe(2)
+    expect(signalOpenCount(null, 4, 1)).toBe(4)
+    expect(signalOpenCount('12', 3, 2)).toBe(10)
+  })
+
+  it('totals problem signals like the Firefight headline', () => {
+    expect(
+      summarizeProblems([
+        { severity: 'critical', count: 9870, error: null, shown: 500, snoozed: 0 },
+        { severity: 'warn', count: 765, error: null, shown: 300, snoozed: 0 },
+        { severity: 'critical', count: 331, error: null, shown: 331, snoozed: 0 },
+        // errored: counted as errored, never in the totals
+        { severity: 'critical', count: 50, error: 'timeout', shown: 50, snoozed: 0 },
+        // nothing on the board and nothing snoozed: not a problem
+        { severity: 'critical', count: 7, error: null, shown: 0, snoozed: 0 },
+        // all snoozed: still a problem signal, count 0 after the snooze
+        { severity: 'warn', count: 0, error: null, shown: 0, snoozed: 4 }
+      ])
+    ).toEqual({ total: 10966, critical: 10201, errored: 1 })
   })
 })

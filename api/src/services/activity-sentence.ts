@@ -104,6 +104,33 @@ export interface ActivityEntryInput {
     addendum?: { id: string; title: string | null } | null
   } | null
   why?: ActivityWhy | null
+  /** A child row edited from the record's page, readable (api services/revision-fields.ts). */
+  o2m?: ActivityO2m | null
+}
+
+/** One child-row change as the server summarised it for this reader — labels, never ids. */
+export interface ActivityO2m {
+  verb: 'added' | 'changed' | 'removed'
+  collection?: string | null
+  collection_label: string
+  row_label?: string | null
+  changes?: Array<{ field: string; label: string; from: string | null; to: string | null }> | null
+}
+
+/**
+ * "changed Materials · 110140: Quantity 4 → 5", "added Forecasts · 2026",
+ * "removed Lines · Line 3" (army 6 H1). Never the stored JSON, never a row id.
+ */
+export function o2mSentence(o2m: ActivityO2m): string {
+  const label = text(o2m.collection_label) || 'related rows'
+  const row = text(o2m.row_label)
+  const subject = row ? `${label} · ${row}` : label
+  if (o2m.verb === 'added') return `added ${subject}`
+  if (o2m.verb === 'removed') return `removed ${subject}`
+  const changes = (o2m.changes ?? [])
+    .filter((c) => c && text(c.label))
+    .map((c) => `${text(c.label)} ${text(c.from) || '—'} → ${text(c.to) || '—'}`)
+  return changes.length ? `changed ${subject}: ${changes.join(', ')}` : `changed ${subject}`
 }
 
 export interface CollectionNames {
@@ -799,12 +826,14 @@ export function activityPredicate(
   switch (action) {
     case 'create':
     case 'o2m-create':
-      if (action === 'o2m-create') return `added related rows${on}`
+      if (action === 'o2m-create')
+        return entry.o2m ? `${o2mSentence(entry.o2m)}${on}` : `added related rows${on}`
       if (collection === 'nivaro_settings') return 'saved the settings'
       return `created ${record ?? aNoun}`
     case 'update':
     case 'o2m-update': {
-      if (action === 'o2m-update') return `changed related rows${on}`
+      if (action === 'o2m-update')
+        return entry.o2m ? `${o2mSentence(entry.o2m)}${on}` : `changed related rows${on}`
       const fields = changedFieldsOf(entry)
       if (collection === 'nivaro_settings')
         return fields.length
@@ -826,7 +855,8 @@ export function activityPredicate(
     }
     case 'delete':
     case 'o2m-delete':
-      if (action === 'o2m-delete') return `removed related rows${on}`
+      if (action === 'o2m-delete')
+        return entry.o2m ? `${o2mSentence(entry.o2m)}${on}` : `removed related rows${on}`
       return `deleted ${record ?? aNoun}`
     case 'restore':
       return `restored ${record ?? aNoun}`

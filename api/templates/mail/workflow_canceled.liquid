@@ -15,7 +15,7 @@
 {%- endif -%}
 {% render 'partials/button', url: record_url, label: 'Open record' %}
 {% render 'partials/record-card', card: record_card %}
-{% render 'partials/approval-chain', chain: approval_chain %}
+{% render 'partials/approval-chain', chain: approval_chain, me: recipient_email %}
 {%- comment -%}
 The newest thing a person wrote on the record (nivaro_comments or a child
 note table), last so the reader leaves with the latest human context. Skipped

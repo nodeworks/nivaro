@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyBaseLogger } from 'fastify'
+import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl, fetchGuardedInCloud } from '../lib/ssrf.js'
@@ -599,6 +600,8 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
     const { getIo } = await import('./io-holder.js')
     const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
     const category = NOTIFY_CATEGORIES.find((c) => c === opts.category)
+    const lane =
+      typeof opts.lane === 'string' ? resolveTemplate(opts.lane, data).trim().toLowerCase() : ''
     const failures: string[] = []
     for (const userId of recipients) {
       try {
@@ -611,6 +614,10 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
           ...(category ? { category } : {}),
           always_inbox: opts.always_inbox !== false,
           ...(opts.ack_required === true ? { ack_required: true } : {}),
+          // `lane: 'fyi'` (templated, e.g. `{{creator_lane}}`) — a courtesy
+          // notice that must not land in Needs you even when the recipient
+          // "owns" the step through the creator fallback (L30).
+          ...(lane === 'fyi' ? { lane: 'fyi' as const } : {}),
           channels: { inapp: true, email: false }
         })
       } catch (err) {
@@ -1630,7 +1637,44 @@ export async function resolveFlowCreator(flowId: string): Promise<string | null>
   }
 }
 
-function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+/**
+ * Pure: a run error as a person reads it (army 6 M51: the inbox showed
+ * "push_mwf: external API request failed — /flows/3F525BD5-…"). The step's
+ * key prefix, flow paths and uuids are internal; the stock connector
+ * failures get plain words.
+ */
+export function friendlyFlowError(raw: string, opKey?: string | null): string {
+  let s = String(raw ?? '').trim()
+  if (opKey && s.toLowerCase().startsWith(`${opKey.toLowerCase()}:`))
+    s = s.slice(opKey.length + 1).trim()
+  else s = s.replace(/^[a-z][a-z0-9_]*:\s+/i, '')
+  s = s
+    .replace(/\s*[—-]?\s*\/flows\/[0-9a-f-]{36}/gi, '')
+    .replace(UUID_RE, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  if (/^external API request failed$/i.test(s)) return 'the external system did not answer'
+  if (/^missing (url|recipient)$/i.test(s)) return `the step is not set up (${s.slice(8)} missing)`
+  return s || 'an unknown error'
+}
+
+/** Pure: the creator's in-app notice for a failed run. `recordLabel` is the
+ *  record's FRIENDLY id (never a row id) or null. */
+export function flowErrorNotice(
+  flowName: string,
+  reason: string,
+  recordLabel: string | null
+): { subject: string; message: string } {
+  const about = recordLabel ? ` for ${recordLabel}` : ''
+  return {
+    subject: `Flow "${flowName}" failed${about}`.slice(0, 255),
+    message: `${flowName} failed${about}: ${reason}.`.slice(0, 500)
+  }
+}
+
+function notifyFlowError(ctx: ExecutionContext, err: unknown, opKey?: string | null): void {
   const last = lastErrorNotifyAt.get(ctx.flowId)
   if (last && Date.now() - last < 3_600_000) return
   lastErrorNotifyAt.set(ctx.flowId, Date.now())
@@ -1643,15 +1687,34 @@ function notifyFlowError(ctx: ExecutionContext, err: unknown): void {
     const { notifyUser } = await import('./notification-channels.js')
     const { getIo } = await import('./io-holder.js')
     const appShim = { io: getIo() ?? undefined } as unknown as Parameters<typeof notifyUser>[0]
-    const snippet = errorText(err, 200)
+    const reason = friendlyFlowError(errorText(err, 300), opKey)
+    // The record the run was about, by its friendly id only — a bare row id
+    // tells nobody anything (no-internal-ids rule).
+    let recordLabel: string | null = null
+    const rec = flowRecordOf(ctx.payload)
+    if (rec) {
+      try {
+        const { resolveFriendlyIds } = await import('./workflow-transitions.js')
+        const label = (await resolveFriendlyIds(rec.collection, [rec.item])).get(rec.item)
+        if (label && label !== rec.item) recordLabel = label
+      } catch {
+        /* the notice reads fine without it */
+      }
+    }
     const { buildFlowFailedMail } = await import('./mail-builders.js')
     const built = await buildFlowFailedMail(ctx.flowId, { error: errorText(err, 1000) }).catch(
       () => null
     )
+    // The flow's page is the click target (an admin page), not text.
+    const base = adminBaseUrl()
+    const flowUrl =
+      base && /^https?:\/\//i.test(base) ? `${base.replace(/\/$/, '')}/flows/${ctx.flowId}` : null
+    const notice = flowErrorNotice(ctx.flowName, reason, recordLabel)
     await notifyUser(appShim, creator, {
-      subject: `Flow "${ctx.flowName}" failed`,
+      subject: notice.subject,
       category: 'system',
-      message: `${snippet} — /flows/${ctx.flowId}`.slice(0, 500),
+      message: notice.message,
+      ...(flowUrl ? { target: { kind: 'external' as const, url: flowUrl } } : {}),
       ...(built ? { template: built.template, template_data: built.data } : {})
     })
   })().catch((notifyErr) =>
@@ -2028,7 +2091,11 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
         { flowId: ctx.flowId, key: progress.failed.key, error: progress.failed.error },
         'Flow run failed'
       )
-      notifyFlowError(ctx, new Error(`${progress.failed.key}: ${progress.failed.error}`))
+      notifyFlowError(
+        ctx,
+        new Error(`${progress.failed.key}: ${progress.failed.error}`),
+        progress.failed.key
+      )
     } else {
       ctx.log.info({ flowId: ctx.flowId }, 'Flow execution complete')
     }

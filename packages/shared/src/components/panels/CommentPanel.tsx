@@ -897,6 +897,7 @@ export function CommentPanel({
     for (const e of threadEntries) c[noteKindOf(e)]++
     return c
   }, [threadEntries])
+  const badgeCount = isNew ? (queuedComments ?? []).length : kindCounts.people
   const visibleEntries = useMemo(() => {
     const q = noteQuery.trim().toLowerCase()
     return threadEntries.filter((e) => {
@@ -1004,9 +1005,15 @@ export function CommentPanel({
           <span className='text-[13px] font-medium text-slate-800 dark:text-slate-200'>
             {title || 'Comments'}
           </span>
-          {(threadEntries.length > 0 || (queuedComments ?? []).length > 0) && (
-            <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
-              {isNew ? (queuedComments ?? []).length : threadEntries.length}
+          {/* The badge counts what PEOPLE wrote (comments and note rows) — system entries
+              (state changes, change reasons, integration events) ride the thread but never
+              the count (army 6 L6: "2" over one comment). */}
+          {badgeCount > 0 && (
+            <span
+              className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'
+              data-notes-badge
+            >
+              {badgeCount}
             </span>
           )}
           <ChevronDown

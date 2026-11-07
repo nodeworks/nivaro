@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtFigure, parseFigure, reconcilePatch } from './PlanGrid'
+import { fmtFigure, isParentItemKey, parseFigure, reconcilePatch } from './PlanGrid'
 
 const row = { january: 100, february: 50, march: 0, april: 150 }
 const open = ['february', 'march', 'april']
@@ -123,5 +123,17 @@ describe('reconcilePatch across rows', () => {
     })
     expect(r.patch).toEqual({ january: 60 })
     expect(r.targetPatch).toBeUndefined()
+  })
+})
+
+// army6 L27: FORECAST STATUS stayed "Not judged yet" after Save all — the grid
+// reads its record again once its staged rows flush.
+describe('isParentItemKey', () => {
+  it("matches the record's own item reads by id, whatever the collection", () => {
+    expect(isParentItemKey(['item', 'workflows', '372960'], '372960')).toBe(true)
+    expect(isParentItemKey(['item', 'workflows', 372960, 'x'], '372960')).toBe(true)
+    expect(isParentItemKey(['item', 'workflows', '1'], '372960')).toBe(false)
+    expect(isParentItemKey(['o2m-rows', 'forecasts', '372960'], '372960')).toBe(false)
+    expect(isParentItemKey(['item', 'workflows'], '372960')).toBe(false)
   })
 })

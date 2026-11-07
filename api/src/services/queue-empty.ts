@@ -33,7 +33,9 @@ export async function explainEmptyQueue(
   user: User,
   isAdmin: boolean,
   scope: QueueScope,
-  filters: Record<string, unknown> | undefined
+  filters: Record<string, unknown> | undefined,
+  /** Records in this scope before any column filter, when the caller knows. */
+  scopeTotal: number | null = null
 ): Promise<QueueEmptyReason> {
   const sources = (await db('nivaro_queue_sources')
     .where({ queue_id: queueId })
@@ -82,6 +84,11 @@ export async function explainEmptyQueue(
     unreadable.length > 0
       ? ` (Records from ${unreadable.map(nice).join(', ')} never appear for you — your role cannot read them.)`
       : ''
+  // My Items with nothing owned at all: the filters are not why it is empty
+  // (army 6 L40 — "No records match these filters" for someone who owns nothing).
+  const mineMessage = `Nothing in this queue is waiting on you${inQueue}. Records appear here when you are an owner of their current step or have claimed them.${partly}`
+  if (scope === 'mine' && scopeTotal === 0)
+    return { reason: 'scope_mine', message: mineMessage, unreadable, queue_total: queueTotal }
   if (activeFilters.length > 0)
     return {
       reason: 'filters',
@@ -90,12 +97,7 @@ export async function explainEmptyQueue(
       queue_total: queueTotal
     }
   if (scope === 'mine')
-    return {
-      reason: 'scope_mine',
-      message: `Nothing in this queue is waiting on you${inQueue}. Records appear here when you are an owner of their current step or have claimed them.${partly}`,
-      unreadable,
-      queue_total: queueTotal
-    }
+    return { reason: 'scope_mine', message: mineMessage, unreadable, queue_total: queueTotal }
   if (scope === 'unowned')
     return {
       reason: 'scope_unowned',

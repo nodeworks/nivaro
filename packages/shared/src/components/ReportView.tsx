@@ -1240,12 +1240,17 @@ export function QueryWidgetBody({
                     stroke='#94a3b8'
                     tickFormatter={vFmt}
                   />
+                  {/* Every category gets its label (army 6 L22: Budget
+                      Utilization labelled every other type); long names are
+                      shortened, the tooltip keeps the full one. */}
                   <YAxis
                     type='category'
                     dataKey={xField}
                     tick={{ fontSize: 10 }}
                     stroke='#94a3b8'
-                    width={120}
+                    width={140}
+                    interval={0}
+                    tickFormatter={shortCategoryLabel}
                   />
                 </>
               ) : (
@@ -3950,6 +3955,21 @@ export function ReportWidgetCard({
   )
 }
 
+/** A horizontal chart's category label, shortened to fit its 140 px axis. */
+export function shortCategoryLabel(v: unknown): string {
+  const t = v == null ? '' : String(v)
+  return t.length > 24 ? `${t.slice(0, 23)}…` : t
+}
+
+/** Army 6 D8 / M36: an administrator who carries a User Scope reads scoped
+ *  figures like anyone else — say which scope. `/users/me/scopes` answers
+ *  `admin` + `access_scope_label` (display names, never ids). */
+export function adminAccessScopeNote(scopes: unknown): string | null {
+  const s = scopes as { admin?: boolean; access_scope_label?: string | null } | null | undefined
+  if (!s?.admin || !s.access_scope_label) return null
+  return `(your access scope: ${s.access_scope_label})`
+}
+
 export function ReportView({
   reportId,
   showFilterBar = true,
@@ -4329,13 +4349,23 @@ export function ReportView({
     return <div className={cn('p-6 text-[13px] text-slate-400', className)}>Report not found.</div>
   }
 
+  const accessScopeNote = adminAccessScopeNote(myScopes)
+
   return (
     <div className={cn('flex flex-col gap-3', className)}>
+      {accessScopeNote && (!showFilterBar || (widgets.length === 0 && filterBar.length === 0)) && (
+        <p className='text-[11.5px] text-amber-700 dark:text-amber-300'>{accessScopeNote}</p>
+      )}
       {showFilterBar && (widgets.length > 0 || filterBar.length > 0) && (
         <div className='space-y-1.5'>
           <div className='flex flex-wrap items-center gap-1.5'>
             <span className='flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500 dark:text-slate-300'>
               Filters
+              {accessScopeNote && (
+                <span className='font-normal text-amber-700 dark:text-amber-300'>
+                  {accessScopeNote}
+                </span>
+              )}
               {appliedCount > 0 && (
                 <span className='rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'>
                   Active · {appliedCount}

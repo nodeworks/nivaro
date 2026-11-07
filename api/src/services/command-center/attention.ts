@@ -158,7 +158,10 @@ async function workItems(ctx: Ctx): Promise<AttentionItem[]> {
       id: o.item
     }))
   )
-  const labelOf = (o: OpenInstance) => labels.get(U(`${o.collection}:${o.item}`)) ?? `#${o.item}`
+  const { missingRecordLabel } = await import('../queues.js')
+  const labelOf = (o: OpenInstance) =>
+    labels.get(U(`${o.collection}:${o.item}`)) ||
+    missingRecordLabel(o.collection, ctx.collectionLabel.get(o.collection))
   const stateOf = (o: OpenInstance) => ctx.index.states.get(U(o.state_id))
   const collLabel = (c: string) => ctx.collectionLabel.get(c) ?? c
 
@@ -267,6 +270,7 @@ async function workItems(ctx: Ctx): Promise<AttentionItem[]> {
 
 /** Pending approval steps every approver of which is away, or that waited past stuck_days. */
 async function approvalItems(ctx: Ctx): Promise<AttentionItem[]> {
+  const { missingRecordLabel } = await import('../queues.js')
   const pending = (await db('nivaro_approval_instances as i')
     .join('nivaro_approval_chains as ch', 'i.chain', 'ch.id')
     .where('i.status', 'pending')
@@ -375,7 +379,9 @@ async function approvalItems(ctx: Ctx): Promise<AttentionItem[]> {
       id: `approval:${p.id}`,
       kind: 'approval_blocked' as const,
       severity: reason === 'away' ? ('critical' as const) : ('warning' as const),
-      title: labels.get(U(`${p.collection}:${p.item}`)) ?? `#${p.item}`,
+      title:
+        labels.get(U(`${p.collection}:${p.item}`)) ||
+        missingRecordLabel(p.collection, ctx.collectionLabel.get(p.collection)),
       detail: `${p.name} · ${step} · ${
         reason === 'away'
           ? 'everyone who can approve it is away'

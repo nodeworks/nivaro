@@ -28,7 +28,7 @@ and `transition_text`, the transition's notify_text, says what happened.
 {%- endif -%}
 <p style="margin:0 0 20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">
   {%- if from_state %}From <strong>{{ from_state.label }}</strong>{% if days_in_previous_state and days_in_previous_state >= 2 %} (after {{ days_in_previous_state | round }} days there){% elsif hours_in_previous_state and hours_in_previous_state >= 1 %} (after {{ hours_in_previous_state | round }}h there){% endif %} to{% else %}Started in{% endif %} <strong>{{ to_state.label }}</strong>.
-  {%- if to_state.is_terminal %} Nothing further is needed.{% elsif owners and owners.size > 0 %} It is now waiting on {% for o in owners %}{{ o.first_name }} {{ o.last_name }}{% unless forloop.last %}, {% endunless %}{% endfor %}.{% endif -%}
+  {%- if to_state.is_terminal %} Nothing further is needed.{% elsif owners and owners.size > 0 %} It is now waiting on {% for o in owners %}{{ o.first_name }} {{ o.last_name }}{% unless forloop.last %}, {% endunless %}{% endfor %}.{% elsif creator_acts and requester %}{% assign me_l = recipient_email | downcase %} It is now waiting on {% if me_l != '' and me_l == requester.email %}<strong>you</strong>: nobody else is assigned to {{ to_state.label }}, so it moves on when you act on it{% else %}{{ requester.name }}, the requester{% endif %}.{% endif -%}
 </p>
 {%- if comment_is_human -%}
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 22px;">
@@ -45,7 +45,7 @@ words (the transition's notify_text) — the rule name only as a footnote.
 {%- endif -%}
 {% render 'partials/button', url: record_url, label: 'Open record' %}
 {% render 'partials/record-card', card: record_card %}
-{% render 'partials/approval-chain', chain: approval_chain %}
+{% render 'partials/approval-chain', chain: approval_chain, me: recipient_email %}
 {%- if brief and brief.field_changes and brief.field_changes.size > 0 -%}
 {% assign changes_title = 'Changed while in ' | append: from_state.label %}
 {% render 'partials/changed-fields', changes: brief.field_changes, title: changes_title %}

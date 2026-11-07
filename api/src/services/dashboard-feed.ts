@@ -3,6 +3,7 @@ import type { User } from '../types.js'
 import { recordLink } from './app-links.js'
 import { parseSpecial } from './collections.js'
 import { selectInChunks } from './db-batch.js'
+import { type OpenProblemSummary, openProblemSummary } from './integration-signals.js'
 import { can, getRowFilter } from './permissions.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
@@ -1858,6 +1859,37 @@ export async function integrationsSummary(): Promise<Array<{ name: string } & In
     byApi.set(Number(s.external_api), list)
   }
   return apis.map((a) => ({ name: a.name, ...verdictOf(byApi.get(Number(a.id)) ?? []) }))
+}
+
+export interface IntegrationProblems {
+  total: number
+  critical: number
+  errored: number
+  checked_at: string | null
+  /** Per signal — admins only (names a partner and a problem kind). */
+  signals?: Array<{ label: string; severity: 'critical' | 'warn'; count: number }>
+}
+
+/** The Integrations console's open-problem headline, from the same helper the
+ *  console's own count uses (army 6 H10: the tile said "None failing" while
+ *  the console listed 10,966 problems). Non-admins get the counts only. */
+export async function integrationProblems(
+  isAdmin: boolean,
+  read: (now?: Date) => Promise<OpenProblemSummary> = openProblemSummary
+): Promise<IntegrationProblems> {
+  const s = await read()
+  const out: IntegrationProblems = {
+    total: s.total,
+    critical: s.critical,
+    errored: s.errored,
+    checked_at: s.checked_at
+  }
+  if (isAdmin) {
+    out.signals = s.signals
+      .slice(0, 5)
+      .map((x) => ({ label: x.label, severity: x.severity, count: x.count }))
+  }
+  return out
 }
 
 // ── Zone pulse ──────────────────────────────────────────────────────────────

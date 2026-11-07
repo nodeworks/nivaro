@@ -144,6 +144,7 @@ import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
+import { OWN_RECORD_WRITES_EVENT, type OwnRecordWrites } from '../panels/RecordIntegrityBanner'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
 import {
@@ -179,7 +180,16 @@ import {
   rowBaseBookFor,
   writeLineGuarded
 } from './line-midair'
-import { changedRowFields, checkNumberEntry, lineRuleErrors, NUMBER_FIELD_TYPES } from './line-qty'
+import {
+  changedRowFields,
+  checkNumberEntry,
+  computedColumnErrors,
+  dropRevertedFields,
+  isRealLineEdit,
+  lineRuleErrors,
+  NUMBER_FIELD_TYPES,
+  zeroQtyColumn
+} from './line-qty'
 import { LineCollisionDialog } from './MidairCollisionDialog'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
@@ -220,6 +230,32 @@ const ERP_XML_ENTITIES: Record<string, string> = {
   amp: '&',
   '#39': "'"
 }
+/** Copied lines without the values this record does not offer (army6 M5):
+ *  per M2O column, `available` holds the ids the target's cascade/option
+ *  filter allows; a value outside it is dropped. `dropped[i]` names the
+ *  fields row i lost. A column with no entry in `available` is not judged. */
+export function dropUnavailableValues(
+  rows: Array<Record<string, unknown>>,
+  available: Map<string, Set<string>>
+): { rows: Array<Record<string, unknown>>; dropped: string[][] } {
+  const dropped: string[][] = []
+  const out = rows.map((row) => {
+    const lost: string[] = []
+    const next = { ...row }
+    for (const [field, ok] of available) {
+      const v = row[field]
+      if (v == null || v === '') continue
+      if (!ok.has(String(v))) {
+        delete next[field]
+        lost.push(field)
+      }
+    }
+    dropped.push(lost)
+    return next
+  })
+  return { rows: out, dropped }
+}
+
 /** The line's × — labelled, and for a SAVED line a two-step: the first click arms it for 3 s
  *  ("Click again to delete"), the second deletes (b09-N7). A staged (unsaved) line goes at once. */
 export function DeleteLineButton({
@@ -1863,6 +1899,61 @@ export function InlineTableField({
       ]),
     [manyField]
   )
+  // Copied lines whose value had to be dropped (army6 M5): the staged row
+  // object → the fields that ask "Pick again". Keyed by the object itself, so
+  // an edit of the row (a new object) clears it.
+  const pickAgainRef = useRef(new WeakMap<object, Set<string>>())
+  /** Per cascaded / option-filtered M2O column: which of the copied values
+   *  this record offers (the stale sweep's filter, judged before staging).
+   *  A column whose check fails is left out (its values are kept). */
+  const availableCopyValues = async (
+    batch: Array<Record<string, unknown>>
+  ): Promise<Map<string, Set<string>>> => {
+    const out = new Map<string, Set<string>>()
+    const fields = new Set([
+      ...Object.keys(fieldCascadeFilters),
+      ...Object.keys(fieldOptionFilters)
+    ])
+    await Promise.all(
+      [...fields].map(async (field) => {
+        const rel = m2oRelMap.get(field)
+        if (!rel?.one_collection) return
+        const ids = [
+          ...new Set(
+            batch
+              .map((r) => r[field])
+              .filter((v) => v != null && v !== '')
+              .map(String)
+          )
+        ]
+        if (ids.length === 0) return
+        const parts = [fieldCascadeFilters[field], fieldOptionFilters[field]].filter(
+          (f): f is Record<string, unknown> => !!f
+        )
+        const filter = parts.length === 1 ? parts[0] : { _and: parts }
+        try {
+          const res = await client.request<{ data: Array<{ id: unknown }> }>(
+            get(`/items/${rel.one_collection}`, {
+              filter: JSON.stringify({ _and: [filter, { id: { _in: ids } }] }),
+              fields: 'id',
+              limit: ids.length
+            })
+          )
+          const ok = new Set((res.data ?? []).map((x) => String(x.id)))
+          // A pinned default (the project's generic item) is offered outside
+          // the filter on purpose — never dropped.
+          for (const r of batch) {
+            const pin = pinnedOptionFor(field, r)
+            if (pin?.id != null) ok.add(String(pin.id))
+          }
+          out.set(field, ok)
+        } catch {
+          /* unknown: keep the copied values */
+        }
+      })
+    )
+    return out
+  }
   const copyLinesFrom = async (sourceParentId: string) => {
     if (!staging) return
     try {
@@ -1873,18 +1964,33 @@ export function InlineTableField({
         })
       )
       const rows = r.data ?? []
-      for (const row of rows) {
+      const cleaned = rows.map((row) => {
         const clean: Record<string, unknown> = {}
         for (const [k, v] of Object.entries(row)) {
           if (!COPY_STRIP.has(k) && v != null && typeof v !== 'object') clean[k] = v
         }
-        staging.queueRow(relatedCollection, manyField, withNextOrder(clean))
-      }
-      toast.success(
-        rows.length > 0
-          ? `${rows.length} line(s) copied in — they save with this record`
-          : 'That record has no lines on this table'
+        return clean
+      })
+      // army6 M5: a copied value this record does not offer (a Power line's
+      // Category on a CMTS project) is dropped and the cell asks to be picked
+      // again — the copy used to carry it in, and Save took it.
+      const available = await availableCopyValues(cleaned)
+      const { rows: kept, dropped } = dropUnavailableValues(cleaned, available)
+      const batch = withNextOrders(kept)
+      batch.forEach((row, i) => {
+        if (dropped[i]?.length) pickAgainRef.current.set(row, new Set(dropped[i]))
+        staging.queueRow(relatedCollection, manyField, row)
+      })
+      const fixLines = dropped.filter((d) => d.length > 0).length
+      const fixFields = [...new Set(dropped.flat())].map(
+        (f) => cols.find((c) => c.field === f)?.label || titleCase(f)
       )
+      if (rows.length === 0) toast.success('That record has no lines on this table')
+      else if (fixLines > 0)
+        toast.warning(
+          `${rows.length} line(s) copied in — ${fixLines} need ${fixFields.join(', ')} picked again: the copied value is not available on this record`
+        )
+      else toast.success(`${rows.length} line(s) copied in — they save with this record`)
       setCopyFromOpen(false)
     } catch {
       toast.error('Could not copy lines')
@@ -2009,6 +2115,10 @@ export function InlineTableField({
     provenance?: Record<string, RuleProvenance>
     /** Required columns the last save attempt found empty — highlighted until filled. */
     missing?: string[]
+    /** Cells the last save attempt refused for their VALUE (a bad number, a
+     *  validation rule, a computed total too large) — highlighted like a
+     *  missing one but never labelled "required" (army6 L2). */
+    invalid?: string[]
   }
   /** Fields a 'lock' rule can make read-only — the ones that wait on the
    *  first lock evaluation before accepting input. */
@@ -4079,6 +4189,18 @@ export function InlineTableField({
   const LOCAL_WRITE_GRACE_MS = 10_000
   const stampLocalWrite = (id: string | number) =>
     localWritesRef.current.set(String(id), Date.now())
+  // A record-level Fix (integrity banner) writes lines through the API, not
+  // this grid: stamp them as this tab's own (army6 M5 — the grid said "changed
+  // by others · changed by <the person who clicked Fix>").
+  useEffect(() => {
+    const onOwn = (e: Event) => {
+      const writes = (e as CustomEvent<OwnRecordWrites>).detail?.writes ?? []
+      for (const w of writes) if (w.collection === relatedCollection) stampLocalWrite(w.id)
+    }
+    window.addEventListener(OWN_RECORD_WRITES_EVENT, onOwn)
+    return () => window.removeEventListener(OWN_RECORD_WRITES_EVENT, onOwn)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: stampLocalWrite only writes a ref
+  }, [relatedCollection])
   writeRowRef.current = async (url, rowId, body) => {
     const r = await writeLineGuarded(client, rowBases, url, rowId, body, {
       key: `${relatedCollection}.${manyField}`,
@@ -5107,7 +5229,7 @@ export function InlineTableField({
         toast.error(
           `Rules applied to ${d.applied} ${d.applied === 1 ? 'line' : 'lines'} — ${d.failed.length} failed: ${d.failed
             .slice(0, 3)
-            .map((f) => `#${f.id} ${f.error}`)
+            .map((f) => `${lineLabelOf(rows, String(f.id), rowOrderField)}: ${f.error}`)
             .join('; ')}`
         )
       } else {
@@ -5218,8 +5340,12 @@ export function InlineTableField({
     if (rowSoftLock) setRowSoftLock(null)
     const draft = applyComputedFields({ ...row })
     // #16 — remember what the row held when its editor opened, so a write by
-    // someone else while it is open shows up as a per-field ghost.
-    editBaseRef.current = { rowId: id, snap: snapshotRow(row) }
+    // someone else while it is open shows up as a per-field ghost. The STORED
+    // row, never the row with this tab's staged edit over it (army6 H4): a
+    // staged 10,000,000,000 against the saved 3 read as "Changed by others
+    // … 10000000000 → 3" with the person's own stored value as "theirs".
+    const storedRow = rawRows.find((r) => String(r.id) === id) ?? row
+    editBaseRef.current = { rowId: id, snap: snapshotRow(storedRow) }
     noteEditorBase(id)
     setEditState({ rowId: id, draft, locksPending: lockTargets.size > 0 })
     refreshRuleState(id, draft)
@@ -5496,7 +5622,21 @@ export function InlineTableField({
     const required = !!displayCols.find((c) => c.field === k)?.required
     const leaves = (filled || !required) && !!cur?.missing?.includes(k)
     const nextMissing = leaves ? (cur?.missing ?? []).filter((f) => f !== k) : cur?.missing
-    if (leaves && nextMissing?.length === 0) setUniqueError(null)
+    // A cell refused for its value leaves the list on any change (army6 L2).
+    // A computed column (Amount) is flagged too: it follows its inputs.
+    const computedFlagged = (cur?.invalid ?? []).filter((f) =>
+      cols.some((c) => c.field === f && c.computed_type === 'write')
+    )
+    const invalidLeaves = !!cur?.invalid?.includes(k) || computedFlagged.length > 0
+    const nextInvalid = invalidLeaves
+      ? (cur?.invalid ?? []).filter((f) => f !== k && !computedFlagged.includes(f))
+      : cur?.invalid
+    if (
+      (leaves || invalidLeaves) &&
+      (nextMissing?.length ?? 0) === 0 &&
+      (nextInvalid?.length ?? 0) === 0
+    )
+      setUniqueError(null)
     setEditState((s) =>
       s
         ? {
@@ -5505,7 +5645,12 @@ export function InlineTableField({
             missing:
               (filled || !required) && s.missing?.includes(k)
                 ? s.missing.filter((f) => f !== k)
-                : s.missing
+                : s.missing,
+            invalid: s.invalid?.length
+              ? s.invalid.filter(
+                  (f) => f !== k && !cols.some((c) => c.field === f && c.computed_type === 'write')
+                )
+              : s.invalid
           }
         : s
     )
@@ -5588,7 +5733,9 @@ export function InlineTableField({
       setUniqueError(
         `Required: ${missingRequired.map((c) => c.label || titleCase(c.field)).join(', ')}`
       )
-      setEditState((s) => (s ? { ...s, missing: missingRequired.map((c) => c.field) } : s))
+      setEditState((s) =>
+        s ? { ...s, missing: missingRequired.map((c) => c.field), invalid: undefined } : s
+      )
       return false
     }
     // Numbers the column cannot hold (1.5 in an integer column, 1e308 in a
@@ -5611,7 +5758,9 @@ export function InlineTableField({
     })
     if (badNumbers.length > 0) {
       setUniqueError(badNumbers.map((b) => b.message).join(' · '))
-      setEditState((s) => (s ? { ...s, missing: badNumbers.map((b) => b.field) } : s))
+      setEditState((s) =>
+        s ? { ...s, invalid: badNumbers.map((b) => b.field), missing: undefined } : s
+      )
       return false
     }
     // The line collection's validation_rules (min 0 on a quantity, …), judged
@@ -5633,7 +5782,29 @@ export function InlineTableField({
     )
     if (ruleErrs.length > 0) {
       setUniqueError(ruleErrs.map((b) => b.message).join(' · '))
-      setEditState((s) => (s ? { ...s, missing: ruleErrs.map((b) => b.field) } : s))
+      setEditState((s) =>
+        s ? { ...s, invalid: ruleErrs.map((b) => b.field), missing: undefined } : s
+      )
+      return false
+    }
+    // army6 M4: the line's computed money columns (Amount = qty × price) are
+    // judged at the LINE Save — 1,000,000,000 × $100 was taken here and only
+    // the record's Create refused it, with nothing highlighted.
+    const computedErrs = computedColumnErrors(
+      cols,
+      applyComputedFields({ ...editState.draft }),
+      savedForCheck,
+      editState.rowId === 'new'
+        ? 'New line'
+        : editState.rowId.startsWith('pending:')
+          ? `Line ${Number(editState.rowId.slice('pending:'.length)) + rows.length + 1}`
+          : lineLabelOf(rows, editState.rowId, rowOrderField)
+    )
+    if (computedErrs.length > 0) {
+      setUniqueError(computedErrs.map((b) => b.message).join(' · '))
+      setEditState((s) =>
+        s ? { ...s, invalid: computedErrs.map((b) => b.field), missing: undefined } : s
+      )
       return false
     }
     // Sum cap (options.sum_cap): the grid's total for `field` — with this
@@ -5699,6 +5870,11 @@ export function InlineTableField({
       }
     }
     setUniqueError(null)
+    // army6 L1: a quantity of 0 is allowed (close-out lines) but never silent;
+    // a line that was already 0 is not warned again.
+    const zeroQty = zeroQtyColumn(cols, editState.draft)
+    if (zeroQty && !(savedForCheck && zeroQtyColumn(cols, savedForCheck)))
+      toast.warning(`${zeroQty} is 0 — this is a $0 line. Remove it if it is not needed.`)
     setSaving(true)
     try {
       if (editState.rowId.startsWith('pending:')) {
@@ -5872,6 +6048,35 @@ export function InlineTableField({
             k.startsWith('__nested_ops_')
           )
           const queuedPayload = rowPayload
+          // H4 (army6): a staged field put back to its STORED value (a refused
+          // 10,000,000,000 corrected to the saved 3) leaves the staged edit —
+          // `rowPayload` drops it as "no change", and merging that into the
+          // staged edit kept re-sending the refused value on every Save.
+          const { rest: stagedRest, reverted } = dropRevertedFields(
+            pendingEdits.get(editState.rowId),
+            editState.draft,
+            baseRow
+          )
+          if (reverted.length > 0) {
+            staging.cancelPendingEdit(relatedCollection, manyField, editState.rowId)
+            const remaining = {
+              ...stagedRest,
+              ...queuedPayload,
+              ...Object.fromEntries(nestedOpsEntries)
+            }
+            if (isRealLineEdit(remaining)) {
+              // No editor base for an already staged row: the form takes the
+              // read-time base of the row again (rowBaseBookFor peek).
+              const base = await editorBaseOf(editState.rowId)
+              staging.queueEdit(relatedCollection, manyField, editState.rowId, {
+                ...remaining,
+                ...(base != null ? { __base_revision: base } : {})
+              })
+            }
+            editorBaseRef.current.delete(editState.rowId)
+            clearIfStillEditing()
+            return true
+          }
           // Opening a row and clicking away is not an edit. An EMPTY queued
           // payload still registered the row as pending ("Edited" badge, a
           // flush PATCH with no fields) — close without queueing instead.
@@ -7197,7 +7402,8 @@ export function InlineTableField({
                 </div>
               )
             }
-            const isMissing = !!editState?.missing?.includes(c.field)
+            const isRequiredMiss = !!editState?.missing?.includes(c.field)
+            const isMissing = isRequiredMiss || !!editState?.invalid?.includes(c.field)
             return (
               <div
                 key={c.field}
@@ -7215,7 +7421,7 @@ export function InlineTableField({
                   )}
                 >
                   {label}
-                  {isMissing && (
+                  {isRequiredMiss && (
                     <span className='ml-1 normal-case tracking-normal'>· required</span>
                   )}
                   {(() => {
@@ -9521,6 +9727,16 @@ export function InlineTableField({
                                         rowOverlay[c.field] ?? row[c.field],
                                         String(row.id)
                                       )}
+                                    </div>
+                                  ) : !isEditing &&
+                                    (displayVal == null || displayVal === '') &&
+                                    pickAgainRef.current.get(row)?.has(c.field) ? (
+                                    <div
+                                      className='py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'
+                                      data-pick-again={c.field}
+                                      data-tip='The copied value is not available on this record'
+                                    >
+                                      Pick again
                                     </div>
                                   ) : (
                                     <div className='py-0.5 overflow-hidden'>

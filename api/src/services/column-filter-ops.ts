@@ -82,23 +82,58 @@ export function parseColumnFilterOp(raw: string): ColumnFilterOp | null {
   }
 }
 
-/** The calendar day a stored value falls on, or null when it is not a date. */
-export function dayOfValue(value: unknown): string | null {
+/** The zone a timestamp's calendar day is read in — the one the list shows
+ *  (army 6 L37: "On 11/05/2026" matched 11/04 10 PM ET rows by their UTC day). */
+export const FILTER_DAY_ZONE = 'America/New_York'
+
+const ZONED = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2})$/i
+
+/**
+ * The calendar day a stored value falls on, or null when it is not a date.
+ * A timestamp that carries its zone (Z / offset, a Date, the JS toString
+ * shape) is read as an America/New_York day; a date-only value — including
+ * a Date at exactly UTC midnight, which is how a SQL `date` column arrives —
+ * keeps its own day; a zone-less "YYYY-MM-DD hh:mm" keeps its date part.
+ */
+export function dayOfValue(value: unknown, timeZone: string = FILTER_DAY_ZONE): string | null {
   if (value == null) return null
-  if (value instanceof Date) return localDay(value)
+  if (value instanceof Date) return dateDay(value, timeZone)
   const s = String(value).trim()
   if (!s) return null
+  if (ZONED.test(s)) {
+    const d = new Date(s)
+    return Number.isNaN(d.getTime()) ? null : zonedDay(d, timeZone)
+  }
   const iso = s.match(/^(\d{4}-\d{2}-\d{2})(?:[T ]|$)/)
   if (iso) return iso[1]
   const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
   if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
   const parsed = new Date(s)
-  return Number.isNaN(parsed.getTime()) ? null : localDay(parsed)
+  return Number.isNaN(parsed.getTime()) ? null : zonedDay(parsed, timeZone)
 }
 
-function localDay(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+function dateDay(d: Date, timeZone: string): string | null {
+  if (Number.isNaN(d.getTime())) return null
+  const utcMidnight =
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  return utcMidnight ? d.toISOString().slice(0, 10) : zonedDay(d, timeZone)
+}
+
+function zonedDay(d: Date, timeZone: string): string {
+  try {
+    // en-CA formats as YYYY-MM-DD.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(d)
+  } catch {
+    return d.toISOString().slice(0, 10)
+  }
 }
 
 /** Currency and thousands separators are display, not data. */

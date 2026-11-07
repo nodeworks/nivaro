@@ -55,6 +55,95 @@ export function isStallProne(state: GapStateRow, transitions: GapTransitionRow[]
   return !creatorWayOut
 }
 
+/**
+ * Pure: is a record parked in `state` the REQUESTER's move (army 6 M44)? A
+ * step past the start, not terminal, whose only manual way out the creator
+ * may take (allow_creator) — an IR at Warehouse Submission with no WS owner
+ * group: nobody else is assigned, the requester submits it. Only judged when
+ * the step has no active assigned owner (the caller checks that).
+ */
+export function creatorActsIn(state: GapStateRow, transitions: GapTransitionRow[]): boolean {
+  if (on(state.is_initial) || on(state.is_terminal)) return false
+  return transitions.some(
+    (t) =>
+      t.from_state != null &&
+      sameId(t.from_state, state.id) &&
+      !on(t.auto_trigger) &&
+      on(t.allow_creator)
+  )
+}
+
+/** Does the creator act in this state (template transitions read here)? */
+export async function creatorActsInState(state: GapStateRow): Promise<boolean> {
+  if (!state.template || on(state.is_initial) || on(state.is_terminal)) return false
+  try {
+    return creatorActsIn(state, await templateTransitions(String(state.template)))
+  } catch {
+    return false
+  }
+}
+
+export interface Requester {
+  id: string
+  name: string
+  /** Lower-cased. */
+  email: string | null
+  /** When the record was created (ISO), when the row says. */
+  created_at: string | null
+}
+
+/** Pure: the creator uuid + created date off a record row (`creator` on
+ *  workflows, `user_created` on Directus-era tables). */
+export function creatorOfRow(
+  row: Record<string, unknown> | null | undefined
+): { id: string; created_at: string | null } | null {
+  const id = [row?.creator, row?.user_created].find(
+    (v): v is string => typeof v === 'string' && v.length > 20
+  )
+  if (!id) return null
+  const raw = [row?.date_created, row?.created, row?.created_at].find((v) => v != null && v !== '')
+  const t = raw != null ? new Date(raw as string | Date) : null
+  return { id, created_at: t && Number.isFinite(t.getTime()) ? t.toISOString() : null }
+}
+
+/** The record's creator as a person who can act: null when unknown, or
+ *  suspended / redacted. Best-effort. */
+export async function recordRequester(
+  collection: string,
+  item: string | number
+): Promise<Requester | null> {
+  try {
+    const row = (await db(collection).where({ id: item }).first()) as
+      | Record<string, unknown>
+      | undefined
+    const c = creatorOfRow(row)
+    if (!c) return null
+    const u = (await db('nivaro_users')
+      .where({ id: c.id })
+      .first('id', 'first_name', 'last_name', 'email', 'status', 'is_redacted')) as
+      | {
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+          status: string | null
+          is_redacted: boolean | number | null
+        }
+      | undefined
+    if (!u) return null
+    const { isInactivePerson } = await import('./pipeline-engine.js')
+    if (isInactivePerson(u)) return null
+    return {
+      id: String(u.id),
+      name: [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || 'the requester',
+      email: u.email ? u.email.toLowerCase() : null,
+      created_at: c.created_at
+    }
+  } catch {
+    return null
+  }
+}
+
 async function templateTransitions(templateId: string): Promise<GapTransitionRow[]> {
   return (await db('nivaro_workflow_transitions')
     .where({ template: templateId })
@@ -159,9 +248,12 @@ export async function noticeOwnerGap(args: {
     if (!isStallProne(state, await templateTransitions(String(state.template)))) return null
     const label = state.label || state.key || 'this step'
     const subject = gapSubject(args.friendlyId, label)
+    // An OPEN notice dedupes; one retired because the record moved on
+    // (retireGapNotices) does not — a record sent back into the gap is new news.
     const already = await db('nivaro_notifications')
       .where({ collection: args.subjectCollection, item: String(args.subjectItem) })
       .where('subject', subject)
+      .whereNot('status', 'archived')
       .first('id')
     if (already) return { told: 0 }
 
@@ -221,5 +313,81 @@ export async function noticeOwnerGap(args: {
     return null
   } finally {
     inFlight.delete(key)
+  }
+}
+
+/** Pure: is this subject an owner-gap notice about `friendlyId` — and not
+ *  about the step it waits in now (`currentLabel`)? */
+export function isStaleGapSubject(
+  subject: string | null | undefined,
+  friendlyId: string,
+  currentLabel: string | null
+): boolean {
+  const s = String(subject ?? '')
+  if (!friendlyId) return false
+  const about =
+    s.startsWith(`No approver: ${friendlyId} in `) ||
+    s.startsWith(`No approver yet: ${friendlyId} in `)
+  if (!about) return false
+  if (!currentLabel) return true
+  return (
+    s !== gapSubject(friendlyId, currentLabel) && s !== creatorGapSubject(friendlyId, currentLabel)
+  )
+}
+
+/**
+ * The record moved on from a step nobody owned (army 6 L31: the admins' "No
+ * approver: CM26INV-37423 in Engineering Review" stayed in Needs you,
+ * ack_required, while the IR sat at Warehouse Submission). Archive the open
+ * notices about any OTHER step — administrators' and the creator's — and tell
+ * open bells. Best-effort; returns how many rows were retired.
+ */
+export async function retireGapNotices(opts: {
+  collection: string
+  item: string
+  friendlyId: string
+  /** Label of the state the record is in NOW (its notices stay). */
+  currentLabel: string | null
+}): Promise<number> {
+  if (!opts.friendlyId) return 0
+  try {
+    const rows = (
+      (await db('nivaro_notifications')
+        .where({ collection: opts.collection, item: String(opts.item) })
+        .where('subject', 'like', 'No approver%')
+        .whereNot('status', 'archived')
+        .select('id', 'recipient', 'subject')
+        .limit(500)) as Array<{ id: number; recipient: string; subject: string | null }>
+    ).filter((r) => isStaleGapSubject(r.subject, opts.friendlyId, opts.currentLabel))
+    if (rows.length === 0) return 0
+    const ids = rows.map((r) => Number(r.id))
+    await db('nivaro_notifications').whereIn('id', ids).update({ status: 'archived' })
+    await db('nivaro_notifications')
+      .whereIn('id', ids)
+      .whereNull('read_at')
+      .update({ read_at: new Date() })
+      .catch(() => {})
+    try {
+      const { getIo } = await import('./io-holder.js')
+      const io = getIo()
+      const byRecipient = new Map<string, { recipient: string; ids: number[] }>()
+      for (const r of rows) {
+        const key = String(r.recipient).toUpperCase()
+        const cur = byRecipient.get(key) ?? { recipient: r.recipient, ids: [] }
+        cur.ids.push(Number(r.id))
+        byRecipient.set(key, cur)
+      }
+      for (const { recipient, ids: rowIds } of byRecipient.values())
+        io?.to(`user:${recipient}`).emit('notification:retired', {
+          ids: rowIds,
+          collection: opts.collection,
+          item: String(opts.item)
+        })
+    } catch {
+      /* live refresh is a courtesy */
+    }
+    return rows.length
+  } catch {
+    return 0
   }
 }

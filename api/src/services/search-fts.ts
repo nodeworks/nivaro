@@ -181,6 +181,12 @@ export function searchAnswerKey(i: SearchAnswerKeyInput): string {
   ].join('|')
 }
 
+/** An answer some part of which was cut by the time budget (`partial` names the parts). */
+export function isPartialAnswer(value: unknown): boolean {
+  const p = (value as { partial?: unknown } | null)?.partial
+  return Array.isArray(p) && p.length > 0
+}
+
 const answerCache = createShortCache<unknown>('global-search-answer', SEARCH_ANSWER_TTL_MS, {
   max: 2000
 })
@@ -197,7 +203,14 @@ const answerCache = createShortCache<unknown>('global-search-answer', SEARCH_ANS
  */
 export const searchAnswerCache = {
   get<T>(input: SearchAnswerKeyInput, load: () => Promise<T>): Promise<T> {
-    return answerCache.get(searchAnswerKey(input), load) as Promise<T>
+    const key = searchAnswerKey(input)
+    // A CUT answer (`partial`: parts that ran out of time) is never reused (army 6 H13): the
+    // same search 2 s later must run again, never get a cached "nothing matches" in 97 ms.
+    // Callers sharing the one flight still get it once, with `partial` saying what was cut.
+    return (answerCache.get(key, load) as Promise<T>).then((value) => {
+      if (isPartialAnswer(value)) answerCache.forget(key)
+      return value
+    })
   },
   /** Drop everything (a synonym or search-config write that should show at once). */
   forget(): void {

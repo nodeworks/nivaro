@@ -526,7 +526,7 @@ describe('a create the creator cannot read back', () => {
     expect(m.created).toHaveLength(1)
     expect(m.onSaved).toHaveBeenCalledWith('372777')
     expect(toasts.warning).toHaveBeenCalledWith(
-      'Workflow 372777 was created, but it’s outside what you can see (no Zone set).',
+      'The new workflow was created, but it’s outside what you can see (no Zone set).',
       expect.anything()
     )
     expect(host.textContent ?? '').not.toMatch(/Cannot read properties/)

@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../context'
-import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
+import { QueryStatStrip, type QueryWidgetStat, tileValue } from './QueryStatStrip'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let host: HTMLDivElement
@@ -61,5 +61,42 @@ describe('QueryStatStrip requires_field', () => {
     const text = await mount([{ project_id: '1', fusion_synced_at: '2026-10-23T08:00:00Z' }])
     expect(text).not.toContain('no Fusion data')
     expect(text).toMatch(/2026/)
+  })
+})
+
+// Army 6 L18: under a zero_dash table the Total row printed "—" for a column
+// of zeros while the tile above it said "$0".
+describe('QueryStatStrip zeroDash', () => {
+  const spend: QueryWidgetStat = { label: 'Current Spend', field: 'spend', format: 'currency' }
+
+  it('a row-summed 0 reads as no figure when the table dashes zeros', () => {
+    expect(tileValue(spend, 0, true)).toBeNull()
+    expect(tileValue(spend, 12.5, true)).toBe(12.5)
+    expect(tileValue(spend, 0, false)).toBe(0)
+    // a tile with its own query is not the table's column
+    expect(tileValue({ ...spend, query: { slug: 'q', value_field: 'v' } }, 0, true)).toBe(0)
+  })
+
+  it('renders "—" beside a dashed Total row, "$0" otherwise', async () => {
+    const render = async (zeroDash: boolean) => {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={new QueryClient()}>
+            <NivaroProvider client={{ request: vi.fn() } as never}>
+              <QueryStatStrip
+                stats={[spend]}
+                rows={[{ spend: 0 }, { spend: 0 }]}
+                effectiveParams={{}}
+                loading={false}
+                zeroDash={zeroDash}
+              />
+            </NivaroProvider>
+          </QueryClientProvider>
+        )
+      })
+      return host.querySelector('[data-stat-value]')?.textContent ?? ''
+    }
+    expect(await render(true)).toContain('—')
+    expect(await render(false)).toContain('$0')
   })
 })

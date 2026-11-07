@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyValidationRule } from '../../lib/validation-rules'
-import { changedRowFields, lineRuleErrors } from './line-qty'
+import { changedRowFields, computedColumnErrors, lineRuleErrors, MAX_LINE_MONEY } from './line-qty'
 
 // The server judges validation_rules only on the fields a write carries
 // (api services/validation-rules.ts enforceValidationRules). This mirrors that
@@ -110,5 +110,45 @@ describe('lineRuleErrors (the client twin of the server judgment)', () => {
     expect(lineRuleErrors(fields, { price: '-2.5' }, { price: '-2.5' })).toEqual([
       { field: 'price', message: 'Price can not be negative' }
     ])
+  })
+})
+
+// army6 M4: qty 1,000,000,000 × $100 was taken at the line Save; only the
+// record's Create refused it, with nothing highlighted.
+describe('computedColumnErrors', () => {
+  const amount = {
+    field: 'amount',
+    label: 'Amount',
+    type: 'decimal',
+    computed_type: 'write',
+    computed_formula: 'quantity * price'
+  }
+  it('refuses a computed amount the money column cannot hold, naming the line', () => {
+    expect(
+      computedColumnErrors([amount], { quantity: 1e9, price: 100, amount: 1e11 }, null, 'Line 1')
+    ).toEqual([{ field: 'amount', message: 'Line 1: Amount must be smaller than $10,000,000,000' }])
+  })
+  it("the column's own rule wins (the server's words)", () => {
+    const ruled = {
+      ...amount,
+      validation_rules: [
+        {
+          type: 'max',
+          value: 9_999_999_999.99,
+          message: 'Amount must be smaller than 10,000,000,000'
+        }
+      ]
+    }
+    expect(computedColumnErrors([ruled], { amount: 1e11 }, null, 'Line 2')[0]?.message).toBe(
+      'Line 2: Amount must be smaller than 10,000,000,000'
+    )
+  })
+  it('a normal amount, a non-computed column and an unchanged stored figure pass', () => {
+    expect(computedColumnErrors([amount], { amount: 6.15 }, null, 'Line 1')).toEqual([])
+    expect(
+      computedColumnErrors([{ ...amount, computed_type: null }], { amount: 1e11 }, null, 'Line 1')
+    ).toEqual([])
+    expect(computedColumnErrors([amount], { amount: 1e11 }, { amount: 1e11 }, 'Line 1')).toEqual([])
+    expect(MAX_LINE_MONEY).toBe(9_999_999_999.99)
   })
 })

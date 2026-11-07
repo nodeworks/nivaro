@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto'
 import type { GraphQLSchema } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { rawWriterReason, reasonColumn } from './notification-reason.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * API surface changelogs: GraphQL (#163) — type/field diffs on every schema
@@ -118,6 +120,47 @@ async function notifyAdminsOfBreak(subject: string, message: string): Promise<vo
   }
 }
 
+/** The removed half of a diff ("- …" lines), order-free, as one hash. */
+export function removedSetHash(lines: readonly string[]): string {
+  const removed = lines.filter((l) => l.startsWith('-')).sort()
+  return createHash('sha1').update(removed.join('\n')).digest('hex')
+}
+
+interface RedisLike {
+  get(k: string): Promise<string | null>
+  set(k: string, v: string, ...args: (string | number)[]): Promise<unknown>
+}
+
+const lastNotified = new Map<string, string>()
+const BREAK_NOTICE_TTL_S = 90 * 24 * 3600
+
+/**
+ * army6 L53 — "GraphQL schema change removed 170 type(s)…" reached every admin
+ * after EVERY staging rebuild: the nightly restore puts the schema log back, so
+ * the same removal is found again each morning. Admins are told about a removed
+ * set once; the same set again stays quiet. The last told hash lives in Redis
+ * (outside the restored database, per tenant), with this process's memory as
+ * the fallback when Redis is not there.
+ */
+export async function shouldNotifyBreak(
+  kind: 'graphql' | 'rest',
+  lines: readonly string[],
+  redis: RedisLike | null = (getApp() as unknown as { redis?: RedisLike } | null)?.redis ?? null
+): Promise<boolean> {
+  const hash = removedSetHash(lines)
+  const key = `nvr:schema-break:${currentTenantKey()}:${kind}`
+  if (lastNotified.get(key) === hash) return false
+  lastNotified.set(key, hash)
+  if (!redis) return true
+  try {
+    if ((await redis.get(key)) === hash) return false
+    await redis.set(key, hash, 'EX', BREAK_NOTICE_TTL_S)
+  } catch {
+    // Redis trouble: this process's memory is all there is.
+  }
+  return true
+}
+
 /** Record the GraphQL schema shape; diff + notify on change (#163). */
 export async function recordGraphQLSchema(schema: GraphQLSchema): Promise<void> {
   try {
@@ -135,7 +178,7 @@ export async function recordGraphQLSchema(schema: GraphQLSchema): Promise<void> 
         diff: lines.slice(0, 200).join('\n'),
         breaking
       })
-      if (breaking) {
+      if (breaking && (await shouldNotifyBreak('graphql', lines))) {
         await notifyAdminsOfBreak(
           'GraphQL schema change removed types or fields',
           `The rebuilt GraphQL schema removed ${lines.filter((l) => l.startsWith('-')).length} type(s)/field(s). Integrations querying them will now error. See /api/dev-tools/graphql-changelog.`
@@ -177,10 +220,10 @@ export async function recordRestRoutes(version: string, routes: string[]): Promi
     if (last?.version === version) return // same release — nothing to record
     let diff: string | null = null
     let breaking = false
+    const lines: string[] = []
     if (last) {
       const prev = new Set(JSON.parse(last.routes) as string[])
       const next = new Set(sorted)
-      const lines: string[] = []
       for (const r of next) if (!prev.has(r)) lines.push(`+ ${r}`)
       for (const r of prev) {
         if (!next.has(r)) {
@@ -197,7 +240,7 @@ export async function recordRestRoutes(version: string, routes: string[]): Promi
       diff,
       breaking
     })
-    if (breaking) {
+    if (breaking && (await shouldNotifyBreak('rest', lines))) {
       await notifyAdminsOfBreak(
         `Release ${version} removed REST routes`,
         `The new release removed routes that existed in the previous one — integrations calling them now 404. See /api/dev-tools/api-changelog.`

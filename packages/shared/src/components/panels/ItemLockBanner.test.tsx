@@ -9,7 +9,8 @@ import {
   type RealtimeAdapter,
   RealtimeContext
 } from '../../lib/realtime'
-import { ItemLockBanner, takenAwayText, useItemLock } from './ItemLockBanner'
+import { holdsLockByTakeOver } from '../item-edit/FieldAffordances'
+import { ItemLockBanner, TAKEOVER_HOLD_MS, takenAwayText, useItemLock } from './ItemLockBanner'
 
 type Cmd = { _method: string; _path: string }
 
@@ -645,7 +646,7 @@ describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
     expect(lock?.acquired).toBe(true)
   })
 
-  it('a take-over into a clean form lets the lock go within ~2 s (b09-N5)', async () => {
+  it('a take-over into a clean form keeps the lock a minute, then lets it go (army6 M28, b09-N5)', async () => {
     vi.useFakeTimers()
     const { client, calls } = fakeClient(() => ({ data: null }))
     act(() =>
@@ -660,12 +661,79 @@ describe('useItemLock — a clean form lets its lock go (a10-4)', () => {
       await lock?.takeOver()
     })
     expect(lock?.acquired).toBe(true)
+    expect(holdsLockByTakeOver()).toBe(true)
+    // The clean release no longer hands it straight back to the person displaced.
+    await act(async () => {
+      vi.advanceTimersByTime(2_000)
+    })
+    await flush()
     expect(said(calls, 'DELETE')).toHaveLength(0)
+    expect(lock?.acquired).toBe(true)
+    // Still clean a minute later: it goes, and the typing gate is back.
+    await act(async () => {
+      vi.advanceTimersByTime(TAKEOVER_HOLD_MS)
+    })
+    await flush()
+    expect(said(calls, 'DELETE')).toHaveLength(1)
+    expect(lock?.acquired).toBe(false)
+    expect(holdsLockByTakeOver()).toBe(false)
+  })
+
+  it('after a take-over, an edit then a save lets go at the usual beat', async () => {
+    vi.useFakeTimers()
+    const { client, calls } = fakeClient(() => ({ data: null }))
+    const render = (dirty: boolean) =>
+      act(() =>
+        root.render(
+          <NivaroProvider client={client}>
+            <DirtyProbe dirty={dirty} />
+          </NivaroProvider>
+        )
+      )
+    render(false)
+    await flush()
+    await act(async () => {
+      await lock?.takeOver()
+    })
+    render(true)
+    render(false)
     await act(async () => {
       vi.advanceTimersByTime(2_000)
     })
     await flush()
     expect(said(calls, 'DELETE')).toHaveLength(1)
+  })
+
+  it("the displaced person's heartbeat hears taken_over on a free lock and does not take it back", async () => {
+    vi.useFakeTimers()
+    let mine = true
+    const { client, calls } = fakeClient((cmd) => {
+      if (cmd._path.endsWith('/heartbeat') && !mine)
+        throw {
+          status: 404,
+          response: { locked_by: null, taken_over: true, taken_over_by_name: 'Sudharsan K' }
+        }
+      return { data: null }
+    })
+    act(() =>
+      root.render(
+        <NivaroProvider client={client}>
+          <DirtyProbe dirty={true} />
+        </NivaroProvider>
+      )
+    )
+    await flush()
+    await act(async () => {
+      await lock?.claim()
+    })
+    expect(said(calls, 'POST')).toHaveLength(1)
+    mine = false
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+    })
+    await flush()
+    // A dirty form would re-take a plainly free lock; a take-over says stop.
+    expect(said(calls, 'POST')).toHaveLength(1)
     expect(lock?.acquired).toBe(false)
   })
 
