@@ -1,6 +1,42 @@
 {
-  "generated_at": "2026-11-07T20:20:34.576Z",
+  "generated_at": "2026-11-07T21:48:19.489Z",
   "releases": [
+    {
+      "version": "0.3.80",
+      "tag": "v0.3.80",
+      "date": "2026-11-07T16:48:04-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "army 8 findings — pickers, lists, forms, live sync",
+              "hash": "399d9c5e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "army 8 findings — filters, search seeks, alerts, owners",
+              "hash": "1b2628078"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "changelog",
+              "text": "plain-language notes for recent fixes",
+              "hash": "3765597b0"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.79",
       "tag": "v0.3.79",
