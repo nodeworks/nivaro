@@ -115,6 +115,7 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
+import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import {
   groupSearchRelations,
   judgeSearchRelations,
@@ -123,7 +124,6 @@ import {
   type SearchRelationGroup,
   searchRelationCollections
 } from './search-relations.js'
-import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
 import {
@@ -3228,19 +3228,127 @@ function applyFilters(
 
 // ─── Sort ─────────────────────────────────────────────────────────────────────
 
+/** One M2O hop of a relation-path sort: the FK column on the current collection and its target. */
+interface SortHop {
+  to: string
+  fk: string
+}
+
+/** The M2O hop `seg` names from `current` — matched like the field checks (case-insensitive,
+ *  the FK with or without `_id`). Null for anything else (a to-many alias, an unknown name). */
+function sortM2OHop(seg: string, current: string, rels: CMSRelation[]): SortHop | null {
+  const k = seg.toLowerCase()
+  const cur = current.toLowerCase()
+  for (const r of rels) {
+    if ((r.many_collection ?? '').toLowerCase() !== cur || !r.one_collection) continue
+    const fk = r.many_field.toLowerCase()
+    if (fk === k || (fk.endsWith('_id') && fk.slice(0, -3) === k))
+      return { to: r.one_collection, fk: r.many_field }
+  }
+  return null
+}
+
+function sortRefusal(
+  path: string,
+  message: string,
+  statusCode = 400,
+  code = 'FIELD_NOT_FILTERABLE'
+) {
+  return Object.assign(new Error(message), { statusCode, code, fields: [path] })
+}
+
+/**
+ * A relation-path sort planned as the caller (army 7 b15): its M2O hops, the stored column it
+ * lands on, and the caller's read gates for every hop.
+ *
+ * - Every hop must be an M2O (a sort through a list of related records has no single value):
+ *   anything else is 400 FIELD_NOT_FILTERABLE, never the raw path handed to SQL (a 500).
+ * - The caller must be able to read every collection the path crosses: 403 FIELD_NOT_READABLE
+ *   otherwise. The field list of each hop is judged by assertReadableSystemPaths already.
+ * - Rows the caller may not read on a hop (its read row filter, User Scopes) sort as if the
+ *   link were empty (NULL): the related row is looked up through the same gate a relation
+ *   filter uses (H12), so `sort=workflows_id.requisition_amount` over junction rows of
+ *   out-of-scope workflows cannot rank those workflows by a hidden amount.
+ */
+async function planRelationSort(
+  user: User | null | undefined,
+  collection: string,
+  path: string
+): Promise<{ hops: SortHop[]; column: string; gate?: FilterScopeGate }> {
+  const segments = path.split('.')
+  const hops: SortHop[] = []
+  let current = collection
+  for (const seg of segments.slice(0, -1)) {
+    const hop = sortM2OHop(seg, current, await getRelsForCollection(current))
+    if (!hop)
+      throw sortRefusal(
+        path,
+        `"${path}" cannot be sorted: only a link to one related record can be sorted by its fields`
+      )
+    hops.push(hop)
+    current = hop.to
+  }
+  const last = segments[segments.length - 1]
+  const physical = await getActualColumns(current)
+  let column = [...physical].find((c) => c.toLowerCase() === last.toLowerCase())
+  // `project.region` where the stored column is `region_id`: the link's id.
+  if (!column) column = sortM2OHop(last, current, await getRelsForCollection(current))?.fk
+  if (!column)
+    throw sortRefusal(
+      path,
+      `"${path}" cannot be sorted: it is calculated when the record is read, not stored`
+    )
+  if (!user) return { hops, column }
+  if (!(await isAdminRole(user))) {
+    for (const hop of hops) {
+      if (await can(user, 'read', hop.to)) continue
+      throw sortRefusal(path, `"${path}" cannot be filtered or sorted`, 403, 'FIELD_NOT_READABLE')
+    }
+  }
+  const gate = createFilterScopeGate(user)
+  await gate.prime(hops.map((h) => h.to))
+  return { hops, column, gate }
+}
+
+/**
+ * The related value a relation-path sort orders by: one correlated subquery per hop, each
+ * looking its row up by id (no JOIN on the list read, so the page's own `*` / `id` / sort
+ * columns are never ambiguous — "Ambiguous column name 'id'" was a 500 for every caller).
+ * A hop the caller's gates narrow reads from a derived table filtered by those gates; a row
+ * outside them is not found, so the value is NULL.
+ */
+function relationSortValue(
+  plan: { hops: SortHop[]; column: string; gate?: FilterScopeGate },
+  outer: string,
+  i = 0
+): Knex.QueryBuilder {
+  const hop = plan.hops[i]
+  const alias = `_nvr_sort${i}`
+  let source: string | Knex.QueryBuilder = `${hop.to} as ${alias}`
+  if (plan.gate && !plan.gate.isOpen(hop.to)) {
+    const gated = db(hop.to).select('*')
+    plan.gate.apply(gated, hop.to)
+    source = gated.as(alias)
+  }
+  const sub: Knex.QueryBuilder = db
+    .from(source as string)
+    .whereRaw('??.?? = ??.??', [alias, 'id', outer, hop.fk])
+  if (i === plan.hops.length - 1) sub.select(db.raw('??.??', [alias, plan.column]))
+  else sub.select(db.raw('?', [relationSortValue(plan, alias, i + 1)]))
+  return sub
+}
+
 /**
  * Apply sort strings to query builder.
- * Supports dotted paths for relation traversal (M2O only) via LEFT JOIN.
- * Alias examples: `author.first_name`, `-status.label`, `author.org.name`
+ * Supports dotted paths for relation traversal (M2O only), judged as the caller
+ * (planRelationSort). Examples: `author.first_name`, `-status.label`, `author.org.name`
  */
 async function applySorts(
   q: QB,
   sorts: string[],
   collection: string,
-  rels: CMSRelation[]
+  user?: User | null
 ): Promise<void> {
-  let joinCounter = 0
-
   for (const s of sorts) {
     const desc = s.startsWith('-')
     const path = desc ? s.slice(1) : s
@@ -3254,45 +3362,15 @@ async function applySorts(
       continue
     }
 
-    // Dotted path — walk M2O hops, LEFT JOIN each intermediate table
+    // `collection.column` names the root's own column.
     const segments = path.split('.')
-    let currentCollection = collection
-    let currentRels = rels
-    let currentAlias = collection // tracks the alias/table of the current hop
-    let valid = true
-
-    for (let i = 0; i < segments.length - 1; i++) {
-      const seg = segments[i]
-      const m2oMatch = findM2ORelation(seg, currentCollection, currentRels)
-      if (!m2oMatch) {
-        valid = false
-        break
-      }
-
-      const nextCollection = m2oMatch.rel.one_collection as string
-      const fkField = m2oMatch.fkField
-      const joinAlias = `_sort_${joinCounter++}`
-
-      q.leftJoin(
-        `${nextCollection} as ${joinAlias}`,
-        `${joinAlias}.id`,
-        `${currentAlias}.${fkField}`
-      )
-
-      currentCollection = nextCollection
-      currentAlias = joinAlias
-      // Load rels for next collection (from cache or DB)
-      currentRels = await getRelsForCollection(currentCollection)
-    }
-
-    if (!valid) {
-      // Fall back to raw column sort if path could not be resolved
-      q.orderBy(path, direction)
+    if (segments.length === 2 && segments[0].toLowerCase() === collection.toLowerCase()) {
+      q.orderBy(`${collection}.${segments[1]}`, direction)
       continue
     }
 
-    const finalColumn = segments[segments.length - 1]
-    q.orderBy(`${currentAlias}.${finalColumn}`, direction)
+    const plan = await planRelationSort(user, collection, path)
+    q.orderByRaw(`(?) ${direction}`, [relationSortValue(plan, collection)])
   }
 }
 
@@ -4954,7 +5032,7 @@ export async function readItems(
   const rankSearch = !!(query.search_rank && search && !keyset)
   const applyListOrder = async () => {
     if (sort.length) {
-      await applySorts(q, sort, collection, rels)
+      await applySorts(q, sort, collection, user)
     } else if (!(collection === 'nivaro_users' && search && orderByPeopleRelevance(q, search))) {
       // A people search with no sort of its own ranks by name (services/people-search-rank.ts);
       // anything else by the primary key, so pages never overlap (M16). MSSQL requires an
@@ -5101,10 +5179,7 @@ export async function readItems(
         // An nvarchar column scans ~3x faster upper-cased in a binary collation,
         // and for a printable-ASCII pattern finds the same rows (services/search-like.ts).
         else if (narrow && textKindOf(type) === 'unicode')
-          w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [
-            ref,
-            pattern.toUpperCase()
-          ])
+          w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [ref, pattern.toUpperCase()])
         else w.orWhere(db.raw('??', [ref]), 'like', pattern)
       }
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {

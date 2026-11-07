@@ -22,7 +22,7 @@ import {
   needsStreamingCap,
   routeBodyLimit
 } from './lib/body-limits.js'
-import { describeDbRefusal, errorText, isPoolBusy, messageWithoutSql } from './lib/db-refusal.js'
+import { describeDbRefusal, errorText, isPoolBusy, serverFaultMessage } from './lib/db-refusal.js'
 import { applyEarlyHints, loadEarlyHints } from './lib/early-hints.js'
 import { registerJsonBodyParser } from './lib/json-body.js'
 import { applySecurityHeaders } from './lib/security-headers.js'
@@ -721,8 +721,9 @@ export async function buildServer() {
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
         // A server fault's driver message carries the statement (tables,
-        // columns); the body gets the reason only — the log keeps the rest.
-        message: status >= 500 ? messageWithoutSql(err) : err.message,
+        // columns): a database fault gets a plain sentence, anything else the
+        // reason only — the log keeps the rest.
+        message: status >= 500 ? serverFaultMessage(err) : err.message,
         // A refusal's machine code rides every 4xx; driver codes on a 5xx stay in the log.
         ...(coded ? { code: err.code } : {}),
         ...(err.code && err.violations ? { code: err.code, violations: err.violations } : {}),

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DB_FAULT_MESSAGE,
   describeDbRefusal,
   describeValueRefusal,
   messageWithoutSql,
-  reasonWithoutSql
+  reasonWithoutSql,
+  serverFaultMessage
 } from '../../../lib/db-refusal.js'
 
 describe('database refusals', () => {
@@ -172,6 +174,34 @@ describe('messageWithoutSql', () => {
       'Update failed - try again'
     )
     expect(messageWithoutSql(new Error('Something broke'))).toBe('Something broke')
+  })
+})
+
+describe('serverFaultMessage (army 7 b15: no driver text in a 5xx body)', () => {
+  it('answers a database fault with a plain sentence, never the driver reason', () => {
+    const knexErr = new Error(
+      "select top (@p0) * from [workflows] left join [vendors] as [_sort_0] on [_sort_0].[id] = [workflows].[vendor] order by [_sort_0].[name] asc - Ambiguous column name 'id'."
+    )
+    expect(serverFaultMessage(knexErr)).toBe(DB_FAULT_MESSAGE)
+    const tedious = Object.assign(new Error("Ambiguous column name 'id'."), {
+      number: 209,
+      code: 'EREQUEST'
+    })
+    expect(serverFaultMessage(tedious)).toBe(DB_FAULT_MESSAGE)
+    const aggregate = Object.assign(new Error('boom'), {
+      errors: [Object.assign(new Error("Invalid column name 'x'."), { number: 207 })]
+    })
+    expect(serverFaultMessage(aggregate)).toBe(DB_FAULT_MESSAGE)
+    expect(DB_FAULT_MESSAGE).not.toMatch(/column|select|\[/i)
+  })
+
+  it('keeps an app error and a coded error of our own', () => {
+    expect(serverFaultMessage(new Error('Something broke'))).toBe('Something broke')
+    const ours = Object.assign(new Error('The list took too long'), {
+      statusCode: 504,
+      code: 'LIST_TIMEOUT'
+    })
+    expect(serverFaultMessage(ours)).toBe('The list took too long')
   })
 })
 

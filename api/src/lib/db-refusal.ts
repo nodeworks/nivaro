@@ -226,6 +226,50 @@ export function messageWithoutSql(err: unknown): string {
   return `${head[1]}${cut > 0 ? message.slice(cut + 3) : 'The database refused the statement'}`
 }
 
+/** What a 5xx body says for a database fault (see serverFaultMessage). */
+export const DB_FAULT_MESSAGE =
+  'The server could not finish this request. The problem was recorded; try again, or ask for help if it keeps happening.'
+
+/**
+ * Whether an error came from the database driver: a statement knex prefixed (the driver's
+ * reason after it), a tedious RequestError (`number`, `EREQUEST`), or an AggregateError of them.
+ */
+export function isDriverFault(err: unknown): boolean {
+  const e = err as {
+    message?: unknown
+    number?: unknown
+    code?: unknown
+    errors?: unknown
+    statusCode?: unknown
+  }
+  if (!e || typeof e !== 'object') return false
+  // An error that carries its own status is ours (LIST_TIMEOUT, a coded refusal).
+  if (e.statusCode != null) return false
+  const message = typeof e.message === 'string' ? e.message : ''
+  if (message && messageWithoutSql(err) !== message) return true
+  if (typeof e.number === 'number' || e.code === 'EREQUEST') return true
+  return (
+    Array.isArray(e.errors) &&
+    e.errors.some(
+      (x) =>
+        !!x &&
+        typeof x === 'object' &&
+        (typeof (x as { number?: unknown }).number === 'number' ||
+          (x as { code?: unknown }).code === 'EREQUEST')
+    )
+  )
+}
+
+/**
+ * The message a 5xx body carries. A database fault never shows the driver's own words
+ * ("Ambiguous column name 'id'." named the columns of a broken statement to every caller,
+ * army 7 b15): a plain sentence instead, the reason stays in the log and the issue.
+ * Anything else keeps messageWithoutSql.
+ */
+export function serverFaultMessage(err: unknown): string {
+  return isDriverFault(err) ? DB_FAULT_MESSAGE : messageWithoutSql(err)
+}
+
 const SQL_HEAD =
   /^((?:[^:\n]{1,80}: )?)(?:insert|update|delete|select|merge|exec|execute|with|declare)\s/i
 
