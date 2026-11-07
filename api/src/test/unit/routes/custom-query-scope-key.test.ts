@@ -71,6 +71,7 @@ vi.mock('../../../db/index.js', () => ({
 }))
 
 import { customQueriesRoutes } from '../../../routes/custom-queries.js'
+import { customQuerySqlStamp } from '../../../services/custom-query-cache.js'
 import { execCustomQuerySql } from '../../../services/custom-query-exec.js'
 import { resetReadGate } from '../../../services/read-gate.js'
 import { resetSingleFlight } from '../../../services/single-flight.js'
@@ -106,6 +107,12 @@ afterEach(() => {
   exec.hold = null
 })
 
+// The key carries a stamp of the SQL + scope declaration (army 6 M15).
+const STAMP = customQuerySqlStamp({
+  sql_text: 'EXEC dbo.zone_spend :year, :zone',
+  scope_params: JSON.stringify({ zone: { dimension: 'zone' } })
+})
+
 describe('execute key carries the real User Scope allowance', () => {
   it('a restricted caller runs and caches under its allowance; an unrestricted one does not', async () => {
     const a = await app()
@@ -113,8 +120,8 @@ describe('execute key carries the real User Scope allowance', () => {
     await run(a, 'free-1')
     const keys = redis.setex.mock.calls.map((c) => c[0])
     expect(keys).toEqual([
-      `cq:zone-spend:${JSON.stringify({ year: 2026, zone: 'Z1,Z2' })}`,
-      `cq:zone-spend:${JSON.stringify({ year: 2026, zone: null })}`
+      `cq:zone-spend:${STAMP}:${JSON.stringify({ year: 2026, zone: 'Z1,Z2' })}`,
+      `cq:zone-spend:${STAMP}:${JSON.stringify({ year: 2026, zone: null })}`
     ])
     const params = vi.mocked(execCustomQuerySql).mock.calls.map((c) => c[1])
     expect(params[0]).toEqual({ year: 2026, zone: 'Z1,Z2' })
@@ -124,7 +131,7 @@ describe('execute key carries the real User Scope allowance', () => {
     const a = await app()
     await run(a, 'zoned-1', 'Z9')
     expect(redis.setex.mock.calls[0][0]).toBe(
-      `cq:zone-spend:${JSON.stringify({ year: 2026, zone: '__scope_empty__' })}`
+      `cq:zone-spend:${STAMP}:${JSON.stringify({ year: 2026, zone: '__scope_empty__' })}`
     )
   })
 

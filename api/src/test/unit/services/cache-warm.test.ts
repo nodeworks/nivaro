@@ -11,7 +11,11 @@ import {
   takeBootWarm,
   type WarmQueryDef
 } from '../../../services/cache-warm.js'
-import { customQueryCacheKey, customQueryCacheValue } from '../../../services/custom-query-cache.js'
+import {
+  customQueryCacheKey,
+  customQueryCacheValue,
+  customQuerySqlStamp
+} from '../../../services/custom-query-cache.js'
 import { buildFinalParams } from '../../../services/custom-query-exec.js'
 
 function q(slug: string, extra: Partial<WarmQueryDef> = {}): WarmQueryDef {
@@ -27,6 +31,9 @@ function q(slug: string, extra: Partial<WarmQueryDef> = {}): WarmQueryDef {
     ...extra
   }
 }
+
+/** The route / warm key of a fixture query at year 2026. */
+const key2026 = (slug: string) => `cq:${slug}:${customQuerySqlStamp(q(slug))}:{"year":2026}`
 
 function fakeRedis() {
   const store = new Map<string, { value: string; ttl: number }>()
@@ -146,8 +153,12 @@ describe('runCacheWarm', () => {
     const redis = fakeRedis()
     const s = await runCacheWarm({ redis, deps: deps() })
     // The real builder casts the integer default exactly as the route does.
-    const key = customQueryCacheKey('a', buildFinalParams(JSON.parse(q('a').params ?? '[]'), {}))
-    expect(key).toBe('cq:a:{"year":2026}')
+    const key = customQueryCacheKey(
+      'a',
+      buildFinalParams(JSON.parse(q('a').params ?? '[]'), {}),
+      q('a')
+    )
+    expect(key).toBe(`cq:a:${customQuerySqlStamp(q('a'))}:{"year":2026}`)
     const entry = redis.store.get(key)
     expect(entry?.ttl).toBe(300)
     const parsed = JSON.parse(entry?.value ?? 'null')
@@ -188,11 +199,11 @@ describe('runCacheWarm', () => {
   it('usage run skips a key cached within the hour and refreshes an older one', async () => {
     const now = Date.parse('2026-10-17T10:00:00Z')
     const redis = fakeRedis()
-    redis.store.set('cq:a:{"year":2026}', {
+    redis.store.set(key2026('a'), {
       value: customQueryCacheValue([], new Date(now - 10 * 60_000)),
       ttl: 100
     })
-    redis.store.set('cq:b:{"year":2026}', {
+    redis.store.set(key2026('b'), {
       value: customQueryCacheValue([], new Date(now - 2 * 3600_000)),
       ttl: 100
     })
@@ -200,15 +211,13 @@ describe('runCacheWarm', () => {
     const s = await runCacheWarm({ redis, deps: deps({ exec, now: () => now }) })
     expect(exec).toHaveBeenCalledTimes(1)
     expect(s).toMatchObject({ warmed: 1, skipped: 1 })
-    expect(JSON.parse(redis.store.get('cq:b:{"year":2026}')?.value ?? '{}').rows).toEqual([
-      { fresh: true }
-    ])
+    expect(JSON.parse(redis.store.get(key2026('b'))?.value ?? '{}').rows).toEqual([{ fresh: true }])
   })
 
   it('warm_daily always overwrites and has no overall budget', async () => {
     let clock = Date.parse('2026-10-17T06:00:00Z')
     const redis = fakeRedis()
-    redis.store.set('cq:d:{"year":2026}', {
+    redis.store.set(key2026('d'), {
       value: customQueryCacheValue([], new Date(clock)),
       ttl: 9
     })
@@ -234,9 +243,7 @@ describe('runCacheWarm', () => {
     })
     expect(exec).toHaveBeenCalledTimes(4)
     expect(s).toMatchObject({ warmed: 4, cached: 4, budgetSpent: false })
-    expect(JSON.parse(redis.store.get('cq:d:{"year":2026}')?.value ?? '{}').rows).toEqual([
-      { n: 2 }
-    ])
+    expect(JSON.parse(redis.store.get(key2026('d'))?.value ?? '{}').rows).toEqual([{ n: 2 }])
   })
 
   it('dedupes a param set that lands on the default key', async () => {

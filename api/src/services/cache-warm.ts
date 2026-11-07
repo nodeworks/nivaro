@@ -462,7 +462,7 @@ const defaultViewerDeps: ViewerPhaseDeps = {
       t.params
     )
     await applyScopeParams(query.scope_params ?? null, finalParams, t.as.id, t.as.isAdmin)
-    const key = customQueryCacheKey(query.slug, finalParams)
+    const key = customQueryCacheKey(query.slug, finalParams, query)
     return {
       cacheKey: key,
       // The execute route's single-flight key is the cache key itself.
@@ -849,7 +849,7 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
         summary.skipped++
         continue
       }
-      const key = customQueryCacheKey(q.slug, finalParams)
+      const key = customQueryCacheKey(q.slug, finalParams, q)
       if (seenKeys.has(key)) {
         summary.skipped++
         continue

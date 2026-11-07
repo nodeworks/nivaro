@@ -67,6 +67,8 @@ type HarnessOpts = {
   fieldType?: (f: string) => string | null
   /** GET /field-defaults/mine fails. */
   getFails?: boolean
+  /** The form has not settled (a restore offer is open). Default true. */
+  ready?: boolean
 }
 
 let root: Root
@@ -117,6 +119,7 @@ function Harness({ o }: { o: HarnessOpts }) {
     markAutoFilled: (fs) => calls.auto.push(...fs),
     revalidate: o.revalidate ?? (async (f) => !o.invalid?.has(f)),
     disabled: !!o.disabled,
+    ready: o.ready,
     rulesFor,
     readValue: (f) => (f === 'tags' ? (staged.current.tags ?? []) : undefined),
     canFill: (f) => (o.canFill ? o.canFill(f, touched) : !touched.has(f)),
@@ -226,6 +229,15 @@ describe('usePersonalDefaults: applying on a new record', () => {
     form.rerender()
     await flush()
     expect(calls.set).toHaveLength(3)
+  })
+
+  it('L4 (army 6): held while the form has not settled — nothing applied yet', async () => {
+    await mount({ defaults: [d('region', '10', { zone: '2' }), d('zone', '2')], ready: false })
+    expect(calls.set).toHaveLength(0)
+    expect(api.context.held).toBe(true)
+    await renderWith({ defaults: [d('region', '10', { zone: '2' }), d('zone', '2')] })
+    expect(api.context.held).toBe(false)
+    expect(draft()).toMatchObject({ zone: '2', region: '10' })
   })
 
   it('never overwrites a field that already has a value', async () => {

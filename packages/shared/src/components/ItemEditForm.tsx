@@ -59,6 +59,7 @@ import type { FieldSource } from '../lib/config-sentences'
 import {
   deleteDraft,
   draftCreatedAs,
+  draftFilledBack,
   draftHasContent,
   draftKey,
   draftMatchesPrefill,
@@ -290,8 +291,10 @@ import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
 import { useStableFieldAffordances } from './item-edit/render-stability'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
+import { type SaveNotice, saveClosingMessage, saveLeftWorkStaged } from './item-edit/save-outcome'
 import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
+import { staleBannerMode, touchedEditsDiffer } from './item-edit/stale-banner'
 import { useFormUsageBeacon } from './item-edit/useFormUsageBeacon'
 import {
   linksBeyond,
@@ -2175,23 +2178,10 @@ function ItemEditFormView({
   // replaced by the access-lost panel and the record's cached data dropped.
   const [recordGone, setRecordGone] = useState<RecordGone | null>(null)
   // The last save's side notes (see saveMut): written-but-hidden, links lost.
-  const saveNoticeRef = useRef<{
-    hidden: { reason: string | null } | null
-    linkProblems: string[]
-    /** Lines whose staged edit met someone else's newer save (a10-3). */
-    lineConflicts?: number
-    /** Header fields the person left on THEIRS in the mid-air dialog (b09). */
-    keptTheirs?: number
-    /** The record itself got no PATCH (no field left to write). */
-    noFieldWrite?: boolean
-    /** The save had no step beyond the record's own fields. */
-    onlyMain?: boolean
-    /** A line (child row) write was refused: what is staged stays staged,
-     *  the form stays dirty and no green "Changes saved" (army5 b02-N7). */
-    childFailed?: boolean
-    /** "Line 1: <refusal>" for each refused line edit / delete. */
-    childErrors?: string[]
-  }>({ hidden: null, linkProblems: [] })
+  const saveNoticeRef = useRef<SaveNotice>({ hidden: null, linkProblems: [] })
+  // The change reason a save carried while some of its lines met someone else's newer save:
+  // the line chooser's Mine re-save carries it again (army6 M29).
+  const lineReasonRef = useRef<string | null>(null)
   // Set by the header mid-air dialog for the retry it starts (read once).
   const keptTheirsRef = useRef(0)
   // The last save left a refused line staged (army5 b02-N7).
@@ -2445,7 +2435,11 @@ function ItemEditFormView({
   // write landed, until dismissed or the next save.
   const [remoteChanges, setRemoteChanges] = useState<Record<string, RemoteFieldChange>>({})
   const ownSaveAtRef = useRef(0)
-  const lastTouchRef = useRef<{ user_id: string | null; user_name: string | null } | null>(null)
+  const lastTouchRef = useRef<{
+    user_id: string | null
+    user_name: string | null
+    timestamp?: string
+  } | null>(null)
   // Summary mode (#3): the grouped layout as RecordReadView. Session-only —
   // nothing is persisted: every load starts in Edit unless the
   // collection's summary_mode_rules (role × state) say otherwise — see the
@@ -3884,6 +3878,9 @@ function ItemEditFormView({
         fields[k] = v
         baseVals[k] = base[k]
       }
+      // L2 (army 6): what the person did not edit themselves (a rule / default filled it from
+      // their picks) is marked, so the restore offer counts the same fields the Leave dialog does.
+      const filled = Object.keys(fields).filter((k) => !userTouchedRef.current.has(k))
       const obj = <T,>(m: Map<string, T>, conv: (v: T) => unknown) =>
         Object.fromEntries([...m.entries()].map(([k, v]) => [k, conv(v)]))
       const stored: StoredDraft = keepDraftSavedAt(
@@ -3895,6 +3892,7 @@ function ItemEditFormView({
           saved_at: new Date().toISOString(),
           fields,
           base: baseVals,
+          ...(filled.length ? { filled } : {}),
           base_updated_at:
             (base.date_updated as string | undefined) ??
             (base.updated_at as string | undefined) ??
@@ -4015,7 +4013,16 @@ function ItemEditFormView({
     const next = { ...draftRef.current, ...d.fields }
     draftRef.current = next
     setDraft(next)
+    // The person's own edits come back as theirs; what a rule filled from them stays filled
+    // (L2: the next Leave / offer count the same fields — draftFilledBack is the rule the
+    // offer counts by). New records only (R7 review): on an existing record every restored
+    // value stays protected as touched, or a re-read / someone else's save replaces it.
+    const filledBack = draftFilledBack(d)
     for (const k of Object.keys(d.fields)) {
+      if (filledBack.has(k)) {
+        autoFilledFieldsRef.current.add(k)
+        continue
+      }
       userTouchedRef.current.add(k)
       fieldEditSeqRef.current.set(k, ++ruleSeqRef.current)
     }
@@ -7974,6 +7981,24 @@ function ItemEditFormView({
     void qc.invalidateQueries({ queryKey: ['o2m-rows'] })
     void qc.invalidateQueries({ queryKey: ['pipeline', collection, String(itemId)] })
   }, [lastTouch, qc, collection, itemId])
+  // L44 (army 6): the person settled a mid-air conflict — they have seen the newer save.
+  const acknowledgeStale = useCallback(() => {
+    const ts = lastTouchRef.current?.timestamp
+    if (ts) staleBaselineRef.current = ts
+    setStaleBy(null)
+  }, [])
+  // "…your edits may overwrite theirs" only while an edited field still differs from the
+  // latest record; a clean form simply takes the newer record (no banner over values it shows).
+  const staleMode = staleBy
+    ? staleBannerMode({
+        dirty: hasUnsaved,
+        editsDiffer: touchedEditsDiffer(userTouchedRef.current, draft, itemData, valuesEqual)
+      })
+    : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fires when the mode turns auto-refresh
+  useEffect(() => {
+    if (staleMode === 'auto-refresh') refreshStaleRecord()
+  }, [staleMode])
   const lastTouchText = useMemo(() => {
     if (!lastTouch) return null
     const ms = Date.now() - new Date(lastTouch.timestamp).getTime()
@@ -9577,7 +9602,11 @@ function ItemEditFormView({
         }
       }
       setPendingO2MEdits(nextEdits)
-      if (flushChallenge) setCrChallenge(flushChallenge)
+      if (flushChallenge) {
+        setCrChallenge(flushChallenge)
+        // Not saved yet: what needs the reason stays staged (army6 M29).
+        saveNoticeRef.current.reasonWaiting = true
+      }
       if (lineCollisions.length > 0) {
         saveNoticeRef.current.lineConflicts = lineCollisions.length
         setLineCollision(lineCollisions)
@@ -9737,6 +9766,9 @@ function ItemEditFormView({
       } catch {
         /* cosmetic only */
       }
+      // Lines that met someone else's newer save wait on the chooser: its Mine re-save
+      // carries the reason this save was given (army6 M29).
+      lineReasonRef.current = saveNoticeRef.current.lineConflicts ? changeReasonRef.current : null
       changeReasonRef.current = null
       baseRevisionOverrideRef.current = null
       restoreGuardRef.current = new Map()
@@ -9758,7 +9790,8 @@ function ItemEditFormView({
       // A refused line keeps its staged edit: the form stays dirty (and its
       // recovery draft stays) so the person sees the unsaved line and can fix
       // it — never a clean form over work that did not land (army5 b02-N7).
-      const childFailed = !isNew && saveNoticeRef.current.childFailed === true
+      // A change still waiting on its reason (army6 M29) is unsaved work the same way.
+      const childFailed = !isNew && saveLeftWorkStaged(saveNoticeRef.current)
       childRefusedRef.current = childFailed
       if (!childFailed) setIsDirty(false)
       // The persisted recovery draft is spent — remove it now rather than on
@@ -9834,44 +9867,21 @@ function ItemEditFormView({
         // A refused line: the dialog stays open on its error steps ("Saved
         // with errors"), and the closing message names the refusal.
         if (!notice.childFailed) setSaveDialogOpen(false)
-        const why = notice.hidden?.reason ? ` (${notice.hidden.reason})` : ''
-        if (notice.childFailed) {
-          // Line creates name their refusals in linkProblems (below).
-          const errs = notice.childErrors ?? []
-          if (errs.length > 0 || notice.linkProblems.length === 0)
-            toast.error(
-              errs.length > 0
-                ? `Not everything saved — ${errs.join(' · ')}`
-                : 'Not everything saved — some lines did not save',
-              { duration: 20_000 }
-            )
-        } else if (notice.hidden) {
-          toast.warning(
-            isNew
-              ? `The new ${noun.toLowerCase()} was created, but it’s outside what you can see${why}.`
-              : `Saved, but this ${noun.toLowerCase()} is now outside what you can see${why}.`,
-            { duration: 15_000 }
-          )
-        } else if (notice.lineConflicts) {
-          // The chooser is open: the rest saved, these lines wait on a pick.
-          toast.warning(
-            `Saved, except ${notice.lineConflicts} ${notice.lineConflicts === 1 ? 'line' : 'lines'} someone else changed — pick which value wins`,
-            { duration: 10_000 }
-          )
-        } else if (!isNew && notice.keptTheirs) {
-          // The mid-air dialog's retry: say what happened to the fields the
-          // person left on THEIRS — never a plain "Changes saved" when
-          // nothing of theirs was written over (army5 b09).
-          const n = notice.keptTheirs
-          toast.success(
-            notice.noFieldWrite && notice.onlyMain
-              ? `Kept the newer ${n === 1 ? 'value' : 'values'} — nothing of yours left to save`
-              : `Changes saved — kept the newer ${n === 1 ? 'value' : 'values'} for ${n} ${n === 1 ? 'field' : 'fields'}`
-          )
-        } else if (!isNew && notice.noFieldWrite && notice.onlyMain) {
-          // L43 (army 6): no request was sent — never "Changes saved".
-          toast('Nothing to save — no changes')
-        } else toast.success(isNew ? 'Record created' : 'Changes saved')
+        // One closing message (item-edit/save-outcome.ts): never "Changes saved" over a
+        // refused line, a change waiting on its reason (M29) or a save that sent nothing (L43).
+        const msg = saveClosingMessage(notice, { isNew, noun })
+        if (msg) {
+          const show =
+            msg.kind === 'error'
+              ? toast.error
+              : msg.kind === 'warning'
+                ? toast.warning
+                : msg.kind === 'success'
+                  ? toast.success
+                  : toast
+          if (msg.duration) show(msg.text, { duration: msg.duration })
+          else show(msg.text)
+        }
         if (notice.linkProblems.length > 0) {
           toast.error(
             `${isNew ? `The new ${noun.toLowerCase()} was created` : 'Saved'}, but some parts did not save: ${[
@@ -9943,6 +9953,7 @@ function ItemEditFormView({
   const resolveLineChooser = (theirsKeys: Set<string>) => {
     const list = lineCollision ?? []
     setLineCollision(null)
+    acknowledgeStale()
     const next = new Map(pendingO2MEdits)
     let keep = 0
     for (const lc of list) {
@@ -9969,6 +9980,11 @@ function ItemEditFormView({
       else next.delete(lc.key)
     }
     setPendingO2MEdits(next)
+    // M29 (army 6): the re-save runs without the preflight, so it carries the reason the first
+    // save was given — without it the line PATCH met 422 and the reason dialog opened again.
+    if (keep > 0 && lineReasonRef.current && !changeReasonRef.current)
+      changeReasonRef.current = lineReasonRef.current
+    lineReasonRef.current = null
     if (keep > 0) setLineResaveTick((t) => t + 1)
     else toast.success('Kept the newer values')
   }
@@ -14004,6 +14020,8 @@ function ItemEditFormView({
                                         draftBaseOverrideRef.current = false
                                       }
                                       setCollision(null)
+                                      // Settled: the stale banner must not reappear about it (L44).
+                                      acknowledgeStale()
                                       setTimeout(() => saveMut.mutate(), 0)
                                     }}
                                   />
@@ -14011,7 +14029,11 @@ function ItemEditFormView({
                                 {lineCollision && (
                                   <LineCollisionDialog
                                     lines={lineCollision}
-                                    onCancel={() => setLineCollision(null)}
+                                    onCancel={() => {
+                                      // Decide later: a later Save asks for its reason again.
+                                      lineReasonRef.current = null
+                                      setLineCollision(null)
+                                    }}
                                     onResolve={resolveLineChooser}
                                   />
                                 )}
@@ -14894,7 +14916,7 @@ function ItemEditFormView({
                                         onGoneChange={setRecordGone}
                                       />
                                     )}
-                                    {staleBy && (
+                                    {staleBy && staleMode !== 'auto-refresh' && (
                                       <div
                                         className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
                                         data-stale-record-banner
@@ -14903,7 +14925,7 @@ function ItemEditFormView({
                                         <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
                                           <span className='font-semibold'>{staleBy}</span> changed
                                           this record while you had it open
-                                          {userTouchedRef.current.size > 0
+                                          {staleMode === 'review'
                                             ? ' — review their changes before saving, or your edits may overwrite theirs.'
                                             : ' — refresh to see the latest values.'}
                                         </p>
@@ -14912,7 +14934,7 @@ function ItemEditFormView({
                                           onClick={refreshStaleRecord}
                                           className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
                                         >
-                                          {userTouchedRef.current.size > 0 ? 'Dismiss' : 'Refresh'}
+                                          {staleMode === 'review' ? 'Dismiss' : 'Refresh'}
                                         </button>
                                       </div>
                                     )}

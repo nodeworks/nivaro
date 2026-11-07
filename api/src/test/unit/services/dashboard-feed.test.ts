@@ -661,6 +661,59 @@ describe('tallyCollection', () => {
     expect(tally.open.get('Z1')).toBe(2)
     expect(tally.breached.get('Z1')).toBe(1)
   })
+
+  it('counts a record whose addendum is in flight on the addendum SLA, own instance done or not (army 6 M27)', async () => {
+    // Record 1: own instance open, addendum in flight (the addendum's SLA wins).
+    // Record 3: own instance completed (not listed), addendum in flight and breached.
+    const instances = [
+      { id: 'I1', item: '1', current_state: 'S', template: 'T', started_at: new Date() },
+      { id: 'I2', item: '2', current_state: 'S', template: 'T', started_at: new Date() }
+    ]
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const rows = table.startsWith('nivaro_workflow_instances') ? instances : []
+      const chain: Record<string, unknown> = {}
+      for (const m of ['where', 'whereNull', 'whereNotNull', 'orderBy', 'limit', 'select'])
+        chain[m] = () => chain
+      // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+      chain.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+        Promise.resolve(rows).then(res, rej)
+      return chain
+    }) as never)
+    const scopes = {
+      applyScopeEnforcement: () => {},
+      resolveRecordDimensionIds: async (_c: string, ids: string[]) =>
+        new Map(ids.map((id) => [id, ['z1']]))
+    } as never
+    const computeStatusBatch = vi.fn(async (collection: string) =>
+      collection === 'nivaro_addendums'
+        ? { A1: { status: 'ok' }, A3: { status: 'breached' } }
+        : { '1': { status: 'breached' }, '2': { status: 'breached' } }
+    ) as never
+    const addendums = vi.fn(
+      async () =>
+        new Map([
+          ['1', { addendum_id: 'A1' }],
+          ['3', { addendum_id: 'A3' }]
+        ])
+    )
+    const tally = await tallyCollection(
+      scopes,
+      'tally_addendum_probe',
+      [],
+      `tally-addendum-probe|${Math.random()}`,
+      { filters: [], deny: false },
+      computeStatusBatch,
+      addendums
+    )
+    expect(addendums).toHaveBeenCalledWith('tally_addendum_probe')
+    expect(tally.open.get('Z1')).toBe(3)
+    // 2 (own, breached) + 3 (addendum, breached); 1 reads its addendum's ok.
+    expect(tally.breached.get('Z1')).toBe(2)
+    const own = (computeStatusBatch as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+      (c) => c[0] === 'tally_addendum_probe'
+    )
+    expect(own?.[1]).toEqual(['2'])
+  })
 })
 
 describe('integrationProblems (army 6 H10)', () => {

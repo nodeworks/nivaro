@@ -27,6 +27,11 @@ export const lowCodePageBuilder: DocSection = {
         ['record-grid', 'An editable grid over a collection, with scope pickers and month sets']
       ]
     },
+    { type: 'h3', text: 'Admin-only widgets' },
+    {
+      type: 'p',
+      text: 'Any widget whose config has `admin_only: true` is shown to administrators only (judged on the admin flag, not on role permissions). Use it for setup editors, such as budget targets or cost tables, that only administrators change. Hiding the widget does not secure the data: the server must still refuse writes from everyone else.'
+    },
     { type: 'h3', text: 'Value formats on record widgets' },
     {
       type: 'p',

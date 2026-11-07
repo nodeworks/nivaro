@@ -269,6 +269,32 @@ export function o2mRowLabel(row: Record<string, unknown>, template: string | nul
   return null
 }
 
+/** A display template's related-record paths ("{{year}} {{po_line_type.type}}" →
+ *  ["po_line_type.type"]): the plain row read has only the link's id there. */
+export function templateRelationPaths(template: string | null | undefined): string[] {
+  if (!template) return []
+  const out = new Set<string>()
+  for (const m of template.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g))
+    if (m[1].includes('.') && !m[1].startsWith('.')) out.add(m[1])
+  return [...out]
+}
+
+/** The row with its related records filled in from a deep read (`deep` = the same row read
+ *  with `fields=id,<paths>`), for the label only — the row itself stays as the grid caches it. */
+export function withTemplateRelations(
+  row: Record<string, unknown>,
+  deep: Record<string, unknown> | undefined,
+  paths: string[]
+): Record<string, unknown> {
+  if (!deep || paths.length === 0) return row
+  const out = { ...row }
+  for (const head of new Set(paths.map((p) => p.split('.')[0]))) {
+    const v = deep[head]
+    if (v !== null && typeof v === 'object') out[head] = v
+  }
+  return out
+}
+
 const O2M_ITEM_FIELDS = ['cifa', 'item', 'catalog_item', 'product', 'part', 'material']
 const PEOPLE_COLLECTIONS = new Set(['nivaro_users', 'directus_users'])
 
@@ -376,6 +402,44 @@ function O2MSummary({
     staleTime: 10 * 60_000
   })
   const itemRel = o2mItemRelation(childRelations, relatedCollection, manyField)
+  // army6 L10: a template naming a related record ("{{year}} {{po_line_type.type}}" → "2026
+  // Goods") rendered only "2026" — the row read carries the link's id. Those paths are read for
+  // the saved rows under a key of their own (never the grid's ['o2m-rows'] shape); the key
+  // carries each row's link ids, so a changed link reads again. Same filter as the saved rows
+  // (the parent link + row_filter), never an id list: up to 200 ids in a GET filter made a URL
+  // proxies refuse (R7 review).
+  const relPaths = templateRelationPaths(template)
+  const relHeads = [...new Set(relPaths.map((p) => p.split('.')[0]))]
+  const relSig = relPaths.length
+    ? JSON.stringify((savedRows ?? []).map((r) => [r.id, ...relHeads.map((h) => r[h] ?? null)]))
+    : ''
+  const { data: relRows } = useQuery<Record<string, unknown>[]>({
+    queryKey: [
+      'o2m-summary-labels',
+      relatedCollection,
+      manyField,
+      parentId,
+      rowFilter ? JSON.stringify(rowFilter) : '',
+      relPaths.join(','),
+      relSig
+    ],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${relatedCollection}`, {
+            filter: JSON.stringify(filterClause),
+            fields: ['id', ...relPaths].join(','),
+            limit: O2M_FETCH_LIMIT
+          })
+        )
+        .then((r) => r.data ?? [])
+        // A link the reader cannot follow: the label falls back as before.
+        .catch(() => []),
+    enabled:
+      relPaths.length > 0 && !!parentId && parentId !== 'new' && (savedRows?.length ?? 0) > 0,
+    staleTime: 60_000
+  })
+  const relById = new Map((relRows ?? []).map((r) => [String(r.id), r]))
 
   // Saved rows minus staged deletes, plus staged rows — what a save would leave.
   const stagingKey = `${relatedCollection}.${manyField}`
@@ -437,7 +501,10 @@ function O2MSummary({
             className='flex items-baseline justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400'
           >
             <span className='truncate'>
-              {o2mRowLabel(row, template ?? null) ??
+              {o2mRowLabel(
+                withTemplateRelations(row, relById.get(String(row.id)), relPaths),
+                template ?? null
+              ) ??
                 (itemRel && row[itemRel.field] != null && row[itemRel.field] !== '' ? (
                   <M2OSummaryValue collection={itemRel.collection} id={row[itemRel.field]} />
                 ) : (

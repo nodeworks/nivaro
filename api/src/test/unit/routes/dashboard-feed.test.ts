@@ -51,6 +51,11 @@ vi.mock('../../../services/record-access.js', () => ({
   visibleIds: vi.fn(async (_g: unknown, ids: string[]) => new Set(ids))
 }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// The zone pulse's addendum reader (army 6 M27): no collection here opts in.
+vi.mock('../../../services/collections.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/collections.js')>()),
+  getCollection: vi.fn(async () => undefined)
+}))
 
 import { db } from '../../../db/index.js'
 import { requireAuth } from '../../../middleware/authenticate.js'

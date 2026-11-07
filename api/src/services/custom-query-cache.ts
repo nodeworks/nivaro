@@ -9,9 +9,35 @@
  *
  * Leaf module: imports nothing of the app.
  */
+import { createHash } from 'node:crypto'
 
-export function customQueryCacheKey(slug: string, params: Record<string, unknown>): string {
-  return `cq:${slug}:${JSON.stringify(params)}`
+/** What of a query's definition decides its answer besides the bound params. */
+export interface CustomQueryKeyDef {
+  sql_text?: string | null
+  scope_params?: string | null
+}
+
+/**
+ * Short stamp of the SQL text + scope declaration (army 6 M15): a config script
+ * or editor that rewrites a query's SQL leaves every older entry behind instead
+ * of serving numbers computed by the old SQL until the TTL runs out (12 h for
+ * the rpt-* spend reports). Param definitions need no part here — a changed
+ * default changes the bound params, which are in the key already.
+ */
+export function customQuerySqlStamp(def: CustomQueryKeyDef): string {
+  return createHash('sha1')
+    .update(`${def.sql_text ?? ''}\u0000${def.scope_params ?? ''}`)
+    .digest('hex')
+    .slice(0, 10)
+}
+
+/** `cq:<slug>:<sql stamp>:<params JSON>` — `cq:<slug>:*` still matches every entry of a slug. */
+export function customQueryCacheKey(
+  slug: string,
+  params: Record<string, unknown>,
+  def: CustomQueryKeyDef
+): string {
+  return `cq:${slug}:${customQuerySqlStamp(def)}:${JSON.stringify(params)}`
 }
 
 /** The cached value: `{cached_at, rows}`, stamped so a viewer can be told its age. */

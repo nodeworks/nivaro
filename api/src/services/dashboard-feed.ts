@@ -1,8 +1,8 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { recordLink } from './app-links.js'
-import { parseSpecial } from './collections.js'
-import { selectInChunks } from './db-batch.js'
+import { getCollection, parseSpecial } from './collections.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import { type OpenProblemSummary, openProblemSummary } from './integration-signals.js'
 import { can, getRowFilter } from './permissions.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
@@ -1944,18 +1944,39 @@ interface CollectionTally {
 }
 const tallyCache = new Map<string, { at: number; value: CollectionTally }>()
 
+/** An in-flight addendum per PARENT record id (only its ids matter here). */
+export type PulseAddendumReader = (
+  collection: string
+) => Promise<Map<string, { addendum_id: string }>>
+
+/** The zone pulse's addendum reader: in-flight addendums of a collection that
+ *  opted in (`addendums_enabled`), none otherwise — the queues' rule. */
+export const pulseAddendums: PulseAddendumReader = async (collection) => {
+  const meta = await getCollection(collection)
+  if (!meta?.addendums_enabled) return new Map()
+  const { activeAddendumInstancesForCollection } = await import('./addendum-summary.js')
+  return activeAddendumInstancesForCollection(collection)
+}
+
 /** Tally each target id's open records, SLA breaches and recent updates in
  *  one collection, as the viewer can see it (`enforcement` = the viewer's
  *  User Scopes on it). A failed read throws, so nothing is cached for it.
  *  `computeStatusBatch` is handed in: zonePulse imports it once, rather than
- *  each of its concurrent tallies importing it on its own. */
+ *  each of its concurrent tallies importing it on its own.
+ *
+ *  `addendums` (army 6 M27): a record whose addendum is in flight is open
+ *  work in the ADDENDUM's state with the addendum's SLA, even when its own
+ *  instance is completed — the Workflows queue's rule, so the pulse's
+ *  breached total matches the queue's. Left out = the record's own instance
+ *  only. */
 export async function tallyCollection(
   scopes: typeof import('./user-scopes.js'),
   collection: string,
   hops: import('./user-scopes.js').ScopeHop[],
   cacheKey: string,
   enforcement: import('./user-scopes.js').ScopeEnforcement,
-  computeStatusBatch: typeof import('../routes/sla.js').computeStatusBatch
+  computeStatusBatch: typeof import('../routes/sla.js').computeStatusBatch,
+  addendums?: PulseAddendumReader
 ): Promise<CollectionTally> {
   const key = `${currentTenantKey()}|${cacheKey}`
   const hit = tallyCache.get(key)
@@ -1991,6 +2012,25 @@ export async function tallyCollection(
   const latest = new Map<string, (typeof instances)[number]>()
   for (const i of instances) if (!latest.has(String(i.item))) latest.set(String(i.item), i)
 
+  // In-flight addendums, by parent id the viewer can read: their parents count
+  // as open (own instance completed or not) and are judged on the addendum's SLA.
+  const viaAddendum = new Map<string, string>()
+  if (addendums) {
+    const active = await addendums(collection)
+    let parents = [...active.keys()].map(String)
+    if (parents.length > 0 && needsRecord) {
+      const readable = await selectInChunks(parents, 1000, async (chunk) => {
+        const q = whereInList(db(collection), 'id', chunk)
+        visible(q)
+        return ((await q.pluck('id')) as unknown[]).map(String)
+      })
+      const seen = new Set(readable)
+      parents = parents.filter((p) => seen.has(p))
+    }
+    for (const p of parents) viaAddendum.set(p, String(active.get(p)?.addendum_id))
+  }
+  const openIds = [...new Set([...latest.keys(), ...viaAddendum.keys()])]
+
   const zonesOf = async (ids: string[]) => {
     const map = new Map<string, string[]>()
     for (let k = 0; k < ids.length; k += 1500) {
@@ -2004,7 +2044,7 @@ export async function tallyCollection(
 
   const open = new Map<string, number>()
   const itemsByZone = new Map<string, string[]>()
-  const openZones = await zonesOf([...latest.keys()])
+  const openZones = await zonesOf(openIds)
   for (const [id, zs] of openZones) {
     for (const z of zs) {
       bump(open, z)
@@ -2018,11 +2058,23 @@ export async function tallyCollection(
   const breached = new Map<string, number>()
   const statusIds = [...new Set([...itemsByZone.values()].flat())]
   if (statusIds.length > 0) {
-    const statuses = await computeStatusBatch(
-      collection,
-      statusIds,
-      statusIds.map((id) => latest.get(id)).filter((i) => i != null)
-    )
+    const ownIds = statusIds.filter((id) => !viaAddendum.has(id))
+    const addIds = statusIds.filter((id) => viaAddendum.has(id))
+    const statuses: Record<string, { status?: string | null } | undefined> =
+      ownIds.length > 0
+        ? await computeStatusBatch(
+            collection,
+            ownIds,
+            ownIds.map((id) => latest.get(id)).filter((i) => i != null)
+          )
+        : {}
+    if (addIds.length > 0) {
+      const byAddendum = await computeStatusBatch(
+        'nivaro_addendums',
+        addIds.map((id) => viaAddendum.get(id) as string)
+      )
+      for (const id of addIds) statuses[id] = byAddendum[viaAddendum.get(id) as string]
+    }
     for (const [z, list] of itemsByZone) {
       breached.set(z, list.filter((id) => statuses[id]?.status === 'breached').length)
     }
@@ -2117,7 +2169,8 @@ export async function zonePulse(opts: {
         hops,
         `${collection}|${dim.name}|${JSON.stringify(enforcement)}`,
         enforcement,
-        computeStatusBatch
+        computeStatusBatch,
+        pulseAddendums
       )
       tallies.set(collection, tally)
       if (tally.truncated) truncated = true

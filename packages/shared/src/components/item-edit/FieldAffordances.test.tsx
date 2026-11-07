@@ -488,6 +488,14 @@ describe('personalDefaultSlotState: which control a field shows', () => {
     expect(personalDefaultSlotState({ ...base, hasValue: false })).toBe('reserve')
     expect(personalDefaultSlotState({ ...base, loaded: false })).toBe('reserve')
   })
+  it('L4 (army 6): a new record whose defaults wait on the restore offer keeps the box', () => {
+    const held = { ...base, hasDefault: true, hasValue: false, held: true }
+    expect(personalDefaultSlotState(held)).toBe('reserve')
+    // A value already on the field still shows its state.
+    expect(personalDefaultSlotState({ ...held, hasValue: true, isDefault: true })).toBe('saved')
+    // Defaults applied (no longer held): an empty field says its default exists.
+    expect(personalDefaultSlotState({ ...held, held: false })).toBe('saved-empty')
+  })
   it('renders nothing when the layout does not allow it or the field is not editable', () => {
     expect(personalDefaultSlotState({ ...base, allowed: false })).toBeNull()
     expect(personalDefaultSlotState({ ...base, editable: false })).toBeNull()

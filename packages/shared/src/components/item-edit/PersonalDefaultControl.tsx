@@ -41,6 +41,9 @@ export function personalDefaultSlotState(s: {
   /** The saved defaults could not be read: offer Make default on a value, else nothing (never
    *  an empty reserved box that waits forever). */
   failed?: boolean
+  /** A new record whose defaults are not applied yet (restore offer open): an empty field keeps
+   *  its box instead of "Your default · Clear default" (army6 L4). */
+  held?: boolean
 }): PersonalDefaultSlotState | null {
   if (!s.allowed) return null
   // The prefilled marker and the default-state actions are ONE control while the value stands.
@@ -48,6 +51,7 @@ export function personalDefaultSlotState(s: {
   if (s.applied && s.hasDefault) return 'applied'
   if (!s.editable) return null
   if (!s.loaded) return 'reserve'
+  if (s.held && !s.hasValue) return 'reserve'
   if (s.failed && !s.hasDefault) return s.hasValue ? 'offer' : null
   if (s.hasDefault) return !s.hasValue ? 'saved-empty' : s.isDefault ? 'saved' : 'update'
   return s.hasValue ? 'offer' : 'reserve'
@@ -72,7 +76,8 @@ export function personalDefaultSlotFor(
     hasDefault: api.defaultFor(field) !== null,
     isDefault: api.isDefault(field),
     applied: api.applied(field),
-    failed: api.failed
+    failed: api.failed,
+    held: api.held === true
   })
 }
 

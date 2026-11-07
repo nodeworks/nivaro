@@ -115,6 +115,14 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
+import {
+  groupSearchRelations,
+  judgeSearchRelations,
+  parseSearchRelations,
+  type SearchRelationDeps,
+  type SearchRelationGroup,
+  searchRelationCollections
+} from './search-relations.js'
 import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
 import { fitExpansion, searchVariants } from './search-synonyms.js'
 import { applySectionLocks } from './section-locks.js'
@@ -4617,6 +4625,112 @@ export function searchProbePage(qb: Knex.QueryBuilder, column: string, ids: unkn
   ])
 }
 
+/**
+ * The related-label paths a list search also matches (`browser_config.search_relations`,
+ * services/search-relations.ts), judged as the caller hop by hop, grouped by the hops they
+ * take, with the column type of every field searched and the scope gate that puts the
+ * caller's read row filter and User Scopes on every hop (H12). Exported for tests.
+ */
+export interface SearchRelationPlan {
+  groups: Array<SearchRelationGroup & { types: Map<string, string> }>
+  gate?: FilterScopeGate
+}
+
+export async function searchRelationPlan(
+  user: User | null | undefined,
+  collection: string,
+  browserConfig: unknown,
+  rootAllowed: string[] | null,
+  rels: CMSRelation[]
+): Promise<SearchRelationPlan> {
+  const configured = parseSearchRelations(browserConfig)
+  if (!configured) return { groups: [] }
+  const relsOf = (c: string) => (c === collection ? Promise.resolve(rels) : getRelsForCollection(c))
+  const deps: SearchRelationDeps = {
+    hop: async (c, seg) => {
+      const r = await relsOf(c)
+      const m2o = findM2ORelation(seg, c, r)
+      if (m2o) return { kind: 'm2o', to: m2o.rel.one_collection as string, column: m2o.fkField }
+      const m2m = findM2MRelation(seg, c, r)
+      if (!m2m) return null
+      return {
+        kind: 'm2m',
+        to: m2m.otherCollection,
+        column: seg,
+        junction: m2m.junction,
+        fkToParent: m2m.fkToParent,
+        fkToOther: m2m.fkToOther
+      }
+    },
+    isTextColumn: async (c, f) => {
+      const [meta, types] = await Promise.all([getFields(c), getColumnTypes(c)])
+      return meta.some((m) => m.field === f && ['string', 'text'].includes(m.type) && types.has(f))
+    },
+    // Server-side reads (no caller) own their access, as with filters.
+    canRead: (c) => (user ? can(user, 'read', c) : Promise.resolve(true)),
+    allowedFields: (c) => (user ? getAllowedFields(user, 'read', c) : Promise.resolve(null)),
+    isSystem: isSystemCollection
+  }
+  const judged = await judgeSearchRelations(collection, configured, rootAllowed, deps)
+  if (!judged.length) return { groups: [] }
+  const grouped = groupSearchRelations(judged)
+  const groups = await Promise.all(
+    grouped.map(async (g) => ({ ...g, types: await getColumnTypes(g.hops[g.hops.length - 1].to) }))
+  )
+  if (!user) return { groups }
+  const gate = createFilterScopeGate(user)
+  await gate.prime(searchRelationCollections(grouped))
+  return { groups, gate }
+}
+
+/**
+ * `w OR EXISTS(…hops… AND (field LIKE pattern OR …))` for one related-label group: an M2O
+ * hop is `to.id = from.fk`, an M2M hop goes through its junction. Every hop's rows carry the
+ * caller's gate (a collection the gate was never primed for matches nothing). The LIKE takes
+ * the same varchar / binary-collation form as the collection's own columns.
+ */
+function orRelationSearch(
+  w: Knex.QueryBuilder,
+  root: string,
+  group: SearchRelationPlan['groups'][number],
+  pattern: string,
+  gate: FilterScopeGate | undefined,
+  like: (b: Knex.QueryBuilder, ref: string, type: string | undefined, pattern: string) => void
+): void {
+  const step = (b: Knex.QueryBuilder, from: string, i: number) => {
+    const hop = group.hops[i]
+    const onFar = (far: Knex.QueryBuilder) => {
+      gate?.apply(far, hop.to)
+      if (i < group.hops.length - 1) step(far, hop.to, i + 1)
+      else
+        far.where((any) => {
+          for (const f of group.fields) like(any, `${hop.to}.${f}`, group.types.get(f), pattern)
+        })
+    }
+    if (hop.kind === 'm2o') {
+      b.whereExists(function (this: QB) {
+        this.select(db.raw('1'))
+          .from(hop.to)
+          .whereRaw('??.?? = ??.??', [hop.to, 'id', from, hop.column])
+        onFar(this)
+      })
+    } else {
+      b.whereExists(function (this: QB) {
+        this.select(db.raw('1'))
+          .from(hop.junction)
+          .whereRaw('??.?? = ??.??', [hop.junction, hop.fkToParent, from, 'id'])
+          .whereExists(function (this: QB) {
+            this.select(db.raw('1'))
+              .from(hop.to)
+              .whereRaw('??.?? = ??.??', [hop.to, 'id', hop.junction, hop.fkToOther])
+            onFar(this)
+          })
+      })
+    }
+  }
+  w.orWhere((sub) => step(sub, root, 0))
+}
+
 async function probeSearchMatches(countQ: Knex.QueryBuilder, collection: string) {
   return searchProbeOutcome((await searchProbeQuery(countQ, collection)) as Array<{ id: unknown }>)
 }
@@ -4957,28 +5071,48 @@ export async function readItems(
       // column is matched with a varchar pattern when the text allows it, so
       // the column is not converted to nvarchar row by row.
       const mssql = isMssql()
+      // Related labels (`browser_config.search_relations`, services/search-relations.ts): each
+      // word may also match a related record's text field — a project by its region's name.
+      // Judged as the caller hop by hop; off when the request narrows its own search_fields.
+      const relPlan: SearchRelationPlan = query.search_fields?.length
+        ? { groups: [] }
+        : await searchRelationPlan(
+            user,
+            collection,
+            collectionMeta?.browser_config,
+            allowedFields,
+            rels
+          ).catch(() => ({ groups: [] }))
       const expanded = await searchVariants(search, collection).catch(() => [])
       const variants = fitExpansion(
         expanded.length ? expanded : [[[search]]],
-        searchCols.length,
+        searchCols.length + relPlan.groups.reduce((n, g) => n + g.fields.length, 0),
         SEARCH_PATTERN_BUDGET
       )
+      const likeOn = (
+        w: Knex.QueryBuilder,
+        ref: string,
+        type: string | undefined,
+        pattern: string
+      ) => {
+        const narrow = mssql && varcharSafePattern(pattern)
+        if (narrow && NON_UNICODE_TYPES.has(type ?? ''))
+          w.orWhereRaw('?? LIKE CAST(? AS varchar(4000))', [ref, pattern])
+        // An nvarchar column scans ~3x faster upper-cased in a binary collation,
+        // and for a printable-ASCII pattern finds the same rows (services/search-like.ts).
+        else if (narrow && textKindOf(type) === 'unicode')
+          w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [
+            ref,
+            pattern.toUpperCase()
+          ])
+        else w.orWhere(db.raw('??', [ref]), 'like', pattern)
+      }
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
         for (const alt of slot) {
           const pattern = `%${likeEscape(alt)}%`
-          const narrow = mssql && varcharSafePattern(pattern)
-          for (const f of searchCols) {
-            if (narrow && NON_UNICODE_TYPES.has(columnTypes.get(f) ?? ''))
-              w.orWhereRaw('?? LIKE CAST(? AS varchar(4000))', [f, pattern])
-            // An nvarchar column scans ~3x faster upper-cased in a binary collation,
-            // and for a printable-ASCII pattern finds the same rows (services/search-like.ts).
-            else if (narrow && textKindOf(columnTypes.get(f)) === 'unicode')
-              w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [
-                f,
-                pattern.toUpperCase()
-              ])
-            else w.orWhere(db.raw('??', [f]), 'like', pattern)
-          }
+          for (const f of searchCols) likeOn(w, f, columnTypes.get(f), pattern)
+          for (const g of relPlan.groups)
+            orRelationSearch(w, collection, g, pattern, relPlan.gate, likeOn)
         }
       }
       const applySearch = (qb: QB) => {

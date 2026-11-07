@@ -1,7 +1,7 @@
 import { ExternalLink, History, RotateCcw, Trash2 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { useItemNavigation } from '../../context'
-import type { StoredDraft } from '../../lib/draft-store'
+import { draftFilledBack, type StoredDraft } from '../../lib/draft-store'
 import { formatRelative, titleCase } from '../../lib/utils'
 
 /**
@@ -60,6 +60,12 @@ export function DraftRecoveryBanner({
   }, [])
   const itemNav = useItemNavigation()
   const fields = Object.entries(draft.fields ?? {})
+  // The person's own edits, counted as the Leave dialog counts them (army6 L2); what a rule
+  // filled from those picks is named apart. Same rule as the restore (draftFilledBack): an
+  // existing record's fields, or a draft of filled fields only, all count as the person's.
+  const filledSet = draftFilledBack(draft)
+  const filled = fields.filter(([k]) => filledSet.has(k)).length
+  const own = fields.length - filled
   const created = createdId !== null
   const rows = Object.values(draft.pending_rows ?? {}).reduce((n, r) => n + r.length, 0)
   const edits = Object.values(draft.pending_edits ?? {}).reduce(
@@ -70,7 +76,8 @@ export function DraftRecoveryBanner({
   const links = Object.values(draft.m2m_links ?? {}).reduce((n, x) => n + x.length, 0)
   const unlinks = Object.values(draft.m2m_unlinks ?? {}).reduce((n, x) => n + x.length, 0)
   const parts: string[] = []
-  if (fields.length) parts.push(`${fields.length} field${fields.length === 1 ? '' : 's'}`)
+  if (own) parts.push(`${own} field${own === 1 ? '' : 's'}`)
+  if (filled) parts.push(`${filled} filled in from ${own === 1 ? 'it' : 'them'}`)
   if (rows) parts.push(`${rows} new line${rows === 1 ? '' : 's'}`)
   if (edits) parts.push(`${edits} line edit${edits === 1 ? '' : 's'}`)
   if (deletes) parts.push(`${deletes} line removal${deletes === 1 ? '' : 's'}`)
@@ -87,9 +94,9 @@ export function DraftRecoveryBanner({
         <span className='min-w-0 flex-1'>
           {created ? (
             <span className='font-semibold' data-nvr-draft-created>
-              These changes from {formatRelative(draft.saved_at)} were already saved
-              {createdId ? ` as record ${createdId}` : ' as a new record'} — restoring them makes a
-              second one.
+              {/* No row id (Rob's no-internal-ids rule): "Open the record" links to it. */}
+              These changes from {formatRelative(draft.saved_at)} were already saved as a new record
+              — restoring them makes a second one.
             </span>
           ) : (
             <span className='font-semibold'>
@@ -120,7 +127,7 @@ export function DraftRecoveryBanner({
             className='inline-flex h-7 items-center gap-1 rounded-md bg-amber-600 px-2.5 text-[11.5px] font-semibold text-white hover:bg-amber-700'
             data-nvr-draft-open-created
           >
-            <ExternalLink className='h-3 w-3' /> Open record {createdId}
+            <ExternalLink className='h-3 w-3' /> Open the record
           </a>
         )}
         <button

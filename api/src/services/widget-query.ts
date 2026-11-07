@@ -5,10 +5,10 @@
  * and the cache warm, so a warmed entry is byte-for-byte what a viewer's own
  * miss would have written under the same key.
  *
- * The key is `customQueryCacheKey(slug, params)` where params are the bound
- * params AFTER scope injection — it carries every value the statement is
- * built from, and nothing else (the SQL is a pure function of sql_text and
- * those params). Widget keys differ from the execute route's for the same
+ * The key is `customQueryCacheKey(slug, params, cq)` where params are the
+ * bound params AFTER scope injection — it carries every value the statement
+ * is built from plus a stamp of sql_text (the SQL is a pure function of
+ * sql_text and those params, so a rewritten query never reads old entries). Widget keys differ from the execute route's for the same
  * question: the route expands every declared param, this path only the bound
  * ones (see routes/widgets-internal.ts).
  */
@@ -121,7 +121,7 @@ export async function planWidgetQuery(
   await applyScopeParams(cq.scope_params ?? null, params, userId, isAdmin)
   return {
     params,
-    cacheKey: customQueryCacheKey(cq.slug, params),
+    cacheKey: customQueryCacheKey(cq.slug, params, cq),
     cacheTtl: Number(cq.cache_ttl ?? 0),
     resolvedSql: resolveWidgetSql(cq.sql_text, params)
   }

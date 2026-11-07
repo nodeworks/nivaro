@@ -25,11 +25,20 @@ function parseJson<T>(raw: string | null): T | null {
  * from its SQL: tables named after FROM / JOIN — and, for an `EXEC proc`,
  * inside that procedure's own text — that carry a recognised timestamp
  * column. A table without one cannot vouch for itself and is left out.
+ *
+ * A declared source may add `newest_by` (an indexed key, normally `id`): the
+ * probe then reads `column` of the newest row by that key (TOP 1 … ORDER BY
+ * key DESC, a seek) instead of MAX(column), which scans the table when
+ * `column` has no index (inventory_item_transactions: 2M rows, ~350 ms per
+ * probe on production). It sees new rows, not later edits to old ones — the
+ * cache's own lifetime still covers those.
  */
 
 export interface FreshnessSource {
   table: string
   column: string
+  /** Probe the newest row by this indexed key instead of MAX(column). */
+  newest_by?: string
 }
 
 export interface FreshnessFact extends FreshnessSource {
@@ -59,7 +68,10 @@ export function parseFreshnessSources(raw: string | null | undefined): Freshness
   for (const e of parsed) {
     const t = String((e as { table?: unknown })?.table ?? '')
     const c = String((e as { column?: unknown })?.column ?? '')
-    if (IDENT.test(t) && IDENT.test(c)) out.push({ table: t, column: c })
+    const by = (e as { newest_by?: unknown })?.newest_by
+    if (!IDENT.test(t) || !IDENT.test(c)) continue
+    if (typeof by === 'string' && IDENT.test(by)) out.push({ table: t, column: c, newest_by: by })
+    else out.push({ table: t, column: c })
   }
   return out.slice(0, MAX_SOURCES)
 }
@@ -175,14 +187,14 @@ const newest = new Map<string, { at: number; value: Promise<string | null> }>()
 const NEWEST_TTL = 60_000
 
 async function newestWrite(src: FreshnessSource): Promise<string | null> {
-  const key = `${src.table}.${src.column}`
+  const key = `${src.table}.${src.column}${src.newest_by ? `@${src.newest_by}` : ''}`
   const hit = newest.get(key)
   if (hit && Date.now() - hit.at < NEWEST_TTL) return hit.value
   const value = (async () => {
     try {
-      const row = (await db(src.table).max(`${src.column} as v`).first()) as
-        | { v: unknown }
-        | undefined
+      const row = (await (src.newest_by
+        ? db(src.table).select(`${src.column} as v`).orderBy(src.newest_by, 'desc').first()
+        : db(src.table).max(`${src.column} as v`).first())) as { v: unknown } | undefined
       const v = row?.v
       if (v instanceof Date) return v.toISOString()
       if (typeof v === 'string' && v) {

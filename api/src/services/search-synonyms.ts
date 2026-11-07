@@ -209,10 +209,52 @@ export function phraseAlternatives(search: string, index: Map<string, string[]>)
   return out
 }
 
+/** Characters that join the parts of one code ("2026-WEST-NNO-HE-POWERING", "a_b", "x/y"). */
+const JOINERS = /[-_/]+/
+/** A part shorter than this ("A-1", the "b" of "x/b") would match almost anything. */
+const MIN_PART = 2
+
+/**
+ * A reading where every joined word is split into its parts, each its own
+ * slot (army 6 P2 L2): "2026-NNO-POWER" finds "2026-WEST-NNO-HE-POWERING",
+ * which the word as typed never does. Parts under 2 characters are skipped;
+ * a word that keeps fewer than two parts stays as typed. null when no word
+ * splits — the reading would add nothing to the typed one.
+ */
+export function splitJoinedReading(search: string): Variant | null {
+  const tokens = search.split(/\s+/).filter(Boolean)
+  let split = false
+  const parts: string[] = []
+  for (const t of tokens) {
+    const p = t.split(JOINERS).filter((x) => x.length >= MIN_PART)
+    if (p.length > 1) {
+      split = true
+      parts.push(...p)
+    } else parts.push(t)
+  }
+  return split ? parts.map((p) => [p]) : null
+}
+
+const sameWords = (a: Variant, b: Variant) =>
+  a.length === b.length && a.every((s, i) => s[0]?.toLowerCase() === b[i][0]?.toLowerCase())
+
+/**
+ * The variants plus the split reading, LAST: after the typed reading (never
+ * trimmed) and after the multi-word synonym readings, so fitExpansion — which
+ * drops variants from the end — gives up the split reading before any
+ * synonym reading. Left out when it repeats a reading already there.
+ */
+export function withSplitReading(variants: Variant[], search: string): Variant[] {
+  if (variants.length === 0) return variants
+  const split = splitJoinedReading(search)
+  if (!split || variants.some((v) => sameWords(v, split))) return variants
+  return [...variants, split]
+}
+
 /** Expansion for one collection's search (or Cmd+K with collection omitted). */
 export async function searchVariants(search: string, collection?: string | null) {
   const groups = await synonymGroups()
-  return expandSearch(search, synonymIndex(groups, collection))
+  return withSplitReading(expandSearch(search, synonymIndex(groups, collection)), search)
 }
 
 export async function searchPhrases(search: string, collection?: string | null) {

@@ -759,6 +759,7 @@ function PageDrillHost({ children }: { children: ReactNode }) {
 
 export function PageViewPage() {
   const { slug } = useParams<{ slug: string }>()
+  const { user } = useAuth()
 
   const {
     data: page,
@@ -797,7 +798,12 @@ export function PageViewPage() {
   }
 
   const columns = page.layout?.columns ?? 12
-  const widgets = page.layout?.widgets ?? []
+  // `admin_only` widgets (budget setup editors) are for administrators only —
+  // keyed on is_admin, never can(): Creator / Approver hold `*` policies.
+  // Same rule as @nivaro/shared lib/page-widget-access.ts (PageRenderer).
+  const widgets = (page.layout?.widgets ?? []).filter(
+    (w) => !!user?.is_admin || (w.config as { admin_only?: unknown })?.admin_only !== true
+  )
 
   // Chromeless drawer-trigger buttons (query/matrix/record-grid with
   // display:'drawer') marooned in their own 76px grid band waste most of it —

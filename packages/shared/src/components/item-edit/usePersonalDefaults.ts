@@ -43,6 +43,9 @@ export type PersonalDefaultsApi = {
   failed: boolean
   /** The form shows a new record (the prefilled state can appear on it). */
   isNew: boolean
+  /** A new record whose defaults are not applied yet (the draft check or a restore offer is
+   *  still open): an empty field is not "empty despite your default" yet (army6 L4). */
+  held?: boolean
   /** The caller's saved default that fits the record's current parent values. */
   defaultFor(field: string): SavedDefault | null
   /** The field holds a value and it IS the saved default for the current parent values
@@ -799,6 +802,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
     [client, qc, collection]
   )
 
+  const held = isNew && !disabled && !ready
   const context = useMemo<PersonalDefaultsApi>(
     () => ({
       allowed: (f) => (optsRef.current.enabled ?? true) && optsRef.current.layoutAllows(f),
@@ -806,6 +810,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       loaded: data !== undefined || isError,
       failed: data === undefined && isError,
       isNew,
+      held,
       defaultFor,
       isDefault,
       save,
@@ -824,6 +829,7 @@ export function usePersonalDefaults(opts: UsePersonalDefaultsOptions): UsePerson
       data,
       isError,
       isNew,
+      held,
       defaultFor,
       isDefault,
       save,

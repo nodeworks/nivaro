@@ -6,6 +6,7 @@ import {
   DrilldownContext,
   type DrilldownTarget,
   useDrilldown,
+  useItemEditAuth,
   useItemNavigation,
   useNivaroClient,
   useOverlayState
@@ -13,6 +14,7 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { get, post } from '../lib/commands'
 import { describeError } from '../lib/error-message'
+import { visiblePageWidgets } from '../lib/page-widget-access'
 import {
   explicitAllUrlParams,
   filterSelectionToSearch,
@@ -1860,6 +1862,7 @@ export interface PageRendererProps {
 
 export function PageRenderer({ slug, hideHeader, className }: PageRendererProps) {
   const client = useNivaroClient()
+  const { isAdmin } = useItemEditAuth()
   const outerDrill = useDrilldown()
   // The stack for the sheet PageRenderer hosts itself (see the outerDrill guard
   // below). It lives in the host's overlay history when one is provided, so the
@@ -1901,7 +1904,8 @@ export function PageRenderer({ slug, hideHeader, className }: PageRendererProps)
   }
 
   const columns = page.layout?.columns ?? 12
-  const widgets = page.layout?.widgets ?? []
+  // `admin_only` widgets (budget setup editors) are for administrators only.
+  const widgets = visiblePageWidgets(page.layout?.widgets ?? [], isAdmin)
 
   // Bands occupied only by chromeless drawer buttons collapse out of the
   // fixed-height grid into a compact flex toolbar row (mirrors PageView).

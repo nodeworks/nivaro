@@ -1767,7 +1767,7 @@ async function runChatTool(
       const redis = (getApp() as { redis?: unknown } | null)?.redis as
         | { get(k: string): Promise<string | null>; set(...a: unknown[]): Promise<string | null> }
         | undefined
-      const cacheKey = customQueryCacheKey(slug, finalParams)
+      const cacheKey = customQueryCacheKey(slug, finalParams, query)
       let rows: Array<Record<string, unknown>> | null = null
       let cached = false
       if (query.cache_ttl > 0 && redis) {

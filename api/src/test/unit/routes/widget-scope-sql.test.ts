@@ -89,6 +89,7 @@ vi.mock('../../../db/index.js', () => {
 })
 
 import { widgetsInternalRoutes } from '../../../routes/widgets-internal.js'
+import { customQuerySqlStamp } from '../../../services/custom-query-cache.js'
 import { resetSingleFlight } from '../../../services/single-flight.js'
 
 async function render(userId: string) {
@@ -118,13 +119,18 @@ afterEach(() => {
   resetSingleFlight()
 })
 
+const STAMP = customQuerySqlStamp({
+  sql_text: 'EXEC dbo.spend :year, :zone',
+  scope_params: '{"zone":{"dimension":"zone"}}'
+})
+
 describe('custom-query widget User Scopes', () => {
   it('a restricted viewer runs SQL carrying the scope value, cached under the scoped key', async () => {
     const { res, redis } = await render('restricted')
     expect(res.statusCode).toBe(200)
     expect(sql.ran).toEqual(["EXEC dbo.spend 2026, 'Z1'"])
     const key = redis.setex.mock.calls[0]?.[0] as string
-    expect(key).toBe(`cq:spend:${JSON.stringify({ year: 2026, zone: 'Z1' })}`)
+    expect(key).toBe(`cq:spend:${STAMP}:${JSON.stringify({ year: 2026, zone: 'Z1' })}`)
     expect(redis.get).toHaveBeenCalledWith(key)
   })
 
@@ -132,7 +138,9 @@ describe('custom-query widget User Scopes', () => {
     const { res, redis } = await render('free')
     expect(res.statusCode).toBe(200)
     expect(sql.ran).toEqual(['EXEC dbo.spend 2026, NULL'])
-    expect(redis.setex.mock.calls[0]?.[0]).toBe(`cq:spend:${JSON.stringify({ year: 2026 })}`)
+    expect(redis.setex.mock.calls[0]?.[0]).toBe(
+      `cq:spend:${STAMP}:${JSON.stringify({ year: 2026 })}`
+    )
   })
 
   it('concurrent renders share one run per final key, never across scope values', async () => {

@@ -466,7 +466,10 @@ export function RelationCombobox({
       narrowLocally(
         data ?? [],
         (item) => applyDisplayTemplate(tmpl, item) || `#${item.id}`,
-        query,
+        // The server also reads a joined code by its parts ("2026-NNO-POWER"
+        // finds 2026-WEST-NNO-HE-POWERING, services/search-synonyms.ts), so
+        // the list narrowed while that search is out does too.
+        query.replace(/[-_/]+/g, ' '),
         optionsSettled
       ),
     [data, tmpl, query, optionsSettled]

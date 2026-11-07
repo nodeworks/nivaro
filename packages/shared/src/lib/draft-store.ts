@@ -24,6 +24,10 @@ export interface StoredDraft {
   fields: Record<string, unknown>
   /** The loaded values those fields had (for the restore diff). */
   base: Record<string, unknown>
+  /** Keys of `fields` the person did not edit themselves — a rule or default filled them
+   *  from the person's picks (army6 L2: the offer counts the person's own edits, as the
+   *  Leave dialog does). Absent on drafts stored by older builds = every field is theirs. */
+  filled?: string[]
   /** The record's own updated-at at capture time, when it exposes one. */
   base_updated_at: string | null
   /** The record revision the draft was made on (army5 b09): a restore saves
@@ -39,6 +43,23 @@ export interface StoredDraft {
    *  every new form shares one draft key, so a draft is only offered back on
    *  a form that started from the same prefill. Absent = a blank new form. */
   prefill_sig?: string | null
+}
+
+/**
+ * Which of a draft's fields come back as FILLED (a rule's, not the person's own edit) when it
+ * is restored — the one rule the restore and the offer's count share, so the offer, the Leave
+ * dialog after a restore and the next offer all count the same fields (army6 L2, R7 review).
+ * New forms only: on an existing record every restored value stays the person's, protected as
+ * touched from a re-read or someone else's save. A draft of filled fields only keeps them all
+ * as the person's (nothing else would hold them over a re-read).
+ */
+export function draftFilledBack(
+  draft: Pick<StoredDraft, 'item_id' | 'fields' | 'filled'>
+): Set<string> {
+  if (draft.item_id !== 'new') return new Set()
+  const keys = Object.keys(draft.fields ?? {})
+  const filled = new Set((draft.filled ?? []).filter((k) => keys.includes(k)))
+  return filled.size === keys.length ? new Set() : filled
 }
 
 /** A short, stable signature of a new form's prefill (null when blank). */

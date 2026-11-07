@@ -869,7 +869,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
     // M19 — anonymous by definition: cached for at least the public floor, and a miss goes
     // through the read gate + single flight like every other heavy read.
     const ttl = effectiveCacheTtl(query.cache_ttl, true)
-    const cacheKey = customQueryCacheKey(query.slug, finalParams)
+    const cacheKey = customQueryCacheKey(query.slug, finalParams, query)
     if (ttl > 0 && app.redis) {
       try {
         const cached = await app.redis.get(cacheKey)
@@ -976,7 +976,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       // M19 — anonymous callers are served from the cache for at least the public floor.
       const ttl = effectiveCacheTtl(query.cache_ttl, anonymous)
 
-      const cacheKey = customQueryCacheKey(slug, finalParams)
+      const cacheKey = customQueryCacheKey(slug, finalParams, query)
       if (ttl > 0 && app.redis && !wantsRefresh) {
         try {
           const cached = await app.redis.get(cacheKey)

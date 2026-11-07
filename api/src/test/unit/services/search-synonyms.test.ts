@@ -10,7 +10,9 @@ import {
   patternCount,
   phraseAlternatives,
   type SynonymGroup,
-  synonymIndex
+  splitJoinedReading,
+  synonymIndex,
+  withSplitReading
 } from '../../../services/search-synonyms.js'
 
 const groups: SynonymGroup[] = [
@@ -84,5 +86,59 @@ describe('coveredBy', () => {
     expect(coveredBy(groups, 'laptop', 'assets')?.id).toBe(2)
     expect(coveredBy(groups, 'laptop', null)).toBeNull()
     expect(coveredBy(groups, 'desk', 'assets')).toBeNull()
+  })
+})
+
+describe('splitJoinedReading', () => {
+  it('splits a joined code into one slot per part', () => {
+    expect(splitJoinedReading('2026-NNO-POWER')).toEqual([['2026'], ['NNO'], ['POWER']])
+    expect(splitJoinedReading('acme po_12/bb')).toEqual([['acme'], ['po'], ['12'], ['bb']])
+  })
+
+  it('skips parts under 2 characters (R7 review)', () => {
+    expect(splitJoinedReading('acme po_12/b')).toEqual([['acme'], ['po'], ['12']])
+    expect(splitJoinedReading('NNO-A-POWER')).toEqual([['NNO'], ['POWER']])
+  })
+
+  it('is null when no word has a joiner inside it, or the split adds nothing', () => {
+    expect(splitJoinedReading('Robert Lee')).toBeNull()
+    expect(splitJoinedReading('- x')).toBeNull()
+    expect(splitJoinedReading('')).toBeNull()
+    // only one part of 2+ characters left: the word stays as typed
+    expect(splitJoinedReading('A-1')).toBeNull()
+    expect(splitJoinedReading('PW26-7 acme')).toBeNull()
+  })
+
+  it('reads the parts as every-word-must-match (the LIKE side of items search)', () => {
+    const reading = splitJoinedReading('2026-NNO-POWER') ?? []
+    const label = '2026-WEST-NNO-HE-POWERING'.toLowerCase()
+    expect(reading.every((slot) => slot.some((w) => label.includes(w.toLowerCase())))).toBe(true)
+  })
+})
+
+describe('withSplitReading (R7 review)', () => {
+  const idx = synonymIndex(groups, null)
+
+  it('comes after the typed reading AND the multi-word synonym readings', () => {
+    const variants = expandSearch('purchase order 2026-NNO-POWER', idx)
+    expect(variants).toHaveLength(2) // typed + "purchase order" | "po"
+    const out = withSplitReading(variants, 'purchase order 2026-NNO-POWER')
+    expect(out).toHaveLength(3)
+    expect(out[0]).toEqual(variants[0])
+    expect(out[1]).toEqual(variants[1])
+    expect(out[2].map((s) => s[0])).toEqual(['purchase', 'order', '2026', 'NNO', 'POWER'])
+  })
+
+  it('is the first reading the parameter budget gives up', () => {
+    const out = withSplitReading(expandSearch('po 2026-NNO-POWER', idx), 'po 2026-NNO-POWER')
+    const fitted = fitExpansion(out, 1, patternCount(out) - 1)
+    expect(fitted).toHaveLength(out.length - 1)
+    expect(fitted.some((v) => v.some((s) => s[0] === 'NNO'))).toBe(false)
+  })
+
+  it('adds nothing when the search does not split', () => {
+    const v = expandSearch('PW26-7', idx)
+    expect(withSplitReading(v, 'PW26-7')).toBe(v)
+    expect(withSplitReading([], '2026-NNO-POWER')).toEqual([])
   })
 })
