@@ -2974,6 +2974,16 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>_starts_with</td><td>LIKE ?%</td><td>Prefix match.</td></tr>
               <tr><td>_ends_with</td><td>LIKE %?</td><td>Suffix match.</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Bracket form</h3>
+          <p class="doc-p">The items routes also take a filter spelled as query keys: <code class="doc-code">filter[field][_op]=value</code>, with relation hops (<code class="doc-code">filter[project][division][_eq]=3</code>) and numbered groups (<code class="doc-code">filter[_or][0][name][_eq]=a</code>). <code class="doc-code">_in</code> / <code class="doc-code">_nin</code> take a comma list, <code class="doc-code">_null</code> / <code class="doc-code">_nnull</code> take <code class="doc-code">true</code> or <code class="doc-code">false</code>. It is the same filter as the JSON form and judged the same way: a field you cannot read is 403 <code class="doc-code">FIELD_NOT_READABLE</code>, a field that does not exist is 400 <code class="doc-code">UNKNOWN_FIELD</code>. A key with no operator means <code class="doc-code">_eq</code> (<code class="doc-code">filter[status]=active</code> = <code class="doc-code">filter[status][_eq]=active</code>), and a <code class="doc-code">filter=&lt;JSON&gt;</code> sent alongside bracket keys is combined with them — both must hold. A malformed key, a key naming <code class="doc-code">__proto__</code> / <code class="doc-code">prototype</code> / <code class="doc-code">constructor</code>, a group index with no condition (<code class="doc-code">filter[_or][0]=x</code>), conflicting keys, more than 50 keys or 8 levels, or a JSON part that is not an object is 400 <code class="doc-code">INVALID_FILTER</code>.</p>
+          <pre class="doc-pre"><code>?filter[status][_eq]=active&amp;filter[id][_in]=1,2,3
+// = ?filter={"status":{"_eq":"active"},"id":{"_in":["1","2","3"]}}
+
+?filter[status]=active
+// = ?filter={"status":{"_eq":"active"}}
+
+?filter={"total":{"_gt":100}}&amp;filter[status]=active
+// = ?filter={"_and":[{"total":{"_gt":100}},{"status":{"_eq":"active"}}]}</code></pre>
           <h3 class="doc-h3">Pipeline state (<code class="doc-code">$state</code>)</h3>
           <pre class="doc-pre"><code>// In one of these states
 ?filter={"$state":{"_in":["started","in_review"]}}
@@ -17684,6 +17694,11 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)</cod
 // Exact id: a one-token query with a digit (AB26-77260, B1234-2, PO-00042) equal to a
 // business-id column (string *_id / *_number / *_no, numeric *_number for digits) comes
 // back as data.exact (exact: true) and first in records. Scoped, the record id too.
+// A record that only REFERS to the id (a workflow's project_id) ranks under the record
+// whose label shows it (the project) and is not marked exact.
+// Tables over 500,000 rows are never scanned, but answer an id (or its first 4+
+// characters) through the id columns an index leads, plus browser_config.search_fields
+// columns an index leads: an invoice number finds its invoice, read as you.
 GET /api/global-search?q=AB26-77260
 
 // Time budget: every part of the answer (each big collection, the exact-id pass, people,
@@ -17691,7 +17706,9 @@ GET /api/global-search?q=AB26-77260
 // SEARCH_BUDGET_MS). A part still running at the deadline is stopped and left out; the
 // answer then names it in "partial" (collection names, "small tables", or people /
 // semantic / comments / files / videos / docs / chat / config). An exact id found through
-// an index ends the wait 0.3 s later — the remaining scans are cut. No "partial" = complete.
+// an index ends the wait 0.3 s later — the remaining scans are cut. Those are named in
+// "trimmed", not "partial": the answer is known, so no "took too long" warning.
+// No "partial" = complete.
 // "partial": ["line_items", "comments"]
 
 // Typo tolerance: when fewer than 3 results matched, a near-spelling pass over name

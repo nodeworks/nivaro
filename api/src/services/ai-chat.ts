@@ -357,7 +357,7 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'queue_summary',
     description:
-      'Summarise one of the queues listed in your instructions under "Queues you may ask about" — only queues the asker may read answer. Returns the totals (total, unowned, SLA warnings/breaches, at-risk), the by-state breakdown, the oldest records in their state, the SLA-breached records with hours over and owners, the unowned records, and the at-risk rules firing most; every record carries its friendly id and a link. Runs as the asker, so the figures match what they see on the queue page. Prefer queue_name when the user names a queue; use queue_id when the catalogue gives it or a name was ambiguous.',
+      'Summarise one of the queues listed in your instructions under "Queues you may ask about" — only queues the asker may read answer. Returns the totals (total, unowned, SLA warnings/breaches, at-risk), the by-state breakdown, the oldest records in their state, the SLA-breached records with hours over and owners, the unowned records (a record whose every owner is suspended or a former user counts as unowned — inactive_owners names them), and the at-risk rules firing most; every record carries its friendly id as `label` and a link — name records by `label`, never by `id` (an internal row number). Runs as the asker, so the figures match what they see on the queue page. Prefer queue_name when the user names a queue; use queue_id when the catalogue gives it or a name was ambiguous.',
     input_schema: {
       type: 'object' as const,
       properties: {

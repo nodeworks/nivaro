@@ -496,6 +496,26 @@ export function draftMedia(
   }
 }
 
+/** The version's edits hold at least one caption with text. Exported for tests. */
+export function versionHasCaptions(version: { edits?: unknown } | null | undefined): boolean {
+  let edits: unknown = version?.edits
+  if (typeof edits === 'string') {
+    try {
+      edits = JSON.parse(edits)
+    } catch {
+      return false
+    }
+  }
+  const caps = (edits as { captions?: unknown } | null)?.captions
+  return (
+    Array.isArray(caps) &&
+    caps.some(
+      (c) =>
+        typeof (c as { text?: unknown })?.text === 'string' && !!(c as { text: string }).text.trim()
+    )
+  )
+}
+
 export async function loadVersion(id: string | null | undefined): Promise<VersionRow | undefined> {
   if (!id) return undefined
   return db('nivaro_help_video_versions').where({ id }).first()
@@ -698,7 +718,10 @@ export async function serializeVideo(
       ? `${base}/poster?st=${pt}&v=${String(video.poster_file).slice(0, 8).toLowerCase()}`
       : null,
     stream_url: published ? `${base}/stream?st=${pt}` : null,
-    captions_url: published ? `${base}/captions.vtt?st=${pt}` : null,
+    // Only when the version has caption text: an empty "WEBVTT" file made players show a
+    // Captions control that never showed anything (army 8 b14).
+    captions_url:
+      published && versionHasCaptions(published) ? `${base}/captions.vtt?st=${pt}` : null,
     contexts: contexts.map(
       (c: { kind: ContextInput['kind']; key: string; state_key: string | null }) => ({
         kind: c.kind,

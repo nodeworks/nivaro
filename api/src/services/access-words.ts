@@ -142,6 +142,15 @@ export interface OwnerSource {
   added_by?: string | null
 }
 
+const CREATOR_FIELDS = new Set(['user_created', 'created_by', 'creator', 'createdby'])
+const CREATOR_LABELS = /^(user created|created by|creator)$/i
+
+/** A fallback owner field that is the record's creator column. */
+export function isCreatorField(field?: string | null, label?: string | null): boolean {
+  if (field && CREATOR_FIELDS.has(field.toLowerCase())) return true
+  return !!label && CREATOR_LABELS.test(label.trim())
+}
+
 export function ownerSourceSentence(name: string, src: OwnerSource): string {
   switch (src.kind) {
     case 'group': {
@@ -181,9 +190,13 @@ export function ownerSourceSentence(name: string, src: OwnerSource): string {
     case 'manual':
       return `${name} was added to this record by hand${src.added_by ? ` by ${src.added_by}` : ''}.`
     case 'fallback':
-      return src.field_hidden
-        ? `${name} owns this record because a field on the record names them.`
-        : `${name} owns this record because they are its ${src.field_label ?? 'named person'}.`
+      if (src.field_hidden)
+        return `${name} owns this record because a field on the record names them.`
+      // The creator field reads as a plain verb — "because they are its User
+      // Created" was a raw column label (army8 b02).
+      if (isCreatorField(src.field, src.field_label))
+        return `${name} owns this record because they created it.`
+      return `${name} owns this record because they are its ${src.field_label ?? 'named person'}.`
     case 'delegate':
       return `${name} stands in for ${src.for_name ?? 'an owner'}, who is out of office${
         src.until ? ` until ${src.until}` : ''

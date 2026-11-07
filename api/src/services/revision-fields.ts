@@ -113,6 +113,10 @@ export interface O2mLabelDeps {
   snapshotLabel(collection: string, row: Record<string, unknown>): Promise<string | null>
   /** People by name. */
   userNames(ids: string[]): Promise<Map<string, string>>
+  /** The many-to-one fields the collection's display template reads through
+   *  ("{{inventory_request.inventory_request_id}} - {{cifa.cifa_number}}" →
+   *  inventory_request, cifa). Optional: absent = none. */
+  templateRelations?(collection: string): Promise<string[]>
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -168,6 +172,13 @@ const defaultDeps: O2mLabelDeps = {
   async snapshotLabel(collection, row) {
     const { labelFromSnapshot } = await import('./record-headline.js')
     return labelFromSnapshot(collection, row)
+  },
+  async templateRelations(collection) {
+    const { getCollection } = await import('./collections.js')
+    const col = (await getCollection(collection).catch(() => null)) as {
+      display_template?: string | null
+    } | null
+    return templateRelationHeads(col?.display_template)
   },
   async userNames(ids) {
     const out = new Map<string, string>()
@@ -231,9 +242,20 @@ export async function revisionsForReader<T extends RevisionLike>(
     out.push(next)
   }
   if (pending.length > 0) {
-    const summaries = await o2mSummaries(user, pending, childFields, deps).catch(() => null)
+    const summaries = await o2mSummaries(user, pending, childFields, deps, collection).catch(
+      () => null
+    )
     if (summaries) for (const [i, s] of summaries) out[i].o2m = s
   }
+  return out
+}
+
+/** The relation heads a display template reads through, in order, once each. */
+export function templateRelationHeads(template: string | null | undefined): string[] {
+  if (!template) return []
+  const out: string[] = []
+  for (const m of template.matchAll(/\{\{\s*([\w]+)\.[\w.]+\s*\}\}/g))
+    if (!out.includes(m[1])) out.push(m[1])
   return out
 }
 
@@ -242,7 +264,8 @@ async function o2mSummaries(
   user: User,
   rows: Array<{ index: number; payload: O2mPayload; action: string }>,
   childFields: (child: string) => Promise<Set<string> | null | false>,
-  deps: O2mLabelDeps
+  deps: O2mLabelDeps,
+  parentCollection?: string
 ): Promise<Map<number, O2mSummary>> {
   type Work = {
     index: number
@@ -319,6 +342,26 @@ async function o2mSummaries(
       }
     }
   }
+  // A row whose own label is only the template's related parts (an IR
+  // material: "{{inventory_request…}} - {{cifa.cifa_number}}") is named by the
+  // record it is about — its item — never by the parent it sits on: "changed
+  // Inventory Request Materials" said nothing about WHICH line (army8 b02).
+  const itemRef = new Map<number, { collection: string; id: string }>()
+  for (const w of work) {
+    if (!w.snapshot || !deps.templateRelations) continue
+    const heads = await deps.templateRelations(w.child).catch(() => [] as string[])
+    if (heads.length === 0) continue
+    const { m2o } = await meta(w.child)
+    for (const h of heads) {
+      const target = m2o.get(h)
+      const v = w.snapshot[h]
+      if (!target || target === parentCollection || USER_COLLECTIONS.has(target)) continue
+      if (v == null || v === '' || typeof v === 'object') continue
+      itemRef.set(w.index, { collection: target, id: String(v) })
+      refs.push({ collection: target, id: String(v) })
+      break
+    }
+  }
   const [labels, names] = await Promise.all([
     refs.length ? deps.recordLabels(user, refs).catch(() => ({}) as Record<string, string>) : {},
     userIds.size ? deps.userNames([...userIds]).catch(() => new Map<string, string>()) : new Map()
@@ -331,6 +374,12 @@ async function o2mSummaries(
     if (w.childId && w.verb !== 'removed') {
       const l = (labels as Record<string, string>)[`${w.child}:${w.childId}`]?.trim()
       if (l && l !== collectionLabel) rowLabel = l
+    }
+    if (!rowLabel && itemRef.has(w.index)) {
+      const ref = itemRef.get(w.index) as { collection: string; id: string }
+      const l = (labels as Record<string, string>)[`${ref.collection}:${ref.id}`]?.trim()
+      // An unreadable item reads as its collection's name — that names nothing.
+      if (l && l !== ref.id && !UUID.test(l) && l !== (await title(ref.collection))) rowLabel = l
     }
     if (!rowLabel && w.snapshot) {
       const l = (await deps.snapshotLabel(w.child, w.snapshot).catch(() => null))?.trim()

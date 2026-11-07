@@ -43,7 +43,32 @@ describe('SearchBudget.run', () => {
     expect(b.remaining()).toBeLessThanOrEqual(30)
     const out = await b.run('units', [], () => sleep(1_000).then(() => [1]))
     expect(out).toEqual([])
+    // Cut because the answer was already known — trimmed, never "took too long".
+    expect(b.trimmed.has('units')).toBe(true)
+    expect(b.timedOut.has('units')).toBe(false)
+    b.finish()
+  })
+
+  it('army 8 b14: after an exact hit shortens the wait, cut parts are trimmed, not partial', async () => {
+    const b = new SearchBudget(2_000)
+    const slow = b.run('comments', [], () => sleep(1_000).then(() => ['late']))
+    await sleep(10)
+    b.shorten(20)
+    expect(await slow).toEqual([])
+    expect([...b.trimmed]).toEqual(['comments'])
+    expect([...b.timedOut]).toEqual([])
+    // A part asked for after the shortened deadline (still before the real one) is trimmed too.
+    expect(await b.run('files', 'fb', async () => 'ran')).toBe('fb')
+    expect(b.trimmed.has('files')).toBe(true)
+    expect(b.timedOut.size).toBe(0)
+    b.finish()
+  })
+
+  it('without an exact hit, the real deadline still marks parts out of time', async () => {
+    const b = new SearchBudget(30)
+    await b.run('units', [], () => sleep(500).then(() => [1]))
     expect(b.timedOut.has('units')).toBe(true)
+    expect(b.trimmed.size).toBe(0)
     b.finish()
   })
 

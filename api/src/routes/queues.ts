@@ -9,6 +9,7 @@ import { builtinAllowed } from '../services/bulk-actions.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import { canUserReadQueue } from '../services/queue-access.js'
 import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
+import { markInactiveOwners } from '../services/queue-owner-status.js'
 import type {
   QueueItemsQuery,
   QueueRow,
@@ -1424,6 +1425,11 @@ export async function queuesRoutes(app: FastifyInstance) {
       { signal }
     )
     const result = await promise
+    // Owners who cannot act are marked, so a "No Owners" row naming a
+    // suspended person explains itself (army 8 b08-N4). The live path already
+    // judged its rows (same rule, no second read); a materialized page is read
+    // here. The single-flight result is shared: marking is idempotent.
+    await markInactiveOwners(result.items as never)
     // #502: an empty view says WHY — nothing yours vs filtered out vs a
     // source this role cannot read looked identical before.
     const empty =

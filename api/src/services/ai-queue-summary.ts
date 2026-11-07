@@ -1,6 +1,12 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { fetchQueueItems, type QueueItem, type QueueRow, type QueueStats } from './queues.js'
+import {
+  fetchQueueItems,
+  isUnowned,
+  type QueueItem,
+  type QueueRow,
+  type QueueStats
+} from './queues.js'
 import { isAdminRole } from './user-scopes.js'
 
 /**
@@ -31,6 +37,9 @@ export interface QueueSummaryRecord {
   state: string | null
   aging_hours: number | null
   url: string
+  /** Unowned list only: the people still named on a record whose every owner
+   *  is suspended or a former user (it counts as unowned). */
+  inactive_owners?: string[]
 }
 
 export interface QueueSummary {
@@ -98,8 +107,12 @@ export function shapeQueueSummary(
     return opts.stateLabels?.[key] ?? titleCase(key)
   }
   const record = (it: QueueItem): QueueSummaryRecord => {
-    const friendly = opts.friendlyIds?.[itemKey(it)]
-    const label = friendly ?? it.label
+    // A record with no human id resolves to its internal row id ("360291",
+    // army 8 b08-N7): the queue's own row label ("No workflow number · <name>")
+    // is what people see, so that is what the answer names.
+    const resolved = opts.friendlyIds?.[itemKey(it)]
+    const friendly = resolved && resolved !== String(it.item_id) ? resolved : undefined
+    const label = friendly ?? (it.label || resolved || String(it.item_id))
     const out: QueueSummaryRecord = {
       label,
       collection: it.collection,
@@ -134,11 +147,18 @@ export function shapeQueueSummary(
       owners: it.owners.map((o) => o.name)
     }))
 
+  // The queue's own rule (army 8 b08-N7): a record whose every owner is
+  // suspended or a former user counts as unowned — the answer said "Unowned 4"
+  // and then listed only the two with no owner at all.
   const unowned = items
-    .filter((it) => it.owners.length === 0)
+    .filter(isUnowned)
     .sort(byAgeDesc)
     .slice(0, limit)
-    .map(record)
+    .map((it) =>
+      it.owners.length > 0
+        ? { ...record(it), inactive_owners: it.owners.map((o) => o.name) }
+        : record(it)
+    )
 
   const reasonCounts = new Map<string, number>()
   for (const it of items) {

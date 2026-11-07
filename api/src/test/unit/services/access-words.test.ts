@@ -88,6 +88,19 @@ describe('ownerSourceSentence (#1956)', () => {
       'Kim owns this step through the owner group "Zone 1 Finance" — it covers records whose Zone is Zone 1, and this record\'s Zone is Zone 1. Kim is in the team "Finance team", which sits in it.'
     )
   })
+  it('names the creator fallback in plain words, never the column label (army8 b02)', () => {
+    expect(
+      ownerSourceSentence('Peter Moniz', {
+        kind: 'fallback',
+        field: 'user_created',
+        field_label: 'User Created'
+      })
+    ).toBe('Peter Moniz owns this record because they created it.')
+    expect(ownerSourceSentence('Ana', { kind: 'fallback', field_label: 'Created By' })).toBe(
+      'Ana owns this record because they created it.'
+    )
+  })
+
   it('explains delegation, manual adds, fallback and default groups', () => {
     expect(
       ownerSourceSentence('Ana', { kind: 'delegate', for_name: 'Kim', until: 'Oct 20, 2026' })

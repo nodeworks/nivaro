@@ -436,7 +436,10 @@ export async function editLockVerdictFor(
           await offersAMove(user, parent, String(parentId), latest)
         ),
         tier: 'admin_only',
-        open_fields: cfg.admin_only.open_fields
+        // A FINISHED run (Completed, Canceled) leaves nothing open: putting a finished
+        // record on hold means nothing (army 8 b14: Put On Hold was offered to a creator
+        // on a Completed, admin-locked workflow). Open fields apply while the run waits.
+        open_fields: latest.completed_at == null ? cfg.admin_only.open_fields : []
       }
   }
   if (cfg.states.length === 0) return OPEN
@@ -501,7 +504,7 @@ export async function lockHolderVerdict(
     if (await isAdminRole(user)) return OPEN
     const verdict = await editLockVerdictFor(user, collection, String(item), cfg)
     // A form with open fields is still worth holding: each save is judged.
-    if (verdict.tier === 'admin_only' && (cfg.admin_only?.open_fields.length ?? 0) > 0)
+    if (verdict.tier === 'admin_only' && (verdict.open_fields?.length ?? 0) > 0)
       return { ...verdict, allowed: true, message: '' }
     return verdict
   } catch {

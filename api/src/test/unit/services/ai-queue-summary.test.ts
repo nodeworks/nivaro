@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 // The shaper is pure, but the module imports the queue service (and through
 // it the db + SLA routes) for the read half — keep those inert.
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
-vi.mock('../../../services/queues.js', () => ({ fetchQueueItems: vi.fn() }))
+vi.mock('../../../services/queues.js', () => ({
+  fetchQueueItems: vi.fn(),
+  isUnowned: (it: { owners: unknown[]; no_active_owner?: boolean }) =>
+    it.owners.length === 0 || it.no_active_owner === true
+}))
 vi.mock('../../../services/user-scopes.js', () => ({ isAdminRole: vi.fn(async () => false) }))
 
 const { shapeQueueSummary, QUEUE_SUMMARY_MAX_LIST_LIMIT } = await import(
@@ -163,5 +167,35 @@ describe('shapeQueueSummary', () => {
     expect(out.breached).toEqual([])
     expect(out.unowned).toEqual([])
     expect(out.at_risk_reasons).toEqual([])
+  })
+})
+
+// Army 8 b08-N7: the answer named a numberless workflow "360291" (its row id)
+// and listed 2 of the 4 unowned records.
+describe('shapeQueueSummary — army 8', () => {
+  it('names a record with no human id by its row label, never the internal id', () => {
+    const s = shapeQueueSummary(
+      [row({ item_id: '360291', label: 'No workflow number · IG Net2.0', aging_hours: 900 })],
+      { ...stats, total: 1 },
+      queue,
+      { friendlyIds: { 'orders:360291': '360291' } }
+    )
+    expect(s.oldest[0].label).toBe('No workflow number · IG Net2.0')
+  })
+  it('lists records whose every owner is inactive as unowned, naming those owners', () => {
+    const s = shapeQueueSummary(
+      [
+        row({ item_id: '7', owners: [] }),
+        row({
+          item_id: '8',
+          owners: [{ id: 'r', name: 'Redacted Redacted' }],
+          no_active_owner: true
+        })
+      ],
+      { ...stats, total: 2, unowned: 2 },
+      queue
+    )
+    expect(s.unowned.map((r) => r.id).sort()).toEqual(['7', '8'])
+    expect(s.unowned.find((r) => r.id === '8')?.inactive_owners).toEqual(['Redacted Redacted'])
   })
 })

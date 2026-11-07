@@ -987,6 +987,15 @@ export const apiFilter: DocSection = {
         ['_ends_with', 'LIKE %?', 'Suffix match.']
       ]
     },
+    { type: 'h3', text: 'Bracket form' },
+    {
+      type: 'p',
+      text: 'The items routes also take a filter spelled as query keys: `filter[field][_op]=value`, with relation hops (`filter[project][division][_eq]=3`) and numbered groups (`filter[_or][0][name][_eq]=a`). `_in` / `_nin` take a comma list, `_null` / `_nnull` take `true` or `false`. It is the same filter as the JSON form and judged the same way: a field you cannot read is 403 `FIELD_NOT_READABLE`, a field that does not exist is 400 `UNKNOWN_FIELD`. A key with no operator means `_eq` (`filter[status]=active` = `filter[status][_eq]=active`), and a `filter=<JSON>` sent alongside bracket keys is combined with them — both must hold. A malformed key, a key naming `__proto__` / `prototype` / `constructor`, a group index with no condition (`filter[_or][0]=x`), conflicting keys, more than 50 keys or 8 levels, or a JSON part that is not an object is 400 `INVALID_FILTER`.'
+    },
+    {
+      type: 'pre',
+      code: '?filter[status][_eq]=active&filter[id][_in]=1,2,3\n// = ?filter={"status":{"_eq":"active"},"id":{"_in":["1","2","3"]}}\n\n?filter[status]=active\n// = ?filter={"status":{"_eq":"active"}}\n\n?filter={"total":{"_gt":100}}&filter[status]=active\n// = ?filter={"_and":[{"total":{"_gt":100}},{"status":{"_eq":"active"}}]}'
+    },
     { type: 'h3', text: 'Pipeline state (`$state`)' },
     {
       type: 'pre',

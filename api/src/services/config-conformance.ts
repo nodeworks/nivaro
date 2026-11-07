@@ -284,6 +284,15 @@ async function layoutPresence(
   return { layouts, visibleOn }
 }
 
+/** Whether the integrity sweep judges a field validation rule. A SOFT rule
+ *  is a note the form shows while typing ("No warehouse serves this region
+ *  yet … You can still save") — never an integrity issue: it kept a fully
+ *  filled record at "99% · 1 issue" with nothing its creator could fix
+ *  (army8 b02). */
+export function sweptByIntegrity(rule: ValidationRule | null | undefined): boolean {
+  return !!rule && !rule.soft
+}
+
 export async function compileChecks(collection: string): Promise<CompiledChecks> {
   const fields = (await db('nivaro_fields')
     .where({ collection })
@@ -425,6 +434,7 @@ export async function compileChecks(collection: string): Promise<CompiledChecks>
       // API writes) — that we CAN check.
       const sweepable: ValidationRule[] = []
       for (const r of rules) {
+        if (!sweptByIntegrity(r)) continue
         if (r.type === 'min_days_from_today' || r.type === 'max_days_from_today') {
           const days = Number(r.value)
           if (creationBaseline && Number.isFinite(days)) {

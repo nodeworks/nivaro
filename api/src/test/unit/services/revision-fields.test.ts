@@ -19,7 +19,8 @@ import {
   parseO2mComment,
   pickFields,
   readableFieldSet,
-  revisionsForReader
+  revisionsForReader,
+  templateRelationHeads
 } from '../../../services/revision-fields.js'
 
 const user = { id: 'U1', role: 'R1' } as never
@@ -100,6 +101,56 @@ describe('revisionsForReader', () => {
   }
   const UUID_A = '46A4897B-3F11-4DAE-BC1D-C2C0517ABBC6'
   const UUID_B = '087389AF-2013-4A66-8C29-7F0E2E1047E5'
+
+  it('a row labelled only by related parts is named by its item, not its parent (army8 b02)', async () => {
+    perms.fields.orders = null
+    perms.fields.materials = null
+    perms.readable.add('materials')
+    const comment = JSON.stringify({
+      child_collection: 'materials',
+      child_id: '9',
+      snapshot: { id: 9, qty: 7, cifa: 55749, orders: 37820 },
+      changes: { qty: [3, 7] }
+    })
+    const itemDeps = {
+      ...deps,
+      fieldMeta: vi.fn(async () => ({
+        labels: new Map([['qty', 'Quantity']]),
+        hidden: new Set<string>(),
+        m2o: new Map([
+          ['orders', 'orders'],
+          ['cifa', 'cifa_items']
+        ])
+      })),
+      // The child's own label is only the collection name (template = related parts only).
+      recordLabels: vi.fn(async (_u: unknown, refs: Array<{ collection: string; id: string }>) =>
+        Object.fromEntries(
+          refs.map((r) => [
+            `${r.collection}:${r.id}`,
+            r.collection === 'cifa_items' ? '301092' : 'Materials'
+          ])
+        )
+      ),
+      snapshotLabel: vi.fn(async () => null),
+      templateRelations: vi.fn(async () => ['orders', 'cifa'])
+    }
+    const [row] = await revisionsForReader(
+      user,
+      'orders',
+      [{ action: 'o2m-update', data: null, delta: null, comment }],
+      itemDeps
+    )
+    expect(row.o2m?.row_label).toBe('301092')
+    expect(row.o2m?.changes).toEqual([{ field: 'qty', label: 'Quantity', from: '3', to: '7' }])
+  })
+
+  it('templateRelationHeads reads the relation heads once each', () => {
+    expect(
+      templateRelationHeads('{{inventory_request.inventory_request_id}} - {{cifa.cifa_number}}')
+    ).toEqual(['inventory_request', 'cifa'])
+    expect(templateRelationHeads('{{name}}')).toEqual([])
+    expect(templateRelationHeads(null)).toEqual([])
+  })
 
   it('an o2m-update becomes "Materials · 110140: Quantity 4 → 5", no comment JSON', async () => {
     perms.fields.orders = null

@@ -12,7 +12,10 @@ const state = vi.hoisted(() => ({
   user: { role: '', preferences: null as string | null },
   updates: [] as Array<Record<string, unknown>>,
   activity: [] as Array<Record<string, unknown>>,
-  notified: 0
+  notified: 0,
+  touched: vi.fn(),
+  forget: vi.fn(),
+  touchListener: null as ((c: string) => void) | null
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
@@ -25,8 +28,15 @@ vi.mock('../../../middleware/authenticate.js', () => {
     }
     req.isAdmin = false
   }
-  return { authenticate, requireAdmin: authenticate }
+  return { authenticate, requireAdmin: authenticate, forgetIdentityRows: state.forget }
 })
+vi.mock('../../../services/item-events.js', () => ({
+  publishCollectionTouched: state.touched,
+  onCollectionTouched: vi.fn((fn: (c: string) => void) => {
+    state.touchListener = fn
+    return () => {}
+  })
+}))
 vi.mock('../../../services/activity.js', () => ({
   logActivity: vi.fn(async (a: Record<string, unknown>) => {
     state.activity.push(a)
@@ -90,9 +100,25 @@ beforeEach(() => {
   state.updates = []
   state.activity = []
   state.notified = 0
+  state.touched.mockClear()
+  state.forget.mockClear()
 })
 
 describe('POST /me/access-request', () => {
+  it('army 8 b10: a written request tells the other replicas to drop the kept identity row', async () => {
+    await submit(body)
+    expect(state.touched).toHaveBeenCalledWith('nivaro_users')
+    // A replica hearing it forgets its kept rows; another collection's touch does not.
+    state.touchListener?.('workflows')
+    expect(state.forget).not.toHaveBeenCalled()
+    state.touchListener?.('nivaro_users')
+    expect(state.forget).toHaveBeenCalledTimes(1)
+    // An identical resend writes nothing and tells nobody.
+    state.touched.mockClear()
+    await submit(body)
+    expect(state.touched).not.toHaveBeenCalled()
+  })
+
   it('first submit: stores only real zones, moves to review, tells admins once', async () => {
     const res = await submit(body)
     expect(res.statusCode).toBe(200)

@@ -6,6 +6,7 @@ on it yet and an administrator has been told (owner-gap-notice.ts).
 `requester` on the current step = nobody is assigned and it is the
 requester's own move: "waiting on you (requester)" when `me` (the
 recipient's address) is theirs, else "waiting on <name> (requester)".
+More than six owners end "+N more" (`more_owners`).
 Usage: {% render 'partials/approval-chain', chain: approval_chain, me: recipient_email %}
 {%- endcomment -%}
 {%- assign me_l = me | downcase -%}
@@ -32,10 +33,10 @@ Usage: {% render 'partials/approval-chain', chain: approval_chain, me: recipient
       {%- if s.status == 'not_reached' %} <span style="color:#94a3b8;">&middot; not reached</span>{% endif -%}
       {%- if s.status == 'canceled' %} <span style="font-weight:400;color:#b91c1c;">&middot; canceled{% if s.by %} by {{ s.by }}{% endif %}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
       {%- if s.status == 'done' and s.by %} <span style="font-weight:400;color:#64748b;">&middot; {{ s.by }}{% if s.at %}, {{ s.at | date: '%b %-d' }}{% endif %}</span>{% endif -%}
-      {%- if s.status == 'current' and s.owners.size > 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {{ s.owners | join: ', ' }}</span>{% endif -%}
+      {%- if s.status == 'current' and s.owners.size > 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {{ s.owners | join: ', ' }}{% if s.more_owners > 0 %} +{{ s.more_owners }} more{% endif %}</span>{% endif -%}
       {%- if s.status == 'current' and s.requester and s.owners.size == 0 %} <span style="font-weight:400;color:#64748b;">&middot; waiting on {% if me_l != '' and me_l == s.requester.email %}<strong style="color:#1e293b;">you</strong> (requester){% else %}{{ s.requester.name }} (requester){% endif %}</span>{% endif -%}
       {%- if s.status == 'current' and s.no_approver and s.owners.size == 0 %} <span style="font-weight:400;color:#b45309;">&middot; no approver is set for this step yet, an administrator has been told</span>{% endif -%}
-      {%- if s.status == 'upcoming' and s.owners.size > 0 %} <span style="color:#94a3b8;">&middot; next: {{ s.owners | join: ', ' }}</span>{% endif -%}
+      {%- if s.status == 'upcoming' and s.owners.size > 0 %} <span style="color:#94a3b8;">&middot; next: {{ s.owners | join: ', ' }}{% if s.more_owners > 0 %} +{{ s.more_owners }} more{% endif %}</span>{% endif -%}
     </td>
   </tr>
   {%- endfor -%}

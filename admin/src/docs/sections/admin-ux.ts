@@ -66,6 +66,11 @@ Cmd+N                  Quick "Create in [collection]" (collection-filtered)`
 // Exact id: a one-token query with a digit (AB26-77260, B1234-2, PO-00042) equal to a
 // business-id column (string *_id / *_number / *_no, numeric *_number for digits) comes
 // back as data.exact (exact: true) and first in records. Scoped, the record id too.
+// A record that only REFERS to the id (a workflow's project_id) ranks under the record
+// whose label shows it (the project) and is not marked exact.
+// Tables over 500,000 rows are never scanned, but answer an id (or its first 4+
+// characters) through the id columns an index leads, plus browser_config.search_fields
+// columns an index leads: an invoice number finds its invoice, read as you.
 GET /api/global-search?q=AB26-77260
 
 // Time budget: every part of the answer (each big collection, the exact-id pass, people,
@@ -73,7 +78,9 @@ GET /api/global-search?q=AB26-77260
 // SEARCH_BUDGET_MS). A part still running at the deadline is stopped and left out; the
 // answer then names it in "partial" (collection names, "small tables", or people /
 // semantic / comments / files / videos / docs / chat / config). An exact id found through
-// an index ends the wait 0.3 s later — the remaining scans are cut. No "partial" = complete.
+// an index ends the wait 0.3 s later — the remaining scans are cut. Those are named in
+// "trimmed", not "partial": the answer is known, so no "took too long" warning.
+// No "partial" = complete.
 // "partial": ["line_items", "comments"]
 
 // Typo tolerance: when fewer than 3 results matched, a near-spelling pass over name

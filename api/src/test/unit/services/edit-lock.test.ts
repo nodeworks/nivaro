@@ -601,6 +601,21 @@ describe('admin-only tier', () => {
     })
   })
 
+  it('army 8 b14: a FINISHED run leaves nothing open — no hold on a Completed record', async () => {
+    t.tables.nivaro_workflow_instances = [
+      { id: 'i3', current_state: 's10', key: 'completed', label: 'Completed', completed_at: 'x' }
+    ]
+    expect(await editLockVerdictFor(userOf('U-CJ'), 'workflows', '100')).toMatchObject({
+      locked: true,
+      allowed: false,
+      tier: 'admin_only',
+      open_fields: []
+    })
+    expect(
+      await recordWriteRefusal(reqAs('U-CJ'), 'workflows', 100, { fields: ['is_on_hold'] })
+    ).toMatchObject({ status: 403, body: { code: 'EDIT_LOCKED' } })
+  })
+
   it('adminOnlyStateOf names the admin-only state, or null', async () => {
     expect(await adminOnlyStateOf('workflows', '100')).toEqual({
       key: 'waiting_po',

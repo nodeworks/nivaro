@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { BracketFilterError, foldBracketFilter } from '../lib/bracket-filter.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { describeDbRefusal, describeValueRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import { authenticate } from '../middleware/authenticate.js'
@@ -189,6 +190,18 @@ function parseCsv(text: string): Record<string, string>[] {
 export async function itemsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', resolveWorkspace)
+  // `filter[field][_op]=value` (the bracket form) is folded into the one JSON filter, so
+  // the same field gates judge it — it used to be ignored and answer the whole list
+  // (army 8 b10). Malformed bracket keys are a 400, never silently dropped.
+  app.addHook('preHandler', async (req, reply) => {
+    try {
+      foldBracketFilter(req.query as Record<string, unknown> | undefined)
+    } catch (err) {
+      if (err instanceof BracketFilterError)
+        return reply.code(400).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
   // A connected AI app (OAuth) never writes a system table, whatever its user may
   // do — judged on the routed collection name, not the raw URL.
   app.addHook('preHandler', async (req, reply) => {

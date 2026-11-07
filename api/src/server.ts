@@ -2842,7 +2842,31 @@ export async function buildServer() {
           app.log.warn({ err, freq }, '[metric-alerts] check failed')
         }
       }
-      app.cron.schedule('metric-alerts-hourly', '5 * * * *', () => metricAlertPass('hourly'))
+      app.cron.schedule('metric-alerts-hourly', '5 * * * *', async () => {
+        await metricAlertPass('hourly')
+        // A daily / weekly check whose slot was missed runs now, as its own
+        // job (army 8 b11) — see overdueMetricCheckJobs. One catch-up per tick
+        // (daily first), and a failed one is retried at most every 6 hours.
+        try {
+          const {
+            lastMetricCheckAttempts,
+            lastMetricCheckRuns,
+            nextMetricCatchUp,
+            METRIC_CHECK_JOBS
+          } = await import('./services/metric-alerts.js')
+          const [completed, attempted] = await Promise.all([
+            lastMetricCheckRuns(),
+            lastMetricCheckAttempts()
+          ])
+          const freq = nextMetricCatchUp(completed, attempted)
+          if (freq) {
+            app.log.info({ freq }, '[metric-alerts] catch-up for a missed check')
+            await app.cron.runNow(METRIC_CHECK_JOBS[freq], null, 'catch-up')
+          }
+        } catch (err) {
+          app.log.warn({ err }, '[metric-alerts] catch-up failed')
+        }
+      })
       app.cron.schedule('metric-alerts-daily', '35 6 * * *', () => metricAlertPass('daily'))
       app.cron.schedule('metric-alerts-weekly', '35 6 * * 1', () => metricAlertPass('weekly'))
       app.cron.schedule('metric-alerts-digest-daily', '0 8 * * *', async () => {

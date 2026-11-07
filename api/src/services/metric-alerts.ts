@@ -178,8 +178,13 @@ export async function resolveMetricValue(
         const arr = Array.isArray(raw) ? raw : raw != null ? [raw] : []
         if (arr.length) params[paramName] = arr.join(',')
       }
+      // As a person: through the query's cache and the heavy read gate (one shared
+      // run per final key, scope values included) — the alerts "Now X" reading and
+      // report metric widgets are request paths (army 8 review M6).
       const rows = asUser
-        ? await runCustomQueryAsUser(source.slug, params, asUser.user, asUser.isAdmin)
+        ? await runCustomQueryAsUser(source.slug, params, asUser.user, asUser.isAdmin, {
+            shared: { who: asUser.user.id, label: `metric:${source.slug}` }
+          })
         : await runCustomQueryBySlug(source.slug, params)
       if (!rows.length) return null
       const first = rows[0]
@@ -247,6 +252,125 @@ async function countAsUser(
     limit: 1
   })
   return Number(res.total ?? 0)
+}
+
+// ─── The viewer's current reading of a firing rule ───────────────────────────
+
+/** How long one viewer's current reading of one rule is reused. Longer than the
+ *  widgets' poll (2 min), so a poll is normally answered from here (army 8 review M6). */
+export const CURRENT_VALUE_TTL_MS = 5 * 60_000
+/** Readings resolved at once for one request. */
+export const CURRENT_VALUE_CONCURRENCY = 3
+/** One request waits this long for its readings; a rule still reading past it answers
+ *  null this time (the stored reading shows) and its result fills the cache for the next. */
+export const CURRENT_VALUE_BUDGET_MS = 4_000
+const currentValueCache = new Map<string, { at: number; value: number | null }>()
+const CURRENT_VALUE_CACHE_MAX = 2000
+
+function rememberCurrentValue(key: string, at: number, value: number | null): void {
+  if (!currentValueCache.has(key) && currentValueCache.size >= CURRENT_VALUE_CACHE_MAX) {
+    const first = currentValueCache.keys().next().value
+    if (first !== undefined) currentValueCache.delete(first)
+  }
+  currentValueCache.set(key, { at, value })
+}
+
+/**
+ * The value of each OPEN firing rule as `user` sees it right now (army 8 b16 /
+ * b11): the log row keeps the reading taken when the rule first fired, with
+ * the rule's own filters and nobody's scope — "Invoices past due 162" for a
+ * person whose zones hold 140, eighteen hours after the check that read 162.
+ * Resolved AS the viewer (custom-query access gate + scope params, items
+ * service reads), so a zone-restricted person never sees an all-zones figure.
+ * Null = could not be read as them (no access, failed read) or not read inside
+ * the time budget. Cached per tenant + person + rule for five minutes; at most
+ * `max` rules are resolved per call (the newest open ones), the rest answer
+ * undefined. Misses resolve `concurrency` at a time under `budgetMs` (custom
+ * queries go through their cache and the heavy read gate, resolveMetricValue);
+ * a reading that finishes after the budget still fills the cache.
+ */
+export async function currentRuleValues(
+  rules: Array<{ rule_id: number; metric_source: string | null; filters: string | null }>,
+  viewer: { user: User; isAdmin: boolean },
+  opts: {
+    max?: number
+    now?: number
+    resolve?: typeof resolveMetricValue
+    concurrency?: number
+    budgetMs?: number
+  } = {}
+): Promise<Map<number, number | null>> {
+  const { currentTenantKey } = await import('./tenant-rooms.js')
+  const resolve = opts.resolve ?? resolveMetricValue
+  const now = opts.now ?? Date.now()
+  const out = new Map<number, number | null>()
+  const tenant = currentTenantKey()
+  const userKey = String(viewer.user.id).toUpperCase()
+  const misses: Array<{
+    ruleId: number
+    key: string
+    source: MetricSource | null
+    filters: string | null
+  }> = []
+  for (const r of rules.slice(0, opts.max ?? 10)) {
+    if (out.has(r.rule_id) || misses.some((m) => m.ruleId === r.rule_id)) continue
+    const key = `${tenant}|${userKey}|${r.rule_id}|${r.filters ?? ''}`
+    const hit = currentValueCache.get(key)
+    if (hit && now - hit.at < CURRENT_VALUE_TTL_MS) {
+      out.set(r.rule_id, hit.value)
+      continue
+    }
+    misses.push({
+      ruleId: r.rule_id,
+      key,
+      source: parseJsonSafe<MetricSource>(r.metric_source),
+      filters: r.filters
+    })
+  }
+  if (misses.length === 0) return out
+
+  const budgetMs = opts.budgetMs ?? CURRENT_VALUE_BUDGET_MS
+  let expired = false
+  let onDeadline: () => void = () => {}
+  const deadline = new Promise<void>((done) => {
+    onDeadline = done
+  })
+  const timer = setTimeout(() => {
+    expired = true
+    onDeadline()
+  }, budgetMs)
+  let next = 0
+  const worker = async () => {
+    while (!expired && next < misses.length) {
+      const m = misses[next++]
+      const reading = m.source
+        ? resolve(m.source, normalizeMetricFilters(m.filters), viewer).catch(() => null)
+        : Promise.resolve(null)
+      // A reading that lands after the budget is still remembered for the next poll.
+      const settled = reading.then((value) => {
+        rememberCurrentValue(m.key, now, value)
+        out.set(m.ruleId, value)
+      })
+      await Promise.race([settled, deadline])
+    }
+  }
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(opts.concurrency ?? CURRENT_VALUE_CONCURRENCY, misses.length)) },
+    worker
+  )
+  await Promise.race([Promise.all(workers), deadline])
+  clearTimeout(timer)
+  expired = true
+  onDeadline()
+  // Past the budget: nothing better than the stored reading for these, this time.
+  const answer = new Map(out)
+  for (const m of misses) if (!answer.has(m.ruleId)) answer.set(m.ruleId, null)
+  return answer
+}
+
+/** Test seam: forget every cached current reading. */
+export function resetCurrentRuleValues(): void {
+  currentValueCache.clear()
 }
 
 // ─── Rule checks ──────────────────────────────────────────────────────────────
@@ -369,6 +493,85 @@ export const METRIC_CHECK_JOBS: Record<string, string> = {
   hourly: 'metric-alerts-hourly',
   daily: 'metric-alerts-daily',
   weekly: 'metric-alerts-weekly'
+}
+
+/** How long after its last completed run a daily / weekly check counts as missed. */
+export const METRIC_CHECK_GRACE_MS: Record<'daily' | 'weekly', number> = {
+  daily: 25 * 3_600_000,
+  weekly: 7 * 24 * 3_600_000 + 3_600_000
+}
+
+/**
+ * Pure: which daily / weekly check jobs missed their slot (army 8 b11) — no
+ * completed run inside the grace window. The daily job fires once at 06:35;
+ * a process that was not ticking then (a nightly rebuild's maintenance hold,
+ * a restart) left every daily rule unchecked for another day, and a rule that
+ * never got a run stayed "Not checked yet" for good. The hourly pass runs
+ * these as catch-ups. A job with no run at all is overdue.
+ */
+export function overdueMetricCheckJobs(
+  lastCompleted: Map<string, Date | string | null>,
+  now = Date.now(),
+  /** Newest run of each job in ANY status (failed, running, completed). */
+  lastAttempted: Map<string, Date | string | null> = new Map()
+): Array<'daily' | 'weekly'> {
+  const out: Array<'daily' | 'weekly'> = []
+  const time = (raw: Date | string | null | undefined) =>
+    raw ? new Date(raw).getTime() : Number.NaN
+  for (const freq of ['daily', 'weekly'] as const) {
+    const at = time(lastCompleted.get(METRIC_CHECK_JOBS[freq]))
+    if (Number.isFinite(at) && now - at <= METRIC_CHECK_GRACE_MS[freq]) continue
+    // A run that failed (or is still running) was tried recently: wait before trying
+    // again — a failing daily check retried every hour was 24 runs a day (army 8 review).
+    const tried = time(lastAttempted.get(METRIC_CHECK_JOBS[freq]))
+    if (Number.isFinite(tried) && now - tried < METRIC_CATCH_UP_BACKOFF_MS) continue
+    out.push(freq)
+  }
+  return out
+}
+
+/** A missed check is retried at most this often (≤ 4 tries a day). */
+export const METRIC_CATCH_UP_BACKOFF_MS = 6 * 3_600_000
+
+/**
+ * Pure: the ONE catch-up the hourly pass runs now, or null. Daily before weekly, one
+ * per hourly tick: the first tick after a deploy with no run history would otherwise
+ * check every daily AND weekly rule at once (and send what fires) in one go.
+ */
+export function nextMetricCatchUp(
+  lastCompleted: Map<string, Date | string | null>,
+  lastAttempted: Map<string, Date | string | null>,
+  now = Date.now()
+): 'daily' | 'weekly' | null {
+  return overdueMetricCheckJobs(lastCompleted, now, lastAttempted)[0] ?? null
+}
+
+/** The newest completed run of each daily / weekly check job. */
+export async function lastMetricCheckRuns(): Promise<Map<string, Date | string | null>> {
+  return newestMetricCheckRuns(true)
+}
+
+/** The newest run of each daily / weekly check job in any status (the catch-up backoff). */
+export async function lastMetricCheckAttempts(): Promise<Map<string, Date | string | null>> {
+  return newestMetricCheckRuns(false)
+}
+
+async function newestMetricCheckRuns(
+  completedOnly: boolean
+): Promise<Map<string, Date | string | null>> {
+  const q = db('nivaro_job_runs').whereIn('job_id', [
+    METRIC_CHECK_JOBS.daily,
+    METRIC_CHECK_JOBS.weekly
+  ])
+  if (completedOnly) q.where('status', 'completed')
+  const rows = (await q
+    .groupBy('job_id')
+    .select('job_id')
+    .max({ started_at: 'started_at' })) as Array<{
+    job_id: string
+    started_at: Date | null
+  }>
+  return new Map(rows.map((r) => [String(r.job_id), r.started_at]))
 }
 
 /**

@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-import { evaluateTransitionRequirements } from '../../../services/transition-requirements.js'
+import {
+  evaluateTransitionRequirements,
+  templateNamesRelatedFields
+} from '../../../services/transition-requirements.js'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -856,5 +859,15 @@ describe('evaluateTransitionRequirements — grid cascade narrowing (army5 b01-N
     ])
     expect(block.fields[0].cascade_filters).toEqual(rules)
     expect(block.rows[0].cascade_values).toEqual({ zone: 3 })
+  })
+})
+
+// Army 8 b06-N-T: the REQ IDs dialog showed "-" for a line category whose
+// template is "{{core_category.name}} - {{sub_category.name}}".
+describe('templateNamesRelatedFields', () => {
+  it('spots a template that reads related fields', () => {
+    expect(templateNamesRelatedFields('{{core_category.name}} - {{sub_category.name}}')).toBe(true)
+    expect(templateNamesRelatedFields('{{ name }}')).toBe(false)
+    expect(templateNamesRelatedFields(null)).toBe(false)
   })
 })

@@ -414,6 +414,11 @@ export interface EvaluateRequirementsOptions {
   strict?: boolean
 }
 
+/** Pure: a display template reads a related record's field ("{{core_category.name}}"). */
+export function templateNamesRelatedFields(template: string | null | undefined): boolean {
+  return !!template && /\{\{\s*\w+\.[\w.]+\s*\}\}/.test(template)
+}
+
 export async function evaluateTransitionRequirements(
   database: typeof db,
   requirementsJson: string | null,
@@ -881,8 +886,26 @@ export async function evaluateTransitionRequirements(
       } catch {
         template = null
       }
+      // A template that names related fields ("{{core_category.name}} — {{sub_category.name}}")
+      // cannot resolve on the bare row: the dialog showed "-" for a line category the
+      // line grid reads as "Engineering — Labor" (army 8 b06-N-T). The shared label
+      // service renders dotted templates; the bare row is the fallback.
+      if (templateNamesRelatedFields(template)) {
+        try {
+          const { getLabels } = await import('./queues.js')
+          const labels = await getLabels(new Map([[relatedCollection, new Set(distinct)]]))
+          for (const id of distinct) {
+            const label = labels[`${relatedCollection}:${id}`]
+            if (label && label.trim() && label.trim() !== '-') out.set(id, label)
+          }
+        } catch {
+          /* fall back to the bare rows below */
+        }
+      }
+      const missing = distinct.filter((id) => !out.has(id))
+      if (missing.length === 0) return out
       const related = (await database(relatedCollection)
-        .whereIn('id', distinct)
+        .whereIn('id', missing)
         .limit(500)
         .select('*')) as Array<Record<string, unknown>>
       for (const r of related) out.set(String(r.id), resolveDisplayValue(r, template))

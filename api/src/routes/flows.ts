@@ -20,6 +20,16 @@ import {
 import { deferEffect } from '../services/unit-of-work.js'
 import { verifyWebhookSignature } from '../services/webhook-signature.js'
 
+const FLOW_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const FLOW_ID_PARAMS = ['id', 'opId', 'runId'] as const
+
+/** Every flow / operation / run id in the route params is a uuid. Exported for tests. */
+export function flowParamsAreUuids(params: unknown): boolean {
+  if (!params || typeof params !== 'object') return true
+  const p = params as Record<string, unknown>
+  return FLOW_ID_PARAMS.every((k) => p[k] == null || FLOW_UUID_RE.test(String(p[k])))
+}
+
 interface Flow {
   id: string
   name: string
@@ -585,6 +595,12 @@ export async function flowsRoutes(app: FastifyInstance) {
     })
   }
   app.addHook('preHandler', requireAdmin)
+  // Flow, operation and run ids are uuids: anything else (`/flows/foo`, `/flows/runs`)
+  // is a flow that does not exist — 404, never the uniqueidentifier conversion's 500
+  // (army 8 b13/b14).
+  app.addHook('preHandler', async (req, reply) => {
+    if (!flowParamsAreUuids(req.params)) return reply.code(404).send({ error: 'Not found' })
+  })
 
   // #535 — per-flow silence verdicts against each flow's own cadence.
   app.get('/health', async () => ({ data: await flowHealth() }))

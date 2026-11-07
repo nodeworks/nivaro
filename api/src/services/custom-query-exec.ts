@@ -407,7 +407,13 @@ export async function runCustomQueryAsUser(
   slug: string,
   incoming: Record<string, unknown>,
   user: { id: string; role?: string | null },
-  isAdmin: boolean
+  isAdmin: boolean,
+  /**
+   * `shared`: read through the custom-query cache and the heavy read gate like the
+   * execute route (a request path that may fan out — alerts "Now X", army 8 review
+   * M6). Without it the query runs directly (crons, report snapshots).
+   */
+  opts: { shared?: { who?: string | null; label?: string; signal?: AbortSignal } } = {}
 ): Promise<Array<Record<string, unknown>>> {
   const query = (await db('nivaro_custom_queries').where({ slug }).first()) as
     | (CustomQueryRowRec & { scope_params?: string | null })
@@ -431,11 +437,56 @@ export async function runCustomQueryAsUser(
     slug,
     sqlText: query.sql_text
   })
-  try {
-    return await execCustomQuerySql(query.sql_text, finalParams)
-  } catch (err) {
-    const { recordQueryError } = await import('./query-cache-stats.js')
-    recordQueryError(slug, err instanceof Error ? err.message : String(err))
-    throw err
+  const run = async () => {
+    try {
+      return await execCustomQuerySql(query.sql_text, finalParams)
+    } catch (err) {
+      const { recordQueryError } = await import('./query-cache-stats.js')
+      recordQueryError(slug, err instanceof Error ? err.message : String(err))
+      throw err
+    }
   }
+  if (!opts.shared) return run()
+  // The execute route's own cache entry and flight (key built AFTER scope injection,
+  // services/custom-query-cache.ts): a hit costs one Redis read; a miss shares one run
+  // with every concurrent caller of the same final key, holding a heavy-read slot.
+  const { customQueryCacheKey, customQueryCacheValue } = await import('./custom-query-cache.js')
+  const cacheKey = customQueryCacheKey(slug, finalParams, query)
+  const ttl = Math.max(0, Number(query.cache_ttl) || 0)
+  const { getApp } = await import('./io-holder.js')
+  const redis = (getApp() as { redis?: unknown } | null)?.redis as
+    | {
+        get(k: string): Promise<string | null>
+        setex(k: string, s: number, v: string): Promise<unknown>
+      }
+    | undefined
+  if (ttl > 0 && redis) {
+    try {
+      const hit = await redis.get(cacheKey)
+      if (hit) {
+        const parsed = JSON.parse(hit) as unknown
+        const rows = Array.isArray(parsed) ? parsed : (parsed as { rows?: unknown } | null)?.rows
+        if (Array.isArray(rows)) return rows as Array<Record<string, unknown>>
+      }
+    } catch {
+      /* the cache is a convenience — read live */
+    }
+  }
+  const { sharedGatedRead } = await import('./read-gate.js')
+  const out = await sharedGatedRead(
+    cacheKey,
+    opts.shared.who ?? user.id,
+    // Same value shape as the execute route's flight on this key (routes/custom-queries.ts
+    // runSharedQuery), so either side may join the other's run.
+    async () => {
+      const rows = await run()
+      const cachedAt = new Date().toISOString()
+      if (ttl > 0 && redis) {
+        await redis.setex(cacheKey, ttl, customQueryCacheValue(rows, cachedAt)).catch(() => {})
+      }
+      return { rows: rows as unknown[], cachedAt }
+    },
+    { label: opts.shared.label ?? `cq:${slug}`, signal: opts.shared.signal }
+  )
+  return out.value.rows as Array<Record<string, unknown>>
 }

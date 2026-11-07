@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { runAnomalyChecks, SENSITIVITY_DESCRIPTIONS } from '../services/anomaly-detect.js'
 import {
+  currentRuleValues,
   METRIC_CHECK_JOBS,
   parseJsonSafe,
   ruleLastCheckedAt,
@@ -443,10 +444,33 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
         'l.*',
         'r.name as rule_name',
         'r.operator as rule_operator',
+        'r.filters as rule_filters',
         'd.name as definition_name',
-        'd.unit as definition_unit'
+        'd.unit as definition_unit',
+        'd.metric_source as metric_source'
       )
-    return reply.send({ data: rows })
+    // An open alert also carries the reading the VIEWER would get now
+    // (army 8 b16/b11): the stored value is the one taken at the first fire,
+    // with nobody's scope. `current_value` null = could not be read as them.
+    const open = (rows as Array<Record<string, unknown>>).filter(
+      (r) => r.status === 'firing' && !r.resolved_at
+    )
+    const current = await currentRuleValues(
+      open.map((r) => ({
+        rule_id: Number(r.rule_id),
+        metric_source: (r.metric_source as string | null) ?? null,
+        filters: (r.rule_filters as string | null) ?? null
+      })),
+      { user: req.user!, isAdmin: !!req.isAdmin }
+    ).catch(() => new Map<number, number | null>())
+    const checkedAt = new Date().toISOString()
+    const data = (rows as Array<Record<string, unknown>>).map((r) => {
+      const { metric_source: _src, rule_filters: _f, ...rest } = r
+      const isOpen = r.status === 'firing' && !r.resolved_at
+      if (!isOpen || !current.has(Number(r.rule_id))) return rest
+      return { ...rest, current_value: current.get(Number(r.rule_id)), current_at: checkedAt }
+    })
+    return reply.send({ data })
   })
 
   app.post('/run', { preHandler: requireAdmin }, async (req, reply) => {

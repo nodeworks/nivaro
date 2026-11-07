@@ -12,7 +12,7 @@ import { fallbackDisplayRef, recordDisplayRefs } from '../services/record-displa
 import { safeRecordLabel } from '../services/record-label-fallback.js'
 import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
 import { SearchBudget } from '../services/search-budget.js'
-import { labelSearchFieldsOf } from '../services/search-fields.js'
+import { labelSearchFieldsOf, parseSearchFields } from '../services/search-fields.js'
 import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
 import {
   fastLike,
@@ -182,6 +182,9 @@ interface PlanEntry {
   kinds?: Record<string, TextKind>
   /** Columns that lead an index: an exact id there is a seek. */
   indexed?: string[]
+  /** A table over ROW_BUDGET: its id columns are index-led only (bigTableSeekColumns) —
+   *  exact and prefix seeks, never a scan. */
+  seekOnly?: boolean
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -202,6 +205,35 @@ const ROW_BUDGET = 500_000
 const FUZZY_ROW_BUDGET = 200_000
 const FUZZY_PER_COLLECTION = 4
 const FILTER_COLLECTIONS = 12
+
+/**
+ * A table over ROW_BUDGET is never scanned, but an id typed exactly (or its start)
+ * is still a single index seek there (army 8 b07/b14/b16: invoice numbers —
+ * "11006855426ADJ", "130115" — found nothing because invoices, 2.7M rows, sat out
+ * of search entirely). Its seek columns: the string id columns (`number`,
+ * `invoice_id`) and `browser_config.search_fields` string columns that LEAD an
+ * index — never a column a statement would have to scan. Numeric columns only when
+ * search_fields names them (a big table's `line_item_number` would match "12" on
+ * thousands of rows). Exported for tests.
+ */
+export function bigTableSeekColumns(
+  stringCols: Iterable<string>,
+  numericCols: Iterable<string>,
+  indexed: Iterable<string>,
+  searchFields: string[] | null
+): { cols: string[]; nums: string[] } {
+  const leads = new Set(indexed)
+  const named = new Set(searchFields ?? [])
+  const cols = [...stringCols]
+    .filter((c) => IDENT_RE.test(c) && leads.has(c) && (isIdColumn(c) || named.has(c)))
+    .sort()
+    .slice(0, MAX_ID_COLS)
+  const nums = [...numericCols]
+    .filter((c) => IDENT_RE.test(c) && leads.has(c) && named.has(c))
+    .sort()
+    .slice(0, MAX_NUM_ID_COLS)
+  return { cols, nums }
+}
 
 /** `browser_config.label_search_fields` (search program item 23) through the one
  *  parser (services/search-fields.ts): identifier names only, deduped, capped.
@@ -375,14 +407,24 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
     const textSearchable = rows <= ROW_BUDGET && columns.length > 0
     const kinds: Record<string, TextKind> = {}
     for (const c of available) kinds[c] = kindOf.get(`${col.collection}.${c}`) ?? 'other'
+    const small = rows <= ROW_BUDGET
+    const seekOnly = small
+      ? null
+      : bigTableSeekColumns(
+          available,
+          numsByTable.get(col.collection) ?? [],
+          leads.get(col.collection) ?? [],
+          parseSearchFields(col.browser_config)
+        )
     plan.push({
       collection: col.collection,
       display_name: col.display_name,
-      columns: rows <= ROW_BUDGET ? columns : [],
-      labelColumns: rows <= ROW_BUDGET ? [...new Set([...baseLabel, ...labelSearch])] : [],
+      columns: small ? columns : [],
+      labelColumns: small ? [...new Set([...baseLabel, ...labelSearch])] : [],
       labelSearch,
-      idColumns: rows <= ROW_BUDGET ? idColumns : [],
-      numIdColumns: rows <= ROW_BUDGET ? numIdColumns : [],
+      idColumns: seekOnly ? seekOnly.cols : idColumns,
+      numIdColumns: seekOnly ? seekOnly.nums : numIdColumns,
+      ...(seekOnly ? { seekOnly: true } : {}),
       template: col.display_template,
       rows,
       textSearchable,
@@ -882,6 +924,90 @@ export function exactStatement(
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
 }
 
+/** A prefix seek runs only for a query at least this long (a 2-letter start would
+ *  name five arbitrary rows of a big table). */
+const PREFIX_MIN_LEN = 4
+/** Rows one prefix seek brings back per column. */
+const PREFIX_PER_COLUMN = 5
+
+/**
+ * Prefix seeks on the big (seek-only) tables: `[col] LIKE 'q%'` on a column an index
+ * leads is a range seek, so an invoice number's start ("INV-PPC-0003") finds its rows
+ * without scanning 2.7M of them. One TOP-N subquery per column (OR across two indexes
+ * would scan); the value is escaped and bound in the column's own string type (an
+ * nvarchar pattern against a varchar column converts every row and never seeks).
+ * Exported for tests.
+ */
+export function prefixStatement(
+  batch: Array<{ collection: string; cols: string[]; kinds?: Record<string, TextKind> }>,
+  q: string,
+  mssql = onMssql()
+): { sql: string; bindings: unknown[] } | null {
+  if (q.length < PREFIX_MIN_LEN) return null
+  const pattern = `${escapeLike(q)}%`
+  const parts: string[] = []
+  const bindings: unknown[] = []
+  for (const b of batch) {
+    if (!IDENT_RE.test(b.collection)) continue
+    for (const c of b.cols) {
+      if (!IDENT_RE.test(c)) continue
+      const ansi = mssql && b.kinds?.[c] === 'ansi'
+      const bound = ansi ? 'CAST(? AS varchar(4000))' : '?'
+      parts.push(
+        `SELECT * FROM (SELECT TOP ${PREFIX_PER_COLUMN} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE [${c}] LIKE ${bound} ESCAPE '\\') AS [p_${b.collection}_${c}]`
+      )
+      bindings.push(pattern)
+    }
+  }
+  return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
+}
+
+/** Rows one tab seek (counts / records tabs) brings back per column of a big table —
+ *  the tab answers from these candidates, so a count past it reads "at least". */
+export const TAB_SEEK_PER_COLUMN = 100
+
+/**
+ * A big (seek-only) table's candidates for the /counts and /records tabs (army 8
+ * review M3): one TOP-N subquery per index-led id column, UNION ALL'd — never an OR
+ * across columns (two indexes under one OR scan the 2.7M rows). From PREFIX_MIN_LEN
+ * characters it is a prefix seek (`LIKE 'q%'`, the same rule as prefixStatement);
+ * a shorter id is an exact seek on each column. Every value is bound in the column's
+ * own string type (an nvarchar value against a varchar column never seeks). The ids
+ * found are then read AS THE CALLER (`id _in`), so access is judged as usual.
+ * Exported for tests.
+ */
+export function tabSeekStatement(
+  p: { collection: string; kinds?: Record<string, TextKind> },
+  cols: string[],
+  q: string,
+  perColumn = TAB_SEEK_PER_COLUMN,
+  mssql = onMssql()
+): { sql: string; bindings: unknown[] } | null {
+  if (!IDENT_RE.test(p.collection) || q.length < 2) return null
+  const prefix = q.length >= PREFIX_MIN_LEN
+  const n = Math.max(1, Math.min(1000, Math.floor(perColumn)))
+  const parts: string[] = []
+  const bindings: unknown[] = []
+  for (const c of cols) {
+    if (!IDENT_RE.test(c)) continue
+    const kind = p.kinds?.[c] ?? 'other'
+    let where: string
+    if (prefix) {
+      const bound = mssql && kind === 'ansi' ? 'CAST(? AS varchar(4000))' : '?'
+      where = `[${c}] LIKE ${bound} ESCAPE '\\'`
+      bindings.push(`${escapeLike(q)}%`)
+    } else {
+      const eq = typedEquals(`[${c}]`, q, kind, { indexed: true, mssql })
+      where = eq.sql
+      bindings.push(...eq.bindings)
+    }
+    parts.push(
+      `SELECT * FROM (SELECT TOP ${n} CAST(id AS nvarchar(64)) AS id, '${c}' AS k FROM [${p.collection}] WHERE ${where}) AS [t_${c}]`
+    )
+  }
+  return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
+}
+
 /** Split each collection's exact columns into the ones an index leads (one seek
  *  statement for the whole search) and the rest (scans, budgeted per table).
  *  Exported for tests. */
@@ -962,6 +1088,28 @@ async function searchExact(
     if (hits.length > 0) budget.shorten(EXACT_GRACE_MS)
     return hits
   })()
+  // 1b. Big (seek-only) tables: the start of an id, as a range seek per column. Never
+  //     an exact hit — a prefix row ranks as a prefix match under any exact one.
+  const prefixPass = (async () => {
+    const big = specs.filter((s) => s.p.seekOnly && s.cols.length > 0)
+    if (big.length === 0) return [] as Found[]
+    const results = await Promise.all(
+      big.map((s) => {
+        const stmt = prefixStatement([s], q)
+        if (!stmt) return [] as Array<{ c: string; id: string }>
+        return budget
+          .runQuery<{ c: string; id: string }>(s.collection, stmt.sql, stmt.bindings, {
+            priority: EXACT_PRIORITY
+          })
+          .catch(() => [] as Array<{ c: string; id: string }>)
+      })
+    )
+    const lower = q.toLowerCase()
+    return exactHits(ctx, specs, candidates, results.flat(), q, null, (v) => {
+      const t = v.toLowerCase()
+      return t.startsWith(lower) && t !== lower
+    })
+  })()
   // 2. Id columns no index leads: scans, each big table on its own budget.
   const scanPass = (async () => {
     if (scan.length === 0) return [] as Found[]
@@ -978,22 +1126,50 @@ async function searchExact(
     const rows = await runArms(budget, arms, null, EXACT_PRIORITY)
     return exactHits(ctx, specs, candidates, rows, q, scope)
   })()
-  const [a, b] = await Promise.all([seekPass, scanPass])
-  return [...a, ...b]
+  const [a, b, c] = await Promise.all([seekPass, scanPass, prefixPass])
+  const templates = new Map(candidates.map((p) => [p.collection, p.template]))
+  return demoteForeignExact([...a, ...b, ...c], (col) => templates.get(col) ?? null)
 }
 
-/** Exact candidates → hits the caller may read that still show the exact value. */
+/** The fields a display template shows (`{{project_id}} - {{name}}` → project_id, name). */
+function templateFields(template: string | null): string[] {
+  return [...(template ?? '').matchAll(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1])
+}
+
+/**
+ * A record is the exact match for an id when the id is ITS OWN — the column its label
+ * shows (projects `{{project_id}} - {{name}}`) or its primary key. A record that only
+ * carries that id as a reference (a workflow's `project_id`) is an equal match, ranked
+ * under it — but only when some record owns the id: with no owner in the answer the
+ * reference match stays exact (army 8 b14: "201953" marked one arbitrary workflow of
+ * the project EXACT, above the project itself). Exported for tests.
+ */
+export function demoteForeignExact<
+  H extends { collection: string; matched_field?: string; exact?: boolean; tier: MatchTier }
+>(hits: H[], templateOf: (collection: string) => string | null): H[] {
+  const own = (h: H) =>
+    h.matched_field === 'id' ||
+    templateFields(templateOf(h.collection)).includes(h.matched_field ?? '')
+  if (!hits.some((h) => h.exact && own(h))) return hits
+  return hits.map((h) => (h.exact && !own(h) ? { ...h, exact: false, tier: 'equal' as const } : h))
+}
+
+/** Exact candidates → hits the caller may read that still show the exact value.
+ *  With `prefix` (the big-table prefix seeks): hits whose value STARTS with the
+ *  query, as prefix-tier matches, never exact. */
 async function exactHits(
   ctx: SearchCtx,
   specs: Array<{ p: PlanEntry; collection: string; cols: string[]; nums: string[] }>,
   candidates: PlanEntry[],
   found: Array<{ c: string; id: string }>,
   q: string,
-  scope: string | null
+  scope: string | null,
+  prefix?: (value: string) => boolean
 ): Promise<Found[]> {
   if (found.length === 0) return []
-  const rows = await confirmRows(ctx.user, groupCandidates(found, 2))
+  const rows = await confirmRows(ctx.user, groupCandidates(found, prefix ? PREFIX_PER_COLUMN : 2))
   const lower = q.toLowerCase()
+  const matches = prefix ?? ((v: string) => v.toLowerCase() === lower)
   const out: Found[] = []
   for (const [collection, items] of rows) {
     const spec = specs.find((s) => s.collection === collection)
@@ -1002,9 +1178,15 @@ async function exactHits(
     const idReadable = readableOnly(['id'], ctx.allowed.get(collection)).length > 0
     for (const item of items) {
       let col = [...(spec?.cols ?? []), ...(spec?.nums ?? [])].find(
-        (c) => item[c] != null && String(item[c]).toLowerCase() === lower
+        (c) => item[c] != null && matches(String(item[c]))
       )
-      if (!col && scope === collection && idReadable && String(item.id).toLowerCase() === lower)
+      if (
+        !col &&
+        !prefix &&
+        scope === collection &&
+        idReadable &&
+        String(item.id).toLowerCase() === lower
+      )
         col = 'id'
       if (!col) continue
       const value = String(item[col])
@@ -1023,8 +1205,7 @@ async function exactHits(
             ...(byPk
               ? {}
               : { matched_label: ctx.labelOf(collection, col), matched_value: value.slice(0, 80) }),
-            exact: true,
-            tier: 'exact'
+            ...(prefix ? { tier: 'prefix' as const } : { exact: true, tier: 'exact' as const })
           },
           item
         )
@@ -1544,7 +1725,13 @@ async function tabFilter(
   parsed: ParsedQuery,
   labelsOnly: boolean,
   allowed: string[] | null
-): Promise<{ filter: Record<string, unknown>; cols: string[]; text: string } | null> {
+): Promise<{
+  filter: Record<string, unknown>
+  cols: string[]
+  text: string
+  /** A big table's candidates hit the per-column cap: the count is "at least". */
+  capped?: boolean
+} | null> {
   const fields = await readableFieldMetas(p.collection, allowed)
   const metas = new Map([
     [
@@ -1554,9 +1741,35 @@ async function tabFilter(
   ])
   // A tab is one collection: its amounts and dates resolve there, like a scope.
   const plan = planFilters(parsed, metas, { scope: p.collection })
-  const cols = searchColumns(p, labelsOnly, allowed)
   const clauses = plan.targets?.get(p.collection) ?? []
   const text = plan.text
+  // A big (seek-only) table answers an id or its start through its index-led id
+  // columns only: one typed TOP-N seek per column (tabSeekStatement), then the ids
+  // found read as the caller — never an OR of LIKEs across indexes (a scan of
+  // 2.7M rows per 2-character search, army 8 review M3), never a contains scan.
+  if (p.seekOnly) {
+    const seek = readableOnly(p.idColumns, allowed)
+    if (text.length < 2 || !looksLikeId(text) || seek.length === 0) return null
+    const stmt = tabSeekStatement(p, seek, text)
+    if (!stmt) return null
+    const rows = (await db.raw(stmt.sql, stmt.bindings as Knex.RawBinding[])) as unknown as Array<{
+      id: string
+      k: string
+    }>
+    const ids = [...new Set((rows ?? []).map((r) => String(r.id)))]
+    if (ids.length === 0) return null
+    // A column that filled its TOP-N may hold more: a count from these is a floor.
+    const perCol = new Map<string, number>()
+    for (const r of rows ?? []) perCol.set(r.k, (perCol.get(r.k) ?? 0) + 1)
+    const capped = [...perCol.values()].some((n) => n >= TAB_SEEK_PER_COLUMN)
+    return {
+      filter: combinedFilter({ id: { _in: ids } }, clauses),
+      cols: seek,
+      text,
+      ...(capped ? { capped: true } : {})
+    }
+  }
+  const cols = searchColumns(p, labelsOnly, allowed)
   if (text.length >= 2 && cols.length === 0) return null
   if (text.length < 2 && clauses.length === 0) return null
   const textFilter = text.length >= 2 ? await matchFilter(cols, text) : null
@@ -1575,7 +1788,9 @@ export async function countMatches(
   q: string,
   collections: string[],
   labelsOnly = false
-): Promise<Array<{ collection: string; display_name: string | null; count: number }>> {
+): Promise<
+  Array<{ collection: string; display_name: string | null; count: number; capped?: boolean }>
+> {
   const parsed = parseSearchQuery(q, await loadSearchScopes())
   const readableSet = new Set(readable)
   const plan = (await buildSearchPlan()).filter(
@@ -1585,14 +1800,20 @@ export async function countMatches(
       (!parsed.scope || parsed.scope === p.collection)
   )
   const allowed = await allowedByCollection(user, plan)
-  const out: Array<{ collection: string; display_name: string | null; count: number }> = []
+  const out: Array<{
+    collection: string
+    display_name: string | null
+    count: number
+    capped?: boolean
+  }> = []
   for (let i = 0; i < plan.length; i += COUNT_CONCURRENCY) {
     await Promise.all(
       plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
         try {
           const f = await tabFilter(p, parsed, labelsOnly, allowed.get(p.collection) ?? null)
-          // A text-only search never scans a table over the row budget.
-          if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return
+          // A text-only search never scans a table over the row budget (a seek-only
+          // table's filter is the ids its typed per-column TOP-N seeks found).
+          if (!f || (!p.textSearchable && !p.seekOnly && !hasFilterTokens(parsed))) return
           const r = await withFastContains(fastKinds(p), () =>
             readItems(user, p.collection, {
               filter: f.filter,
@@ -1601,7 +1822,13 @@ export async function countMatches(
             })
           )
           if (typeof r.total === 'number' && r.total > 0)
-            out.push({ collection: p.collection, display_name: p.display_name, count: r.total })
+            out.push({
+              collection: p.collection,
+              display_name: p.display_name,
+              count: r.total,
+              // A big table counts its seek candidates only: "at least" this many.
+              ...(f.capped ? { capped: true } : {})
+            })
         } catch {
           /* unreadable or the filter was refused — no tab count */
         }
@@ -1620,7 +1847,7 @@ export async function searchCollectionPage(
   offset: number,
   limit: number,
   labelsOnly = false
-): Promise<{ data: RecordHit[]; total: number | null; query?: unknown }> {
+): Promise<{ data: RecordHit[]; total: number | null; query?: unknown; capped?: boolean }> {
   if (!readable.includes(collection)) return { data: [], total: 0 }
   const p = (await buildSearchPlan()).find((x) => x.collection === collection)
   if (!p) return { data: [], total: 0 }
@@ -1628,7 +1855,8 @@ export async function searchCollectionPage(
   if (parsed.scope && parsed.scope !== collection) return { data: [], total: 0 }
   const allowed = await getAllowedFields(user, 'read', collection).catch(() => [])
   const f = await tabFilter(p, parsed, labelsOnly, allowed)
-  if (!f || (!p.textSearchable && !hasFilterTokens(parsed))) return { data: [], total: 0 }
+  if (!f || (!p.textSearchable && !p.seekOnly && !hasFilterTokens(parsed)))
+    return { data: [], total: 0 }
   const r = await withFastContains(fastKinds(p), () =>
     readItems(user, collection, {
       filter: f.filter,
@@ -1655,7 +1883,11 @@ export async function searchCollectionPage(
       snippet: matched.slice(0, 120)
     }
   })
-  return { data, total: typeof r.total === 'number' ? r.total : null }
+  return {
+    data,
+    total: typeof r.total === 'number' ? r.total : null,
+    ...(f.capped ? { capped: true } : {})
+  }
 }
 
 /** True when a collection's `browser_config.global_search` is false: it never takes part in
@@ -1978,7 +2210,10 @@ async function runGlobalSearch(
     // Confirmable commands (services/search-commands.ts): judged as the caller,
     // never fail the search.
     const commands = await searchCommands(user as User, q, records, opts).catch(() => [])
+    // Only parts the search's own deadline cut: parts stopped because an exact id hit
+    // already answered (budget.trimmed) are not a failure and raise no warning.
     const partial = [...budget.timedOut]
+    const trimmed = [...budget.trimmed].filter((t) => !budget.timedOut.has(t))
     const data: Record<string, unknown> = {
       ...base,
       records,
@@ -1991,7 +2226,9 @@ async function runGlobalSearch(
       commands,
       // Parts that ran out of time (collection names, or people / semantic /
       // comments / files …): the answer holds everything else.
-      ...(partial.length ? { partial } : {})
+      ...(partial.length ? { partial } : {}),
+      // Parts skipped after an exact id hit — "See all" runs them in full.
+      ...(trimmed.length ? { trimmed } : {})
     }
     return data
   } finally {

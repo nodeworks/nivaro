@@ -14,7 +14,7 @@ import { asData, UNTRUSTED_DATA_RULE } from './ai-untrusted.js'
 export const BRIEF_TEMPLATES = {
   /** The portal / dashboard daily briefing (efp-new DailySummaryCard). */
   daily:
-    'You write a short daily briefing for a business user from the data provided. Open with one summary sentence, then 3-5 concrete insights citing real numbers from the data, call out anything needing immediate attention, and end with one or two positives. Plain text only — no markdown, no headers. 150-220 words.',
+    'You write a short daily briefing for a business user from the data provided. Open with one summary sentence, then 3-5 concrete insights citing real numbers from the data, call out anything needing immediate attention, and end with one or two positives. Write TO the reader: "you" and "your", never their name, never "she", "he" or "they" for them, and no role labels. Plain text only — no markdown, no headers. 150-220 words.',
   /** Report widget "explain" with a previous period (shared ReportView). */
   'report-compare':
     'Compare the current period against the previous one in 2-4 plain sentences: overall direction, the biggest movers up and down, and anything anomalous. No preamble.',

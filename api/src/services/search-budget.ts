@@ -27,6 +27,8 @@
 import { boundedRaw, StatementCancelled } from './bounded-sql.js'
 
 const MIN_STATEMENT_MS = 50
+/** A cut this close to the search's own deadline counts as out of time. */
+const CUT_TOLERANCE_MS = 25
 /** Slots only `reserved` statements may use, beyond `concurrency`. */
 const RESERVED_SLOTS = 1
 
@@ -59,6 +61,17 @@ export class SearchBudget {
   private readonly waiters: Waiter[] = []
   /** Parts that ran out of time (collection names or part labels). */
   readonly timedOut = new Set<string>()
+  /**
+   * Parts cut early on purpose — an exact id hit brought the deadline in
+   * (`shorten`), or the answer was complete (`finish`) — before the search's own
+   * deadline (army 8 b14: every exact-id lookup said "Some results took too long"
+   * right above the exact hit). Not a failure: callers never report these as partial.
+   */
+  readonly trimmed = new Set<string>()
+  /** The deadline the search was given — `shorten` never moves it. */
+  private readonly initialDeadline: number
+  /** `shorten` brought the deadline in. */
+  private shortened = false
 
   constructor(
     totalMs: number,
@@ -66,7 +79,16 @@ export class SearchBudget {
     private readonly now: () => number = Date.now
   ) {
     this.deadline = this.now() + Math.max(0, totalMs)
+    this.initialDeadline = this.deadline
     this.arm()
+  }
+
+  /** Record a cut part: out of time only when the search's own deadline had passed
+   *  (a timer may fire a few ms early — the tolerance keeps that a timeout). */
+  private cut(label: string): void {
+    const early = this.shortened && this.now() < this.initialDeadline - CUT_TOLERANCE_MS
+    if (this.finished.signal.aborted || early) this.trimmed.add(label)
+    else this.timedOut.add(label)
   }
 
   /** Aborts at the deadline. */
@@ -92,6 +114,7 @@ export class SearchBudget {
     const next = this.now() + Math.max(0, ms)
     if (next >= this.deadline) return
     this.deadline = next
+    this.shortened = true
     this.arm()
   }
 
@@ -196,7 +219,7 @@ export class SearchBudget {
    */
   async run<T>(label: string, fallback: T, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.expired()) {
-      this.timedOut.add(label)
+      this.cut(label)
       return fallback
     }
     const signal = this.signal
@@ -208,13 +231,13 @@ export class SearchBudget {
     try {
       const out = await Promise.race([fn(signal), stopped])
       if (out === CUT) {
-        this.timedOut.add(label)
+        this.cut(label)
         return fallback
       }
       return out as T
     } catch (e) {
       if (e instanceof StatementCancelled || signal.aborted) {
-        this.timedOut.add(label)
+        this.cut(label)
         return fallback
       }
       throw e
@@ -262,7 +285,7 @@ export class SearchBudget {
       return this.run(label, [] as T[], () => this.query<T>(sql, bindings, opts))
     }
     if (this.finished.signal.aborted) {
-      this.timedOut.add(label)
+      this.cut(label)
       return []
     }
     const until = Math.max(this.deadline, this.now() + floor)
@@ -297,7 +320,7 @@ export class SearchBudget {
       )
     } catch (e) {
       if (e instanceof StatementCancelled || part.signal.aborted) {
-        this.timedOut.add(label)
+        this.cut(label)
         return []
       }
       throw e

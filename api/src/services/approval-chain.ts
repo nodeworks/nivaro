@@ -30,6 +30,9 @@ export interface ChainStep {
   by: string | null
   at: string | null
   owners: string[]
+  /** Owners left out of `owners` (it names at most CHAIN_OWNER_NAMES): the mail says
+   *  "+N more" (army 8 b13: a 15-owner step named 6 with nothing after). */
+  more_owners?: number
   skip_reason: string | null
   /** The current step waits on nobody who can act and nobody else can move it
    *  (owner-gap-notice.ts) — the mail says no approver is set yet. */
@@ -38,6 +41,18 @@ export interface ChainStep {
    *  (allow_creator) — the mail says "waiting on you (requester)" to them and
    *  "waiting on <name> (requester)" to everyone else (army 6 M44). */
   requester?: { name: string; email: string | null } | null
+}
+
+/** Names a step lists in the approval path before "+N more". */
+export const CHAIN_OWNER_NAMES = 6
+
+/** The first CHAIN_OWNER_NAMES names and how many were left out. Exported for tests. */
+export function capOwnerNames(names: string[]): { owners: string[]; more: number } {
+  const list = names.filter(Boolean)
+  return {
+    owners: list.slice(0, CHAIN_OWNER_NAMES),
+    more: Math.max(0, list.length - CHAIN_OWNER_NAMES)
+  }
 }
 
 export interface StepStatusInput {
@@ -170,13 +185,12 @@ export async function buildApprovalChain(
     // A finished record waits on nobody: a terminal state's owners are who
     // gets told, not who acts next — "Completed · waiting on Rob" reads wrong.
     const terminal = s.is_terminal === true || s.is_terminal === 1
-    const owners =
+    const capped = capOwnerNames(
       (status === 'current' || status === 'upcoming') && !terminal
-        ? e.owners
-            .map((o) => nameOf(o) ?? '')
-            .filter(Boolean)
-            .slice(0, 6)
+        ? e.owners.map((o) => nameOf(o) ?? '')
         : []
+    )
+    const owners = capped.owners
     const named = status === 'done' || status === 'canceled'
     const step: ChainStep = {
       key: s.key,
@@ -185,6 +199,7 @@ export async function buildApprovalChain(
       by: named ? (acted?.by ?? null) : null,
       at: named ? (acted?.at ?? null) : null,
       owners,
+      ...(capped.more > 0 ? { more_owners: capped.more } : {}),
       skip_reason: status === 'skipped' ? (e.skip_reasons[0] ?? null) : null
     }
     if ((status === 'current' || status === 'upcoming') && !terminal) ownerStepState.set(step, s.id)
@@ -208,6 +223,7 @@ export async function buildApprovalChain(
     if (st.status === 'upcoming') {
       if (seenUpcoming) {
         st.owners = []
+        delete st.more_owners
         ownerStepState.delete(st)
       }
       seenUpcoming = true
@@ -244,20 +260,17 @@ async function nameActingOwners(
       db,
       { skipFallback: true }
     )
-    const acting = new Map<string, string[]>()
+    const acting = new Map<string, { owners: string[]; more: number }>()
     for (const id of stateIds) {
       const owners = await activeOwnersOnly(resolved.get(id) ?? [])
-      acting.set(
-        id,
-        owners
-          .map((o) => nameOf(o) ?? '')
-          .filter(Boolean)
-          .slice(0, 6)
-      )
+      acting.set(id, capOwnerNames(owners.map((o) => nameOf(o) ?? '')))
     }
     let stalled: Set<string> | null = null
     for (const [step, id] of stepState) {
-      step.owners = acting.get(id) ?? []
+      const named = acting.get(id) ?? { owners: [], more: 0 }
+      step.owners = named.owners
+      if (named.more > 0) step.more_owners = named.more
+      else delete step.more_owners
       if (step.status === 'current' && step.owners.length === 0) {
         stalled ??= await import('./owner-gap-notice.js')
           .then((m) => m.stalledStates(states as unknown as GapStateRow[]))

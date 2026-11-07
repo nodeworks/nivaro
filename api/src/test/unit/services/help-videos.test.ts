@@ -17,6 +17,7 @@ import {
   sessionTag,
   type VideoRow,
   validateContexts,
+  versionHasCaptions,
   viewerMaySee
 } from '../../../services/help-videos.js'
 
@@ -482,5 +483,19 @@ describe('saveDraftEdits', () => {
     })
     expect(tables.nivaro_help_video_versions[0].edits_hash).toBe(h0)
     expect(tables.nivaro_help_video_versions[0].edits).toBe(JSON.stringify(base))
+  })
+})
+
+// army 8 b14: four published videos answered an empty "WEBVTT" captions file and the
+// player showed a pressed Captions button that never showed anything.
+describe('versionHasCaptions', () => {
+  it('true only when a caption carries text', () => {
+    expect(
+      versionHasCaptions({ edits: JSON.stringify({ captions: [{ text: 'Open the queue' }] }) })
+    ).toBe(true)
+    expect(versionHasCaptions({ edits: { captions: [{ text: '  ' }] } })).toBe(false)
+    expect(versionHasCaptions({ edits: JSON.stringify({ captions: [] }) })).toBe(false)
+    expect(versionHasCaptions({ edits: 'not json' })).toBe(false)
+    expect(versionHasCaptions(undefined)).toBe(false)
   })
 })

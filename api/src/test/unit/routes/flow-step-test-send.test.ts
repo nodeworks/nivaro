@@ -62,12 +62,38 @@ async function app() {
 
 afterEach(() => vi.clearAllMocks())
 
+const FLOW = '0a72fd0a-0000-4000-8000-000000000001'
+
+describe('flow ids are uuids (army 8 b13/b14: GET /flows/foo answered 500)', () => {
+  it('a non-uuid id is 404 before any database read', async () => {
+    fakeDb()
+    const a = await app()
+    for (const url of [
+      '/flows/foo',
+      '/flows/runs',
+      '/flows/foo/runs',
+      `/flows/${FLOW}/operations/x1`
+    ]) {
+      const res = await a.inject({ method: url.endsWith('x1') ? 'DELETE' : 'GET', url })
+      expect(res.statusCode, url).toBe(404)
+    }
+    expect(db).not.toHaveBeenCalled()
+  })
+
+  it('a uuid id reaches the route', async () => {
+    fakeDb()
+    const res = await (await app()).inject({ method: 'GET', url: `/flows/${FLOW}` })
+    expect(res.statusCode).not.toBe(404)
+    expect(db).toHaveBeenCalledWith('nivaro_flows')
+  })
+})
+
 describe('POST /flows/:id/operations/test-send', () => {
   it('mail step: one email to the caller, rendered over the payload; step "to" ignored', async () => {
     fakeDb()
     const res = await (await app()).inject({
       method: 'POST',
-      url: '/flows/f1/operations/test-send',
+      url: `/flows/${FLOW}/operations/test-send`,
       payload: {
         type: 'mail',
         options: {
@@ -90,7 +116,7 @@ describe('POST /flows/:id/operations/test-send', () => {
     fakeDb()
     const res = await (await app()).inject({
       method: 'POST',
-      url: '/flows/f1/operations/test-send',
+      url: `/flows/${FLOW}/operations/test-send`,
       payload: { type: 'notification', options: { recipient: 'someone-else', message: 'Hi' } }
     })
     expect(res.statusCode).toBe(200)
@@ -103,7 +129,7 @@ describe('POST /flows/:id/operations/test-send', () => {
     fakeDb()
     const res = await (await app()).inject({
       method: 'POST',
-      url: '/flows/f1/operations/test-send',
+      url: `/flows/${FLOW}/operations/test-send`,
       payload: { type: 'webhook', options: {} }
     })
     expect(res.statusCode).toBe(400)

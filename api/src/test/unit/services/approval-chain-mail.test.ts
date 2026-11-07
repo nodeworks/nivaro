@@ -51,7 +51,11 @@ vi.mock('../../../services/pipeline-engine.js', () => ({
   activeOwnersOnly: async (owners: Array<{ id: string }>) => owners.filter((x) => x.id !== JOE.id)
 }))
 
-import { buildApprovalChain, chainStepStatus } from '../../../services/approval-chain.js'
+import {
+  buildApprovalChain,
+  capOwnerNames,
+  chainStepStatus
+} from '../../../services/approval-chain.js'
 import { renderMailTemplate } from '../../../services/mail.js'
 
 const st = (id: string, key: string, sort: number, extra: Record<string, unknown> = {}) => ({
@@ -189,6 +193,44 @@ describe('buildApprovalChain (army 6)', () => {
     expect(ws?.no_approver).toBeUndefined()
     env.creatorActs = false
     env.requester = null
+  })
+})
+
+describe('army 8 b13: a long owner list ends "+N more"', () => {
+  it('capOwnerNames keeps six names and counts the rest', () => {
+    const names = Array.from({ length: 15 }, (_, i) => `Person ${i + 1}`)
+    expect(capOwnerNames(names)).toEqual({ owners: names.slice(0, 6), more: 9 })
+    expect(capOwnerNames(['A', '', 'B'])).toEqual({ owners: ['A', 'B'], more: 0 })
+  })
+
+  it('the step names six assigned owners and the rest as a count', async () => {
+    env.users = []
+    env.stalled = new Set()
+    env.assigned = Array.from({ length: 15 }, (_, i) => ({
+      id: `U-${i}`,
+      first_name: 'Owner',
+      last_name: String(i + 1),
+      email: `o${i}@x`
+    }))
+    env.chain = {
+      currentStateId: 'WS',
+      states: [st('S', 'started', 0, { is_initial: true }), st('WS', 'warehouse_submission', 1)],
+      history: [{ from_state: 'S', to_state: 'WS', timestamp: '2026-11-06T16:00:00Z', user: null }],
+      entries: { S: entry, WS: entry }
+    }
+    const steps = await buildApprovalChain('I-1')
+    env.assigned = null
+    const ws = steps.find((s) => s.key === 'warehouse_submission')
+    expect(ws?.owners).toHaveLength(6)
+    expect(ws?.more_owners).toBe(9)
+    const html = await renderMailTemplate('workflow_transition', {
+      friendly_id: 'MM26INV-37439',
+      to_state: { label: 'Warehouse Submission' },
+      approval_chain: steps,
+      owners: [],
+      recipient_email: 'o14@x'
+    })
+    expect(html).toContain('Owner 6 +9 more')
   })
 })
 

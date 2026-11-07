@@ -26,12 +26,7 @@ import { selectInChunks } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can, getAllowedFields } from './permissions.js'
-import {
-  activeOwnersOnly,
-  parseJson,
-  type ResolvedOwner,
-  resolveStateOwnersBatch
-} from './pipeline-engine.js'
+import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
   ADDENDUM_COLLECTION,
   addendumLabel,
@@ -40,6 +35,7 @@ import {
 } from './pipeline-subject.js'
 import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { integrationsFilterBuckets, integrationsMatchKeys } from './queue-integrations.js'
+import { markInactiveOwners } from './queue-owner-status.js'
 import { PathReadBatch } from './queue-path-batch.js'
 import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
@@ -614,31 +610,9 @@ export function isUnowned(item: Pick<QueueItem, 'owners' | 'no_active_owner'>): 
   return item.owners.length === 0 || item.no_active_owner === true
 }
 
-/**
- * Marks `no_active_owner` on items whose every owner is inactive — one
- * batched people read for the whole set (activeOwnersOnly). Best-effort: a
- * failed lookup leaves the items as they were.
- */
-export async function markInactiveOwners(
-  items: QueueItem[],
-  activeOnly: (owners: Array<{ id: string }>) => Promise<Array<{ id: string }>> = activeOwnersOnly
-): Promise<void> {
-  const ids = new Map<string, { id: string }>()
-  for (const it of items)
-    for (const o of it.owners) ids.set(String(o.id).toUpperCase(), { id: o.id })
-  if (ids.size === 0) return
-  let active: Set<string>
-  try {
-    active = new Set((await activeOnly([...ids.values()])).map((o) => String(o.id).toUpperCase()))
-  } catch {
-    return
-  }
-  if (active.size === ids.size) return
-  for (const it of items) {
-    if (it.owners.length === 0) continue
-    if (!it.owners.some((o) => active.has(String(o.id).toUpperCase()))) it.no_active_owner = true
-  }
-}
+/** Marks owners who cannot act and `no_active_owner` on rows with no other — one
+ *  rule (isInactivePerson) and one batched people read, services/queue-owner-status.ts. */
+export { markInactiveOwners }
 
 export function applyScopeFilter(
   items: QueueItem[],

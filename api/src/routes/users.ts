@@ -6,10 +6,12 @@ import {
   adminRefusal,
   authenticate,
   credentialMintRefusal,
+  forgetIdentityRows,
   requireAdmin
 } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteDefaultsForUser } from '../services/field-defaults.js'
+import { onCollectionTouched, publishCollectionTouched } from '../services/item-events.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
 import {
@@ -152,7 +154,20 @@ function safeUser<T extends object>(u: T | undefined | null): T | undefined {
   return u ? (withoutCredentials(u as Record<string, unknown>) as unknown as T) : undefined
 }
 
+/** One listener per process: another replica's access-request write drops this
+ *  process's kept identity rows (they live ≤ 5 s, but the request page re-reads
+ *  /auth/me at once — army 8 b10 saw "Submit for Review" again after a first submit). */
+let identityTouchListening = false
+function listenForIdentityTouches(): void {
+  if (identityTouchListening) return
+  identityTouchListening = true
+  onCollectionTouched((collection) => {
+    if (collection === 'nivaro_users') forgetIdentityRows()
+  })
+}
+
 export async function usersRoutes(app: FastifyInstance) {
+  listenForIdentityTouches()
   // Every /:id below names a nivaro_users row (uniqueidentifier). A mistyped
   // or truncated id (/profile/abc) used to reach SQL Server as a conversion
   // error — a 500 carrying the driver's text. No such person = 404.
@@ -885,6 +900,9 @@ export async function usersRoutes(app: FastifyInstance) {
       return reply.send({ data: { access_request, role_changed: false, unchanged: true } })
 
     await db('nivaro_users').where({ id: me }).update(patch)
+    // This process forgot the row on the write; the other replicas hear it now, so the
+    // request page's own re-read of /auth/me sees the new role + request wherever it lands.
+    publishCollectionTouched('nivaro_users')
     await logActivity({
       action: 'access-request',
       user: me,
