@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-11-07T17:17:27.374Z",
+  "generated_at": "2026-11-07T17:59:32.295Z",
   "releases": [
     {
       "version": "0.3.78",
       "tag": "v0.3.78",
-      "date": "2026-11-07T12:17:12-05:00",
+      "date": "2026-11-07T12:17:27-05:00",
       "sections": [
         {
           "label": "Added",
@@ -13,7 +13,8 @@
               "section": "Added",
               "scope": "item-actions",
               "text": "admin_only flag hides an action from non-admins",
-              "hash": "b9d13bc18"
+              "hash": "b9d13bc18",
+              "audience": "developer"
             }
           ]
         },
@@ -23,14 +24,16 @@
             {
               "section": "Fixed",
               "scope": "queues",
-              "text": "do not pre-fill filters from a person's default scopes",
-              "hash": "626b47ea7"
+              "text": "Worklist filters no longer fill in your default zone or year by themselves. They open empty, and you still only see what you have access to.",
+              "hash": "626b47ea7",
+              "commit_text": "do not pre-fill filters from a person's default scopes"
             },
             {
               "section": "Fixed",
               "scope": "pipelines",
-              "text": "owner fallback user owns a step only when nobody else does",
-              "hash": "a2c5809d2"
+              "text": "The person who raised a request is no longer listed as an approver on steps that already have approvers.",
+              "hash": "a2c5809d2",
+              "commit_text": "owner fallback user owns a step only when nobody else does"
             }
           ]
         }
@@ -48,8 +51,9 @@
             {
               "section": "Fixed",
               "scope": "security",
-              "text": "custom queries fail closed for scope-restricted people",
-              "hash": "40b444ea4"
+              "text": "Reports and dashboard figures that cannot be limited to the zones you have access to no longer run, instead of showing data from other zones.",
+              "hash": "40b444ea4",
+              "commit_text": "custom queries fail closed for scope-restricted people"
             }
           ]
         }
@@ -67,14 +71,16 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "army round 7 — record form, search, dashboards, report caches, page widgets",
-              "hash": "559649cdd"
+              "text": "Record forms keep your reason and unsaved changes more reliably, search finds codes like 2026-NNO-POWER by their parts, and dashboard zone counts now match the worklists.",
+              "hash": "559649cdd",
+              "commit_text": "army round 7 — record form, search, dashboards, report caches, page widgets"
             },
             {
               "section": "Fixed",
               "scope": "release",
               "text": "promote-production waits for the automatic production deploy",
-              "hash": "80e053b28"
+              "hash": "80e053b28",
+              "audience": "developer"
             }
           ]
         }
@@ -93,7 +99,8 @@
               "section": "Fixed",
               "scope": null,
               "text": "classify the nine tables migrations 506-517 added in the config inventory",
-              "hash": "3c988002d"
+              "hash": "3c988002d",
+              "audience": "developer"
             }
           ]
         }
@@ -111,8 +118,9 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "notification record labels only for records the caller can still see",
-              "hash": "989393a02"
+              "text": "Notifications name a record only if you can still open it.",
+              "hash": "989393a02",
+              "commit_text": "notification record labels only for records the caller can still see"
             }
           ]
         }
@@ -130,8 +138,9 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "army round 6 — scope-gated filters, no internal ids, record form, queues, notifications",
-              "hash": "ca417a2cf"
+              "text": "Fast typing in forms no longer drops characters, record headers show the record name instead of an internal number, and history shows line changes as sentences.",
+              "hash": "ca417a2cf",
+              "commit_text": "army round 6 — scope-gated filters, no internal ids, record form, queues, notifications"
             }
           ]
         }
@@ -150,13 +159,15 @@
               "section": "Fixed",
               "scope": null,
               "text": "M2M far-leg identity uses the compiler's exact key rule",
-              "hash": "2b6141348"
+              "hash": "2b6141348",
+              "audience": "developer"
             },
             {
               "section": "Fixed",
               "scope": null,
-              "text": "M2M filter checks follow the compiler exactly (security review)",
-              "hash": "29226e9d7"
+              "text": "Filters on linked records can no longer reveal values you are not allowed to see.",
+              "hash": "29226e9d7",
+              "commit_text": "M2M filter checks follow the compiler exactly (security review)"
             }
           ]
         }
@@ -174,8 +185,9 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "record form baseline at open; M2M junction columns pass the field-policy check",
-              "hash": "d35797f48"
+              "text": "Saving a record no longer overwrites a colleague's change made while you had it open, and new units can be created again.",
+              "hash": "d35797f48",
+              "commit_text": "record form baseline at open; M2M junction columns pass the field-policy check"
             }
           ]
         }
@@ -193,8 +205,9 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "M2M relation filters naming a junction column answered 400",
-              "hash": "788acdf5e"
+              "text": "Pickers that depend on another choice, such as project type, project, location and unit type, show their options again.",
+              "hash": "788acdf5e",
+              "commit_text": "M2M relation filters naming a junction column answered 400"
             }
           ]
         }
@@ -212,14 +225,16 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "army round 5 — record form saves, server filters, rollup rounding, budget totals",
-              "hash": "4b0c64bdf"
+              "text": "A record save that is only partly accepted now says so and keeps your draft, and budget totals round correctly.",
+              "hash": "4b0c64bdf",
+              "commit_text": "army round 5 — record form saves, server filters, rollup rounding, budget totals"
             },
             {
               "section": "Fixed",
               "scope": null,
-              "text": "army round 5 blockers — field policy, M2O scope, conflict resolve, cutover holes",
-              "hash": "37b76fbe7"
+              "text": "Resolving a conflicting edit saves only the values you chose to keep.",
+              "hash": "37b76fbe7",
+              "commit_text": "army round 5 blockers — field policy, M2O scope, conflict resolve, cutover holes"
             }
           ]
         }
@@ -237,8 +252,9 @@
             {
               "section": "Fixed",
               "scope": null,
-              "text": "go-live fixes from the army round 4 staging test",
-              "hash": "ab8a0d190"
+              "text": "Typing amounts like 2.05 no longer turns them into 25, and new inventory requests notify their first approvers.",
+              "hash": "ab8a0d190",
+              "commit_text": "go-live fixes from the army round 4 staging test"
             }
           ]
         }
@@ -257,7 +273,8 @@
               "section": "Added",
               "scope": "api",
               "text": "extension transition checks",
-              "hash": "77c661e93"
+              "hash": "77c661e93",
+              "audience": "developer"
             }
           ]
         },
@@ -268,7 +285,8 @@
               "section": "Fixed",
               "scope": "api",
               "text": "transition checks fail closed on state lookup, docs notes",
-              "hash": "416e4ec72"
+              "hash": "416e4ec72",
+              "audience": "developer"
             }
           ]
         },
@@ -279,7 +297,8 @@
               "section": "Other",
               "scope": "api",
               "text": "priority:threshold script entry",
-              "hash": "1aa4151ca"
+              "hash": "1aa4151ca",
+              "audience": "developer"
             }
           ]
         }

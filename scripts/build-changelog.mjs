@@ -13,9 +13,38 @@
  * conventional-commit prefix people already write.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 const OUT = 'changelog.json'
+
+/**
+ * Plain-language notes (changelog-notes.json, keyed by commit hash): a commit
+ * subject is written for developers ("classify the nine tables migrations
+ * 506-517 added…", army 7 L54). `text` replaces what people read (the subject
+ * stays in commit_text); `audience: "developer"` marks a line the portal's
+ * What's new page leaves out. A missing or broken file changes nothing.
+ */
+const NOTES = (() => {
+  try {
+    const raw = JSON.parse(readFileSync('changelog-notes.json', 'utf8'))
+    return raw && typeof raw.notes === 'object' && raw.notes ? raw.notes : {}
+  } catch {
+    return {}
+  }
+})()
+
+/** One entry with its plain-language note applied. */
+function applyNote(entry, notes = NOTES) {
+  const note = entry.hash ? notes[entry.hash] : null
+  if (!note || typeof note !== 'object') return entry
+  const out = { ...entry }
+  if (typeof note.text === 'string' && note.text.trim()) {
+    out.commit_text = entry.text
+    out.text = note.text.trim()
+  }
+  if (note.audience === 'developer') out.audience = 'developer'
+  return out
+}
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim()
 
@@ -59,12 +88,14 @@ function entriesFor(fromTag, toTag) {
     const m = /^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)$/.exec(subject)
     const type = m?.[1]?.toLowerCase() ?? 'other'
     const section = SECTIONS.find((s) => s.key === type)?.label ?? 'Other'
-    out.push({
-      section,
-      scope: m?.[2] ?? null,
-      text: (m?.[3] ?? subject).trim(),
-      hash: hash ?? null
-    })
+    out.push(
+      applyNote({
+        section,
+        scope: m?.[2] ?? null,
+        text: (m?.[3] ?? subject).trim(),
+        hash: hash ?? null
+      })
+    )
   }
   return out
 }

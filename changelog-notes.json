@@ -1,0 +1,48 @@
+{
+  "_about": "Plain-language release notes, keyed by commit hash (as in changelog.json). scripts/build-changelog.mjs applies them: \"text\" replaces the commit subject people see (the subject stays in commit_text); \"audience\": \"developer\" marks a line the portal What's new page leaves out. Write for the people using the app: what they will notice, no table, field, route or code names.",
+  "notes": {
+    "b9d13bc18": { "audience": "developer" },
+    "626b47ea7": {
+      "text": "Worklist filters no longer fill in your default zone or year by themselves. They open empty, and you still only see what you have access to."
+    },
+    "a2c5809d2": {
+      "text": "The person who raised a request is no longer listed as an approver on steps that already have approvers."
+    },
+    "40b444ea4": {
+      "text": "Reports and dashboard figures that cannot be limited to the zones you have access to no longer run, instead of showing data from other zones."
+    },
+    "559649cdd": {
+      "text": "Record forms keep your reason and unsaved changes more reliably, search finds codes like 2026-NNO-POWER by their parts, and dashboard zone counts now match the worklists."
+    },
+    "80e053b28": { "audience": "developer" },
+    "3c988002d": { "audience": "developer" },
+    "989393a02": {
+      "text": "Notifications name a record only if you can still open it."
+    },
+    "ca417a2cf": {
+      "text": "Fast typing in forms no longer drops characters, record headers show the record name instead of an internal number, and history shows line changes as sentences."
+    },
+    "2b6141348": { "audience": "developer" },
+    "29226e9d7": {
+      "text": "Filters on linked records can no longer reveal values you are not allowed to see."
+    },
+    "d35797f48": {
+      "text": "Saving a record no longer overwrites a colleague's change made while you had it open, and new units can be created again."
+    },
+    "788acdf5e": {
+      "text": "Pickers that depend on another choice, such as project type, project, location and unit type, show their options again."
+    },
+    "4b0c64bdf": {
+      "text": "A record save that is only partly accepted now says so and keeps your draft, and budget totals round correctly."
+    },
+    "37b76fbe7": {
+      "text": "Resolving a conflicting edit saves only the values you chose to keep."
+    },
+    "ab8a0d190": {
+      "text": "Typing amounts like 2.05 no longer turns them into 25, and new inventory requests notify their first approvers."
+    },
+    "77c661e93": { "audience": "developer" },
+    "416e4ec72": { "audience": "developer" },
+    "1aa4151ca": { "audience": "developer" }
+  }
+}
