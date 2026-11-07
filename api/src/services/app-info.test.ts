@@ -90,6 +90,24 @@ describe('buildAppInfo', () => {
     expect(appEnvironment()).toBe('other')
   })
 
+  it('reads the environment from NIVARO_INSTANCE when NIVARO_ENVIRONMENT is unset', () => {
+    expect(appEnvironment({ NODE_ENV: 'production', NIVARO_INSTANCE: 'staging' })).toBe('staging')
+    expect(appEnvironment({ NODE_ENV: 'production', NIVARO_INSTANCE: 'Production' })).toBe(
+      'production'
+    )
+    expect(appEnvironment({ NODE_ENV: 'production', NIVARO_INSTANCE: 'efp-east' })).toBe(
+      'production'
+    )
+    expect(
+      appEnvironment({
+        NODE_ENV: 'production',
+        NIVARO_INSTANCE: 'staging',
+        NIVARO_ENVIRONMENT: 'test'
+      })
+    ).toBe('test')
+    expect(appEnvironment({ NODE_ENV: 'development' })).toBe('development')
+  })
+
   it('MOBILE_SIGNIN=off turns mobile sign-in off', async () => {
     process.env.MOBILE_SIGNIN = 'off'
     expect((await buildAppInfo()).sign_in.mobile).toBe(false)

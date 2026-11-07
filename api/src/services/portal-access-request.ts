@@ -9,6 +9,11 @@ import { notifyUser } from './notification-channels.js'
  * the route uses, kept pure where they can be (army 4 a09-2 / a09-4).
  */
 
+/** The notification rules row access-request notices to admins file under: `workflow`
+ *  ("something is waiting on you"), not `system` — admins mute `system` for import and
+ *  monitor noise, and a muted access request leaves a new hire stuck awaiting authorization. */
+export const ACCESS_REQUEST_NOTIFY_CATEGORY = 'workflow' as const
+
 /** Longest reason the server stores; a longer one is refused, never cut. */
 export const ACCESS_REASON_MAX = 2000
 const MAX_DIVISIONS = 50
@@ -157,6 +162,9 @@ export async function notifyAdminsOfAccessRequest(
       subject: `${requester.name} asked for access to the portal`,
       message: `“${reason}” Review it under People → Awaiting authorization.`,
       sender: requester.id,
+      // army7 b10: a real category, so admins can route or mute these under
+      // Profile → Notification rules (and ask for email) — never "other".
+      category: ACCESS_REQUEST_NOTIFY_CATEGORY,
       target: { kind: 'access_request', action: 'review' }
     }).catch(() => null)
     if (res) told++

@@ -30,6 +30,8 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   ADMIN_ONLY: 'Only administrators can do this. Ask one to do it for you.',
   FIELD_FORBIDDEN: 'Leave that field out, or ask an administrator for access to it.',
   FIELD_NOT_READABLE: 'Leave that field out, or ask an administrator for access to it.',
+  QUERY_NOT_SCOPED:
+    'This report is not limited to the data you may see yet. Ask an administrator to set it up for your access.',
   FILE_NOT_READABLE: 'Ask the person who shared it to share it with you, or attach your own copy.',
   NOT_WHILE_MASQUERADING: 'Stop viewing as someone else first, then try again.',
   API_KEY_SCOPE_MISSING: 'Use a key that has this scope, or ask an administrator to add it.',

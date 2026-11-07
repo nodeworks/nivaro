@@ -29,14 +29,29 @@ export interface AppInfo {
 /** What a tenant hook already knows when it lets the probe through a blocked tenant. */
 export type AppInfoBlock = NonNullable<FastifyRequest['nvrTenantBlock']>
 
-export function appEnvironment(): AppInfo['environment'] {
-  const v = (process.env.NIVARO_ENVIRONMENT ?? '').trim().toLowerCase()
+export function appEnvironment(env: NodeJS.ProcessEnv = process.env): AppInfo['environment'] {
+  const v = (env.NIVARO_ENVIRONMENT ?? '').trim().toLowerCase()
   if (v) {
     return v === 'production' || v === 'staging' || v === 'development' || v === 'test'
       ? v
       : 'other'
   }
-  return process.env.NODE_ENV === 'production' ? 'production' : 'development'
+  // army7 b10: staging runs NODE_ENV=production and told apps it was production.
+  // With no NIVARO_ENVIRONMENT, an instance named for an environment
+  // (NIVARO_INSTANCE=staging) says which one it is before NODE_ENV does.
+  const named = INSTANCE_ENVIRONMENTS[(env.NIVARO_INSTANCE ?? '').trim().toLowerCase()]
+  if (named) return named
+  return env.NODE_ENV === 'production' ? 'production' : 'development'
+}
+
+const INSTANCE_ENVIRONMENTS: Record<string, AppInfo['environment']> = {
+  production: 'production',
+  prod: 'production',
+  staging: 'staging',
+  stage: 'staging',
+  development: 'development',
+  dev: 'development',
+  test: 'test'
 }
 
 /** Areas the phone app may show, from the switches the admin already uses. */
