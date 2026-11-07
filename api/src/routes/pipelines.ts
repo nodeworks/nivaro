@@ -18,7 +18,7 @@ import {
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
-import { selectInChunks } from '../services/db-batch.js'
+import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
@@ -3045,19 +3045,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .orderBy('is_default')
 
     const groupIds = groups.map((g) => g.id)
-    const userRows = groupIds.length
-      ? ((await db('nivaro_pipeline_owner_group_users as ogu')
-          .join('nivaro_users as u', 'ogu.user', 'u.id')
-          .whereIn('ogu.group', groupIds)
-          .select(
-            'ogu.id as link_id',
-            'ogu.group',
-            'u.id',
-            'u.email',
-            'u.first_name',
-            'u.last_name'
-          )) as Array<ResolvedOwner & { link_id: number; group: string }>)
-      : []
+    // Chunked: one state can carry thousands of groups (2,100-parameter cap).
+    const userRows = (await selectInChunks(groupIds, 2000, (chunk) =>
+      whereInList(
+        db('nivaro_pipeline_owner_group_users as ogu').join('nivaro_users as u', 'ogu.user', 'u.id'),
+        'ogu.group',
+        chunk
+      )
+        .select('ogu.id as link_id', 'ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+    )) as Array<ResolvedOwner & { link_id: number; group: string }>
 
     const usersByGroup = new Map<string, Array<ResolvedOwner & { link_id: number }>>()
     for (const r of userRows) {
@@ -3895,12 +3891,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       : []
 
     const groupIds = groups.map((g) => g.id)
-    const groupUsers = groupIds.length
-      ? await db('nivaro_pipeline_owner_group_users as ogu')
-          .join('nivaro_users as u', 'ogu.user', 'u.id')
-          .whereIn('ogu.group', groupIds)
-          .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
-      : []
+    // Chunked: a template carries thousands of groups (2,100-parameter cap).
+    const groupUsers = (await selectInChunks(groupIds, 2000, (chunk) =>
+      whereInList(
+        db('nivaro_pipeline_owner_group_users as ogu').join('nivaro_users as u', 'ogu.user', 'u.id'),
+        'ogu.group',
+        chunk
+      )
+        .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+    )) as Array<Record<string, unknown>>
 
     const usersByGroup = new Map<string, ResolvedOwner[]>()
     for (const u of groupUsers) {
@@ -4271,7 +4270,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .select('id')) as Array<{ id: number }>
     if (groups.length === 0)
       return reply.code(404).send({ error: 'Template not found or has no owner groups' })
-    const groupIds = groups.map((g) => g.id)
+    // The template's groups as a subquery, never an id list: a template carries thousands of
+    // groups (EFP workflows), and binding each one blew SQL Server's 2,100-parameter cap on
+    // every cleanup — even removing one person's seats.
+    const templateGroupIds = () =>
+      db('nivaro_pipeline_owner_groups').where({ template: id }).select('id')
 
     const deadUsers = (await db('nivaro_users')
       .where((qb) => {
@@ -4305,7 +4308,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       500,
       (chunk) =>
         db('nivaro_pipeline_owner_group_users')
-          .whereIn('group', groupIds)
+          .whereIn('group', templateGroupIds())
           .whereIn('user', chunk)
           .select('user') as unknown as Promise<Array<{ user: string }>>
     )
@@ -4316,7 +4319,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     let groupMembersRemoved = 0
     for (let i = 0; i < deadIds.length; i += 500) {
       groupMembersRemoved += await db('nivaro_pipeline_owner_group_users')
-        .whereIn('group', groupIds)
+        .whereIn('group', templateGroupIds())
         .whereIn('user', deadIds.slice(i, i + 500))
         .delete()
     }
