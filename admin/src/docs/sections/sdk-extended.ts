@@ -799,6 +799,15 @@ export const customQueriesGuide: DocSection = {
       type: 'p',
       text: 'Custom queries are admin-defined SQL SELECT statements exposed as parameterized REST endpoints. Use them for complex analytics, cross-collection joins, and aggregations that the standard filter DSL cannot express.'
     },
+    { type: 'h3', id: 'custom-queries-scope', text: 'User Scopes and raw SQL' },
+    {
+      type: 'p',
+      text: 'The items service never sees inside a custom query, so a query narrows itself to the caller through its scope parameters: `scope_params` maps a query parameter to a User-Scope dimension, for example `{"divisions": {"dimension": "division", "translate": "display"}}`. For a person restricted on that dimension the parameter is filled with their allowance when they leave it empty, and cut down to it when they ask for more; asking only for what they may not see returns no rows.'
+    },
+    {
+      type: 'warn',
+      text: 'A query that leaves a dimension out is refused, not run, for people restricted on it. When the SQL (or a procedure it EXECs) reads a table a dimension reaches and that dimension is not in `scope_params`, a restricted caller gets 403 `QUERY_NOT_SCOPED` from the execute route, dashboard and report widgets, Ask AI and MCP alike. Administrators and unrestricted people are never refused. A query that reads scoped tables yet shows nothing a scope should hide (a zone picker, a lookup list) can say so with `{"$not_scoped": {"reason": "…"}}`; the readiness check `raw-sql-scope-coverage` then counts it as covered.'
+    },
     { type: 'h3', text: 'Creating a custom query in the admin UI' },
     {
       type: 'p',

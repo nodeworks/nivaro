@@ -963,7 +963,8 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         (query as { scope_params?: string | null }).scope_params ?? null,
         finalParams,
         req.user?.id,
-        req.isAdmin ?? false
+        req.isAdmin ?? false,
+        { slug: query.slug, sqlText: query.sql_text }
       )
 
       // Cache check. A caller may ask to bypass it — the viewer can see how old

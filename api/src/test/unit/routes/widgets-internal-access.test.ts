@@ -234,7 +234,8 @@ describe('system tables and raw SQL scope (F1, F2)', () => {
       '{"zone":{"dimension":"zone"}}',
       { year: 2026 },
       'caller',
-      false
+      false,
+      { slug: 'spend', sqlText: 'SELECT 1' }
     )
   })
 })

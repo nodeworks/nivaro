@@ -118,7 +118,10 @@ export async function planWidgetQuery(
   isAdmin: boolean
 ): Promise<WidgetQueryPlan> {
   const params = { ...bound }
-  await applyScopeParams(cq.scope_params ?? null, params, userId, isAdmin)
+  await applyScopeParams(cq.scope_params ?? null, params, userId, isAdmin, {
+    slug: cq.slug,
+    sqlText: cq.sql_text
+  })
   return {
     params,
     cacheKey: customQueryCacheKey(cq.slug, params, cq),

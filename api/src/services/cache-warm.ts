@@ -461,7 +461,10 @@ const defaultViewerDeps: ViewerPhaseDeps = {
       (parseJson<unknown[]>(query.params) ?? []) as never,
       t.params
     )
-    await applyScopeParams(query.scope_params ?? null, finalParams, t.as.id, t.as.isAdmin)
+    await applyScopeParams(query.scope_params ?? null, finalParams, t.as.id, t.as.isAdmin, {
+      slug: query.slug,
+      sqlText: query.sql_text
+    })
     const key = customQueryCacheKey(query.slug, finalParams, query)
     return {
       cacheKey: key,

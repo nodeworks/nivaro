@@ -20,6 +20,7 @@
  */
 import { db } from '../db/index.js'
 import { customQueryDependentsIndex, type Dependent } from './custom-query-dependents.js'
+import { NOT_SCOPED_KEY } from './custom-query-scope.js'
 import { tablesReadBy } from './query-freshness.js'
 import { listScopeDimensions, scopeHopsFor } from './user-scopes.js'
 
@@ -62,6 +63,16 @@ function parseScopeParams(raw: unknown): string[] {
       .filter(Boolean)
   } catch {
     return []
+  }
+}
+
+function declaresNotScoped(raw: unknown): boolean {
+  if (!raw) return false
+  try {
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return !!v && typeof v === 'object' && (v as Record<string, unknown>)[NOT_SCOPED_KEY] != null
+  } catch {
+    return false
   }
 }
 
@@ -129,8 +140,11 @@ async function compute(): Promise<ScopeCoverageReport> {
       if (hit.length) reaching.push({ dimension: d.name, label: d.label ?? d.name, tables: hit })
     }
     const covered = parseScopeParams(q.scope_params)
+    // An administrator's "$not_scoped" declaration: the execute gate lets it
+    // through, so the report counts it as covered.
+    const notScoped = declaresNotScoped(q.scope_params)
     const missing = reaching
-      .filter((r) => !covered.includes(r.dimension))
+      .filter((r) => !notScoped && !covered.includes(r.dimension))
       .map((r) => ({ dimension: r.dimension, label: r.label }))
     const used_by = missing.length ? dependentsOf(q.id, q.slug) : []
     const status: QueryCoverage['status'] =

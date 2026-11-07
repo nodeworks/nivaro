@@ -1763,7 +1763,10 @@ async function runChatTool(
       // The raw-SQL scope gap closes here exactly as it does on the execute
       // route: a restricted asker's allowance is injected before anything runs
       // or is cached.
-      await applyScopeParams(query.scope_params ?? null, finalParams, user.id, admin)
+      await applyScopeParams(query.scope_params ?? null, finalParams, user.id, admin, {
+        slug,
+        sqlText: query.sql_text
+      })
       const redis = (getApp() as { redis?: unknown } | null)?.redis as
         | { get(k: string): Promise<string | null>; set(...a: unknown[]): Promise<string | null> }
         | undefined

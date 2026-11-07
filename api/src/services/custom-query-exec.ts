@@ -427,7 +427,10 @@ export async function runCustomQueryAsUser(
   }
   const finalParams = buildFinalParams(defs, incoming)
   const { applyScopeParams } = await import('./custom-query-scope.js')
-  await applyScopeParams(query.scope_params ?? null, finalParams, user.id, isAdmin)
+  await applyScopeParams(query.scope_params ?? null, finalParams, user.id, isAdmin, {
+    slug,
+    sqlText: query.sql_text
+  })
   try {
     return await execCustomQuerySql(query.sql_text, finalParams)
   } catch (err) {
