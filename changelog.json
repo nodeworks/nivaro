@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-07T00:47:23.140Z",
+  "generated_at": "2026-11-07T08:55:40.698Z",
   "releases": [
+    {
+      "version": "0.3.75",
+      "tag": "v0.3.75",
+      "date": "2026-11-07T03:55:26-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "classify the nine tables migrations 506-517 added in the config inventory",
+              "hash": "3c988002d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.74",
       "tag": "v0.3.74",
-      "date": "2026-11-06T19:47:06-05:00",
+      "date": "2026-11-06T19:47:23-05:00",
       "sections": [
         {
           "label": "Fixed",
