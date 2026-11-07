@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-07T14:58:09.728Z",
+  "generated_at": "2026-11-07T16:44:52.402Z",
   "releases": [
+    {
+      "version": "0.3.77",
+      "tag": "v0.3.77",
+      "date": "2026-11-07T11:44:35-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "custom queries fail closed for scope-restricted people",
+              "hash": "40b444ea4"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.76",
       "tag": "v0.3.76",
-      "date": "2026-11-07T09:57:54-05:00",
+      "date": "2026-11-07T09:58:09-05:00",
       "sections": [
         {
           "label": "Fixed",
