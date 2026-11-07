@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { tenantState } from '../services/ai-tenant-state.js'
 import { getCollection } from '../services/collections.js'
@@ -235,12 +236,46 @@ async function indexLeads(): Promise<Map<string, Set<string>>> {
 }
 
 // One plan per tenant: in cloud mode one process serves many tenant databases.
-const planCacheOf = tenantState(() => ({ value: null as { at: number; plan: PlanEntry[] } | null }))
+const planCacheOf = tenantState(() => ({
+  value: null as { at: number; plan: PlanEntry[] } | null,
+  building: null as Promise<PlanEntry[]> | null
+}))
+/** A plan younger than this is used as is. */
+const PLAN_FRESH_MS = 60_000
+/** A plan younger than this still answers at once while a rebuild runs behind it. */
+const PLAN_STALE_MS = 30 * 60_000
 
+/**
+ * The search plan, rebuilt once a minute — but never inside a search's wait once one
+ * exists (army 7 b16 N1): on a quiet day every search came more than a minute after the
+ * last, so each paid the six metadata reads (information_schema over every table) before
+ * its own statements, and on a cold staging that ate the budget. A stale plan (≤30 min)
+ * answers now and one rebuild (single-flight, background pool) lands for the next search.
+ */
 async function buildSearchPlan(): Promise<PlanEntry[]> {
-  const planCache = planCacheOf().value
-  if (planCache && Date.now() - planCache.at < 60_000) return planCache.plan
+  const state = planCacheOf()
+  const cached = state.value
+  const age = cached ? Date.now() - cached.at : Number.POSITIVE_INFINITY
+  if (cached && age < PLAN_FRESH_MS) return cached.plan
+  const stale = cached != null && age < PLAN_STALE_MS
+  if (!state.building) {
+    const load = () => loadSearchPlan()
+    const building = (stale ? runInBackgroundPool(load) : load()).then((plan) => {
+      state.value = { at: Date.now(), plan }
+      return plan
+    })
+    state.building = building
+    void building
+      .finally(() => {
+        if (state.building === building) state.building = null
+      })
+      .catch(() => {})
+  }
+  if (stale && cached) return cached.plan
+  return state.building
+}
 
+async function loadSearchPlan(): Promise<PlanEntry[]> {
   const [collections, stringCols, numericCols, relations, idTables, rowCounts, leads] =
     await Promise.all([
       db('nivaro_collections')
@@ -355,7 +390,6 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
       indexed: [...(leads.get(col.collection) ?? [])]
     })
   }
-  planCacheOf().value = { at: Date.now(), plan }
   return plan
 }
 
@@ -668,6 +702,22 @@ export function packArms<A extends { rows: number; bindings: unknown[] }>(
   return out
 }
 
+/** Budget priorities (services/search-budget.ts): exact ids before record scans before
+ *  the extra kinds (notes, files…), which run at the default 0. */
+const EXACT_PRIORITY = 2
+const RECORD_PRIORITY = 1
+
+/**
+ * The order groups ask for a slot in: the packed small tables first, then the big
+ * tables smallest first. Under a deadline the cheap statements finish and answer; the
+ * old biggest-first order spent every slot on the slowest scans and cut the small
+ * tables (projects, vendors) that hold most of what people type. Exported for tests.
+ */
+export function cheapestFirst<A extends { rows: number }>(groups: A[][]): A[][] {
+  const cost = (g: A[]) => (g.length > 1 ? 0 : (g[0]?.rows ?? 0))
+  return [...groups].sort((a, b) => cost(a) - cost(b))
+}
+
 /**
  * Run arms under the search's budget: one statement per group (packArms), at most the
  * budget's concurrency at a time, each cancelled on the server at the deadline. A
@@ -677,9 +727,10 @@ export function packArms<A extends { rows: number; bindings: unknown[] }>(
 async function runArms(
   budget: SearchBudget,
   arms: Arm[],
-  prefix: { sql: string; bindings: unknown[] } | null = null
+  prefix: { sql: string; bindings: unknown[] } | null = null,
+  priority = RECORD_PRIORITY
 ): Promise<Array<{ c: string; id: string }>> {
-  const groups = packArms(arms, prefix?.bindings.length ?? 0)
+  const groups = cheapestFirst(packArms(arms, prefix?.bindings.length ?? 0))
   const results = await Promise.all(
     groups.map((g) => {
       // `partial` names a big table; the small ones together are one entry.
@@ -688,7 +739,7 @@ async function runArms(
       const bindings = [...(prefix?.bindings ?? []), ...g.flatMap((a) => a.bindings)]
       return budget
         .run(label, [] as Array<{ c: string; id: string }>, () =>
-          budget.query<{ c: string; id: string }>(sql, bindings)
+          budget.query<{ c: string; id: string }>(sql, bindings, { priority })
         )
         .catch(() => {
           planCacheOf().value = null // stale plan — rebuild next request
@@ -787,6 +838,9 @@ async function searchUnion(
 
 /** After an exact id hit, how long the other scans may still add to the answer. */
 const EXACT_GRACE_MS = 300
+/** An exact-id seek runs at least this long from its own start, even past the deadline
+ *  (army 7 b16 N1): an index seek that started late is never cut by the budget. */
+const EXACT_FLOOR_MS = 800
 
 interface ExactSpec {
   collection: string
@@ -882,23 +936,24 @@ async function searchExact(
   //    brings the whole search's deadline in: the answer is known.
   const seekPass = (async () => {
     const stmt = exactStatement(seek, q)
+    // Seeks: first in the queue, the reserved slot, and a floor past the deadline —
+    // an exact record match is never what the budget cuts.
+    const seekOpts = { priority: EXACT_PRIORITY, reserved: true, floorMs: EXACT_FLOOR_MS }
     const [byCol, byId] = await Promise.all([
       stmt
         ? budget
-            .run('exact', [] as Array<{ c: string; id: string }>, () =>
-              budget.query<{ c: string; id: string }>(stmt.sql, stmt.bindings)
-            )
+            .runQuery<{ c: string; id: string }>('exact', stmt.sql, stmt.bindings, seekOpts)
             .catch(() => [] as Array<{ c: string; id: string }>)
         : [],
       // A primary-key seek, so any table size; its own statement — an id type
       // clash (uuid vs digits) fails only this one.
       scope && candidates.some((p) => p.collection === scope)
         ? budget
-            .run('exact:id', [] as Array<{ c: string; id: string }>, () =>
-              budget.query<{ c: string; id: string }>(
-                `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
-                [/^\d{1,15}$/.test(q) ? Number(q) : q]
-              )
+            .runQuery<{ c: string; id: string }>(
+              'exact:id',
+              `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
+              [/^\d{1,15}$/.test(q) ? Number(q) : q],
+              seekOpts
             )
             .catch(() => [] as Array<{ c: string; id: string }>)
         : []
@@ -919,7 +974,8 @@ async function searchExact(
           a.stmt != null
       )
       .map((a) => ({ collection: a.collection, rows: a.rows, ...a.stmt }))
-    const rows = await runArms(budget, arms)
+    // Scans (no index leads the column): ahead of the text scans, without a floor.
+    const rows = await runArms(budget, arms, null, EXACT_PRIORITY)
     return exactHits(ctx, specs, candidates, rows, q, scope)
   })()
   const [a, b] = await Promise.all([seekPass, scanPass])
@@ -1861,9 +1917,13 @@ async function runGlobalSearch(
     return base
   }
 
-  // Readable collections in one pass (avoid per-collection can() round-trips)
+  // Readable collections in one pass (avoid per-collection can() round-trips). The search
+  // plan is ready before the budget's clock starts (a rebuild is metadata, not search).
   const user = req.user!
-  const readable = await readableCollections(user as User)
+  const [readable] = await Promise.all([
+    readableCollections(user as User),
+    buildSearchPlan().catch(() => [] as PlanEntry[])
+  ])
   // Field metadata — filters, matched-field labels, and the semantic block's labels
   const fieldRows = readable.length
     ? ((await db('nivaro_fields')
