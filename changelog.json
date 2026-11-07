@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-07T00:27:29.531Z",
+  "generated_at": "2026-11-07T00:47:23.140Z",
   "releases": [
+    {
+      "version": "0.3.74",
+      "tag": "v0.3.74",
+      "date": "2026-11-06T19:47:06-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "notification record labels only for records the caller can still see",
+              "hash": "989393a02"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.73",
       "tag": "v0.3.73",
-      "date": "2026-11-06T19:27:07-05:00",
+      "date": "2026-11-06T19:27:29-05:00",
       "sections": [
         {
           "label": "Fixed",
