@@ -167,7 +167,9 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_role_checklists', // #2472 first-week checklists an admin published per role
   'nivaro_role_notification_defaults', // #3077 starting notification rules per role (migration 513)
   'nivaro_search_synonyms', // #1581 admin-authored search synonym groups (migration 498)
-  'nivaro_chaos_presets' // #2855 saved fault presets (migration 497) — promoted between instances
+  'nivaro_chaos_presets', // #2855 saved fault presets (migration 497) — promoted between instances
+  'nivaro_mcp_tool_kits', // migration 509 — named MCP tool bundles (promote COPY)
+  'nivaro_mcp_contract_tests' // migration 509 — saved MCP console contract tests (promote COPY)
 ]
 
 /** Derived from business data — differing between environments proves nothing. */
@@ -384,6 +386,13 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_chat_huddle_sessions', // migration 496 — finished huddles, counts and timings
   'nivaro_chaos_runs', // migration 497 — fault drills run on this instance
   'nivaro_chaos_run_events',
+  'nivaro_user_field_defaults', // migration 506 — personal field defaults per person
+  'nivaro_mcp_connection_scopes', // migration 509 — limits per connected app (promote SKIP)
+  'nivaro_mcp_tool_suggestion_dismissals', // migration 509
+  'nivaro_agent_triggers', // migration 510 — endpoints/secrets per environment (promote SKIP)
+  'nivaro_agent_trigger_deliveries',
+  'nivaro_agent_questions', // migration 511 — questions agents asked people
+  'nivaro_activity_views', // migration 517 — saved audit views per person (promote SKIP)
   // Not a migration: a deployment's one-off data-move scratch table, staged by an extension
   // script and carried by database copies. Classified so it never reads as a new migration.
   'nivaro_forecast_stage'
