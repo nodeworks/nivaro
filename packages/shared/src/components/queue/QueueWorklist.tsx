@@ -96,7 +96,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { copyIdText } from '../../lib/record-ref'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { userErrorMessage } from '../../lib/safe-error'
-import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
+import { matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
 import {
   cn,
@@ -772,14 +772,9 @@ export function QueueWorklist({
             const vals = await displayValuesFor(m, restrictedIds)
             if (vals.length > 0) allowed[key.slice('extra.'.length)] = vals
           }
-          // Seeding: defaults ∩ restriction pre-fill the filter once
-          const ids = effectiveScopeSeedIds(myScopes, dim.name)
-          if (ids.length === 0) continue
-          const existing = filterValues[key]
-          if (existing && (Array.isArray(existing) ? existing.length > 0 : existing !== ''))
-            continue
-          const vals = ids.length ? await displayValuesFor(m, ids) : []
-          if (vals.length > 0) patch[key] = vals
+          // No seeding from the viewer's DEFAULT scopes (EFP 2026-11-07): a
+          // queue opens on everything the person may see; restrictions are
+          // applied by the server regardless and bound the pickable values above.
         } catch {
           /* scope seeding is best-effort — an unreadable target just skips */
         }
