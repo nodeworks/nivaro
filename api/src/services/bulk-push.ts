@@ -96,6 +96,11 @@ export async function runItemActionOver(opts: {
   const { actionId, collection, ids, req } = opts
   const action = itemActionRegistry.get(actionId)
   if (!action) throw Object.assign(new Error('Item action not found'), { statusCode: 404 })
+  if (action.admin_only && !req.isAdmin)
+    throw Object.assign(new Error(`"${action.label}" is for administrators only`), {
+      statusCode: 403,
+      code: 'ADMIN_ONLY'
+    })
   if (action.collections && !action.collections.includes(collection))
     throw Object.assign(new Error(`"${action.label}" does not apply to ${collection}`), {
       statusCode: 400

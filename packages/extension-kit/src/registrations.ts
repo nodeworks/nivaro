@@ -99,6 +99,9 @@ export interface ItemActionDef {
   /** false = one record at a time only: never offered in the bulk bars, and a
    *  multi-record push of it is refused (e.g. closing out a PO). Default true. */
   bulk?: boolean
+  /** Administrators only: the button is hidden from everyone else and the
+   *  execute, choices and bulk routes refuse them (403). Default false. */
+  admin_only?: boolean
   /** Per-record applicability; the client hides inapplicable buttons. Errors
    *  count as applicable — a broken check must not hide a working action. */
   applicable?(ctx: { collection: string; itemId: string | number }): Promise<boolean>

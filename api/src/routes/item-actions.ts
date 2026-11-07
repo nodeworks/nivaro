@@ -13,7 +13,10 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     const collection = q.collection
     const item = q.item
-    const actions = itemActionRegistry.list(collection)
+    // An administrators-only action is never offered to anyone else.
+    const actions = itemActionRegistry
+      .list(collection)
+      .filter((a) => !a.admin_only || !!req.isAdmin)
     // With ?item=, per-record applicability gates run so the client only
     // renders buttons that can actually do something on THIS record.
     const kept = item
@@ -62,6 +65,10 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const action = itemActionRegistry.get(req.params.id)
       if (!action) return reply.status(404).send({ error: 'Item action not found' })
+      if (action.admin_only && !req.isAdmin)
+        return reply
+          .status(403)
+          .send({ error: `${action.label} is for administrators only`, code: 'ADMIN_ONLY' })
       const collection = String(req.query.collection ?? '')
       const item = String(req.query.item ?? '')
       if (!collection || !item)
@@ -115,6 +122,10 @@ export async function itemActionsRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const action = itemActionRegistry.get(req.params.id)
       if (!action) return reply.status(404).send({ error: 'Item action not found' })
+      if (action.admin_only && !req.isAdmin)
+        return reply
+          .status(403)
+          .send({ error: `${action.label} is for administrators only`, code: 'ADMIN_ONLY' })
       const collection = String(req.query.collection ?? '')
       const item = String(req.query.item ?? '')
       if (!collection || !item)
@@ -189,6 +200,10 @@ export async function itemActionsRoutes(app: FastifyInstance) {
   }>('/item-actions/:id/execute', { preHandler: [requireAuth] }, async (req, reply) => {
     const action = itemActionRegistry.get(req.params.id)
     if (!action) return reply.status(404).send({ error: 'Item action not found' })
+    if (action.admin_only && !req.isAdmin)
+      return reply
+        .status(403)
+        .send({ error: `${action.label} is for administrators only`, code: 'ADMIN_ONLY' })
 
     const { collection, itemId, payload } = req.body ?? ({} as typeof req.body)
     if (!collection || itemId == null || String(itemId).trim() === '') {
