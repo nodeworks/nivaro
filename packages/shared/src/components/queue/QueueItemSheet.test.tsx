@@ -55,7 +55,7 @@ const INSTANCE = {
   ]
 }
 
-function render() {
+function render(extra: Partial<Parameters<typeof QueueItemSheet>[0]> = {}) {
   const calls: Cmd[] = []
   const client = {
     url: '',
@@ -79,6 +79,7 @@ function render() {
             onClaim={() => {}}
             onRelease={() => {}}
             refetchItems={() => {}}
+            {...extra}
           />
         </NivaroProvider>
       </QueryClientProvider>
@@ -162,5 +163,21 @@ describe('QueueItemSheet moves (army6 H7)', () => {
       transition_id: 't-cancel',
       comment: 'Duplicate request'
     })
+  })
+})
+
+// army 7 N7 — Peek labelled extra fields by their raw paths ("PROJECT TYPE → NAME").
+describe('QueueItemSheet field labels', () => {
+  it('labels extra fields as the list headers do, path only as the fallback', async () => {
+    render({
+      item: { ...ITEM, extra: { 'project_type.name': 'Growth', 'divisions.name': 'Z1' } },
+      fieldLabel: (f) => (f === 'project_type.name' ? 'Project Type' : '')
+    })
+    await flush()
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Project Type')
+    expect(text).not.toContain('→')
+    // No alias: plain words, never the raw path.
+    expect(text).toContain('Divisions')
   })
 })

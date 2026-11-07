@@ -186,3 +186,33 @@ export function copyIdText(row: { label?: string | null }): string | null {
   if (!label || isNoNumberLabel(label)) return null
   return label
 }
+
+/**
+ * How a record's own row menu names the record (aria label) and what its
+ * "Copy ID" copies — the friendly id people read, never the row id (army 7
+ * N7/M52). `label` is the host's ready label (a queue row's "PW26-76166" /
+ * "No workflow number · …"); otherwise the row's friendly id column. The row
+ * id stays only for a collection that names no friendly id column at all, where
+ * it is the id people see; while the metadata is unknown nothing is copied. `copy` null = the
+ * record has no number: there is nothing to copy.
+ */
+export function rowMenuRef(opts: {
+  label?: string | null
+  meta?: RecordRefMeta | null
+  row?: Record<string, unknown> | null
+  id: string | number
+  collection?: string | null
+}): { copy: string | null; name: string } {
+  const label = String(opts.label ?? '').trim()
+  if (label) return { copy: copyIdText({ label }), name: label }
+  const friendly = friendlyIdOf(opts.meta, opts.row)
+  if (friendly) return { copy: friendly, name: friendly }
+  // Metadata not loaded yet (first paint, drill sheets): never fall back to the row id —
+  // hide Copy ID until it is known rather than copy an internal number.
+  if (!opts.meta) return { copy: null, name: 'this record' }
+  if (!friendlyIdFieldOf(opts.meta)) return { copy: String(opts.id), name: String(opts.id) }
+  return {
+    copy: null,
+    name: recordRefLabel(opts.meta, opts.row, opts.id, opts.collection)
+  }
+}

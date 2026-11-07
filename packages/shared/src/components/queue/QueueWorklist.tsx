@@ -141,7 +141,8 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { dedupeChooserKeys } from './column-chooser'
-import { stateAspectEffect } from './live-state-aspect'
+import { stateAspectEffect, statsOutrunRows } from './live-state-aspect'
+import { pathHeader } from './path-label'
 import { OwnerAvatars } from './OwnerAvatars'
 import { QueueBulkBar } from './QueueBulkBar'
 import { QueueItemSheet } from './QueueItemSheet'
@@ -603,12 +604,8 @@ function StateChip({
   )
 }
 
-function formatColumnHeader(path: string): string {
-  return path
-    .split('.')
-    .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
-    .join(' → ')
-}
+// No alias: plain words, never the raw path (army 7 N7) — shared with the Peek sheet.
+const formatColumnHeader = pathHeader
 
 function SortableColumnToggle({
   id,
@@ -1601,6 +1598,7 @@ export function QueueWorklist({
   // read (page 1, one row) re-counts totals / SLA / at-risk as the viewer; the
   // newer of that and the list's own read wins.
   const { data: liveStats, dataUpdatedAt: liveStatsAt } = useQuery<{
+    total?: number
     stats: QueueStats
     filtered_stats: QueueStats | null
     state_counts?: Record<string, number>
@@ -1626,6 +1624,25 @@ export function QueueWorklist({
     ? (liveStats.filtered_stats ?? null)
     : (data?.filtered_stats ?? null)
   const liveStateCounts = liveStatsNewer ? liveStats.state_counts : data?.state_counts
+  // The tiles never run ahead of the rows (army 7 N5): a stats read that counts a
+  // different total re-reads the rows once, quietly, as the server judges them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the stats read landing
+  useEffect(() => {
+    if (!liveStatsNewer) return
+    const outrun = statsOutrunRows({
+      liveTotal: liveStats.total,
+      rowsTotal: data?.total,
+      table: view === 'table' && !serverGrouped,
+      busy: selectedCountRef.current > 0 || draggingRef.current
+    })
+    if (!outrun) return
+    liveRefetchRef.current = true
+    // This scope's rows only; if nothing was refetched (query paused or not mounted) the
+    // quiet flag must not linger into the next person-driven page change.
+    void qc.invalidateQueries({ queryKey: ['queue-items', queueId, scope] }).finally(() => {
+      liveRefetchRef.current = false
+    })
+  }, [liveStatsAt])
   // Aging chips follow the other active filters (army 6 L38). With an aging
   // chip itself on, the filtered buckets would zero the other chips, so they
   // keep the counts they had just before it was picked.
@@ -3249,6 +3266,7 @@ export function QueueWorklist({
           <RowActionsMenu
             collection={row.collection}
             id={row.item_id}
+            label={row.label}
             hasPipeline={row.state != null}
             onOpen={() => openItemPage(row)}
             onPeek={() => setSheetItem(row)}
@@ -5184,6 +5202,7 @@ export function QueueWorklist({
         collectionLabel={collectionLabel}
         claimsEnabled={claimsEnabled}
         columnFormats={mergedColumnFormats}
+        fieldLabel={(field) => aliasFor(`extra.${field}`, formatColumnHeader(field))}
         width={displayConfig?.sheet_width}
         itemLayout={displayConfig?.item_layout}
         onOpenChange={(open) => {

@@ -4,6 +4,7 @@ import {
   friendlyIdFieldOf,
   friendlyIdOf,
   recordRefLabel,
+  rowMenuRef,
   shareableRecordId
 } from './record-ref'
 
@@ -63,5 +64,42 @@ describe('record refs (#776)', () => {
       '7'
     )
     expect(await shareableRecordId(client, 'workflows', {}, { workflow_id: 'CM26-7' }, 7)).toBe('7')
+  })
+})
+
+// army 7 N7/M52 — the row ⋯ menu copied and named the row id ("367714").
+describe('rowMenuRef', () => {
+  it('copies and names the queue row’s friendly label, never its row id', () => {
+    expect(rowMenuRef({ label: 'PW26-76166', id: 367714 })).toEqual({
+      copy: 'PW26-76166',
+      name: 'PW26-76166'
+    })
+  })
+  it('has nothing to copy for a record with no number, but still names it', () => {
+    const r = rowMenuRef({ label: 'No workflow number · IG Net2.0', id: 360291 })
+    expect(r.copy).toBeNull()
+    expect(r.name).toBe('No workflow number · IG Net2.0')
+  })
+  it('reads the friendly id column from a browser row', () => {
+    expect(
+      rowMenuRef({ meta, row: { id: 367714, workflow_id: 'PW26-76166' }, id: 367714 })
+    ).toEqual({ copy: 'PW26-76166', name: 'PW26-76166' })
+  })
+  it('a blank friendly id copies nothing and reads "No … number"', () => {
+    const r = rowMenuRef({
+      meta,
+      row: { id: 360291, workflow_id: null, description: 'IG Net2.0' },
+      id: 360291,
+      collection: 'workflows'
+    })
+    expect(r.copy).toBeNull()
+    expect(r.name).toBe('No workflow number · IG Net2.0')
+  })
+  it('keeps the row id where the collection names no friendly id column', () => {
+    expect(rowMenuRef({ meta: {}, row: { id: 12 }, id: 12 })).toEqual({ copy: '12', name: '12' })
+  })
+
+  it('copies nothing while the collection metadata is not loaded yet', () => {
+    expect(rowMenuRef({ id: 'abc' })).toEqual({ copy: null, name: 'this record' })
   })
 })

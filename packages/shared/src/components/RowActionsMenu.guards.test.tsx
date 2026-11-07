@@ -90,7 +90,7 @@ async function openMenu(
       </QueryClientProvider>
     )
   )
-  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Actions for 5"]')
+  const trigger = document.querySelector<HTMLButtonElement>('[aria-label^="Actions for"]')
   await act(async () => trigger?.click())
   for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 0)))
   const shown = Array.from(document.querySelectorAll('[data-row-action]')).map((b) =>
@@ -125,7 +125,7 @@ describe('RowActionsMenu — registry actions follow the record', () => {
 
   it('bulk mode on: the row menu is disabled and never opens', async () => {
     const { shown, calls } = await openMenu({ is_on_hold: true }, undefined, true)
-    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Actions for 5"]')
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label^="Actions for"]')
     expect(trigger?.disabled).toBe(true)
     expect(shown).toEqual([])
     expect(calls.some((c) => c._path === '/bulk-actions/available')).toBe(false)
@@ -169,7 +169,7 @@ describe('RowActionsMenu — registry actions follow the record', () => {
       )
     )
     await act(async () =>
-      document.querySelector<HTMLButtonElement>('[aria-label="Actions for 5"]')?.click()
+      document.querySelector<HTMLButtonElement>('[aria-label^="Actions for"]')?.click()
     )
     for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 0)))
     const fusion = document.querySelector<HTMLButtonElement>(

@@ -60,7 +60,7 @@ async function openMenu(isAdmin: boolean, excluded: boolean) {
       </QueryClientProvider>
     )
   )
-  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Actions for 3"]')
+  const trigger = document.querySelector<HTMLButtonElement>('[aria-label^="Actions for"]')
   await act(async () => trigger?.click())
   await tick()
   return calls

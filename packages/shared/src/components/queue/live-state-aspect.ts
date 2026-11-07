@@ -18,3 +18,23 @@ export function stateAspectEffect(
     ? { refresh: true, pill: 0, stats: true }
     : { refresh: false, pill: 1, stats: true }
 }
+
+/**
+ * Whether a live stats read must pull the rows along (army 7 N5): the tiles
+ * counted a different total than the rows on screen, so a record entered or
+ * left the worklist — the strip said 38 while the rows, pager and sentence
+ * stayed at 37 behind a "2 updates · Refresh" pill for minutes. One quiet
+ * re-read of the rows per stats read (already coalesced), only when the counts
+ * disagree, never in a grouped / board view (those refresh their own way), and
+ * never mid-selection or mid-drag (the pill stays the way in there).
+ */
+export function statsOutrunRows(opts: {
+  liveTotal: number | null | undefined
+  rowsTotal: number | null | undefined
+  table: boolean
+  busy: boolean
+}): boolean {
+  if (!opts.table || opts.busy) return false
+  if (typeof opts.liveTotal !== 'number' || typeof opts.rowsTotal !== 'number') return false
+  return opts.liveTotal !== opts.rowsTotal
+}

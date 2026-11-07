@@ -25,6 +25,7 @@ import {
 import { Badge } from '../ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { OwnerAvatars } from './OwnerAvatars'
+import { pathHeader } from './path-label'
 import { needsTransitionNote, useTransitionNote } from './transition-note'
 
 interface QueueOwner {
@@ -94,12 +95,7 @@ function formatAging(hours: number | null): string {
   return humanHours(hours)
 }
 
-function formatFieldHeader(path: string): string {
-  return path
-    .split('.')
-    .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
-    .join(' → ')
-}
+const formatFieldHeader = pathHeader
 
 function MetaCell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -124,6 +120,7 @@ export function QueueItemSheet({
   collectionLabel,
   claimsEnabled = true,
   columnFormats,
+  fieldLabel,
   width,
   itemLayout
 }: {
@@ -142,6 +139,9 @@ export function QueueItemSheet({
   claimsEnabled?: boolean
   /** Extra-field path → display format config (display-only). */
   columnFormats?: Record<string, ColumnFormatConfig>
+  /** Extra-field path → the label its list column header shows (the queue's column
+   *  alias); without it the path is spelled out (army 7 N7: "PROJECT TYPE → NAME"). */
+  fieldLabel?: (field: string) => string
   /** Sidebar width: px number or 'NN%' of viewport; default 480. */
   width?: number | string | null
   /** Layout slug the Open button pins on the full item; null = default. */
@@ -339,7 +339,7 @@ export function QueueItemSheet({
                   </MetaCell>
                 )}
                 {Object.entries(item.extra ?? {}).map(([key, value]) => (
-                  <MetaCell key={key} label={formatFieldHeader(key)}>
+                  <MetaCell key={key} label={fieldLabel?.(key) || formatFieldHeader(key)}>
                     {value == null || value === ''
                       ? '—'
                       : columnFormats?.[key]
