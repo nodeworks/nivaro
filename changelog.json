@@ -1,6 +1,82 @@
 {
-  "generated_at": "2026-11-07T17:59:32.295Z",
+  "generated_at": "2026-11-07T18:37:16.106Z",
   "releases": [
+    {
+      "version": "0.3.79",
+      "tag": "v0.3.79",
+      "date": "2026-11-07T13:37:00-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "changelog",
+              "text": "plain-language release notes",
+              "hash": "1f3e17a34"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "friendly ids and labels, tiles never ahead of rows",
+              "hash": "e562f0fc1"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "access-request notices, app environment and error hint parity",
+              "hash": "cbb8d206f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "owner cleanup and owner reads past 2,100 groups",
+              "hash": "cd1300e6b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "exact record matches are never cut by the time budget",
+              "hash": "f8783cc26"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "related-field sorts work and respect the caller's scope",
+              "hash": "191669e3e"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "lists",
+              "text": "warm the next page's labels; row menu friendly ids",
+              "hash": "af7f17a75"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www/docs.html and the docs index",
+              "hash": "b1ff17d8b"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.3.78",
       "tag": "v0.3.78",
