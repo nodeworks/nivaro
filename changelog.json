@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-08T15:04:39.556Z",
+  "generated_at": "2026-11-08T15:51:12.606Z",
   "releases": [
+    {
+      "version": "0.3.88",
+      "tag": "v0.3.88",
+      "date": "2026-11-08T10:50:55-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "join default channels when a role is given",
+              "hash": "311f0da28"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.87",
       "tag": "v0.3.87",
-      "date": "2026-11-08T10:04:20-05:00",
+      "date": "2026-11-08T10:04:39-05:00",
       "sections": [
         {
           "label": "Fixed",
