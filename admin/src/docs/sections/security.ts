@@ -489,17 +489,34 @@ export const securityRetentionPolicies: DocSection = {
     { type: 'h1', id: 'retention-policies', text: 'Privacy & Retention Policies' },
     {
       type: 'p',
-      text: 'Retention policies identify users who have been inactive for a configurable period and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.'
+      text: 'Retention policies identify people who have not signed in for a configurable period (and, optionally, have left the company per directory sync) and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.'
+    },
+    { type: 'h3', text: 'Who is in scope' },
+    {
+      type: 'p',
+      text: 'A person is a candidate only when EVERY gate holds:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'No sign-in since the cutoff: `nivaro_users.last_access` is empty or older than the threshold (months). A recent sign-in always protects. The activity log is not read.',
+        '**Left the company** (option `require_directory_gone`, Settings: "Only people who have left the company"): directory sync marks the account `missing` or `disabled` (`nivaro_users.directory_status`), with a verdict taken in the last 7 days.',
+        'Not a machine account (`account_kind` set, or an integration/bot address) — an idle integration is not a leaver.',
+        'Not under an active legal hold, not already redacted, and not in the protected addresses or roles.'
+      ]
+    },
+    {
+      type: 'warn',
+      text: 'A policy with "Only people who have left the company" on REFUSES to run — nothing is judged or written — while directory sync is off, has never completed, or last completed more than 7 days ago. The refusal is recorded as a run with its reason, and a scheduled run fails its job so Background Jobs shows it.'
     },
     { type: 'h3', text: 'How it works' },
     {
       type: 'ul',
       items: [
-        'A policy defines an inactivity threshold (months), the action to take, which fields to redact, and protected addresses/roles that are never touched.',
-        'Users with no `nivaro_activity` rows since the cutoff — and not in any exclusion list — are candidates.',
-        'Redacted users get `is_redacted = true` and are automatically excluded from all user pickers and list endpoints throughout the UI.',
-        'Policies can be executed manually (with an optional dry-run preview) or scheduled via a cron expression.',
-        'Every execution is recorded in `nivaro_retention_runs` with an affected count and up to 50 sample IDs for audit.'
+        'Redacted users get `is_redacted = true`, are suspended, get one `user-retention-suspend` activity row each saying why, and are excluded from all user pickers and list endpoints.',
+        'Policies can be executed manually (Dry run / Run now) or on their own cron expression (`cron_schedule`). Each scheduled policy is a Background Jobs entry `retention-policy-<id>` on the background pool. Directory sync runs at 04:15, so a policy that needs it should run after that (e.g. `45 4 * * *`).',
+        'Dry-run mode on the policy makes every run — manual or scheduled — a preview: nothing is written, the run is still recorded.',
+        'Every execution (including a refusal) is recorded in `nivaro_retention_runs` with an affected count and up to 50 sample IDs for audit.'
       ]
     },
     { type: 'h3', text: 'Actions' },
@@ -532,7 +549,7 @@ GET    /api/retention/:id/runs    // run history`
     },
     {
       type: 'note',
-      text: 'All retention endpoints require admin access. The dry-run endpoint returns affected_count and up to 50 sample user IDs without writing any changes.'
+      text: 'All retention endpoints require admin access. A run answers `affected_count`, `affected_ids` (up to 50), `dry_run` (true whenever nothing was written), `refused` (the reason, or null), `cutoff`, `candidates` (up to 500 people, each with `reasons` — one line per gate it matched), `candidates_truncated` and `skipped` (how many each gate kept out: machine, excluded, signed_in, directory_present).'
     }
   ]
 }

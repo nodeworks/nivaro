@@ -10,13 +10,14 @@
  * every other process on the database does the same within its poll.
  */
 import type { FastifyInstance } from 'fastify'
-import { SCHEDULES_EPOCH, bumpEpoch } from '../db/config-epoch.js'
+import { bumpEpoch, SCHEDULES_EPOCH } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 
 export interface DesiredSchedule {
   expression: string
   run: () => Promise<void>
   description?: string
+  idempotent?: 'safe' | 'unsafe' | 'unknown'
 }
 
 export interface ReconcileResult {
@@ -65,12 +66,10 @@ export function reconcile(
     const d = desired.get(id) as DesiredSchedule
     try {
       if (plan.change.includes(id)) app.cron.unschedule(id)
-      app.cron.schedule(
-        id,
-        d.expression,
-        d.run,
-        d.description ? { description: d.description } : {}
-      )
+      app.cron.schedule(id, d.expression, d.run, {
+        ...(d.description ? { description: d.description } : {}),
+        ...(d.idempotent ? { idempotent: d.idempotent } : {})
+      })
       ;(plan.change.includes(id) ? out.rescheduled : out.scheduled).push(id)
     } catch (err) {
       out.invalid.push({ id, error: (err as Error)?.message ?? 'Invalid schedule' })
@@ -146,15 +145,35 @@ registerScheduleResync('retention', async (app) => {
     desired.set(`${RETENTION_PREFIX}${p.id}`, {
       expression: p.cron_schedule,
       description: p.name ? `Retention policy: ${p.name}` : undefined,
+      // A rerun judges the same people again and skips anyone already
+      // redacted, so a repeated tick changes nothing twice.
+      idempotent: 'safe',
       run: async () => {
+        const fresh = await db('nivaro_retention_policies').where({ id: p.id }).first()
+        if (!fresh?.is_active) return
+        const { runRetentionPolicy } = await import('./retention.js')
+        // Same path as Run now: honours dry_run_mode, records the run in
+        // nivaro_retention_runs. A refusal (directory sync off or stale) or an
+        // error fails the job so Background Jobs shows it instead of "completed".
+        let result: Awaited<ReturnType<typeof runRetentionPolicy>>
         try {
-          const fresh = await db('nivaro_retention_policies').where({ id: p.id }).first()
-          if (!fresh?.is_active) return
-          const { executeRetentionPolicy } = await import('./retention.js')
-          await executeRetentionPolicy(fresh, undefined, false)
+          result = await runRetentionPolicy(fresh, { dryRun: false, source: 'schedule' })
         } catch (err) {
           app.log.error({ err }, `[retention] policy ${p.id} cron failed`)
+          throw err
         }
+        if (result.refused) throw new Error(`Retention policy ${p.id} refused: ${result.refused}`)
+        if (result.errors.length > 0) {
+          throw new Error(
+            `Retention policy ${p.id}: ${result.errors.length} error(s) — ${result.errors[0]}`.slice(
+              0,
+              500
+            )
+          )
+        }
+        app.log.info(
+          `[retention] policy ${p.id} ${result.dryRun ? 'dry run' : 'live run'}: ${result.affectedCount} affected`
+        )
       }
     })
   }
