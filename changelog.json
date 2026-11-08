@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-08T14:17:11.144Z",
+  "generated_at": "2026-11-08T15:04:39.556Z",
   "releases": [
+    {
+      "version": "0.3.87",
+      "tag": "v0.3.87",
+      "date": "2026-11-08T10:04:20-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "erp",
+              "text": "a response_success rule can accept on any value at a path",
+              "hash": "218c89b14"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "regenerate docs index",
+              "hash": "a21d3aa55"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.86",
       "tag": "v0.3.86",
-      "date": "2026-11-08T09:16:56-05:00",
+      "date": "2026-11-08T09:17:11-05:00",
       "sections": [
         {
           "label": "Fixed",
