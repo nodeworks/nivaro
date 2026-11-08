@@ -298,6 +298,10 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
 const TOKEN_REUSE_MARGIN_S = 60
 const TOKEN_MAX_REUSE_S = 3600
 const oauthTokens = new Map<string, { token: string; until: number }>()
+/** OAUTH_TOKEN_CACHE=off turns reuse off (every call fetches a token, as before). */
+function oauthTokenCacheOn(): boolean {
+  return (process.env.OAUTH_TOKEN_CACHE ?? '').trim().toLowerCase() !== 'off'
+}
 
 function oauthTokenKey(c: OAuth2CCConfig): string {
   const shape = JSON.stringify([
@@ -333,9 +337,15 @@ export async function resolveAuth(
   cfg: Record<string, unknown> | null,
   /** #626 — record the token fetch on this API's flight recorder. */
   rec?: { apiId: number; kind?: 'token' | 'token_probe'; triggeredBy?: string }
-): Promise<{ headers: Record<string, string>; queryParams: Record<string, string> }> {
+): Promise<{
+  headers: Record<string, string>
+  queryParams: Record<string, string>
+  /** The bearer came from the token cache (a 401 then retries once with a fresh one). */
+  fromCache?: boolean
+}> {
   const headers: Record<string, string> = {}
   const queryParams: Record<string, string> = {}
+  let fromCache = false
 
   switch (authType) {
     case 'bearer': {
@@ -367,10 +377,11 @@ export async function resolveAuth(
       // endpoints) — token_url alone is enough to attempt the exchange.
       if (c?.token_url) {
         const reuseKey = oauthTokenKey(c)
-        if (rec?.kind !== 'token_probe') {
+        if (rec?.kind !== 'token_probe' && oauthTokenCacheOn()) {
           const kept = oauthTokens.get(reuseKey)
           if (kept && kept.until > Date.now()) {
             headers.Authorization = `Bearer ${kept.token}`
+            fromCache = true
             break
           }
         }
@@ -451,14 +462,14 @@ export async function resolveAuth(
         note(res.status, null, text, resH)
         headers.Authorization = `Bearer ${body.access_token}`
         const life = Math.min(TOKEN_MAX_REUSE_S, Number(body.expires_in)) - TOKEN_REUSE_MARGIN_S
-        if (Number.isFinite(life) && life > 0)
+        if (oauthTokenCacheOn() && Number.isFinite(life) && life > 0)
           oauthTokens.set(reuseKey, { token: body.access_token, until: Date.now() + life * 1000 })
       }
       break
     }
   }
 
-  return { headers, queryParams }
+  return fromCache ? { headers, queryParams, fromCache } : { headers, queryParams }
 }
 
 // ─── Body-dependent signing (hmac, aws_sigv4) ────────────────────────────────
@@ -781,7 +792,7 @@ async function callExternalApiInner(
   const logText = logScrub.text
   const logHeaders = logScrub.headers
   const staticHeaders = parseJson<Record<string, string>>(row.headers) ?? {}
-  const auth = await resolveAuth(row.auth_type, cfg, {
+  let auth = await resolveAuth(row.auth_type, cfg, {
     apiId: row.id,
     triggeredBy: options._log?.triggeredBy
   })
@@ -849,6 +860,7 @@ async function callExternalApiInner(
   }
   let attempts = 0
   let retried = 0
+  let tokenRefreshed = false
   for (;;) {
     attempts += 1
     const ctl = attempts === 1 ? controller : new AbortController()
@@ -876,7 +888,25 @@ async function callExternalApiInner(
     } finally {
       clearTimeout(t)
     }
-    if (attempts > inlineRetries || !transient(res, fetchError)) break
+    // A kept token the partner refuses (revoked, rotated, expired early): drop it, fetch a
+    // fresh one and send again — once. Without the cache this call would have used a fresh
+    // token anyway, so the retry only restores that behaviour.
+    if (res?.status === 401 && auth.fromCache && !tokenRefreshed) {
+      tokenRefreshed = true
+      forgetOAuthToken(cfg)
+      try {
+        auth = await resolveAuth(row.auth_type, cfg, {
+          apiId: row.id,
+          triggeredBy: options._log?.triggeredBy
+        })
+        Object.assign(reqHeaders, auth.headers)
+        init.headers = reqHeaders
+        continue
+      } catch {
+        // token server down: keep the 401 we have; the caller sees the partner's answer
+      }
+    }
+    if (attempts > inlineRetries + (tokenRefreshed ? 1 : 0) || !transient(res, fetchError)) break
     retried += 1
     await new Promise((r) => setTimeout(r, inlineBackoff * attempts))
   }
