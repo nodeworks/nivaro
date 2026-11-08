@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-11-08T02:16:39.580Z",
+  "generated_at": "2026-11-08T03:01:16.117Z",
   "releases": [
+    {
+      "version": "0.3.84",
+      "tag": "v0.3.84",
+      "date": "2026-11-07T22:01:01-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "send backs never land on skipped steps; activity list reads unlocked",
+              "hash": "94d6f8701"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "shared",
+              "text": "fewer record-page reads; side panels wait for the record",
+              "hash": "4d01ab0be"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "changelog",
+              "text": "several plain lines per commit; notes for 0.3.80-0.3.82",
+              "hash": "ffd38655c"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.83",
       "tag": "v0.3.83",
-      "date": "2026-11-07T21:16:13-05:00",
+      "date": "2026-11-07T21:16:39-05:00",
       "sections": [
         {
           "label": "Fixed",
