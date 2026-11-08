@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-08T03:01:16.117Z",
+  "generated_at": "2026-11-08T04:15:22.726Z",
   "releases": [
+    {
+      "version": "0.3.85",
+      "tag": "v0.3.85",
+      "date": "2026-11-07T23:15:07-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "BOM re-upload without a native confirm; lists return to their page",
+              "hash": "779ad8cac"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "one link per person on alias writes; honest grouped search counts",
+              "hash": "d24cdab8e"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.84",
       "tag": "v0.3.84",
-      "date": "2026-11-07T22:01:01-05:00",
+      "date": "2026-11-07T22:01:16-05:00",
       "sections": [
         {
           "label": "Fixed",
