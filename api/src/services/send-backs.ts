@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * #85 — how many times a record bounced back, and why the last time. A
@@ -20,10 +20,13 @@ export async function sendBackBatch(instanceIds: string[]): Promise<Map<string, 
   const out = new Map<string, SendBackSummary>()
   if (instanceIds.length === 0) return out
   const rows = (await selectInChunks<Record<string, unknown>, string>(instanceIds, 2000, (chunk) =>
-    db('nivaro_workflow_history as h')
-      .join('nivaro_workflow_states as st', 'st.id', 'h.to_state')
-      .join('nivaro_workflow_states as sf', 'sf.id', 'h.from_state')
-      .whereIn('h.instance', chunk)
+    whereInList(
+      db('nivaro_workflow_history as h')
+        .join('nivaro_workflow_states as st', 'st.id', 'h.to_state')
+        .join('nivaro_workflow_states as sf', 'sf.id', 'h.from_state'),
+      'h.instance',
+      chunk
+    )
       .whereRaw('sf.sort > st.sort')
       .orderBy([
         { column: 'h.instance', order: 'asc' },

@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * Per-record addendum summary for list surfaces (collection browser, queues):
@@ -76,7 +76,7 @@ async function activeAddendumInstancesQuery(
       .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
       .where('a.parent_collection', collection)
       .modify((qb) => {
-        if (chunk[0] !== null) qb.whereIn('a.parent_id', chunk)
+        if (chunk[0] !== null) whereInList(qb, 'a.parent_id', chunk)
       })
       .whereNotIn('a.status', [...FINAL_ADDENDUM_STATUSES])
       .whereNull('wi.completed_at')
@@ -123,7 +123,7 @@ export async function addendumSummaryBatch(
   const rows = (await selectInChunks(wanted, 2000, (chunk) =>
     database('nivaro_addendums')
       .where({ parent_collection: collection })
-      .whereIn('parent_id', chunk)
+      .modify((qb) => whereInList(qb, 'parent_id', chunk))
       .select('id', 'parent_id', 'title', 'status', 'cost_impact', 'created_at')
       .orderBy('created_at', 'desc')
   )) as Array<{

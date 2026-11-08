@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { getCollection } from './collections.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * #7 — a collection's fulfilment figures (how much of a request has shipped),
@@ -79,7 +79,7 @@ export async function fulfilmentBatch(
   const out = new Map<string, FulfilmentFigures>()
   if (ids.length === 0) return out
   const rows = (await selectInChunks<Record<string, unknown>, string>(ids, 2000, (chunk) =>
-    db(collection).whereIn('id', chunk).select('id', cfg.shipped_field, cfg.requested_field)
+    whereInList(db(collection), 'id', chunk).select('id', cfg.shipped_field, cfg.requested_field)
   ).catch(() => [])) as Array<Record<string, unknown>>
   for (const r of rows) {
     const shipped = Number(r[cfg.shipped_field] ?? 0) || 0

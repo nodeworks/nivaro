@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * #643 — "changed since you looked", for lists. A record carries a mark when
@@ -56,7 +56,7 @@ export async function unseenChangesFor(
         .leftJoin('nivaro_users as u', 'u.id', 'a.user')
         .where('v.user', userId)
         .where('a.collection', collection)
-        .whereIn('a.item', chunk)
+        .modify((qb) => whereInList(qb, 'a.item', chunk))
         .whereIn('a.action', ['create', 'update'])
         .whereRaw('a.[timestamp] > v.last_viewed_at')
         .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
@@ -73,7 +73,7 @@ export async function unseenChangesFor(
         .leftJoin('nivaro_users as u', 'u.id', 'h.user')
         .where('v.user', userId)
         .where('i.collection', collection)
-        .whereIn('i.item', chunk)
+        .modify((qb) => whereInList(qb, 'i.item', chunk))
         .whereRaw('h.[timestamp] > v.last_viewed_at')
         .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
         .groupBy('i.item', 'u.first_name', 'u.last_name', 'u.email')
@@ -88,7 +88,7 @@ export async function unseenChangesFor(
         .leftJoin('nivaro_users as u', 'u.id', 'c.user')
         .where('v.user', userId)
         .where('c.collection', collection)
-        .whereIn('c.item', chunk)
+        .modify((qb) => whereInList(qb, 'c.item', chunk))
         .whereRaw('c.created_at > v.last_viewed_at')
         .whereNull('c.deleted_at')
         .whereNot('c.user', userId)

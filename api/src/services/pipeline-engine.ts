@@ -1,7 +1,7 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { getPhysicalColumns } from './collections.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import {
   ADDENDUM_COLLECTION,
   fetchPipelineRecord,
@@ -224,9 +224,12 @@ export async function buildDelegationSubstitutions(
     ownerIds,
     2000,
     (chunk) =>
-      database('nivaro_users')
-        .whereIn('id', chunk)
-        .select('id', 'delegate_id', 'delegate_expires_at', 'is_out_of_office') as Promise<
+      whereInList(database('nivaro_users'), 'id', chunk).select(
+        'id',
+        'delegate_id',
+        'delegate_expires_at',
+        'is_out_of_office'
+      ) as Promise<
         Array<{
           id: string
           delegate_id: string | null
@@ -256,9 +259,12 @@ export async function buildDelegationSubstitutions(
     delegateIds,
     2000,
     (chunk) =>
-      database('nivaro_users')
-        .whereIn('id', chunk)
-        .select('id', 'email', 'first_name', 'last_name') as Promise<ResolvedOwner[]>
+      whereInList(database('nivaro_users'), 'id', chunk).select(
+        'id',
+        'email',
+        'first_name',
+        'last_name'
+      ) as Promise<ResolvedOwner[]>
   )
   const delegateById = new Map(delegateRows.map((d) => [d.id, d]))
 
@@ -659,7 +665,7 @@ export async function resolveFilterValues(
             if (!hopRel) throw new Error(`no m2o hop ${table}.${hopField}`)
             const ids = [...new Set([...fkByItem.values()].filter((v) => v != null))]
             const rows = (await selectInChunks(ids as string[], 2000, (chunk) =>
-              database(table).whereIn('id', chunk).select('id', hopField)
+              whereInList(database(table), 'id', chunk).select('id', hopField)
             )) as Array<Record<string, unknown>>
             const hopByRowId = new Map(rows.map((r) => [String(r.id), r[hopField]]))
             const next = new Map<string, unknown>()
@@ -672,7 +678,7 @@ export async function resolveFilterValues(
           const displayCol = segments[segments.length - 1]
           const finalIds = [...new Set([...fkByItem.values()].filter((v) => v != null))]
           const displayRows = (await selectInChunks(finalIds as string[], 2000, (chunk) =>
-            database(table).whereIn('id', chunk).select('id', displayCol)
+            whereInList(database(table), 'id', chunk).select('id', displayCol)
           )) as Array<Record<string, unknown>>
           const displayByRowId = new Map(displayRows.map((r) => [String(r.id), r[displayCol]]))
           for (const [itemId, fk] of fkByItem) {
@@ -696,9 +702,10 @@ export async function resolveFilterValues(
             (r) => r.many_collection === junction && r.many_field === relCol && r.one_collection
           )
           const junctionRows = (await selectInChunks(itemIds, 2000, (chunk) =>
-            database(junction)
-              .whereIn(ourCol, chunk)
-              .select(`${ourCol} as our_id`, `${relCol} as rel_id`)
+            whereInList(database(junction), ourCol, chunk).select(
+              `${ourCol} as our_id`,
+              `${relCol} as rel_id`
+            )
           )) as Array<{ our_id: unknown; rel_id: unknown }>
           const idsByItem = new Map<string, Set<string>>()
           const allRelated = new Set<string>()
@@ -713,9 +720,10 @@ export async function resolveFilterValues(
           const displayByRelId = new Map<string, string>()
           if (relatedRel?.one_collection && allRelated.size > 0 && segments.length >= 2) {
             const rows = (await selectInChunks([...allRelated], 2000, (chunk) =>
-              database(relatedRel.one_collection as string)
-                .whereIn('id', chunk)
-                .select('id', displayCol)
+              whereInList(database(relatedRel.one_collection as string), 'id', chunk).select(
+                'id',
+                displayCol
+              )
             )) as Array<Record<string, unknown>>
             for (const r of rows) displayByRelId.set(String(r.id), String(r[displayCol]))
           }
@@ -949,10 +957,15 @@ export async function resolveStateOwnersBatch(
     instanceIds.length > 0
       ? span('owners:instance-owners', () =>
           selectInChunks(instanceIds, 2000, (chunk) =>
-            database('nivaro_pipeline_instance_owners as io')
-              .join('nivaro_users as u', 'io.user', 'u.id')
-              .whereIn('io.instance', chunk)
-              .select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+            whereInList(
+              database('nivaro_pipeline_instance_owners as io').join(
+                'nivaro_users as u',
+                'io.user',
+                'u.id'
+              ),
+              'io.instance',
+              chunk
+            ).select('io.instance', 'io.state', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
           )
         )
       : Promise.resolve([])
@@ -987,9 +1000,7 @@ export async function resolveStateOwnersBatch(
         try {
           return await span('owners:records', () =>
             selectInChunks(ids, 2000, (chunk) =>
-              database(collection)
-                .whereIn('id', chunk)
-                .select(needed ? [...needed] : '*')
+              whereInList(database(collection), 'id', chunk).select(needed ? [...needed] : '*')
             )
           )
         } catch {
@@ -997,7 +1008,7 @@ export async function resolveStateOwnersBatch(
           // fall back to the full row rather than resolving nobody.
           try {
             return await selectInChunks(ids, 2000, (chunk) =>
-              database(collection).whereIn('id', chunk).select('*')
+              whereInList(database(collection), 'id', chunk).select('*')
             )
           } catch {
             return []
@@ -1110,19 +1121,26 @@ export async function resolveStateOwnersBatch(
     const [rows, teamRows] = await Promise.all([
       span('owners:group-users', () =>
         selectInChunks([...allGroupIds], 2000, (chunk) =>
-          database('nivaro_pipeline_owner_group_users as ogu')
-            .join('nivaro_users as u', 'ogu.user', 'u.id')
-            .whereIn('ogu.group', chunk)
-            .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+          whereInList(
+            database('nivaro_pipeline_owner_group_users as ogu').join(
+              'nivaro_users as u',
+              'ogu.user',
+              'u.id'
+            ),
+            'ogu.group',
+            chunk
+          ).select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
         )
       ),
       span('owners:group-teams', () =>
         selectInChunks([...allGroupIds], 2000, (chunk) =>
-          database('nivaro_pipeline_owner_group_teams as ogt')
-            .join('nivaro_user_group_members as m', 'm.group_id', 'ogt.team_id')
-            .join('nivaro_users as u', 'm.user', 'u.id')
-            .whereIn('ogt.group', chunk)
-            .select('ogt.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+          whereInList(
+            database('nivaro_pipeline_owner_group_teams as ogt')
+              .join('nivaro_user_group_members as m', 'm.group_id', 'ogt.team_id')
+              .join('nivaro_users as u', 'm.user', 'u.id'),
+            'ogt.group',
+            chunk
+          ).select('ogt.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
         )
       )
     ])
@@ -1185,9 +1203,12 @@ export async function resolveStateOwnersBatch(
   if (fallbackIdByKey.size > 0) {
     const rows = (await span('owners:fallback-users', () =>
       selectInChunks([...new Set(fallbackIdByKey.values())], 2000, (chunk) =>
-        database('nivaro_users')
-          .whereIn('id', chunk)
-          .select('id', 'email', 'first_name', 'last_name')
+        whereInList(database('nivaro_users'), 'id', chunk).select(
+          'id',
+          'email',
+          'first_name',
+          'last_name'
+        )
       )
     )) as ResolvedOwner[]
     for (const row of rows) fallbackOwnerById.set(String(row.id).toUpperCase(), row)
@@ -1291,9 +1312,13 @@ export async function activeOwnersOnly<T extends { id: string }>(
   try {
     const ids = [...new Set(owners.map((o) => String(o.id)))]
     const rows = (await selectInChunks(ids, 2000, (chunk) =>
-      database('nivaro_users')
-        .whereIn('id', chunk)
-        .select('id', 'status', 'is_redacted', 'first_name', 'last_name')
+      whereInList(database('nivaro_users'), 'id', chunk).select(
+        'id',
+        'status',
+        'is_redacted',
+        'first_name',
+        'last_name'
+      )
     )) as Array<{
       id: string
       status: string | null

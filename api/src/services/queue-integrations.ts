@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
  * #630 — the queue's `integrations` filter: how far behind a row's
@@ -102,7 +102,7 @@ export async function integrationsMatchKeys(
       const rows = (await selectInChunks(unique, 1500, (chunk) =>
         db('nivaro_integration_obligations')
           .where('collection', collection)
-          .whereIn('item', chunk)
+          .modify((qb) => whereInList(qb, 'item', chunk))
           .whereNot('outcome', 'superseded')
           .select('item', 'outcome')
       ).catch(() => [])) as Array<{ item: string; outcome: string }>

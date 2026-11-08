@@ -22,7 +22,7 @@ import {
   parseColumnFilterOp,
   sortOptionValues
 } from './column-filter-ops.js'
-import { selectInChunks } from './db-batch.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
 import { can, getAllowedFields } from './permissions.js'
@@ -1648,9 +1648,7 @@ export async function fillBlankLabels(
       const cols = FALLBACK_TEXT_FIELDS.filter((f) => have.has(f))
       if (cols.length > 0 && have.has('id')) {
         const rows = (await selectInChunks(blank, 2000, (chunk) =>
-          db(collection)
-            .whereIn('id', chunk)
-            .select(['id', ...cols])
+          whereInList(db(collection), 'id', chunk).select(['id', ...cols])
         )) as Array<Record<string, unknown>>
         texts = new Map(
           rows.map((r) => {
@@ -1707,7 +1705,7 @@ async function attachRelationPaths(
       const pickCols = [...new Set(['id', ...leaves])]
       if (pickCols.length === 1) continue
       const parents = (await selectInChunks(fks.map(String), 2000, (chunk) =>
-        db(rel.one_collection!).whereIn('id', chunk).select(pickCols)
+        whereInList(db(rel.one_collection!), 'id', chunk).select(pickCols)
       )) as Array<Record<string, unknown>>
       const deeper = [...subPaths].filter((p) => p.includes('.'))
       if (deeper.length > 0)
@@ -1741,7 +1739,7 @@ export async function renderTemplateLabels(
     // label key and silently falling the Item column back to raw ids.
     const selectCols = [...new Set(['id', ...wanted])]
     const rows = (await selectInChunks(ids, 2000, (chunk) =>
-      db(collection).whereIn('id', chunk).select(selectCols)
+      whereInList(db(collection), 'id', chunk).select(selectCols)
     )) as Array<Record<string, unknown>>
 
     // Dotted template paths ({{unit.name}}, {{line.order.order_id}})
@@ -1820,7 +1818,7 @@ async function labelsForCollection(
     if (!labelField || !pk) return labels
 
     const rows = (await selectInChunks([...ids], 2000, (chunk) =>
-      db(collection).whereIn(pk, chunk).select(pk, labelField)
+      whereInList(db(collection), pk, chunk).select(pk, labelField)
     )) as Array<Record<string, unknown>>
     for (const row of rows) {
       const value = row[labelField]
@@ -1885,9 +1883,9 @@ export function newPathReadBatch(): PathReadBatch {
   return new PathReadBatch(
     (collection, keys, columns, keyColumn) =>
       selectInChunks(keys, 2000, (chunk) =>
-        db(collection)
-          .whereIn(keyColumn, chunk)
-          .select([...new Set([keyColumn, 'id', ...columns])])
+        whereInList(db(collection), keyColumn, chunk).select([
+          ...new Set([keyColumn, 'id', ...columns])
+        ])
       ) as Promise<Array<Record<string, unknown>>>,
     (collection) => getRelations(collection)
   )
@@ -1979,9 +1977,7 @@ export async function resolvePathValues(
     const rows = batch
       ? await batch.rows(collection, ids, head === 'id' ? [] : [head])
       : await selectInChunks(ids, 2000, (chunk) =>
-          db(collection)
-            .whereIn('id', chunk)
-            .select(head === 'id' ? ['id'] : ['id', head])
+          whereInList(db(collection), 'id', chunk).select(head === 'id' ? ['id'] : ['id', head])
         )
     const out = new Map<string, PathValue>()
     for (const row of rows as Array<Record<string, unknown>>) {
@@ -1995,7 +1991,7 @@ export async function resolvePathValues(
     const rows = batch
       ? await batch.rows(collection, ids, [head])
       : await selectInChunks(ids, 2000, (chunk) =>
-          db(collection).whereIn('id', chunk).select(['id', head])
+          whereInList(db(collection), 'id', chunk).select(['id', head])
         )
     const fkByRowId = new Map<string, string>()
     const relatedIds = new Set<string>()
@@ -2032,7 +2028,7 @@ export async function resolvePathValues(
     const relatedIdList = [...relatedIds]
     const readRelated = () =>
       selectInChunks(relatedIdList, 2000, (chunk) =>
-        db(classified.relatedCollection).whereIn('id', chunk).select(selectFields)
+        whereInList(db(classified.relatedCollection), 'id', chunk).select(selectFields)
       )
     const relatedRows = batch
       ? await batch.once(
@@ -2065,7 +2061,7 @@ export async function resolvePathValues(
     const o2mCols = rest.length > 0 ? [manyField, 'id'] : [manyField, ...selectFields]
     const readRelated = () =>
       selectInChunks(ids, 2000, (chunk) =>
-        db(classified.relatedCollection).whereIn(manyField, chunk).select(o2mCols)
+        whereInList(db(classified.relatedCollection), manyField, chunk).select(o2mCols)
       )
     const relatedRows = batch
       ? await batch.once(
@@ -2133,8 +2129,7 @@ export async function resolvePathValues(
   // m2m
   const readJunction = () =>
     selectInChunks(ids, 2000, (chunk) =>
-      db(`${classified.junction} as _j`)
-        .whereIn(`_j.${classified.junctionFkToParent}`, chunk)
+      whereInList(db(`${classified.junction} as _j`), `_j.${classified.junctionFkToParent}`, chunk)
         .join(
           `${classified.relatedCollection} as _rel`,
           '_rel.id',
@@ -2251,17 +2246,22 @@ export async function resolveAggregateValues(
     const fkToParent = classified.junctionFkToParent as string
     const fkToOther = classified.junctionFkToOther as string
     rows = (await selectInChunks(ids, 2000, (chunk) =>
-      db(`${junction} as _j`)
-        .join(`${classified.relatedCollection} as _rel`, '_rel.id', `_j.${fkToOther}`)
-        .whereIn(`_j.${fkToParent}`, chunk)
+      whereInList(
+        db(`${junction} as _j`).join(
+          `${classified.relatedCollection} as _rel`,
+          '_rel.id',
+          `_j.${fkToOther}`
+        ),
+        `_j.${fkToParent}`,
+        chunk
+      )
         .groupBy(`_j.${fkToParent}`)
         .select(db.raw('?? as pid', [`_j.${fkToParent}`]), aggExpr(`_rel.${leaf ?? 'id'}`))
     )) as Array<{ pid: unknown; v: unknown }>
   } else {
     const manyField = classified.manyField as string
     rows = (await selectInChunks(ids, 2000, (chunk) =>
-      db(classified.relatedCollection)
-        .whereIn(manyField, chunk)
+      whereInList(db(classified.relatedCollection), manyField, chunk)
         .groupBy(manyField)
         .select(db.raw('?? as pid', [manyField]), aggExpr(leaf ?? 'id'))
     )) as Array<{ pid: unknown; v: unknown }>
@@ -2452,7 +2452,7 @@ export async function resolveCollectionSource(
     if (wanted.length > 0) {
       // Candidates still have to satisfy the source's own field conditions.
       try {
-        const cq = db(source.collection).select('id').whereIn('id', wanted).orderBy('id')
+        const cq = whereInList(db(source.collection).select('id'), 'id', wanted).orderBy('id')
         applyQueueConditions(cq as unknown as ConditionBuilder, conditions)
         applyQueueGate(cq, gate, user)
         const extra = (await cq) as Array<{ id: string | number }>
@@ -2484,9 +2484,15 @@ export async function resolveCollectionSource(
       'queue:instances',
       () =>
         selectInChunks(ids, 2000, (chunk) =>
-          db('nivaro_workflow_instances as wi')
-            .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
-            .whereIn('wi.item', chunk)
+          whereInList(
+            db('nivaro_workflow_instances as wi').leftJoin(
+              'nivaro_workflow_states as s',
+              'wi.current_state',
+              's.id'
+            ),
+            'wi.item',
+            chunk
+          )
             .where('wi.collection', source.collection)
             .orderBy('wi.started_at', 'desc')
             .select(
@@ -2730,9 +2736,7 @@ export async function resolveCollectionSource(
       const fields = new Set<string>(['id'])
       for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
       const riskRows = await selectInChunks(ids, 2000, (chunk) =>
-        db(source.collection as string)
-          .whereIn('id', chunk)
-          .select([...fields])
+        whereInList(db(source.collection as string), 'id', chunk).select([...fields])
       )
       return evaluateRows(riskRows as Record<string, unknown>[], rules)
     }),
