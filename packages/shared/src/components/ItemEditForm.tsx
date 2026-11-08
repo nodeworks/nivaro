@@ -154,7 +154,13 @@ import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRule
 import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
 import { ImportIssuesPanel } from './import/ImportIssuesPanel'
-import { diffReimportLines, type ReimportLineDiff } from './import/reimportDiff'
+import {
+  diffReimportLines,
+  type ReimportLineDiff,
+  reimportMatchKey,
+  reimportPendingNotice,
+  reimportRestoredDeletes
+} from './import/reimportDiff'
 import {
   AddendumFieldContext,
   type AddendumFieldMap,
@@ -439,22 +445,9 @@ function summaryEntryKey(e: SummaryEntry): string {
 }
 
 // ─── Re-import helpers (pure) ───────────────────────────────────────────────
-// Mirrors the match-key normalization in reimportDiff.ts — used here only to
+// The match key (reimportMatchKey, from reimportDiff.ts) is used here only to
 // re-associate a MATCHED line (changed or unchanged) with its nested __o2m_
 // payload, which diffReimportLines intentionally drops from its output.
-
-function reimportMatchKey(row: Record<string, unknown>, matchBy: string[]): string {
-  return matchBy
-    .map((col) => {
-      const trimmed = String(row[col] ?? '').trim()
-      if (trimmed !== '') {
-        const num = Number(trimmed)
-        if (Number.isFinite(num)) return String(num)
-      }
-      return trimmed
-    })
-    .join('\x00')
-}
 
 function buildReimportFileRows(result: ImportParseResponse): Record<string, unknown>[] {
   return result.lines.map((line) => ({
@@ -2695,8 +2688,9 @@ function ItemEditFormView({
     // Read when the record opens, NOT at the first keystroke (army 6 b09
     // BLOCKER): a form that missed a live update and was first edited after a
     // colleague's save took that save as its baseline, and its own save then
-    // wrote over the newer value with no 409. One small read per open.
-    enabled: !isNew && !!itemId,
+    // wrote over the newer value with no 409. One small read per open — once the
+    // record has answered (army 10: beside the read it 404'd for a missing record).
+    enabled: !isNew && !!itemId && recordAnswered,
     // The baseline only moves when the form adopts the server's values (its
     // own save, a remote change it took in) — those invalidate it. Refetching
     // on its own (stale + window focus) moved it past another tab's save while
@@ -3174,6 +3168,10 @@ function ItemEditFormView({
     result: ImportParseResponse
     template: ImportTemplateSummary
     existingRows: Record<string, unknown>[]
+    /** Lines staged for delete that the file still lists — apply takes the removal back. */
+    restored: string[]
+    /** One line about the unsaved work the import lands on top of (null = none). */
+    pendingNotice: string | null
   } | null>(null)
   const [reimportApplying, setReimportApplying] = useState(false)
 
@@ -3182,18 +3180,11 @@ function ItemEditFormView({
       const cfg = template.reimport
       if (!cfg) return
 
-      const hasPendingWork =
-        isDirty ||
-        [...pendingO2MRows.values()].some((rows) => rows.length > 0) ||
-        [...pendingO2MEdits.values()].some((edits) => edits.size > 0) ||
-        [...pendingO2MDeletes.values()].some((dels) => dels.size > 0)
-      if (hasPendingWork) {
-        const proceed = window.confirm(
-          'Unsaved changes will be combined with the re-import staging. Continue?'
-        )
-        if (!proceed) return
-      }
-
+      // Unsaved work on the record is NOT a question asked through a native
+      // confirm: the browser blocks the page on that modal, and an automated
+      // tab (Claude in Chrome, army 10 item 3) or an embedded host can never
+      // answer it — the tab looked frozen for good. The review dialog below
+      // is the confirmation; it says what the import lands on top of.
       const rel = result.line_target_field
         ? relations.find(
             (r) => r.one_collection === collection && r.one_field === result.line_target_field
@@ -3294,8 +3285,26 @@ function ItemEditFormView({
           }
         }
       }
+      // A line the person removed on the form (unsaved) that the file still
+      // lists comes back: the file wins, the diff already counts it as an
+      // update or unchanged. Without this the save would PATCH a row it had
+      // just deleted.
+      const lineKey =
+        rel?.many_collection && rel.many_field ? `${rel.many_collection}.${rel.many_field}` : null
+      const stagedDeletes = lineKey ? (pendingO2MDeletes.get(lineKey) ?? new Set<string>()) : null
+      const restored =
+        stagedDeletes && cfg.lines !== 'append'
+          ? reimportRestoredDeletes(fileRows, existingRows, cfg.match_by, stagedDeletes)
+          : []
+      const pendingNotice = reimportPendingNotice({
+        headerDirty: isDirty,
+        pendingRows: [...pendingO2MRows.values()].reduce((n, rows) => n + rows.length, 0),
+        pendingEdits: [...pendingO2MEdits.values()].reduce((n, edits) => n + edits.size, 0),
+        pendingDeletes: [...pendingO2MDeletes.values()].reduce((n, dels) => n + dels.size, 0),
+        restored: restored.length
+      })
       setImportIssues([])
-      setReimportDialog({ diff, result, template, existingRows })
+      setReimportDialog({ diff, result, template, existingRows, restored, pendingNotice })
     },
     [
       isDirty,
@@ -3315,7 +3324,8 @@ function ItemEditFormView({
       diff: ReimportLineDiff,
       result: ImportParseResponse,
       template: ImportTemplateSummary,
-      existingRows: Record<string, unknown>[]
+      existingRows: Record<string, unknown>[],
+      restored: string[] = []
     ) => {
       const cfg = template.reimport
       if (!cfg) return
@@ -3413,6 +3423,11 @@ function ItemEditFormView({
         // on the activity row, so history and the grid can say "from Bid
         // Import" with a link to the file.
         const importStamp = `import:${result.template_name || 'file'}:${result.file_id ?? ''}`
+        // A removed-on-the-form line the file still lists comes back first,
+        // so its update below lands on a live row, not a deleted one.
+        for (const id of restored) {
+          o2mStagingCtx.cancelPendingDelete(lineCollection, lineField, id)
+        }
         for (const row of creates) {
           o2mStagingCtx.queueRow(lineCollection, lineField, { ...row, _change_reason: importStamp })
         }
@@ -5720,7 +5735,8 @@ function ItemEditFormView({
         )
         .catch(() => null),
     staleTime: 30_000,
-    enabled: editLockConfigured && !isNew && !designOn
+    // After the record answered (army 10): a missing record's instance read only 404s.
+    enabled: editLockConfigured && !isNew && !designOn && recordAnswered
   })
   const editLock = editLockInstance?.edit_lock
   const editLockMessage =
@@ -5875,7 +5891,8 @@ function ItemEditFormView({
     queryKey: ['pipeline-instance-lock', collection, itemId],
     queryFn: fetchPipelineInstanceLock,
     staleTime: 30_000,
-    enabled: stateLookupNeeded && !isNew && !recordUnavailable && !designStateKey
+    // Waits for the record to answer, like the entry prefetch below (army 10).
+    enabled: stateLookupNeeded && !isNew && recordAnswered && !designStateKey
   })
   // Record-page waterfall (#C5): both lookups above wait for the layout (and
   // the collection meta) to say they are needed. A collection whose last
@@ -5886,17 +5903,14 @@ function ItemEditFormView({
     if (!layoutKnown || designCtx) return
     rememberRecordLookups(collection, { role: roleLookupNeeded, state: stateLookupNeeded })
   }, [layoutKnown, designCtx, collection, roleLookupNeeded, stateLookupNeeded])
+  // The state half waits for the record read to answer (army 10: a missing record's
+  // instance read was one of six 404s). The layout → field-config chain the form waits on
+  // is two round trips, so a lookup started when the record answers is still in time.
   // biome-ignore lint/correctness/useExhaustiveDependencies: entry only — once per record opened
   useEffect(() => {
     if (isNew || designCtx) return
     const want = recordLookupsFor(collection)
     if (!want) return
-    if (want.state)
-      void qc.prefetchQuery({
-        queryKey: ['pipeline-instance-lock', collection, itemId],
-        queryFn: fetchPipelineInstanceLock,
-        staleTime: 30_000
-      })
     if (want.role)
       void qc.prefetchQuery({
         queryKey: ['current-user-me'],
@@ -5904,6 +5918,17 @@ function ItemEditFormView({
         staleTime: 5 * 60_000
       })
   }, [collection, itemId])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once the record answered
+  useEffect(() => {
+    if (isNew || designCtx || !recordAnswered) return
+    const want = recordLookupsFor(collection)
+    if (want?.state)
+      void qc.prefetchQuery({
+        queryKey: ['pipeline-instance-lock', collection, itemId],
+        queryFn: fetchPipelineInstanceLock,
+        staleTime: 30_000
+      })
+  }, [collection, itemId, recordAnswered])
   const pipelineInstanceData = useMemo(
     () =>
       designStateKey
@@ -7162,7 +7187,8 @@ function ItemEditFormView({
   const fieldComments = useFieldCommentsApi({
     collection,
     itemId,
-    enabled: !isNew && !designOn && effectiveShowComments,
+    // After the record answered (army 10: the comments read 404'd for a missing record).
+    enabled: !isNew && !designOn && effectiveShowComments && recordAnswered,
     labelOf: fieldCommentLabel,
     jump: fieldCommentJump
   })
@@ -7992,7 +8018,8 @@ function ItemEditFormView({
         }>(get(`/last-touch/${collection}/${encodeURIComponent(String(itemId))}`))
         .then((r) => r.data ?? null)
         .catch(() => null),
-    enabled: !isNew && !!itemId,
+    // After the record answered (army 10: it 404'd beside a missing record's read).
+    enabled: !isNew && !!itemId && recordAnswered,
     staleTime: 60_000,
     // The stale-record banner rides this read — one indexed row a minute without a live
     // socket, paused while the tab is hidden (react-query default).
@@ -8118,7 +8145,7 @@ function ItemEditFormView({
         }>(get(`/provenance/${collection}/${encodeURIComponent(String(itemId))}`))
         .then((r) => r.data)
         .catch(() => null),
-    enabled: !isNew && !!itemId,
+    enabled: !isNew && !!itemId && recordAnswered,
     staleTime: 5 * 60_000
   })
   // Someone else saved while this record was open. Baseline = the last touch
@@ -12843,6 +12870,15 @@ function ItemEditFormView({
                                         {reimportDialog.diff.matchedUnchanged} unchanged
                                       </p>
                                     )}
+                                    {reimportDialog?.pendingNotice && (
+                                      <p
+                                        role='status'
+                                        data-reimport-pending-notice
+                                        className='rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                                      >
+                                        {reimportDialog.pendingNotice}
+                                      </p>
+                                    )}
                                     {reimportDialog && (
                                       <ImportColumnChips
                                         diff={reimportDialog.diff}
@@ -12869,7 +12905,8 @@ function ItemEditFormView({
                                           reimportDialog.diff,
                                           reimportDialog.result,
                                           reimportDialog.template,
-                                          reimportDialog.existingRows
+                                          reimportDialog.existingRows,
+                                          reimportDialog.restored
                                         )
                                         setReimportApplying(false)
                                         setReimportDialog(null)

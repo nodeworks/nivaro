@@ -28,6 +28,11 @@ export interface QueueReturnStash {
   }
   /** Set by the chip right before navigating back — the worklist consumes it once. */
   restore?: boolean
+  /**
+   * The history entry the worklist was on when it opened the record (army 10): the
+   * browser's Back to that same entry restores the stash too, not only the chip.
+   */
+  entry?: string | null
 }
 
 export function readQueueReturn(): QueueReturnStash | null {
@@ -51,6 +56,23 @@ export function writeQueueReturn(stash: QueueReturnStash | null): void {
   } catch {
     /* storage may be unavailable — the chip simply never shows */
   }
+}
+
+/**
+ * Whether a worklist mounting now should re-apply the stash: the chip asked for it, or
+ * this is the very history entry the record was opened from (Back), or the record's back
+ * arrow returned here (`returned` = arrived by a "return to the list" navigation).
+ */
+export function queueReturnApplies(
+  stash: QueueReturnStash,
+  queueId: string,
+  entry: string | null,
+  returned: boolean
+): boolean {
+  if (stash.queue_id !== queueId) return false
+  if (stash.restore) return true
+  if (stash.entry && entry && stash.entry === entry) return true
+  return returned
 }
 
 export function QueueReturnChip() {

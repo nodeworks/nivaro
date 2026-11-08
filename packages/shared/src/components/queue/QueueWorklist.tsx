@@ -83,6 +83,7 @@ import {
 } from '../../lib/list-link'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
+import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
 import { usePrefetchIntent } from '../../lib/prefetch'
@@ -119,7 +120,7 @@ import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
-import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
+import { queueReturnApplies, readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { ListLoadError } from '../ListLoadError'
 import { LiveRowMark } from '../LiveRowMark'
 import { CopyListLinkButton } from '../list/CopyListLinkButton'
@@ -2124,7 +2125,8 @@ export function QueueWorklist({
         path: `${window.location.pathname}${window.location.search}`,
         at: Date.now(),
         scroll: scrollRef.current?.scrollTop ?? 0,
-        state: { scope, page, sort, filters: filterValues, group_by: groupBy, view }
+        state: { scope, page, sort, filters: filterValues, group_by: groupBy, view },
+        entry: ensureHistoryKey()
       })
     }
     itemNav.open(rowTarget(row))
@@ -2310,13 +2312,15 @@ export function QueueWorklist({
 
   // #50 — coming back from a record via its "Back to <queue>" chip: re-apply
   // the stashed filters / page / sort AFTER the default view landed, then
-  // scroll to where the person was once the rows are back.
+  // scroll to where the person was once the rows are back. Army 10: the browser's
+  // Back to the entry the record was opened from, and a record's back arrow
+  // (a "return to the list" navigation), restore it the same way.
   const scrollRef = useRef<HTMLDivElement>(null)
   const pendingScrollRef = useRef<number | null>(null)
   useEffect(() => {
     if (!displayReady) return
     const stash = readQueueReturn()
-    if (!stash?.restore || stash.queue_id !== queueId) return
+    if (!stash || !queueReturnApplies(stash, queueId, historyKey(), arrivedByListReturn())) return
     writeQueueReturn({ ...stash, restore: false })
     const s = stash.state ?? {}
     if (s.scope) setScope(s.scope as Scope)

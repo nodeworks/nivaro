@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diffReimportLines } from './reimportDiff'
+import { diffReimportLines, reimportPendingNotice, reimportRestoredDeletes } from './reimportDiff'
 
 describe('diffReimportLines', () => {
   it('replace deletes all existing rows and creates all file rows', () => {
@@ -270,5 +270,91 @@ describe('diffReimportLines', () => {
     })
     expect(result.matchedUnchanged).toBe(1)
     expect(result.creates).toEqual([])
+  })
+})
+
+// army 10 item 3 (BLOCKER): on an IR, remove a material line on the form
+// (unsaved), then BOM Re-Upload a file that still lists it. The form asked
+// "Unsaved changes will be combined…" through window.confirm — a native modal
+// the page blocks on, which an automated tab can never answer, so the tab
+// froze for good. The review dialog now carries that note itself, and the
+// removed line the file still lists comes back instead of being deleted AND
+// edited in one save.
+describe('reimportRestoredDeletes', () => {
+  const existing = [
+    { id: '163117', cifa: 39767, quantity: 3 },
+    { id: '163118', cifa: 53580, quantity: 20 },
+    { id: '163119', cifa: 40900, quantity: 2 }
+  ]
+
+  it('a line removed on the form that the file still lists comes back', () => {
+    const file = [{ cifa: '39767', quantity: 4 }]
+    expect(reimportRestoredDeletes(file, existing, ['cifa'], new Set(['163117']))).toEqual([
+      '163117'
+    ])
+  })
+
+  it('a removed line the file no longer lists stays removed', () => {
+    const file = [{ cifa: 53580, quantity: 20 }]
+    expect(reimportRestoredDeletes(file, existing, ['cifa'], new Set(['163117']))).toEqual([])
+  })
+
+  it('nothing staged, or no match key = nothing to restore', () => {
+    const file = [{ cifa: 39767, quantity: 4 }]
+    expect(reimportRestoredDeletes(file, existing, ['cifa'], new Set())).toEqual([])
+    expect(reimportRestoredDeletes(file, existing, [], new Set(['163117']))).toEqual([])
+  })
+
+  it('the diff still pairs the removed line as an update, never a second create', () => {
+    const file = [{ cifa: '39767', quantity: 4 }]
+    const diff = diffReimportLines(file, existing, { lines: 'upsert', match_by: ['cifa'] })
+    expect(diff.updates).toEqual([{ id: '163117', changes: { quantity: 4 } }])
+    expect(diff.creates).toEqual([])
+  })
+})
+
+describe('reimportPendingNotice', () => {
+  it('says nothing when the record has no unsaved work', () => {
+    expect(
+      reimportPendingNotice({
+        headerDirty: false,
+        pendingRows: 0,
+        pendingEdits: 0,
+        pendingDeletes: 0,
+        restored: 0
+      })
+    ).toBeNull()
+  })
+
+  it('names the unsaved work and the line that comes back', () => {
+    const one = reimportPendingNotice({
+      headerDirty: false,
+      pendingRows: 0,
+      pendingEdits: 0,
+      pendingDeletes: 1,
+      restored: 1
+    })
+    expect(one).toContain('stay in place')
+    expect(one).toContain('One line you removed is still in the file')
+    const two = reimportPendingNotice({
+      headerDirty: true,
+      pendingRows: 0,
+      pendingEdits: 0,
+      pendingDeletes: 2,
+      restored: 2
+    })
+    expect(two).toContain('2 lines you removed')
+  })
+
+  it('a removed line the file dropped is not promised back', () => {
+    const note = reimportPendingNotice({
+      headerDirty: false,
+      pendingRows: 0,
+      pendingEdits: 0,
+      pendingDeletes: 1,
+      restored: 0
+    })
+    expect(note).toContain('stay in place')
+    expect(note).not.toContain('comes back')
   })
 })

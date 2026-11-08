@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider } from '../context'
 import { ItemEditForm } from './ItemEditForm'
+import { rememberRecordLookups, resetRecordLookups } from './item-edit/record-lookups'
 import type { CMSField } from './item-edit/types'
 
 // Army 9 b14: a link to a record that does not exist showed "Order not found"
@@ -241,5 +242,105 @@ describe('ItemEditForm on a record that does not exist', () => {
     expect(s.some((p) => p.startsWith('/items/order_lines'))).toBe(true)
     expect(s.some((p) => p.startsWith('/items/orders_tags'))).toBe(true)
     expect(s).toContain('/items/orders/1/resolve-paths')
+  })
+})
+
+// Army 10: on staging 0.3.84 the EFP record page (header, actions, comments, revisions,
+// pipeline, tasks, lock banner) still made 6 failing calls for a missing record: revisions,
+// comments, last-touch, provenance, the record read, pipelines/instance. Every read about the
+// record answers 404 here, as the server does; only the record read itself may fail.
+const FULL_PAGE = {
+  showHeader: true,
+  showItemActions: true,
+  showRevisions: true,
+  showPipeline: true,
+  showWorkflow: true,
+  showComments: true,
+  showTasks: true,
+  showLockBanner: true
+} as const
+
+describe('the full record page on a record that does not exist', () => {
+  afterEach(() => resetRecordLookups())
+  it('makes exactly one failing call — the record read', async () => {
+    // A record of this collection opened earlier asked for its state at entry: that
+    // prefetch must wait for the record too.
+    rememberRecordLookups('orders', { role: false, state: true })
+    const failed: string[] = []
+    const { client } = makeClient(false)
+    const inner = client.request
+    const aboutRecord = (c: Cmd) => {
+      const q = c._params ?? {}
+      // These answer 200 for a missing record on the server (the layout resolves without
+      // it; /access-explain says "no record with this id").
+      if (c._path === '/collection-layouts/active' || c._path.startsWith('/access-explain/'))
+        return false
+      return (
+        /\/orders\/1(\/|$)/.test(c._path) ||
+        String(q.item ?? '') === '1' ||
+        String(q.items ?? '') === '1' ||
+        String(q.ids ?? '') === '1' ||
+        String(q.item_id ?? '') === '1'
+      )
+    }
+    client.request = vi.fn(async (cmd: Cmd) => {
+      if ((cmd._method ?? 'GET').toUpperCase() === 'GET' && aboutRecord(cmd)) {
+        failed.push(`${cmd._path}${cmd._params ? ` ${JSON.stringify(cmd._params)}` : ''}`)
+        await inner(cmd).catch(() => null)
+        throw Object.assign(new Error('Not found'), { status: 404 })
+      }
+      return inner(cmd)
+    }) as typeof client.request
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <ItemEditAuthContext.Provider value={{ isAdmin: true, userId: 'U1' }}>
+              <ItemEditForm collection='orders' itemId='1' documentTitle={false} {...FULL_PAGE} />
+            </ItemEditAuthContext.Provider>
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    )
+    await settle(() => /not found/i.test(host.textContent ?? ''))
+    for (let i = 0; i < 20; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 15))
+      })
+    expect(host.textContent).toMatch(/Order not found/)
+    expect(failed).toEqual(['/items/orders/1'])
+  })
+})
+
+describe('the full record page on a record that exists', () => {
+  it('still reads its touch line, origin, collision baseline, comments and state', async () => {
+    const { client, calls } = makeClient(true)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <ItemEditAuthContext.Provider value={{ isAdmin: true, userId: 'U1' }}>
+              <ItemEditForm collection='orders' itemId='1' documentTitle={false} {...FULL_PAGE} />
+            </ItemEditAuthContext.Provider>
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    )
+    const paths = () => calls.map((c) => c._path)
+    await settle(
+      () =>
+        paths().includes('/last-touch/orders/1') &&
+        paths().includes('/provenance/orders/1') &&
+        paths().includes('/comments') &&
+        calls.some((c) => c._path === '/revisions' && c._params?.latest_only === '1') &&
+        paths().includes('/pipelines/instance/orders/1')
+    )
+    expect(paths()).toContain('/last-touch/orders/1')
+    expect(paths()).toContain('/provenance/orders/1')
+    expect(paths()).toContain('/comments')
+    expect(paths()).toContain('/pipelines/instance/orders/1')
+    expect(calls.some((c) => c._path === '/revisions' && c._params?.latest_only === '1')).toBe(true)
   })
 })

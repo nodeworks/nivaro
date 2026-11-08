@@ -5172,7 +5172,10 @@ export function CollectionBrowserView({
   useEffect(() => {
     if (prevCondRef.current !== conditionsParam) {
       prevCondRef.current = conditionsParam
-      setPage(1)
+      // Judged NOW, not when the update lands (army 10): Back within the cache window has
+      // the rows at once, so the default view's conditions change in the same commit that
+      // closes the restore window below, and a plain setPage(1) then landed on page 1.
+      setPage(pageWhileSettling(restorePendingRef.current, 1))
     }
   }, [conditionsParam])
 

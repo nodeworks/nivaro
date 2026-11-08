@@ -78,10 +78,12 @@ function existingEntries(v: unknown): unknown[] {
   return [v]
 }
 
+// Case-blind on the id: a stored uniqueidentifier reads upper-case, a lookup
+// may hand the same id lower-case — one person, one link (army 9/10 b02).
 const entryKey = (e: unknown): string =>
   e && typeof e === 'object'
-    ? `${String((e as { collection?: unknown }).collection ?? '')}:${String((e as { id?: unknown }).id ?? '')}`
-    : `:${String(e)}`
+    ? `${String((e as { collection?: unknown }).collection ?? '').toLowerCase()}:${String((e as { id?: unknown }).id ?? '').toLowerCase()}`
+    : `:${String(e).toLowerCase()}`
 
 /**
  * Write every staged link the body can carry into `payload`; returns the

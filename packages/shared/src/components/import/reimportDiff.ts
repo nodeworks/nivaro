@@ -45,6 +45,62 @@ function matchKey(row: Record<string, unknown>, matchBy: string[]): string {
   return matchBy.map((col) => normalizeMatchComponent(row[col])).join('\x00')
 }
 
+/** The match key a file row or an existing line is paired by — the one
+ *  normalization, shared with the form's nested-payload re-association. */
+export const reimportMatchKey = matchKey
+
+/**
+ * Lines the person removed on the form (staged, not saved) that the file
+ * still lists. On apply the file wins: the removal is taken back and the
+ * line is updated in place — otherwise the same line would be both queued
+ * for delete and queued for an edit, and the save would PATCH a row it had
+ * just deleted (army 10 item 3: remove a material line, then BOM Re-Upload).
+ */
+export function reimportRestoredDeletes(
+  fileRows: Record<string, unknown>[],
+  existingRows: Record<string, unknown>[],
+  matchBy: string[],
+  pendingDeletes: ReadonlySet<string>
+): string[] {
+  if (pendingDeletes.size === 0 || matchBy.length === 0) return []
+  const fileKeys = new Set(fileRows.map((row) => matchKey(row, matchBy)))
+  const restored: string[] = []
+  for (const row of existingRows) {
+    const id = String(row.id)
+    if (!pendingDeletes.has(id)) continue
+    if (fileKeys.has(matchKey(row, matchBy))) restored.push(id)
+  }
+  return restored
+}
+
+/**
+ * What the review dialog says when the record already has unsaved work. The
+ * form used to ask this through a native `window.confirm` — a modal the
+ * browser blocks the page on, which an automated tab (and some embedded
+ * hosts) can never answer, so the tab looked frozen for good. The review
+ * dialog is the confirmation; this is its one extra line. Null = nothing to say.
+ */
+export function reimportPendingNotice(input: {
+  headerDirty: boolean
+  pendingRows: number
+  pendingEdits: number
+  pendingDeletes: number
+  restored: number
+}): string | null {
+  const { headerDirty, pendingRows, pendingEdits, pendingDeletes, restored } = input
+  const hasWork = headerDirty || pendingRows > 0 || pendingEdits > 0 || pendingDeletes > 0
+  if (!hasWork) return null
+  const parts = ['Your unsaved changes on this record stay in place; the file is applied on top.']
+  if (restored > 0) {
+    parts.push(
+      restored === 1
+        ? 'One line you removed is still in the file, so it comes back.'
+        : `${restored} lines you removed are still in the file, so they come back.`
+    )
+  }
+  return parts.join(' ')
+}
+
 export function diffReimportLines(
   fileRows: Record<string, unknown>[],
   existingRows: Record<string, unknown>[],

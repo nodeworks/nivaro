@@ -320,6 +320,7 @@ export {
   QUEUE_RETURN_KEY,
   QueueReturnChip,
   type QueueReturnStash,
+  queueReturnApplies,
   readQueueReturn,
   writeQueueReturn
 } from './components/item-edit/QueueReturnChip'
@@ -854,6 +855,7 @@ export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slot
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/list-inline-edit'
 export * from './lib/list-link'
+export { arrivedByListReturn, LIST_RETURN_STATE } from './lib/list-page-memory'
 export * from './lib/live'
 export * from './lib/live-list'
 export * from './lib/live-ops'

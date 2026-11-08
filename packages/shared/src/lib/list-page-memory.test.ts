@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  arrivedByListReturn,
+  LIST_RETURN_STATE,
   pageWhileSettling,
   rememberedListPage,
   rememberListPage,
@@ -84,5 +86,34 @@ describe('restoreWindowOutcome', () => {
       page: null
     })
     expect(restoreWindowOutcome({ ...base, pending: null })).toBeNull()
+  })
+})
+
+// army 10: a record's back arrow opens the list as a NEW entry (it never steps back).
+describe('list page memory — return to the list', () => {
+  beforeEach(() => window.sessionStorage.clear())
+  it('a return navigation (usr carries LIST_RETURN_STATE) starts on the page last left', () => {
+    window.history.replaceState({ key: 'list-a', idx: 0 }, '')
+    rememberListPage('cbv:workflows', 2)
+    window.history.replaceState({ key: 'list-b', idx: 2, usr: LIST_RETURN_STATE }, '')
+    expect(arrivedByListReturn()).toBe(true)
+    expect(rememberedListPage('cbv:workflows')).toBe(2)
+    expect(rememberedListPage('cbv:invoices')).toBeNull()
+  })
+  it('a plain new visit does not inherit the last page', () => {
+    window.history.replaceState({ key: 'list-a', idx: 0 }, '')
+    rememberListPage('cbv:workflows', 2)
+    window.history.replaceState({ key: 'list-b', idx: 2, usr: null }, '')
+    expect(arrivedByListReturn()).toBe(false)
+    expect(rememberedListPage('cbv:workflows')).toBeNull()
+  })
+  it("the entry's own page wins over the last page; page 1 forgets both", () => {
+    rememberListPage('cbv:workflows', 4, 'list-a')
+    rememberListPage('cbv:workflows', 2, 'list-b')
+    window.history.replaceState({ key: 'list-a', idx: 0, usr: LIST_RETURN_STATE }, '')
+    expect(rememberedListPage('cbv:workflows')).toBe(4)
+    rememberListPage('cbv:workflows', 1, 'list-b')
+    window.history.replaceState({ key: 'list-c', idx: 3, usr: LIST_RETURN_STATE }, '')
+    expect(rememberedListPage('cbv:workflows')).toBeNull()
   })
 })

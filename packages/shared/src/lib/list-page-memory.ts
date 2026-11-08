@@ -11,20 +11,41 @@
  * new tab) carries no `key` — react-router writes only `{idx: 0}` there — so nothing was
  * remembered for the most common way in. Writing a page now mints a key for that entry
  * (history.replaceState keeps every other state field, so the router's idx and usr stay).
+ *
+ * Army 10: a record's own back arrow (efp-new) does not step back through history — it
+ * opens the page the record was opened from as a NEW entry, so the per-entry page was
+ * never found. That navigation carries LIST_RETURN_STATE; a list reached that way starts
+ * on the page it was last on in this tab (kept per list beside the per-entry pages).
  */
 
 const PREFIX = 'nvr:list-page:'
+/** The page each list was last on in this tab (read only on a "return to the list"). */
+const LAST = `${PREFIX}last:`
 /** Entries kept at most; the oldest are dropped. */
 const MAX_ENTRIES = 50
 
-function historyKey(): string | null {
+export function historyKey(): string | null {
   if (typeof window === 'undefined') return null
   const st = window.history?.state as { key?: unknown } | null | undefined
   return typeof st?.key === 'string' && st.key ? st.key : null
 }
 
+/**
+ * History state for a navigation that RETURNS to a list (a record's back arrow): react-router
+ * stores it under `usr`, where rememberedListPage looks for it. Hosts that cannot import this
+ * (efp-new pins the published package) pass the same literal.
+ */
+export const LIST_RETURN_STATE = { nvrListReturn: true } as const
+
+/** True when the current history entry was reached by a "return to the list" navigation. */
+export function arrivedByListReturn(): boolean {
+  if (typeof window === 'undefined') return false
+  const st = window.history?.state as { usr?: { nvrListReturn?: unknown } | null } | null
+  return st?.usr?.nvrListReturn === true
+}
+
 /** The current entry's key, minting one for an entry that has none (see above). */
-function ensureHistoryKey(): string | null {
+export function ensureHistoryKey(): string | null {
   const have = historyKey()
   if (have || typeof window === 'undefined' || !window.history) return have
   try {
@@ -47,9 +68,9 @@ export function rememberedListPage(
   list: string,
   entry: string | null = historyKey()
 ): number | null {
-  if (!entry) return null
   try {
-    const raw = window.sessionStorage.getItem(storageKey(list, entry))
+    const own = entry ? window.sessionStorage.getItem(storageKey(list, entry)) : null
+    const raw = own ?? (arrivedByListReturn() ? window.sessionStorage.getItem(LAST + list) : null)
     const n = raw == null ? Number.NaN : Number(raw)
     return Number.isInteger(n) && n > 1 && n < 100_000 ? n : null
   } catch {
@@ -63,19 +84,20 @@ export function rememberListPage(
   page: number,
   entry: string | null = page > 1 ? ensureHistoryKey() : historyKey()
 ): void {
-  if (!entry) return
   try {
     const store = window.sessionStorage
-    const key = storageKey(list, entry)
     if (!(page > 1)) {
-      store.removeItem(key)
+      store.removeItem(LAST + list)
+      if (entry) store.removeItem(storageKey(list, entry))
       return
     }
-    store.setItem(key, String(Math.floor(page)))
+    store.setItem(LAST + list, String(Math.floor(page)))
+    if (!entry) return
+    store.setItem(storageKey(list, entry), String(Math.floor(page)))
     const ours: string[] = []
     for (let i = 0; i < store.length; i++) {
       const k = store.key(i)
-      if (k?.startsWith(PREFIX)) ours.push(k)
+      if (k?.startsWith(PREFIX) && !k.startsWith(LAST)) ours.push(k)
     }
     // sessionStorage keeps insertion order per key well enough for a cap: drop the first.
     for (const k of ours.slice(0, Math.max(0, ours.length - MAX_ENTRIES))) store.removeItem(k)
