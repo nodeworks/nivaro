@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-08T15:51:12.606Z",
+  "generated_at": "2026-11-08T16:33:58.898Z",
   "releases": [
+    {
+      "version": "0.3.89",
+      "tag": "v0.3.89",
+      "date": "2026-11-08T11:33:42-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "external-apis",
+              "text": "a refused kept token retries once with a fresh one",
+              "hash": "9fb0c5fa1"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "reuse partner tokens, probe OAuth partners, never block worklists on cold stats",
+              "hash": "3fada91b5"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.88",
       "tag": "v0.3.88",
-      "date": "2026-11-08T10:50:55-05:00",
+      "date": "2026-11-08T10:51:12-05:00",
       "sections": [
         {
           "label": "Added",
