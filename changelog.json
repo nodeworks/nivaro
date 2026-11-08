@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-08T16:33:58.898Z",
+  "generated_at": "2026-11-08T16:52:18.505Z",
   "releases": [
+    {
+      "version": "0.3.90",
+      "tag": "v0.3.90",
+      "date": "2026-11-08T11:52:00-05:00",
+      "sections": [
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "queues",
+              "text": "bind queue-read id lists as one OPENJSON array",
+              "hash": "a8f786897"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.89",
       "tag": "v0.3.89",
-      "date": "2026-11-08T11:33:42-05:00",
+      "date": "2026-11-08T11:33:58-05:00",
       "sections": [
         {
           "label": "Fixed",
