@@ -202,7 +202,9 @@ export function deriveService(
     failingReason = `${running} of ${desired} running${slotError ? ` — ${slotError}` : ''}`
   else if (updateState && BAD_UPDATE_STATES.has(updateState))
     failingReason = `Update ${updateState.replace('_', ' ')}${s.UpdateStatus?.Message ? ` — ${s.UpdateStatus.Message}` : ''}`
-  else if (failedSlots > 0 && mode !== 'job')
+  // A service scaled to 0 on purpose is stopped, not failing: the errors of the tasks it
+  // had before it was stopped are history (retired stacks read as 15 "failing" on EFP prod).
+  else if (failedSlots > 0 && mode !== 'job' && desired !== 0)
     failingReason = `${failedSlots} slot${failedSlots === 1 ? '' : 's'} failing${slotError ? ` — ${slotError}` : ''}`
 
   const kept: StackTask[] = []
