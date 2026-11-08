@@ -7,6 +7,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { describeOwnerGroup, sentenceLabelsFromFields } from '../../lib/config-sentences'
 import { useRecordReader } from '../../lib/record-loader'
 import { ConfigReadBack } from '../ConfigReadBack'
+import { ConfirmButton } from '../profile/primitives'
 import { UserAvatar } from '../UserAvatar'
 import { Button } from '../ui/button'
 import {
@@ -646,7 +647,7 @@ export function PipelineStateOwners({
                       </div>
                     )}
                   </div>
-                  <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0'>
+                  <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 [&:has([data-armed])]:opacity-100 transition-opacity shrink-0'>
                     <button
                       type='button'
                       onClick={() => (isExpanded ? closeEditor() : openEditor(g))}
@@ -655,17 +656,16 @@ export function PipelineStateOwners({
                     >
                       <Settings className='h-3.5 w-3.5' />
                     </button>
-                    <button
-                      type='button'
-                      onClick={() => {
-                        if (confirm(`Delete group "${g.name || `Group ${idx + 1}`}"?`))
-                          deleteGroup.mutate(g.id)
-                      }}
-                      className='rounded p-1 text-slate-400 hover:text-red-500'
+                    <ConfirmButton
+                      onConfirm={() => deleteGroup.mutate(g.id)}
                       title='Delete group'
+                      confirmLabel='Delete?'
+                      confirmTitle={`Delete group "${g.name || `Group ${idx + 1}`}"?`}
+                      className='rounded p-1 text-slate-400 hover:text-red-500'
+                      armedClassName='rounded bg-red-50 px-1.5 text-[11px] font-semibold text-red-700 hover:text-red-700 dark:bg-red-500/10 dark:text-red-400'
                     >
                       <Trash2 className='h-3.5 w-3.5' />
-                    </button>
+                    </ConfirmButton>
                   </div>
                 </div>
 

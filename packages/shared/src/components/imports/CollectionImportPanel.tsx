@@ -54,6 +54,57 @@ const JOB_STATUS: Record<ImportJobStatus, { dot: string; text: string; label: st
   failed: { dot: 'bg-red-500', text: 'text-red-700 dark:text-red-400', label: 'Failed' }
 }
 
+export const ROLLBACK_QUESTION =
+  'Roll back this import? Created rows are deleted (to trash) and overwritten rows restored to their prior values. One-shot.'
+
+/**
+ * "Roll back this import" asks in place: the first pick keeps the menu open and
+ * turns the item into the question, a second pick runs it, closing the menu
+ * cancels. Never a native confirm — it blocks the page and automated tabs
+ * cannot answer it.
+ */
+export function RollbackJobItem({
+  disabled,
+  rolledBack,
+  onConfirm
+}: {
+  disabled: boolean
+  rolledBack: boolean
+  onConfirm: () => void
+}) {
+  const [armed, setArmed] = useState(false)
+  return (
+    <DropdownMenuItem
+      disabled={disabled}
+      data-armed={armed ? '' : undefined}
+      className={cn(
+        armed &&
+          'max-w-[300px] whitespace-normal bg-red-50 font-medium text-red-700 focus:bg-red-100 focus:text-red-800 dark:bg-red-500/10 dark:text-red-400 dark:focus:bg-red-500/20 dark:focus:text-red-300'
+      )}
+      onSelect={(e) => {
+        if (!armed) {
+          e.preventDefault()
+          setArmed(true)
+          return
+        }
+        setArmed(false)
+        onConfirm()
+      }}
+    >
+      {armed ? (
+        <span className='block'>
+          {ROLLBACK_QUESTION}
+          <span className='mt-1 block text-[11px] font-semibold'>Choose again to roll back</span>
+        </span>
+      ) : rolledBack ? (
+        'Rolled back'
+      ) : (
+        'Roll back this import'
+      )}
+    </DropdownMenuItem>
+  )
+}
+
 function JobStatusPill({ status }: { status: ImportJobStatus }) {
   const s = JOB_STATUS[status] ?? JOB_STATUS.pending
   return (
@@ -405,20 +456,11 @@ export function CollectionImportPanel({
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end' className='text-[12.5px]'>
               <DropdownMenuItem onSelect={() => openJob(j.id)}>View details</DropdownMenuItem>
-              <DropdownMenuItem
+              <RollbackJobItem
                 disabled={j.status !== 'complete' || !!j.rolled_back_at}
-                onSelect={() => {
-                  if (
-                    window.confirm(
-                      'Roll back this import? Created rows are deleted (to trash) and overwritten rows restored to their prior values. One-shot.'
-                    )
-                  ) {
-                    rollbackJob.mutate(j.id)
-                  }
-                }}
-              >
-                {j.rolled_back_at ? 'Rolled back' : 'Roll back this import'}
-              </DropdownMenuItem>
+                rolledBack={!!j.rolled_back_at}
+                onConfirm={() => rollbackJob.mutate(j.id)}
+              />
               <DropdownMenuItem
                 disabled={j.status !== 'complete' && j.status !== 'failed'}
                 onSelect={() => removeJob.mutate(j.id)}

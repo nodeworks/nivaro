@@ -56,6 +56,7 @@ import { ConfigHistoryButton } from '../ConfigHistory'
 import { ConfigReadBack } from '../ConfigReadBack'
 import { PipelineCumulativeFlowCard } from '../charts/CumulativeFlowChart'
 import { useCollectionBody } from '../layout-editor/collection-meta'
+import { ConfirmButton } from '../profile/primitives'
 import { QueryErrorState } from '../QueryErrorState'
 import { Term } from '../Term'
 import { Badge } from '../ui/badge'
@@ -97,6 +98,9 @@ import type {
 
 /** The brand colour, through the token a host re-points (white-labelling). */
 const BRAND = 'rgb(var(--nvr-cyan-rgb, 0 206 255))'
+/** A delete/unbind icon button waiting for its second press (ConfirmButton). */
+const ARMED_DELETE =
+  'rounded bg-red-50 px-1.5 text-[11px] font-semibold text-red-700 hover:text-red-700 dark:bg-red-500/10 dark:text-red-400'
 
 // ─── Simple combobox ──────────────────────────────────────────────────────────
 
@@ -2341,7 +2345,7 @@ function SortableStateRow({
           users={getBaseOwners(groups)}
           filteredCount={groups.filter((g) => g.filters && g.filters.length > 0).length}
         />
-        <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0'>
+        <div className='flex items-center gap-1 opacity-0 group-hover:opacity-100 [&:has([data-armed])]:opacity-100 transition-opacity shrink-0'>
           <button
             type='button'
             onClick={onToggleExpand}
@@ -2357,13 +2361,16 @@ function SortableStateRow({
           >
             <Pencil className='h-3.5 w-3.5' />
           </button>
-          <button
-            type='button'
-            onClick={onDelete}
+          <ConfirmButton
+            onConfirm={onDelete}
+            title='Delete state'
+            confirmLabel='Delete?'
+            confirmTitle={`Delete state "${s.label}"?`}
             className='rounded p-1 text-slate-400 hover:text-red-500'
+            armedClassName={ARMED_DELETE}
           >
             <Trash2 className='h-3.5 w-3.5' />
-          </button>
+          </ConfirmButton>
         </div>
       </div>
     </div>
@@ -2579,13 +2586,16 @@ function SortableDimensionRow({
         >
           <Pencil className='h-3.5 w-3.5' />
         </button>
-        <button
-          type='button'
-          onClick={onDelete}
+        <ConfirmButton
+          onConfirm={onDelete}
+          title='Delete dimension'
+          confirmLabel='Delete?'
+          confirmTitle={`Delete dimension "${d.label}"?`}
           className='rounded p-1 text-slate-400 hover:text-red-500 transition-colors'
+          armedClassName={ARMED_DELETE}
         >
           <Trash2 className='h-3.5 w-3.5' />
-        </button>
+        </ConfirmButton>
       </div>
     </div>
   )
@@ -2812,9 +2822,7 @@ function BindingDimensionsPanel({
                     d={d}
                     siblings={orderedDims}
                     onEdit={() => startEdit(d)}
-                    onDelete={() => {
-                      if (confirm(`Delete dimension "${d.label}"?`)) deleteDimension.mutate(d.id)
-                    }}
+                    onDelete={() => deleteDimension.mutate(d.id)}
                     onSaveCascade={(rules) =>
                       updateDimension.mutate({
                         dimId: d.id,
@@ -3611,9 +3619,7 @@ export function PipelineEditorView({
                                 setExpandedStateId(expandedStateId === s.id ? null : s.id)
                               }
                               onEdit={() => setEditingState(s)}
-                              onDelete={() => {
-                                if (confirm(`Delete state "${s.label}"?`)) deleteState.mutate(s.id)
-                              }}
+                              onDelete={() => deleteState.mutate(s.id)}
                             />
                           )}
                           {expandedStateId === s.id && editingState?.id !== s.id && (
@@ -3868,17 +3874,18 @@ export function PipelineEditorView({
                                   <Plus className='h-3 w-3' />
                                   Add route
                                 </button>
-                                <button
-                                  type='button'
-                                  onClick={() => {
-                                    const allIds = grp.routes.flatMap((r) => r.ids)
-                                    if (confirm(`Delete all routes for "${grp.label}"?`))
-                                      deleteRoute.mutate(allIds)
-                                  }}
+                                <ConfirmButton
+                                  onConfirm={() =>
+                                    deleteRoute.mutate(grp.routes.flatMap((r) => r.ids))
+                                  }
+                                  title='Delete all routes'
+                                  confirmLabel='Delete all?'
+                                  confirmTitle={`Delete all routes for "${grp.label}"?`}
                                   className='rounded p-1 text-slate-300 opacity-0 hover:text-red-500 group-hover/hdr:opacity-100 transition-opacity'
+                                  armedClassName={cn(ARMED_DELETE, 'opacity-100')}
                                 >
                                   <Trash2 className='h-3.5 w-3.5' />
-                                </button>
+                                </ConfirmButton>
                               </div>
 
                               {/* Route rows */}
@@ -4023,7 +4030,7 @@ export function PipelineEditorView({
                                               </span>
                                             )}
                                           </div>
-                                          <div className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100'>
+                                          <div className='flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 [&:has([data-armed])]:opacity-100'>
                                             <button
                                               type='button'
                                               onClick={() =>
@@ -4033,16 +4040,16 @@ export function PipelineEditorView({
                                             >
                                               <Pencil className='h-3.5 w-3.5' />
                                             </button>
-                                            <button
-                                              type='button'
-                                              onClick={() => {
-                                                if (confirm('Delete this route?'))
-                                                  deleteRoute.mutate(route.ids)
-                                              }}
+                                            <ConfirmButton
+                                              onConfirm={() => deleteRoute.mutate(route.ids)}
+                                              title='Delete route'
+                                              confirmLabel='Delete?'
+                                              confirmTitle='Delete this route?'
                                               className='rounded p-1 text-slate-400 hover:text-red-500'
+                                              armedClassName={ARMED_DELETE}
                                             >
                                               <Trash2 className='h-3.5 w-3.5' />
-                                            </button>
+                                            </ConfirmButton>
                                           </div>
                                         </div>
                                       </SortableTransitionItem>
@@ -4199,16 +4206,16 @@ export function PipelineEditorView({
                             </span>
                           )}
                         </button>
-                        <button
-                          type='button'
-                          onClick={() => {
-                            if (confirm(`Unbind "${b.collection}"?`)) unbindCollection.mutate(b.id)
-                          }}
-                          className='rounded p-1.5 text-slate-400 hover:text-red-500 transition-colors'
+                        <ConfirmButton
+                          onConfirm={() => unbindCollection.mutate(b.id)}
                           title='Unbind collection'
+                          confirmLabel='Unbind?'
+                          confirmTitle={`Unbind "${b.collection}"?`}
+                          className='rounded p-1.5 text-slate-400 hover:text-red-500 transition-colors'
+                          armedClassName={ARMED_DELETE}
                         >
                           <Link2Off className='h-3.5 w-3.5' />
-                        </button>
+                        </ConfirmButton>
                       </div>
                     </div>
                     {expandedBindingId === b.id && (

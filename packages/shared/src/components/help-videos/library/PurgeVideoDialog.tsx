@@ -46,7 +46,7 @@ export function PurgeVideoDialog({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const confirm = async () => {
+  const purgeForGood = async () => {
     if (inflight.current || pending) return
     inflight.current = true
     setPending(true)
@@ -114,7 +114,7 @@ export function PurgeVideoDialog({
             variant='destructive'
             // The light destructive token is 3.8:1 under white text; red-700 clears 4.5:1.
             className={`bg-red-700 hover:bg-red-800 dark:bg-destructive dark:hover:bg-destructive/90 ${pending ? 'opacity-70' : ''}`}
-            onClick={() => void confirm()}
+            onClick={() => void purgeForGood()}
             // Not `disabled`: that would drop keyboard focus to the page while the request runs.
             aria-disabled={pending}
             data-hv-purge-confirm

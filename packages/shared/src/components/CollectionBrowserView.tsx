@@ -151,7 +151,6 @@ import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushAct
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
-import { relatedMissing } from './item-edit/related-missing'
 import {
   type ListPage,
   localYmd,
@@ -180,6 +179,7 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/Int
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { usePickerExclusion } from './item-edit/RecordGrantTools'
 import { invalidateRecordQueries } from './item-edit/RecordLiveSync'
+import { relatedMissing } from './item-edit/related-missing'
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
 import { CopyListLinkButton } from './list/CopyListLinkButton'
@@ -196,6 +196,7 @@ import {
   itemActionChoiceStep,
   RevisionsPanel
 } from './panels'
+import { ConfirmButton } from './profile/primitives'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordCompareDialog } from './RecordCompare'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -4049,11 +4050,11 @@ function BulkBar({
                   {r.name}
                 </button>
                 {r.mine && (
-                  <button
-                    type='button'
-                    aria-label={`Delete recipe ${r.name}`}
-                    onClick={() => {
-                      if (!window.confirm(`Delete the recipe "${r.name}"?`)) return
+                  <ConfirmButton
+                    title={`Delete recipe ${r.name}`}
+                    confirmLabel='Delete?'
+                    confirmTitle={`Delete the recipe "${r.name}"?`}
+                    onConfirm={() => {
                       void client
                         .request(del(`/bulk-recipes/${r.id}`))
                         .then(() =>
@@ -4061,9 +4062,10 @@ function BulkBar({
                         )
                     }}
                     className='absolute -right-1.5 -top-1.5 hidden h-4 w-4 items-center justify-center rounded-full bg-slate-600 text-[9px] text-white dark:text-foreground hover:bg-red-600 group-hover/recipe:flex'
+                    armedClassName='flex w-auto bg-red-600 px-1.5 font-semibold text-white dark:text-white'
                   >
                     ✕
-                  </button>
+                  </ConfirmButton>
                 )}
               </span>
             ))}
@@ -7602,18 +7604,17 @@ export function CollectionBrowserView({
                     {a.label}
                   </button>
                 ))}
-                <button
-                  type='button'
-                  onClick={() => {
-                    if (window.confirm('Delete this record? It moves to Trash for 30 days.')) {
-                      deleteRow.mutate(cellMenu.row.id as string | number)
-                    }
+                <ConfirmButton
+                  confirmLabel='Delete this record? It moves to Trash for 30 days.'
+                  onConfirm={() => {
+                    deleteRow.mutate(cellMenu.row.id as string | number)
                     setCellMenu(null)
                   }}
                   className='block w-full truncate px-3 py-1.5 text-left text-[12px] text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20'
+                  armedClassName='whitespace-normal bg-red-50 font-semibold dark:bg-red-900/20'
                 >
                   Delete
-                </button>
+                </ConfirmButton>
               </>
             )}
           </div>,

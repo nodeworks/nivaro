@@ -5,7 +5,9 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { userErrorMessage } from '../../../lib/safe-error'
-import { Button } from '../../ui/button'
+import { cn } from '../../../lib/utils'
+import { ConfirmButton } from '../../profile/primitives'
+import { Button, buttonVariants } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
 import { Switch } from '../../ui/switch'
@@ -185,10 +187,9 @@ function PathEditor({
       setBusy(false)
     }
   }
+  // Asked first by the Delete path ConfirmButton (never a native confirm).
   const remove = async () => {
     if (!path) return
-    if (!window.confirm(`Delete "${path.title || 'Untitled path'}"? Nobody's progress is lost.`))
-      return
     setBusy(true)
     try {
       await api.remove(path.id)
@@ -435,16 +436,18 @@ function PathEditor({
           Cancel
         </Button>
         {path && (
-          <Button
-            size='sm'
-            variant='ghost'
-            className='ml-auto text-rose-700 hover:text-rose-800 dark:text-rose-300'
-            onClick={() => void remove()}
+          <ConfirmButton
+            className={cn(
+              buttonVariants({ size: 'sm', variant: 'ghost' }),
+              'ml-auto text-rose-700 hover:text-rose-800 dark:text-rose-300'
+            )}
+            armedClassName='h-auto min-h-8 whitespace-normal bg-rose-50 text-left text-rose-800 hover:bg-rose-100 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20'
+            confirmLabel={`Delete "${path.title || 'Untitled path'}"? Nobody's progress is lost.`}
+            onConfirm={() => void remove()}
             disabled={busy}
-            data-hv-path-delete
           >
             <Trash2 className='h-3.5 w-3.5' /> Delete path
-          </Button>
+          </ConfirmButton>
         )}
       </div>
     </section>

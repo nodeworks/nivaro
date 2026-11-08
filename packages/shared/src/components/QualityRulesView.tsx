@@ -4,6 +4,7 @@ import { useNavigation, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
+import { ConfirmButton } from './profile/primitives'
 
 /**
  * Quality rules — the admin-authored data checks (not-null, regex, range,
@@ -132,7 +133,12 @@ function RuleForm({
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder='Rule name' className={inputCls} />
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder='Rule name'
+          className={inputCls}
+        />
         <PickList
           value={ruleType}
           onChange={(v) => setRuleType(v as RuleType)}
@@ -163,8 +169,20 @@ function RuleForm({
         )}
         {ruleType === 'range' && (
           <>
-            <input value={min} onChange={(e) => setMin(e.target.value)} type='number' placeholder='Min (optional)' className={inputCls} />
-            <input value={max} onChange={(e) => setMax(e.target.value)} type='number' placeholder='Max (optional)' className={inputCls} />
+            <input
+              value={min}
+              onChange={(e) => setMin(e.target.value)}
+              type='number'
+              placeholder='Min (optional)'
+              className={inputCls}
+            />
+            <input
+              value={max}
+              onChange={(e) => setMax(e.target.value)}
+              type='number'
+              placeholder='Max (optional)'
+              className={inputCls}
+            />
           </>
         )}
       </div>
@@ -179,7 +197,9 @@ function RuleForm({
               <div className='w-[180px]'>
                 <PickList
                   value={c.field}
-                  onChange={(v) => setConditions((prev) => prev.map((x, j) => (j === i ? { ...x, field: v } : x)))}
+                  onChange={(v) =>
+                    setConditions((prev) => prev.map((x, j) => (j === i ? { ...x, field: v } : x)))
+                  }
                   options={fields.map((f) => ({ value: f.field, label: f.field }))}
                   placeholder='Field…'
                 />
@@ -187,7 +207,9 @@ function RuleForm({
               <div className='w-[120px]'>
                 <PickList
                   value={c.op}
-                  onChange={(v) => setConditions((prev) => prev.map((x, j) => (j === i ? { ...x, op: v } : x)))}
+                  onChange={(v) =>
+                    setConditions((prev) => prev.map((x, j) => (j === i ? { ...x, op: v } : x)))
+                  }
                   options={[
                     { value: 'eq', label: '=' },
                     { value: 'neq', label: '≠' },
@@ -205,7 +227,11 @@ function RuleForm({
               {c.op !== 'null' && c.op !== 'nnull' && (
                 <input
                   value={c.value}
-                  onChange={(e) => setConditions((prev) => prev.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+                  onChange={(e) =>
+                    setConditions((prev) =>
+                      prev.map((x, j) => (j === i ? { ...x, value: e.target.value } : x))
+                    )
+                  }
                   placeholder='Value'
                   className={cn(inputCls, 'flex-1')}
                 />
@@ -237,7 +263,11 @@ function RuleForm({
         >
           {saving ? 'Saving…' : rule ? 'Save rule' : 'Create rule'}
         </button>
-        <button type='button' onClick={onCancel} className='text-[12px] text-slate-400 hover:text-slate-600'>
+        <button
+          type='button'
+          onClick={onCancel}
+          className='text-[12px] text-slate-400 hover:text-slate-600'
+        >
           Cancel
         </button>
       </div>
@@ -257,12 +287,15 @@ export function QualityRulesView({ className }: { className?: string }) {
   const { data: collections = [] } = useQuery<Array<{ collection: string }>>({
     queryKey: ['dqv-collections'],
     queryFn: () =>
-      client.request<{ data: Array<{ collection: string }> }>(get('/collections')).then((r) => r.data ?? []),
+      client
+        .request<{ data: Array<{ collection: string }> }>(get('/collections'))
+        .then((r) => r.data ?? []),
     staleTime: 60_000
   })
   const { data: colMeta } = useQuery<{ fields: Array<{ field: string; hidden?: boolean }> }>({
     queryKey: ['dqv-collection-meta', collection],
-    queryFn: () => client.request<{ data: never }>(get(`/collections/${collection}`)).then((r) => r.data),
+    queryFn: () =>
+      client.request<{ data: never }>(get(`/collections/${collection}`)).then((r) => r.data),
     enabled: !!collection,
     staleTime: 30_000
   })
@@ -307,8 +340,7 @@ export function QualityRulesView({ className }: { className?: string }) {
     onSuccess: invalidateRules
   })
   const runMut = useMutation({
-    mutationFn: () =>
-      client.request<{ data: DqRun }>(post(`/data-quality/run/${collection}`, {})),
+    mutationFn: () => client.request<{ data: DqRun }>(post(`/data-quality/run/${collection}`, {})),
     onSuccess: (r) => {
       setSelectedRunId(r.data.id)
       void qc.invalidateQueries({ queryKey: ['dqv-runs', collection] })
@@ -321,7 +353,9 @@ export function QualityRulesView({ className }: { className?: string }) {
     <div className={cn('flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-6', className)}>
       <div className='flex flex-wrap items-end gap-3'>
         <div className='w-[280px]'>
-          <p className='mb-1 text-[11.5px] font-medium text-slate-600 dark:text-muted-foreground'>Collection</p>
+          <p className='mb-1 text-[11.5px] font-medium text-slate-600 dark:text-muted-foreground'>
+            Collection
+          </p>
           <PickList
             value={collection}
             onChange={(v) => {
@@ -407,7 +441,12 @@ export function QualityRulesView({ className }: { className?: string }) {
                   <div className='min-w-0 flex-1'>
                     <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
                       {r.name}
-                      <span className={cn('ml-2 rounded px-1.5 py-px text-[10px] font-medium uppercase', SEVERITY_TINT[r.severity])}>
+                      <span
+                        className={cn(
+                          'ml-2 rounded px-1.5 py-px text-[10px] font-medium uppercase',
+                          SEVERITY_TINT[r.severity]
+                        )}
+                      >
                         {r.severity}
                       </span>
                     </p>
@@ -418,7 +457,9 @@ export function QualityRulesView({ className }: { className?: string }) {
                   </div>
                   <button
                     type='button'
-                    onClick={() => updateMut.mutate({ id: r.id, body: { is_active: !r.is_active } })}
+                    onClick={() =>
+                      updateMut.mutate({ id: r.id, body: { is_active: !r.is_active } })
+                    }
                     className={cn(
                       'rounded-full border px-2 py-0.5 text-[11px] font-medium',
                       r.is_active
@@ -438,15 +479,16 @@ export function QualityRulesView({ className }: { className?: string }) {
                   >
                     Edit
                   </button>
-                  <button
-                    type='button'
-                    onClick={() => {
-                      if (window.confirm(`Delete rule "${r.name}"?`)) deleteMut.mutate(r.id)
-                    }}
+                  <ConfirmButton
+                    onConfirm={() => deleteMut.mutate(r.id)}
+                    title='Delete rule'
+                    confirmLabel='Delete?'
+                    confirmTitle={`Delete rule "${r.name}"?`}
                     className='text-[13px] text-slate-300 hover:text-red-500'
+                    armedClassName='rounded bg-red-50 px-1.5 text-[11px] font-semibold text-red-700 hover:text-red-700 dark:bg-red-500/10 dark:text-red-400'
                   >
                     ✕
-                  </button>
+                  </ConfirmButton>
                 </div>
               )
             )}
@@ -489,25 +531,44 @@ export function QualityRulesView({ className }: { className?: string }) {
               <div className='rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
                 <p className='text-[12px] text-slate-600 dark:text-muted-foreground'>
                   {selectedRun.total_records ?? '?'} records checked ·{' '}
-                  <span className={cn((selectedRun.failed_records ?? 0) > 0 && 'font-medium text-red-600 dark:text-red-400')}>
+                  <span
+                    className={cn(
+                      (selectedRun.failed_records ?? 0) > 0 &&
+                        'font-medium text-red-600 dark:text-red-400'
+                    )}
+                  >
                     {selectedRun.failed_records ?? 0} failing
                   </span>
                 </p>
                 <div className='mt-2 space-y-1.5'>
                   {(selectedRun.results ?? []).map((res) => (
-                    <div key={res.rule_id} className='rounded-md border border-slate-100 px-2.5 py-1.5 dark:border-border'>
+                    <div
+                      key={res.rule_id}
+                      className='rounded-md border border-slate-100 px-2.5 py-1.5 dark:border-border'
+                    >
                       <p className='text-[12px] text-slate-700 dark:text-foreground'>
                         {res.name}
-                        <span className={cn('ml-2 rounded px-1.5 py-px text-[10px] font-medium uppercase', SEVERITY_TINT[res.severity] ?? '')}>
+                        <span
+                          className={cn(
+                            'ml-2 rounded px-1.5 py-px text-[10px] font-medium uppercase',
+                            SEVERITY_TINT[res.severity] ?? ''
+                          )}
+                        >
                           {res.severity}
                         </span>
                         <span
                           className={cn(
                             'ml-2 text-[11.5px]',
-                            res.failed_count > 0 ? 'font-medium text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'
+                            res.failed_count > 0
+                              ? 'font-medium text-red-600 dark:text-red-400'
+                              : 'text-emerald-600 dark:text-emerald-400'
                           )}
                         >
-                          {res.error ? `error: ${res.error}` : res.failed_count > 0 ? `${res.failed_count} failing` : 'pass'}
+                          {res.error
+                            ? `error: ${res.error}`
+                            : res.failed_count > 0
+                              ? `${res.failed_count} failing`
+                              : 'pass'}
                         </span>
                       </p>
                       {res.sample_ids?.length > 0 && (
@@ -517,7 +578,10 @@ export function QualityRulesView({ className }: { className?: string }) {
                               key={String(id)}
                               type='button'
                               onClick={() => {
-                                const url = nav.itemUrl?.({ collection: selectedRun.collection, itemId: String(id) })
+                                const url = nav.itemUrl?.({
+                                  collection: selectedRun.collection,
+                                  itemId: String(id)
+                                })
                                 if (url) nav.navigate(url)
                               }}
                               className='rounded bg-slate-500/10 px-1.5 py-px font-mono text-slate-600 underline decoration-dotted underline-offset-2 hover:text-slate-800 dark:text-muted-foreground'

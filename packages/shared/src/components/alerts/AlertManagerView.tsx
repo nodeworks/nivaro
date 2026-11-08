@@ -27,6 +27,7 @@ import {
   useMyScopes
 } from '../../lib/use-my-scopes'
 import { cn } from '../../lib/utils'
+import { ConfirmButton } from '../profile/primitives'
 import {
   AlertRuleDrawer,
   AnomalyRuleDrawer,
@@ -182,6 +183,9 @@ const tdCls = 'px-3 py-2.5 align-middle text-[12px] text-slate-600 dark:text-sla
 const tdNum = cn(tdCls, 'font-mono tabular-nums text-slate-800 dark:text-slate-100')
 const iconBtn =
   'inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-400 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:hover:bg-muted/50 dark:hover:text-slate-200'
+/** An icon delete button waiting for its second press (ConfirmButton). */
+const iconBtnArmed =
+  'w-auto border-red-300 bg-red-50 px-2 text-[11px] font-semibold text-red-700 hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/10 dark:hover:text-red-400'
 
 /** Relative distance, but only while it still adds information. The shared
  *  formatRelative() falls back to a formatted date past a week, which would
@@ -687,9 +691,8 @@ export function AlertManagerView({
     }
   }
 
+  // Asked first by the row's ConfirmButton (never a native confirm).
   const deleteRule = async (rule: MetricAlertRule) => {
-    if (!window.confirm(`Delete rule "${rule.name}"? This removes the rule and all subscriptions.`))
-      return
     try {
       await raw('DELETE', `/metric-alerts/rules/${rule.id}`)
       note('Alert rule deleted')
@@ -721,9 +724,8 @@ export function AlertManagerView({
     }
   }
 
+  // Asked first by the row's ConfirmButton (never a native confirm).
   const deleteAnomalyRule = async (rule: AnomalyRule) => {
-    if (!window.confirm(`Delete anomaly rule "${rule.name}"? Its log entries are also removed.`))
-      return
     try {
       await raw('DELETE', `/metric-alerts/anomaly-rules/${rule.id}`)
       note('Anomaly rule deleted')
@@ -762,8 +764,8 @@ export function AlertManagerView({
     }
   }
 
+  // Asked first by the row's ConfirmButton (never a native confirm).
   const deleteReportAlert = async (row: ReportAlertRow) => {
-    if (!window.confirm(`Delete widget alert "${row.name}"?`)) return
     try {
       await raw('DELETE', `/report-studio/${row.report}/alerts/${row.id}`)
       note('Widget alert deleted')
@@ -1145,17 +1147,19 @@ export function AlertManagerView({
                           >
                             <Pencil className='h-3.5 w-3.5' />
                           </button>
-                          <button
-                            type='button'
+                          <ConfirmButton
                             title='Delete rule'
+                            confirmLabel='Delete?'
+                            confirmTitle={`Delete rule "${rule.name}"? This removes the rule and all subscriptions.`}
                             className={cn(
                               iconBtn,
                               'hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400'
                             )}
-                            onClick={() => deleteRule(rule)}
+                            armedClassName={iconBtnArmed}
+                            onConfirm={() => void deleteRule(rule)}
                           >
                             <Trash2 className='h-3.5 w-3.5' />
-                          </button>
+                          </ConfirmButton>
                         </>
                       )}
                     </div>
@@ -1225,18 +1229,19 @@ export function AlertManagerView({
                   <StatusBadge status={sub.status} />
                 </td>
                 <td className={tdCls}>
-                  <button
-                    type='button'
+                  <ConfirmButton
                     title='Unsubscribe'
+                    confirmLabel='Unsubscribe?'
+                    confirmTitle='Unsubscribe from this alert?'
                     className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
-                    onClick={async () => {
-                      if (!window.confirm('Unsubscribe from this alert?')) return
+                    armedClassName={iconBtnArmed}
+                    onConfirm={async () => {
                       await raw('DELETE', `/metric-alerts/subscriptions/${sub.id}`)
                       invalidate('nvr-ma-subs')
                     }}
                   >
                     <Trash2 className='h-3.5 w-3.5' />
-                  </button>
+                  </ConfirmButton>
                 </td>
               </tr>
             ))}
@@ -1330,17 +1335,16 @@ export function AlertManagerView({
                     >
                       <Pencil className='h-3.5 w-3.5' />
                     </button>
-                    <button
-                      type='button'
+                    <ConfirmButton
                       title='Remove subscription'
+                      confirmLabel='Remove?'
+                      confirmTitle='Remove this notification subscription?'
                       className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
-                      onClick={() => {
-                        if (!window.confirm('Remove this notification subscription?')) return
-                        removeNotifSub.mutate(s.id)
-                      }}
+                      armedClassName={iconBtnArmed}
+                      onConfirm={() => removeNotifSub.mutate(s.id)}
                     >
                       <Trash2 className='h-3.5 w-3.5' />
-                    </button>
+                    </ConfirmButton>
                   </div>
                 </td>
               </tr>
@@ -1531,14 +1535,16 @@ export function AlertManagerView({
                   {/* Someone else's alert: the server refuses changes (403), so
                       none are offered (army5 b16-N4). */}
                   {canEditRule(alertOwner(a)) && (
-                    <button
-                      type='button'
+                    <ConfirmButton
                       title='Delete'
+                      confirmLabel='Delete?'
+                      confirmTitle={`Delete widget alert "${a.name}"?`}
                       className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
-                      onClick={() => deleteReportAlert(a)}
+                      armedClassName={iconBtnArmed}
+                      onConfirm={() => void deleteReportAlert(a)}
                     >
                       <Trash2 className='h-3.5 w-3.5' />
-                    </button>
+                    </ConfirmButton>
                   )}
                 </td>
               </tr>
@@ -1696,14 +1702,16 @@ export function AlertManagerView({
                         >
                           <Pencil className='h-3.5 w-3.5' />
                         </button>
-                        <button
-                          type='button'
+                        <ConfirmButton
                           title='Delete'
+                          confirmLabel='Delete?'
+                          confirmTitle={`Delete anomaly rule "${rule.name}"? Its log entries are also removed.`}
                           className={cn(iconBtn, 'hover:border-red-300 hover:text-red-500')}
-                          onClick={() => deleteAnomalyRule(rule)}
+                          armedClassName={iconBtnArmed}
+                          onConfirm={() => void deleteAnomalyRule(rule)}
                         >
                           <Trash2 className='h-3.5 w-3.5' />
-                        </button>
+                        </ConfirmButton>
                       </div>
                     )}
                   </td>

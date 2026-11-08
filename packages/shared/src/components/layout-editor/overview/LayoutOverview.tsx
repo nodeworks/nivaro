@@ -374,7 +374,7 @@ function DeleteConfirm({
   )
   const refs = blocked?.refs.length ? blocked.refs : row.references
 
-  const confirm = async () => {
+  const deleteLayout = async () => {
     setBusy(true)
     try {
       await client.request(del(`/collection-layouts/${row.layout_id}`))
@@ -430,7 +430,7 @@ function DeleteConfirm({
               <button
                 type='button'
                 disabled={busy}
-                onClick={() => void confirm()}
+                onClick={() => void deleteLayout()}
                 className='inline-flex h-8 items-center rounded-md bg-red-600 px-3 text-[12.5px] font-semibold text-white hover:bg-red-700 disabled:opacity-50'
               >
                 {busy ? 'Deleting…' : 'Delete layout'}
