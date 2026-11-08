@@ -6,6 +6,7 @@ import { applyRowFilter, can, getAllowedFields, getRowFilter, scopeAllows } from
 import {
   applyScopeEnforcement,
   getUserScopeEnforcement,
+  hasRestrictScope,
   type ScopeEnforcement
 } from './user-scopes.js'
 
@@ -61,8 +62,9 @@ async function compile(user: User, isAdmin: boolean, collection: string): Promis
   // An API key's scopes narrow whatever its owner may read, an administrator
   // included — the same rule can() applies to every REST read.
   if (user.api_key_scopes && !scopeAllows(user.api_key_scopes, 'read', collection)) return DENY
-  const keyRestricted = (user.api_key_scope_restrictions ?? []).length > 0
-  if (isAdmin && !keyRestricted) return OPEN
+  // An administrator is OPEN unless a restrict-mode User Scope (own or the
+  // key's) narrows them — those bind admins too (decision 2026-11-08).
+  if (isAdmin && !(await hasRestrictScope(user))) return OPEN
   if (PARENT_GATED.has(collection)) return OPEN
   const system = /^(nivaro_|directus_)/i.test(collection)
   if (system && !isAdmin) return DENY

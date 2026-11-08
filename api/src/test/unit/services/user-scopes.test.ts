@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //
 // Conflating the two is the easy and expensive mistake (assuming a "default
 // zone" confines a user), so these tests pin the asymmetry explicitly, along
-// with the admin bypass, the internal-collection exemption, and the
+// with restrictions binding admins too, the internal-collection exemption, and the
 // strict-vs-fail-open behaviour when a dimension cannot reach a collection.
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
@@ -274,10 +274,10 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
     expect(out).toEqual({ filters: [], deny: false })
   })
 
-  it('exempts an admin from every restriction', async () => {
+  it('holds an admin to their own restriction like anyone (decision 2026-11-08)', async () => {
     installDb({
       roleAdmin: true,
-      scopes: [scopeRow({ mode: 'restrict', values: JSON.stringify([10]) })]
+      scopes: [scopeRow({ mode: 'restrict', values: JSON.stringify([1, 2, 3]) })]
     })
 
     const out = await getUserScopeEnforcement(
@@ -285,7 +285,35 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
       'divisions'
     )
 
+    expect(out.deny).toBe(false)
+    expect(out.filters).toHaveLength(1)
+    expect(out.filters[0].ids).toEqual([1, 2, 3])
+  })
+
+  it('leaves an admin with no restriction unscoped', async () => {
+    installDb({
+      roleAdmin: true,
+      scopes: [scopeRow({ mode: 'default', values: JSON.stringify([10]) })]
+    })
+
+    const out = await getUserScopeEnforcement(
+      makeUser({ role: 'role-admin-unique-2' }),
+      'divisions'
+    )
+
     expect(out).toEqual({ filters: [], deny: false })
+  })
+
+  it("an admin-owned API key's restrictions still apply, on top of the admin's own", async () => {
+    installDb({ roleAdmin: true, scopes: [] })
+    const keyOnly = await getUserScopeEnforcement(
+      makeUser({
+        role: 'role-admin-unique-3',
+        api_key_scope_restrictions: [{ dimension: 'division', values: [4] }]
+      }),
+      'divisions'
+    )
+    expect(keyOnly.filters.map((f) => f.ids)).toEqual([[4]])
   })
 
   it('exempts internal nivaro_ collections', async () => {

@@ -6,7 +6,12 @@ const perms = {
   getAllowedFields: vi.fn(),
   applyRowFilter: vi.fn()
 }
-const scopes = { getUserScopeEnforcement: vi.fn(), applyScopeEnforcement: vi.fn() }
+const scopes = {
+  getUserScopeEnforcement: vi.fn(),
+  applyScopeEnforcement: vi.fn(),
+  // Own restrict rows (admins too, 2026-11-08) or an API key's restrictions.
+  hasRestrictScope: vi.fn()
+}
 
 vi.mock('../../../db/index.js', () => {
   const db = (table: string) => ({
@@ -44,6 +49,10 @@ describe('nested GraphQL read gates', () => {
     perms.getRowFilter.mockResolvedValue(null)
     perms.getAllowedFields.mockResolvedValue(null)
     scopes.getUserScopeEnforcement.mockResolvedValue(NONE)
+    scopes.hasRestrictScope.mockImplementation(
+      async (u: { api_key_scope_restrictions?: unknown[] }) =>
+        (u.api_key_scope_restrictions?.length ?? 0) > 0
+    )
   })
 
   it('denies without a caller', async () => {
@@ -55,6 +64,19 @@ describe('nested GraphQL read gates', () => {
     const gate = await nestedGate({ user, isAdmin: true }, 'orders')
     expect(gate.open).toBe(true)
     expect(perms.can).not.toHaveBeenCalled()
+  })
+
+  it('narrows an admin whose own restrict scope binds them (2026-11-08)', async () => {
+    scopes.hasRestrictScope.mockResolvedValue(true)
+    scopes.getUserScopeEnforcement.mockResolvedValue({
+      filters: [{ hops: [], ids: [1, 2, 3] }],
+      deny: false
+    })
+    const gate = await nestedGate({ user, isAdmin: true }, 'orders')
+    expect(gate.open).toBe(false)
+    expect(gate.rowFilter).toBeNull()
+    expect(perms.can).not.toHaveBeenCalled()
+    expect(perms.getRowFilter).not.toHaveBeenCalled()
   })
 
   it('still narrows an admin-owned key that carries scope restrictions', async () => {

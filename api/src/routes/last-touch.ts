@@ -5,10 +5,11 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { boundedRaw, StatementCancelled } from '../services/bounded-sql.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 /** readOne as the caller: null (or a throw) = the record is hidden from them. */
 async function recordReadable(req: FastifyRequest, collection: string, id: string) {
-  if (req.isAdmin) return true
+  if (await seesAllRecords(req.isAdmin, req.user)) return true
   const { readOne } = await import('../services/items.js')
   const row = await readOne(req.user!, collection, id, req.workspaceId ?? undefined, ['id']).catch(
     () => null

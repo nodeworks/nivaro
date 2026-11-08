@@ -29,6 +29,7 @@ import {
   type TaskRow,
   taskColumns
 } from '../services/tasks.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 // urgent first in any 'what next' ordering
 const PRIORITY_RANK_SQL = "CASE t.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END"
@@ -135,11 +136,12 @@ async function teamIdsOf(userId: string): Promise<number[]> {
  *  of its team, or anyone who can read the record it sits on (#1000). A
  *  support ticket is private to its own people. */
 async function canSeeTask(req: FastifyRequest, t: TaskRow): Promise<boolean> {
-  if (req.isAdmin) return true
+  // A restricted admin sees a task on a record outside their User Scope no more than anyone.
+  if (await seesAllRecords(req.isAdmin, req.user)) return true
   const me = req.user!.id
   if (isTaskParty(t, me)) return true
   if (t.team_id != null && (await teamIdsOf(me)).includes(Number(t.team_id))) return true
-  if (t.kind === 'support') return false
+  if (t.kind === 'support') return !!req.isAdmin
   return canReadTaskRecord(req.user!, t.collection, t.item, req.workspaceId ?? undefined)
 }
 

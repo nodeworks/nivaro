@@ -354,7 +354,42 @@ async function adminReadable(files: FileRow[], req: Caller, depth: number): Prom
     // Could not tell whether these files live in closed rooms: deny them.
     for (const f of candidates) out.delete(String(f.id).toLowerCase())
   }
+  await narrowAdminToScope(candidates, user, out)
   return out
+}
+
+/**
+ * A restricted administrator (a restrict-mode User Scope, 2026-11-08) reads a
+ * record attachment only through a record they can open, like anyone: a file
+ * every FK-linked record of which lies outside their scope is dropped. An
+ * admin with no restriction is untouched (one cached scope read).
+ */
+async function narrowAdminToScope(
+  candidates: FileRow[],
+  user: User,
+  out: Set<string>
+): Promise<void> {
+  const { hasRestrictScope } = await import('./user-scopes.js')
+  if (!(await hasRestrictScope(user))) return
+  const left = candidates.filter((f) => out.has(String(f.id).toLowerCase()))
+  if (left.length === 0) return
+  const refs = await fileRecordRefs(left.map((f) => String(f.id)))
+  if (refs.failed) {
+    for (const f of left) out.delete(String(f.id).toLowerCase())
+    return
+  }
+  const pending = left
+    .map((f) => ({
+      file: String(f.id).toLowerCase(),
+      refs: refs.get(String(f.id).toLowerCase()) ?? []
+    }))
+    .filter((p) => p.refs.length > 0)
+  if (pending.length === 0) return
+  const visible = await visibleRefs(
+    user,
+    pending.flatMap((p) => p.refs)
+  )
+  for (const p of pending) if (!p.refs.some((r) => visible.has(refKey(r)))) out.delete(p.file)
 }
 
 /** Sources whose loss leaves "is this a DM / private-channel file?" unknown. */

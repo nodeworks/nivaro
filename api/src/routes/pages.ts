@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { aggregateItems, readItems } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { visibleRecordIds } from '../services/sla-visibility.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -493,19 +494,32 @@ export async function pagesRoutes(app: FastifyInstance) {
             const limit = Math.min(Math.max(Number(cfg.limit) || 10, 1), 50)
             // A non-admin sees activity only on records they can see: read a
             // wider window, keep the visible ones.
+            // A restricted administrator is judged like anyone (User Scopes, 2026-11-08).
+            const seesAll = await seesAllRecords(req.isAdmin, user)
             let q = db('nivaro_activity')
               .select('id', 'action', 'collection', 'item', 'user', 'timestamp')
               .orderBy('timestamp', 'desc')
-              .limit(req.isAdmin ? limit : limit * 5)
+              .limit(seesAll ? limit : limit * 5)
             if (collection) q = q.where({ collection })
-            let rows = (await q) as Array<{ item: unknown }>
-            if (!req.isAdmin && collection) {
-              const seen = await visibleRecordIds(
-                user,
-                collection,
-                rows.map((r) => String(r.item ?? '')).filter(Boolean)
-              )
-              rows = rows.filter((r) => r.item != null && seen.has(String(r.item))).slice(0, limit)
+            let rows = (await q) as Array<{ item: unknown; collection?: unknown }>
+            if (!seesAll) {
+              const byCollection = new Map<string, string[]>()
+              for (const r of rows) {
+                const c = String(r.collection ?? collection ?? '')
+                if (!c || r.item == null) continue
+                byCollection.set(c, [...(byCollection.get(c) ?? []), String(r.item)])
+              }
+              const seen = new Set<string>()
+              for (const [c, ids] of byCollection)
+                for (const id of await visibleRecordIds(user, c, ids, { isAdmin: !!req.isAdmin }))
+                  seen.add(`${c}\u0001${id}`)
+              rows = rows
+                .filter(
+                  (r) =>
+                    r.item != null &&
+                    seen.has(`${String(r.collection ?? collection ?? '')}\u0001${String(r.item)}`)
+                )
+                .slice(0, limit)
             }
             return { data: { rows } }
           }

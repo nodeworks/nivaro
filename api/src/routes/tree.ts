@@ -26,6 +26,7 @@ import {
   rebuildPaths,
   updateSubtreePaths
 } from '../services/tree-path.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 // ── Sibling ordering helpers ─────────────────────────────────────────────────
 // When a config has an order_field, children/nodes/nested results are sorted
@@ -73,7 +74,7 @@ export async function asViewer(
   config: TreeConfig,
   nodes: FlatNode[]
 ): Promise<FlatNode[]> {
-  if (req.isAdmin || nodes.length === 0) return nodes
+  if (nodes.length === 0 || (await seesAllRecords(req.isAdmin, req.user))) return nodes
   const user = req.user!
   const [seen, allowed] = await Promise.all([
     visibleRecordIds(
@@ -129,7 +130,7 @@ function writeRefusal(err: unknown): { code: number; error: string } | null {
 
 /** May the caller see this record (null id = the root, always). */
 async function seesNode(req: FastifyRequest, collection: string, id: unknown): Promise<boolean> {
-  if (req.isAdmin || id == null) return true
+  if (id == null || (await seesAllRecords(req.isAdmin, req.user))) return true
   return (await visibleRecordIds(req.user!, collection, [String(id)])).has(String(id))
 }
 
@@ -340,7 +341,7 @@ export async function treeRoutes(app: FastifyInstance) {
 
     const rootId = req.query.root ?? undefined
     return treeRead(req, reply, async () => {
-      if (req.isAdmin)
+      if (await seesAllRecords(req.isAdmin, req.user))
         return sortNestedNodes(await getNestedTree(config, { rootId }), config.order_field)
       if (!(await seesNode(req, config.collection, rootId))) return []
       const flat = await asViewer(req, config, await getNodes(config, { rootId }))
@@ -503,7 +504,7 @@ export async function treeRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'All nodes must share the same parent' })
     }
 
-    if (!req.isAdmin) {
+    if (!(await seesAllRecords(req.isAdmin, req.user))) {
       const seen = await visibleRecordIds(req.user!, config.collection, ids.map(String))
       if (ids.some((id) => !seen.has(String(id)))) {
         return reply.code(400).send({ error: 'One or more ids do not exist' })

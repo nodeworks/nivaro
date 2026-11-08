@@ -367,10 +367,11 @@ export async function visibleRecordIds(
   if (items.length === 0) return []
   try {
     const admin = isAdmin ?? (await roleIsAdmin(user.role))
-    if (admin) return items
-    if (!(await can(user, 'read', collection))) return []
+    if (!admin && !(await can(user, 'read', collection))) return []
     if (isSystemCollection(collection)) return items
-    const gates = await compileAccessGates(user, collection)
+    // Admins skip policy + row filters, never their own restrict scopes.
+    const gates = await compileAccessGates(user, collection, { actingAdmin: admin })
+    if (gates.bypass) return items
     const seen = new Set<string>()
     for (const id of await visibleIds(gates, items.map(String))) seen.add(id.toLowerCase())
     return items.filter((i) => seen.has(String(i).toLowerCase()))

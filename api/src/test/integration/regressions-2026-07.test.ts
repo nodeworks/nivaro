@@ -10,6 +10,15 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../../services/user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false),
+  restrictScopesFor: vi.fn(async () => []),
+  seesAllRecords: vi.fn(async (isAdmin: unknown) => !!isAdmin)
+}))
+
 vi.mock('../../config.js', () => ({
   config: {
     NODE_ENV: 'test',

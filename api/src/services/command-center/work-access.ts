@@ -38,19 +38,21 @@ export class Viewer {
   }
 
   /**
-   * The ids (of those given) this viewer can open, upper-cased. Admins pass every id; anyone else
-   * goes through the same gates a record read applies.
+   * The ids (of those given) this viewer can open, upper-cased. Everyone goes through the gates a
+   * record read applies; an admin skips policy + row filters but not their own restrict User
+   * Scopes (2026-11-08) — with none, every id passes without a query.
    */
   async visibleUpper(collection: string, ids: string[]): Promise<Set<string>> {
     const wanted = [...new Set(ids.map((i) => String(i).toUpperCase()))]
     if (!(await this.mayRead(collection))) return new Set()
-    if (this.isAdmin) return new Set(wanted)
     const known = this.visible.get(collection) ?? new Set<string>()
     const ask = wanted.filter((i) => !known.has(i) && !known.has(`!${i}`))
     if (ask.length > 0) {
       try {
         const { compileAccessGates, visibleIds } = await import('../record-access.js')
-        const gates = await compileAccessGates(this.user, collection)
+        const gates = await compileAccessGates(this.user, collection, {
+          actingAdmin: this.isAdmin
+        })
         const seen = new Set([...(await visibleIds(gates, ask))].map((s) => s.toUpperCase()))
         for (const id of ask) known.add(seen.has(id) ? id : `!${id}`)
       } catch {

@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
 import { restoreTrashRow, type TrashRow } from '../services/trash.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 /**
  * Trash bin.
@@ -32,8 +33,11 @@ export async function trashRoutes(app: FastifyInstance) {
     const page = Math.max(1, Number(req.query.page) || 1)
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50))
 
+    // A restricted administrator (User Scope, 2026-11-08) sees only their own
+    // deletions, like anyone: a trash snapshot cannot be checked against a scope.
+    const fullAdmin = await seesAllRecords(req.isAdmin, req.user)
     const q = db('nivaro_trash').orderBy('deleted_at', 'desc')
-    if (!req.isAdmin) q.where({ deleted_by: req.user!.id })
+    if (!fullAdmin) q.where({ deleted_by: req.user!.id })
     if (req.query.collection) q.where({ collection: req.query.collection })
     const days = Number(req.query.days)
     if (Number.isFinite(days) && days > 0) {
@@ -72,7 +76,7 @@ export async function trashRoutes(app: FastifyInstance) {
     // derive it from the current (filtered) page of rows. NOTE: never
     // .distinct(col).pluck(col) on mssql — nested-array trap.
     const colQ = db('nivaro_trash').distinct('collection')
-    if (!req.isAdmin) colQ.where({ deleted_by: req.user!.id })
+    if (!fullAdmin) colQ.where({ deleted_by: req.user!.id })
     const colRows = (await colQ) as Array<{ collection: string }>
     const collections = [...new Set(colRows.map((r) => String(r.collection)))].sort()
 
@@ -119,7 +123,7 @@ export async function trashRoutes(app: FastifyInstance) {
       if (!(await can(user, 'read', collection))) return reply.send({ data: null })
       const restricted =
         (user.api_key_scope_restrictions?.length ?? 0) > 0 || (user.api_key_scopes?.length ?? 0) > 0
-      const fullAdmin = !!req.isAdmin && !restricted
+      const fullAdmin = !restricted && (await seesAllRecords(req.isAdmin, user))
       const q = db('nivaro_trash')
         .where({ collection, item_id: item })
         .orderBy('deleted_at', 'desc')
@@ -163,6 +167,7 @@ export async function trashRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'Up to 100 entries per bulk restore' })
       }
 
+      const fullAdmin = await seesAllRecords(req.isAdmin, req.user)
       const results: Array<{
         id: number
         ok: boolean
@@ -179,7 +184,7 @@ export async function trashRoutes(app: FastifyInstance) {
           results.push({ id: trashId, ok: false, error: 'Trash entry not found' })
           continue
         }
-        if (!req.isAdmin && row.deleted_by !== req.user!.id) {
+        if (!fullAdmin && row.deleted_by !== req.user!.id) {
           results.push({ id: trashId, ok: false, error: 'Forbidden' })
           continue
         }
@@ -222,7 +227,7 @@ export async function trashRoutes(app: FastifyInstance) {
       const trashId = Number(req.params.id)
       const row = (await db('nivaro_trash').where({ id: trashId }).first()) as TrashRow | undefined
       if (!row) return reply.code(404).send({ error: 'Trash entry not found' })
-      if (!req.isAdmin && row.deleted_by !== req.user!.id) {
+      if (row.deleted_by !== req.user!.id && !(await seesAllRecords(req.isAdmin, req.user))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       try {
@@ -245,7 +250,7 @@ export async function trashRoutes(app: FastifyInstance) {
       const trashId = Number(req.params.id)
       const row = (await db('nivaro_trash').where({ id: trashId }).first()) as TrashRow | undefined
       if (!row) return reply.code(404).send({ error: 'Trash entry not found' })
-      if (!req.isAdmin && row.deleted_by !== req.user!.id) {
+      if (row.deleted_by !== req.user!.id && !(await seesAllRecords(req.isAdmin, req.user))) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
       const hold = await db('nivaro_legal_holds')

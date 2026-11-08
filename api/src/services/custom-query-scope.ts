@@ -90,7 +90,8 @@ function dimensionReaches(dim: ScopeDimension, sql: string): Promise<boolean> {
  * run raw SQL only when every dimension they are restricted on, and that
  * reaches a table the SQL reads, is carried by the query's scope_params.
  * Otherwise the raw SQL would return rows the items service hides from them.
- * Unrestricted people and administrators are never refused here. A failure
+ * Unrestricted people (administrators without a restrict scope included) are
+ * never refused here; a restricted administrator is, like anyone. A failure
  * to work out the tables refuses too — the restricted answer is "no rows",
  * never "all rows".
  */
@@ -136,7 +137,8 @@ function parseJson<T>(raw: string | null): T | null {
  * Custom queries are raw SQL — the items-service scope enforcement can never
  * reach inside them, so this is where the documented raw-SQL gap closes. Per
  * declared param:
- *   - admin, or no restriction on the dimension → untouched.
+ *   - no restriction on the dimension → untouched. Administrators are no
+ *     exception (decision 2026-11-08): their restrict scopes bind raw SQL too.
  *   - param omitted → the full allowance is injected (comma-joined, the
  *     STRING_SPLIT convention procs conventionally use).
  *   - param provided → intersected with the allowance. An empty intersection
@@ -150,10 +152,10 @@ export async function applyScopeParams(
   scopeParamsRaw: string | null,
   finalParams: Record<string, unknown>,
   userId: string | null | undefined,
-  isAdmin: boolean,
+  _isAdmin: boolean,
   query?: ScopeGateQuery
 ): Promise<void> {
-  if (isAdmin || !userId) return
+  if (!userId) return
   const declared = parseJson<Record<string, ScopeParamDef>>(scopeParamsRaw)
   const entries =
     declared && typeof declared === 'object'
@@ -163,7 +165,10 @@ export async function applyScopeParams(
   // declared params there is nothing to inject.
   if (entries.length === 0 && query?.sqlText == null) return
 
-  const [scopes, dimensions] = await Promise.all([getUserScopes(userId), listScopeDimensions()])
+  const scopes = await getUserScopes(userId)
+  // Nobody restricts this person: nothing to gate, nothing to inject.
+  if (!scopes.some((s) => s.mode === 'restrict' && s.values.length > 0)) return
+  const dimensions = await listScopeDimensions()
 
   if (query?.sqlText != null && !isNotScoped(declared)) {
     await assertQueryCoversScopes(

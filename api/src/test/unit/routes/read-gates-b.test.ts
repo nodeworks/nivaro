@@ -1,6 +1,15 @@
 import knex from 'knex'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../../../services/user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false),
+  restrictScopesFor: vi.fn(async () => []),
+  seesAllRecords: vi.fn(async (isAdmin: unknown) => !!isAdmin)
+}))
+
 // Army v3 (fix-reads-b): the read gates added to share links' neighbours —
 // notification subscriptions, staged imports, report snapshots, anomaly log,
 // record templates, page widgets, trees, team pages, direct notices, presence.

@@ -7,7 +7,8 @@
  * could not even see (row filters, User Scopes, tree permissions).
  *
  * The rule, everywhere:
- *   1. Admins pass.
+ *   1. Admins pass — unless a restrict-mode User Scope binds them (decision
+ *      2026-11-08): then the record must be inside it (rule 5, a 404 outside).
  *   2. An addendum instance is judged on its PARENT record (that is what the
  *      record form shows and what every pipeline rule reads).
  *   3. Other system collections are admin-only.
@@ -37,6 +38,8 @@ export interface GuardDeps {
   /** updateOne's own row-level gates: update row filter + tree permission. */
   updatable: (user: User, collection: string, id: string) => Promise<boolean>
   subject: (collection: string, item: string) => Promise<{ collection: string; itemId: string }>
+  /** Does a restrict-mode User Scope (own or API key) bind this person? */
+  restricted?: (user: User) => Promise<boolean>
 }
 
 async function defaultDeps(): Promise<GuardDeps> {
@@ -66,7 +69,8 @@ async function defaultDeps(): Promise<GuardDeps> {
         return null
       }
     },
-    subject: (c, i) => resolvePipelineSubject(c, i)
+    subject: (c, i) => resolvePipelineSubject(c, i),
+    restricted: async (u) => (await import('./user-scopes.js')).hasRestrictScope(u)
   }
 }
 
@@ -85,17 +89,30 @@ export async function assertInstanceAccess(
   deps?: GuardDeps,
   action: 'read' | 'update' = 'update'
 ): Promise<void> {
-  if (isAdmin) return
+  if (isAdmin && !user) return
   if (!user) throw new InstanceAccessError(403, FORBIDDEN)
   const d = deps ?? (await defaultDeps())
+  if (isAdmin && !(await (d.restricted ?? (async () => false))(user))) return
   let target = { collection, itemId: String(item) }
   if (collection === ADDENDUM_COLLECTION) {
     target = await d.subject(collection, String(item))
     // An addendum with no resolvable parent has nothing a non-admin can own.
-    if (target.collection === ADDENDUM_COLLECTION) throw new InstanceAccessError(404, NOT_FOUND)
+    if (target.collection === ADDENDUM_COLLECTION) {
+      if (isAdmin) return
+      throw new InstanceAccessError(404, NOT_FOUND)
+    }
   }
-  if (target.collection.startsWith('nivaro_') || target.collection.startsWith('directus_'))
+  if (target.collection.startsWith('nivaro_') || target.collection.startsWith('directus_')) {
+    if (isAdmin) return
     throw new InstanceAccessError(403, FORBIDDEN)
+  }
+  if (isAdmin) {
+    // A restricted administrator: no policy or row-filter checks, only the
+    // record must be inside their User Scope (readOne applies it).
+    if ((await d.readOne(user, target.collection, target.itemId)) == null)
+      throw new InstanceAccessError(404, NOT_FOUND)
+    return
+  }
   if (!(await d.can(user, action, target.collection))) throw new InstanceAccessError(403, FORBIDDEN)
   const row = await d.readOne(user, target.collection, target.itemId)
   if (row == null) throw new InstanceAccessError(404, NOT_FOUND)

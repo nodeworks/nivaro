@@ -91,19 +91,17 @@ export async function myRecordSet(
     add(raw, r.collection, r.item)
   }
 
-  // Judge every record as the person; an admin's set is taken as it stands.
+  // Judge every record as the person. An admin skips policy + row filters but
+  // not their own restrict User Scopes (no restriction = taken as it stands).
   const set: RecordSet = new Map()
   for (const [collection, ids] of raw) {
     const list = [...ids]
     let ok: Set<string>
-    if (opts.isAdmin) ok = new Set(list)
-    else {
-      try {
-        const gates = await compileAccessGates(user, collection)
-        ok = await visibleIds(gates, list)
-      } catch {
-        ok = new Set()
-      }
+    try {
+      const gates = await compileAccessGates(user, collection, { actingAdmin: opts.isAdmin })
+      ok = await visibleIds(gates, list)
+    } catch {
+      ok = new Set()
     }
     if (ok.size) set.set(collection, ok)
   }

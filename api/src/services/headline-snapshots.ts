@@ -422,14 +422,14 @@ function isoDay(v: unknown): string {
 
 /**
  * The zones a viewer may read headline figures for: null = unrestricted
- * (admins, and anyone without a restriction on the dimension whose target is
- * the configured zone collection), else the zone-field values of the zones
- * they are restricted to. The figures were written by a cron with no user, so
- * this is the only scope check they get.
+ * (anyone without a restriction on the dimension whose target is the
+ * configured zone collection), else the zone-field values of the zones they
+ * are restricted to. The figures were written by a cron with no user, so this
+ * is the only scope check they get.
  *
- * An admin-owned API key with `scope_restrictions` is held to them, the same
- * rule getUserScopeEnforcement applies: the key's restrictions bind, the
- * admin's own (empty) scopes do not. With no zone configured, or no scope
+ * Own restrict scopes bind administrators too (2026-11-08), and an API key's
+ * `scope_restrictions` apply on top — the same rule getUserScopeEnforcement
+ * applies. With no zone configured, or no scope
  * dimension targeting the zone collection, anyone carrying a restriction reads
  * nothing — their restriction cannot be mapped to zones, and handing them the
  * all-zones row would widen their scope on a config gap.
@@ -440,18 +440,15 @@ export async function headlineZoneAllowance(
   user: User,
   isAdmin: boolean
 ): Promise<Set<string> | null> {
-  const keyRestricts = (user.api_key_scope_restrictions ?? []).filter((r) => r.values.length > 0)
-  if (isAdmin && keyRestricts.length === 0) return null
+  // Restrict scopes bind administrators too (2026-11-08): an admin is
+  // unrestricted only while none binds them (no settings read on that path).
+  const { restrictScopesFor, listScopeDimensions } = await import('./user-scopes.js')
+  const all = await restrictScopesFor(user)
+  if (isAdmin && all.length === 0) return null
   const settings = await loadHeadlineSettings({ strict: true })
-  const { getUserScopes, listScopeDimensions } = await import('./user-scopes.js')
-  const own = isAdmin
-    ? []
-    : (await getUserScopes(String(user.id))).filter(
-        (s) => s.mode === 'restrict' && s.values.length > 0
-      )
   const dims = await listScopeDimensions()
   const known = new Set(dims.map((d) => d.name))
-  const restricts = [...own, ...keyRestricts].filter((r) => known.has(r.dimension))
+  const restricts = all.filter((r) => known.has(r.dimension))
   if (restricts.length === 0) return null
   if (!settings?.zone_collection || !settings.zone_field) return new Set()
   const zoneDims = new Set(

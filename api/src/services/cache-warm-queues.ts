@@ -134,7 +134,8 @@ export function firstPageRequest(
 
 /** Access signature for a queue read: admin, else role + restrict scopes. */
 export function queueAccessSignature(v: WarmViewer): string {
-  if (v.isAdmin) return 'admin'
+  // v.signature is 'admin' or 'admin|<restricts>' for administrators.
+  if (v.isAdmin) return v.signature || 'admin'
   return `role:${String(v.role ?? '').toLowerCase()}|${v.signature}`
 }
 

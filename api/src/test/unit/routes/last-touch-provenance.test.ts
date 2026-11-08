@@ -2,6 +2,15 @@ import Fastify from 'fastify'
 import knexFactory from 'knex'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../../../services/user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false),
+  restrictScopesFor: vi.fn(async () => []),
+  seesAllRecords: vi.fn(async (isAdmin: unknown) => !!isAdmin)
+}))
+
 // army6 M40: /api/provenance/forecasts/7917869 answered in 13.7–16.8 s and kept
 // running after the page was left. Every statement now rides one 3 s budget and
 // is cancelled on the server (bounded-sql) when it runs out.

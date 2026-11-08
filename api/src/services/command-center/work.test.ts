@@ -8,6 +8,12 @@ vi.mock('../../db/index.js', () => ({
   })
 }))
 vi.mock('../../lib/column-probe.js', () => ({ hasColumn: async () => false }))
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false)
+}))
 
 const regionSets = new Map<string, Set<string> | null>()
 vi.mock('./regions.js', () => ({

@@ -39,7 +39,8 @@ export async function recordVisibleTo(
   }
 }
 
-/** Deleted record: its history is still an unrestricted admin's to read. An
+/** Deleted record: its history is still an unrestricted admin's to read (no
+ *  API-key or User Scope restriction). An
  *  existing row readOne hid stays hidden. */
 async function adminDeletedFallback(
   req: FastifyRequest,
@@ -47,9 +48,14 @@ async function adminDeletedFallback(
   item: string | number
 ): Promise<boolean> {
   const user = req.user
+  // A restrict User Scope (own or the key's) binds an administrator too
+  // (2026-11-08): a deleted record's scope can no longer be judged, so a
+  // restricted admin is refused like anyone.
   const restricted =
     (user?.api_key_scope_restrictions?.length ?? 0) > 0 || (user?.api_key_scopes?.length ?? 0) > 0
   if (!req.isAdmin || restricted) return false
+  const { hasRestrictScope } = await import('./user-scopes.js')
+  if (user && (await hasRestrictScope(user))) return false
   const exists = await db(collection)
     .where({ id: String(item) })
     .first('id')

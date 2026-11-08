@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../../../services/user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false),
+  restrictScopesFor: vi.fn(async () => []),
+  seesAllRecords: vi.fn(async (isAdmin: unknown) => !!isAdmin)
+}))
+
 // A record's attachment follows the record (army 2026-10-25): reading it needs one
 // referencing record readable as the caller, changing it needs every one updatable and
 // not edit-locked. A file no FK-linked record grants follows where it is used without a

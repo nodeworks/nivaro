@@ -55,16 +55,21 @@ export async function narrowingFacts(
   const hit = cache.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.facts
   let facts: NarrowingFacts | null = null
-  if (!(await isAdminRole(user.role))) {
-    const gates = await compileAccessGates(user, collection)
-    if (gates.permitted) {
+  // Admins skip policy, row filters and field lists — never their own
+  // restrict User Scopes (2026-11-08), so those are named for them too.
+  const admin = await isAdminRole(user.role)
+  {
+    const gates = await compileAccessGates(user, collection, { actingAdmin: admin })
+    if (gates.permitted && !gates.bypass) {
       const scopes = await Promise.all(
         gates.scopes.map(async (g) => ({
           label: g.label,
           values: await labelValues(g.target, g.displayField, g.values)
         }))
       )
-      const fields = await getAllowedFields(user, 'read', collection).catch(() => null)
+      const fields = admin
+        ? null
+        : await getAllowedFields(user, 'read', collection).catch(() => null)
       const f: NarrowingFacts = {
         rowFilter: !!gates.rowFilter,
         scopes,

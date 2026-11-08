@@ -235,10 +235,11 @@ async function visibleInstances(
   collection: string,
   instances: WorkflowInstance[]
 ): Promise<WorkflowInstance[]> {
-  if (ctx.isAdmin) return instances
-  if (/^(nivaro_|directus_)/i.test(collection)) return []
+  if (/^(nivaro_|directus_)/i.test(collection)) return ctx.isAdmin ? instances : []
   if (instances.length === 0) return instances
-  const gates = await compileAccessGates(user, collection)
+  // Admins skip policy + row filters, never their own restrict User Scopes.
+  const gates = await compileAccessGates(user, collection, { actingAdmin: !!ctx.isAdmin })
+  if (gates.bypass) return instances
   const seen = await visibleIds(
     gates,
     instances.map((i) => String(i.item))

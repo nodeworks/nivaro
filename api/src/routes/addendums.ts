@@ -8,6 +8,7 @@ import { can } from '../services/permissions.js'
 import { syncAddendumInQueues } from '../services/queue-materialization.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceAddendumChange } from '../services/record-events.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -136,11 +137,11 @@ async function parentStillEditable(
   req: import('fastify').FastifyRequest,
   existing: Record<string, unknown>
 ): Promise<boolean> {
-  if (req.isAdmin) return true
+  if (await seesAllRecords(req.isAdmin, req.user)) return true
   const collection = String(existing.parent_collection)
   return (
     (await parentReadable(req, collection, String(existing.parent_id))) &&
-    (await can(req.user!, 'update', collection))
+    (req.isAdmin || (await can(req.user!, 'update', collection)))
   )
 }
 

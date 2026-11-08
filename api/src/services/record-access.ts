@@ -76,20 +76,32 @@ export async function compileAccessGates(
   const base: AccessGates = {
     collection,
     user,
-    bypass: !!opts.actingAdmin,
+    bypass: false,
     permitted: true,
     rowFilter: null,
     scopes: [],
     strict: null
   }
-  if (base.bypass) return base
-  base.permitted = await can(user, 'read', collection)
-  if (!base.permitted) return base
-  base.rowFilter = (await getRowFilter(user, 'read', collection)) ?? null
+  // An acting administrator skips the role policy and row filters, but NOT
+  // their own restrict-mode User Scopes (decision 2026-11-08): those bind
+  // admins exactly like anyone else. No restriction = the old bypass.
+  if (opts.actingAdmin && /^(nivaro_|directus_)/i.test(collection)) {
+    // System tables answer to no User Scope (getUserScopeEnforcement's rule).
+    base.bypass = true
+    return base
+  }
+  if (!opts.actingAdmin) {
+    base.permitted = await can(user, 'read', collection)
+    if (!base.permitted) return base
+    base.rowFilter = (await getRowFilter(user, 'read', collection)) ?? null
+  }
   const restricts = (await getUserScopes(user.id)).filter(
     (s) => s.mode === 'restrict' && s.values.length > 0
   )
-  if (restricts.length === 0) return base
+  if (restricts.length === 0) {
+    base.bypass = !!opts.actingAdmin
+    return base
+  }
   const routed = await routeScopeGates(restricts, await listScopeDimensions(), collection)
   base.scopes = routed.scopes
   base.strict = routed.strict

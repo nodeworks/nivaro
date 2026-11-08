@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
-vi.mock('../../../services/user-scopes.js', () => ({
-  listScopeDimensions: vi.fn(async () => []),
-  getUserScopes: vi.fn(async () => [])
-}))
+vi.mock('../../../services/user-scopes.js', () => {
+  const getUserScopes = vi.fn(async (_id?: string) => [] as Array<Record<string, unknown>>)
+  return {
+    listScopeDimensions: vi.fn(async () => []),
+    getUserScopes,
+    // The real rule over the mocked rows: own restrict rows (admins too) + key restrictions.
+    restrictScopesFor: vi.fn(
+      async (u: { id: string; api_key_scope_restrictions?: Array<{ values: unknown[] }> }) => [
+        ...(await getUserScopes(String(u.id))).filter(
+          (s) => s.mode === 'restrict' && (s.values as unknown[]).length > 0
+        ),
+        ...(u.api_key_scope_restrictions ?? []).filter((r) => r.values.length > 0)
+      ]
+    )
+  }
+})
 
 import { db } from '../../../db/index.js'
 import {
@@ -327,9 +339,18 @@ const AREA_DIM = {
 describe('headlineZoneAllowance', () => {
   const user = { id: 'U1', role: 'R' } as never
 
-  it('admins are unrestricted', async () => {
+  it('admins with no restriction are unrestricted', async () => {
     allowanceDb([])
     expect(await headlineZoneAllowance(user, true)).toBeNull()
+  })
+
+  it('an admin with a restriction is held to it (2026-11-08)', async () => {
+    allowanceDb([{ label: 'Zone 1' }])
+    vi.mocked(listScopeDimensions).mockResolvedValueOnce([AREA_DIM] as never)
+    vi.mocked(getUserScopes).mockResolvedValueOnce([
+      { dimension: 'area', mode: 'restrict', values: ['1'] }
+    ] as never)
+    expect(await headlineZoneAllowance(user, true)).toEqual(new Set(['Zone 1']))
   })
 
   it('a person with no restriction on the zone dimension is unrestricted', async () => {
@@ -384,8 +405,6 @@ describe('headlineZoneAllowance', () => {
       api_key_scope_restrictions: [{ dimension: 'area', values: ['1'] }]
     } as never
     expect(await headlineZoneAllowance(keyUser, true)).toEqual(new Set(['Zone 1']))
-    // The admin's own (empty) scopes are not what binds the key.
-    expect(getUserScopes).not.toHaveBeenCalled()
   })
 
   it('an admin-owned API key restricted on another dimension reads nothing when no zone is configured', async () => {

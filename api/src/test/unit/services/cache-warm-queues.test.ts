@@ -47,7 +47,7 @@ const parse = (q: Record<string, string>) => {
 const V = (id: string, role: string | null, signature = '', isAdmin = false): WarmViewer => ({
   id,
   role,
-  signature: isAdmin ? 'admin' : signature,
+  signature: isAdmin ? signature || 'admin' : signature,
   isAdmin
 })
 const use = (queueId: string, query: string, user: string, n: number): QueueUsageRow => ({
@@ -110,6 +110,10 @@ describe('firstPageRequest', () => {
 describe('queueAccessSignature', () => {
   it('is admin for administrators, else role + restrict scopes', () => {
     expect(queueAccessSignature(V('a', 'R-ADMIN', '', true))).toBe('admin')
+    // A restricted admin reads a narrower queue (2026-11-08): its own group.
+    expect(queueAccessSignature(V('d', 'R-ADMIN', 'admin|region=["N"]', true))).toBe(
+      'admin|region=["N"]'
+    )
     expect(queueAccessSignature(V('b', 'R1', 'region=["N"]'))).toBe('role:r1|region=["N"]')
     expect(queueAccessSignature(V('c', null, ''))).toBe('role:|')
   })

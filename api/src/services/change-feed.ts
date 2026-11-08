@@ -213,10 +213,11 @@ async function deletesListable(
   admin: boolean,
   keyNarrowed: boolean
 ): Promise<boolean> {
-  if (admin) return true
   if (keyNarrowed && (user.api_key_scope_restrictions?.length ?? 0) > 0) return false
   try {
-    const g = await compileAccessGates(user, collection)
+    // An admin's own restrict scopes count like anyone's (bypass = none apply).
+    const g = await compileAccessGates(user, collection, { actingAdmin: admin })
+    if (g.bypass) return true
     return g.permitted && !g.rowFilter && g.scopes.length === 0 && !g.strict
   } catch {
     return false

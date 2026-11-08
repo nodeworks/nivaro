@@ -127,7 +127,22 @@ export async function summarizePersonAccess(
   const admin = await isAdminRole(user.role)
   const head = { id: String(user.id), name, role: roleRow?.name ?? null, admin }
   if (admin) {
-    const s = `${name} has an administrator role — they see and can change every record.`
+    // Restrict User Scopes bind administrators too (2026-11-08) — say so.
+    const { restrictScopesFor, resolveScopeLabelsForUsers } = await import('./user-scopes.js')
+    const restricts = await restrictScopesFor(user).catch(() => [])
+    let limit = ''
+    if (restricts.length > 0) {
+      const dims = [...new Set(restricts.map((r) => r.dimension))]
+      const labels = await resolveScopeLabelsForUsers([String(user.id)], dims).catch(
+        () => new Map<string, Map<string, string[]>>()
+      )
+      const mine = labels.get(String(user.id))
+      const names = [...new Set(dims.flatMap((d) => mine?.get(d) ?? []))]
+      limit = names.length ? names.join(', ') : dims.join(', ')
+    }
+    const s = limit
+      ? `${name} has an administrator role — they can change every record they see, but their access filter limits them to ${limit}.`
+      : `${name} has an administrator role — they see and can change every record.`
     return {
       user: head,
       collections: [],

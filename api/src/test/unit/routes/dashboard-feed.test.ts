@@ -25,14 +25,28 @@ vi.mock('../../../services/workflow-conditions.js', () => ({
 vi.mock('../../../services/transition-requirements.js', () => ({
   evaluateTransitionRequirements: vi.fn(async () => null)
 }))
-vi.mock('../../../services/user-scopes.js', () => ({
-  listScopeDimensions: vi.fn(async () => []),
-  getUserScopes: vi.fn(async () => []),
-  scopeHopsFor: vi.fn(async () => []),
-  getUserScopeEnforcement: vi.fn(async () => ({ filters: [], deny: false })),
-  applyScopeEnforcement: vi.fn(),
-  resolveRecordDimensionIds: vi.fn(async () => new Map())
-}))
+vi.mock('../../../services/user-scopes.js', () => {
+  const getUserScopes = vi.fn(async (_id?: string) => [] as Array<Record<string, unknown>>)
+  // The real restrictScopesFor over the mocked rows: own restrict rows + key restrictions.
+  const restrictScopesFor = vi.fn(
+    async (u: { id: string; api_key_scope_restrictions?: Array<{ values: unknown[] }> }) => [
+      ...(await getUserScopes(String(u.id))).filter(
+        (s) => s.mode === 'restrict' && (s.values as unknown[]).length > 0
+      ),
+      ...(u.api_key_scope_restrictions ?? []).filter((r) => r.values.length > 0)
+    ]
+  )
+  return {
+    listScopeDimensions: vi.fn(async () => []),
+    getUserScopes,
+    restrictScopesFor,
+    hasRestrictScope: vi.fn(async (u: never) => (await restrictScopesFor(u)).length > 0),
+    scopeHopsFor: vi.fn(async () => []),
+    getUserScopeEnforcement: vi.fn(async () => ({ filters: [], deny: false })),
+    applyScopeEnforcement: vi.fn(),
+    resolveRecordDimensionIds: vi.fn(async () => new Map())
+  }
+})
 vi.mock('../../../routes/sla.js', () => ({ computeStatusBatch: vi.fn(async () => ({})) }))
 vi.mock('../../../services/app-links.js', () => ({
   recordLink: vi.fn(async (c: string, id: string) => `/records/${c}/${id}`)

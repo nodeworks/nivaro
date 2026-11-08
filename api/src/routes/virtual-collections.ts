@@ -142,19 +142,17 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
     // The SQL runs as the service account, so it answers only to people the
     // role lets read the collection, never to a User-Scoped person (raw SQL
     // cannot apply their scope), and only with the columns their policy allows.
+    // A restrict scope refuses administrators too (2026-11-08): the virtual SQL
+    // cannot be narrowed to their scope, so it must not answer them at all.
     let allowed: string[] | null = null
-    if (!req.isAdmin) {
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
-      }
-      const scoped =
-        (req.user!.api_key_scope_restrictions?.length ?? 0) > 0 ||
-        (await getUserScopes(req.user!.id)).some(
-          (s) => s.mode === 'restrict' && s.values.length > 0
-        )
-      if (scoped) return reply.code(403).send({ error: 'Forbidden' })
-      allowed = await getAllowedFields(req.user!, 'read', collection)
+    if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
     }
+    const scoped =
+      (req.user!.api_key_scope_restrictions?.length ?? 0) > 0 ||
+      (await getUserScopes(req.user!.id)).some((s) => s.mode === 'restrict' && s.values.length > 0)
+    if (scoped) return reply.code(403).send({ error: 'Forbidden' })
+    if (!req.isAdmin) allowed = await getAllowedFields(req.user!, 'read', collection)
 
     try {
       const wrapped = `SELECT TOP 100 * FROM (${col.virtual_sql}) _v`

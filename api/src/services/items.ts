@@ -483,7 +483,10 @@ export async function assertLinkedFilesReadable(
   req: FastifyRequest | undefined,
   previous?: Record<string, unknown> | null
 ): Promise<void> {
-  if (!req?.user || req.isAdmin || isSystemCollection(collection)) return
+  if (!req?.user || isSystemCollection(collection)) return
+  // An admin is exempt only while no restrict User Scope binds them (2026-11-08).
+  const { seesAllRecords } = await import('./user-scopes.js')
+  if (await seesAllRecords(req.isAdmin, req.user)) return
   const { getFileRefColumns } = await import('./file-usage.js')
   const sites = await getFileRefColumns().catch(() => [])
   const ids: Array<{ field: string; id: string }> = []
@@ -3457,8 +3460,9 @@ async function applyUserScopes(q: QB, collection: string, user: User): Promise<v
 /**
  * Writes answer to the same User Scopes reads do: an update or delete of a
  * record outside the caller's scope (another Zone) is a not-found, never a
- * silent success. `restricts` false = no restriction for this person (admins,
- * unscoped people), so the gate costs no query.
+ * silent success. `restricts` false = no restriction for this person (unscoped
+ * people, administrators included — a restricted admin is held to it too), so
+ * the gate costs no query.
  */
 async function writeScopeFor(
   user: User,

@@ -7,6 +7,7 @@ import { getLabels } from '../services/queues.js'
 import { withReadGate } from '../services/read-gate.js'
 import { parseRollupFormula } from '../services/rollups.js'
 import { visibleRecordIds } from '../services/socket-access.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 /**
  * Number lineage — "why is this number what it is".
@@ -81,7 +82,8 @@ export async function lineageRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     const { numberTrail } = await import('../services/number-trail.js')
-    const visible = req.isAdmin
+    // A restricted administrator is judged like anyone (User Scopes, 2026-11-08).
+    const visible = (await seesAllRecords(req.isAdmin, req.user))
       ? undefined
       : async (col: string, ids: string[]) =>
           new Set(await visibleRecordIds(req.user!, col, ids, false))

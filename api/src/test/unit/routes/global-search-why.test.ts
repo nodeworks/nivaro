@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // admin and as the named person, explains hidden samples through the person's
 // access gates, and names field-only matches.
 
+const targetRestricted = vi.hoisted(() => ({ v: false }))
+vi.mock('../../../services/user-scopes.js', () => ({
+  hasRestrictScope: vi.fn(async () => targetRestricted.v)
+}))
+
 vi.mock('../../../middleware/authenticate.js', () => {
   const authenticate = vi.fn(
     async (req: {
@@ -230,6 +235,16 @@ describe('GET /global-search/why', () => {
     expect(data.user.is_admin).toBe(true)
     expect(data.totals).toEqual({ admin: 2, user: 2, hidden: 0 })
     expect(countCalls).toHaveLength(1)
+  })
+
+  it('a restricted admin target is counted as themselves (2026-11-08)', async () => {
+    targetIsAdmin.v = true
+    targetRestricted.v = true
+    counts.admin = [{ collection: 'units', display_name: 'Units', count: 2 }]
+    const app = await buildApp()
+    await app.inject({ url: url('pump'), headers: { 'x-test-user': 'admin' } })
+    expect(countCalls).toHaveLength(2)
+    targetRestricted.v = false
   })
 })
 

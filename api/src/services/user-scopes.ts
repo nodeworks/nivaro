@@ -622,6 +622,46 @@ export async function isAdminRole(roleId: string | null | undefined): Promise<bo
   return admin
 }
 
+/**
+ * The restrict-mode allowances that bind this person: their own
+ * nivaro_user_scopes restrict rows (administrators included) plus an API
+ * key's scope restrictions. Empty = nothing narrows them. One cached read.
+ */
+export async function restrictScopesFor(
+  user: Pick<User, 'id' | 'api_key_scope_restrictions'>
+): Promise<Array<{ dimension: string; values: Array<string | number> }>> {
+  const own = user.id
+    ? (await getUserScopes(String(user.id))).filter(
+        (s) => s.mode === 'restrict' && s.values.length > 0
+      )
+    : []
+  const key = (user.api_key_scope_restrictions ?? []).filter((r) => r.values.length > 0)
+  return [...own, ...key]
+}
+
+/** Does any restrict-mode User Scope (own or API key) narrow this person? */
+export async function hasRestrictScope(
+  user: Pick<User, 'id' | 'api_key_scope_restrictions'>
+): Promise<boolean> {
+  return (await restrictScopesFor(user)).length > 0
+}
+
+/**
+ * May a record-visibility check be skipped for this caller? Only for an
+ * administrator whom no restrict-mode User Scope (own or API key) narrows.
+ * A restricted administrator goes through the record read like anyone — the
+ * items service and record-access skip their policy and row filters, never
+ * their scopes. Replaces the bare `if (req.isAdmin) return true` shortcut.
+ */
+export async function seesAllRecords(
+  isAdmin: boolean | null | undefined,
+  user: Pick<User, 'id' | 'api_key_scope_restrictions'> | null | undefined
+): Promise<boolean> {
+  if (!isAdmin) return false
+  if (!user) return true
+  return !(await hasRestrictScope(user))
+}
+
 export function bustRoleAdminCache(): void {
   roleAdminCache.clear()
 }
@@ -671,15 +711,15 @@ async function buildUserScopeEnforcement(
 ): Promise<ScopeEnforcement> {
   const none: ScopeEnforcement = { filters: [], deny: false }
   if (collection.startsWith('nivaro_') || collection.startsWith('directus_')) return none
-  // API-key scope restrictions (migration 208) apply EVEN for an admin-owned
-  // key — restricting a key is the point of setting them, and integration
-  // keys are almost always minted by admins.
+  // Restrict-mode User Scopes bind EVERYONE who carries them, administrators
+  // included (decision 2026-11-08): an admin limited to Zones 1-3 sees Zones
+  // 1-3 in lists, records, queues, pickers and search, like anyone else.
+  // Admins keep every other power (no policy checks, no row filters). An admin
+  // with no restrict rows costs nothing beyond the cached getUserScopes read.
+  // API-key scope restrictions (migration 208) apply on top, for an
+  // admin-owned key too — restricting a key is the point of setting them.
   const keyRestrictions = user.api_key_scope_restrictions ?? []
-  if (keyRestrictions.length === 0 && (await isAdminRole(user.role))) return none
-  const scopes =
-    keyRestrictions.length > 0 && (await isAdminRole(user.role))
-      ? [] // admin's own (empty) scopes; only the key's restrictions apply
-      : await getUserScopes(user.id)
+  const scopes = user.id ? await getUserScopes(user.id) : []
   const restricts: Array<{ dimension: string; values: Array<string | number> }> = [
     ...scopes.filter((s) => s.mode === 'restrict' && s.values.length > 0),
     ...keyRestrictions.filter((r) => r.values.length > 0)

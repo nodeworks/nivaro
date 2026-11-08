@@ -10,6 +10,7 @@ import {
   readOne
 } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 function parseJsonSafe(val: unknown): unknown {
   if (typeof val !== 'string') return val
@@ -60,7 +61,7 @@ async function subRowGate(
     const refused = await recordWriteRefusal(req, collection, itemId)
     return refused ? refuse(refused.status, refused.body) : true
   }
-  if (req.isAdmin) return true
+  if (await seesAllRecords(req.isAdmin, user)) return true
   try {
     const row = await readOne(user, collection, itemId, req.workspaceId ?? undefined, ['id'])
     return row == null ? refuse(404, { error: 'Not found' }) : true

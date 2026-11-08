@@ -9,6 +9,7 @@ import {
   explainIds,
   visibleIds
 } from '../services/record-access.js'
+import { hasRestrictScope } from '../services/user-scopes.js'
 import { getUser } from '../services/users.js'
 import type { User } from '../types.js'
 import { countMatches, searchCollectionPage } from './global-search.js'
@@ -155,13 +156,16 @@ export async function whyCantTheyFind(opts: {
   collections?: string[]
 }): Promise<{ totals: WhyAnswer['totals']; collections: WhyRow[] }> {
   const { admin, target, targetIsAdmin, q } = opts
+  // A restrict User Scope binds an administrator too (2026-11-08): only an
+  // admin with none sees everything the requesting admin does.
+  const targetSeesAll = targetIsAdmin && !(await hasRestrictScope(target).catch(() => true))
   const labelsOnly = !!opts.labelsOnly
   const all = await allCollections()
   const scope = opts.collections?.length ? all.filter((c) => opts.collections!.includes(c)) : all
 
   const adminCounts = await countMatches(admin, all, q, scope, labelsOnly)
   const hitCollections = adminCounts.map((r) => r.collection)
-  const userCounts = targetIsAdmin
+  const userCounts = targetSeesAll
     ? adminCounts
     : hitCollections.length
       ? await countMatches(target, hitCollections, q, hitCollections, labelsOnly)
@@ -180,7 +184,7 @@ export async function whyCantTheyFind(opts: {
       reasons: [],
       samples: []
     }
-    if (row.hidden > 0 && !targetIsAdmin) await explainRow(row, admin, target, q, labelsOnly)
+    if (row.hidden > 0 && !targetSeesAll) await explainRow(row, admin, target, q, labelsOnly)
     rows.push(row)
   }
   rows.sort((x, y) => y.hidden - x.hidden || y.admin_count - x.admin_count)

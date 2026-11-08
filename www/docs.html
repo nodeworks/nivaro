@@ -2332,7 +2332,7 @@ const { data: tx } = await nivaro.request(
             <li>Every new queue is seeded with one owned_by_me source, so a useful personal worklist exists with zero configuration.</li>
           </ul>
           <h3 class="doc-h3">Who sees which rows</h3>
-          <p class="doc-p">A queue lists only records its viewer may read. The role's read permission, its row filter and the viewer's user scopes apply to every collection source, on live queues and on cached ones. Counts and state totals follow the same rows. Two people opening one shared queue may therefore see different totals. Administrators see every row.</p>
+          <p class="doc-p">A queue lists only records its viewer may read. The role's read permission, its row filter and the viewer's user scopes apply to every collection source, on live queues and on cached ones. Counts and state totals follow the same rows. Two people opening one shared queue may therefore see different totals. Administrators skip the role's permission and row filter but not their own user scopes: an administrator limited to a zone sees that zone's rows, one without a restriction sees every row.</p>
           <h3 class="doc-h3">Configuring a queue</h3>
           <p class="doc-p">Open Queues in the Automation nav section. Click New Queue, then add sources — for a collection source, pick the target collection and (optionally) restrict to specific state keys. Toggle "Shared with everyone" to make a queue visible to all users rather than just its owner.</p>
           <h3 class="doc-h3">Display settings</h3>
@@ -14646,10 +14646,11 @@ Authorization: Bearer &lt;nvm_-token&gt;
           </ul>
           <h3 class="doc-h3">Enforcement and seeding</h3>
           <ul class="doc-ul">
-            <li>Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters. Admins bypass.</li>
+            <li>Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters.</li>
             <li>Defaults are never enforced — they pre-select filter chips and quick filters (collection browser, reports) the first time a surface loads; restricted values also narrow the visible filter options.</li>
             <li>Raw-SQL surfaces (custom queries, stored procedures, query-type report widgets, queue caches) cannot be dimension-filtered — treat those as curated, not scoped.</li>
           </ul>
+          <p class="doc-p">Restrictions apply to administrators too. An administrator with a RESTRICTED scope sees only the rows inside it — in collection lists, single records, queues and worklists, pickers, search, dashboards and reports, exports, record history, comments and tasks on records, files attached to records, and custom queries that declare scope parameters — exactly like anyone else, and an update or delete of a record outside it is a not-found. Everything else an administrator has stays: no role policy checks, no role row filters, system tables and the admin consoles. An administrator with no restriction sees every record, as before. Remove the restriction on their Scopes card to give an administrator every zone back.</p>
           <h3 class="doc-h3">API</h3>
           <pre class="doc-pre"><code>GET  /api/scope-dimensions                  # registry (authenticated)
 POST/PATCH/DELETE /api/scope-dimensions[/:id]  # admin

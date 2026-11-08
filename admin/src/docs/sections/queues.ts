@@ -47,7 +47,7 @@ export const queuesGuide: DocSection = {
     { type: 'h3', text: 'Who sees which rows' },
     {
       type: 'p',
-      text: "A queue lists only records its viewer may read. The role's read permission, its row filter and the viewer's user scopes apply to every collection source, on live queues and on cached ones. Counts and state totals follow the same rows. Two people opening one shared queue may therefore see different totals. Administrators see every row."
+      text: "A queue lists only records its viewer may read. The role's read permission, its row filter and the viewer's user scopes apply to every collection source, on live queues and on cached ones. Counts and state totals follow the same rows. Two people opening one shared queue may therefore see different totals. Administrators skip the role's permission and row filter but not their own user scopes: an administrator limited to a zone sees that zone's rows, one without a restriction sees every row."
     },
     { type: 'h3', text: 'Configuring a queue' },
     {

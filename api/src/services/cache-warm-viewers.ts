@@ -116,12 +116,15 @@ export function scopeSignature(
   isAdmin: boolean,
   rows: Array<{ dimension: string; mode: string; values: unknown[] }>
 ): string {
-  if (isAdmin) return 'admin'
-  return rows
+  const restricts = rows
     .filter((r) => r.mode === 'restrict' && Array.isArray(r.values) && r.values.length > 0)
     .map((r) => `${r.dimension}=${JSON.stringify(r.values.map(String).sort())}`)
     .sort()
     .join('|')
+  // Restrict scopes bind administrators too (2026-11-08): a restricted admin
+  // reads a different answer from an unrestricted one.
+  if (isAdmin) return restricts ? `admin|${restricts}` : 'admin'
+  return restricts
 }
 
 function declaresScope(raw: string | null | undefined): boolean {

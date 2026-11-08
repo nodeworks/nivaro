@@ -76,9 +76,15 @@ describe('custom-query scope gate', () => {
     expect(params.divisions).toBe('Zone 1')
   })
 
-  it('never refuses administrators or unrestricted people', async () => {
-    await applyScopeParams(null, {}, 'admin', true, { sqlText: sql('SELECT * FROM workflows') })
+  it('refuses a restricted administrator like anyone (2026-11-08)', async () => {
+    await expect(
+      applyScopeParams(null, {}, 'admin', true, { sqlText: sql('SELECT * FROM workflows') })
+    ).rejects.toMatchObject({ code: 'QUERY_NOT_SCOPED' })
+  })
+
+  it('never refuses unrestricted people, administrators included', async () => {
     state.scopes = []
+    await applyScopeParams(null, {}, 'admin', true, { sqlText: sql('SELECT * FROM workflows') })
     await applyScopeParams(null, {}, 'u2', false, { sqlText: sql('SELECT * FROM workflows') })
     state.scopes = [{ mode: 'default', dimension: 'zone', values: [1] }]
     await applyScopeParams(null, {}, 'u3', false, { sqlText: sql('SELECT * FROM workflows') })

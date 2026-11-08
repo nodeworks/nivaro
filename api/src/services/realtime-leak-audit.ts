@@ -119,7 +119,10 @@ async function defaultDeps(): Promise<LeakCheckDeps> {
     import('./system-collections.js')
   ])
   return {
-    isAdmin: (u) => perm.isAdminRole(u),
+    // An admin is exempt only while no restrict User Scope binds them (2026-11-08).
+    isAdmin: async (u) =>
+      (await perm.isAdminRole(u)) &&
+      !(await (await import('./user-scopes.js')).hasRestrictScope(u)),
     canRead: async (u, c) => {
       if (sys.isSystemCollection(c)) return sys.systemReadableColumns(c) != null
       return perm.can(u, 'read', c)

@@ -9,6 +9,7 @@ import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 import { currentTenantKey } from './tenant-rooms.js'
+import { hasRestrictScope } from './user-scopes.js'
 
 /**
  * Per-viewer reads behind the dashboard canvas (/api/dashboard/*): what was
@@ -243,7 +244,9 @@ async function visibleRecords<T extends { collection: string; item: string }>(
   isAdmin: boolean,
   records: T[]
 ): Promise<T[]> {
-  if (isAdmin || records.length === 0) return records
+  if (records.length === 0) return records
+  // Admins skip policy + row filters, never their own restrict User Scopes.
+  if (isAdmin && !(await hasRestrictScope(user))) return records
   const byCollection = new Map<string, string[]>()
   for (const r of records) {
     const list = byCollection.get(r.collection) ?? []
@@ -253,7 +256,7 @@ async function visibleRecords<T extends { collection: string; item: string }>(
   const allowed = new Set<string>()
   await Promise.all(
     [...byCollection.entries()].map(async ([collection, ids]) => {
-      const gates = await compileAccessGates(user, collection)
+      const gates = await compileAccessGates(user, collection, { actingAdmin: isAdmin })
       for (const id of await visibleIds(gates, [...new Set(ids)])) {
         allowed.add(`${collection}:${String(id).toUpperCase()}`)
       }
@@ -2122,11 +2125,10 @@ export async function zonePulse(opts: {
 
   const target = dim.target_collection
   const display = dim.display_field && IDENT.test(dim.display_field) ? dim.display_field : null
-  const restricted = opts.isAdmin
-    ? []
-    : (await scopes.getUserScopes(userId))
-        .filter((s) => s.mode === 'restrict' && s.dimension === dim.name)
-        .flatMap((s) => s.values)
+  // Restrict scopes bind administrators too (2026-11-08).
+  const restricted = (await scopes.getUserScopes(userId))
+    .filter((s) => s.mode === 'restrict' && s.dimension === dim.name)
+    .flatMap((s) => s.values)
   const cols = ['id', ...(display ? [display] : [])]
   let zoneRows: Array<Record<string, unknown>>
   if (restricted.length > 0) {

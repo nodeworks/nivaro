@@ -26,6 +26,7 @@ import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -160,7 +161,7 @@ async function recordVisible(
   collection: string,
   item: string | number | null | undefined
 ): Promise<boolean> {
-  if (req.isAdmin) return true
+  if (await seesAllRecords(req.isAdmin, req.user)) return true
   if (item == null || item === '') return false
   if (collection === 'nivaro_revisions') {
     const rev = (await db('nivaro_revisions')
@@ -450,7 +451,7 @@ export async function commentsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     // Counts only for the rows the caller can open (row filter, User Scopes).
-    const visible = req.isAdmin ? ids : await visibleRecordIds(req.user!, collection, ids, false)
+    const visible = await visibleRecordIds(req.user!, collection, ids, !!req.isAdmin)
     if (visible.length === 0) return { data: {} }
     const rows = (await db('nivaro_comments')
       .where({ collection })

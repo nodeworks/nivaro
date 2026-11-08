@@ -29,7 +29,7 @@ import { db } from '../../../db/index.js'
 import { canSeeRoom } from '../../../services/chat.js'
 import { getIo } from '../../../services/io-holder.js'
 import { can } from '../../../services/permissions.js'
-import { visibleIds } from '../../../services/record-access.js'
+import { compileAccessGates, visibleIds } from '../../../services/record-access.js'
 import {
   bindFromRequest,
   bindVerdict,
@@ -292,9 +292,17 @@ describe('room gates (#1720)', () => {
     vi.unstubAllEnvs()
     expect(await roomStillAllowed(ANA, 'tenant:T-B', notAdmin, ctx)).toBe(true)
   })
-  it('lets an administrator into any record room without a row check', async () => {
+  it('lets an unrestricted administrator into any record room without a row check', async () => {
+    vi.mocked(compileAccessGates).mockResolvedValueOnce({ bypass: true } as never)
     expect(await canSeeRecordRoom(ANA, 'orders', '7', true)).toBe(true)
     expect(visibleIds).not.toHaveBeenCalled()
+    expect(vi.mocked(compileAccessGates).mock.calls.at(-1)?.[2]).toEqual({ actingAdmin: true })
+  })
+  it('holds a restricted administrator to their User Scope (2026-11-08)', async () => {
+    vi.mocked(compileAccessGates).mockResolvedValueOnce({ bypass: false } as never)
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await canSeeRecordRoom(ANA, 'orders', '7', true)).toBe(false)
+    expect(can).not.toHaveBeenCalled()
   })
   it('matches record ids case-insensitively (MSSQL upper-cases uuids)', async () => {
     vi.mocked(visibleIds).mockResolvedValueOnce(new Set(['ABC-1']))
@@ -319,6 +327,7 @@ describe('room gates (#1720)', () => {
     vi.mocked(visibleIds).mockRejectedValueOnce(new Error('db down'))
     expect(await visibleRecordIds(ANA, 'orders', ['1'], false)).toEqual([])
     vi.mocked(visibleIds).mockClear()
+    vi.mocked(compileAccessGates).mockResolvedValueOnce({ bypass: true } as never)
     expect(await visibleRecordIds(ANA, 'orders', ['1', '2'], true)).toEqual(['1', '2'])
     expect(visibleIds).not.toHaveBeenCalled()
   })

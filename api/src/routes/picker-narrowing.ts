@@ -72,8 +72,9 @@ export async function pickerNarrowingRoutes(app: FastifyInstance): Promise<void>
 
       // Scopes: name the dimensions that narrow THIS collection — never a count
       // of the rows they hide (those are rows the viewer may not know exist).
+      // Administrators included: their restrict scopes narrow pickers too.
       const scopeLabels: string[] = []
-      if (!req.isAdmin && !collection.startsWith('nivaro_')) {
+      if (!collection.startsWith('nivaro_')) {
         const scopes = (await getUserScopes(user.id)).filter(
           (s) => s.mode === 'restrict' && s.values.length > 0
         )

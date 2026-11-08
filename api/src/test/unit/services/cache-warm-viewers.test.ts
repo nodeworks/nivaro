@@ -86,7 +86,11 @@ afterEach(() => {
 
 describe('scopeSignature', () => {
   it('is admin, empty for no restriction, and order-insensitive otherwise', () => {
-    expect(scopeSignature(true, [{ dimension: 'r', mode: 'restrict', values: [1] }])).toBe('admin')
+    expect(scopeSignature(true, [])).toBe('admin')
+    // Restrictions bind admins too (2026-11-08): a restricted admin is its own group.
+    expect(scopeSignature(true, [{ dimension: 'r', mode: 'restrict', values: [1] }])).toBe(
+      'admin|r=["1"]'
+    )
     expect(scopeSignature(false, [{ dimension: 'r', mode: 'default', values: [1] }])).toBe('')
     expect(scopeSignature(false, [{ dimension: 'r', mode: 'restrict', values: [] }])).toBe('')
     const a = scopeSignature(false, [
@@ -227,14 +231,18 @@ describe('as whom — the key carries exactly the scope the statement ran with',
     const n1 = await planWidgetQuery(cq, { year: '2026' }, 'u-north', false)
     const n2 = await planWidgetQuery(cq, { year: '2026' }, 'u-north2', false)
     const s = await planWidgetQuery(cq, { year: '2026' }, 'u-south', false)
-    const admin = await planWidgetQuery(cq, { year: '2026' }, 'u-north', true)
+    const admin = await planWidgetQuery(cq, { year: '2026' }, 'u-admin', true)
+    const restrictedAdmin = await planWidgetQuery(cq, { year: '2026' }, 'u-north', true)
     expect(n1.cacheKey).toBe(n2.cacheKey)
     expect(n1.cacheKey).not.toBe(s.cacheKey)
     expect(n1.resolvedSql).toBe(`EXEC budget '2026', 'N'`)
     expect(s.resolvedSql).toBe(`EXEC budget '2026', 'S'`)
-    // An administrator is unrestricted — a different key again, never the scoped one.
+    // An unrestricted administrator — a different key again, never the scoped one.
     expect(admin.resolvedSql).toBe(`EXEC budget '2026', NULL`)
     expect(new Set([n1.cacheKey, s.cacheKey, admin.cacheKey]).size).toBe(3)
+    // A restricted administrator is held to their allowance (2026-11-08): the scoped key.
+    expect(restrictedAdmin.resolvedSql).toBe(`EXEC budget '2026', 'N'`)
+    expect(restrictedAdmin.cacheKey).toBe(n1.cacheKey)
   })
 })
 

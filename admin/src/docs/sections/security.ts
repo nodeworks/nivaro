@@ -574,10 +574,14 @@ export const securityUserScopes: DocSection = {
     {
       type: 'ul',
       items: [
-        'Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters. Admins bypass.',
+        'Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters.',
         'Defaults are never enforced — they pre-select filter chips and quick filters (collection browser, reports) the first time a surface loads; restricted values also narrow the visible filter options.',
         'Raw-SQL surfaces (custom queries, stored procedures, query-type report widgets, queue caches) cannot be dimension-filtered — treat those as curated, not scoped.'
       ]
+    },
+    {
+      type: 'p',
+      text: 'Restrictions apply to administrators too. An administrator with a RESTRICTED scope sees only the rows inside it — in collection lists, single records, queues and worklists, pickers, search, dashboards and reports, exports, record history, comments and tasks on records, files attached to records, and custom queries that declare scope parameters — exactly like anyone else, and an update or delete of a record outside it is a not-found. Everything else an administrator has stays: no role policy checks, no role row filters, system tables and the admin consoles. An administrator with no restriction sees every record, as before. Remove the restriction on their Scopes card to give an administrator every zone back.'
     },
     { type: 'h3', text: 'API' },
     {

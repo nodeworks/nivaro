@@ -1,6 +1,15 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Restrict User Scopes bind admins too (2026-11-08): nobody here carries one.
+vi.mock('../../../services/user-scopes.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/user-scopes.js')>()),
+  getUserScopes: vi.fn(async () => []),
+  hasRestrictScope: vi.fn(async () => false),
+  restrictScopesFor: vi.fn(async () => []),
+  seesAllRecords: vi.fn(async (isAdmin: unknown) => !!isAdmin)
+}))
+
 // GET /trash/record (#1871): an open record's "deleted by … when" lookup.
 // The trash snapshot cannot be checked against the viewer's row filter or
 // User Scopes, so only an unrestricted administrator or the deleter learns
@@ -110,6 +119,13 @@ describe('GET /trash/record', () => {
     state.isAdmin = true
     const body = (await get(buildApp())).json()
     expect(body.data).toMatchObject({ deleted_by_name: 'Kim Lee', trash_id: 5 })
+  })
+
+  it('an admin with a restrict User Scope is held to the deleter rule (2026-11-08)', async () => {
+    state.isAdmin = true
+    const { seesAllRecords } = await import('../../../services/user-scopes.js')
+    vi.mocked(seesAllRecords).mockResolvedValueOnce(false)
+    expect((await get(buildApp())).json()).toEqual({ data: null })
   })
 
   it('an admin acting through a scoped key is held to the deleter rule', async () => {

@@ -66,6 +66,7 @@ import {
 } from '../services/record-headline.js'
 import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
 
 // Actual schema (migration 003 + renamed in 012):
@@ -888,8 +889,9 @@ export async function notificationsRoutes(app: FastifyInstance) {
     if (!req.isAdmin && !(await can(req.user!, 'read', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
-    // Only records the sender can see: a hidden id names nobody.
-    if (!req.isAdmin) {
+    // Only records the sender can see: a hidden id names nobody. A restricted
+    // administrator is held to their User Scope like anyone.
+    if (!(await seesAllRecords(req.isAdmin, req.user))) {
       const seen = await visibleRecordIds(req.user!, collection, ids)
       ids = ids.filter((id) => seen.has(id))
       if (ids.length === 0) return reply.code(404).send({ error: 'No such records' })

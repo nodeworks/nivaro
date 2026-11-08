@@ -565,10 +565,12 @@ async function recordReadGate(
 /** Batch twin: keeps only the ids the caller can read (row filter + User
  *  Scopes, one set-based pass). System collections pass through unchanged. */
 async function readableIds(req: FastifyRequest, collection: string, ids: string[]) {
-  if (req.isAdmin || ids.length === 0) return ids
+  if (ids.length === 0) return ids
   if (collection.startsWith('nivaro_') || collection.startsWith('directus_')) return ids
-  if (!req.user) return []
-  const gates = await compileAccessGates(req.user, collection)
+  if (!req.user) return req.isAdmin ? ids : []
+  // An admin skips policy + row filters, not their own restrict User Scopes.
+  const gates = await compileAccessGates(req.user, collection, { actingAdmin: !!req.isAdmin })
+  if (gates.bypass) return ids
   const ok = await visibleIds(gates, ids)
   return ids.filter((i) => ok.has(i))
 }
@@ -3069,11 +3071,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // Chunked: one state can carry thousands of groups (2,100-parameter cap).
     const userRows = (await selectInChunks(groupIds, 2000, (chunk) =>
       whereInList(
-        db('nivaro_pipeline_owner_group_users as ogu').join('nivaro_users as u', 'ogu.user', 'u.id'),
+        db('nivaro_pipeline_owner_group_users as ogu').join(
+          'nivaro_users as u',
+          'ogu.user',
+          'u.id'
+        ),
         'ogu.group',
         chunk
-      )
-        .select('ogu.id as link_id', 'ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+      ).select('ogu.id as link_id', 'ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
     )) as Array<ResolvedOwner & { link_id: number; group: string }>
 
     const usersByGroup = new Map<string, Array<ResolvedOwner & { link_id: number }>>()
@@ -3915,11 +3920,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // Chunked: a template carries thousands of groups (2,100-parameter cap).
     const groupUsers = (await selectInChunks(groupIds, 2000, (chunk) =>
       whereInList(
-        db('nivaro_pipeline_owner_group_users as ogu').join('nivaro_users as u', 'ogu.user', 'u.id'),
+        db('nivaro_pipeline_owner_group_users as ogu').join(
+          'nivaro_users as u',
+          'ogu.user',
+          'u.id'
+        ),
         'ogu.group',
         chunk
-      )
-        .select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
+      ).select('ogu.group', 'u.id', 'u.email', 'u.first_name', 'u.last_name')
     )) as Array<Record<string, unknown>>
 
     const usersByGroup = new Map<string, ResolvedOwner[]>()
