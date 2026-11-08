@@ -10,7 +10,9 @@ import {
   type FieldRule,
   idsNeedingStaging,
   isNoDuplicate,
+  isRuleFill,
   keepCollisionBase,
+  keptAmong,
   type M2MFieldState,
   mergeRuleResults,
   ownEditFields,
@@ -342,6 +344,12 @@ describe('appendUniqueM2MId', () => {
     expect(appendUniqueM2MId(['r1'], 'r2')).toEqual(['r1', 'r2'])
   })
 
+  it('a person id in another letter case is the same person (army9 b02)', () => {
+    const id = '9F0B444A-E704-477D-A70A-A9F98DA0CBA1'
+    const once = appendUniqueM2MId([], id.toLowerCase())
+    expect(appendUniqueM2MId(once, id)).toBe(once)
+  })
+
   it('is idempotent — staging the same id twice yields a single entry', () => {
     const once = appendUniqueM2MId([], 'r1')
     const twice = appendUniqueM2MId(once, 'r1')
@@ -558,5 +566,31 @@ describe('Duplicate (child rows and do-not-duplicate fields)', () => {
       sales_order_id: 'SO-77',
       shipped_qty: 4
     })
+  })
+})
+
+// army9 b01: re-picking Billing Location kept the Org Code the first pick's
+// rule filled, which then failed at Create as "Not an available option".
+describe('isRuleFill', () => {
+  const fills = new Map([['org_code', { trigger: 'billing_location', value: '14' }]])
+  it('a value the trigger rule filled, untouched, follows the trigger', () => {
+    expect(isRuleFill(fills, 'org_code', 'billing_location', 14)).toBe(true)
+    expect(isRuleFill(fills, 'org_code', 'billing_location', '14')).toBe(true)
+  })
+  it('a person-picked value, another trigger or an empty field does not', () => {
+    expect(isRuleFill(fills, 'org_code', 'billing_location', 22)).toBe(false)
+    expect(isRuleFill(fills, 'org_code', 'project', 14)).toBe(false)
+    expect(isRuleFill(fills, 'org_code', 'billing_location', null)).toBe(false)
+    expect(isRuleFill(fills, 'vendor', 'billing_location', 14)).toBe(false)
+  })
+})
+
+// army9 b01: picking a project funded in two years wiped an auto-filled
+// Funding Year that was one of them.
+describe('keptAmong', () => {
+  it('keeps a held value the new record allows', () => {
+    expect(keptAmong('5', [4, 5])).toBe(5)
+    expect(keptAmong(6, [4, 5])).toBeUndefined()
+    expect(keptAmong(null, [4, 5])).toBeUndefined()
   })
 })

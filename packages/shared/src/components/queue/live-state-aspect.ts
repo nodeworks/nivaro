@@ -38,3 +38,22 @@ export function statsOutrunRows(opts: {
   if (typeof opts.liveTotal !== 'number' || typeof opts.rowsTotal !== 'number') return false
   return opts.liveTotal !== opts.rowsTotal
 }
+
+/**
+ * How many "N updates · Refresh" the off-screen changes since the last stats read are
+ * worth, once that read lands (army 9 b08 N-R9-3). Every write to the collection used to
+ * count — other people's drafts and forecasts on records nowhere in this view — and
+ * Refresh then changed nothing. Now an off-screen change only counts when the stats read
+ * shows the view itself changed (its total moved) AND the rows cannot be re-read quietly
+ * (mid-selection / drag); otherwise statsOutrunRows re-reads them, or nothing changed.
+ */
+export function offscreenPill(opts: {
+  pending: number
+  liveTotal: number | null | undefined
+  rowsTotal: number | null | undefined
+  busy: boolean
+}): number {
+  if (opts.pending <= 0 || !opts.busy) return 0
+  if (typeof opts.liveTotal !== 'number' || typeof opts.rowsTotal !== 'number') return 0
+  return opts.liveTotal !== opts.rowsTotal ? opts.pending : 0
+}

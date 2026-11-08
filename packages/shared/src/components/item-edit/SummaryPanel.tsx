@@ -13,6 +13,7 @@ import {
   SENTINEL_FIELDS,
   SYSTEM_FIELDS
 } from './helpers'
+import { m2mIdKey, resolveM2MRelatedCollection } from './M2MCombobox'
 import type { M2MStagingCtx } from './M2MStagingContext'
 import { RelatedItemLabel } from './RelationCombobox'
 import type { CMSField, CMSRelation, FieldGroup, StepDef } from './types'
@@ -37,7 +38,7 @@ function stagedRowMatches(row: Record<string, unknown>, rowFilter?: Record<strin
 
 // ─── M2MSummaryCount ──────────────────────────────────────────────────────────
 
-function M2MSummaryCount({
+export function M2MSummaryCount({
   relation,
   parentId,
   allRelations,
@@ -112,14 +113,18 @@ function M2MSummaryCount({
   // has no single far collection — its junction row names it in the
   // discriminator column. Read that and label each pick in its own table;
   // it used to read "1 item".
-  const m2aField = relatedCollection
-    ? null
-    : ([...allRelations, ...(junctionRelations ?? [])].find(
+  const m2aRel = relatedCollection
+    ? undefined
+    : [...allRelations, ...(junctionRelations ?? [])].find(
         (r) =>
           r.many_collection === relation.many_collection &&
           r.many_field === junctionField &&
           !!r.one_collection_field
-      )?.one_collection_field ?? null)
+      )
+  const m2aField = m2aRel?.one_collection_field ?? null
+  // A pick made on this form is staged as a bare id in the collection the
+  // picker browses (a person) — label it there; it used to read "1 item".
+  const m2aPickCollection = m2aRel ? resolveM2MRelatedCollection(m2aRel) : null
   const { data: m2aItems = [] } = useQuery<Record<string, unknown>[]>({
     queryKey: ['summary-m2a-items', relation.many_collection, manyField, parentId, m2aField],
     queryFn: () =>
@@ -152,10 +157,17 @@ function M2MSummaryCount({
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
   const committedItems = junctionItems.filter((i) => !stagedUnlinks.has(i.id))
 
+  // One entry per linked record, whatever the letter case of its id.
+  const seenIds = new Set<string>()
   const allRelatedIds = [
     ...stagedLinks,
     ...committedItems.map((i) => i[junctionField]).filter((id) => id != null)
-  ]
+  ].filter((id) => {
+    const k = m2mIdKey(id)
+    if (seenIds.has(k)) return false
+    seenIds.add(k)
+    return true
+  })
 
   if (allRelatedIds.length === 0)
     return <span className='text-slate-400 dark:text-slate-500'>—</span>
@@ -181,22 +193,40 @@ function M2MSummaryCount({
     )
   }
 
-  const m2aShown = m2aField
-    ? m2aItems
-        .filter((i) => !stagedUnlinks.has(i.id) && i[junctionField] != null && i[m2aField])
-        .slice(0, 5)
-    : []
-  if (m2aShown.length > 0 && stagedLinks.length === 0) {
-    const extra = allRelatedIds.length - m2aShown.length
+  const m2aSeen = new Set<string>()
+  const m2aShown = (
+    m2aField
+      ? [
+          ...m2aItems
+            .filter((i) => !stagedUnlinks.has(i.id) && i[junctionField] != null && i[m2aField])
+            .map((i) => ({
+              key: String(i.id),
+              collection: m2aCollection(String(i[m2aField as string])),
+              id: i[junctionField]
+            })),
+          ...(m2aPickCollection
+            ? stagedLinks.map((id) => ({
+                key: `staged-${String(id)}`,
+                collection: m2aPickCollection,
+                id
+              }))
+            : [])
+        ]
+      : []
+  ).filter((e) => {
+    const k = `${e.collection}|${m2mIdKey(e.id)}`
+    if (m2aSeen.has(k)) return false
+    m2aSeen.add(k)
+    return true
+  })
+  if (m2aShown.length > 0 && (stagedLinks.length === 0 || m2aPickCollection)) {
+    const extra = m2aShown.length - 5
     return (
       <span className='text-[12px] text-slate-700 dark:text-slate-200'>
-        {m2aShown.map((i, n) => (
-          <span key={String(i.id)}>
+        {m2aShown.slice(0, 5).map((e, n) => (
+          <span key={e.key}>
             {n > 0 && ', '}
-            <M2OSummaryValue
-              collection={m2aCollection(String(i[m2aField as string]))}
-              id={i[junctionField]}
-            />
+            <M2OSummaryValue collection={e.collection} id={e.id} />
           </span>
         ))}
         {extra > 0 && <span className='text-slate-400 dark:text-slate-500'> +{extra} more</span>}

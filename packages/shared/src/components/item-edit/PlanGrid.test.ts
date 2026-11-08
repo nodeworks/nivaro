@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { fmtFigure, isParentItemKey, parseFigure, reconcilePatch } from './PlanGrid'
+import {
+  figureError,
+  fmtFigure,
+  isParentItemKey,
+  nextStagedEdit,
+  parseFigure,
+  reconcilePatch
+} from './PlanGrid'
 
 const row = { january: 100, february: 50, march: 0, april: 150 }
 const open = ['february', 'march', 'april']
@@ -11,6 +18,13 @@ describe('parseFigure / fmtFigure', () => {
     expect(parseFigure('—')).toBe(0)
     expect(parseFigure('(25)')).toBe(-25)
     expect(parseFigure('abc')).toBeNull()
+  })
+  it('uses the worksheet rule: no hex, exponent or misplaced comma (army 9 b03 N2)', () => {
+    expect(parseFigure('0x10')).toBeNull()
+    expect(parseFigure('1e3')).toBeNull()
+    expect(parseFigure('12,34')).toBeNull()
+    expect(figureError('12,34')).toMatch(/comma only between thousands/)
+    expect(figureError('-5')).toBe('Enter an amount of zero or more')
   })
   it('prints whole amounts without cents and the rest with both', () => {
     expect(fmtFigure(1200)).toBe('$1,200')
@@ -135,5 +149,31 @@ describe('isParentItemKey', () => {
     expect(isParentItemKey(['item', 'workflows', '1'], '372960')).toBe(false)
     expect(isParentItemKey(['o2m-rows', 'forecasts', '372960'], '372960')).toBe(false)
     expect(isParentItemKey(['item', 'workflows'], '372960')).toBe(false)
+  })
+})
+
+describe('nextStagedEdit (army 9 b03 N4)', () => {
+  const saved = { id: 7, february: 0, march: 0, may: 100 }
+  it('queues a real change as before', () => {
+    expect(nextStagedEdit(saved, undefined, { february: 50 }, { _change_reason: 'r' })).toEqual({
+      merge: { february: 50, _change_reason: 'r' },
+      replace: null
+    })
+  })
+  it('drops a cell put back to its saved figure and keeps the rest', () => {
+    expect(nextStagedEdit(saved, { february: 50, march: 20 }, { february: 0 })).toEqual({
+      merge: null,
+      replace: { march: 20 }
+    })
+  })
+  it('leaves nothing staged when every cell is back (no "0 → 0" change)', () => {
+    expect(nextStagedEdit(saved, { february: 50, _change_reason: 'r' }, { february: 0 })).toEqual({
+      merge: null,
+      replace: null
+    })
+    expect(nextStagedEdit(saved, { may: 120 }, { may: 100.001 })).toEqual({
+      merge: null,
+      replace: null
+    })
   })
 })

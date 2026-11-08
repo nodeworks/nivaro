@@ -8,6 +8,7 @@ import {
   noteLineReads,
   RowBaseBook,
   rowBaseBookFor,
+  snapshotRowBases,
   withRowBaseRevision,
   writeLineGuarded
 } from './line-midair'
@@ -228,6 +229,63 @@ describe('writeLineGuarded (H4: every immediate line write carries its base)', (
     await expect(
       writeLineGuarded(client, book, '/items/lines/5', '5', { qty: 2 }, { key: 'k', label: 'L' })
     ).rejects.toThrow('boom')
+  })
+})
+
+describe('snapshotRowBases (army9 b09 HIGH: the bulk dialog writes against the rows as OPENED)', () => {
+  it('a later read of a changed row moves the book, not the snapshot — the write carries the open-time base', async () => {
+    const latest: Record<string, number | null> = { '5': 30, '6': 40 }
+    const { client, calls } = fakeClient({ latest })
+    const book = new RowBaseBook((ids) => fetchLatestRevisions(client, 'lines', ids))
+    book.noteRows([
+      { id: 5, qty: 5 },
+      { id: 6, qty: 1 }
+    ])
+    // The dialog opens on lines 5 and 6 (and a staged row, which has no base).
+    const snap = snapshotRowBases(book, ['5', '6', 'pending:0', 'new'])
+    expect([...snap.keys()]).toEqual(['5', '6'])
+    expect(await snap.get('5')).toBe(30)
+    // Someone else saves line 5 while the dialog is open: the live refresh
+    // brings the changed row and the book takes its newer base.
+    latest['5'] = 31
+    book.noteRows([
+      { id: 5, qty: 6 },
+      { id: 6, qty: 1 }
+    ])
+    expect(await book.baseOf('5')).toBe(31)
+    expect(await snap.get('5')).toBe(30)
+    // Apply: the write is judged against 30 — the server's mid-air check
+    // sees the newer save of quantity and answers 409 instead of overwriting.
+    const r = await writeLineGuarded(
+      client,
+      book,
+      '/items/lines/5',
+      '5',
+      { qty: 8 },
+      { key: 'lines.workflow', label: 'Line 2', base: snap.get('5') }
+    )
+    expect(r.ok).toBe(true)
+    const p = calls.filter((c) => c._method === 'PATCH').pop()
+    expect(p?._body).toEqual({ qty: 8, _base_revision: 30 })
+  })
+
+  it('no pinned base (null, or a row the snapshot never saw) = the book as before', async () => {
+    const { client, calls } = fakeClient({ latest: { '7': 12 } })
+    const book = new RowBaseBook((ids) => fetchLatestRevisions(client, 'lines', ids))
+    book.noteRows([{ id: 7, qty: 1 }])
+    const snap = snapshotRowBases(book, ['9'])
+    await writeLineGuarded(
+      client,
+      book,
+      '/items/lines/7',
+      '7',
+      { qty: 2 },
+      { key: 'k', label: 'L', base: snap.get('7') ?? null }
+    )
+    expect(calls.filter((c) => c._method === 'PATCH').pop()?._body).toEqual({
+      qty: 2,
+      _base_revision: 12
+    })
   })
 })
 

@@ -189,3 +189,39 @@ export function fmtDateTime(iso: string | null | undefined): string {
     minute: '2-digit'
   })
 }
+
+/** A report alert condition as people read it ("Rows ≥ 40", "Value ≥ 1,000,000"), never
+ *  "row_count gte 40" (army 9 b16). Twin of api services/report-alert-words.ts. */
+export function reportConditionText(c: { field: string; op: string; value: unknown }): string {
+  const ops: Record<string, string> = { gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', neq: '≠' }
+  const words = (s: string) => {
+    const t = s.replace(/_/g, ' ').trim()
+    return t ? t.charAt(0).toUpperCase() + t.slice(1) : t
+  }
+  let field: string
+  if (c.field === 'value') field = 'Value'
+  else if (c.field === 'row_count') field = 'Rows'
+  else {
+    const m = /^(sum|avg|max|min|tile):(.+)$/.exec(c.field)
+    if (!m) field = words(c.field)
+    else if (m[1] === 'tile') field = m[2].trim()
+    else {
+      const lead = { sum: 'Total of', avg: 'Average', max: 'Largest', min: 'Smallest' }[m[1]] ?? ''
+      field = `${lead} ${m[2].replace(/_/g, ' ').trim()}`.trim()
+    }
+  }
+  const n = Number(c.value)
+  const value = Number.isFinite(n)
+    ? n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    : String(c.value ?? '')
+  return `${field} ${ops[c.op] ?? c.op} ${value}`
+}
+
+/** An alert category as a heading: "SLA", never CSS-capitalised "Sla" (army 9 b16). */
+export function categoryLabel(category: string): string {
+  const known: Record<string, string> = { sla: 'SLA', ai: 'AI', kpi: 'KPI', erp: 'ERP' }
+  const k = category.trim().toLowerCase()
+  if (known[k]) return known[k]
+  const t = category.replace(/[_-]+/g, ' ').trim()
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t
+}

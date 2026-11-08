@@ -1067,6 +1067,21 @@ function ButtonGroupDisplay({
   )
 }
 
+/** The host record's pipeline step from an instance read
+ *  (`/pipelines/instance/:c/:id`), and whether it moved since `before`
+ *  (undefined = never read: a first read is not a move). Army9 b06 N-AB. */
+export function hostStepChange(
+  before: string | null | undefined,
+  data: unknown
+): { next: string | null | undefined; moved: boolean } {
+  // A failed read (the query answers null) says nothing about the step.
+  if (data == null) return { next: before, moved: false }
+  const next =
+    (data as { instance?: { current_state?: string | null } | null } | null | undefined)?.instance
+      ?.current_state ?? null
+  return { next, moved: before !== undefined && before !== next }
+}
+
 export function WidgetSlot({
   widgetId,
   inputBindings = [],
@@ -1106,6 +1121,8 @@ export function WidgetSlot({
   // The host record's id, for scoping the cache subscription below to its
   // own grids (assigned after inputs resolve — the effect reads the ref).
   const hostRecordIdRef = useRef<string | number | null>(null)
+  // The host record's pipeline step as last read (undefined = not read yet).
+  const hostStateRef = useRef<string | null | undefined>(undefined)
   // First-load marker: input-driven render refetches keep stale values on
   // screen instead of flashing the skeleton.
   const hasRenderDataRef = useRef(false)
@@ -1123,11 +1140,38 @@ export function WidgetSlot({
     const t = widget?.widget_type
     if (t !== 'rollup' && t !== 'review_list' && t !== 'custom-query') return
     let timer: ReturnType<typeof setTimeout> | null = null
+    // Seed the step from a read that landed before this widget subscribed.
+    if (hostStateRef.current === undefined && hostRecordIdRef.current != null) {
+      const seen = qc
+        .getQueryCache()
+        .findAll({ queryKey: ['pipeline-instance-lock'] })
+        .find((q) => String(q.queryKey[2]) === String(hostRecordIdRef.current))
+      if (seen?.state.status === 'success')
+        hostStateRef.current = hostStepChange(undefined, seen.state.data).next
+    }
     const unsub = qc.getQueryCache().subscribe((ev) => {
       if (ev.type !== 'updated' || ev.action?.type !== 'success') return
       const key = ev.query.queryKey
       const head = key?.[0]
       if (typeof head !== 'string') return
+      // A pipeline move on the host record (the instance read refetches after
+      // every transition) changes what record-scoped money counts — EFP
+      // Committed counts approval states only. Re-render past the cached
+      // result, or the header kept the old figure until a reload (army9 b06
+      // N-AB). Only this record's read, and only a refetch.
+      if (head === 'pipeline-instance-lock') {
+        if (hostRecordIdRef.current == null || String(key[2]) !== String(hostRecordIdRef.current))
+          return
+        const step = hostStepChange(hostStateRef.current, ev.query.state.data)
+        hostStateRef.current = step.next
+        if (!step.moved) return
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => {
+          forceRenderRef.current = true
+          setRefetchTick((n) => n + 1)
+        }, 400)
+        return
+      }
       if (
         !head.startsWith('o2m-rows') &&
         !head.startsWith('nested') &&

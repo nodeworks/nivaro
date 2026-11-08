@@ -580,6 +580,19 @@ export function useItemLock(
   const visible = useDocumentVisible()
   const focused = useWindowFocused()
   const onScreen = active && visible && focused
+  // A viewer locked out while this tab was hidden or blurred may have missed
+  // the `$lock` notice (army9 b09: the "is editing — read-only" banner stayed
+  // ~5 s after the holder left, until the next presence refresh): the moment
+  // the tab is back on screen, re-read who holds it now. Transition only —
+  // never a re-read per holder change.
+  const wasOnScreenRef = useRef(onScreen)
+  useEffect(() => {
+    const was = wasOnScreenRef.current
+    wasOnScreenRef.current = onScreen
+    if (!enabled || !collection || !item || was || !onScreen) return
+    if (acquiredRef.current || !lockedById) return
+    void refreshLockInfo()
+  }, [enabled, onScreen, collection, item, lockedById, refreshLockInfo])
   useEffect(() => {
     if (!enabled || !collection || !item) return
     if (onScreen) {

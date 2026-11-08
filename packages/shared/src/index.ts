@@ -341,6 +341,7 @@ export {
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export { type RelatedMissing, relatedMissing } from './components/item-edit/related-missing'
 export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
 export {
   type PersonalDefaultsApi,
@@ -768,6 +769,7 @@ export {
   applyDisplayPrefs,
   contrastRatio,
   type DisplayPrefs,
+  deepenForLightSurface,
   hexToRgbChannels,
   liftForDarkSurface,
   rootFontSize,
@@ -877,6 +879,7 @@ export {
   startMetadataPersistence,
   wipeMetadataCache
 } from './lib/metadata-persist'
+export { MONEY_INPUT_MAX, type MoneyParse, parseMoneyInput } from './lib/money-input'
 export {
   displayTrail,
   elementAtScrollPath,
@@ -1160,6 +1163,7 @@ export {
   type WaitAnswer as SlowReadWaitAnswer
 } from './lib/slow-reason'
 export * from './lib/socket-realtime'
+export { registerStagedRowLabel, stagedRowLabel } from './lib/staged-row-labels'
 export * from './lib/stale-chunk'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'

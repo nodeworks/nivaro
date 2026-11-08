@@ -55,6 +55,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { useSlowReason } from '../../hooks/useSlowReason'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { deepenForLightSurface } from '../../lib/display-prefs'
 import { evaluateExpression } from '../../lib/expression'
 import {
   clauseFromControlValue,
@@ -142,7 +143,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { dedupeChooserKeys } from './column-chooser'
 import { groupSumPathsFor } from './group-sums'
-import { stateAspectEffect, statsOutrunRows } from './live-state-aspect'
+import { offscreenPill, stateAspectEffect, statsOutrunRows } from './live-state-aspect'
 import { OwnerAvatars } from './OwnerAvatars'
 import { pathHeader } from './path-label'
 import { QueueBulkBar } from './QueueBulkBar'
@@ -283,6 +284,8 @@ interface QueueStats {
   sla_breached: number
   at_risk: number
   aging?: { d1: number; d3: number; d7: number; over: number }
+  /** Rows an SLA rule applies to; 0 = no SLA here (Warning / Breached tiles hidden). */
+  sla_tracked?: number
 }
 
 interface QueueSource {
@@ -510,21 +513,31 @@ function StatTile({
       onClick={onClick}
       className={cn(
         'nvr-section-enter flex items-center gap-1.5 bg-white px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
-        active && 'bg-nvr-cyan/5 ring-1 ring-inset ring-nvr-cyan dark:bg-nvr-cyan/10',
-        !active && !isLoading && count === 0 && 'opacity-50'
+        // Grows to fill its row when the strip wraps on a narrow screen (army 9 b08 N-R9-7).
+        'grow justify-center sm:justify-start',
+        active && 'bg-nvr-cyan/5 ring-1 ring-inset ring-nvr-cyan dark:bg-nvr-cyan/10'
       )}
     >
       {isLoading ? (
         <Skeleton className='h-5 w-16 rounded' />
       ) : (
         <>
-          <span className='flex items-baseline gap-1 text-[15px] font-semibold leading-none tabular-nums text-slate-900 dark:text-foreground'>
+          {/* A zero dims its number, never its label — opacity took the labels under
+              4.5:1 in light (army 9 b08 N-R9-8). */}
+          <span
+            className={cn(
+              'flex items-baseline gap-1 text-[15px] font-semibold leading-none tabular-nums',
+              count === 0 && !active
+                ? 'text-slate-500 dark:text-slate-400'
+                : 'text-slate-900 dark:text-foreground'
+            )}
+          >
             {filteredCount != null ? (
               <>
                 <span className='text-nvr-navy dark:text-nvr-cyan'>
                   <TickerNumber value={filteredCount} format={formatNumber} />
                 </span>
-                <span className='text-[11px] font-medium text-slate-400'>
+                <span className='text-[11px] font-medium text-slate-500 dark:text-slate-400'>
                   / <TickerNumber value={count} format={formatNumber} />
                 </span>
               </>
@@ -534,12 +547,12 @@ function StatTile({
           </span>
           <span
             className={cn(
-              'text-[11px] font-medium leading-none',
+              'whitespace-nowrap text-[11px] font-medium leading-none',
               tone === 'red'
-                ? 'text-red-500 dark:text-red-400'
+                ? 'text-red-700 dark:text-red-400'
                 : tone === 'amber'
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-slate-400 dark:text-muted-foreground'
+                  ? 'text-amber-800 dark:text-amber-400'
+                  : 'text-slate-500 dark:text-muted-foreground'
             )}
           >
             {label}
@@ -548,7 +561,11 @@ function StatTile({
             <span
               className={cn(
                 'text-[10px] font-medium leading-none',
-                deltaBadIsUp ? (delta > 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-400'
+                deltaBadIsUp
+                  ? delta > 0
+                    ? 'text-red-700 dark:text-red-400'
+                    : 'text-emerald-700 dark:text-emerald-400'
+                  : 'text-slate-500 dark:text-slate-400'
               )}
             >
               {delta > 0 ? '↑' : '↓'}
@@ -688,6 +705,9 @@ export function QueueWorklist({
   // Socket-driven updates no longer refetch under the user — they accumulate here
   // and surface as a "N updates · Refresh" pill the user triggers explicitly.
   const [pendingUpdates, setPendingUpdates] = useState(0)
+  // Off-screen changes waiting for the next stats read to say whether they touched this
+  // view at all (army 9 b08 N-R9-3 — see offscreenPill).
+  const offscreenPendingRef = useRef(0)
   // Live rows (#1743 #1828 #1872 #1932 #2125 #2386): flash + "changed by", new
   // rows marked, edit locks, stats tiles that tick, kanban that follows moves.
   const rowChanges = useRowChanges()
@@ -984,7 +1004,7 @@ export function QueueWorklist({
           if (!own) livePendingRef.current.push({ key, by: null })
         } else pill += 1
       }
-      if (pill > 0) setPendingUpdates((n) => n + pill)
+      if (pill > 0) offscreenPendingRef.current += pill
       if (refresh) scheduleRefetch()
       if (stats) scheduleStats()
     }
@@ -1620,13 +1640,23 @@ export function QueueWorklist({
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the stats read landing
   useEffect(() => {
     if (!liveStatsNewer) return
+    const busy = selectedCountRef.current > 0 || draggingRef.current
+    const offscreen = offscreenPill({
+      pending: offscreenPendingRef.current,
+      liveTotal: liveStats.total,
+      rowsTotal: data?.total,
+      // Only a table re-reads its rows quietly; the other views keep the pill.
+      busy: busy || view !== 'table'
+    })
+    offscreenPendingRef.current = 0
+    if (offscreen > 0) setPendingUpdates((n) => n + offscreen)
     const outrun = statsOutrunRows({
       liveTotal: liveStats.total,
       rowsTotal: data?.total,
       // Grouped tables too (army 8 b08-N6): their headers count the whole set, and
       // nothing else re-read them — "37 of 38" with the strip at 38 for minutes.
       table: view === 'table',
-      busy: selectedCountRef.current > 0 || draggingRef.current
+      busy
     })
     if (!outrun) return
     liveRefetchRef.current = true
@@ -2682,11 +2712,22 @@ export function QueueWorklist({
       render: (row) =>
         row.state ? (
           <span
-            className='inline-block max-w-[190px] truncate whitespace-nowrap rounded px-1.5 py-0.5 align-middle text-[11px] font-medium'
-            style={{
-              backgroundColor: row.state_color ? `${row.state_color}1a` : undefined,
-              color: row.state_color ?? undefined
-            }}
+            // The state's own colour as ink in dark; darkened to 4.5:1 on the light tint
+            // (amber read 2.2:1 — army 9 b08 N-R9-8).
+            className={cn(
+              'inline-block max-w-[190px] truncate whitespace-nowrap rounded px-1.5 py-0.5 align-middle text-[11px] font-medium',
+              row.state_color &&
+                'text-[color:var(--nvr-state-ink)] dark:text-[color:var(--nvr-state-ink-dark)]'
+            )}
+            style={
+              row.state_color
+                ? ({
+                    backgroundColor: `${row.state_color}1a`,
+                    '--nvr-state-ink': deepenForLightSurface(row.state_color),
+                    '--nvr-state-ink-dark': row.state_color
+                  } as React.CSSProperties)
+                : undefined
+            }
             title={
               row.via_addendum
                 ? `Addendum "${row.via_addendum.title ?? ''}" — ${stateLabel(row.state)}`
@@ -3729,6 +3770,13 @@ export function QueueWorklist({
       return filterDefs.filter((d) => d.key === 'state' || d.key === 'owners')
     })()
   )
+  // A worklist no SLA applies to shows no Warning / Breached tiles: "0 Breached" beside
+  // hundreds of week-old rows read as "all on time" (army 9 b08 N-R9-4). An older server
+  // (no sla_tracked) and an SLA filter someone has on keep them.
+  const slaTilesShown =
+    stats?.sla_tracked !== 0 ||
+    filterValues.sla_status === 'warning' ||
+    filterValues.sla_status === 'breached'
   // The attention numbers, as the filter bar's right-hand summary: the item
   // count always, the rest only when non-zero; each toggles its filter.
   const queueSummary = (() => {
@@ -3780,7 +3828,7 @@ export function QueueWorklist({
     ].filter((b) => b.n > 0 || b.on)
     return (
       <span
-        className='flex flex-wrap items-center gap-x-2 text-[11px] text-slate-400'
+        className='flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500 dark:text-slate-400'
         data-queue-summary
       >
         {bits.map((b) => (
@@ -4333,7 +4381,9 @@ export function QueueWorklist({
             className='flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-100 bg-white px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900'
             data-queue-insights
           >
-            <div className='nvr-stagger-direct flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+            {/* Wraps on a phone instead of clipping Unowned off-screen (army 9 b08 N-R9-7);
+                1px gaps over the border colour draw the dividers on every row. */}
+            <div className='nvr-stagger-direct flex max-w-full flex-wrap gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
               <StatTile
                 label='Total'
                 count={stats?.total ?? 0}
@@ -4343,28 +4393,32 @@ export function QueueWorklist({
                 {...trendFor('total')}
                 onClick={clearAllTileFilters}
               />
-              <StatTile
-                label='Warning'
-                count={stats?.sla_warning ?? 0}
-                filteredCount={filteredStats ? filteredStats.sla_warning : null}
-                tone='amber'
-                active={filterValues.sla_status === 'warning'}
-                isLoading={showLoading}
-                deltaBadIsUp
-                {...trendFor('sla_warning')}
-                onClick={() => toggleTileFilter('sla_status', 'warning')}
-              />
-              <StatTile
-                label='Breached'
-                count={stats?.sla_breached ?? 0}
-                filteredCount={filteredStats ? filteredStats.sla_breached : null}
-                tone='red'
-                active={filterValues.sla_status === 'breached'}
-                isLoading={showLoading}
-                deltaBadIsUp
-                {...trendFor('sla_breached')}
-                onClick={() => toggleTileFilter('sla_status', 'breached')}
-              />
+              {slaTilesShown && (
+                <>
+                  <StatTile
+                    label='Warning'
+                    count={stats?.sla_warning ?? 0}
+                    filteredCount={filteredStats ? filteredStats.sla_warning : null}
+                    tone='amber'
+                    active={filterValues.sla_status === 'warning'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('sla_warning')}
+                    onClick={() => toggleTileFilter('sla_status', 'warning')}
+                  />
+                  <StatTile
+                    label='Breached'
+                    count={stats?.sla_breached ?? 0}
+                    filteredCount={filteredStats ? filteredStats.sla_breached : null}
+                    tone='red'
+                    active={filterValues.sla_status === 'breached'}
+                    isLoading={showLoading}
+                    deltaBadIsUp
+                    {...trendFor('sla_breached')}
+                    onClick={() => toggleTileFilter('sla_status', 'breached')}
+                  />
+                </>
+              )}
               <StatTile
                 label='At Risk'
                 count={stats?.at_risk ?? 0}

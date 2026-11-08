@@ -32,7 +32,8 @@ export function GridBulkEditDialog({
   relations,
   collection,
   cascadeFilters,
-  onApply
+  onApply,
+  onEditIntent
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -44,6 +45,9 @@ export function GridBulkEditDialog({
   collection: string
   cascadeFilters?: Record<string, Record<string, unknown> | undefined>
   onApply: (touched: Record<string, unknown>) => Promise<void>
+  /** The person changed a field here: edit intent (the form claims the
+   *  record's edit lock, army9 b09) — before anything is applied. */
+  onEditIntent?: () => void
 }) {
   const [values, setValues] = useState<Record<string, unknown>>({})
   const [touched, setTouched] = useState<Set<string>>(new Set())
@@ -76,6 +80,7 @@ export function GridBulkEditDialog({
   }, [open])
 
   const setField = (k: string, v: unknown) => {
+    onEditIntent?.()
     setValues((prev) => ({ ...prev, [k]: v }))
     setTouched((prev) => new Set([...prev, k]))
   }

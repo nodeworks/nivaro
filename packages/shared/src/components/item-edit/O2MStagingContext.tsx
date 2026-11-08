@@ -31,6 +31,11 @@ export interface O2MStagingCtx {
   queueDelete: (relatedCollection: string, manyField: string, rowId: string) => void
   cancelPendingEdit: (relatedCollection: string, manyField: string, rowId: string) => void
   cancelPendingDelete: (relatedCollection: string, manyField: string, rowId: string) => void
+  /** The person started typing in a line editor (a row editor, the bulk
+   *  "Edit N selected…" dialog): edit intent, before anything is staged —
+   *  the form claims the record's edit lock like it does for a header field
+   *  (army9 b09). Optional: a host without the lock just omits it. */
+  noteEditIntent?: () => void
 }
 
 export const O2MStagingContext = createContext<O2MStagingCtx | null>(null)

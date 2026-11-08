@@ -30,6 +30,12 @@ export type SaveClosingMessage = {
   duration?: number
 }
 
+/** The one toast slot a form's save outcome uses: each save's closing
+ *  message replaces the previous one (Sonner updates a toast by id), so a
+ *  resolved step's "Not saved yet — give a reason…" never stays stacked
+ *  beside the "Changes saved" that followed it (army9 b09). */
+export const SAVE_OUTCOME_TOAST_ID = 'nvr-save-outcome'
+
 /** The save left work staged: the form stays dirty and its recovery draft stays. */
 export function saveLeftWorkStaged(notice: SaveNotice): boolean {
   return notice.childFailed === true || notice.reasonWaiting === true

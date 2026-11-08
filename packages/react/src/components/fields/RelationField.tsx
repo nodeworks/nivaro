@@ -1,7 +1,50 @@
-import { useState } from 'react'
+import { relatedMissing } from '@nivaro/shared'
+import { useEffect, useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
-import { useRelationOptions } from '../../hooks/useRelationOptions'
+import { renderLabel, useRelationOptions } from '../../hooks/useRelationOptions'
+import { get } from '../../lib/commands'
 import type { FieldComponentProps } from '../../types'
+
+/**
+ * The label of a current value that is not among the listed options: read it
+ * once; a row the reader cannot open reads "Not available to you" / "Record
+ * not found" — never its id (army9 review M7: a workflow whose project is now
+ * outside the person's zones showed the bare project number).
+ */
+function useCurrentLabel(
+  client: ReturnType<typeof useOptionalNivaroClient>,
+  collection: string,
+  current: string,
+  listed: boolean,
+  template: string | null | undefined
+): string | null {
+  const [label, setLabel] = useState<{ key: string; text: string } | null>(null)
+  const key = `${collection}|${current}`
+  useEffect(() => {
+    if (!client || !collection || !current || listed) return
+    let live = true
+    client
+      .request<{ data: Record<string, unknown> | null }>(
+        get(`/items/${collection}/${encodeURIComponent(current)}`)
+      )
+      .then((r) => {
+        if (!live) return
+        const row = r?.data
+        setLabel({
+          key,
+          text: row ? renderLabel(row, template, '') || 'Unnamed record' : relatedMissing(null).text
+        })
+      })
+      .catch((err: unknown) => {
+        if (live) setLabel({ key, text: relatedMissing(err).text })
+      })
+    return () => {
+      live = false
+    }
+  }, [client, collection, current, listed, template, key])
+  if (!current || listed) return null
+  return label?.key === key ? label.text : 'Loading…'
+}
 
 /**
  * Unstyled relation picker.
@@ -45,6 +88,23 @@ export function RelationField({
     field.options?.max_values === 1
   const isMany =
     (field.fieldType === 'relation-o2m' || field.fieldType === 'relation-m2m') && !isForcedSingle
+  const singleCurrent =
+    isMany || isForcedSingle
+      ? ''
+      : value != null && typeof value === 'object'
+        ? String((value as { id?: unknown }).id ?? '')
+        : value == null
+          ? ''
+          : String(value)
+  const currentListed =
+    !singleCurrent || loading || options.some((o) => String(o.id) === singleCurrent)
+  const currentLabel = useCurrentLabel(
+    client,
+    relatedCollection,
+    singleCurrent,
+    currentListed,
+    field.relation?.displayTemplate
+  )
 
   if (!client) {
     return (
@@ -182,6 +242,11 @@ export function RelationField({
         onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
       >
         <option value=''>—</option>
+        {currentLabel != null && (
+          <option value={current} data-nivaro-current-unlisted>
+            {currentLabel}
+          </option>
+        )}
         {options.map((o) => (
           <option key={String(o.id)} value={String(o.id)}>
             {o.label}

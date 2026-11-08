@@ -17,7 +17,9 @@ import { useItemEditAuth, useNivaroClient, useParentDraft } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateNumeric } from '../../lib/expression'
+import { parseMoneyInput } from '../../lib/money-input'
 import { userErrorMessage } from '../../lib/safe-error'
+import { registerStagedRowLabel } from '../../lib/staged-row-labels'
 import { cn, formatRelative } from '../../lib/utils'
 import { NumberDraftInput } from '../ui/number-draft-input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -161,13 +163,43 @@ export function fmtFigure(n: number): string {
   })
 }
 
+/** A typed or pasted figure — the one money rule (lib/money-input.ts, the
+ *  forecast worksheet's twin): null when refused, `figureError` says why. */
 export function parseFigure(text: string): number | null {
-  const t = text.replace(/[$,\s]/g, '')
-  if (t === '' || t === '-' || t === '—') return 0
-  const neg = /^\(.*\)$/.test(t)
-  const n = Number(neg ? t.slice(1, -1) : t)
-  if (!Number.isFinite(n)) return null
-  return cents(neg ? -n : n)
+  const r = parseMoneyInput(text)
+  return r.ok ? r.value : null
+}
+
+/** What to tell a person whose figure was refused (or was below zero). */
+export function figureError(text: string): string {
+  const r = parseMoneyInput(text)
+  return r.ok ? 'Enter an amount of zero or more' : r.error
+}
+
+/**
+ * What staging `patch` on a saved row leaves staged. Cells back at their saved
+ * figure drop out; `merge` = queue the patch as usual (nothing went back),
+ * `replace` = the row's whole staged edit after dropping them, null = nothing
+ * left to save on the row (army 9 b03 N4: "0 → 0" kept the record dirty).
+ * Keys starting with "_" (reason, flush flags) never count as a change. Pure.
+ */
+export function nextStagedEdit(
+  saved: Record<string, unknown> | undefined,
+  prior: Record<string, unknown> | undefined,
+  patch: Record<string, number>,
+  extra: Record<string, unknown> = {}
+): { merge: Record<string, unknown> | null; replace: Record<string, unknown> | null } {
+  const back = saved
+    ? Object.keys(patch).filter((c) => Math.abs(num(patch[c]) - num(saved[c])) < 0.005)
+    : []
+  if (back.length === 0) return { merge: { ...patch, ...extra }, replace: null }
+  const rest = Object.fromEntries(
+    Object.entries({ ...(prior ?? {}), ...patch, ...extra }).filter(([k]) => !back.includes(k))
+  )
+  return {
+    merge: null,
+    replace: Object.keys(rest).some((k) => !k.startsWith('_')) ? rest : null
+  }
 }
 
 export type ReconcileMode = 'next' | 'even' | 'weighted' | 'none'
@@ -506,6 +538,20 @@ export function PlanGridField(props: {
     return out
   }, [rawRows, pendingRows, pendingEdits, pendingDeletes, config.key_field, config.category_field])
 
+  // The record's change list names a staged row of this grid "2027 forecast ·
+  // Goods", never by its row id (army 9 b03 N4).
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const rowNameRef = useRef<(r: PlanRow) => string>(() => '')
+  useEffect(
+    () =>
+      registerStagedRowLabel(rc, (rowId) => {
+        const r = rowsRef.current.find((x) => x.id === rowId)
+        return r ? rowNameRef.current(r) : null
+      }),
+    [rc]
+  )
+
   const rowTotal = useCallback(
     (v: Record<string, unknown>) => cents(cols.reduce((a, c) => a + num(v[c]), 0)),
     [cols]
@@ -671,13 +717,26 @@ export function PlanGridField(props: {
         }
       }
       setNotice(null)
-      if (row.id)
-        staging.queueEdit(rc, mf, row.id, {
-          ...patch,
+      if (row.id) {
+        const extra = {
           ...(reason ? { _change_reason: reason } : {}),
           ...(pair?.early ? { __flush_early: true } : {})
-        })
-      else if (row.pendingIndex != null)
+        }
+        // A cell put back to its saved figure is no change any more: it drops
+        // out of the staged edit, and a row with nothing left is not staged at
+        // all (army 9 b03 N4 — "0 → 0" kept the record dirty).
+        const next = nextStagedEdit(
+          rawRows.find((r) => String(r.id) === row.id),
+          pendingEdits?.get(row.id),
+          patch,
+          extra
+        )
+        if (next.merge) staging.queueEdit(rc, mf, row.id, next.merge)
+        else {
+          staging.cancelPendingEdit(rc, mf, row.id)
+          if (next.replace) staging.queueEdit(rc, mf, row.id, next.replace)
+        }
+      } else if (row.pendingIndex != null)
         staging.updateRow(rc, mf, row.pendingIndex, {
           ...row.values,
           ...patch,
@@ -685,7 +744,18 @@ export function PlanGridField(props: {
         })
       return true
     },
-    [staging, rowTotal, sumCap, resolveToken, gridTotal, categoryFigures, rc, mf]
+    [
+      staging,
+      rowTotal,
+      sumCap,
+      resolveToken,
+      gridTotal,
+      categoryFigures,
+      rc,
+      mf,
+      rawRows,
+      pendingEdits
+    ]
   )
 
   const addKey = useCallback(
@@ -833,6 +903,7 @@ export function PlanGridField(props: {
       const startRow = editableUids.indexOf(row.uid)
       const startCol = cols.indexOf(col)
       let landed = 0
+      const refused: string[] = []
       lines.forEach((line, li) => {
         const target = rows.find((r) => r.uid === editableUids[startRow + li])
         if (!target) return
@@ -841,11 +912,18 @@ export function PlanGridField(props: {
           const c = cols[startCol + ci]
           if (!c || isLocked(target.key, c)) return
           const v = parseFigure(cell)
-          if (v == null || v < 0) return
+          if (v == null || v < 0) {
+            refused.push(cell.trim())
+            return
+          }
           patch[c] = v
         })
         if (Object.keys(patch).length && stage(target, patch)) landed += Object.keys(patch).length
       })
+      if (refused.length)
+        toast.error(
+          `${refused.length} pasted ${refused.length === 1 ? 'cell was' : 'cells were'} left out — ${figureError(refused[0])}`
+        )
       if (landed) toast.success(`Pasted ${landed} ${landed === 1 ? 'figure' : 'figures'}`)
     },
     [editableUids, cols, rows, isLocked, stage]
@@ -1011,6 +1089,8 @@ export function PlanGridField(props: {
   const [showCategories, setShowCategories] = useState(false)
   const anySplit = blocks.some((b) => b.mode === 'split')
   const plan = planLabel(compare)
+  rowNameRef.current = (r) =>
+    `${r.key} ${plan.toLowerCase()}${r.cat != null ? ` · ${catLabel(r.cat)}` : ''}`
   const actualName = compare?.label ?? compareSeries?.label ?? 'Actual'
   const closedLabel = closedThroughLabel(compare?.closed_through)
   const closedYear = compare?.closed_through ? Number(compare.closed_through.split('-')[0]) : null
@@ -1753,9 +1833,12 @@ function PlanCell(props: {
       return
     }
     if (parsed == null || parsed < 0) {
-      toast.error('Enter an amount of zero or more')
+      toast.error(figureError(text))
       return
     }
+    const read = parseMoneyInput(text)
+    if (read.ok && read.rounded)
+      toast.message(`Rounded to ${fmtFigure(parsed)} — amounts are kept to the cent`)
     if (Math.abs(parsed - value) < 0.005) return
     onCommit(parsed)
   }

@@ -94,7 +94,12 @@ import {
   readListLinkFromLocation,
   sanitizeCbvLinkState
 } from '../lib/list-link'
-import { rememberedListPage, rememberListPage } from '../lib/list-page-memory'
+import {
+  pageWhileSettling,
+  rememberedListPage,
+  rememberListPage,
+  restoreWindowOutcome
+} from '../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
@@ -146,6 +151,7 @@ import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushAct
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
 import { CollectionTree, useTreeConfig } from './cbv/CollectionTree'
+import { relatedMissing } from './item-edit/related-missing'
 import {
   type ListPage,
   localYmd,
@@ -720,7 +726,20 @@ function RelationLabel({ relatedCollection, id }: { relatedCollection: string; i
     return (
       <span className='inline-block h-3.5 w-24 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
     )
-  if (!item) return <span className='font-mono text-[12px] text-slate-400'>{String(id)}</span>
+  // A linked record the reader cannot read (zone-scoped projects, army 9 review M7) or
+  // that is gone comes back as nothing: say so, never the bare id.
+  if (!item) {
+    const missing = relatedMissing(null)
+    return (
+      <span
+        data-relation-missing
+        data-tip={missing.tip}
+        className='text-[12px] italic text-slate-500 dark:text-slate-400'
+      >
+        {missing.text}
+      </span>
+    )
+  }
   const label = userCol
     ? String(
         [item.first_name, item.last_name].filter(Boolean).join(' ') || item.email || item.id || ''
@@ -4341,7 +4360,16 @@ export function CollectionBrowserView({
     sharedLink ? null : rememberedListPage(`cbv:${collection}`)
   )
   const [page, setPage] = useState(sharedLink?.p ?? restoredPage ?? 1)
+  // Army 9 b14: the async scope seed (Funding Year / Zone defaults) changes the conditions
+  // right after mount, and that automatic reset to page 1 deleted the remembered page.
+  // Until the first settled page has loaded, a reset to 1 goes back to the restored page.
+  const restorePendingRef = useRef<number | null>(restoredPage)
   useEffect(() => {
+    const keep = pageWhileSettling(restorePendingRef.current, page)
+    if (keep !== page) {
+      setPage(keep)
+      return
+    }
     rememberListPage(`cbv:${collection}`, page)
   }, [collection, page])
   // #2447 — cursors that reach the next pages of the current list (forgotten on any change).
@@ -5255,6 +5283,25 @@ export function CollectionBrowserView({
         return res
       })
   })
+  // The first page that loads with the settled conditions ends the restore window; a
+  // restored page past the end (records closed since) moves to the last page.
+  useEffect(() => {
+    const out = restoreWindowOutcome({
+      pending: restorePendingRef.current,
+      gateOpen: scopeGateOpen,
+      fetching: isFetching,
+      failed: !!error,
+      placeholder: isPlaceholderData,
+      loaded: !!itemsRes,
+      total: itemsRes?.total,
+      totalUnknown: itemsRes?.total_timed_out === true,
+      pageSize: effPageSize,
+      page
+    })
+    if (!out) return
+    restorePendingRef.current = null
+    if (out.page != null) setPage(out.page)
+  }, [scopeGateOpen, itemsRes, isFetching, isPlaceholderData, page, effPageSize, error])
   const rows = aiResult ? aiResult.rows : (itemsRes?.data ?? [])
   const total = aiResult ? aiResult.total : (itemsRes?.total ?? 0)
   // The rows are complete but the count gave up (200 + total_timed_out): no total to state.

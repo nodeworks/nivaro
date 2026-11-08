@@ -5391,6 +5391,9 @@ interface OwnerGapCluster {
     group_label: string | null
     matched_filters: string[]
     mismatched_filters: string[]
+    /** The two lists in words, ids resolved ("Project Type Small Electronics"); newer servers. */
+    matched_labels?: string[]
+    missing_labels?: string[]
   } | null
   /** Why no group matches, in words (#2012); absent on older servers. */
   reason?: string
@@ -6232,15 +6235,20 @@ export function OwnerGapsCard({
                               <span className='text-slate-500 dark:text-muted-foreground'>
                                 {' '}
                                 already matches{' '}
-                                {humanizeFieldList(g.suggestion.matched_filters.join(', ')) ||
-                                  'nothing'}
+                                {suggestionList(
+                                  g.suggestion.matched_labels,
+                                  g.suggestion.matched_filters
+                                ) || 'nothing'}
                               </span>
                               {g.suggestion.mismatched_filters.length > 0 && (
                                 <span className='text-amber-700 dark:text-amber-400'>
                                   {' '}
                                   — it misses{' '}
-                                  {humanizeFieldList(g.suggestion.mismatched_filters.join(', '))},
-                                  so assigning creates a group for this combination
+                                  {suggestionList(
+                                    g.suggestion.missing_labels,
+                                    g.suggestion.mismatched_filters
+                                  )}
+                                  , so assigning creates a group for this combination
                                 </span>
                               )}
                             </>
@@ -6315,6 +6323,14 @@ function dimLabel(path: string): string {
  *  ('regions.short_name (wants 10)' → 'Region (wants 10)'). */
 function humanizeFieldList(v: string): string {
   return v.replace(/[a-z_]+(?:\.[a-z_]+)+/g, (m) => dimLabel(m))
+}
+
+/** A suggestion's field list in words: the server's resolved labels when it sends them,
+ *  else the raw strings humanized with any bare id dropped — "Project Type", never
+ *  "Project Type (wants 5)" (army 9 b11 N9-2). Exported for tests. */
+export function suggestionList(labels: string[] | undefined, raw: string[]): string {
+  if (Array.isArray(labels) && labels.length > 0) return labels.join(', ')
+  return humanizeFieldList(raw.map((r) => r.replace(/ \(wants \d+\)$/, '')).join(', '))
 }
 
 function InstanceMigrationCard({ templateId }: { templateId: string }) {

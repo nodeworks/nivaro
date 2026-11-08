@@ -229,4 +229,16 @@ describe('function-call syntax (server-side expr-eval formulas)', () => {
   it('accepts a zero-argument call', () => {
     expect(validateExpression('now()').ok).toBe(true)
   })
+
+  it('round() rounds the decimal value half away from zero, not binary dust', () => {
+    // 100.505 * 3 is 301.51499999999999 as a double; money says 301.52.
+    expect(
+      evaluateNumeric('round(item.price * item.quantity, 2)', { price: 100.505, quantity: 3 })
+    ).toBe(301.52)
+    expect(evaluateNumeric('round(1.005, 2)', {})).toBe(1.01)
+    expect(evaluateNumeric('round(-1.005, 2)', {})).toBe(-1.01)
+    expect(evaluateNumeric('round(2.5)', {})).toBe(3)
+    expect(evaluateNumeric('round(-2.5)', {})).toBe(-3)
+    expect(evaluateNumeric('round(301.515, 2) + 250', {})).toBe(551.52)
+  })
 })

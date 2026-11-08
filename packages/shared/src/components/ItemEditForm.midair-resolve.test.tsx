@@ -263,7 +263,8 @@ describe('ItemEditForm header mid-air dialog (army5 b09)', () => {
     expect(m.row.description).toBe('A B4')
     expect(input('description')?.value).toBe('A B4')
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
-      'Kept the newer value — nothing of yours left to save'
+      'Kept the newer value — nothing of yours left to save',
+      expect.objectContaining({ id: 'nvr-save-outcome' })
     )
   })
 
@@ -281,7 +282,8 @@ describe('ItemEditForm header mid-air dialog (army5 b09)', () => {
     expect(m.row.description).toBe('A B4')
     expect(m.row.title).toBe('T2')
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
-      'Changes saved — kept the newer value for 1 field'
+      'Changes saved — kept the newer value for 1 field',
+      expect.objectContaining({ id: 'nvr-save-outcome' })
     )
   })
 
@@ -294,7 +296,11 @@ describe('ItemEditForm header mid-air dialog (army5 b09)', () => {
     expect(ps[1]._body?.description).toBe('A S2')
     expect(ps[1]._body?._base_revision).toBe(11)
     expect(m.row.description).toBe('A S2')
-    expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Changes saved')
+    // One toast slot per save outcome (army9 b09): the text plus its id.
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Changes saved',
+      expect.objectContaining({ id: 'nvr-save-outcome' })
+    )
   })
 
   it('a mix works per field: theirs kept for one, mine written for the other', async () => {
@@ -313,7 +319,8 @@ describe('ItemEditForm header mid-air dialog (army5 b09)', () => {
     expect(m.row.description).toBe('A B4')
     expect(m.row.title).toBe('T S2')
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
-      'Changes saved — kept the newer value for 1 field'
+      'Changes saved — kept the newer value for 1 field',
+      expect.objectContaining({ id: 'nvr-save-outcome' })
     )
   })
 })

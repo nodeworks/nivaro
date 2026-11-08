@@ -642,7 +642,9 @@ export function QueryTable({
             : `${pct.toLocaleString('en-US', { maximumFractionDigits: 1 })}% of ${fmt(max, c.format)}`
         }
       >
-        <span>{fmt(cellValue(row, c), c.format)}</span>
+        {/* fmtCell, not fmt: zero_dash reaches progress cells too (a type with
+            no CAR tagged read "$0" beside the "—" of its other columns). */}
+        <span>{fmtCell(cellValue(row, c), c.format)}</span>
         <div className='h-1 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
           <div
             className={`h-full rounded-full ${pct !== null && pct > 100 ? 'bg-red-500' : 'bg-nvr-cyan'}`}

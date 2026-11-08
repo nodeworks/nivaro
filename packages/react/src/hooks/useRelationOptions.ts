@@ -12,7 +12,7 @@ export type RelationOption = {
  * Render a display template like "{{first_name}} {{last_name}}" against a row.
  * Falls back to the row id (as string) when no template / no fields resolve.
  */
-function renderLabel(
+export function renderLabel(
   row: Record<string, unknown>,
   template: string | null | undefined,
   idValue: unknown

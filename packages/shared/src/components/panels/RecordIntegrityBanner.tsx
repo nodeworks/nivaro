@@ -150,6 +150,8 @@ interface Proposal {
   choices?: Array<{ id: string; label: string }>
   pick?: { collection: string; item_id: string; field: string }
   notify?: { user_id: string; name: string }
+  /** Asked before applying (removing a line). */
+  confirm?: string
 }
 
 interface ApplyResult {
@@ -328,6 +330,8 @@ function ProposalPicker({
   const [undoLeft, setUndoLeft] = useState(0)
   const [err, setErr] = useState<string | null>(null)
   const [lastApplied, setLastApplied] = useState<Proposal | null>(null)
+  // A proposal that removes something is applied on a second, confirming click.
+  const [confirming, setConfirming] = useState<string | null>(null)
 
   const proposals = useMemo(() => [...(data ?? []), ...extra], [data, extra])
 
@@ -455,6 +459,22 @@ function ProposalPicker({
                       <p className='text-[11px] leading-snug text-slate-500 dark:text-muted-foreground'>
                         {p.basis}
                       </p>
+                      {p.confirm && confirming === p.id && (
+                        <p
+                          role='alert'
+                          data-integrity-confirm
+                          className='mt-1 text-[11px] font-medium leading-snug text-red-700 dark:text-red-300'
+                        >
+                          {p.confirm}{' '}
+                          <button
+                            type='button'
+                            onClick={() => setConfirming(null)}
+                            className='font-normal text-slate-600 underline underline-offset-2 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+                          >
+                            Keep it
+                          </button>
+                        </p>
+                      )}
                       {p.preview.length > 0 && (
                         <div className='mt-1 flex flex-wrap gap-1'>
                           {p.preview.slice(0, 8).map((pv, j) => (
@@ -509,19 +529,33 @@ function ProposalPicker({
                     <button
                       type='button'
                       disabled={apply.isPending || (p.kind === 'pick' && !picked)}
-                      onClick={() => apply.mutate(p)}
+                      data-integrity-apply={p.id}
+                      onClick={() => {
+                        if (p.confirm && confirming !== p.id) {
+                          setConfirming(p.id)
+                          return
+                        }
+                        setConfirming(null)
+                        apply.mutate(p)
+                      }}
                       className={cn(
                         'shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold text-white transition-colors disabled:opacity-50',
-                        p.kind === 'notify'
-                          ? 'bg-slate-600 hover:bg-slate-700'
-                          : 'bg-nvr-cyan hover:bg-nvr-cyan-dark'
+                        p.confirm && confirming === p.id
+                          ? 'bg-red-600 hover:bg-red-700'
+                          : p.kind === 'notify'
+                            ? 'bg-slate-600 hover:bg-slate-700'
+                            : 'bg-nvr-cyan hover:bg-nvr-cyan-dark'
                       )}
                     >
                       {apply.isPending && apply.variables?.id === p.id
                         ? 'Applying…'
-                        : p.kind === 'notify'
-                          ? 'Send'
-                          : 'Apply'}
+                        : p.confirm && confirming === p.id
+                          ? 'Yes, remove'
+                          : p.kind === 'notify'
+                            ? 'Send'
+                            : p.confirm
+                              ? 'Remove'
+                              : 'Apply'}
                     </button>
                   </div>
                 </div>

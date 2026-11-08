@@ -204,6 +204,29 @@ function nextSort(current: string, field: string): string {
   return '' // desc → clear
 }
 
+/**
+ * Value lists match by contains, every typed word somewhere in the label — cmdk's
+ * default fuzzy score listed 23 names without "ARMY" in them for "ARMY" (army 9 b08
+ * N-R9-5); the global search and pickers already match this way.
+ */
+export function containsFilter(value: string, search: string): number {
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return 1
+  const hay = value.toLowerCase()
+  return terms.every((t) => hay.includes(t)) ? 1 : 0
+}
+
+/** aria-sort for a sortable column under the current sort string (`field` / `-field`). */
+export function ariaSortFor(sort: string, field: string): 'ascending' | 'descending' | 'none' {
+  if (!sort || getSortField(sort) !== field) return 'none'
+  return getSortDir(sort) === 'desc' ? 'descending' : 'ascending'
+}
+
+/** A header that is plain text can sit inside a sort button (no nested controls). */
+function sortHeaderIsText(header: unknown): boolean {
+  return typeof header === 'string' || typeof header === 'number'
+}
+
 // ─── Sort icon ────────────────────────────────────────────────────────────────
 
 function SortIcon({ field, sort }: { field: string; sort: string }) {
@@ -323,7 +346,7 @@ function FilterCombobox({
         </button>
       </PopoverTrigger>
       <PopoverContent className='w-[240px] p-0' align='start'>
-        <Command shouldFilter={!isAsync}>
+        <Command shouldFilter={!isAsync} filter={containsFilter}>
           <CommandInput
             placeholder='Search…'
             className='h-8 text-[12px]'
@@ -1270,10 +1293,48 @@ export function DataTable<T = Record<string, unknown>>({
                           col.headerClassName
                         )}
                         onClick={() => handleHeaderClick(col)}
+                        // Sorting is reachable from the keyboard and says its order (army 9
+                        // b08 N-R9-6): a plain-text header is a button (Enter / Space click
+                        // through to this cell's handler); any other header makes the cell
+                        // itself the stop. aria-sort sits on the column header.
+                        aria-sort={
+                          col.sortable && onSortChange ? ariaSortFor(sort, col.key) : undefined
+                        }
+                        tabIndex={
+                          col.sortable && onSortChange && !sortHeaderIsText(col.header)
+                            ? 0
+                            : undefined
+                        }
+                        onKeyDown={
+                          col.sortable && onSortChange && !sortHeaderIsText(col.header)
+                            ? (e) => {
+                                if (e.target !== e.currentTarget) return
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  handleHeaderClick(col)
+                                }
+                              }
+                            : undefined
+                        }
                       >
                         <span className='inline-flex items-center'>
-                          {col.header}
-                          {col.sortable && onSortChange && <SortIcon field={col.key} sort={sort} />}
+                          {col.sortable && onSortChange && sortHeaderIsText(col.header) ? (
+                            <button
+                              type='button'
+                              className='inline-flex items-center rounded-sm text-inherit focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                              data-dt-sort={col.key}
+                            >
+                              {col.header}
+                              <SortIcon field={col.key} sort={sort} />
+                            </button>
+                          ) : (
+                            <>
+                              {col.header}
+                              {col.sortable && onSortChange && (
+                                <SortIcon field={col.key} sort={sort} />
+                              )}
+                            </>
+                          )}
                           {pinsActive && onColumnPinChange && col.key !== 'claim' && (
                             <button
                               type='button'

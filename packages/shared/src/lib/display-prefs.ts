@@ -97,6 +97,19 @@ export function liftForDarkSurface(hex: string, surface: string, min = 4.5): str
   return out
 }
 
+/**
+ * A configured colour (a pipeline state's hex) darkened just enough to read as small
+ * text on a light surface (4.5:1) — amber #f59e0b as text on white was 2.2:1 (army 9
+ * b08 N-R9-8). Non-hex input comes back unchanged.
+ */
+export function deepenForLightSurface(hex: string, surface = '#ffffff', min = 4.5): string {
+  if (!hexToRgbChannels(hex)) return hex
+  let out = hex
+  for (let i = 1; i <= 20 && contrastRatio(out, surface) < min; i++)
+    out = mix(hex, '#000000', i * 0.05)
+  return out
+}
+
 /** Which ink reads on a solid accent fill: light (white) or dark (navy). */
 export function accentInk(hex: string, darkInk = '#080f1c'): 'light' | 'dark' {
   return contrastRatio(hex, '#ffffff') >= contrastRatio(hex, darkInk) ? 'light' : 'dark'

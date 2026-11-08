@@ -170,8 +170,12 @@ export function QueueQuickFilters({
               }
               onApply(patch)
             }}
-            className={`h-6 rounded px-2.5 text-[11px] font-semibold text-white transition-[filter] hover:brightness-110 ${
-              dirty ? 'bg-nvr-cyan' : 'bg-nvr-cyan opacity-60'
+            // Navy ink on the accent fill (white on cyan was 1.9:1 — army 9 b08 N-R9-8),
+            // the same ink EFP's own solid fills use; nothing staged = a quiet tint.
+            className={`h-6 rounded px-2.5 text-[11px] font-semibold transition-[filter] hover:brightness-110 ${
+              dirty
+                ? 'bg-nvr-cyan text-nvr-navy'
+                : 'bg-nvr-cyan/15 text-nvr-navy dark:text-nvr-cyan'
             }`}
             data-queue-quick-apply
           >

@@ -174,9 +174,25 @@ export function RelationCombobox({
   // The keyboard-highlighted option (index into the pinned + listed options).
   const [activeIndex, setActiveIndex] = useState(-1)
 
+  // Enter pressed while the search for the typed text is still out: picked
+  // when that answer lands (a fast "201943⏎" must pick 201943, never the
+  // first row of the previous list). Any further typing or closing drops it.
+  const pendingEnterRef = useRef<string | null>(null)
+  const focusSearch = () => {
+    const el = inputRef.current
+    if (!el || document.activeElement === el) return
+    el.focus({ preventScroll: true })
+    // Caret after the text already typed on the trigger.
+    const end = el.value.length
+    el.setSelectionRange?.(end, end)
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the listed inputs only; the helpers it calls read refs
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 30)
-    else setQuery('')
+    if (open) setTimeout(focusSearch, 30)
+    else {
+      setQuery('')
+      pendingEnterRef.current = null
+    }
   }, [open])
 
   const closeAndRefocus = () => {
@@ -282,6 +298,13 @@ export function RelationCombobox({
       window.removeEventListener('resize', update)
     }
   }, [open])
+  // The search box takes focus the moment the panel exists (not 30 ms later):
+  // keys typed in the meantime would otherwise land on the trigger.
+  const panelReady = open && !!panelStyle && !!portalEl
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the listed inputs only; the helpers it calls read refs
+  useLayoutEffect(() => {
+    if (panelReady && document.activeElement === triggerRef.current) focusSearch()
+  }, [panelReady])
 
   const { data: colMeta, isPending: colMetaPending } = useQuery<{ display_template?: string }>({
     queryKey: ['col-meta', collection],
@@ -383,7 +406,7 @@ export function RelationCombobox({
           get(`/items/${collection}`, {
             limit: 200,
             picker: '1',
-            ...(debouncedQuery ? { search: debouncedQuery } : {}),
+            ...(debouncedQuery.trim() ? { search: debouncedQuery.trim() } : {}),
             ...(filterStr ? { filter: filterStr } : {}),
             ...(tmplFields ? { fields: tmplFields } : {}),
             ...(serverSort ? { sort: serverSort } : {})
@@ -417,13 +440,23 @@ export function RelationCombobox({
     count: data?.length ?? 0
   })
 
-  const { data: selected, isLoading: isLoadingSelected } = useQuery<Item | null>({
+  const {
+    data: selected,
+    isLoading: isLoadingSelected,
+    error: selectedError,
+    isFetched: selectedFetched
+  } = useQuery<Item | null>({
     queryKey: ['relation-single', collection, String(value), tmplFields],
     queryFn: () =>
       readRow(collection, value as string | number, tmplFields) as Promise<Item | null>,
     enabled: !!value,
-    staleTime: 60_000
+    staleTime: 60_000,
+    retry: retryRelatedRead
   })
+  // A value the reader cannot open (a project now outside their zones) says
+  // so in words on the trigger — it used to look empty ("Select…") or show
+  // its number (army9 review M7).
+  const selectedUnreadable = !!value && !isLoadingSelected && selectedFetched && !selected
 
   const pinnedId = pinned?.id != null && pinned.id !== '' ? String(pinned.id) : null
   const { data: pinnedItem } = useQuery<Item | null>({
@@ -656,6 +689,21 @@ export function RelationCombobox({
       | null
     el?.scrollIntoView?.({ block: 'nearest' })
   }, [open, active])
+  // A waiting Enter (see pendingEnterRef) picks once the typed text's answer
+  // is on screen — the same pick Enter makes on a settled list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the listed inputs only; the helpers it calls read refs
+  useEffect(() => {
+    const want = pendingEnterRef.current
+    if (want === null) return
+    if (!open || want !== query) {
+      pendingEnterRef.current = null
+      return
+    }
+    if (!optionsSettled) return
+    pendingEnterRef.current = null
+    if (active >= 0) pickAt(active)
+    else if (navCount === 1 && data !== undefined) pickAt(0)
+  }, [open, query, optionsSettled, active, navCount])
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -671,10 +719,14 @@ export function RelationCombobox({
       setActiveIndex(navCount - 1)
     } else if (e.key === 'Enter') {
       // Never submits a surrounding form. Picks the highlighted option, or the
-      // only one left (a typed project number that leaves one match).
+      // only one left (a typed project number that leaves one match). While
+      // the answer for the typed text is still out, the pick waits for it.
       e.preventDefault()
-      if (active >= 0) pickAt(active)
-      else if (navCount === 1) pickAt(0)
+      if (query.trim() && !optionsSettled) pendingEnterRef.current = query
+      else if (active >= 0) pickAt(active)
+      // A sole option only once the list is in — while the first list loads
+      // the pinned Default is the only row (army9 review L1).
+      else if (navCount === 1 && optionsSettled && data !== undefined) pickAt(0)
     } else if (e.key === 'Tab') {
       // The panel is portaled to the end of the page: move focus back to the
       // trigger first so Tab continues to the NEXT FIELD, not off the page.
@@ -684,21 +736,44 @@ export function RelationCombobox({
   }
   const onTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (disabled) return
+    const printable =
+      e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && (open || e.key !== ' ')
     if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
       e.preventDefault()
       setOpen(true)
-    } else if (
-      !open &&
-      e.key.length === 1 &&
-      e.key !== ' ' &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.altKey
-    ) {
-      // Typing on a closed picker opens it with that text searched.
+    } else if (printable) {
+      // Typing on a closed picker opens it with that text searched. Keys that
+      // land on the trigger after it opened — a fast typist, or a busy page
+      // that has not moved focus into the search box yet — are ADDED to the
+      // search, never dropped (army9 b01 HIGH: "201943" kept only "2" and
+      // Enter picked the first project containing a 2).
       e.preventDefault()
-      setOpen(true)
-      setQuery(e.key)
+      const typed = e.key
+      pendingEnterRef.current = null
+      // Always appended: a closed picker's search is empty, and a key that
+      // arrives before React re-rendered must not replace the earlier ones.
+      // A space never starts the search or doubles one (army9 review L2: it
+      // sent a server search for " ").
+      setQuery((q) => (typed === ' ' && (q === '' || q.endsWith(' ')) ? q : q + typed))
+      if (!open) setOpen(true)
+      else focusSearch()
+    } else if (open && e.key === 'Backspace') {
+      e.preventDefault()
+      pendingEnterRef.current = null
+      setQuery((q) => q.slice(0, -1))
+      focusSearch()
+    } else if (
+      open &&
+      (e.key === 'Enter' ||
+        e.key === 'ArrowDown' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'Home' ||
+        e.key === 'End')
+    ) {
+      // The list is open but focus is still on the trigger: these keys mean
+      // what they mean in the search box (Enter picks, it does not toggle).
+      onSearchKeyDown(e as unknown as React.KeyboardEvent<HTMLInputElement>)
+      focusSearch()
     }
   }
 
@@ -751,7 +826,11 @@ export function RelationCombobox({
             )}
           >
             {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
-            <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
+            {selectedUnreadable ? (
+              <RelatedMissingLabel error={selectedError} className='truncate' />
+            ) : (
+              <span className='truncate'>{selectedLabel ?? placeholder ?? 'Select…'}</span>
+            )}
           </span>
         )}
         <ChevronDown className='h-4 w-4 shrink-0 opacity-50' />
@@ -798,7 +877,10 @@ export function RelationCombobox({
               <input
                 ref={inputRef}
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  pendingEnterRef.current = null
+                  setQuery(e.target.value)
+                }}
                 onKeyDown={onSearchKeyDown}
                 role='combobox'
                 aria-expanded
@@ -881,7 +963,9 @@ export function RelationCombobox({
                       <span className='font-medium text-foreground'>
                         {narrowedBy.labels.join(' · ')}
                       </span>
-                      {narrowedBy.onClear ? ' — clear one to widen the list:' : '.'}
+                      {narrowedBy.onClear
+                        ? ' — clear one to widen the list:'
+                        : '. Change it, or ask an administrator to add options for it.'}
                     </p>
                     {narrowedBy.onClear && (
                       <div className='mt-1.5 flex flex-wrap gap-1.5'>

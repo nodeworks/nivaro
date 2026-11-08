@@ -179,6 +179,7 @@ import {
   lineLabelOf,
   resolveLineCollision,
   rowBaseBookFor,
+  snapshotRowBases,
   writeLineGuarded
 } from './line-midair'
 import {
@@ -2461,7 +2462,14 @@ export function InlineTableField({
    *  false = refused as a mid-air collision (queued for the chooser, nothing
    *  overwritten). Any other error is thrown as before. */
   const writeRowRef = useRef<
-    (url: string, rowId: string, body: Record<string, unknown>) => Promise<boolean>
+    (
+      url: string,
+      rowId: string,
+      body: Record<string, unknown>,
+      /** A base pinned when the person's editor OPENED (snapshotRowBases) —
+       *  beats the book's current one, which a live refresh may have moved. */
+      base?: Promise<number | null> | number | null
+    ) => Promise<boolean>
   >(async () => false)
   /** Collisions met during one action, shown together when it ends. */
   const conflictBatchRef = useRef<LineConflict[]>([])
@@ -2615,6 +2623,19 @@ export function InlineTableField({
     })
     return filters
   }, [cascadeRules, cascadeResolutions, parentDraftCtx])
+  // Which header fields narrow each line picker — named by an empty picker
+  // ("Nothing set up for this Project yet", army9 b01) instead of "No results".
+  const fieldCascadeNarrowed = useMemo(() => {
+    const out: Record<string, { labels: string[]; keys: string[] }> = {}
+    for (const rule of cascadeRules) {
+      if (!fieldCascadeFilters[rule.child_field]) continue
+      const label = parentDraftCtx?.fieldLabels?.[rule.parent_field] ?? titleCase(rule.parent_field)
+      const cur = (out[rule.child_field] ??= { labels: [], keys: [] })
+      cur.labels.push(label)
+      cur.keys.push(rule.parent_field)
+    }
+    return out
+  }, [cascadeRules, fieldCascadeFilters, parentDraftCtx?.fieldLabels])
 
   const isPendingMode = saveMode === 'pending'
   const pendingRows = staging ? staging.getPendingRows(relatedCollection, manyField) : []
@@ -4202,10 +4223,11 @@ export function InlineTableField({
     return () => window.removeEventListener(OWN_RECORD_WRITES_EVENT, onOwn)
     // biome-ignore lint/correctness/useExhaustiveDependencies: stampLocalWrite only writes a ref
   }, [relatedCollection])
-  writeRowRef.current = async (url, rowId, body) => {
+  writeRowRef.current = async (url, rowId, body, base) => {
     const r = await writeLineGuarded(client, rowBases, url, rowId, body, {
       key: `${relatedCollection}.${manyField}`,
-      label: lineLabelOf(rows, rowId, rowOrderField)
+      label: lineLabelOf(rows, rowId, rowOrderField),
+      ...(base !== undefined ? { base } : {})
     })
     if (!r.ok) {
       conflictBatchRef.current.push(r.conflict)
@@ -5609,6 +5631,7 @@ export function InlineTableField({
    *  pass; calling setDraftField in a loop would read a stale editStateRef
    *  and keep only the last key. */
   function setDraftFields(patch: Record<string, unknown>) {
+    staging?.noteEditIntent?.()
     const cur = editStateRef.current
     const rowId = cur?.rowId ?? null
     if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
@@ -5617,6 +5640,10 @@ export function InlineTableField({
     setEditState((st) => (st ? { ...st, draft: nextDraft } : st))
   }
   function setDraftField(k: string, v: unknown) {
+    // Typing in a line editor is edit intent: the form claims the record's
+    // edit lock now, as a header field does — not only when the row is
+    // staged (army9 b09: the other person could edit the same line freely).
+    staging?.noteEditIntent?.()
     const cur = editStateRef.current
     const rowId = cur?.rowId ?? null
     if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
@@ -6862,11 +6889,29 @@ export function InlineTableField({
    *  (probe → changed_field passes, auto targets blanked, locks honoured), and
    *  the result goes out through the grid's OWN write path for its mode. */
   async function applyBulkEdit(touched: Record<string, unknown>) {
+    const pinned = bulkBasesRef.current
     await applyValuesToTargets(
       touched,
       visibleRowTargets().filter((t) => selectedIds.has(t.key)),
-      { clearSelection: true, noun: 'row' }
+      { clearSelection: true, noun: 'row', baseOf: (id) => pinned.get(id) }
     )
+    bulkBasesRef.current = new Map()
+  }
+  /** The selected saved rows' bases, pinned when the bulk dialog OPENS (army9
+   *  b09 HIGH): the dialog can sit open while someone else saves one of those
+   *  lines; a live refresh then moves the grid's read-time base forward and
+   *  the Apply would have passed the mid-air check — Sudharsan's 6 overwritten
+   *  by Bernard's 8, "Changes saved", nothing said to either. */
+  const bulkBasesRef = useRef<Map<string, Promise<number | null>>>(new Map())
+  function openBulkEdit() {
+    bulkBasesRef.current =
+      isNew || readOnly
+        ? new Map()
+        : snapshotRowBases(
+            rowBases,
+            [...selectedIds].filter((k) => !k.startsWith('pending:'))
+          )
+    setBulkEditOpen(true)
   }
   /** Every row the grid holds (saved minus staged deletes, then pending) —
    *  collapsed sections and rows past the render cap included. */
@@ -6893,7 +6938,14 @@ export function InlineTableField({
   async function applyValuesToTargets(
     touched: Record<string, unknown>,
     targets: RowTarget[],
-    opts: { clearSelection: boolean; noun: 'row' | 'line' }
+    opts: {
+      clearSelection: boolean
+      noun: 'row' | 'line'
+      /** Per saved row, the base its write is judged against — pinned when
+       *  the person's dialog opened (army9 b09 HIGH). Absent = the base of the
+       *  read the grid shows now (an instant action, nothing held open). */
+      baseOf?: (rowId: string) => Promise<number | null> | undefined
+    }
   ) {
     const keys = Object.keys(touched)
     if (keys.length === 0 || targets.length === 0) return
@@ -6995,11 +7047,17 @@ export function InlineTableField({
             ...(pendingRows[t.idx] ?? t.row),
             ...changes
           })
-        else
+        else {
+          // The base the record Save judges this line against: the one pinned
+          // when the dialog opened, else the read the grid shows. A save by
+          // someone else while the dialog was open is then a 409 on Save —
+          // the Theirs / Mine chooser — never a silent overwrite.
+          const pinned = (await opts.baseOf?.(t.key)) ?? null
           staging.queueEdit(relatedCollection, manyField, t.key, {
             ...changes,
-            ...stagedBase(t.key)
+            ...(pinned != null && pinned > 0 ? { __base_revision: pinned } : stagedBase(t.key))
           })
+        }
         applied++
       }
       finish(applied, [])
@@ -7027,7 +7085,8 @@ export function InlineTableField({
           const written = await writeRowRef.current(
             `/items/${relatedCollection}/${t.key}${pCtx}`,
             t.key,
-            reason ? { ...changes, _change_reason: reason } : changes
+            reason ? { ...changes, _change_reason: reason } : changes,
+            opts.baseOf?.(t.key)
           )
           if (written) applied++
         } catch (err) {
@@ -7510,6 +7569,7 @@ export function InlineTableField({
                     collection={relatedCollection}
                     itemId={args.rowId ?? 'new'}
                     cascadeFilter={fieldCascadeFilters[c.field]}
+                    narrowedBy={fieldCascadeNarrowed[c.field]}
                     pinnedOption={pinnedOptionFor(c.field, args.draft)}
                   />
                 )}
@@ -7984,7 +8044,7 @@ export function InlineTableField({
           {selectColOn && selectedIds.size > 0 && (
             <button
               type='button'
-              onClick={() => setBulkEditOpen(true)}
+              onClick={openBulkEdit}
               data-tip='Set the same values on every selected line'
               className='inline-flex h-6 items-center gap-1 rounded border border-amber-400 bg-amber-50 px-2 font-medium text-amber-700 transition-colors hover:border-amber-500 dark:border-amber-600 dark:bg-amber-950/30 dark:text-amber-300'
             >
@@ -8829,6 +8889,7 @@ export function InlineTableField({
                                         collection={relatedCollection}
                                         itemId={id}
                                         cascadeFilter={fieldCascadeFilters[c.field]}
+                                        narrowedBy={fieldCascadeNarrowed[c.field]}
                                         pinnedOption={pinnedOptionFor(
                                           c.field,
                                           editState?.draft ?? {}
@@ -9177,6 +9238,7 @@ export function InlineTableField({
                                 collection={relatedCollection}
                                 itemId='new'
                                 cascadeFilter={fieldCascadeFilters[c.field]}
+                                narrowedBy={fieldCascadeNarrowed[c.field]}
                                 pinnedOption={pinnedOptionFor(c.field, editState!.draft)}
                               />
                             </div>
@@ -9724,6 +9786,7 @@ export function InlineTableField({
                                         collection={relatedCollection}
                                         itemId='new'
                                         cascadeFilter={fieldCascadeFilters[c.field]}
+                                        narrowedBy={fieldCascadeNarrowed[c.field]}
                                         pinnedOption={pinnedOptionFor(c.field, editState!.draft)}
                                       />
                                     </div>
@@ -10162,6 +10225,7 @@ export function InlineTableField({
         collection={relatedCollection}
         cascadeFilters={fieldCascadeFilters}
         onApply={applyBulkEdit}
+        onEditIntent={() => staging?.noteEditIntent?.()}
       />
 
       <RowHistorySheet
@@ -10183,8 +10247,14 @@ export function InlineTableField({
         allowRestore={!!allowRevisionRestore && !readOnly}
         rowLabel={(itemId, data) => {
           const n = rowOrderField ? data[rowOrderField] : data.line_number
+          // Never the row id: its place in the grid, or "A removed line".
+          const pos = rows.findIndex((r) => String(r.id) === String(itemId)) + 1
           const title =
-            n !== null && n !== undefined && n !== '' ? `Line ${String(n)}` : `Line #${itemId}`
+            n !== null && n !== undefined && n !== ''
+              ? `Line ${String(n)}`
+              : pos > 0
+                ? `Line ${pos}`
+                : 'A removed line'
           const textCol = displayCols.find(
             (c) =>
               c.field !== 'id' &&

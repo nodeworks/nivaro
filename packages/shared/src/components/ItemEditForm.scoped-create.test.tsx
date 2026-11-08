@@ -468,7 +468,7 @@ describe('new workflow — the 8170 case (3 Zones on the project, one picked)', 
       // Nothing waits for a step after the create.
       expect(writesTo(m.calls, WORKFLOWS.followUps)).toHaveLength(0)
       expect(m.onSaved).toHaveBeenCalledWith('372777')
-      expect(toasts.success).toHaveBeenCalledWith('Record created')
+      expect(toasts.success).toHaveBeenCalledWith('Record created', expect.anything())
       expect(toasts.error).not.toHaveBeenCalled()
     })
   }
@@ -571,7 +571,7 @@ describe('a create the creator cannot read back', () => {
             expect.stringContaining('was created, but it’s outside what you can see'),
             expect.anything()
           )
-        else expect(toasts.success).toHaveBeenCalledWith('Record created')
+        else expect(toasts.success).toHaveBeenCalledWith('Record created', expect.anything())
       })
     }
   }
@@ -615,7 +615,7 @@ describe('an edit that moves the record out of the editor’s scope', () => {
           'Saved, but this workflow is now outside what you can see (its Zone (Zone 4) is not one of yours).',
           expect.anything()
         )
-      else expect(toasts.success).toHaveBeenCalledWith('Changes saved')
+      else expect(toasts.success).toHaveBeenCalledWith('Changes saved', expect.anything())
       expect(host.textContent ?? '').not.toMatch(/Cannot read properties/)
     })
   }

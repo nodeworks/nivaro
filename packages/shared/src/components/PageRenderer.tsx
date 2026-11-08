@@ -1,6 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 import {
   DrilldownContext,
@@ -451,8 +459,15 @@ type QueryWidgetFilter = {
   collection: string
   value_field?: string
   label_field?: string
+  /** A second field shown muted beside the label (a project's name next to
+   *  its number) and searched with it. */
+  secondary_field?: string
   sort?: string
-  /** Option fetch cap (default 500) — bump for big pick lists (projects). */
+  /** Option fetch cap (default 500) — bump for big pick lists (projects).
+   *  The API answers at most 1,000 rows a page; when the collection holds
+   *  more, typing in the search box asks the server for matches instead of
+   *  searching the first page only (army 9 b04 N-1: no 2026 project could be
+   *  picked from the first 1,000 project numbers). */
   limit?: number
   /** Pre-selected values on load. '$current_year' resolves to the current
    *  calendar year (default-year behavior). */
@@ -889,14 +904,56 @@ function QueryFilterSelect({
   const rootRef = useRef<HTMLDivElement>(null)
   const valueField = filter.value_field ?? 'id'
   const labelField = filter.label_field ?? valueField
-  const { data: options = [] } = useQuery<Array<Record<string, unknown>>>({
-    queryKey: ['page-renderer-filter', filter.collection, valueField, labelField, filter.sort],
+  const secondaryField = filter.secondary_field
+  const fields = [...new Set(['id', valueField, labelField, secondaryField ?? ''])]
+    .filter(Boolean)
+    .join(',')
+  const { data: page } = useQuery<{ rows: Array<Record<string, unknown>>; more: boolean }>({
+    queryKey: [
+      'page-renderer-filter',
+      filter.collection,
+      valueField,
+      labelField,
+      secondaryField ?? '',
+      filter.sort
+    ],
+    queryFn: () =>
+      client
+        .request<{ data: Array<Record<string, unknown>>; total?: number | null }>(
+          get(`/items/${filter.collection}`, {
+            fields,
+            limit: filter.limit ?? 500,
+            ...(filter.sort ? { sort: filter.sort } : {})
+          })
+        )
+        .then((r) => {
+          const rows = r.data ?? []
+          // The server has more than it handed back (its page cap or the
+          // filter's own limit): searching needs the server's help.
+          const more =
+            (typeof r.total === 'number' && r.total > rows.length) ||
+            rows.length >= (filter.limit ?? 500)
+          return { rows, more }
+        }),
+    staleTime: 60_000
+  })
+  const options = page?.rows ?? []
+  const needsServerSearch = page?.more === true
+  const searchTerm = search.trim()
+  const deferredTerm = useDeferredValue(searchTerm)
+  const { data: searched = [] } = useQuery<Array<Record<string, unknown>>>({
+    queryKey: ['page-renderer-filter-search', filter.collection, fields, deferredTerm],
+    enabled: needsServerSearch && deferredTerm.length > 0,
     queryFn: () =>
       client
         .request<{ data: Array<Record<string, unknown>> }>(
           get(`/items/${filter.collection}`, {
-            fields: [...new Set(['id', valueField, labelField])].join(','),
-            limit: filter.limit ?? 500,
+            fields,
+            limit: 100,
+            search: deferredTerm,
+            search_fields: [...new Set([valueField, labelField, secondaryField ?? ''])]
+              .filter(Boolean)
+              .join(','),
             ...(filter.sort ? { sort: filter.sort } : {})
           })
         )
@@ -914,19 +971,26 @@ function QueryFilterSelect({
   const label = filter.label ?? titleCase(filter.param)
   // Restricted scope narrows the option list before the search filter; then
   // one option per value sent (uniqueByValue says why that never drops records).
+  // Typed text against a capped list: the server's matches (plus whatever is
+  // already picked, so a selection never vanishes from under the person).
+  const source = needsServerSearch && searchTerm ? [...selected, ...searched] : options
   const scoped = uniqueByValue(
     allowedIds?.length
-      ? options.filter((o) => allowedIds.some((id) => String(id) === String(o.id)))
-      : options,
+      ? source.filter((o) => allowedIds.some((id) => String(id) === String(o.id)))
+      : source,
     (o) => String(o[valueField] ?? '')
   )
+  // Value, label and the secondary field: a server hit on the value alone
+  // (a project number when the label is its name) must survive the local pass.
+  const optionText = (o: Record<string, unknown>) =>
+    [o[valueField], o[labelField], secondaryField ? o[secondaryField] : null]
+      .filter((v) => v != null && v !== '')
+      .join(' ')
+      .toLowerCase()
   const visible = scoped.filter((o) =>
-    search
-      ? String(o[labelField] ?? '')
-          .toLowerCase()
-          .includes(search.toLowerCase())
-      : true
+    searchTerm ? optionText(o).includes(searchTerm.toLowerCase()) : true
   )
+  const searching = needsServerSearch && searchTerm.length > 0 && deferredTerm !== searchTerm
   const badge = allowedIds?.length
     ? {
         label: 'restricted',
@@ -1010,11 +1074,27 @@ function QueryFilterSelect({
                 >
                   <span className={`w-3.5 shrink-0 text-nvr-cyan ${on ? '' : 'invisible'}`}>✓</span>
                   <span className='truncate'>{String(o[labelField] ?? v)}</span>
+                  {secondaryField && o[secondaryField] != null && o[secondaryField] !== '' && (
+                    <span className='min-w-0 truncate text-[11px] text-slate-400'>
+                      {String(o[secondaryField])}
+                    </span>
+                  )}
                 </button>
               )
             })}
             {visible.length === 0 && (
-              <p className='px-2 py-1.5 text-[12px] text-slate-400'>No options</p>
+              <p className='px-2 py-1.5 text-[12px] text-slate-400' aria-live='polite'>
+                {searching
+                  ? 'Searching…'
+                  : searchTerm
+                    ? `No matches for “${searchTerm}”`
+                    : 'No options'}
+              </p>
+            )}
+            {needsServerSearch && !searchTerm && (
+              <p className='px-2 py-1.5 text-[11px] text-slate-400'>
+                Showing the first {options.length.toLocaleString('en-US')} — type to search all
+              </p>
             )}
           </div>
         </div>

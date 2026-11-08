@@ -36,6 +36,12 @@ export interface StoredDraft {
   base_revision?: number | null
   pending_rows: Record<string, Record<string, unknown>[]>
   pending_edits: Record<string, Record<string, Record<string, unknown>>>
+  /** Per `<childCollection>:<rowId>`, the revision a staged line edit was
+   *  based on when it was staged (army9 b09 MEDIUM): a restored line edit
+   *  saves against it, so someone else's save of that line while the draft
+   *  sat here meets the mid-air check (409 → Theirs / Mine) instead of
+   *  silently writing over it. Absent on drafts stored by older builds. */
+  line_bases?: Record<string, number>
   pending_deletes: Record<string, string[]>
   m2m_links: Record<string, unknown[]>
   m2m_unlinks: Record<string, unknown[]>
@@ -202,6 +208,58 @@ export function draftCreatedAs(
   } catch {
     return null
   }
+}
+
+/**
+ * The mid-air bases of a draft's staged line edits (army9 b09 MEDIUM): for
+ * every `<rc>.<mf>` → rowId in `pending_edits`, the revision `baseOf(rc,
+ * rowId)` answers (null / unknown = left out; the flush fetches one then).
+ * Keys are `<rc>:<rowId>`, the form's own line-base key.
+ */
+export async function lineBasesForDraft(
+  pendingEdits: StoredDraft['pending_edits'] | null | undefined,
+  baseOf: (rc: string, rowId: string) => Promise<number | null> | number | null | undefined
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {}
+  for (const [key, rows] of Object.entries(pendingEdits ?? {})) {
+    const rc = key.includes('.') ? key.slice(0, key.indexOf('.')) : key
+    for (const rowId of Object.keys(rows ?? {})) {
+      if (!rowId || rowId === 'new' || rowId.startsWith('pending:')) continue
+      let b: number | null | undefined
+      try {
+        b = await baseOf(rc, rowId)
+      } catch {
+        b = null
+      }
+      if (typeof b === 'number' && Number.isFinite(b) && b > 0) out[`${rc}:${rowId}`] = b
+    }
+  }
+  return out
+}
+
+/**
+ * What the form's draft persist does with its current state (army9 b09 MEDIUM
+ * + Fable review M2). `staged` = every staged line AND link beyond prefill;
+ * `stagedLines` = staged rows / edits / deletes only.
+ * - 'hold'  — a pushed reload asked (`forReload`) while clean-flagged work is
+ *   staged: never "safe to reload" over it (links are not drafted, so they
+ *   would be lost).
+ * - 'drop'  — nothing of the person's is held: delete the stored draft.
+ * - 'store' — write the draft: a dirty field, or staged lines (the Leave
+ *   dialog counts them, so the draft keeps them). Links alone are not a draft
+ *   (a new form's defaults and cascades stage links before the person touched
+ *   anything — R7 review).
+ */
+export function draftPersistDecision(input: {
+  isDirty: boolean
+  forReload: boolean
+  staged: number
+  stagedLines: number
+}): 'hold' | 'drop' | 'store' {
+  const { isDirty, forReload, staged, stagedLines } = input
+  if (isDirty) return 'store'
+  if (forReload && staged > 0) return 'hold'
+  return stagedLines > 0 ? 'store' : 'drop'
 }
 
 /** Does the draft still carry anything (a persisted draft whose fields all

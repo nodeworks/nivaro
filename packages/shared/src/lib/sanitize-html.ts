@@ -87,6 +87,12 @@ export function htmlToText(html: string): string {
   if (typeof DOMParser !== 'undefined') {
     const doc = new DOMParser().parseFromString(html, 'text/html')
     for (const el of doc.body.querySelectorAll('script,style,template,noscript')) el.remove()
+    // A line break or a block boundary separates words: "<p>one<br>two</p>"
+    // reads "one two", never "onetwo" (army9 b01 Summary rail).
+    for (const el of doc.body.querySelectorAll(
+      'br,p,div,li,tr,td,th,h1,h2,h3,h4,h5,h6,blockquote,pre'
+    ))
+      if (el.nextSibling) el.after(doc.createTextNode(' '))
     return (doc.body.textContent || '').replace(/\s+/g, ' ')
   }
   return html

@@ -435,7 +435,13 @@ export function evaluateAst(
           if (fn === 'ceil') return Math.ceil(n)
           const places = node.args[1] ? (num(node.args[1]) ?? 0) : 0
           const f = 10 ** places
-          return Math.round(n * f) / f
+          // Half away from zero on the DECIMAL value, not on binary dust:
+          // 100.505 * 3 is 301.51499999999999 as a double, and a plain
+          // Math.round(n * 100) made it 301.51 while the form, the requisition
+          // total and SQL's ROUND all say 301.52. 15 significant digits is
+          // what a double reliably carries.
+          const scaled = Number((n * f).toPrecision(15))
+          return (Math.sign(scaled) * Math.round(Math.abs(scaled))) / f
         }
         return null
       }
@@ -599,7 +605,6 @@ export function extractExpressionTokens(src: string): string[] {
   const parsed = parseExpression(src)
   return parsed.ok ? parsed.tokens : []
 }
-
 
 // ─── networkdays (#344): business days between two dates, inclusive-exclusive
 // (Mon–Fri; the fractional part of partial days is dropped). Order-agnostic —

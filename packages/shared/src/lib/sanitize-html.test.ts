@@ -20,6 +20,11 @@ describe('htmlToText', () => {
     expect(created).toEqual([])
     expect(w.__xssProbe).toBe(0)
   })
+  it('a line break or paragraph boundary keeps the words apart', () => {
+    expect(htmlToText('<p>note line one<br>line two</p>')).toBe('note line one line two')
+    expect(htmlToText('<p>one</p><p>two</p>')).toBe('one two')
+    expect(htmlToText('<ul><li>a</li><li>b</li></ul>')).toBe('a b')
+  })
   it('collapses whitespace', () => {
     expect(htmlToText('<p>a</p>\n\n<p>b&nbsp; c</p>')).toBe('a b c')
   })

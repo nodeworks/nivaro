@@ -23,6 +23,9 @@ const ROWS = [
 
 let root: Root | null = null
 afterEach(() => {
+  searchDelay = 0
+  listDelay = 0
+  forbiddenIds = []
   act(() => root?.unmount())
   root = null
   document.body.replaceChildren()
@@ -34,6 +37,12 @@ const tick = async () => {
 
 let current: unknown = null
 let rowsNow: Array<Record<string, unknown>> = ROWS
+/** A slow server search (ms) — keeps "Enter before the answer" deterministic. */
+let searchDelay = 0
+/** Delay (ms) on the unsearched first list. */
+let listDelay = 0
+/** Row reads by id answer 403 for these ids (outside the reader's scope). */
+let forbiddenIds: string[] = []
 function Host({ initial, pinned }: { initial: unknown; pinned?: { id: unknown } | null }) {
   const [v, setV] = useState<unknown>(initial)
   current = v
@@ -59,7 +68,9 @@ async function mount(
         return { data: { display_template: '{{name}}', relations: [] } }
       if (cmd._path === '/items/locations') {
         const search = String(cmd._params?.search ?? '').toLowerCase()
+        if (search && searchDelay) await new Promise((r) => setTimeout(r, searchDelay))
         const filter = cmd._params?.filter ? JSON.parse(String(cmd._params.filter)) : null
+        if (!search && !filter && listDelay) await new Promise((r) => setTimeout(r, listDelay))
         let rows = rowsNow
         if (filter?.id?._eq !== undefined)
           rows = rows.filter((r) => String(r.id) === String(filter.id._eq))
@@ -72,6 +83,8 @@ async function mount(
         return { data: rows }
       }
       const one = /^\/items\/locations\/(\d+)$/.exec(cmd._path)
+      if (one && forbiddenIds.includes(one[1]))
+        throw Object.assign(new Error('Forbidden'), { status: 403, response: { status: 403 } })
       if (one) return { data: rowsNow.find((r) => String(r.id) === one[1]) ?? null }
       return { data: null }
     })
@@ -232,5 +245,132 @@ describe('RelationCombobox keyboard', () => {
     const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
     await act(async () => search()?.dispatchEvent(ev))
     expect(ev.defaultPrevented).toBe(true)
+  })
+})
+
+// army9 b01 HIGH: typing a project number on a CLOSED picker kept only the
+// first digit ("201943" → "2"), and Enter then picked the first project with a
+// 2 in it (203430). Keys that reach the trigger after it opened — before focus
+// moved into the search box — are now added to the search, and an Enter typed
+// before the answer arrives waits for it.
+describe('RelationCombobox typing on a closed picker', () => {
+  const PROJECTS = [
+    { id: 1, name: '203430 - 27-NNO-WEST-HE-SE' },
+    { id: 2, name: '201943 - 26-WEST-POWER' },
+    { id: 3, name: '202706 - 26-EAST-BLT' }
+  ]
+  /** A key as the browser delivers it: keydown on whatever has focus, then —
+   *  unless prevented — the character lands in a focused text box. */
+  function press(k: string) {
+    const target = (document.activeElement ?? document.body) as HTMLElement
+    const ev = new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })
+    target.dispatchEvent(ev)
+    if (!ev.defaultPrevented && target instanceof HTMLInputElement && k.length === 1)
+      type(target, target.value + k)
+  }
+  // Small act() steps: React renders between them, as it would in a browser
+  // (one long act() holds every render until it ends).
+  const settle = async () => {
+    for (let t = 0; t < 500 + searchDelay * 2; t += 100)
+      await act(async () => new Promise((r) => setTimeout(r, 100)))
+    await tick()
+  }
+
+  it('a fast burst of digits keeps every digit and Enter picks that project', async () => {
+    await mount(null, { rows: PROJECTS })
+    searchDelay = 800
+    await act(async () => trigger()?.focus())
+    for (const k of '201943') await act(async () => press(k))
+    expect(search()?.value).toBe('201943')
+    // Enter before the search answered: nothing is picked meanwhile (never
+    // the first project with a 2 in it)…
+    await act(async () => press('Enter'))
+    expect(current).toBeNull()
+    // …and the project typed is picked once the answer is in.
+    await settle()
+    expect(current).toBe(2)
+    expect(panel()).toBeNull()
+  })
+
+  it('keys that still land on the trigger after it opened are added, not dropped', async () => {
+    await mount(null, { rows: PROJECTS })
+    const t = trigger() as HTMLButtonElement
+    await act(async () => t.focus())
+    // Every key to the trigger, as when the page is too busy to move focus.
+    for (const k of '201943') await act(async () => key(t, k))
+    expect(search()?.value).toBe('201943')
+    await settle()
+    expect(options()).toEqual(['201943 - 26-WEST-POWER'])
+    await act(async () => key(t, 'Enter'))
+    expect(current).toBe(2)
+  })
+
+  it('key-by-key typing with pauses keeps every digit', async () => {
+    await mount(null, { rows: PROJECTS })
+    await act(async () => trigger()?.focus())
+    for (const k of '201943') {
+      await act(async () => press(k))
+      await act(async () => new Promise((r) => setTimeout(r, 150)))
+    }
+    expect(search()?.value).toBe('201943')
+    await settle()
+    expect(options()).toEqual(['201943 - 26-WEST-POWER'])
+    await act(async () => press('Enter'))
+    expect(current).toBe(2)
+  })
+
+  it('Backspace on the trigger edits the search; a pinned default never steals Enter', async () => {
+    await mount(null, { rows: PROJECTS, pinned: { id: 1 } })
+    const t = trigger() as HTMLButtonElement
+    await act(async () => t.focus())
+    for (const k of '2019434') await act(async () => key(t, k))
+    await act(async () => key(t, 'Backspace'))
+    expect(search()?.value).toBe('201943')
+    await act(async () => key(t, 'Enter'))
+    await settle()
+    expect(current).toBe(2)
+  })
+
+  it('typing more after Enter drops the waiting pick', async () => {
+    await mount(null, { rows: PROJECTS })
+    searchDelay = 800
+    await act(async () => trigger()?.focus())
+    for (const k of '20') await act(async () => press(k))
+    await act(async () => press('Enter'))
+    await act(async () => press('2'))
+    await settle()
+    expect(current).toBeNull()
+    expect(search()?.value).toBe('202')
+  })
+})
+
+// army9 review L1 / L2 / M7.
+describe('RelationCombobox review fixes', () => {
+  it('Enter on an empty box while the first list loads never picks the lone pinned Default', async () => {
+    listDelay = 2000
+    await mount(null, { pinned: { id: 3794 } })
+    await act(async () => trigger()?.focus())
+    await act(async () => key(trigger() as HTMLButtonElement, 'ArrowDown'))
+    await tick()
+    await act(async () => key((search() ?? trigger()) as HTMLElement, 'Enter'))
+    expect(current).toBeNull()
+  })
+
+  it('a space on the trigger never starts a search', async () => {
+    await mount()
+    await act(async () => trigger()?.focus())
+    await act(async () => key(trigger() as HTMLButtonElement, '2'))
+    const t = trigger() as HTMLButtonElement
+    await act(async () => key(t, ' '))
+    await act(async () => key(t, ' '))
+    expect(search()?.value).toBe('2 ')
+  })
+
+  it('a value the reader cannot open says so, never its number', async () => {
+    forbiddenIds = ['4034']
+    await mount(4034)
+    await tick()
+    expect(trigger()?.textContent).toContain('Not available to you')
+    expect(trigger()?.textContent).not.toContain('4034')
   })
 })

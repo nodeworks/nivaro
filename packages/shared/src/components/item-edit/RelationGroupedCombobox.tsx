@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Loader2, Search, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, matchesAllTokens } from '../../lib/utils'
@@ -27,7 +27,8 @@ export function RelationGroupedCombobox({
   disabled,
   placeholder,
   extraFilter,
-  pinned
+  pinned,
+  narrowedBy
 }: {
   collection: string
   value: unknown
@@ -40,6 +41,10 @@ export function RelationGroupedCombobox({
   /** A floating option shown FIRST, above the groups (the project's default
    *  category) — same contract as RelationCombobox `pinned`. */
   pinned?: { id: unknown; tag?: string } | null
+  /** Fields of the record narrowing this list (a line's Category follows the
+   *  header's Project) — named when the list comes back empty, so an empty
+   *  picker says why instead of a bare "No results". */
+  narrowedBy?: { labels: string[] }
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -48,6 +53,9 @@ export function RelationGroupedCombobox({
   const inputRef = useRef<HTMLInputElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const listId = useId()
+  // Keyboard-highlighted option (index into pinned + listed options).
+  const [activeIndex, setActiveIndex] = useState(-1)
 
   // Escape closes the list and focus leaving the picker closes it — an open
   // list must never sit over the next field (army8 b01, same as
@@ -75,9 +83,22 @@ export function RelationGroupedCombobox({
     }
   }, [open])
 
+  const focusSearch = () => {
+    const el = inputRef.current
+    if (!el || document.activeElement === el) return
+    el.focus({ preventScroll: true })
+    const end = el.value.length
+    el.setSelectionRange?.(end, end)
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the listed inputs only; the helpers it calls read refs
   useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 30)
-    else {
+    if (open) {
+      // At once when the panel is there (keys typed meanwhile would land on
+      // the trigger), and again shortly after for a slow first render.
+      if (document.activeElement === triggerRef.current) focusSearch()
+      const t = setTimeout(focusSearch, 30)
+      return () => clearTimeout(t)
+    } else {
       setQuery('')
       setExpandedGroups(new Set())
     }
@@ -255,6 +276,95 @@ export function RelationGroupedCombobox({
     return [gl, ol].filter(Boolean).join(' — ') || NAMELESS_LABEL
   }
 
+  // ── Keyboard: one flat list of what is on screen (pinned, then the rows of
+  // open groups). Typing highlights the first real match — the pinned
+  // Default only when nothing else is listed (army8 review H1) — so Enter
+  // picks like every other picker (army9 b01).
+  // The pinned Default is listed while the box is empty, and while typing only
+  // when the text matches it — a typed miss must never leave it as the one
+  // thing Enter can pick (army9 review H4; same rule as RelationCombobox).
+  const pinnedShown =
+    !!pinnedId &&
+    (!query.trim() ||
+      matchesAllTokens(
+        `${pinnedItem ? labelOf(pinnedItem) : ''} ${pinned?.tag ?? 'Default'}`,
+        query.replace(/[-_/]+/g, ' ')
+      ))
+  const navOffset = pinnedShown ? 1 : 0
+  const navItems = useMemo(
+    () => groups.filter((g) => expandedGroups.has(g.id)).flatMap((g) => g.items),
+    [groups, expandedGroups]
+  )
+  const navCount = navOffset + navItems.length
+  const active = activeIndex >= navCount ? navCount - 1 : activeIndex
+  useEffect(() => {
+    // Typing highlights the first real match; the pinned row only when it is
+    // the one thing listed; a miss highlights nothing.
+    setActiveIndex(open && query.trim() ? (navItems.length ? navOffset : pinnedShown ? 0 : -1) : -1)
+  }, [open, query, navOffset, navItems.length, pinnedShown])
+  const optionDomId = (i: number) => `${listId}-opt-${i}`
+  const pickId = (id: unknown) => {
+    if (String(id) !== String(value)) onChange(id)
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+  const pickAt = (i: number) => {
+    if (i < 0 || i >= navCount) return
+    if (i < navOffset) pickId(pinnedItem?.id ?? pinned?.id)
+    else pickId(navItems[i - navOffset].id)
+  }
+  useEffect(() => {
+    if (!open || active < 0) return
+    const el = rootRef.current?.querySelector(`[data-nav-index="${active}"]`) as
+      | (HTMLElement & { scrollIntoView?: (o?: ScrollIntoViewOptions) => void })
+      | null
+    el?.scrollIntoView?.({ block: 'nearest' })
+  }, [open, active])
+  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (navCount > 0) setActiveIndex(active < 0 ? 0 : Math.min(active + 1, navCount - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (navCount > 0) setActiveIndex(active <= 0 ? 0 : active - 1)
+    } else if (e.key === 'Enter') {
+      // Never submits the form around the picker, and never picks while the
+      // list is still loading (the Default was the only row then).
+      e.preventDefault()
+      if (allItems === undefined) return
+      if (active >= 0) pickAt(active)
+      else if (query.trim() && navCount === 1) pickAt(0)
+    } else if (e.key === 'Tab') {
+      // Back to the trigger first so Tab continues to the next field.
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+  }
+  const onTriggerKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    const printable =
+      e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && (open || e.key !== ' ')
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault()
+      setOpen(true)
+    } else if (printable) {
+      // Typing on a closed picker opens it searching that text; keys that
+      // reach the trigger before focus moved are added, never dropped.
+      e.preventDefault()
+      const typed = e.key
+      setQuery((q) => q + typed)
+      if (!open) setOpen(true)
+      else focusSearch()
+    } else if (open && e.key === 'Backspace') {
+      e.preventDefault()
+      setQuery((q) => q.slice(0, -1))
+      focusSearch()
+    } else if (open && (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      onSearchKeyDown(e)
+      focusSearch()
+    }
+  }
+
   // Trigger button label: "GroupLabel — OptionLabel"
   let triggerLabel: string | null = null
   if (selectedItem) {
@@ -276,8 +386,9 @@ export function RelationGroupedCombobox({
         aria-haspopup='listbox'
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={onTriggerKeyDown}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-sm text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 disabled:pointer-events-none disabled:opacity-50',
           isStale ? 'border-amber-300 dark:border-amber-600' : 'border-input'
         )}
       >
@@ -306,18 +417,21 @@ export function RelationGroupedCombobox({
               ref={inputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              // Enter never submits the form around the picker.
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.preventDefault()
-              }}
+              onKeyDown={onSearchKeyDown}
+              role='combobox'
+              aria-expanded
+              aria-autocomplete='list'
+              aria-controls={`${listId}-list`}
+              aria-activedescendant={active >= 0 ? optionDomId(active) : undefined}
               placeholder='Search…'
               className='flex h-9 w-full bg-transparent py-3 text-[13px] outline-none placeholder:text-muted-foreground'
             />
           </div>
-          <div className='max-h-64 overflow-y-auto py-1'>
+          <div id={`${listId}-list`} role='listbox' className='max-h-64 overflow-y-auto py-1'>
             {!!value && !disabled && (
               <button
                 type='button'
+                tabIndex={-1}
                 onClick={() => {
                   onChange(null)
                   setOpen(false)
@@ -328,15 +442,21 @@ export function RelationGroupedCombobox({
                 Clear selection
               </button>
             )}
-            {pinnedId && (
+            {pinnedShown && (
               <button
                 type='button'
+                tabIndex={-1}
+                id={optionDomId(0)}
+                role='option'
+                aria-selected={String(value) === pinnedId}
+                data-nav-index={0}
                 data-nvr-pinned-option
-                onClick={() => {
-                  onChange(pinnedItem?.id ?? pinned?.id)
-                  setOpen(false)
-                }}
-                className='flex w-full items-center gap-2 border-b border-slate-100 bg-nvr-cyan/5 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border'
+                onClick={() => pickAt(0)}
+                onMouseMove={() => active !== 0 && setActiveIndex(0)}
+                className={cn(
+                  'flex w-full items-center gap-2 border-b border-slate-100 px-3 py-1.5 text-left text-[13px] hover:bg-nvr-cyan/10 dark:border-border',
+                  active === 0 ? 'bg-nvr-cyan/10' : 'bg-nvr-cyan/5'
+                )}
               >
                 <div
                   className={cn(
@@ -359,7 +479,34 @@ export function RelationGroupedCombobox({
                 <Loader2 className='h-4 w-4 animate-spin text-muted-foreground' />
               </div>
             ) : groups.length === 0 ? (
-              <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
+              query.trim() && pinnedShown ? null : query.trim() ? (
+                <p className='px-3 py-2 text-[13px] text-muted-foreground'>
+                  No results for “{query.trim()}”
+                </p>
+              ) : extraFilter ? (
+                // Nothing at all fits this record: say what narrows the list
+                // (a project with no line categories set up — army9 b01) so
+                // the person knows who can fix it, instead of a bare "No results".
+                <p
+                  className='px-3 py-2 text-[12px] leading-5 text-muted-foreground'
+                  data-nvr-empty-narrowed
+                >
+                  {narrowedBy?.labels.length ? (
+                    <>
+                      Nothing set up for this{' '}
+                      <span className='font-medium text-foreground'>
+                        {narrowedBy.labels.join(' · ')}
+                      </span>{' '}
+                      yet.
+                    </>
+                  ) : (
+                    'Nothing set up for this record yet.'
+                  )}{' '}
+                  Pick a different one, or ask an administrator to add options for it.
+                </p>
+              ) : (
+                <p className='px-3 py-2 text-[13px] text-muted-foreground'>No results</p>
+              )
             ) : (
               groups.map((group) => {
                 const expanded = expandedGroups.has(group.id)
@@ -382,6 +529,7 @@ export function RelationGroupedCombobox({
                     </button>
                     {expanded &&
                       group.items.map((item) => {
+                        const nav = navOffset + navItems.indexOf(item)
                         const o = item[optionField] as Item | null
                         const label = o
                           ? applyDisplayTemplate(optionTmpl, o)
@@ -391,11 +539,17 @@ export function RelationGroupedCombobox({
                           <button
                             key={String(item.id)}
                             type='button'
-                            onClick={() => {
-                              onChange(item.id)
-                              setOpen(false)
-                            }}
-                            className='flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-muted'
+                            tabIndex={-1}
+                            id={optionDomId(nav)}
+                            role='option'
+                            aria-selected={sel}
+                            data-nav-index={nav}
+                            onClick={() => pickId(item.id)}
+                            onMouseMove={() => active !== nav && setActiveIndex(nav)}
+                            className={cn(
+                              'flex w-full items-center gap-2 pl-8 pr-3 py-1.5 text-[13px] text-left hover:bg-muted',
+                              active === nav && 'bg-muted'
+                            )}
                           >
                             <div
                               className={cn(

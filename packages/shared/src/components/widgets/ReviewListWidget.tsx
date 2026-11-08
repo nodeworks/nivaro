@@ -49,6 +49,10 @@ export interface ReviewListEnrichRow {
   /** The note the row's current decision carried (a rejection's reason) —
    *  shown under the group header so the person acting on it sees why. */
   note?: string | null
+  /** The confirm's last line per decision value for THIS row, built by the endpoint
+   *  that knows the record (army 9 b07-B: approving a rejected invoice says it reverses
+   *  the rejection and names who is told). Beats the option's `confirm_notice`. */
+  confirm_notices?: Record<string, string> | null
 }
 
 export interface ReviewListConfig {
@@ -392,6 +396,15 @@ export function ReviewListWidget({
     })
   }
 
+  // The row's own words for this decision when the enrich endpoint sent them, else the
+  // option's configured line.
+  const confirmNoticeFor = (group: ReviewGroup, option: ReviewListStatusOption): string | null =>
+    group.rows
+      .map((r) => enrichFor(r.id)?.confirm_notices?.[option.value]?.trim())
+      .find((v) => !!v) ??
+    option.confirm_notice ??
+    null
+
   const handleAction = (group: ReviewGroup, option: ReviewListStatusOption) => {
     // Every decision is confirmed first (army 2026-11-05: Approve committed on
     // the first click and notified the requestor). A decision that requires a
@@ -491,7 +504,8 @@ export function ReviewListWidget({
             'Only the workflow contact chain (or the PO requestor for invalid holds) can decide this'
           // The reason behind the group's decision (a rejection), when the
           // enrich endpoint carries one (army 8 b07-N14).
-          const decisionNote = group.rows.map((r) => enrichFor(r.id)?.note?.trim()).find((v) => !!v) ?? null
+          const decisionNote =
+            group.rows.map((r) => enrichFor(r.id)?.note?.trim()).find((v) => !!v) ?? null
           const name = groupName(group, groupMetaCols)
           const badge = group.mixedStatus
             ? { label: 'Mixed', color: null }
@@ -742,8 +756,8 @@ export function ReviewListWidget({
                 className='mt-1.5 text-[11px] text-slate-500 dark:text-slate-400'
                 data-review-confirm-notice
               >
-                {noteAsk.option.confirm_notice
-                  ? `${noteAsk.option.confirm_notice}${noteAsk.option.require_note ? ' A reason is required.' : ''}`
+                {confirmNoticeFor(noteAsk.group, noteAsk.option)
+                  ? `${confirmNoticeFor(noteAsk.group, noteAsk.option)}${noteAsk.option.require_note ? ' A reason is required.' : ''}`
                   : noteAsk.option.require_note
                     ? 'A reason is required for this decision. It is recorded with the record.'
                     : 'Nothing changes until you confirm. A note is optional and is recorded with the decision.'}

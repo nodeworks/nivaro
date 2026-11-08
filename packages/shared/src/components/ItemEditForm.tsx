@@ -63,7 +63,9 @@ import {
   draftHasContent,
   draftKey,
   draftMatchesPrefill,
+  draftPersistDecision,
   keepDraftSavedAt,
+  lineBasesForDraft,
   loadDraft,
   markDraftCreated,
   prefillSignature,
@@ -124,6 +126,7 @@ import { invalidateRecordTasks } from '../lib/record-tasks'
 import { reimportAllowed } from '../lib/reimport-visibility'
 import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
+import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
   normalizeSummaryModeRules,
   resolveSummaryMode,
@@ -170,6 +173,12 @@ import { CloneDialog } from './item-edit/CloneDialog'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
+import {
+  type CopiedLineChange,
+  copiedLineLabel,
+  copiedValueChanges,
+  rehearsalBody
+} from './item-edit/duplicate-rehearsal'
 import { ExtLayoutSlot } from './item-edit/ExtLayoutSlot'
 import {
   type FieldAffordances,
@@ -291,7 +300,12 @@ import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
 import { useStableFieldAffordances } from './item-edit/render-stability'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
-import { type SaveNotice, saveClosingMessage, saveLeftWorkStaged } from './item-edit/save-outcome'
+import {
+  SAVE_OUTCOME_TOAST_ID,
+  type SaveNotice,
+  saveClosingMessage,
+  saveLeftWorkStaged
+} from './item-edit/save-outcome'
 import { refusedFieldOf } from './item-edit/save-refusal'
 import { foldStagedLinks, foldStagedRows } from './item-edit/staged-links'
 import { staleBannerMode, touchedEditsDiffer } from './item-edit/stale-banner'
@@ -822,6 +836,12 @@ export interface ItemEditFormProps {
    *  from another one (workflow lines from a purchase order's lines) cannot
    *  hand them over through initialValues. */
   initialRows?: Record<string, Array<Record<string, unknown>>>
+  /** The seeded rows were COPIED from another record (More → Duplicate): the
+   *  first Create is rehearsed (`POST ?dry_run=1`) and copied line values the
+   *  stored rows would not keep are confirmed first (army9 b09). Only a
+   *  Duplicate host sets it — a PO import hand-off or a prefill link seeds
+   *  rows too, but those are not "copied from the original record". */
+  rehearseCopiedLines?: boolean
   /** Layout editor canvas (spec §7.3): render this draft layout with the
    *  preview record's values, every placement selectable, nothing written. */
   design?: LayoutDesignProp
@@ -1569,8 +1589,36 @@ export function computeM2MEffectiveIds(
 // re-render. This is the actual dedup guarantee for staged M2M links —
 // every stageLink call goes through it, so no caller (rule-staging or
 // otherwise) can ever produce a duplicate entry for the same field.
+/** `held` when it is one of `ids` (as the id the source gives), else undefined. */
+export function keptAmong(held: unknown, ids: unknown[]): unknown {
+  if (held === null || held === undefined || held === '') return undefined
+  return ids.find((i) => String(i) === String(held))
+}
+
+/** One spelling for a rule-filled value (14 and "14" are the same fill). */
+export function ruleFillKey(v: unknown): string {
+  return v === null || v === undefined ? '' : String(v)
+}
+
+/** Does `target` still hold the value `trigger`'s field rule filled into it?
+ *  Then it was not changed by hand since, and it follows the trigger. */
+export function isRuleFill(
+  fills: ReadonlyMap<string, { trigger: string; value: string }>,
+  target: string,
+  trigger: string,
+  current: unknown
+): boolean {
+  const f = fills.get(target)
+  if (!f || f.trigger !== trigger) return false
+  if (current === null || current === undefined || current === '') return false
+  return f.value === ruleFillKey(current)
+}
+
 export function appendUniqueM2MId(existing: unknown[], id: unknown): unknown[] {
-  if (existing.some((x) => String(x) === String(id))) return existing
+  // Case-blind: the same person id can arrive upper- and lower-case (picker vs
+  // an import's email lookup) and must be linked once (army9 b02).
+  const key = String(id).toLowerCase()
+  if (existing.some((x) => String(x).toLowerCase() === key)) return existing
   return [...existing, id]
 }
 
@@ -1885,6 +1933,7 @@ function ItemEditFormView({
   initialValues,
   initialLinks,
   initialRows,
+  rehearseCopiedLines: rehearseCopiedLinesProp = false,
   design,
   layoutEditing = false
 }: ItemEditFormProps) {
@@ -2722,8 +2771,12 @@ function ItemEditFormView({
   >(new Map())
   const [pendingO2MDeletes, setPendingO2MDeletes] = useState<Map<string, Set<string>>>(new Map())
 
+  // A line editor's first keystroke claims the edit lock (army9 b09) — set
+  // once the lock hook exists (below), read at call time.
+  const lineEditIntentRef = useRef<() => void>(() => {})
   const o2mStagingCtx = useMemo<O2MStagingCtx>(
     () => ({
+      noteEditIntent: () => lineEditIntentRef.current(),
       getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
       queueRow: (rc, mf, data) =>
         setPendingO2MRows((prev) => {
@@ -2897,7 +2950,7 @@ function ItemEditFormView({
           const next = new Map(prev)
           next.set(
             k,
-            (next.get(k) ?? []).filter((x) => String(x) !== String(id))
+            (next.get(k) ?? []).filter((x) => String(x).toLowerCase() !== String(id).toLowerCase())
           )
           return next
         })
@@ -3849,17 +3902,27 @@ function ItemEditFormView({
       persistPendingRef.current = null
       // A create in flight: reloading now could lose or repeat it — wait for it.
       if (draftSpentRef.current) return !forReload
-      if (!isDirty) {
-        // Staged lines or links with a clean flag would be dropped below: keep the hold.
-        // Links only a personal default staged come back on reload: they hold nothing.
-        const quietLinks = pdQuietLinksRef.current(m2mLinks)
-        const staged =
-          pendingO2MRows.size +
-          pendingO2MEdits.size +
-          pendingO2MDeletes.size +
-          (quietLinks.size ? linksBeyond(m2mLinks, quietLinks) : m2mLinks.size) +
-          m2mUnlinks.size
-        if (forReload && staged > 0) return false
+      // Staged lines or links never set the dirty flag (a grid's queueEdit, a
+      // material quantity in the catalog picker): they are unsaved work all
+      // the same. Links only a personal default staged come back on reload:
+      // they hold nothing.
+      const quietLinks = pdQuietLinksRef.current(m2mLinks)
+      const staged =
+        pendingO2MRows.size +
+        pendingO2MEdits.size +
+        pendingO2MDeletes.size +
+        (quietLinks.size ? linksBeyond(m2mLinks, quietLinks) : m2mLinks.size) +
+        m2mUnlinks.size
+      // Staged LINES (a grid's queueEdit, a catalog-picker quantity, a new or
+      // removed row) are the person's work even with a clean dirty flag (army9
+      // b09): the Leave dialog counts them, so the draft keeps them. Staged
+      // links alone still are not a draft (a new form's defaults and their
+      // cascades stage links before the person touched anything — R7 review)
+      // — but a pushed reload never goes ahead over them (Fable review M2).
+      const stagedLines = pendingO2MRows.size + pendingO2MEdits.size + pendingO2MDeletes.size
+      const decision = draftPersistDecision({ isDirty, forReload, staged, stagedLines })
+      if (decision === 'hold') return false
+      if (decision === 'drop') {
         void deleteDraft(recoveryKey)
         if (authUserId && serverDraftRef.current) {
           serverDraftRef.current = false
@@ -3907,6 +3970,13 @@ function ItemEditFormView({
           pending_edits: obj(pendingO2MEdits, (e) =>
             Object.fromEntries(e)
           ) as StoredDraft['pending_edits'],
+          // The revision each staged line edit was based on: a restored edit
+          // saves against it, so a save by someone else meanwhile is a 409
+          // (Theirs / Mine), never a silent overwrite (army9 b09).
+          line_bases: await lineBasesForDraft(
+            obj(pendingO2MEdits, (e) => Object.fromEntries(e)) as StoredDraft['pending_edits'],
+            (rc, rowId) => o2mBaseRevRef.current.get(`${rc}:${rowId}`)
+          ),
           pending_deletes: obj(pendingO2MDeletes, (d) => [...d]) as StoredDraft['pending_deletes'],
           m2m_links: obj(m2mLinks, (l) => [...l]) as StoredDraft['m2m_links'],
           m2m_unlinks: obj(m2mUnlinks, (u) => [...u]) as StoredDraft['m2m_unlinks'],
@@ -4031,10 +4101,19 @@ function ItemEditFormView({
     }
     if (Object.keys(d.pending_rows ?? {}).length)
       setPendingO2MRows(new Map(Object.entries(d.pending_rows)))
-    if (Object.keys(d.pending_edits ?? {}).length)
+    if (Object.keys(d.pending_edits ?? {}).length) {
+      // Each restored line edit keeps the base it was staged on (army9 b09):
+      // the flush sends it as `_base_revision`, so a line someone else saved
+      // while the draft sat here opens the Theirs / Mine chooser. A draft from
+      // an older build carries none — the flush then reads the current one.
+      for (const [k, b] of Object.entries(d.line_bases ?? {})) {
+        if (typeof b === 'number' && Number.isFinite(b) && b > 0)
+          o2mBaseRevRef.current.set(k, Promise.resolve(b))
+      }
       setPendingO2MEdits(
         new Map(Object.entries(d.pending_edits).map(([k, e]) => [k, new Map(Object.entries(e))]))
       )
+    }
     if (Object.keys(d.pending_deletes ?? {}).length)
       setPendingO2MDeletes(
         new Map(Object.entries(d.pending_deletes).map(([k, x]) => [k, new Set(x)]))
@@ -4674,6 +4753,9 @@ function ItemEditFormView({
         }
         const fkField = cfg?.source_fk_field || fc.field
         if (fkField !== field || !cfg?.source_collection || !cfg.field_map) continue
+        // What the targets held before this pick took its earlier fills back:
+        // a value the new record still allows is kept (below).
+        const heldBefore = { ...draftRef.current }
         if (depth === 0 && !fillEmptyOnly) undoDerivedFills(field)
         const map = cfg.field_map
         // Alias-mapped source fields must stay OUT of the readOne fields= —
@@ -4786,6 +4868,13 @@ function ItemEditFormView({
                 } else if (srcAlias) {
                   const ids = await srcAliasIds(srcAlias)
                   if (ids.length === 1) patch[target] = ids[0]
+                  else {
+                    // Several to choose from (a project funded in 2025 and
+                    // 2026): one that was already set and is among them stays
+                    // (army9 b01: Funding Year 2026 went blank).
+                    const kept = keptAmong(heldBefore[target], ids)
+                    if (kept !== undefined) patch[target] = kept
+                  }
                 }
               } catch {
                 /* one entry failing must not take down the rest */
@@ -4951,6 +5040,12 @@ function ItemEditFormView({
     }
   }, [])
 
+  // target field → which trigger's rule last filled it, and with what. A target
+  // still holding that value was never changed by the person since.
+  const ruleFillsRef = useRef<Map<string, { trigger: string; value: string }>>(new Map())
+  const ruleFilledBy = (target: string, trigger: string, current: unknown): boolean =>
+    isRuleFill(ruleFillsRef.current, target, trigger, current)
+
   // Debounced (300ms per trigger field) in-form evaluation of dynamic field
   // rules: POSTs /field-rules/evaluate and dispatches returned targets via
   // applyFieldRuleResults. No-ops entirely (no timer, no request) when the
@@ -4973,8 +5068,17 @@ function ItemEditFormView({
         const targetDraft: Record<string, unknown> = {}
         for (const rule of rules) {
           const aliasIds = getM2MEffectiveIds(rule.target_field)
+          const cur = aliasIds !== undefined ? aliasIds : draftRef.current[rule.target_field]
+          // A value THIS trigger's rule filled, untouched since, follows the
+          // trigger: sent as empty so a fill-when-empty rule fills it again
+          // (army9 b01: re-picking Billing Location kept the old Org Code,
+          // which then failed at Create). A person's own pick is kept.
           targetDraft[rule.target_field] =
-            aliasIds !== undefined ? aliasIds : draftRef.current[rule.target_field]
+            !opts?.fillEmptyOnly &&
+            aliasIds === undefined &&
+            ruleFilledBy(rule.target_field, field, cur)
+              ? null
+              : cur
         }
         client
           .request<{ data: Record<string, unknown> }>(
@@ -4997,6 +5101,10 @@ function ItemEditFormView({
               }
             }
             applyFieldRuleResults(results, sentSeq, pdQuietRef.current.has(field))
+            for (const [k, v] of Object.entries(results ?? {})) {
+              if (m2mAliasFieldsForRules.has(k)) continue
+              ruleFillsRef.current.set(k, { trigger: field, value: ruleFillKey(v) })
+            }
           })
           .catch(() => {})
       }, 300)
@@ -5073,6 +5181,13 @@ function ItemEditFormView({
   // After a manual lock release the next real edit re-acquires the lock.
   // Ref because useItemLock is declared below this callback.
   const relockOnEditRef = useRef<null | (() => void)>(null)
+  // Typing in a line editor (row editor, bulk "Edit N selected…") is the same
+  // edit intent as typing in a header field: claim the lock now, not only
+  // once the row is staged (army9 b09 LOW).
+  lineEditIntentRef.current = () => {
+    if (designOn || (readOnlyRef.current && !undoingRef.current)) return
+    relockOnEditRef.current?.()
+  }
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
       // Design mode: inputs are inert.
@@ -8460,7 +8575,10 @@ function ItemEditFormView({
       // mid-air check first (409 → the Theirs / Mine chooser) — asking its reason now made the
       // person justify a change that was then refused. Such lines are left out here; the
       // chooser's re-save asks the reason if "Mine" wins and the save still needs one.
-      const stale = await staleStagedLines(rc, rows.map((r) => r.rowId))
+      const stale = await staleStagedLines(
+        rc,
+        rows.map((r) => r.rowId)
+      )
       for (const r of rows) {
         if (stale.has(r.rowId)) continue
         for (const k of r.fields) changed.add(k)
@@ -8661,7 +8779,61 @@ function ItemEditFormView({
       }
     })()
   }
+  // A duplicated form's first Create is rehearsed (army9 b09 LOW): copied line
+  // values the stored rows would not keep (a rule re-derives the price from
+  // the category; a role that may not set it has it derived) are named before
+  // anything is created — the Submit dialog already asks about this very
+  // side effect, Duplicate used to apply it silently ($2 → $1).
+  const [copiedChanges, setCopiedChanges] = useState<CopiedLineChange[] | null>(null)
+  const copiedRehearsedRef = useRef(false)
+  async function rehearseCopiedLines(): Promise<CopiedLineChange[]> {
+    const rows = Object.fromEntries(pendingO2MRows)
+    if (Object.keys(rows).length === 0) return []
+    const aliasOf = (key: string): string | null => {
+      const [rc, mf] = key.split('.')
+      const rel = relations.find(
+        (r) =>
+          r.one_collection === collection &&
+          r.many_collection === rc &&
+          r.many_field === mf &&
+          !r.junction_field
+      )
+      return rel?.one_field ?? null
+    }
+    const { body, aliases } = rehearsalBody(draftRef.current, rows, aliasOf)
+    if (Object.keys(aliases).length === 0) return []
+    try {
+      const report = await client.request<{
+        nested?: Record<
+          string,
+          Array<{ index: number; ok: boolean; data?: Record<string, unknown> | null }>
+        >
+      }>(post(`/items/${collection}?dry_run=1`, body))
+      return copiedValueChanges(rows, report?.nested, aliases)
+    } catch {
+      // A rehearsal that fails never blocks the create: the real one answers.
+      return []
+    }
+  }
   async function startSave(): Promise<boolean> {
+    if (isNew && rehearseCopiedLinesProp && initialRows && !copiedRehearsedRef.current) {
+      // The rehearsal is a request of its own: the save dialog shows it as a
+      // running step so the Save does not look stuck (Fable review M5).
+      setSaveSteps([{ id: 'rehearse', label: 'Checking the copied lines', status: 'running' }])
+      setSaveDialogOpen(true)
+      let changes: CopiedLineChange[] = []
+      try {
+        changes = await rehearseCopiedLines()
+      } finally {
+        setSaveDialogOpen(false)
+        setSaveSteps([])
+      }
+      if (changes.length > 0) {
+        setCopiedChanges(changes)
+        return false
+      }
+      copiedRehearsedRef.current = true
+    }
     const collectionChallenge = await preflightChangeReason()
     const layoutChallenge = layoutConfirmChallenge()
     // One prompt: the collection's (its preset reasons) naming every field asked about.
@@ -9923,8 +10095,12 @@ function ItemEditFormView({
                 : msg.kind === 'success'
                   ? toast.success
                   : toast
-          if (msg.duration) show(msg.text, { duration: msg.duration })
-          else show(msg.text)
+          // One toast slot for the save's outcome: the next save's message
+          // REPLACES the last one ("Not saved yet — give a reason" must not sit
+          // beside the "Changes saved" that followed it, army9 b09).
+          const slot = { id: SAVE_OUTCOME_TOAST_ID }
+          if (msg.duration) show(msg.text, { ...slot, duration: msg.duration })
+          else show(msg.text, slot)
         }
         if (notice.linkProblems.length > 0) {
           toast.error(
@@ -10035,11 +10211,16 @@ function ItemEditFormView({
 
   const recordSurface = useRecordSurface()
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
-  useLeaveLinkGuard(
-    hasUnsaved && recordSurface.active && !designOn && !saveMut.isPending,
-    (go) => setLeaveAsk({ go }),
-    formRootRef
-  )
+  const guardLeave = hasUnsaved && recordSurface.active && !designOn && !saveMut.isPending
+  useLeaveLinkGuard(guardLeave, (go) => setLeaveAsk({ go }), formRootRef)
+  // The header's ← Back asks the same question a sidebar link does (army9
+  // b01: it left a dirty form without a word).
+  const backWithGuard = onBack
+    ? () => {
+        if (guardLeave) setLeaveAsk({ go: onBack })
+        else onBack()
+      }
+    : undefined
 
   // ── Offline outbox (#1678) ────────────────────────────────────────────────
   // Back online with the entry held here: replay through the form's own save,
@@ -10477,7 +10658,9 @@ function ItemEditFormView({
       const saved = savedRows.find((r) => String(r.id) === String(rowId))
       const cellKeys = Object.keys(ch).filter((c) => !c.startsWith('__'))
       const lineNo =
-        saved?.line_number != null ? `line ${String(saved.line_number)}` : `row ${rowId}`
+        saved?.line_number != null
+          ? `line ${String(saved.line_number)}`
+          : (stagedRowLabel(rc, rowId) ?? 'a line')
       changeItems.push({
         key: `e:${key}:${rowId}`,
         kind: 'edit',
@@ -10514,7 +10697,7 @@ function ItemEditFormView({
         key: `d:${key}:${rowId}`,
         kind: 'delete',
         label: gridLabel(rc),
-        detail: `row ${rowId}`,
+        detail: stagedRowLabel(rc, rowId) ?? 'a line',
         onRevert: () => o2mStagingCtx.cancelPendingDelete(rc, mf, rowId)
       })
   }
@@ -12510,6 +12693,89 @@ function ItemEditFormView({
                                     : null
                                 }
                               />
+                              {/* Mounted only while it has something to ask: a closed Radix
+                                  dialog still takes ids (useId) and would shift every id
+                                  after it in normal mode. */}
+                              {copiedChanges && (
+                                <Dialog
+                                  open
+                                  onOpenChange={(open) => {
+                                    if (!open) setCopiedChanges(null)
+                                  }}
+                                >
+                                  <DialogContent className='max-w-md' data-nvr-copied-changes>
+                                    <DialogHeader>
+                                      <DialogTitle className='text-[15px]'>
+                                        Some copied line values will change
+                                      </DialogTitle>
+                                    </DialogHeader>
+                                    <DialogBody>
+                                      <p className='text-[13px] text-slate-600 dark:text-slate-300'>
+                                        These values were copied from the original record, but the
+                                        new record will store them differently — a rule or your
+                                        access sets them.
+                                      </p>
+                                      <ul className='mt-3 space-y-1.5 text-[12.5px]'>
+                                        {(copiedChanges ?? []).map((c) => {
+                                          const row = pendingO2MRows.get(c.key)?.[c.index] ?? {}
+                                          const label = copiedLineLabel(row, c.index)
+                                          return (
+                                            <li
+                                              key={`${c.key}:${c.index}:${c.field}`}
+                                              className='flex flex-wrap items-baseline gap-x-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-border dark:bg-muted'
+                                            >
+                                              <span className='font-medium text-slate-800 dark:text-slate-100'>
+                                                {label}
+                                              </span>
+                                              <span className='text-slate-600 dark:text-slate-300'>
+                                                {titleCase(c.field)}:
+                                              </span>
+                                              <span className='tabular-nums text-slate-500 line-through dark:text-slate-400'>
+                                                <ChangeValue
+                                                  value={c.from}
+                                                  field={null}
+                                                  m2oTarget={null}
+                                                />
+                                              </span>
+                                              <span aria-hidden='true' className='text-slate-400'>
+                                                →
+                                              </span>
+                                              <span className='tabular-nums font-medium text-slate-800 dark:text-slate-100'>
+                                                <ChangeValue
+                                                  value={c.to}
+                                                  field={null}
+                                                  m2oTarget={null}
+                                                />
+                                              </span>
+                                            </li>
+                                          )
+                                        })}
+                                      </ul>
+                                    </DialogBody>
+                                    <DialogFooter>
+                                      <Button
+                                        variant='outline'
+                                        size='sm'
+                                        onClick={() => setCopiedChanges(null)}
+                                      >
+                                        Cancel
+                                      </Button>
+                                      <Button
+                                        size='sm'
+                                        className='bg-nvr-cyan text-white'
+                                        autoFocus
+                                        onClick={() => {
+                                          copiedRehearsedRef.current = true
+                                          setCopiedChanges(null)
+                                          handleSave()
+                                        }}
+                                      >
+                                        Create anyway
+                                      </Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
+                              )}
                               <Dialog
                                 open={!!reimportDialog}
                                 onOpenChange={(open) => {
@@ -12588,10 +12854,10 @@ function ItemEditFormView({
                                     data-nvr-header-row
                                     data-nvr-condensed={headerCondensed || undefined}
                                   >
-                                    {onBack && (
+                                    {backWithGuard && (
                                       <button
                                         type='button'
-                                        onClick={onBack}
+                                        onClick={backWithGuard}
                                         aria-label='Back'
                                         className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
                                       >

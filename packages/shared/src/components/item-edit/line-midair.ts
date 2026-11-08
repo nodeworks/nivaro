@@ -260,19 +260,42 @@ export function rowBaseBookFor(
 /** A line write that met someone else's newer save, with where it went. */
 export type LineConflict = LineCollision & { url: string }
 
+/**
+ * The bases of these rows AS OF NOW, pinned (army9 b09 HIGH). A dialog that
+ * holds a person's typed values for a while — the bulk "Edit N selected…"
+ * form — must judge its write against the rows as they were when it OPENED,
+ * not as the grid shows them when Apply is pressed: a live refresh in between
+ * (someone else's save of the same line) moves the book's base forward, and
+ * the write would then pass the server's mid-air check and overwrite that
+ * save with nothing said to anyone. Unknown rows are fetched now, once.
+ */
+export function snapshotRowBases(
+  book: RowBaseBook,
+  rowIds: Iterable<string>
+): Map<string, Promise<number | null>> {
+  const out = new Map<string, Promise<number | null>>()
+  for (const id of rowIds) {
+    if (!id || id === 'new' || id.startsWith('pending:')) continue
+    out.set(id, book.baseOf(id))
+  }
+  return out
+}
+
 /** Write one saved line NOW against its read-time base (H4). `ok` = written;
  *  otherwise the 409 as a line collision (the book then holds the newer
  *  revision, so a "Mine" re-save is a choice made against it). Any other
- *  error is thrown. */
+ *  error is thrown. `meta.base` (a pinned base from `snapshotRowBases`) wins
+ *  over the book's current one; null/absent = the book's. */
 export async function writeLineGuarded(
   client: Pick<NivaroClient, 'request'>,
   book: RowBaseBook,
   url: string,
   rowId: string,
   body: Record<string, unknown>,
-  meta: { key: string; label: string }
+  meta: { key: string; label: string; base?: Promise<number | null> | number | null }
 ): Promise<{ ok: true } | { ok: false; conflict: LineConflict }> {
-  const base = await book.baseOf(rowId)
+  const pinned = meta.base !== undefined ? await meta.base : null
+  const base = pinned != null && pinned > 0 ? pinned : await book.baseOf(rowId)
   try {
     await client.request(patch(url, withRowBaseRevision(body, base)))
   } catch (err) {

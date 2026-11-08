@@ -248,6 +248,22 @@ describe('ReviewListWidget names the group, not its raw key', () => {
     expect(host.querySelectorAll('[data-review-decision-note]')).toHaveLength(1)
   })
 
+  // army 9 b07-B: approving a rejected invoice from the record page said nothing about
+  // the rejection it replaces, nor who is told.
+  it('the confirm uses the row’s own words for the decision when the endpoint sends them', async () => {
+    const words =
+      'Perry Callis rejected this invoice on Nov 3 (“Work not completed.”). Approving replaces that decision: The PO requestor (Andrew Davis), who was told it was rejected, is now told it is approved.'
+    await render('rejected', {
+      1: { can_act: true, confirm_notices: { approved: words } },
+      2: { can_act: true, confirm_notices: { approved: words } }
+    })
+    const approve = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve')!
+    await act(async () => {
+      approve.click()
+    })
+    expect(host.querySelector('[data-review-confirm-notice]')?.textContent).toBe(words)
+  })
+
   it('no reason line when the enrich endpoint carries none', async () => {
     await render('rejected')
     expect(host.querySelector('[data-review-decision-note]')).toBeNull()

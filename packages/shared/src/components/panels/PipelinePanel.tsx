@@ -669,6 +669,35 @@ export function transitionToastText(
   return tx?.label ? `${tx.label} done` : 'Transition executed'
 }
 
+/** A move that takes longer than this says it is working (army9 b06 N-AC: a
+ *  Submit took ~5 s with nothing on screen, and the success toast was gone
+ *  before the page settled). */
+export const SLOW_MOVE_MS = 1200
+
+/** "Submitting…" for a slow move: shown only past SLOW_MOVE_MS, then REPLACED
+ *  by the result toast (same id) so the answer lands where the person is
+ *  already looking, and stays a little longer. */
+export function slowMoveToast(label: string | null | undefined) {
+  const id = `nvr-move-${Math.random().toString(36).slice(2)}`
+  let shown = false
+  const timer = setTimeout(() => {
+    shown = true
+    toast.loading(`${label?.trim() || 'Moving'}…`, { id })
+  }, SLOW_MOVE_MS)
+  return {
+    /** Options for the result toast: replaces the loading one when shown. */
+    done: (): { id?: string; duration?: number } => {
+      clearTimeout(timer)
+      return shown ? { id, duration: 7000 } : {}
+    },
+    /** An error toast of its own follows — drop the loading one. */
+    fail: () => {
+      clearTimeout(timer)
+      if (shown) toast.dismiss(id)
+    }
+  }
+}
+
 /** Header Owners tile + owner panels read these — a move changes who owns the record. */
 function invalidateOwnerReads(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -2542,7 +2571,14 @@ function PipelinePanelInner({
           ...(reviewed ? { reviewed: true } : {})
         })
       ),
-    onSuccess: (res, variables) => {
+    onMutate: (variables) => ({
+      slow: slowMoveToast(
+        [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+          (t) => t.id === variables.transition_id
+        )?.label
+      )
+    }),
+    onSuccess: (res, variables, context) => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums')
         queryClient.invalidateQueries({ queryKey: ['addendums'] })
@@ -2558,9 +2594,10 @@ function PipelinePanelInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success(transitionToastText(data, variables.transition_id, res))
+      toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
     },
-    onError: (err: unknown, variables) => {
+    onError: (err: unknown, variables, context) => {
+      context?.slow.fail()
       // The twin of a press already being applied (another tab, a retried
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {
@@ -3288,7 +3325,14 @@ function PipelineTransitionButtonsInner({
           ...(reviewed ? { reviewed: true } : {})
         })
       ),
-    onSuccess: (res, variables) => {
+    onMutate: (variables) => ({
+      slow: slowMoveToast(
+        [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+          (t) => t.id === variables.transition_id
+        )?.label
+      )
+    }),
+    onSuccess: (res, variables, context) => {
       queryClient.invalidateQueries({ queryKey })
       if (collection === 'nivaro_addendums')
         queryClient.invalidateQueries({ queryKey: ['addendums'] })
@@ -3304,9 +3348,10 @@ function PipelineTransitionButtonsInner({
       setComment('')
       setPendingTransition(null)
       setRequirementsDialog(null)
-      toast.success(transitionToastText(data, variables.transition_id, res))
+      toast.success(transitionToastText(data, variables.transition_id, res), context?.slow.done())
     },
-    onError: (err: unknown, variables) => {
+    onError: (err: unknown, variables, context) => {
+      context?.slow.fail()
       // The twin of a press already being applied (another tab, a retried
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {

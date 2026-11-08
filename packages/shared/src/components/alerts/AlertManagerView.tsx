@@ -18,6 +18,7 @@ import {
   Users
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import {
   effectiveScopeSeedIds,
@@ -44,7 +45,13 @@ import type {
   ReportAlertLogRow,
   ReportAlertRow
 } from './types'
-import { fmtDateTime, fmtMetric, OPERATOR_LABELS } from './types'
+import {
+  categoryLabel,
+  fmtDateTime,
+  fmtMetric,
+  OPERATOR_LABELS,
+  reportConditionText
+} from './types'
 
 /** A report's filter bar entry (nivaro_report_defs.global_filters.filter_bar). */
 export interface ReportFilterBarEntry {
@@ -109,7 +116,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 }
 const categoryChip = (category: string) =>
   cn(
-    'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold capitalize',
+    'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold',
     CATEGORY_COLORS[category] ?? 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-slate-300'
   )
 
@@ -126,7 +133,7 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold capitalize',
+        'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold',
         map[status] ?? 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-slate-400'
       )}
     >
@@ -450,10 +457,11 @@ export function AlertManagerView({
   const qc = useQueryClient()
   const { scopes } = useMyScopes()
   const [tab, setTab] = useState<TabKey>(defaultTab)
-  const [flash, setFlash] = useState<string | null>(null)
+  // Sonner, not a fixed div under the page: a `position: fixed` box inside the page
+  // outlet's transform never showed (army 9 b16: no feedback on Subscribe/Unsubscribe).
   const note = (msg: string) => {
-    setFlash(msg)
-    window.setTimeout(() => setFlash(null), 2500)
+    if (/^Failed\b/.test(msg)) toast.error(msg)
+    else toast.success(msg)
   }
 
   const raw = <T,>(method: string, path: string, body?: unknown) =>
@@ -850,12 +858,6 @@ export function AlertManagerView({
 
   return (
     <div className={cn('flex flex-col gap-3', className)} data-alert-manager=''>
-      {flash && (
-        <div className='fixed right-4 top-4 z-[60] rounded-md bg-[#0f172a] px-3 py-2 text-[12.5px] text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'>
-          {flash}
-        </div>
-      )}
-
       {/* Tab bar */}
       <div
         className='flex flex-wrap gap-1 border-b border-slate-200 pb-px dark:border-border'
@@ -910,7 +912,7 @@ export function AlertManagerView({
                   gi > 0 && 'border-t border-slate-200 dark:border-border'
                 )}
               >
-                <span className={categoryChip(category)}>{category}</span>
+                <span className={categoryChip(category)}>{categoryLabel(category)}</span>
                 <span className='text-[11px] text-slate-400 dark:text-slate-500'>
                   {defs.length} metric{defs.length !== 1 ? 's' : ''}
                 </span>
@@ -1487,7 +1489,7 @@ export function AlertManagerView({
                         key={`${c.field}-${i}`}
                         className='inline-flex rounded bg-slate-100 px-1.5 py-px text-[11px] text-slate-600 dark:bg-muted dark:text-slate-300'
                       >
-                        {c.field} {OPERATOR_LABELS[c.op] ?? c.op} {c.value}
+                        {reportConditionText(c)}
                       </span>
                     ))}
                   </div>
@@ -1651,7 +1653,7 @@ export function AlertManagerView({
                   <td className={tdCls}>
                     <span
                       className={cn(
-                        'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold capitalize',
+                        'inline-flex rounded-full px-2 py-px text-[10.5px] font-semibold',
                         rule.sensitivity === 'high'
                           ? 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400'
                           : rule.sensitivity === 'low'

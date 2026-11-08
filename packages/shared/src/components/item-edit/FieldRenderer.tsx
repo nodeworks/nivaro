@@ -333,6 +333,7 @@ export const FieldRenderer = memo(function FieldRenderer({
             placeholder={field.placeholder ?? undefined}
             extraFilter={cascadeFilter}
             pinned={pinnedOption}
+            narrowedBy={narrowedBy}
           />
         )
       }
@@ -420,6 +421,7 @@ export const FieldRenderer = memo(function FieldRenderer({
           <QuickCreateButton
             targetCollection={m2oRel.one_collection}
             config={quickCreate}
+            value={value}
             onCreated={(id) => onChange(id)}
           />
         )}

@@ -77,6 +77,11 @@ export function m2aWriteMeta(
   return { field: otherRel.one_collection_field ?? 'collection', value }
 }
 
+/** One spelling per linked id (GUIDs compare case-blind). */
+export function m2mIdKey(id: unknown): string {
+  return String(id).toLowerCase()
+}
+
 // ─── M2MCombobox (multi-select) ────────────────────────────────────────────────
 
 export function M2MCombobox({
@@ -209,8 +214,11 @@ export function M2MCombobox({
     availableForFilter !== undefined
       ? new Set(committedIdsList.filter((id) => !availableIdSet.has(id)))
       : new Set<string>()
-  const stagedLinkIds = new Set(stagedLinks.map(String))
-  const allSelectedIds = new Set([...committedIds, ...stagedLinkIds])
+  // Ids compare case-blind: a person id arrives upper-case from the picker and
+  // lower-case from an import's email lookup — the same person must not be
+  // linked twice ("Peter Moniz, Peter Moniz", army9 b02).
+  const stagedLinkIds = new Set(stagedLinks.map(m2mIdKey))
+  const allSelectedIds = new Set([...[...committedIds].map(m2mIdKey), ...stagedLinkIds])
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
@@ -219,12 +227,12 @@ export function M2MCombobox({
   }, [allSelectedIds.size])
 
   function handleToggle(optId: unknown) {
-    const strId = String(optId)
+    const strId = m2mIdKey(optId)
     if (stagedLinkIds.has(strId)) {
       staging?.unstageLink(stagingKey, optId)
       return
     }
-    const existing = junctionItems.find((i) => String(i[junctionField]) === strId)
+    const existing = junctionItems.find((i) => m2mIdKey(i[junctionField]) === strId)
     if (existing) {
       if (stagedUnlinks.has(existing.id)) staging?.unstageUnlink(stagingKey, existing.id)
       else staging?.stageUnlink(stagingKey, existing.id)
@@ -399,7 +407,7 @@ export function M2MCombobox({
                       )
                   ).map((opt) => {
                     const optId = String(opt.id)
-                    const isSelected = allSelectedIds.has(optId)
+                    const isSelected = allSelectedIds.has(m2mIdKey(optId))
                     return (
                       <CommandItem
                         key={optId}

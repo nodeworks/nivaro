@@ -668,13 +668,14 @@ function FieldChangeRow({
   )
 }
 
-function FieldChangeList({
+export function FieldChangeList({
   before,
   after,
   meta,
   fieldRevert,
   mode,
-  hideStatusChips
+  hideStatusChips,
+  ownFields
 }: {
   before: Record<string, unknown>
   after: Record<string, unknown>
@@ -682,11 +683,20 @@ function FieldChangeList({
   fieldRevert?: FieldRevertCtl
   mode: 'changes' | 'all'
   hideStatusChips?: boolean
+  /** Fields THIS save wrote (the revision's delta). Other differences from the
+   *  previous snapshot were recalculated in between (rollups, forecast status)
+   *  and are listed apart, not credited to this person (army9 b01). */
+  ownFields?: ReadonlySet<string> | null
 }) {
   const [showSystem, setShowSystem] = useState(false)
   const allRows = useMemo(() => computeFieldRows(before, after, meta), [before, after, meta])
   const scoped = mode === 'changes' ? allRows.filter((r) => r.status !== 'unchanged') : allRows
-  const visible = showSystem ? scoped : scoped.filter((r) => !r.system)
+  const shown = showSystem ? scoped : scoped.filter((r) => !r.system)
+  const isBetween = (r: FieldRowData) =>
+    !!ownFields && mode === 'changes' && !r.system && !ownFields.has(r.field)
+  const between = shown.filter(isBetween)
+  const visible = [...shown.filter((r) => !isBetween(r)), ...between]
+  const firstBetweenIdx = between.length ? visible.length - between.length : -1
   const hiddenSystem = scoped.length - visible.length
   if (scoped.length === 0)
     return (
@@ -695,15 +705,28 @@ function FieldChangeList({
       </p>
     )
   const firstBehindIdx = visible.findIndex(
-    (r) => !metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
+    (r) => !isBetween(r) && !metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
   )
   const hasLayoutRows = visible.some(
-    (r) => metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
+    (r) => !isBetween(r) && metaFor(meta, r.field).onLayout && !metaFor(meta, r.field).system
   )
   return (
     <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
       {visible.map((row, idx) => (
         <div key={row.field}>
+          {idx === firstBetweenIdx && (
+            <div
+              data-recalculated-between
+              className='border-b border-t border-slate-100 bg-slate-50/70 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'
+            >
+              <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+                Recalculated since the save before
+              </p>
+              <p className='text-[10.5px] text-slate-500 dark:text-slate-400'>
+                Not part of this edit — worked out automatically between the two saves.
+              </p>
+            </div>
+          )}
           {idx === firstBehindIdx && hasLayoutRows && (
             <div className='border-b border-t border-slate-100 bg-slate-50/70 px-3 py-1.5 dark:border-border/60 dark:bg-muted/30'>
               <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
@@ -987,6 +1010,7 @@ function RevisionRow({
     }
     return { humanDelta: human, systemDelta: system }
   }, [revision, previousData, meta, isUpdate])
+  const ownDeltaFields = useMemo(() => new Set(Object.keys(revision.delta ?? {})), [revision])
   const canRollback = isUpdate || isCreate
   const [rolledBackAt, setRolledBackAt] = useState<string | null>(null)
 
@@ -1204,6 +1228,7 @@ function RevisionRow({
             fieldRevert={fieldRevert}
             mode={view}
             hideStatusChips={isCreate}
+            ownFields={isUpdate && revision.delta ? ownDeltaFields : null}
           />
 
           {rolledBackAt && inlineTableFields && inlineTableFields.length > 0 && (

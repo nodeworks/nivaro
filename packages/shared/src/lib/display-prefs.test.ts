@@ -5,6 +5,7 @@ import {
   applyAccentVars,
   applyDisplayPrefs,
   contrastRatio,
+  deepenForLightSurface,
   hexToRgbChannels,
   liftForDarkSurface,
   rootFontSize
@@ -60,6 +61,15 @@ describe('accent helpers', () => {
     expect(contrastRatio(lifted, '#1a1a1a')).toBeGreaterThanOrEqual(4.5)
     // already-light accents are left alone
     expect(liftForDarkSurface('#e8a93a', '#1a1a1a')).toBe('#e8a93a')
+  })
+
+  // army 9 b08 N-R9-8: amber state chip text on white was 2.2:1.
+  it('darkens a light state colour until it reads as text on white', () => {
+    const amber = '#f59e0b'
+    expect(contrastRatio(amber, '#ffffff')).toBeLessThan(4.5)
+    expect(contrastRatio(deepenForLightSurface(amber), '#ffffff')).toBeGreaterThanOrEqual(4.5)
+    expect(deepenForLightSurface('#1d4ed8')).toBe('#1d4ed8')
+    expect(deepenForLightSurface('teal')).toBe('teal')
   })
 
   it('picks the ink that reads on a solid fill', () => {
