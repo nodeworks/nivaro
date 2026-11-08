@@ -1329,7 +1329,7 @@ export async function fetchMaterializedQueueItems(
   let durationStats: Map<string, { p50: number; p80: number; n: number }> | null = null
   try {
     const { getStateDurationStats } = await import('./predictive-sla.js')
-    durationStats = await getStateDurationStats()
+    durationStats = await getStateDurationStats({ wait: false })
   } catch {
     durationStats = null
   }

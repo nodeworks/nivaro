@@ -1,7 +1,8 @@
 /**
  * External API health probes (#612) and per-API SLOs (#603).
  *
- * Probes: an API with `health_path` set is probed every 5 minutes (the
+ * Probes: an API with `health_path` set (or signing in with oauth2_cc — then its token
+ * endpoint alone) is probed every 5 minutes (the
  * `external-api-health-probes` cron — ticks only on deployed instances; Run
  * now works everywhere) and on demand from its editor. For an oauth2_cc API
  * the token endpoint is probed separately first. Every probe lands on the
@@ -190,23 +191,33 @@ export async function probeApi(apiId: number, triggeredBy = 'probe'): Promise<Pr
   return out
 }
 
-/** APIs the probe cron visits: enabled, with a health path, not mocked here. */
+/** APIs the probe cron visits: enabled, not mocked here, and either with a health path or
+ *  signing in with OAuth client credentials — for those the token endpoint alone is a
+ *  real check (a dead token endpoint fails every call), so a partner without a health
+ *  path is still watched instead of never (EFP prod 2026-11-08: no API had one). */
 export async function healthProbeTargets(): Promise<
   Array<{ id: number; name: string; path: string }>
 > {
   const rows = (await db('nivaro_external_apis')
     .where({ enabled: true })
-    .whereNotNull('health_path')
-    .select('id', 'name', 'health_path', 'mock_config')
+    .where((q) => q.whereNotNull('health_path').orWhere('auth_type', 'oauth2_cc'))
+    .select('id', 'name', 'health_path', 'auth_type', 'mock_config')
     .catch(() => [])) as Array<{
     id: number
     name: string
     health_path: string | null
+    auth_type: string | null
     mock_config: string | null
   }>
   return rows
-    .filter((r) => (r.health_path ?? '').trim() && !mockConfigFor(r))
-    .map((r) => ({ id: r.id, name: r.name, path: String(r.health_path) }))
+    .filter(
+      (r) => ((r.health_path ?? '').trim() || r.auth_type === 'oauth2_cc') && !mockConfigFor(r)
+    )
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      path: (r.health_path ?? '').trim() || '(token endpoint)'
+    }))
 }
 
 /** Probe every target, four at a time. */

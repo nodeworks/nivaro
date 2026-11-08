@@ -51,7 +51,15 @@ async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
   return map
 }
 
-export async function getStateDurationStats(): Promise<Map<string, StateDurationStats>> {
+/**
+ * `opts.wait: false` (request paths): a truly cold process answers an EMPTY map at once and
+ * lets the load run behind it — the aggregate over all workflow history takes 8.7 s on EFP
+ * production (max 15 s), and every queue read after a deploy used to wait for it. The only
+ * cost is no "historically stuck" flags for the first seconds after boot.
+ */
+export async function getStateDurationStats(
+  opts: { wait?: boolean } = {}
+): Promise<Map<string, StateDurationStats>> {
   if (cache && Date.now() - cache.at < TTL) return cache.stats
   if (!loading) {
     loading = loadAllStats()
@@ -74,6 +82,7 @@ export async function getStateDurationStats(): Promise<Map<string, StateDuration
   // "historically stuck" flag, so an expired cache serves immediately while
   // the refresh runs behind it. Only a truly cold process ever waits.
   if (cache) return cache.stats
+  if (opts.wait === false) return new Map()
   return loading
 }
 

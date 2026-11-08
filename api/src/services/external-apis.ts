@@ -16,6 +16,7 @@ import {
 import { maskJsonPaths, redactHeaders } from './outbound-redaction.js'
 import { isSensitiveHeaderName, maskBodySecrets, maskQueryString } from './secret-mask.js'
 import { instanceKey } from './settings-overrides.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { inflightNoteWait } from './traffic-inflight.js'
 import { noteOutbound } from './traffic-map.js'
 
@@ -287,6 +288,40 @@ export async function writeApiCallLog(entry: ApiCallLogEntry): Promise<void> {
   }
 }
 
+// ─── OAuth client-credentials token cache ────────────────────────────────────
+// A partner token (SAT, MDSi) is reused until shortly before it expires instead of
+// fetched before every call (90–360 ms each on EFP production, plus load on the token
+// server). Keyed by tenant + everything that shapes the exchange (token url, client,
+// scope, audience, secret, token headers) so a credential change never reuses an old
+// token. Only tokens that state `expires_in` are kept. A partner 401 drops the entry;
+// health probes (kind 'token_probe') always fetch fresh — they test the token server.
+const TOKEN_REUSE_MARGIN_S = 60
+const TOKEN_MAX_REUSE_S = 3600
+const oauthTokens = new Map<string, { token: string; until: number }>()
+
+function oauthTokenKey(c: OAuth2CCConfig): string {
+  const shape = JSON.stringify([
+    c.token_url,
+    c.client_id ?? null,
+    c.client_secret ?? null,
+    c.scope ?? null,
+    c.audience ?? null,
+    c.token_headers ?? null
+  ])
+  return `${currentTenantKey()}|${createHash('sha256').update(shape).digest('hex')}`
+}
+
+/** Drop the kept token for this auth config (a partner answered 401). */
+export function forgetOAuthToken(cfg: Record<string, unknown> | null): void {
+  const c = cfg as unknown as OAuth2CCConfig | null
+  if (c?.token_url) oauthTokens.delete(oauthTokenKey(c))
+}
+
+/** Test seam. */
+export function clearOAuthTokenCache(): void {
+  oauthTokens.clear()
+}
+
 // ─── Auth resolution ──────────────────────────────────────────────────────────
 
 /** Exported so the /external-apis test route authenticates EXACTLY like a
@@ -331,6 +366,14 @@ export async function resolveAuth(
       // client_id may live in token_headers instead (header-credential token
       // endpoints) — token_url alone is enough to attempt the exchange.
       if (c?.token_url) {
+        const reuseKey = oauthTokenKey(c)
+        if (rec?.kind !== 'token_probe') {
+          const kept = oauthTokens.get(reuseKey)
+          if (kept && kept.until > Date.now()) {
+            headers.Authorization = `Bearer ${kept.token}`
+            break
+          }
+        }
         const tokenHeaders: Record<string, string> = {
           'Content-Type': 'application/x-www-form-urlencoded',
           ...(c.token_headers ?? {})
@@ -384,7 +427,12 @@ export async function resolveAuth(
         // Authorization only turns "our credentials are wrong" into a partner
         // 401 that reads like their fault.
         const text = await res.text()
-        let body: { access_token?: string; error?: string; error_description?: string } = {}
+        let body: {
+          access_token?: string
+          expires_in?: number | string
+          error?: string
+          error_description?: string
+        } = {}
         try {
           body = JSON.parse(text)
         } catch {
@@ -402,6 +450,9 @@ export async function resolveAuth(
         }
         note(res.status, null, text, resH)
         headers.Authorization = `Bearer ${body.access_token}`
+        const life = Math.min(TOKEN_MAX_REUSE_S, Number(body.expires_in)) - TOKEN_REUSE_MARGIN_S
+        if (Number.isFinite(life) && life > 0)
+          oauthTokens.set(reuseKey, { token: body.access_token, until: Date.now() + life * 1000 })
       }
       break
     }
@@ -884,6 +935,9 @@ async function callExternalApiInner(
       parsedBody = text
     }
   }
+
+  // A refused token (expired early, revoked, rotated) must not be reused for the next call.
+  if (res.status === 401 && row.auth_type === 'oauth2_cc') forgetOAuthToken(cfg)
 
   logOutbound(
     {

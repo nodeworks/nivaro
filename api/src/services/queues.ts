@@ -2811,7 +2811,7 @@ export async function resolveCollectionSource(
   > | null = null
   try {
     const { getStateDurationStats } = await import('./predictive-sla.js')
-    durationStats = await span('queue:predictive-sla', () => getStateDurationStats())
+    durationStats = await span('queue:predictive-sla', () => getStateDurationStats({ wait: false }))
   } catch {
     durationStats = null
   }
