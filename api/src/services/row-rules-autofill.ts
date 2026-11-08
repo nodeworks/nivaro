@@ -129,6 +129,30 @@ async function getConfigs(childCollection: string): Promise<GridRuleConfig[]> {
 }
 
 /**
+ * A parent that does not exist yet: a rehearsed create (`?dry_run=1`) checks
+ * its nested child rows without a stored parent, so the row rules that read
+ * the parent — and the 'lock' rules that drop a caller's locked value, e.g.
+ * a line price a role may not set — used to be skipped, and the rehearsal
+ * said a copied $2 price was kept while the real create stored $1 (army 11
+ * f4 M3). The rehearsal hands the parent AS IT WOULD BE STORED instead.
+ */
+export interface VirtualParent {
+  collection: string
+  row: Record<string, unknown>
+}
+
+/** The virtual parent for a grid config — only when the row names no stored parent. */
+export function virtualParentFor(
+  cfg: { parentCollection: string },
+  fkValue: unknown,
+  virtualParent: VirtualParent | undefined
+): Record<string, unknown> | undefined {
+  if (!virtualParent || virtualParent.collection !== cfg.parentCollection) return undefined
+  if (fkValue != null && fkValue !== '') return undefined
+  return virtualParent.row
+}
+
+/**
  * Fill layout-rule defaults into a child-row create payload. Mutates payload.
  * `callerFields` is the set of keys the ORIGINAL request body carried — those
  * are never overwritten, whatever the rules say.
@@ -145,7 +169,8 @@ export async function applyRowLocksOnWrite(
   payload: Record<string, unknown>,
   callerFields: Set<string>,
   existing: Record<string, unknown> | null,
-  isAdmin = false
+  isAdmin = false,
+  virtualParent?: VirtualParent
 ): Promise<string[]> {
   if (collection.startsWith('nivaro_')) return []
   const dropped: string[] = []
@@ -156,7 +181,8 @@ export async function applyRowLocksOnWrite(
       if (!cfg.rowRules.some((r) => r.target_type === 'lock')) continue
       const merged = { ...(existing ?? {}), ...payload }
       const fkValue = merged[cfg.fkField]
-      if (fkValue == null || fkValue === '') continue
+      const virtual = virtualParentFor(cfg, fkValue, virtualParent)
+      if ((fkValue == null || fkValue === '') && !virtual) continue
       const wanted = new Set(cfg.parentContextFields)
       for (const rule of cfg.rowRules) {
         const tf = rule.trigger_field
@@ -164,9 +190,11 @@ export async function applyRowLocksOnWrite(
       }
       const parentContext: Record<string, unknown> = {}
       if (wanted.size > 0) {
-        const parent = (await db(cfg.parentCollection)
-          .where({ id: String(fkValue) })
-          .first()) as Record<string, unknown> | undefined
+        const parent =
+          virtual ??
+          ((await db(cfg.parentCollection)
+            .where({ id: String(fkValue) })
+            .first()) as Record<string, unknown> | undefined)
         if (parent) for (const f of wanted) parentContext[f] = parent[f] ?? null
       }
       const locks = new Set<string>()
@@ -209,7 +237,8 @@ export async function applyRowLocksOnWrite(
 export async function applyRowRulesOnCreate(
   collection: string,
   payload: Record<string, unknown>,
-  callerFields: Set<string>
+  callerFields: Set<string>,
+  virtualParent?: VirtualParent
 ): Promise<void> {
   if (collection.startsWith('nivaro_')) return
   try {
@@ -218,10 +247,12 @@ export async function applyRowRulesOnCreate(
 
     for (const cfg of configs) {
       const fkValue = payload[cfg.fkField]
-      if (fkValue == null || fkValue === '') continue
+      const virtual = virtualParentFor(cfg, fkValue, virtualParent)
+      if ((fkValue == null || fkValue === '') && !virtual) continue
 
       // Parent context: the fields the layout declares plus any $parent.*
-      // fields the rules themselves reference — read off the real parent row.
+      // fields the rules themselves reference — read off the real parent row
+      // (or, in a rehearsal, the parent as it would be stored).
       const wanted = new Set(cfg.parentContextFields)
       for (const rule of cfg.rowRules) {
         const tf = rule.trigger_field
@@ -229,9 +260,11 @@ export async function applyRowRulesOnCreate(
       }
       let parentContext: Record<string, unknown> = {}
       if (wanted.size > 0) {
-        const parent = (await db(cfg.parentCollection)
-          .where({ id: String(fkValue) })
-          .first()) as Record<string, unknown> | undefined
+        const parent =
+          virtual ??
+          ((await db(cfg.parentCollection)
+            .where({ id: String(fkValue) })
+            .first()) as Record<string, unknown> | undefined)
         if (!parent) continue
         parentContext = {}
         for (const f of wanted) parentContext[f] = parent[f] ?? null

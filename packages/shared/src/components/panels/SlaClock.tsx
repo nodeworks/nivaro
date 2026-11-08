@@ -31,10 +31,14 @@ export interface SlaStatusData {
   elapsed_hours?: number
   total_hours?: number
   pct_used?: number
-  sla_rule?: { name?: string; duration_hours?: number } | null
+  sla_rule?: { name?: string; duration_hours?: number; business_hours_only?: boolean } | null
+  /** When the record entered this step (the calendar clock). */
+  entered_at?: string | null
   acknowledged?: { at: string; by: string } | null
   has_ladder?: boolean
   can_adjust?: boolean
+  /** May this person acknowledge the breach (step owners, admins). */
+  can_ack?: boolean
   override?: SlaOverrideInfo | null
 }
 
@@ -58,6 +62,43 @@ export function useSlaStatus(collection: string, itemId: string | null | undefin
     enabled: !!itemId,
     staleTime: 60_000
   })
+}
+
+/**
+ * SLA hours in the rule's own unit. A business-hours rule counts WORKING
+ * hours — "2d 4h" for 52 of them read as two days when it is six and a half
+ * working days (army 11 a4), so they are always said as working hours.
+ */
+export function slaHours(hours: number | null | undefined, business: boolean): string {
+  if (!business) return humanHours(hours)
+  if (hours == null || Number.isNaN(hours)) return '—'
+  const h = Math.max(0, hours)
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} working min`
+  const n = Math.round(h)
+  return `${n} working hour${n === 1 ? '' : 's'}`
+}
+
+/** "3 working hours left of 24 working hours" / "52 working hours past the 24 working-hour limit". */
+export function slaClockText(
+  data: Pick<SlaStatusData, 'elapsed_hours' | 'total_hours' | 'sla_rule'>
+): string {
+  const business = !!data.sla_rule?.business_hours_only
+  const total = data.total_hours ?? 0
+  const left = total - (data.elapsed_hours ?? 0)
+  const limit = business ? `${Math.round(total)} working-hour limit` : `${humanHours(total)} limit`
+  return left >= 0
+    ? `${slaHours(left, business)} left of ${slaHours(total, business)}`
+    : `${slaHours(-left, business)} past the ${limit}`
+}
+
+/** Calendar time in the step — the same age the lists show ("13 days in this step"). */
+export function stepAgeText(enteredAt: string | null | undefined, now = Date.now()): string | null {
+  if (!enteredAt) return null
+  const t = new Date(enteredAt).getTime()
+  if (!Number.isFinite(t)) return null
+  const days = Math.floor((now - t) / 86_400_000)
+  if (days < 1) return null
+  return `${days} day${days === 1 ? '' : 's'} in this step`
 }
 
 /** "Adjusted to 48h (rule: 24h) by Rob Lee, 2h ago — waiting on vendor" */
@@ -234,7 +275,6 @@ export function AdjustClockPopover({
 export function SlaClockLine({ collection, itemId }: { collection: string; itemId: string }) {
   const { data } = useSlaStatus(collection, itemId)
   if (!data?.status || data.status === 'none' || data.total_hours == null) return null
-  const left = data.total_hours - (data.elapsed_hours ?? 0)
   const tone =
     data.status === 'breached'
       ? 'text-red-700 dark:text-red-300'
@@ -246,10 +286,7 @@ export function SlaClockLine({ collection, itemId }: { collection: string; itemI
       <Clock3 className='h-3.5 w-3.5 shrink-0 text-slate-400' />
       <p className={`min-w-0 flex-1 text-[12px] ${tone}`}>
         <span className='font-medium'>SLA</span>
-        {data.sla_rule?.name ? ` · ${data.sla_rule.name}` : ''} ·{' '}
-        {left >= 0
-          ? `${humanHours(left)} left of ${humanHours(data.total_hours)}`
-          : `${humanHours(-left)} past the ${humanHours(data.total_hours)} limit`}
+        {data.sla_rule?.name ? ` · ${data.sla_rule.name}` : ''} · {slaClockText(data)}
         {data.override && (
           <span
             className='ml-1 text-slate-500 dark:text-slate-400'

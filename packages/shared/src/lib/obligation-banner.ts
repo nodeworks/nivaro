@@ -15,6 +15,11 @@ export interface BannerLine {
    *  rejected). Null for hook / flow / cron obligations. */
   transition_id: string | null
   transition_label: string | null
+  /** Send now can repeat a stored request (its own, or a safe prior one).
+   *  Absent = yes (the one button an older server always offered). */
+  can_resend?: boolean
+  /** "Send current data" can rebuild the request from the record as it is now. */
+  can_send_current?: boolean
 }
 
 interface Row {
@@ -36,6 +41,8 @@ interface Row {
   submission_id?: number | null
   transition_id?: string | null
   transition_label?: string | null
+  can_resend?: boolean
+  can_send_current?: boolean
 }
 
 /** "14:02" in the viewer's preferred zone — `getDisplayTimezone()` is the
@@ -127,7 +134,10 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
       outcome: r.outcome,
       submission_id: r.submission_id ?? null,
       transition_id: r.transition_id ?? null,
-      transition_label: r.transition_label ?? null
+      transition_label: r.transition_label ?? null,
+      // An older server sends neither: keep the one button it always had.
+      can_resend: r.can_resend ?? true,
+      can_send_current: r.can_send_current ?? false
     }
   })
 }

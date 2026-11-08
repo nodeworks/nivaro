@@ -668,6 +668,32 @@ export async function itemsRoutes(app: FastifyInstance) {
         req.log.warn({ err, collection }, 'bulk update form check skipped')
         return new Map<string, string>()
       })
+    // Army 11 N3 — the form's field rules, for every caller: a required field
+    // is never cleared, a cascade parent or a sequenced id's part is never
+    // changed in bulk, a cascade child's value must be one its picker offers
+    // for that record. Unlike the layout check above, these do not fail open:
+    // an unreadable rule table refuses the write.
+    const ruleRefusals = await import('../services/bulk-field-rules.js')
+      .then((r) =>
+        r.bulkRuleRefusals({
+          collection,
+          ids,
+          data,
+          user: req.user!,
+          isAdmin: !!req.isAdmin,
+          workspaceId: req.workspaceId ?? undefined
+        })
+      )
+      .catch((err) => {
+        req.log.warn({ err, collection }, 'bulk update field rules unreadable')
+        return new Map(
+          ids.map((id) => [
+            String(id).toLowerCase(),
+            'Could not check this field’s rules — try again'
+          ])
+        )
+      })
+    for (const [k, why] of ruleRefusals) if (!refusals.has(k)) refusals.set(k, why)
     for (const id of ids) {
       rp.next(id)
       const refusal = refusals.get(String(id).toLowerCase())
@@ -810,6 +836,17 @@ export async function itemsRoutes(app: FastifyInstance) {
           errors.push({
             item: String(item),
             error: String(refusal.body.code ?? refusal.body.error ?? 'Refused')
+          })
+          continue
+        }
+        // Someone else is editing this one right now: a bulk move never runs
+        // over them (army 11 f4 M4) — the record page asks, the bulk run skips.
+        const held = await editLockRefusal(req, collection, String(item)).catch(() => null)
+        if (held) {
+          failed++
+          errors.push({
+            item: String(item),
+            error: `${held.body.locked_by_name ?? 'Someone else'} is editing it right now`
           })
           continue
         }

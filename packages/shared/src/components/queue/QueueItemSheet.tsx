@@ -122,7 +122,8 @@ export function QueueItemSheet({
   columnFormats,
   fieldLabel,
   width,
-  itemLayout
+  itemLayout,
+  onOpenRecord
 }: {
   item: SheetItem | null
   onOpenChange: (open: boolean) => void
@@ -146,10 +147,13 @@ export function QueueItemSheet({
   width?: number | string | null
   /** Layout slug the Open button pins on the full item; null = default. */
   itemLayout?: string | null
+  /** The host opens the record (the worklist remembers its place first, army 11
+   *  Q1-4). Absent = plain item navigation. */
+  onOpenRecord?: (item: SheetItem) => void
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
-  const { open: openItemPage } = useItemNavigation()
+  const { open: openItemPage, urlFor: itemUrlFor } = useItemNavigation()
   const [commentText, setCommentText] = useState('')
   const [reqDialog, setReqDialog] = useState<ReqDialogState | null>(null)
   // army6 H7 — nothing moves on one click: a move without a note asks
@@ -292,19 +296,28 @@ export function QueueItemSheet({
                     )}
                   </div>
                 </div>
-                <button
-                  type='button'
-                  onClick={() =>
-                    openItemPage({
-                      collection: item.collection,
-                      itemId: item.item_id,
-                      layoutSlug: itemLayout ?? null
-                    })
-                  }
+                <a
+                  href={itemUrlFor({
+                    collection: item.collection,
+                    itemId: item.item_id,
+                    layoutSlug: itemLayout ?? null
+                  })}
+                  onClick={(e) => {
+                    // Modified clicks open a new tab like any link (army 11 Q1-4).
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+                    e.preventDefault()
+                    if (onOpenRecord) onOpenRecord(item)
+                    else
+                      openItemPage({
+                        collection: item.collection,
+                        itemId: item.item_id,
+                        layoutSlug: itemLayout ?? null
+                      })
+                  }}
                   className='flex shrink-0 items-center gap-1 text-[12px] font-medium text-nvr-navy hover:underline dark:text-nvr-cyan'
                 >
                   Open <ExternalLink className='h-3 w-3' />
-                </button>
+                </a>
               </div>
             </SheetHeader>
 

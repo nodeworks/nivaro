@@ -432,7 +432,9 @@ function parsePreferences<T extends { preferences?: unknown }>(row: T): T {
   return row
 }
 
-const FILTERABLE_USER_COLS = new Set<string>(USER_COLS.filter((c) => c !== 'preferences'))
+export const FILTERABLE_USER_COLS: ReadonlySet<string> = new Set<string>(
+  USER_COLS.filter((c) => c !== 'preferences')
+)
 
 const SORTABLE_USER_COLS = new Set<string>([
   'first_name',

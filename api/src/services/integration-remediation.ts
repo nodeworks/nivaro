@@ -34,6 +34,7 @@ import {
   type ObligationKindDef,
   resolveObligation
 } from './integration-obligations.js'
+import { secretPathsOf } from './secret-markers.js'
 
 export type ErrorClass =
   | 'transient'
@@ -275,12 +276,9 @@ async function refireFromPrior(
     | undefined
   if (!prior) return { detail: 'the original request is no longer stored' }
 
-  let stored: { endpoint_path: string; body: Record<string, unknown> }
+  let stored: StoredRequest
   try {
-    stored = JSON.parse(prior.payload ?? '') as {
-      endpoint_path: string
-      body: Record<string, unknown>
-    }
+    stored = JSON.parse(prior.payload ?? '') as StoredRequest
     if (!stored?.endpoint_path) throw new Error('no endpoint_path')
   } catch {
     return { detail: 'the original request is not readable' }
@@ -289,14 +287,53 @@ async function refireFromPrior(
   // repeat, and a pending shell left behind would read as a send in flight.
   if (!hasResendableBody(stored)) return { detail: NO_BODY.message, code: NO_BODY.error }
 
-  // The shell: identity cloned from the prior row, everything about THIS
-  // attempt (status/response/external_ref/error_class) starts blank and is
-  // filled in by applySendOutcome right after — the same shared function
-  // every other sender uses, so this row's final shape can never drift from
-  // theirs. `attempts: 0` because nothing has been attempted on this row
-  // yet — applySendOutcome's own `priorAttempts + 1` below is what makes the
-  // first real attempt land as attempts = 1, same as a freshly created
-  // submission anywhere else in the codebase.
+  const outcome = await sendIntoNewRow(
+    obligationId,
+    {
+      collection: prior.collection,
+      item: prior.item,
+      external_api: prior.external_api,
+      payload: prior.payload as string,
+      change_signature: prior.change_signature
+    },
+    stored,
+    userId
+  )
+  if (!outcome) return { detail: 'could not create a submission row to re-fire into' }
+  return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
+}
+
+type StoredRequest = {
+  endpoint_path: string
+  body: Record<string, unknown>
+  secret_paths?: string[]
+}
+
+/**
+ * The one "send into a brand-new submission row" sequence — a re-fire of
+ * someone else's request (`refireFromPrior`) and a fresh send built from the
+ * record's current data (`sendFresh`) both land here, so neither can drift
+ * from the other or from every other sender:
+ *
+ * The shell row starts `pending` with `attempts: 0`, stamped with THIS
+ * obligation's id; `sendPayload` (the same guards as every resend) makes the
+ * call inside the submission's chain step; `applySendOutcome` writes the
+ * row (attempts → 1, status, error_class); `propagateSubmissionStatus` moves
+ * the obligation and points its `submission_id` at the new row.
+ * Returns null when no row could be created.
+ */
+async function sendIntoNewRow(
+  obligationId: number,
+  identity: {
+    collection: string
+    item: string
+    external_api: number
+    payload: string
+    change_signature: string | null
+  },
+  stored: StoredRequest,
+  userId: string | null
+): Promise<{ status: string; error?: string | null } | null> {
   const now = new Date()
   // Probed once per tenant — naming a column this database hasn't run
   // migration 350 for fails the WHOLE insert, not just these two fields.
@@ -307,15 +344,15 @@ async function refireFromPrior(
   )
   const inserted = (await db('nivaro_erp_submissions')
     .insert({
-      collection: prior.collection,
-      item: prior.item,
-      external_api: prior.external_api,
+      collection: identity.collection,
+      item: identity.item,
+      external_api: identity.external_api,
       external_ref: null,
       status: 'pending',
       attempts: 0,
       last_error: null,
-      payload: prior.payload,
-      change_signature: prior.change_signature,
+      payload: identity.payload,
+      change_signature: identity.change_signature,
       obligation_id: obligationId,
       ...requesterFields,
       ...(await chainFields('nivaro_erp_submissions')),
@@ -327,13 +364,13 @@ async function refireFromPrior(
   // tedious hands an OBJECT back from .returning on this stack.
   const newId =
     typeof first === 'object' && first !== null ? Number(first.id) : Number(first ?? 0) || null
-  if (!newId) return { detail: 'could not create a submission row to re-fire into' }
+  if (!newId) return null
 
   const { sendPayload } = await import('../routes/erp-submissions.js')
   const { applySendOutcome, propagateSubmissionStatus } = await import('./erp-submission-status.js')
 
   const outcome = await withChainStep(`submission:${newId}`, async () => {
-    const sent = await sendPayload(prior.external_api, stored, userId ?? undefined)
+    const sent = await sendPayload(identity.external_api, stored, userId ?? undefined)
     await applySendOutcome({
       submissionId: newId,
       outcome: sent,
@@ -345,21 +382,150 @@ async function refireFromPrior(
     return sent
   })
   // resolveObligation (inside propagateSubmissionStatus) is what points the
-  // re-firing obligation's own submission_id at the NEW row — the prior
-  // obligation, whichever one that was, is never touched by this call.
+  // obligation's own submission_id at the NEW row — no other obligation's
+  // row is ever touched by this call.
   await propagateSubmissionStatus({
     submissionId: newId,
     status: outcome.status,
     error: outcome.error,
     obligationId
   })
+  return outcome
+}
 
-  return { detail: `re-sent: ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}` }
+/**
+ * May a PERSON send this kind's request rebuilt from the record's current
+ * data? Only when the kind declares a builder (`fresh_request`), the send is
+ * not a person's own to make on the record (`human` — a Fusion submit is
+ * never pushed from here), and the kind names its endpoint. Null = yes.
+ */
+export function freshSendRefusal(def: ObligationKindDef | undefined): string | null {
+  if (!def) return 'this kind is no longer registered — a person needs to look'
+  if (def.human) return 'this send belongs to a person — open the record and push it there'
+  if (typeof def.fresh_request !== 'function') {
+    return 'this kind cannot rebuild its request from the current data'
+  }
+  if (!String(def.endpoint_path ?? '').trim()) {
+    return 'this kind does not name the endpoint it sends to'
+  }
+  return null
+}
+
+/** What Send now may offer on one obligation row, for the record banner and
+ *  the board: repeat a stored request (its own, or — for a kind that allows
+ *  it — the newest prior one), and/or send the record's current data. */
+export function sendOptionsFor(
+  def: ObligationKindDef | undefined,
+  row: { submission_id?: number | null }
+): { can_resend: boolean; can_send_current: boolean } {
+  return {
+    can_resend: row.submission_id != null || refireRefusal(def) === null,
+    can_send_current: freshSendRefusal(def) === null
+  }
+}
+
+type FreshBuild =
+  | {
+      ok: true
+      row: { id: number; api: string; kind: string; collection: string; item: string }
+      apiId: number
+      request: { endpoint_path: string; body: Record<string, unknown>; summary: string }
+    }
+  | { ok: false; detail: string }
+
+/** Build (never send) the current-data request for one obligation. */
+async function buildFresh(obligationId: number): Promise<FreshBuild> {
+  const row = (await db('nivaro_integration_obligations')
+    .where({ id: obligationId })
+    .first('id', 'api', 'kind', 'collection', 'item')) as
+    | { id: number; api: string; kind: string; collection: string; item: string }
+    | undefined
+  if (!row) return { ok: false, detail: 'no such obligation' }
+  const def = getObligationKind(row.api, row.kind)
+  const refusal = freshSendRefusal(def)
+  if (refusal || !def?.fresh_request) return { ok: false, detail: `not sent: ${refusal}` }
+  const api = (await db('nivaro_external_apis').where({ name: row.api }).first('id')) as
+    | { id: number }
+    | undefined
+  if (!api) return { ok: false, detail: `not sent: ${row.api} is not set up on this instance` }
+  let built: Awaited<ReturnType<NonNullable<ObligationKindDef['fresh_request']>>>
+  try {
+    built = await def.fresh_request(db, String(row.item))
+  } catch (err) {
+    return {
+      ok: false,
+      detail: `not sent: the message could not be built (${err instanceof Error ? err.message : String(err)})`
+    }
+  }
+  if ('refused' in built) return { ok: false, detail: `not sent: ${built.refused}` }
+  // The builder may only produce the kind's own shape of request — never a
+  // sibling push's endpoint.
+  if (String(built.endpoint_path ?? '').trim() !== String(def.endpoint_path ?? '').trim()) {
+    return { ok: false, detail: 'not sent: the rebuilt request is for a different endpoint' }
+  }
+  if (!built.body || typeof built.body !== 'object' || Array.isArray(built.body)) {
+    return { ok: false, detail: 'not sent: the message could not be built (no body)' }
+  }
+  return { ok: true, row, apiId: Number(api.id), request: built }
+}
+
+/** What "Send current data" would send — for the confirm. Sends nothing. */
+export async function freshSendPreview(
+  obligationId: number
+): Promise<{ available: boolean; api?: string; summary?: string; detail?: string }> {
+  const b = await buildFresh(obligationId)
+  if (!b.ok) return { available: false, detail: b.detail }
+  return { available: true, api: b.row.api, summary: b.request.summary }
+}
+
+/**
+ * A person clicked "Send current data": rebuild the request from the
+ * record as it is NOW (the kind's own builder — the same template its live
+ * sender renders) and send it through the normal path into a fresh
+ * submission row. Never called by a sweep: `runRetryPass` and
+ * `runMissingRefirePass` only ever repeat stored requests.
+ */
+export async function sendFresh(
+  obligationId: number,
+  userId: string | null
+): Promise<SendNowResult> {
+  if (!(await remediationEnabled())) {
+    return { detail: 'remediation is off for this deployment' }
+  }
+  const b = await buildFresh(obligationId)
+  if (!b.ok) return { detail: b.detail }
+  const stored: StoredRequest = {
+    endpoint_path: b.request.endpoint_path,
+    body: b.request.body,
+    // The template's own placeholders (body secrets) — the same list every
+    // sender stores, so sendPayload honours exactly those.
+    secret_paths: secretPathsOf(b.request.body)
+  }
+  if (!hasResendableBody(stored)) return { detail: NO_BODY.message, code: NO_BODY.error }
+  const outcome = await sendIntoNewRow(
+    obligationId,
+    {
+      collection: b.row.collection,
+      item: String(b.row.item),
+      external_api: b.apiId,
+      payload: JSON.stringify(stored),
+      change_signature: null
+    },
+    stored,
+    userId
+  )
+  if (!outcome) return { detail: 'could not create a submission row to send into' }
+  return {
+    detail: `sent current data (${b.request.summary}): ${outcome.status}${outcome.error ? ` — ${outcome.error}` : ''}`
+  }
 }
 
 /** What Send now did. `code: 'no_body'` = the submission it would resend has no body (the route
  *  answers 409). */
-export type SendNowResult = { detail: string; code?: 'no_body' }
+export type SendNowResult = {
+  detail: string
+  code?: 'no_body' | 'fresh_available'
+}
 
 /**
  * A person clicked "Send now" on one obligation. When the obligation has a
@@ -400,8 +566,19 @@ export async function sendNow(obligationId: number, userId: string | null): Prom
   }
 
   const def = getObligationKind(row.api, row.kind)
+  // Nothing safe to repeat — but a kind that can rebuild its request from the
+  // current data says so, and the person chooses "Send current data" (a
+  // separate, explicitly confirmed click; never done here by itself).
+  const fresh = freshSendRefusal(def) === null
   const refusal = refireRefusal(def)
-  if (refusal) return { detail: `not re-sent: ${refusal}` }
+  if (refusal) {
+    return fresh
+      ? {
+          detail: 'the stored request could be out of date — send the current data instead',
+          code: 'fresh_available'
+        }
+      : { detail: `not re-sent: ${refusal}` }
+  }
 
   const prior = await mostRecentSubmissionFor(
     row.api,
@@ -410,7 +587,12 @@ export async function sendNow(obligationId: number, userId: string | null): Prom
     String(def?.endpoint_path ?? '')
   )
   if (!prior) {
-    return { detail: 'nothing to re-send — this send has never run for this record' }
+    return fresh
+      ? {
+          detail: 'nothing was ever sent for this record — send the current data instead',
+          code: 'fresh_available'
+        }
+      : { detail: 'nothing to re-send — this send has never run for this record' }
   }
   return refireFromPrior(obligationId, prior.id, userId)
 }

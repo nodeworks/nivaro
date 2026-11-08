@@ -66,7 +66,8 @@ export function RecordDrilldownSheet({
   onPush,
   onPop,
   onClose,
-  design
+  design,
+  onOpenRecord
 }: {
   collection: string
   itemId: string
@@ -90,10 +91,14 @@ export function RecordDrilldownSheet({
    *  one) with the preview record, inline at its sheet width instead of in a
    *  modal sheet, with no Open record link and no host override view. */
   design?: LayoutDesignProp
+  /** The host opens the record itself (a worklist remembers its place first so
+   *  Back returns to it, army 11 Q1-4). Absent = plain item navigation. A
+   *  modified click (Cmd/Ctrl/middle) always opens the link in a new tab. */
+  onOpenRecord?: (target: { collection: string; itemId: string }) => void
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
-  const { open: openItemPage } = useItemNavigation()
+  const { open: openItemPage, urlFor: itemUrlFor } = useItemNavigation()
 
   // Nested drilling: relation fields inside the sheet push onto this stack;
   // Back pops. The initial target comes from the props.
@@ -198,13 +203,21 @@ export function RecordDrilldownSheet({
         </span>
       )}
       {!design && (
-        <button
-          type='button'
-          onClick={() => openItemPage({ collection: current.collection, itemId: current.itemId })}
+        // A real link (army 11 Q1-4): Cmd/Ctrl/middle-click opens the record in a new
+        // tab and keeps this list where it is; a plain click goes through the host.
+        <a
+          href={itemUrlFor({ collection: current.collection, itemId: current.itemId })}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+            e.preventDefault()
+            const target = { collection: current.collection, itemId: String(current.itemId) }
+            if (onOpenRecord) onOpenRecord(target)
+            else openItemPage(target)
+          }}
           className='flex shrink-0 items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
         >
           Open record <ExternalLink className='h-3 w-3' />
-        </button>
+        </a>
       )}
     </>
   )

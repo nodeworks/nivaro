@@ -391,7 +391,14 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         's.last_error as submission_last_error',
         's.response as submission_response'
       )
-    return { data: rows, total: Number(total) || 0, page, limit }
+    const { sendOptionsFor } = await import('../services/integration-remediation.js')
+    const withOptions = (rows as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      ...sendOptionsFor(getObligationKind(String(r.api), String(r.kind)), {
+        submission_id: (r.submission_id as number | null | undefined) ?? null
+      })
+    }))
+    return { data: withOptions, total: Number(total) || 0, page, limit }
   })
 
   // One record's ledger, newest first. NOT admin-only — gated on the
@@ -425,7 +432,9 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       // Task 19 — a read this banner already makes once per record, never a
       // second probe per row: same reasoning as /summary above. Same
       // envelope position too — top-level sibling of `data`.
-      const { remediationEnabled } = await import('../services/integration-remediation.js')
+      const { remediationEnabled, sendOptionsFor } = await import(
+        '../services/integration-remediation.js'
+      )
       // A transition-triggered obligation names the transition that owns it
       // (trigger_ref = its id) so the record's partner-status line can offer
       // "re-run <Submit to Warehouse>" as the fix, not just say it failed.
@@ -458,11 +467,15 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           r.trigger === 'transition' && trigger_ref
             ? txLabels.get(String(trigger_ref).toUpperCase())
             : undefined
+        const def = getObligationKind(r.api, r.kind)
         return {
           ...r,
-          label: getObligationKind(r.api, r.kind)?.label ?? null,
+          label: def?.label ?? null,
           transition_id: tx ? String(trigger_ref) : null,
-          transition_label: tx ?? null
+          transition_label: tx ?? null,
+          // What Send now may offer here (repeat a stored request / send the
+          // current data) — the banner shows only the buttons that can work.
+          ...sendOptionsFor(def, r as { submission_id?: number | null })
         }
       })
       return { data, remediation_enabled: await remediationEnabled() }
@@ -476,12 +489,28 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
   // definition has none of its own — the most recent request ever made for
   // this record on this API. Always a two-click confirm in the UI; this
   // route itself is a single POST, the confirm lives client-side.
-  app.post<{ Params: { id: string } }>(
+  // What "Send current data" would send — the confirm's own words ("This
+  // sends the record's current state (…) to LinX now"). Builds, never sends.
+  app.get<{ Params: { id: string } }>(
+    '/integration-obligations/:id/fresh-preview',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isFinite(id)) return reply.code(404).send({ error: 'No such obligation' })
+      const { freshSendPreview } = await import('../services/integration-remediation.js')
+      return { data: await freshSendPreview(id) }
+    }
+  )
+
+  app.post<{ Params: { id: string }; Body: { fresh?: boolean } | null }>(
     '/integration-obligations/:id/send',
     { preHandler: requireAdmin },
     async (req, reply) => {
       const id = Number(req.params.id)
-      const { sendNow, remediationEnabled, isClosedOutcome } = await import(
+      // `fresh: true` = "Send current data": the request rebuilt from the
+      // record as it is now, never the stored one. Only ever a person's click.
+      const fresh = req.body?.fresh === true
+      const { sendNow, sendFresh, remediationEnabled, isClosedOutcome } = await import(
         '../services/integration-remediation.js'
       )
       // Checked here FIRST, before even reading the row — the whole point
@@ -504,13 +533,15 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       if (isClosedOutcome(row.outcome)) {
         return reply.code(409).send({ error: `already ${row.outcome} — there is nothing to send` })
       }
-      const r = await sendNow(id, req.user?.id ?? null)
+      const r = fresh
+        ? await sendFresh(id, req.user?.id ?? null)
+        : await sendNow(id, req.user?.id ?? null)
       // The submission it would resend has no body (its payload template refused to render).
       if (r.code === 'no_body') {
         return reply.code(409).send(NO_BODY)
       }
       await logActivity({
-        action: 'integration-send-now',
+        action: fresh ? 'integration-send-current' : 'integration-send-now',
         collection: 'nivaro_integration_obligations',
         item: req.params.id,
         user: req.user?.id ?? null,

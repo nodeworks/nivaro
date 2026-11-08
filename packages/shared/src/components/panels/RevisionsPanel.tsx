@@ -602,12 +602,15 @@ function FieldChangeRow({
   meta,
   fieldRevert,
   mode,
-  hideStatusChips
+  hideStatusChips,
+  between
 }: {
   row: FieldRowData
   meta: FieldMetaMap
   fieldRevert?: FieldRevertCtl
   mode: 'changes' | 'all'
+  /** Worked out between the two saves, not part of this edit. */
+  between?: boolean
   /** On a CREATE revision every field is 'set' — the chips say nothing. */
   hideStatusChips?: boolean
 }) {
@@ -636,7 +639,10 @@ function FieldChangeRow({
         )}
         {(row.status === 'changed' || (mode === 'changes' && row.status === 'added')) &&
           fieldRevert &&
-          row.field !== 'id' && (
+          row.field !== 'id' &&
+          // A value worked out between saves (a rollup, a forecast status) is
+          // not something to put back by hand (army11 f1 design review).
+          !between && (
             <span className='ml-auto shrink-0'>
               <RevertFieldButton field={row.field} ctl={fieldRevert} />
             </span>
@@ -743,6 +749,7 @@ export function FieldChangeList({
             fieldRevert={fieldRevert}
             mode={mode}
             hideStatusChips={hideStatusChips}
+            between={isBetween(row)}
           />
         </div>
       ))}

@@ -1257,13 +1257,16 @@ function buildRows(base: PresenceBase, isAdmin: boolean, extras: PresenceAdminEx
       recording_id: extras.recordingByUser.get(uid) ?? null,
       ...(extras.staleBuilds.has(uid) ? { stale_build: extras.staleBuilds.get(uid) } : {}),
       // Set while an admin is masquerading as this user — the row is
-      // theirs, the person behind it is someone else.
-      masquerade: masqByUser.has(uid)
-        ? {
-            admin_id: masqByUser.get(uid) ?? null,
-            admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
-          }
-        : null
+      // theirs, the person behind it is someone else. ADMINS ONLY (Rob, army 11): who an
+      // administrator is viewing as — and that administrator's id — is never shown to anyone
+      // else. The signature step is per isAdmin, so the shared base keeps it untouched.
+      masquerade:
+        isAdmin && masqByUser.has(uid)
+          ? {
+              admin_id: masqByUser.get(uid) ?? null,
+              admin_name: adminNames.get(masqByUser.get(uid) ?? '') ?? 'an administrator'
+            }
+          : null
     }
     return { uid, row: r, idle, out }
   })
@@ -1303,6 +1306,29 @@ async function signatureAnswer(
   return { base, admin: isAdmin, built: buildRows(base, isAdmin, extras), visible }
 }
 
+/**
+ * Army 11 (o2): a person's zones are not everyone's business. A non-admin sees another
+ * person's scope labels only where they SHARE them — per dimension, the labels both hold (so
+ * the chat list can still group a Zone 1 viewer's colleagues under Zone 1); a dimension the
+ * viewer is not restricted on shows nothing. Their own row and administrators see it all.
+ */
+export function scopesForViewer(
+  row: Map<string, string[]> | undefined,
+  viewer: Map<string, string[]> | undefined,
+  self: boolean
+): Map<string, string[]> {
+  if (!row) return new Map()
+  if (self) return row
+  const out = new Map<string, string[]>()
+  for (const [dim, labels] of row) {
+    const mine = new Set(viewer?.get(dim) ?? [])
+    if (mine.size === 0) continue
+    const shared = labels.filter((l) => mine.has(l))
+    if (shared.length) out.set(dim, shared)
+  }
+  return out
+}
+
 /** One viewer's answer on top of their signature's: own row, labels, stuck. */
 async function personAnswer(sig: SignatureAnswer, viewer: User): Promise<OnlineAnswer> {
   presenceOnlineCounters.persons++
@@ -1335,8 +1361,14 @@ async function personAnswer(sig: SignatureAnswer, viewer: User): Promise<OnlineA
   return {
     data: entries.map((e) => {
       const stuck = stuckByUser.get(e.uid) ?? null
+      const scoped = sig.admin
+        ? null
+        : scopesForViewer(base.scopesByUser.get(e.uid), base.scopesByUser.get(me), e.uid === me)
       return {
         ...e.out,
+        ...(scoped
+          ? { scopes: [...scoped.values()].flat(), scopes_by_dimension: Object.fromEntries(scoped) }
+          : {}),
         state: e.idle ? 'idle' : stuck ? 'stuck' : 'active',
         stuck,
         page: presencePageLabel(e.row.current_path as string | null, recordLabels)

@@ -155,7 +155,9 @@ describe('undoAgentWrite', () => {
     fx.act = { ...(base.act as object), action: 'create' }
     const r = await undoAgentWrite(user, 7)
     expect(r.action).toBe('delete')
-    expect(deleteOne).toHaveBeenCalledWith(user, 'projects', '42', undefined)
+    expect(deleteOne).toHaveBeenCalledWith(user, 'projects', '42', undefined, undefined, {
+      undoOwnCreate: true
+    })
   })
 
   it('refuses once the record changed after the agent', async () => {

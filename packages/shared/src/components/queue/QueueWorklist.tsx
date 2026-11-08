@@ -20,6 +20,7 @@ import {
   Bell,
   Check,
   ChevronDown,
+  Download,
   FileDiff,
   Flame,
   GripVertical,
@@ -77,13 +78,15 @@ import {
 } from '../../lib/list-inline-edit'
 import {
   dropListLinkParam,
+  encodeListLink,
   type QueueLinkState,
   readListLinkFromLocation,
+  replaceListLinkParam,
   sanitizeQueueLinkState
 } from '../../lib/list-link'
+import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
 import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
-import { arrivedByListReturn, ensureHistoryKey, historyKey } from '../../lib/list-page-memory'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
 import { usePrefetchIntent } from '../../lib/prefetch'
@@ -111,6 +114,7 @@ import {
 } from '../../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from '../ai/ask-context'
 import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
+import { BulkFieldUpdateButton } from '../bulk/BulkFieldUpdateButton'
 import { BulkRowMark } from '../bulk/BulkRowMark'
 import { RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
@@ -153,6 +157,8 @@ import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
 import { QueueWorkloadView } from './QueueWorkloadView'
 import { needsTransitionNote, useTransitionNote } from './transition-note'
+import { worklistCsv, worklistCsvName } from './worklist-csv'
+import { atRiskBreakdown, extraChoiceText, worklistKeyTarget } from './worklist-helpers'
 
 /** Root drill entry may pin a grouped layout; nested levels never do. */
 type DrillEntry = DrilldownTarget & { rootLayoutSlug?: string | null }
@@ -287,6 +293,8 @@ interface QueueStats {
   aging?: { d1: number; d3: number; d7: number; over: number }
   /** Rows an SLA rule applies to; 0 = no SLA here (Warning / Breached tiles hidden). */
   sla_tracked?: number
+  /** At-risk rows per rule name (live path only). */
+  at_risk_by_rule?: Record<string, number>
 }
 
 interface QueueSource {
@@ -307,6 +315,8 @@ interface ExtraFieldMeta {
   target_collection?: string
   display_field?: string
   aggregate?: string
+  /** The field's select choices — values show as their labels (army 11 Q1-2). */
+  choices?: Array<{ value: string; text: string }>
 }
 
 interface QueueMeta {
@@ -339,6 +349,8 @@ interface QueueMeta {
       sla_breached: number
       at_risk: number
       age_hour_cap: number
+      /** Weight per at-risk rule name (e.g. {"On hold": -5000} parks held records last). */
+      at_risk_rule_weights?: Record<string, number> | null
     } | null
     formula_columns?: Array<{
       key: string
@@ -490,9 +502,12 @@ function StatTile({
   trend,
   delta,
   deltaBadIsUp,
+  breakdown,
   onClick
 }: {
   label: string
+  /** What the count is made of, e.g. "On hold 144 · Sent back 4" (army 11 Q1-6). */
+  breakdown?: string | null
   count: number
   /** Count over the active column filters — renders as "277 / 504" when set. */
   filteredCount?: number | null
@@ -512,6 +527,19 @@ function StatTile({
     <button
       type='button'
       onClick={onClick}
+      aria-pressed={active}
+      // A spoken name, not "42Total↑2" (army 11 q1).
+      aria-label={[
+        filteredCount != null
+          ? `${formatNumber(filteredCount)} of ${formatNumber(count)} ${label}`
+          : `${formatNumber(count)} ${label}`,
+        breakdown || null,
+        delta != null && delta !== 0
+          ? `${delta > 0 ? 'up' : 'down'} ${formatNumber(Math.abs(delta))} since the last daily count`
+          : null
+      ]
+        .filter(Boolean)
+        .join(', ')}
       className={cn(
         'nvr-section-enter flex items-center gap-1.5 bg-white px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:bg-card dark:hover:bg-card/80',
         // Grows to fill its row when the strip wraps on a narrow screen (army 9 b08 N-R9-7).
@@ -558,6 +586,14 @@ function StatTile({
           >
             {label}
           </span>
+          {breakdown && (
+            <span
+              data-stat-breakdown
+              className='whitespace-nowrap text-[11px] leading-none text-slate-600 dark:text-slate-300'
+            >
+              {breakdown}
+            </span>
+          )}
           {delta != null && delta !== 0 && (
             <span
               className={cn(
@@ -1226,7 +1262,8 @@ export function QueueWorklist({
     available_values: {
       collection: string[]
       state: string[]
-      owners?: Array<{ id: string; name: string }>
+      /** `label` tells look-alike names apart ("… (suspended)", "… · 2"). */
+      owners?: Array<{ id: string; name: string; label?: string; inactive?: string }>
       /** Distinct values per extra column, already narrowed by the other
        *  active filters — absent when there are too many to enumerate. */
       extra?: Record<string, string[]>
@@ -1769,6 +1806,9 @@ export function QueueWorklist({
     const source = scope === 'all' ? trends?.data : scope === 'mine' ? mineTrends?.data : undefined
     const rows = source ?? []
     if (rows.length === 0) return {}
+    // A filtered tile reads "104 / 301": an arrow beside it reads as the filtered
+    // figure's trend, but the series is the whole queue's (army 11 Q1-1).
+    if (filteredStats) return {}
     const series = rows.map((r) => r[metric])
     const last = rows[rows.length - 1]
     return { trend: series, delta: (stats?.[metric] ?? 0) - last[metric] }
@@ -1781,7 +1821,7 @@ export function QueueWorklist({
   const burnDown = useMemo(() => {
     const source = scope === 'all' ? trends?.data : scope === 'mine' ? mineTrends?.data : undefined
     const rows = source ?? []
-    if (rows.length < 3 || !stats) return null
+    if (rows.length < 3 || !stats || filteredStats) return null
     const series = rows.map((r) =>
       scope === 'mine' ? ((r as unknown as { owned?: number }).owned ?? r.total) : r.total
     )
@@ -1793,7 +1833,7 @@ export function QueueWorklist({
       return { dir: 'down' as const, pace, days: Math.max(1, Math.ceil(current / -pace)) }
     }
     return { dir: 'up' as const, pace, days: null }
-  }, [trends?.data, mineTrends?.data, scope, stats])
+  }, [trends?.data, mineTrends?.data, scope, stats, filteredStats])
 
   // ── Friendly labels: workflow state keys → state labels, collection names →
   // registry display names. Fallback: title-cased key.
@@ -2115,21 +2155,37 @@ export function QueueWorklist({
     }
   }
 
+  // #50 — remember where the queue was so the record's "Back to <queue>"
+  // chip (and the browser's Back) returns here with the same filters, page and
+  // scroll position. Every way out to a record goes through this (army 11 Q1-4:
+  // the side sheet's Open record skipped it, so Back landed on My Items page 1).
+  const rememberPlace = () => {
+    if (!queue) return
+    writeQueueReturn({
+      queue_id: queueId,
+      name: queue.name,
+      path: `${window.location.pathname}${window.location.search}`,
+      at: Date.now(),
+      scroll: scrollRef.current?.scrollTop ?? 0,
+      state: { scope, page, sort, filters: filterValues, group_by: groupBy, view },
+      entry: ensureHistoryKey()
+    })
+  }
   const openItemPage = (row: QueueItemRow) => {
-    // #50 — remember where the queue was so the record's "Back to <queue>"
-    // chip returns here with the same filters, page and scroll position.
-    if (queue) {
-      writeQueueReturn({
-        queue_id: queueId,
-        name: queue.name,
-        path: `${window.location.pathname}${window.location.search}`,
-        at: Date.now(),
-        scroll: scrollRef.current?.scrollTop ?? 0,
-        state: { scope, page, sort, filters: filterValues, group_by: groupBy, view },
-        entry: ensureHistoryKey()
-      })
-    }
+    rememberPlace()
     itemNav.open(rowTarget(row))
+  }
+  /** "Open record" in a side sheet: the root record keeps the queue's pinned layout. */
+  const openFromSheet = (target: { collection: string; itemId: string }) => {
+    rememberPlace()
+    const root = drillStack?.[0]
+    const isRoot =
+      !!root && root.collection === target.collection && String(root.itemId) === target.itemId
+    itemNav.open({
+      collection: target.collection,
+      itemId: target.itemId,
+      layoutSlug: isRoot ? (displayConfig?.item_layout ?? null) : null
+    })
   }
 
   // Row context menu (#43, queues): right-click a table row for its actions.
@@ -2206,28 +2262,31 @@ export function QueueWorklist({
   useEffect(() => {
     if (view !== 'table') return
     function onKeyDown(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
-      ) {
-        return
-      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      // Army 11 N10: the list keys belong to the page or to a focused ROW only — a
+      // focused button, link, menu or field keeps its own keys (Enter on "Insights"
+      // opened the highlighted record instead). Enter itself is the focused row's
+      // (DataTable runs onRowClick for it), never a window-wide shortcut.
+      if (!worklistKeyTarget(e.target)) return
       const idx = highlightedId ? visibleRows.findIndex((r) => rowId(r) === highlightedId) : -1
+      const focusRow = (row: QueueItemRow) => {
+        setHighlightedId(rowId(row))
+        // Roving focus: the row the keys moved to takes focus, so Enter / screen
+        // readers act on what is highlighted.
+        const key = rowId(row)
+        const el = [...document.querySelectorAll<HTMLElement>('tr[data-row-key]')].find(
+          (tr) => tr.getAttribute('data-row-key') === key
+        )
+        el?.focus()
+      }
       if (e.key === 'j' || e.key === 'ArrowDown') {
         e.preventDefault()
         const next = visibleRows[Math.min(idx + 1, visibleRows.length - 1)]
-        if (next) setHighlightedId(rowId(next))
+        if (next) focusRow(next)
       } else if (e.key === 'k' || e.key === 'ArrowUp') {
         e.preventDefault()
         const prev = visibleRows[Math.max(idx - 1, 0)]
-        if (prev) setHighlightedId(rowId(prev))
-      } else if (e.key === 'Enter' && idx >= 0 && !sheetItem) {
-        e.preventDefault()
-        openItem(visibleRows[idx])
+        if (prev) focusRow(prev)
       } else if (e.key === 'c' && idx >= 0 && claimsEnabled) {
         e.preventDefault()
         const row = visibleRows[idx]
@@ -2317,6 +2376,7 @@ export function QueueWorklist({
   // (a "return to the list" navigation), restore it the same way.
   const scrollRef = useRef<HTMLDivElement>(null)
   const pendingScrollRef = useRef<number | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot when the view is ready; the drill stack is read as it is then
   useEffect(() => {
     if (!displayReady) return
     const stash = readQueueReturn()
@@ -2330,6 +2390,9 @@ export function QueueWorklist({
     if (s.view) setView(s.view as 'table' | 'kanban' | 'workload')
     if (s.page) setPage(s.page)
     pendingScrollRef.current = stash.scroll ?? 0
+    // Back from a record opened out of a side sheet lands on the sheet's history
+    // entry: the list comes back as it was, the sheet does not (army 11 Q1-4).
+    if (drillStack && drillStack.length > 0) drill.back(drillStack.length)
   }, [displayReady, queueId])
   // army 5 b16-N3 — a dashboard link carries ?scope=all|mine so "Your
   // worklists" opens the scope the number was counted in (not an empty My
@@ -2584,8 +2647,13 @@ export function QueueWorklist({
     if (groupBy === 'state') return key === 'No state' ? key : stateLabel(key)
     if (groupBy === 'collection') return collectionLabel(key)
     if (groupBy?.startsWith('extra.') && key !== '—') {
-      const fmt = formatConfigFor(groupBy.slice('extra.'.length))
+      const path = groupBy.slice('extra.'.length)
+      const fmt = formatConfigFor(path)
       if (fmt) return formatMultiValue(key, fmt)
+      return extraChoiceText(
+        (queue?.extra_field_meta ?? []).find((m) => m.path === path),
+        key
+      )
     }
     return key
   }
@@ -2913,6 +2981,37 @@ export function QueueWorklist({
   const drillStack = drill.value
   const setDrilldown = (entry: DrillEntry) => drill.push([entry])
 
+  // Army 11 Q1-4: the worklist's state rides on the address (`?lv=`, replaced — never
+  // pushed), so Back from a record, a reload and a copied address bar all come back
+  // to the same scope / filters / sort / page. The state the view first settled on
+  // (the person's default) keeps a clean address. Re-written after a side sheet opens
+  // (that push carries the router's own, older address).
+  const urlBaselineRef = useRef<{ queue: string; enc: string } | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: listLinkState reads exactly these values
+  useEffect(() => {
+    if (!displayReady || !queueId) return
+    const key = `queue:${queueId}`
+    const state = listLinkState() as Record<string, unknown>
+    const enc = encodeListLink(key, state)
+    if (urlBaselineRef.current?.queue !== queueId) {
+      urlBaselineRef.current = { queue: queueId, enc }
+      return
+    }
+    replaceListLinkParam(key, enc === urlBaselineRef.current.enc ? null : state)
+  }, [
+    displayReady,
+    queueId,
+    scope,
+    filterValues,
+    sort,
+    groupBy,
+    view,
+    visibleColumns,
+    columnPins,
+    page,
+    drillStack
+  ])
+
   const drilldownConfigFor = (
     path: string
   ): { enabled: boolean; layout_id: number | null; width: number | string | null } => {
@@ -3113,9 +3212,11 @@ export function QueueWorklist({
       const value = row.extra?.[field]
       if (value == null || value === '') return <span className='text-slate-300'>—</span>
       const fmt = formatConfigFor(field)
-      const display = fmt ? formatMultiValue(String(value), fmt) : String(value)
-      const { text, title } = compactCell(display)
       const meta = (queue?.extra_field_meta ?? []).find((m) => m.path === field)
+      const display = fmt
+        ? formatMultiValue(String(value), fmt)
+        : extraChoiceText(meta, String(value))
+      const { text, title } = compactCell(display)
       const targetIds = row.extra_ids?.[field] ?? []
       const cfg = drilldownConfigFor(field)
       if (
@@ -3346,6 +3447,74 @@ export function QueueWorklist({
     actionsColumn
   ]
 
+  // Army 11 N9: worklist CSV — every row of this tab + filters + sort (paged reads,
+  // capped), the columns on screen, the words on screen.
+  const [csvBusy, setCsvBusy] = useState(false)
+  async function exportCsv() {
+    if (!queue || csvBusy) return
+    setCsvBusy(true)
+    try {
+      const CAP = 10_000
+      const rows: QueueItemRow[] = []
+      for (let p = 1; rows.length < CAP; p++) {
+        const res = await client.request<QueueItemsPage>(
+          get(`/queues/${queueId}/items`, {
+            scope,
+            sort:
+              sort === 'state_entered'
+                ? '-aging_hours'
+                : sort === '-state_entered'
+                  ? 'aging_hours'
+                  : sort,
+            filters: JSON.stringify(apiFilters),
+            page: p,
+            limit: 100
+          })
+        )
+        const batch = (res.data ?? []) as QueueItemRow[]
+        rows.push(...batch)
+        if (batch.length < 100 || rows.length >= (res.total ?? 0)) break
+      }
+      const metaOf = (path: string) => (queue.extra_field_meta ?? []).find((m) => m.path === path)
+      const text = worklistCsv(
+        rows.slice(0, CAP),
+        columns.map((c) => ({
+          key: c.key,
+          header: typeof c.header === 'string' ? c.header : c.key === 'label' ? 'Item' : ''
+        })),
+        {
+          stateLabel,
+          collectionLabel,
+          extraText: (path, v) => {
+            const fmt = formatConfigFor(path)
+            return fmt && fmt.type !== 'number'
+              ? formatMultiValue(v, fmt)
+              : extraChoiceText(metaOf(path), v)
+          },
+          extraIsNumber: (path) => formatConfigFor(path)?.type === 'number'
+        }
+      )
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = worklistCsvName(queue.name)
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast.success(
+        rows.length >= CAP
+          ? `Exported the first ${CAP.toLocaleString('en-US')} rows`
+          : `Exported ${rows.length.toLocaleString('en-US')} ${rows.length === 1 ? 'row' : 'rows'}`
+      )
+    } catch (err) {
+      toast.error(userErrorMessage(err, 'Could not export this worklist'))
+    } finally {
+      setCsvBusy(false)
+    }
+  }
+
   // Effective pin map — user pins (saved view / session) win, then the queue's
   // builder-set display_config.default_pins, then the historic default of the
   // first data column (Item) pinned left. Pins for columns no longer visible
@@ -3396,12 +3565,24 @@ export function QueueWorklist({
         // Records hidden from pickers (a retired zone) are not offered.
         picker: '1'
       }
-      // The other facets' picks cascade in (Zone 1 → only Zone 1's regions).
-      const narrow = context?.narrowBy.length
+      // The other facets' picks cascade in (Zone 1 → only Zone 1's regions). A
+      // dimension the person is RESTRICTED on cascades too, picked or not (army 11
+      // Q2-2: a Zones 1-3 person was offered the National region).
+      const picks = context?.narrowBy ?? []
+      const restrictedNarrow: CascadeSelection[] = []
+      for (const [path, values] of Object.entries(allowedValuesByPath)) {
+        if (path === meta.path || values.length === 0) continue
+        const m = extraFieldMetaByPath.get(path)
+        if (!m?.target_collection || !m.display_field) continue
+        if (picks.some((p) => p.collection === m.target_collection)) continue
+        restrictedNarrow.push({ collection: m.target_collection, field: m.display_field, values })
+      }
+      const selections = [...picks, ...restrictedNarrow]
+      const narrow = selections.length
         ? cascadeFilter(
             meta.target_collection,
             await fetchCascadeRelations(client, qc, meta.target_collection),
-            context.narrowBy
+            selections
           )
         : null
       const clauses = [
@@ -3579,7 +3760,8 @@ export function QueueWorklist({
       type: 'combobox' as const,
       multi: true,
       options: (data?.available_values.owners ?? []).map((o) => ({
-        label: o.name,
+        // "Nisha Uprety (suspended)" / "Redacted Redacted (former user) · 2" (army 11 Q1-3).
+        label: o.label ?? o.name,
         value: o.id
       }))
     },
@@ -3612,7 +3794,13 @@ export function QueueWorklist({
           ...base,
           type: 'combobox' as const,
           multi: true,
-          options: present.map((v) => ({ label: fmt ? formatMultiValue(v, fmt) : v, value: v }))
+          // The "your access" mark follows the person's restriction on every tab,
+          // not only on an empty one (army 11 Q2-1).
+          restricted: Boolean(allowedValuesByPath[f]?.length),
+          options: present.map((v) => ({
+            label: fmt ? formatMultiValue(v, fmt) : extraChoiceText(meta, v),
+            value: v
+          }))
         }
       if (meta?.kind === 'relation')
         return {
@@ -3714,7 +3902,8 @@ export function QueueWorklist({
             cascade,
             restricted: Boolean(allowedValuesByPath[path]?.length),
             options: present.map((v) => ({
-              label: fmt && fmt.type !== 'number' ? formatMultiValue(v, fmt) : v,
+              label:
+                fmt && fmt.type !== 'number' ? formatMultiValue(v, fmt) : extraChoiceText(meta, v),
               value: v
             }))
           }
@@ -4156,6 +4345,20 @@ export function QueueWorklist({
               </button>
             )}
             <CopyListLinkButton listKey={`queue:${queueId}`} getState={listLinkState} />
+            {view === 'table' && (
+              <button
+                type='button'
+                onClick={() => void exportCsv()}
+                disabled={csvBusy || !data || (data.total ?? 0) === 0}
+                data-tip='Download the rows on this tab, with these filters and columns, as a spreadsheet (CSV)'
+                aria-label='Export to CSV'
+                className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                data-queue-export
+              >
+                <Download className='h-3.5 w-3.5' />
+                {csvBusy ? 'Exporting…' : 'Export'}
+              </button>
+            )}
             <button
               type='button'
               onClick={() => setInsightsOpen((o) => !o)}
@@ -4425,6 +4628,11 @@ export function QueueWorklist({
               )}
               <StatTile
                 label='At Risk'
+                breakdown={
+                  filteredStats
+                    ? atRiskBreakdown(filteredStats.at_risk_by_rule)
+                    : atRiskBreakdown(stats?.at_risk_by_rule)
+                }
                 count={stats?.at_risk ?? 0}
                 filteredCount={filteredStats ? filteredStats.at_risk : null}
                 tone='red'
@@ -4875,6 +5083,11 @@ export function QueueWorklist({
                   isLoading={showLoading}
                   onPageChange={setPage}
                   onRowClick={(row) => openItem(row)}
+                  // One Tab stop per list, arrow keys between rows, Enter opens the
+                  // focused row (army 11 N10).
+                  onRowFocus={(row) => setHighlightedId(rowId(row))}
+                  activeRowKey={highlightedId}
+                  rowAriaLabel={(row) => row.label || undefined}
                   rowDragProps={(row) => ({
                     ...askDrag({ collection: row.collection, id: row.item_id }),
                     ...rowIntent.record(row.collection, row.item_id)
@@ -5111,6 +5324,17 @@ export function QueueWorklist({
               void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
             }}
           />
+          {/* The list bar's Update Field, with the same form rules (army 11 N11). */}
+          {builtinGate('update-field') && (
+            <BulkFieldUpdateButton
+              targets={items
+                .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
+                .map((r) => ({ collection: r.collection, id: r.item_id }))}
+              disabled={bulkBusy}
+              onDone={() => void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })}
+              className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+            />
+          )}
         </QueueBulkBar>
       )}
 
@@ -5127,6 +5351,7 @@ export function QueueWorklist({
           onPop={() => drill.back()}
           // Explicit dismissal unwinds every level in one go.
           onClose={() => drill.back(drillStack.length)}
+          onOpenRecord={openFromSheet}
         />
       ) : null}
 
@@ -5271,6 +5496,7 @@ export function QueueWorklist({
         fieldLabel={(field) => aliasFor(`extra.${field}`, formatColumnHeader(field))}
         width={displayConfig?.sheet_width}
         itemLayout={displayConfig?.item_layout}
+        onOpenRecord={(row) => openItemPage(row as QueueItemRow)}
         onOpenChange={(open) => {
           if (!open) {
             setSheetItem(null)

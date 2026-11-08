@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { narrowLocally, useLatestSearch } from './picker-search'
+import { labelOnlyMatches, narrowLocally, PICKER_PAGE, useLatestSearch } from './picker-search'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let host: HTMLDivElement
@@ -67,5 +67,21 @@ describe('narrowLocally', () => {
   })
   it('shows the server answer untouched once settled', () => {
     expect(narrowLocally(people, (p) => p, 'robert', true)).toEqual(people)
+  })
+})
+
+describe('labelOnlyMatches (army11 f3: Funding Year "2026" found nothing)', () => {
+  const years = Array.from({ length: 11 }, (_, i) => ({ id: 2027 - i }))
+  const label = (y: { id: number }) => String(y.id)
+  it('finds a numeric label the server could not search', () => {
+    expect(labelOnlyMatches(years, label, '2026').map((y) => y.id)).toEqual([2026])
+    expect(labelOnlyMatches(years, label, '202').length).toBe(8)
+  })
+  it('never answers from a list that was cut at a page', () => {
+    const many = Array.from({ length: PICKER_PAGE }, (_, i) => ({ id: i }))
+    expect(labelOnlyMatches(many, label, '1')).toEqual([])
+  })
+  it('an empty box matches nothing (the list itself shows)', () => {
+    expect(labelOnlyMatches(years, label, '  ')).toEqual([])
   })
 })

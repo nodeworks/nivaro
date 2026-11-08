@@ -61,9 +61,7 @@ describe('obligationNoteText', () => {
         reason: 'no send was ever attempted — the trigger did not fire',
         trigger: 'reconcile'
       })
-    ).toBe(
-      'Partner was never told (wf.state) — no send was ever attempted — the trigger did not fire'
-    )
+    ).toBe('Partner was never told (wf.state) — nothing was sent when this changed')
   })
 
   it('says an overdue obligation is still unmet', () => {

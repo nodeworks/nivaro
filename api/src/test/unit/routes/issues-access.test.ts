@@ -43,6 +43,8 @@ const ISSUES: Record<number, Record<string, unknown>> = {
   1: {
     id: 1,
     source: 'server',
+    title:
+      "[server] GET /api/items/:collection: select top (@p0) [id], [workflows_id] from [workflows_divisions] - Ambiguous column name 'id'.",
     raised_by: 'PAUL',
     assigned_to: null,
     details: 'select top (@p0) …'
@@ -95,6 +97,10 @@ describe('GET /issues', () => {
     expect(list.sql).toMatch(own)
     expect(list.bindings).toContain('PAUL')
     for (const r of res.json().data) if (r.source === 'server') expect(r.details).toBeNull()
+    // army 11 o2: the title carried the SQL and the driver message — the route only now.
+    const server = res.json().data.find((r: { id: number }) => r.id === 1)
+    expect(server.title).toBe('A server error on GET /api/items/:collection')
+    expect(JSON.stringify(res.json().data)).not.toMatch(/select top|Ambiguous|workflows_divisions/)
     await app.close()
   })
 
@@ -116,6 +122,7 @@ describe('GET /issues', () => {
     const list = sql.ran.find((q) => q.sql.includes('from [nivaro_issues]'))!
     expect(list.sql).not.toMatch(own)
     expect(res.json().data.find((r: { id: number }) => r.id === 1).details).toContain('select')
+    expect(res.json().data.find((r: { id: number }) => r.id === 1).title).toContain('Ambiguous')
     await app.close()
   })
 })
@@ -175,5 +182,19 @@ describe('POST /issues/bulk-status', () => {
     })
     expect(sql.ran.find((q) => q.method === 'update')!.sql).not.toContain('[raised_by]')
     await app.close()
+  })
+})
+
+describe('serverIssueTitleForViewer', () => {
+  it('keeps the method and route, never the message', async () => {
+    const { serverIssueTitleForViewer } = await import('../../../routes/issues.js')
+    expect(
+      serverIssueTitleForViewer('[server] PATCH /api/items/:collection/:id: Record 4471 not found')
+    ).toBe('A server error on PATCH /api/items/:collection/:id')
+    expect(serverIssueTitleForViewer('[server] GET /api/settings: boom')).toBe(
+      'A server error on GET /api/settings'
+    )
+    expect(serverIssueTitleForViewer('Conversion failed when converting')).toBe('A server error')
+    expect(serverIssueTitleForViewer(null)).toBe('A server error')
   })
 })

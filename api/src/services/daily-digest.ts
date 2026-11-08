@@ -4,6 +4,7 @@ import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { linkTo, recordLink } from './app-links.js'
 import { chunkArray } from './db-batch.js'
+import { type DeferredSnippet, decodeDeferredSnippet } from './deferred-snippet.js'
 import { sendRawMail } from './mail.js'
 import { classifyNotification, emailModeFor, type NotifyPrefs } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
@@ -190,6 +191,46 @@ async function recordLinkFor(
   query?: string
 ): Promise<string | null> {
   return recordLink(collection, item, { recipientUserId: userId, query }).catch(() => null)
+}
+
+/**
+ * The held mails as summary lines (army 11): newest first, ONE line per record (the latest
+ * thing that happened, "+N earlier updates"), each linked to its record for this reader, with
+ * the mail's own summary sentence — never the stripped page.
+ */
+export async function deferredLines(
+  rows: Array<{ subject: string; snippet: string | null; created_at: Date | string }>,
+  userId: string,
+  link: (collection: string, item: string) => Promise<string | null> = (c, i) =>
+    recordLinkFor(c, i, userId)
+): Promise<DigestLine[]> {
+  const newest = [...rows].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )
+  const groups = new Map<string, { row: (typeof rows)[number]; snip: DeferredSnippet; n: number }>()
+  const order: string[] = []
+  newest.forEach((row, idx) => {
+    const snip = decodeDeferredSnippet(row.snippet)
+    const key = snip.collection && snip.item ? `${snip.collection}:${snip.item}` : `#${idx}`
+    const g = groups.get(key)
+    if (g) g.n++
+    else {
+      groups.set(key, { row, snip, n: 1 })
+      order.push(key)
+    }
+  })
+  const out: DigestLine[] = []
+  for (const key of order.slice(0, 30)) {
+    const { row, snip, n } = groups.get(key)!
+    const more = n > 1 ? `+${n - 1} earlier ${n === 2 ? 'update' : 'updates'}` : ''
+    const sub = [snip.text, more].filter(Boolean).join(' · ')
+    out.push({
+      text: row.subject,
+      sub: sub || null,
+      url: snip.collection && snip.item ? await link(snip.collection, snip.item) : null
+    })
+  }
+  return out
 }
 
 /** Open workflow-engine items where the user is a resolved current-state owner. */
@@ -531,7 +572,7 @@ export async function runDailyActionDigest(
     if (mine.length > 0) {
       sections.push({
         title: `Updates since your last summary (${mine.length})`,
-        lines: mine.slice(0, 30).map((d) => ({ text: d.subject, sub: d.snippet?.slice(0, 120) }))
+        lines: await deferredLines(mine, userId)
       })
     }
 
@@ -616,7 +657,8 @@ export async function runDailyActionDigest(
         html: digestHtml,
         template: 'daily_digest',
         why: DIGEST_WHY,
-        skipDigest: true
+        skipDigest: true,
+        rolePicked: true
       })
       sent++
       if (!opts?.preserveDeferred) flushedIds.push(...mine.map((d) => d.id))

@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
+import { MACHINE_TRANSITION_COMMENT } from './transition-comment.js'
 
 /**
  * The newest thing a PERSON wrote about a record — what the Notes thread
@@ -17,7 +18,7 @@ export interface LatestComment {
   author_name: string | null
   author_email: string | null
   at: string | null
-  source: 'comment' | 'note'
+  source: 'comment' | 'note' | 'transition'
 }
 
 const MAX_CHARS = 600
@@ -52,9 +53,14 @@ type Candidate = LatestComment & { ts: number; userId: string | null }
 
 export async function latestPeopleComment(
   collection: string,
-  item: string | number
+  item: string | number,
+  opts: { skipText?: string | null } = {}
 ): Promise<LatestComment | null> {
   const candidates: Candidate[] = []
+  // The comment the mail already quotes (this move's own note) is skipped so
+  // the block shows the newest OTHER thing a person wrote.
+  const skip = opts.skipText ? stripHtmlToText(String(opts.skipText)) : null
+  const fresh = (text: string) => !skip || text !== skip
 
   // 1. nivaro_comments on the record itself.
   try {
@@ -74,7 +80,7 @@ export async function latestPeopleComment(
       )) as Array<Record<string, unknown>>
     for (const r of rows) {
       const text = stripHtmlToText(String(r.text ?? ''))
-      if (!isHuman(text)) continue
+      if (!isHuman(text) || !fresh(text)) continue
       candidates.push({
         text: clip(text),
         author_name:
@@ -124,7 +130,7 @@ export async function latestPeopleComment(
           .select('*')) as Array<Record<string, unknown>>
         for (const r of rows) {
           const text = stripHtmlToText(String(r[textCol] ?? ''))
-          if (!isHuman(text)) continue
+          if (!isHuman(text) || !fresh(text)) continue
           const rawAt = dateCol ? r[dateCol] : null
           const at = rawAt ? new Date(rawAt as string) : null
           candidates.push({
@@ -141,6 +147,56 @@ export async function latestPeopleComment(
       } catch {
         /* a missing column on one note table must not hide the others */
       }
+    }
+  } catch {
+    /* best effort */
+  }
+
+  // 3. A note a person typed on a move (Send Back's required reason, a
+  // cancel reason). The cancel mail quoted a 3 p.m. hold note while a newer
+  // send-back note sat on the record (army 11 a1 F-13, a2 F4).
+  // Only what a PERSON typed (review #2): engine rows ("Auto-advanced via
+  // skip criteria", bulk-start, imports, split/join JSON) are provenance and
+  // must never be quoted as someone's comment.
+  try {
+    const { originSelect, originOfRow } = await import('./note-authorship.js')
+    const originCol = await originSelect('nivaro_workflow_history', 'h')
+    const rows = (await db('nivaro_workflow_history as h')
+      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+      .leftJoin('nivaro_users as u', 'u.id', 'h.user')
+      .where({ 'i.collection': collection, 'i.item': String(item) })
+      .whereNotNull('h.comment')
+      .orderBy('h.timestamp', 'desc')
+      .limit(10)
+      .select(
+        'h.comment',
+        'h.timestamp',
+        'h.user',
+        'u.first_name',
+        'u.last_name',
+        'u.email',
+        ...originCol
+      )) as Array<Record<string, unknown>>
+    for (const r of rows) {
+      const raw = String(r.comment ?? '')
+      if (!r.user || MACHINE_TRANSITION_COMMENT.test(raw.trim())) continue
+      if (originOfRow({ origin: r.origin, comment: raw }) !== 'person') continue
+      const text = stripHtmlToText(raw)
+      // A delegate's move stores its note annotated ("… (for Beth Ross)"):
+      // the mail's own note inside it is still the same note (review LOW).
+      if (!isHuman(text) || !fresh(text) || (skip && text.includes(skip))) continue
+      const at = r.timestamp ? new Date(r.timestamp as string) : null
+      candidates.push({
+        text: clip(text),
+        author_name:
+          [r.first_name, r.last_name].filter(Boolean).join(' ') || (r.email as string) || null,
+        author_email: (r.email as string) ?? null,
+        at: at && !Number.isNaN(at.getTime()) ? at.toISOString() : null,
+        source: 'transition',
+        ts: at && !Number.isNaN(at.getTime()) ? at.getTime() : 0,
+        userId: (r.user as string) ?? null
+      })
+      break
     }
   } catch {
     /* best effort */

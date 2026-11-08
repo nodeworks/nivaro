@@ -48,12 +48,13 @@ function initials(user: User): string {
 
 const HIDDEN_KIND_LABEL = {
   redacted: 'Redacted',
-  anonymised: 'Anonymised',
+  anonymised: 'Redacted', // one word for one state app-wide (army 11)
   placeholder: 'Placeholder'
 } as const
 const HIDDEN_KIND_TIP = {
   redacted: 'Redacted by a retention policy — hidden from every list and picker',
-  anonymised: 'Email scrubbed by the nightly anonymiser; the redacted flag was never set',
+  anonymised:
+    'Redacted by the legacy retention job (name and email replaced); the redacted flag was never set',
   placeholder:
     'Stand-in kept so old records still name someone — the real account was removed or holds this email elsewhere'
 } as const

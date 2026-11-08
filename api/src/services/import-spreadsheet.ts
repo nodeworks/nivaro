@@ -6,6 +6,24 @@ export const IMPORT_ROW_CAP = 5000
 export interface SheetReadResult {
   rows: Record<string, unknown>[]
   issues: { severity: 'warn' | 'error'; message: string }[]
+  /** The header row's column names — a column with only blank cells is in
+   *  here but in no row object. */
+  columns?: string[]
+}
+
+/** The names on the header row, as the row objects key them. */
+export function sheetHeaderNames(sheet: XLSX.WorkSheet, headerRow: number): string[] {
+  const ref = sheet['!ref']
+  if (!ref) return []
+  const range = XLSX.utils.decode_range(ref)
+  const r = Math.max(range.s.r, headerRow - 1)
+  const out: string[] = []
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined
+    const name = cell ? String(cell.w ?? cell.v ?? '').trim() : ''
+    if (name) out.push(name)
+  }
+  return out
 }
 
 export function readSpreadsheet(
@@ -61,5 +79,5 @@ export function readSpreadsheet(
     })
     rows = rows.slice(0, IMPORT_ROW_CAP)
   }
-  return { rows, issues }
+  return { rows, issues, columns: sheetHeaderNames(workbook.Sheets[sheetName], config.header_row) }
 }

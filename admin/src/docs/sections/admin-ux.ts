@@ -151,7 +151,8 @@ GET /api/global-search/records?q=acme&collection=customers&offset=0&limit=25
     {
       type: 'ul',
       items: [
-        'Record results are read as you: only collections you can read, and only rows your row filters and User Scopes let you open',
+        'Record results are read as you: only collections you can read, and only rows your row filters and User Scopes let you open. Your access is applied before the best matches are picked, so someone limited to some zones finds every match in those zones even when the newest matches are elsewhere',
+        'An id’s number part finds it: “81137” finds HQ26-81137 as an exact match (digits only, at least three, on the id the record’s label shows)',
         'Ranking: an exact match on a searched column first, then a prefix match, then the newest',
         'People: up to 6 matches on first name, last name, email or job title, opening the person’s profile. Non-administrators see only directory details and never suspended, redacted, placeholder or service accounts; administrators also find suspended and service accounts, marked with a chip',
         'Page results index the admin routes (Collections, Workflows, Pipelines, etc.)',
@@ -207,6 +208,19 @@ GET /api/global-search/records?q=acme&collection=customers&offset=0&limit=25
         'Stored as `browser_config.label_search_fields` (a list of field names) on the collection. Unset or empty = the label alone, as before.',
         'Only text fields of the collection count; any other name is ignored. Each person still matches only fields they may read, so a label search field never reveals a value someone could not already see.',
         'Read on the server with `labelSearchFieldsOf(browserConfig)` (services/search-fields.ts); `withLabelSearchFields(labelColumns, configured, textColumns)` adds them to the label columns.'
+      ]
+    },
+    { type: 'h3', id: 'global-search-grouped', text: 'Grouped rows and other systems’ ids' },
+    {
+      type: 'p',
+      text: 'Some records are many rows that people search for as one thing — an invoice is one row per line. `browser_config.search_group_by` names the field those rows share, and Cmd+K shows one row per value (“7 lines”). Group by the field that really identifies the thing (an invoice’s own id), not by a number several of them can share: four vendors can each send an invoice numbered 10020.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '`browser_config.search_group_detail`: up to three fields, or one relation hop such as `vendor.name`, that tell grouped rows apart. Each row’s second line reads them as the person searching (“DEPLOYMENT TECHNOLOGIES INC · Oct 12, 2026”); a value they cannot read is left out.',
+        '`browser_config.search_internal_fields`: fields that hold another system’s ids (a Fusion invoice id). A whole id pasted into search still finds its record, but these fields are never matched by their start or contents and their values are never shown in results.',
+        'Several records with the same exact value are all offered, newest first; none is marked as the one exact match.'
       ]
     },
     { type: 'h3', id: 'global-search-why', text: 'Why can’t they find it?' },

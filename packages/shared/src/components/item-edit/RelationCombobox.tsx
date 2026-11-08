@@ -35,7 +35,7 @@ import {
   NAMELESS_LABEL
 } from './option-disambiguate'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
-import { narrowLocally, useLatestSearch } from './picker-search'
+import { labelOnlyMatches, narrowLocally, PICKER_PAGE, useLatestSearch } from './picker-search'
 import { RelatedMissingLabel, retryRelatedRead } from './related-missing'
 
 /**
@@ -106,9 +106,14 @@ export function RelationCombobox({
   pinned,
   missPlacement,
   defaultOpen,
-  onClose
+  onClose,
+  displayTemplate
 }: {
   collection: string
+  /** Overrides the collection's display template for this picker's options —
+   *  a catalog's "Add any item" shows the item number AND its description
+   *  (army11 f1: bare numbers made people pick blind). */
+  displayTemplate?: string | null
   /** Open the options panel on mount (a list cell's inline editor, #3224). */
   defaultOpen?: boolean
   /** Called when the options panel closes (picked, clicked away or Escape). */
@@ -375,18 +380,33 @@ export function RelationCombobox({
 
   // Extract template fields for relation expansion (e.g. '{{category.name}}' → 'category.name')
   const effectiveTemplate =
-    colMeta?.display_template ??
+    displayTemplate ||
+    colMeta?.display_template ||
     (isUserCollection ? '{{first_name}} {{last_name}} ({{email}})' : null)
   const tmplFields = useMemo(() => {
     if (!effectiveTemplate) return undefined
     const matches = [...effectiveTemplate.matchAll(/\{\{([\w.]+)\}\}/g)].map((m) => m[1])
     if (!matches.length) return undefined
-    return ['id', ...matches].join(',')
+    // Each column once: a `{{id}}` template asked for `id,id` (army11 f3).
+    return [...new Set(['id', ...matches])].join(',')
   }, [effectiveTemplate])
 
   const filterStr = combinedFilter ? JSON.stringify(combinedFilter) : undefined
   // Column-based option sort goes to the server; 'label'/'-label' sort client-side
   const serverSort = optionSort && !/^-?label$/.test(optionSort) ? optionSort : undefined
+  const fetchOptions = (search: string) =>
+    client
+      .request<{ data: Item[] }>(
+        get(`/items/${collection}`, {
+          limit: PICKER_PAGE,
+          picker: '1',
+          ...(search.trim() ? { search: search.trim() } : {}),
+          ...(filterStr ? { filter: filterStr } : {}),
+          ...(tmplFields ? { fields: tmplFields } : {}),
+          ...(serverSort ? { sort: serverSort } : {})
+        })
+      )
+      .then((r) => (r.data ?? []) as Item[])
   const {
     data,
     isFetching: isLoadingOptions,
@@ -400,19 +420,7 @@ export function RelationCombobox({
       tmplFields,
       serverSort ?? ''
     ],
-    queryFn: () =>
-      client
-        .request<{ data: Item[] }>(
-          get(`/items/${collection}`, {
-            limit: 200,
-            picker: '1',
-            ...(debouncedQuery.trim() ? { search: debouncedQuery.trim() } : {}),
-            ...(filterStr ? { filter: filterStr } : {}),
-            ...(tmplFields ? { fields: tmplFields } : {}),
-            ...(serverSort ? { sort: serverSort } : {})
-          })
-        )
-        .then((r) => (r.data ?? []) as Item[]),
+    queryFn: () => fetchOptions(debouncedQuery),
     // Wait for the display template: it decides `fields`, and starting before
     // it lands sent the whole first page twice.
     enabled: open && !colMetaPending,
@@ -432,12 +440,41 @@ export function RelationCombobox({
     }
   })
   useEffect(() => setSearchBusy(isLoadingOptions), [isLoadingOptions])
+  // army11 f3 HIGH — the server searches TEXT columns, so a list whose label is
+  // a number (Funding Year = its id) answered "No results for 2026". When the
+  // server finds nothing, the whole (short) list is read once and matched on
+  // the labels the person sees. Same cache as the empty-box list.
+  const serverFoundNothing =
+    !!debouncedQuery.trim() &&
+    query === debouncedQuery &&
+    !isPlaceholderData &&
+    !isLoadingOptions &&
+    data !== undefined &&
+    data.length === 0
+  const { data: wholeList } = useQuery<Item[]>({
+    queryKey: ['relation-opts', collection, '', filterStr, tmplFields, serverSort ?? ''],
+    queryFn: () => fetchOptions(''),
+    enabled: open && !colMetaPending && serverFoundNothing,
+    staleTime: filterStr ? 0 : 30_000
+  })
+  const labelMatches = useMemo(
+    () =>
+      serverFoundNothing && wholeList
+        ? labelOnlyMatches(
+            wholeList,
+            (item) => applyDisplayTemplate(effectiveTemplate, item) || '',
+            query
+          )
+        : null,
+    [serverFoundNothing, wholeList, effectiveTemplate, query]
+  )
+  const waitingOnLabels = serverFoundNothing && wholeList === undefined
   usePickerMissReport({
     placement: missPlacement,
     open,
     search: debouncedQuery,
-    settled: !isLoadingOptions && !isPlaceholderData && data !== undefined,
-    count: data?.length ?? 0
+    settled: !isLoadingOptions && !isPlaceholderData && data !== undefined && !waitingOnLabels,
+    count: labelMatches?.length ?? data?.length ?? 0
   })
 
   const {
@@ -552,9 +589,10 @@ export function RelationCombobox({
     selectedRaw === null ? null : isNamelessLabel(selectedRaw) ? NAMELESS_LABEL : selectedRaw
   // The answer on screen is for what is typed now — otherwise the previous
   // answer, narrowed by the newer text until the server replies.
-  const optionsSettled = !isPlaceholderData && query === debouncedQuery
+  const optionsSettled = !isPlaceholderData && query === debouncedQuery && !waitingOnLabels
   const shownOptions = useMemo(
     () =>
+      labelMatches ??
       narrowLocally(
         data ?? [],
         (item) => applyDisplayTemplate(tmpl, item) || `#${item.id}`,
@@ -564,7 +602,7 @@ export function RelationCombobox({
         query.replace(/[-_/]+/g, ' '),
         optionsSettled
       ),
-    [data, tmpl, query, optionsSettled]
+    [data, tmpl, query, optionsSettled, labelMatches]
   )
 
   // Options that render the same label ("CEG 1" twice) get a muted secondary
@@ -825,7 +863,12 @@ export function RelationCombobox({
               (!selectedLabel || selectedLabel === NAMELESS_LABEL) && 'text-muted-foreground'
             )}
           >
-            {isStale && <AlertTriangle className='h-3.5 w-3.5 shrink-0 text-amber-500' />}
+            {isStale && (
+              <>
+                <AlertTriangle aria-hidden='true' className='h-3.5 w-3.5 shrink-0 text-amber-500' />
+                <span className='sr-only'>Not an available option: </span>
+              </>
+            )}
             {selectedUnreadable ? (
               <RelatedMissingLabel error={selectedError} className='truncate' />
             ) : (

@@ -122,3 +122,37 @@ export function resolveSummaryMode(
   }
   return cfg.default
 }
+
+/** What the opening mode was resolved for: the record, its pipeline state and
+ *  the viewer's role. A change of state (Submit, Send Back) or role (View-as)
+ *  resolves it again (army 11 a2 F5). */
+export function summaryResolveSignature(
+  recordKey: string,
+  stateKey: string | null,
+  role: string | null
+): string {
+  return JSON.stringify([recordKey, stateKey ?? null, role ? role.toLowerCase() : null])
+}
+
+/** Whether a stored signature was made for this record (vs. another one, or none yet). */
+export function sameSummaryRecord(signature: string | null, recordKey: string): boolean {
+  if (!signature) return false
+  try {
+    const parsed = JSON.parse(signature) as unknown
+    return Array.isArray(parsed) && parsed[0] === recordKey
+  } catch {
+    return false
+  }
+}
+
+/** A later re-resolve (state / role changed) waits while the person has any
+ *  unsaved work — a dirty field, staged lines or a line editor holding typed
+ *  text (army 11 review #4: a flip to Summary unmounted the editor and its
+ *  text was lost). The first resolve of a record never waits. */
+export function holdSummaryReresolve(a: {
+  first: boolean
+  unsaved: boolean
+  lineDrafts: number
+}): boolean {
+  return !a.first && (a.unsaved || a.lineDrafts > 0)
+}

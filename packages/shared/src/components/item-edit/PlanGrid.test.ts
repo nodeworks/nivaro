@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   figureError,
+  filterAddKeys,
   fmtFigure,
   isParentItemKey,
   nextStagedEdit,
@@ -175,5 +176,17 @@ describe('nextStagedEdit (army 9 b03 N4)', () => {
       merge: null,
       replace: null
     })
+  })
+})
+
+describe('filterAddKeys (army11 f1: typing 2026 added 2027)', () => {
+  const years = [2027, 2026, 2025, 2017]
+  it('narrows to what is typed, exact match first', () => {
+    expect(filterAddKeys(years, '2026')).toEqual([2026])
+    expect(filterAddKeys(years, '202')).toEqual([2027, 2026, 2025])
+    expect(filterAddKeys([12026, 2026], '2026')).toEqual([2026, 12026])
+  })
+  it('shows every key with an empty box', () => {
+    expect(filterAddKeys(years, ' ')).toEqual(years)
   })
 })

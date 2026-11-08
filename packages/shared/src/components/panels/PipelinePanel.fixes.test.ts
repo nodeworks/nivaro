@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   briefWarnings,
   FRESH_BUTTON_MS,
+  FRESH_HOVER_MAX_MS,
   FreshButtonGuard,
   latestSendBack,
+  lockedMoveOffer,
   REFUSAL_FIX_ACTIONS,
   refusalCode,
   refusalFixFor
@@ -117,6 +119,18 @@ describe('fresh transition buttons (army6 M19)', () => {
     expect(g.press('b', later)).toBe(true)
   })
 
+  it('a pointer that never leaves (or a keyboard press) is let through once the hover rule ends (army 11 a1 F-12)', () => {
+    const g = new FreshButtonGuard()
+    g.observe(['approve'], 0)
+    g.observe(['fusion-submitted'], 1000)
+    // The click on Approve left the pointer on the spot where the new button appeared.
+    g.enter('fusion-submitted', 1010)
+    expect(g.press('fusion-submitted', 1000 + FRESH_BUTTON_MS + 500)).toBe(false)
+    expect(g.inert('fusion-submitted', 1000 + FRESH_HOVER_MAX_MS - 1)).toBe(true)
+    expect(g.inert('fusion-submitted', 1000 + FRESH_HOVER_MAX_MS)).toBe(false)
+    expect(g.press('fusion-submitted', 1000 + FRESH_HOVER_MAX_MS + 1)).toBe(true)
+  })
+
   it('ids compare case-blind and a gone button is forgotten', () => {
     const g = new FreshButtonGuard()
     g.observe(['A'], 0)
@@ -137,5 +151,26 @@ describe('forward-move brief warnings (army6 D6)', () => {
       ]).map((l) => l.label)
     ).toEqual(['Forecast'])
     expect(briefWarnings(null)).toEqual([])
+  })
+})
+
+describe('a move refused while someone else edits (army 11 f4 M4)', () => {
+  const body = {
+    error: 'Bernard Kelly is editing this record right now. If you Submit now, …',
+    code: 'RECORD_LOCKED',
+    locked_by_name: 'Bernard Kelly',
+    move_anyway: true
+  }
+  it('offers to move anyway in both client error shapes', () => {
+    for (const e of [{ status: 409, response: body }, { response: { data: body } }]) {
+      const offer = lockedMoveOffer(e)
+      expect(offer?.holder).toBe('Bernard Kelly')
+      expect(offer?.message).toContain('Bernard Kelly is editing')
+    }
+  })
+  it('a plain record-lock refusal (a save) and other codes offer nothing', () => {
+    expect(lockedMoveOffer({ response: { ...body, move_anyway: undefined } })).toBeNull()
+    expect(lockedMoveOffer({ response: { code: 'EDIT_LOCKED', move_anyway: true } })).toBeNull()
+    expect(lockedMoveOffer(new Error('x'))).toBeNull()
   })
 })

@@ -278,7 +278,22 @@ export function M2MCombobox({
             role='button'
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              // Typing on the closed picker opens it with that text searched,
+              // like the single pickers (army11 f1: "Kristina Dav" was dropped
+              // until the space, and "davison" did nothing). Keys that land
+              // here after it opened are added, never dropped.
+              const printable =
+                e.key.length === 1 &&
+                !e.ctrlKey &&
+                !e.metaKey &&
+                !e.altKey &&
+                (open || search !== '' || e.key !== ' ')
+              if (printable) {
+                e.preventDefault()
+                const typed = e.key
+                setSearch((q) => (typed === ' ' && (q === '' || q.endsWith(' ')) ? q : q + typed))
+                if (!open) setOpen(true)
+              } else if (e.key === 'Enter' || e.key === ' ' || (!open && e.key === 'ArrowDown')) {
                 e.preventDefault()
                 setOpen((v) => !v)
               }

@@ -482,6 +482,8 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
             subject,
             html: body,
             why: (context as { why?: string }).why ?? null,
+            // A record's own person (creator, contact, owner) — a machine account there is skipped.
+            rolePicked: reasonForRecipient(email, dataRec) != null,
             template: logTemplate,
             ...(category ? { category } : {}),
             ...recordContext
@@ -507,6 +509,7 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
       subject,
       html: body,
       why: sharedWhy,
+      rolePicked: splitAddresses(to).filter((a) => reasonForRecipient(a, dataRec) != null),
       template: logTemplate,
       ...(category ? { category } : {}),
       ...recordContext

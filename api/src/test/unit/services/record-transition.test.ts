@@ -10,6 +10,8 @@ const m = vi.hoisted(() => {
   }
   class TransitionBlockedError extends Error {}
   return {
+    runAuto: vi.fn(async (_c: string, _i: string, _o?: unknown) => {}),
+    flush: vi.fn(),
     InstanceAccessError,
     TransitionDuplicateError,
     TransitionBlockedError,
@@ -55,7 +57,8 @@ vi.mock('../../../services/workflow-actions.js', () => ({
 }))
 vi.mock('../../../services/workflow-transitions.js', () => ({
   applyTransition: m.apply,
-  runAutoTransitions: vi.fn(async () => {})
+  runAutoTransitions: m.runAuto,
+  flushChainEvents: m.flush
 }))
 
 import { runRecordTransition } from '../../../services/record-transition.js'
@@ -139,5 +142,19 @@ describe('runRecordTransition', () => {
       status: 200,
       body: { data: { instance: { id: 'i1', current_state: 's2' }, new_state: null } }
     })
+  })
+})
+
+describe('one chain for a move and its automatic follow-ups (army 11 o3)', () => {
+  it("the person's move joins the auto chain and is flushed once, after it", async () => {
+    m.runAuto.mockClear()
+    m.flush.mockClear()
+    await runRecordTransition(opts).catch(() => undefined)
+    expect(m.apply).toHaveBeenCalled()
+    const applyArgs = m.apply.mock.calls.at(-1)?.[0] as { deferEvents?: unknown[] }
+    expect(Array.isArray(applyArgs?.deferEvents)).toBe(true)
+    const autoOpts = m.runAuto.mock.calls.at(-1)?.[2] as { deferred?: unknown[] }
+    expect(autoOpts?.deferred).toBe(applyArgs.deferEvents)
+    expect(m.flush).toHaveBeenCalledWith(applyArgs.deferEvents)
   })
 })

@@ -52,3 +52,24 @@ export function narrowLocally<T>(
   if (settled || !typed.trim()) return items
   return items.filter((item) => matchesAllTokens(labelOf(item), typed))
 }
+
+/** Rows a picker reads per answer. A shorter answer to an empty box is the whole list. */
+export const PICKER_PAGE = 200
+
+/**
+ * The server found nothing for the typed text — it only searches text columns,
+ * so a list labelled by a number (Funding Year 2026 is the row's id) or by a
+ * joined label answered "No results for “2026”" (army11 f3). Matched here on the
+ * label the person sees, against the WHOLE list — only when that list is
+ * complete (shorter than one page); a longer list was cut, and a match on a
+ * cut list would look like "everything there is".
+ */
+export function labelOnlyMatches<T>(
+  wholeList: T[],
+  labelOf: (item: T) => string,
+  typed: string
+): T[] {
+  const words = typed.replace(/[-_/]+/g, ' ').trim()
+  if (!words || wholeList.length >= PICKER_PAGE) return []
+  return wholeList.filter((item) => matchesAllTokens(labelOf(item), words))
+}

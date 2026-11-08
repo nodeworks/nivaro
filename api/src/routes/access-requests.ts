@@ -2,9 +2,16 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { type AccessReason, explainAccess } from '../services/access-explain.js'
+import {
+  accessRequestSubject,
+  accessTarget,
+  collectionNoun,
+  reasonAboutRequester
+} from '../services/access-request-text.js'
 import { logActivity } from '../services/activity.js'
 import { type DigestSection, registerDigestSection } from '../services/daily-digest.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { ACCESS_REQUEST_NOTIFY_CATEGORY } from '../services/portal-access-request.js'
 import { bustUserScopeCache, listScopeDimensions } from '../services/user-scopes.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
 
@@ -149,14 +156,21 @@ export async function accessRequestRoutes(app: FastifyInstance) {
         [req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') ||
         req.user?.email ||
         'A user'
+      // EVERY administrator who can act on it (army 11: only the first 10 were told), never a
+      // redacted or machine account.
       const admins = (await db('nivaro_users as u')
         .join('nivaro_roles as r', 'r.id', 'u.role')
         .where('r.admin_access', true)
         .where((qb) => void qb.where('u.status', 'active').orWhereNull('u.status'))
-        .limit(10)
+        .where((qb) => void qb.where('u.is_redacted', false).orWhereNull('u.is_redacted'))
+        .whereNull('u.account_kind')
+        .limit(500)
         .select('u.id')) as Array<{ id: string }>
-      const friendly = item ? await resolveFriendlyId(collection, item).catch(() => item) : null
-      const why = reasons?.length ? ` Why: ${reasons.map((r) => r.message).join(' ')}` : ''
+      const friendly = item ? await resolveFriendlyId(collection, item).catch(() => null) : null
+      const target = accessTarget(await collectionNoun(collection), item || null, friendly)
+      const why = reasons?.length
+        ? ` Why it was refused: ${reasons.map((r) => reasonAboutRequester(String(r.message ?? ''))).join(' ')}`
+        : ''
       const { buildAccessRequestMail } = await import('../services/mail-builders.js')
       const built = await buildAccessRequestMail({
         requesterId: req.user?.id ?? null,
@@ -164,14 +178,19 @@ export async function accessRequestRoutes(app: FastifyInstance) {
         collection,
         item,
         friendly,
+        target,
         note,
         reasons
       }).catch(() => null)
       for (const a of admins) {
+        if (String(a.id).toUpperCase() === String(req.user!.id).toUpperCase()) continue
         await notifyUser(app, String(a.id), {
-          subject: `${requester} requested access to ${item ? `${collection}/${friendly ?? item}` : collection}`,
-          message: `${note || 'They hit the access-denied panel and asked for help.'}${why} Grant or deny under System → Access Requests.`,
+          subject: accessRequestSubject(requester, target),
+          message: `${note ? `“${note}”` : 'No reason given.'}${why} Grant or decline it under Access requests.`,
           sender: req.user?.id ?? null,
+          // The same category as the portal access request, so admins route / mute / ask for
+          // email for both in one place (Profile → Notification rules).
+          category: ACCESS_REQUEST_NOTIFY_CATEGORY,
           collection,
           item,
           target: { kind: 'access_request', collection, id: item ?? null, action: 'review' },

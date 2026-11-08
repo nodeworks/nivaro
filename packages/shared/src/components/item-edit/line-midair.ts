@@ -39,6 +39,11 @@ export interface LineCollision {
   conflicts: Array<{ field: string; current_value: unknown }>
   latest: number
   mine: Record<string, unknown>
+  /** For Merge (line-merge.ts): the whole edit this person sent, the line as
+   *  the newer save left it, and its derived (write-computed) fields. */
+  edit?: Record<string, unknown>
+  current?: Record<string, unknown> | null
+  derived?: Array<{ field: string; formula: string }>
 }
 
 /** The chooser's id for one field of one line (the header dialog keys by field). */
@@ -302,6 +307,11 @@ export async function writeLineGuarded(
     const coll = midairCollisionOf(err)
     if (!coll) throw err
     if (coll.latest > 0) book.set(rowId, coll.latest)
+    // Merge (Rob, army 11): the line as the newer save left it, read as this person.
+    const current = await client
+      .request<{ data?: Record<string, unknown> | null }>(get(url.split('?')[0]))
+      .then((r) => r?.data ?? null)
+      .catch(() => null)
     return {
       ok: false,
       conflict: {
@@ -311,6 +321,8 @@ export async function writeLineGuarded(
         conflicts: coll.conflicts,
         latest: coll.latest,
         mine: body,
+        edit: body,
+        current,
         url
       }
     }

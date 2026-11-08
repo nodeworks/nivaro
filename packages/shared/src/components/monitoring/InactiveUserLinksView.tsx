@@ -57,13 +57,14 @@ interface Scan {
 const REASON_LABEL: Record<Reason, string> = {
   suspended: 'Suspended',
   redacted: 'Redacted',
-  anonymised: 'Anonymised',
+  // One word for one state app-wide (army 11): the legacy anonymisation IS a redaction.
+  anonymised: 'Redacted',
   placeholder: 'Placeholder'
 }
 const REASON_TIP: Record<Reason, string> = {
   suspended: 'The account is suspended — the person cannot sign in or act.',
-  redacted: 'Personal details were removed by a retention policy.',
-  anonymised: 'Details were overwritten by the nightly anonymisation of departed people.',
+  redacted: 'Personal details were removed by a retention policy (or the legacy retention job).',
+  anonymised: 'Redacted by the legacy retention job — the name and email were replaced.',
   placeholder: 'Stands in for a legacy account that no longer exists.'
 }
 const REASON_CLS: Record<Reason, string> = {
@@ -74,6 +75,10 @@ const REASON_CLS: Record<Reason, string> = {
 }
 
 const n = (v: number) => v.toLocaleString()
+
+/** Anonymised accounts ARE redacted ones (one word, one filter chip). */
+export const reasonGroup = (r: Reason): Reason => (r === 'anonymised' ? 'redacted' : r)
+const FILTER_REASONS: Reason[] = ['suspended', 'redacted', 'placeholder']
 
 export function InactiveUserLinksView({
   className,
@@ -154,11 +159,11 @@ export function InactiveUserLinksView({
 
   const byReason = useMemo(() => {
     const out: Record<Reason, number> = { suspended: 0, redacted: 0, anonymised: 0, placeholder: 0 }
-    for (const p of people) out[p.user.reason]++
+    for (const p of people) out[reasonGroup(p.user.reason)]++
     return out
   }, [people])
 
-  const shown = reason ? people.filter((p) => p.user.reason === reason) : people
+  const shown = reason ? people.filter((p) => reasonGroup(p.user.reason) === reason) : people
   const totals = useMemo(() => {
     let records = 0
     let seats = 0
@@ -248,7 +253,7 @@ export function InactiveUserLinksView({
           />
         </label>
         <span className='flex flex-wrap items-center gap-1'>
-          {(Object.keys(REASON_LABEL) as Reason[]).map((r) =>
+          {FILTER_REASONS.map((r) =>
             byReason[r] || reason === r ? (
               <button
                 key={r}

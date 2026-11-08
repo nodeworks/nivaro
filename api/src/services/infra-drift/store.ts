@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
+import { appEnvironment } from '../app-info.js'
 import {
   type DockerHost,
   dockerConfigured,
@@ -580,7 +581,9 @@ export async function runDriftCheck(
 
 /** One line per finding for the alert text (values never included, secret or not). */
 export function findingLine(f: Pick<FindingRow, 'service' | 'field' | 'kind' | 'origin'>): string {
-  const what = f.field
+  // A notification is read by every administrator (and anyone viewing as one): the NAME of a
+  // credential-like variable stays on the drift page, the notice says "a secret variable".
+  const what = /^env\./.test(f.field) && SECRETISH.test(f.field) ? 'a secret variable' : f.field
   const verb =
     f.kind === 'missing'
       ? 'is missing'
@@ -611,13 +614,23 @@ export interface AlertDeps {
   notify?: (userId: string, note: AlertNote) => Promise<{ dropped: boolean }>
 }
 
+const SECRETISH = /KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|PRIVATE|SIGNING|SALT/i
+
 /** The alert for one stack's new findings (field names only, never values). */
 export function alertNote(
-  o: Pick<CheckOutcome, 'stack' | 'environment' | 'new_findings'>
+  o: Pick<CheckOutcome, 'stack' | 'environment' | 'new_findings'>,
+  /** This instance's environment (services/app-info.ts appEnvironment). */
+  here: string = appEnvironment()
 ): AlertNote {
   const n = o.new_findings.length
   const services = new Set(o.new_findings.map((f) => f.service)).size
-  const subject = `Stack drift: ${o.stack} on ${o.environment} — ${n} change${n === 1 ? '' : 's'} in ${services} service${services === 1 ? '' : 's'}`
+  // Army 11 O4-8: staging's inbox showed "Stack drift: efp on production" as if it were its
+  // own. A check of ANOTHER environment's stack says where it was checked from.
+  const elsewhere =
+    here && o.environment && here.toLowerCase() !== String(o.environment).toLowerCase()
+      ? ` (checked from ${here})`
+      : ''
+  const subject = `Stack drift: ${o.stack} on ${o.environment}${elsewhere} — ${n} change${n === 1 ? '' : 's'} in ${services} service${services === 1 ? '' : 's'}`
   const lines = o.new_findings.slice(0, 6).map(findingLine)
   if (n > lines.length) lines.push(`…and ${n - lines.length} more`)
   return {

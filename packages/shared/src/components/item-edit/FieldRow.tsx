@@ -27,6 +27,7 @@ import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
 import { AutoIdPreviewField } from './AutoIdPreviewField'
+import { useCascadeClearNotifier } from './cascade-clear-notice'
 import { FOCUSABLE } from './entry/entry-keys'
 import {
   LockReasonBadge,
@@ -39,6 +40,7 @@ import {
 import { FieldCommentButton } from './FieldComments'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
 import { FormHelpVideoButton } from './FormHelpVideoButton'
+import { applyFieldA11y, primaryControl } from './field-a11y'
 import {
   buildCascadeFilter,
   CascadeEffectController,
@@ -594,17 +596,6 @@ function FieldWatchButton({
   )
 }
 
-/** The control a field label names: its first input (a rich-text body, not
- *  the toolbar above it), else a picker's trigger button. */
-function primaryControl(root: HTMLElement | null): HTMLElement | null {
-  if (!root) return null
-  return (
-    root.querySelector<HTMLElement>(
-      'input:not([type=hidden]), textarea, [role="combobox"], [contenteditable="true"]'
-    ) ?? root.querySelector<HTMLElement>('button')
-  )
-}
-
 /** One field of the record form. Memoized: the form re-renders for many
  *  reasons that change nothing a row shows (presence, lock polls, save
  *  state), and every prop it passes is kept stable for that. A row still
@@ -656,6 +647,7 @@ export const FieldRow = memo(function FieldRow({
   // lock reasons, apply-to-lines, related-record opener) — null in hosts that
   // render FieldRow outside ItemEditForm.
   const affordances = useFieldAffordances()
+  const cascadeClearNotify = useCascadeClearNotifier()
   const fieldSource = useFieldSource(field.field)
   const wrapperRef = useRef<HTMLDivElement>(null)
   // The visible label names the field's control for screen readers: every
@@ -664,9 +656,18 @@ export const FieldRow = memo(function FieldRow({
   const labelId = useId()
   const controlRef = useRef<HTMLDivElement>(null)
   const hasLabelRef = useRef(false)
+  // Required / invalid state for assistive tech (army11 f3): the "*" and the
+  // red message under the field were visual only — no aria-required, no
+  // aria-invalid, and the message was not tied to its control.
+  const a11yStateRef = useRef<{ required: boolean; hasError: boolean }>({
+    required: false,
+    hasError: false
+  })
   useEffect(() => {
     const el = hasLabelRef.current ? primaryControl(controlRef.current) : null
-    if (!el || el.hasAttribute('aria-label')) return
+    if (!el) return
+    applyFieldA11y(el, { ...a11yStateRef.current, errorId: `${labelId}-error` })
+    if (el.hasAttribute('aria-label')) return
     if (!el.id) el.id = `${labelId}-control`
     // A text box is the field itself; a picker button keeps its own text
     // after the label ("Zone, Select…" / "Zone, Zone 1").
@@ -876,6 +877,10 @@ export const FieldRow = memo(function FieldRow({
   const shownText = placementFieldText(field, textCtx)
   const label = shownText.label ?? titleCase(field.field)
   hasLabelRef.current = label !== ''
+  a11yStateRef.current = {
+    required: !!(field.required || requiredByRules(field.validation_rules, draft)),
+    hasError: !!error
+  }
   // #2712: a display formula has no column — no history, watch, AI or input.
   const isCalc = isDisplayFormulaRow(field)
   const counter = isCalc ? null : fieldCounterConfig(field)
@@ -1062,6 +1067,14 @@ export const FieldRow = memo(function FieldRow({
   }
 
   const handleCascadeClear = () => {
+    // Say what was cleared and why (one notice per chain, cascade-clear-notice.ts).
+    const had = m2mRelForField && m2mStagingKey ? cascadeCurrentValue : draft[field.field]
+    if (had !== null && had !== undefined && had !== '' && !(Array.isArray(had) && !had.length))
+      cascadeClearNotify?.({
+        field: field.field,
+        label: label || titleCase(field.field),
+        parents: cascadeRules.map((r) => r.parent_field).filter(Boolean)
+      })
     if (m2mRelForField && m2mStagingKey) {
       for (const rid of m2mStagedForCascade) m2mStaging?.unstageLink(m2mStagingKey, rid)
       const junctionItems =
@@ -1403,9 +1416,11 @@ export const FieldRow = memo(function FieldRow({
       {counter && <FieldCounter value={draft[field.field]} config={counter} />}
       {error && (
         // The message under the field: a red border alone never said WHY (Service End before
-        // Start, b01-N5). The form's summary at the top lists it too.
+        // Start, b01-N5). The form's summary at the top lists it too — and is
+        // the ONE live announcement (army11 f3: ten role=alert regions fired at
+        // once); this message is tied to the control by aria-describedby.
         <p
-          role='alert'
+          id={`${labelId}-error`}
           data-field-error={field.field}
           className='text-[11.5px] leading-snug text-red-600 dark:text-red-400'
         >

@@ -1,6 +1,12 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import {
+  accessRequestSubject,
+  accessTarget,
+  collectionNoun,
+  reasonAboutRequester
+} from './access-request-text.js'
 import { type LinkSpec, linkTo, recordLink } from './app-links.js'
 import { buildRecordCard, type RecordCard } from './mail-record-card.js'
 import { reportConditionNumber, reportConditionText } from './report-alert-words.js'
@@ -335,6 +341,8 @@ export async function buildAccessRequestMail(args: {
   collection: string
   item?: string | null
   friendly?: string | null
+  /** "workflow TP26-81395" (services/access-request-text.ts); built here when absent. */
+  target?: string
   note?: string | null
   reasons?: Array<{ message?: string }> | null
 }): Promise<BuiltMail> {
@@ -342,19 +350,21 @@ export async function buildAccessRequestMail(args: {
     cardFor(args.collection, args.item ?? null),
     user(args.requesterId)
   ])
-  const target = args.item
-    ? `${args.collection.replace(/_/g, ' ')} ${args.friendly ?? args.item}`
-    : args.collection.replace(/_/g, ' ')
+  const target =
+    args.target ??
+    accessTarget(await collectionNoun(args.collection), args.item ?? null, args.friendly ?? null)
   return {
     template: 'access_request',
-    subject: `${args.requesterName} requested access to ${args.item ? `${args.collection}/${args.friendly ?? args.item}` : args.collection}`,
+    subject: accessRequestSubject(args.requesterName, target),
     data: {
       why: 'you are an administrator — access requests go to every admin',
       requester_name: args.requesterName,
       requester_email: requester?.email ?? null,
       target_label: target,
       note: args.note ?? null,
-      reasons: (args.reasons ?? []).map((r) => r.message).filter(Boolean),
+      reasons: (args.reasons ?? [])
+        .map((r) => (r.message ? reasonAboutRequester(r.message) : ''))
+        .filter(Boolean),
       record_card: card,
       manage_url: await linkTo('access_requests', {}, { app: 'admin' })
     }

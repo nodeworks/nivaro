@@ -98,3 +98,16 @@ describe('readSpreadsheet', () => {
     )
   })
 })
+
+describe('readSpreadsheet columns (army 11 f2)', () => {
+  it('names a header column whose cells are all blank', () => {
+    const csv = Buffer.from('cifa,quantity,price\n301092,4,\n303909,2,\n')
+    const r = readSpreadsheet(csv, 'bom.csv', {
+      sheet_match: 'EFP Import',
+      header_row: 1,
+      file_types: ['csv']
+    })
+    expect(r.rows[0]).not.toHaveProperty('price')
+    expect(r.columns).toEqual(['cifa', 'quantity', 'price'])
+  })
+})

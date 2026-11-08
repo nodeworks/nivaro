@@ -68,7 +68,11 @@ import {
   RepeaterField,
   smartParseDate
 } from './PolishFields'
-import { QuickCreateButton, type QuickCreateConfig } from './QuickCreateButton'
+import {
+  QuickCreateButton,
+  type QuickCreateConfig,
+  useQuickCreateFollow
+} from './QuickCreateButton'
 import { RelationCombobox } from './RelationCombobox'
 import { RelationGroupedCombobox } from './RelationGroupedCombobox'
 import { RichTextEditor } from './RichTextEditor'
@@ -259,6 +263,9 @@ export const FieldRenderer = memo(function FieldRenderer({
   // #2726: a record-form picker counts searches that find nothing on its placement.
   const affordances = useFieldAffordances()
   const parentDraftForFilters = useParentDraft()
+  // A record made by a step-1 "＋ New" button keeps following the seeds filled
+  // in on later steps (the button itself is unmounted there — army 11 f2).
+  useQuickCreateFollow(parentDraftForFilters)
   const relationPathData = useContext(RelationPathDataContext)
   const parentDraftCtx = parentDraftForFilters
   const apiCfg = (() => {
@@ -422,6 +429,7 @@ export const FieldRenderer = memo(function FieldRenderer({
             targetCollection={m2oRel.one_collection}
             config={quickCreate}
             value={value}
+            field={field.field}
             onCreated={(id) => onChange(id)}
           />
         )}
@@ -940,6 +948,7 @@ export const FieldRenderer = memo(function FieldRenderer({
               manyField={o2mManyField}
               parentId={itemId}
               parentCollection={collection}
+              field={field.field}
               config={catalogMode}
               readOnly={field.readonly}
             />

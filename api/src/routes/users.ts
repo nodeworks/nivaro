@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
+import { readUsersFilter, UsersFilterError } from '../lib/users-filter.js'
 import {
   adminRefusal,
   authenticate,
@@ -45,7 +46,13 @@ import {
   computeUserStats
 } from '../services/user-profile.js'
 import { announcePrefsChanged } from '../services/user-sync.js'
-import { getUser, listUsers, updateUser, withoutCredentials } from '../services/users.js'
+import {
+  FILTERABLE_USER_COLS,
+  getUser,
+  listUsers,
+  updateUser,
+  withoutCredentials
+} from '../services/users.js'
 
 // Dashboard canvas prefs (#848 follow-up): the scope pickers (zone + year)
 // and the density toggle a person leaves the canvas in. Both are per-page UI
@@ -197,14 +204,23 @@ export async function usersRoutes(app: FastifyInstance) {
       people?: string
       page?: string
     }
+    // Bracket keys (`filter[role][_eq]=…`) fold in like /items; anything the list cannot
+    // apply is a 400 — never the whole directory as if filtered (army 11 Q2-6 / L6).
     let filter: Record<string, unknown> = {}
-    if (q.filter) {
-      try {
-        filter = JSON.parse(q.filter)
-      } catch {
-        // ignore malformed filter
-      }
+    try {
+      filter = readUsersFilter(req.query as Record<string, unknown>, FILTERABLE_USER_COLS) ?? {}
+    } catch (err) {
+      if (err instanceof UsersFilterError)
+        return reply.code(400).send({ error: err.message, code: err.code })
+      throw err
     }
+    // The people directory (non-admins) narrows by search only: a filter could probe
+    // columns its projection withholds, so it is refused out loud, not ignored.
+    if (!req.isAdmin && Object.keys(filter).length > 0)
+      return reply.code(400).send({
+        error: 'Only administrators can filter the people list — use search= to find someone',
+        code: 'INVALID_FILTER'
+      })
     const { limit, offset } = listWindow(q, req.isAdmin ? 1000 : 500)
     const result = await listUsers({
       limit,

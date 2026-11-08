@@ -588,7 +588,8 @@ export async function applyRollback(opts: {
   const ordered = [...internal].sort((a, b) => b.order - a.order)
   for (const a of ordered) {
     try {
-      if (a.kind === 'delete_created') await deleteOne(actor, a.collection, a.item, req, ws)
+      if (a.kind === 'delete_created')
+        await deleteOne(actor, a.collection, a.item, req, ws, { undoOwnCreate: true })
       else if (a.kind === 'restore_values' && a.patch)
         await updateOne(actor, a.collection, a.item, a.patch, req, ws)
       else if (a.kind === 'restore_deleted' && a.trash_id != null) {

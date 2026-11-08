@@ -5,6 +5,12 @@ import {
   pickBestLayoutTraced
 } from '../routes/collection-layouts.js'
 import type { User } from '../types.js'
+import {
+  type BulkRuleField,
+  bulkFieldLock,
+  bulkRuleTable,
+  placementRequires
+} from './bulk-field-rules.js'
 import { getFields, getRelations } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { readItems } from './items.js'
@@ -46,6 +52,8 @@ export interface GatePlacement {
   label_override: string | null
   is_visible: boolean
   lock_conditions: string | null
+  /** The placement's overrides JSON (a form may require a field: `required: true`). */
+  overrides?: string | null
 }
 
 export interface FormShape {
@@ -245,7 +253,15 @@ export async function loadFormShape(layout: Record<string, unknown>): Promise<Fo
       db('nivaro_field_groups').where({ layout_id: id }).orderBy('sort', 'asc'),
       db('nivaro_layout_field_assignments')
         .where({ layout_id: id })
-        .select('field', 'group_key', 'sort', 'label_override', 'is_visible', 'lock_conditions')
+        .select(
+          'field',
+          'group_key',
+          'sort',
+          'label_override',
+          'is_visible',
+          'lock_conditions',
+          'overrides'
+        )
         .orderBy('sort', 'asc')
     ]) as Promise<[Record<string, unknown>[], Record<string, unknown>[]]>
   const id = Number(layout.id)
@@ -285,7 +301,8 @@ export async function loadFormShape(layout: Record<string, unknown>): Promise<Fo
         sort: Number(x.sort ?? 0),
         label_override: str(x.label_override),
         is_visible: x.is_visible == null ? true : !!x.is_visible,
-        lock_conditions: str(x.lock_conditions)
+        lock_conditions: str(x.lock_conditions),
+        overrides: str(x.overrides)
       })),
     ungrouped_sort: ungrouped ? Number(ungrouped.sort) : null
   }
@@ -346,7 +363,9 @@ export async function settableFields(collection: string): Promise<{
     if (f.field === 'id' || f.type === 'alias' || alias.has(f.field)) continue
     if (f.computed_formula) continue
     settable.add(f.field)
-    if (f.readonly) readonly.add(f.field)
+    // Stamped by the server (creator, created/changed dates): read-only to a person.
+    const special = String((f as { special?: unknown }).special ?? '')
+    if (f.readonly || /\b(user|date|role)-(created|updated)\b/.test(special)) readonly.add(f.field)
     const label = (f as { label?: string | null }).label
     if (label) labels.set(f.field, label)
   }
@@ -359,6 +378,8 @@ export interface FieldReport {
   /** Of those, records the form locks it on for this person. */
   locked: number
   reason: string | null
+  /** The form requires it: the bar never offers an empty value (army 11 N3). */
+  required?: boolean
 }
 
 export interface BulkFieldsReport {
@@ -391,13 +412,21 @@ export async function bulkFieldsReport(opts: {
     opts.workspaceId
   )) as { data?: Array<Record<string, unknown>> }
   const readableIds = (res.data ?? []).map((r) => String(r.id))
-  const [forms, updatable, meta] = await Promise.all([
+  const [forms, updatable, meta, rules] = await Promise.all([
     resolveFormsForRecords(collection, readableIds, user.role ?? null, isAdmin, callerId(user)),
     isAdmin ? Promise.resolve(null) : getAllowedFields(user, 'update', collection),
-    settableFields(collection)
+    settableFields(collection),
+    bulkRuleTable(collection).catch(() => new Map<string, BulkRuleField>())
   ])
+  // A read-only field is never offered (army 11 N4: "Creator", "Priority — read-only" rows).
   const mayUpdate = (f: string) =>
-    meta.settable.has(f) && (updatable == null || updatable.includes('*') || updatable.includes(f))
+    meta.settable.has(f) &&
+    !meta.readonly.has(f) &&
+    (updatable == null || updatable.includes('*') || updatable.includes(f))
+  // The form's own field rules (army 11 N3): a cascade parent or a sequenced id's
+  // part is locked for every record; a required field is flagged.
+  const ruleLock = (f: string) => bulkFieldLock(rules.get(f))
+  const ruleRequired = (f: string) => !!rules.get(f)?.required
 
   const shapes = new Map<number, FormShape>()
   const recordsOf = new Map<number, string[]>()
@@ -435,8 +464,10 @@ export async function bulkFieldsReport(opts: {
       })
       for (const p of offered) {
         const r = fields[p.field] ?? { records: 0, locked: 0, reason: null }
+        // Required by the field, or by THIS record's form (army 11 review #11).
+        if (ruleRequired(p.field) || placementRequires(shape.placements, p.field)) r.required = true
         r.records++
-        const why = locks.get(p.field)
+        const why = ruleLock(p.field) ?? locks.get(p.field)
         if (why) {
           r.locked++
           r.reason = r.reason ?? why
@@ -449,11 +480,17 @@ export async function bulkFieldsReport(opts: {
   if (noForm > 0)
     for (const f of meta.settable) {
       if (!mayUpdate(f)) continue
-      const r = fields[f] ?? { records: 0, locked: 0, reason: null }
+      const r = fields[f] ?? {
+        records: 0,
+        locked: 0,
+        reason: null,
+        ...(ruleRequired(f) ? { required: true } : {})
+      }
       r.records += noForm
-      if (meta.readonly.has(f)) {
+      const why = ruleLock(f)
+      if (why) {
         r.locked += noForm
-        r.reason = r.reason ?? 'This field is read-only'
+        r.reason = r.reason ?? why
       }
       fields[f] = r
     }
@@ -549,7 +586,7 @@ export async function bulkFormRefusals(opts: {
 }
 
 /** Lower-cased ids of `ids` the caller can read (RLS, scopes, workspace); none on a refusal. */
-async function readableIds(
+export async function readableIds(
   user: User,
   collection: string,
   ids: Array<string | number>,

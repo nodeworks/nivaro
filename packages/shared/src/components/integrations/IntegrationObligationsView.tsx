@@ -22,6 +22,7 @@ import { ErrorSurface } from '../ErrorSurface'
 import { colorPair } from '../QueryTable'
 import { TipLayer } from '../TipLayer'
 import { SimpleSelectXs } from '../ui/SimpleSelect'
+import { SendCurrentDataButton } from './SendCurrentData'
 
 /**
  * The obligations board: per partner, how many messages they should have had
@@ -231,6 +232,10 @@ interface Row {
   submission_status: string | null
   submission_last_error: string | null
   submission_response: string | null
+  /** Send now can repeat a stored request (absent on an older server = yes). */
+  can_resend?: boolean
+  /** "Send current data" is offered (the kind rebuilds from current data). */
+  can_send_current?: boolean
 }
 
 /** The four `submission_*` columns, reshaped into the small object the
@@ -272,6 +277,7 @@ const PAGE_SIZE = 50
 
 export function IntegrationObligationsView({ api, className }: IntegrationObligationsViewProps) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const nav = useItemNavigation()
   const [filters, setFilters] = useState<ObligationFilterState>({
     api: api ?? null,
@@ -885,7 +891,24 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                       )}
                       {remediationEnabled && (
                         <td className='px-3 py-1.5 text-right'>
-                          {canSend && <SendNowButton obligationId={r.id} />}
+                          {canSend && r.can_resend !== false && (
+                            <SendNowButton obligationId={r.id} />
+                          )}
+                          {canSend && r.can_send_current === true && (
+                            <SendCurrentDataButton
+                              obligationId={r.id}
+                              api={r.api}
+                              className='ml-2'
+                              onSent={() => {
+                                void qc.invalidateQueries({
+                                  queryKey: ['integration-obligations', 'summary']
+                                })
+                                void qc.invalidateQueries({
+                                  queryKey: ['integration-obligations', 'list']
+                                })
+                              }}
+                            />
+                          )}
                         </td>
                       )}
                     </tr>

@@ -443,15 +443,117 @@ export async function computeEnteredStateAtBatch(
 /**
  * Who may move a record's SLA clock: an admin, or someone who can act on the
  * record AND owns its current step (record-access canActOn — sees it, may
- * update it, is available, resolves as an owner of the current state).
+ * update it, is available, resolves as an owner of the current state) while
+ * that step is NOT past its limit. A late owner lengthening their own clock
+ * cleared their own breach and stopped its escalation (army 11 a4): once the
+ * step is breached only an admin moves the clock. `breached` is the caller's
+ * reading of the current status (null = not asked).
  */
+export function ownerMayAdjust(
+  breached: boolean | null
+): { ok: true } | { ok: false; reason: string } {
+  return breached
+    ? {
+        ok: false,
+        reason:
+          'This step is already past its deadline — only an administrator can change its clock now'
+      }
+    : { ok: true }
+}
+
+/** The breach-episode escalation actually escalates to someone. */
+export function ruleEscalates(
+  rule: { escalation_ladder?: unknown; escalation_user?: unknown } | null | undefined
+): boolean {
+  if (!rule) return false
+  if (Array.isArray(rule.escalation_ladder) && rule.escalation_ladder.length > 0) return true
+  return rule.escalation_user != null && String(rule.escalation_user) !== ''
+}
+
 async function canAdjustClock(
+  req: FastifyRequest,
+  collection: string,
+  item: string,
+  breached: boolean | null = null
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (req.isAdmin) return { ok: true }
+  if (!req.user) return { ok: false, reason: 'Sign in to adjust the SLA clock' }
+  const owner = await isStepOwner(req, collection, item, 'adjust this clock')
+  if (owner.ok) {
+    // The late owner never extends their own clock — even one who also
+    // manages another owner of the step.
+    if (breached === null) {
+      const st = await computeStatus(collection, item).catch(() => null)
+      breached = st?.status === 'breached'
+    }
+    return ownerMayAdjust(breached)
+  }
+  // An owner's manager may move the clock, late or not (Rob 2026-11-08).
+  if (await managesAStepOwner(req.user.id, collection, item)) return { ok: true }
+  return owner
+}
+
+/**
+ * Is `userId` the manager (nivaro_users.manager_id) of anyone who owns the
+ * record's CURRENT step? Owners as the engine resolves them (groups, manual
+ * owners, delegation), assigned owners only. Never throws.
+ */
+export async function managesAStepOwner(
+  userId: string,
+  collection: string,
+  item: string
+): Promise<boolean> {
+  try {
+    const instance = (await db('nivaro_workflow_instances')
+      .where({ collection, item: String(item) })
+      .whereNull('completed_at')
+      .orderBy('started_at', 'desc')
+      .first('id', 'current_state')) as { id: string; current_state: string | null } | undefined
+    if (!instance?.current_state) return false
+    const { resolveStateOwners } = await import('../services/pipeline-engine.js')
+    const owners = await resolveStateOwners(
+      String(instance.current_state),
+      String(instance.id),
+      collection,
+      String(item),
+      db,
+      { skipFallback: true }
+    )
+    const ids = owners.map((o) => String(o.id)).filter(Boolean)
+    if (ids.length === 0) return false
+    const hit = await db('nivaro_users').whereIn('id', ids).where('manager_id', userId).first('id')
+    return !!hit
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Who may acknowledge a breach (and so stop its escalation): an admin or an
+ * owner of the step that is late — never a bystander who can merely read the
+ * record (army 11 a4: Virginia could silence Andy's escalation).
+ */
+async function canAcknowledge(
   req: FastifyRequest,
   collection: string,
   item: string
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   if (req.isAdmin) return { ok: true }
-  if (!req.user) return { ok: false, reason: 'Sign in to adjust the SLA clock' }
+  if (!req.user) return { ok: false, reason: 'Sign in to acknowledge' }
+  const owner = await isStepOwner(req, collection, item, 'acknowledge this breach')
+  if (owner.ok) return owner
+  // An owner's manager may acknowledge too (Rob 2026-11-08).
+  if (await managesAStepOwner(req.user.id, collection, item)) return { ok: true }
+  return owner
+}
+
+async function isStepOwner(
+  req: FastifyRequest,
+  collection: string,
+  item: string,
+  what: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!req.user) return { ok: false, reason: 'Sign in first' }
   try {
     const { canActOn } = await import('../services/record-access.js')
     // canActOn reads availability columns (status, out-of-office…) off the
@@ -462,11 +564,11 @@ async function canAdjustClock(
     return {
       ok: false,
       reason: verdict.can_act
-        ? `Only the owner of ${verdict.state ?? 'the current step'} or an admin can adjust this clock`
+        ? `Only the owners of ${verdict.state ?? 'the current step'}, their managers or an admin can ${what}`
         : verdict.summary
     }
   } catch {
-    return { ok: false, reason: 'You cannot adjust the SLA clock on this record' }
+    return { ok: false, reason: `You cannot ${what} on this record` }
   }
 }
 
@@ -886,8 +988,8 @@ export async function slaRoutes(app: FastifyInstance) {
 
   // GET /sla/status/:collection/:item — compute SLA status for a specific record
   /** Acknowledge the current breach episode — stops the escalation ladder for
-   *  this state entry. Any authenticated user who can see the record (they
-   *  got here from it) may acknowledge; the ack is attributed. */
+   *  this state entry. The late step's owners and admins only (army 11 a4);
+   *  the ack is attributed. */
   app.post('/ack', { preHandler: requireAuth }, async (req, reply) => {
     const b = req.body as { collection?: string; item?: string; note?: string }
     const collection = String(b.collection ?? '')
@@ -900,6 +1002,8 @@ export async function slaRoutes(app: FastifyInstance) {
     if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
       return reply.code(404).send({ error: 'Record not found' })
     }
+    const mayAck = await canAcknowledge(req, collection, item)
+    if (!mayAck.ok) return reply.code(403).send({ error: mayAck.reason, code: 'SLA_ACK_FORBIDDEN' })
     const status = await computeStatus(collection, item)
     if (!status || status.status !== 'breached' || !status.sla_rule) {
       return reply.code(400).send({ error: 'No active breach to acknowledge' })
@@ -1022,7 +1126,8 @@ export async function slaRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Record not found' })
     }
     if (!(await slaOverridesReady())) return reply.code(404).send({ error: 'No override' })
-    const gate = await canAdjustClock(req, collection, item)
+    // Back to the rule's own clock never helps a late owner — always theirs to do.
+    const gate = await canAdjustClock(req, collection, item, false)
     if (!gate.ok)
       return reply.code(403).send({ error: gate.reason, code: 'SLA_OVERRIDE_FORBIDDEN' })
     const active = (await db(SLA_OVERRIDES_TABLE)
@@ -1064,7 +1169,7 @@ export async function slaRoutes(app: FastifyInstance) {
     // Who may adjust this record's clock — asked only when a rule applies.
     const canAdjust =
       result?.status && result.status !== 'none' && (await slaOverridesReady())
-        ? (await canAdjustClock(req, collection, item)).ok
+        ? (await canAdjustClock(req, collection, item, result.status === 'breached')).ok
         : false
     if (result?.status === 'breached' && result.sla_rule) {
       // Escalation context for the record banner: is this episode acked, and
@@ -1083,9 +1188,12 @@ export async function slaRoutes(app: FastifyInstance) {
       return reply.send({
         ...result,
         can_adjust: canAdjust,
+        can_ack: ack ? false : (await canAcknowledge(req, collection, item)).ok,
         acknowledged: ack ? { at: ack.acked_at, by: ack.acked_by_name } : null,
-        has_ladder: Array.isArray(
-          (result.sla_rule as { escalation_ladder?: unknown }).escalation_ladder
+        // "escalating until acknowledged" only when the rule names someone to
+        // escalate to — an empty ladder escalates to nobody (army 11 a4).
+        has_ladder: ruleEscalates(
+          result.sla_rule as { escalation_ladder?: unknown; escalation_user?: unknown }
         )
       })
     }

@@ -24,6 +24,8 @@ import { evaluateConditionRules, fetchRecordForConditions } from './workflow-con
 import {
   applyTransition,
   coerceBool,
+  type DeferredTransitionEvent,
+  flushChainEvents,
   resolveTransitionTarget,
   runAutoTransitions,
   type WorkflowInstance,
@@ -343,6 +345,9 @@ export async function executeWorkflowTransition(opts: {
   // for — held auto transitions on it may fire again.
   await clearAutoFailures({ instanceId: String(instance.id) })
 
+  // The move and the automatic moves it sets off are one event chain (army
+  // 11 o3): people hear only where the record came to rest.
+  const chainEvents: DeferredTransitionEvent[] = []
   let applied: Awaited<ReturnType<typeof applyTransition>>
   try {
     applied = await applyTransition({
@@ -350,10 +355,12 @@ export async function executeWorkflowTransition(opts: {
       transition,
       userId: opts.actor.id ?? null,
       comment: opts.comment ?? null,
-      source: 'manual'
+      source: 'manual',
+      deferEvents: chainEvents
     })
   } catch (err) {
     await claim.release()
+    flushChainEvents(chainEvents)
     if (err instanceof TransitionBlockedError) {
       throw new WorkflowMutationError(422, err.message)
     }
@@ -363,9 +370,13 @@ export async function executeWorkflowTransition(opts: {
 
   // Chained automation: fire any auto transitions now valid from the new state.
   // They hang under this transition's history row in the event chain.
-  await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
-    runAutoTransitions(collection, item)
-  )
+  try {
+    await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
+      runAutoTransitions(collection, item, { deferred: chainEvents })
+    )
+  } finally {
+    flushChainEvents(chainEvents)
+  }
 
   const prevStateObj = previousState
     ? ((await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()) as

@@ -32,14 +32,31 @@ export class UnknownCollectionError extends Error {
 export function viewerSafeReasons(reasons: AccessReason[]): AccessReason[] {
   return reasons.map(({ trash_id: _t, record_ids: _i, record_values: _v, ...r }) =>
     r.type === 'scope'
-      ? {
-          ...r,
-          message: `This record is not visible to you: your ${r.dimension_label ?? 'access'} filter limits you to ${
-            (r.allowed_values ?? []).join(', ') || '(none)'
-          }.`
-        }
+      ? { ...r, message: scopeDeniedMessage(r.dimension_label, r.allowed_values) }
       : r
   )
+}
+
+/**
+ * Plain words for "outside your access" (army 11 Q2-4): the person's own values in
+ * natural order ("Zone 1, Zone 2 and Zone 3", not id order "Zone 3, Zone 1, Zone 2"),
+ * and no "filter" — people do not think of their access as one.
+ */
+export function scopeDeniedMessage(
+  dimensionLabel: string | null | undefined,
+  allowed: Array<string | number> | null | undefined
+): string {
+  const names = [...new Set((allowed ?? []).map((v) => String(v).trim()).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  )
+  const label = dimensionLabel?.trim() || 'access'
+  if (names.length === 0)
+    return `This record is outside your access. Your ${label} access covers no records yet.`
+  const list =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  return `This record is outside your access. Your ${label} access covers ${list}.`
 }
 
 export async function explainAccess(

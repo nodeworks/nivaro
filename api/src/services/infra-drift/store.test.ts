@@ -66,3 +66,34 @@ describe('isDuplicateKey', () => {
     expect(isDuplicateKey(null)).toBe(false)
   })
 })
+
+describe('drift notice text (army 11 O4-8)', () => {
+  it("says where a check of another environment's stack ran, and never names a secret variable", async () => {
+    const { alertNote } = await import('./store.js')
+    const note = alertNote(
+      {
+        stack: 'efp',
+        environment: 'production',
+        new_findings: [
+          {
+            service: 'efp_realtime',
+            field: 'env.ANTHROPIC_API_KEY',
+            kind: 'added',
+            origin: 'recreated'
+          },
+          { service: 'efp_web', field: 'env.LOG_LEVEL', kind: 'changed', origin: null }
+        ] as never
+      },
+      'staging'
+    )
+    expect(note.subject).toBe(
+      'Stack drift: efp on production (checked from staging) — 2 changes in 2 services'
+    )
+    expect(note.message).not.toContain('ANTHROPIC_API_KEY')
+    expect(note.message).toContain('efp_realtime: a secret variable was added (recreated)')
+    expect(note.message).toContain('env.LOG_LEVEL changed')
+    expect(
+      alertNote({ stack: 'efp', environment: 'staging', new_findings: [] }, 'staging').subject
+    ).toBe('Stack drift: efp on staging — 0 changes in 0 services')
+  })
+})

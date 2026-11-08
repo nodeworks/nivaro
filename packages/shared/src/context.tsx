@@ -333,6 +333,11 @@ export type ParentDraftContextValue = {
    *  relation, so an unfiltered child can't offer records the parent's own
    *  picker would refuse. */
   fieldOptionFilters?: Record<string, Record<string, unknown>>
+  /** One form instance (useId in ItemEditForm): a record made by this form's
+   *  "＋ New" follows THIS form's seeds only (army 11 review HIGH 1). */
+  formKey?: string
+  /** The parent record is not saved yet. */
+  isNew?: boolean
 }
 
 export const ParentDraftContext = createContext<ParentDraftContextValue | null>(null)

@@ -559,6 +559,10 @@ export interface QueryWidgetConfig {
   stats?: QueryWidgetStat[]
   /** Sentence shown, as written, when the query returns no rows. */
   empty_label?: string
+  /** One line under the filters saying what the figures count (army 11 o1 F5:
+   *  Calendar Year Spend opened from Budget & Spend showed another total with
+   *  nothing saying why). Plain text. */
+  note?: string
   /** Set by a sheet opener (never stored): params whose '$row.' / '$rows.'
    *  token found nothing in the opening row(s). A refusal naming one of them
    *  reads as "this row has no …", never the server's raw parameter text. */
@@ -1648,6 +1652,14 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
       }
     >
       {filterBar}
+      {cfg.note?.trim() && (
+        <p
+          data-query-note
+          className='mb-2 shrink-0 text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'
+        >
+          {cfg.note}
+        </p>
+      )}
       {statStrip}
       <div
         data-qt-refetching={refetching ? '' : undefined}

@@ -244,7 +244,9 @@ describe('applyRollback', () => {
       req,
       undefined
     )
-    expect(h.deleteOne).toHaveBeenCalledWith(caller, 'work_orders', '1', req, undefined)
+    expect(h.deleteOne).toHaveBeenCalledWith(caller, 'work_orders', '1', req, undefined, {
+      undoOwnCreate: true
+    })
     expect(h.logActivity).toHaveBeenCalledWith(expect.objectContaining({ action: 'mcp-rollback' }))
   })
 

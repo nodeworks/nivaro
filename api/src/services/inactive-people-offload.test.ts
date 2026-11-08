@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../db/index.js', () => ({ db: () => ({}) }))
 vi.mock('./account-status.js', () => ({ suspensionReason: async () => null }))
+vi.mock('./user-scopes.js', () => ({
+  listScopeDimensions: async () => [],
+  resolveScopeLabelsForUsers: async () => new Map()
+}))
 vi.mock('./inactive-user-links.js', () => ({ scanInactiveUserLinks: async () => ({}) }))
 vi.mock('./read-gate.js', () => ({
   sharedGatedRead: async (_k: string, _w: string, fn: () => unknown) => ({ value: await fn() })
@@ -67,5 +71,19 @@ describe('offloadFromScan', () => {
     expect(out[0].counts).toMatchObject({ tasks: 2, records: 5, seats: 0 })
     expect(out[0].total).toBe(7)
     expect(out[0].tool_path).toBe('/data-integrity?tab=people&person=A')
+  })
+
+  it('one word for the state: anonymised and redacted both read Redacted; last sign-in rides along', () => {
+    const anon = user('E', 'anonymised', [['builtin:owner_seats', 3]])
+    ;(anon.user as { last_access: string | null }).last_access = '2025-12-16T14:17:03.413Z'
+    const out = offloadFromScan({
+      sources,
+      users: [user('A', 'suspended', [['builtin:tasks', 1]]), anon] as never
+    })
+    const byId = new Map(out.map((p) => [p.id, p]))
+    expect(byId.get('A')?.state_label).toBe('Suspended')
+    expect(byId.get('E')?.state_label).toBe('Redacted')
+    expect(byId.get('E')?.last_access).toBe('2025-12-16T14:17:03.413Z')
+    expect(byId.get('E')?.since).toBeNull()
   })
 })

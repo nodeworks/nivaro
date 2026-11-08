@@ -2804,8 +2804,29 @@ function AddKeyButton(props: {
     staleTime: 10 * 60_000
   })
   const free = options.filter((k) => !used.has(String(k)))
+  // army11 f1: the list ignored typing and Enter added the FOCUSED (latest)
+  // year — "2026⏎" added 2027. A filter box takes the keys; Enter adds the
+  // highlighted match (the first one, or an exact match), arrows move.
+  const [filter, setFilter] = useState('')
+  const [active, setActive] = useState(0)
+  const shown = filterAddKeys(free, filter)
+  const activeIdx = Math.min(active, Math.max(0, shown.length - 1))
+  const listId = `plan-add-${config.key_collection ?? 'keys'}`
+  const pick = (k: string | number) => {
+    onAdd(k)
+    setOpen(false)
+  }
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (!o) {
+          setFilter('')
+          setActive(0)
+        }
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type='button'
@@ -2818,26 +2839,69 @@ function AddKeyButton(props: {
       </PopoverTrigger>
       <PopoverContent align='start' sideOffset={6} className='w-[200px] p-1.5'>
         {config.key_collection ? (
-          <ul className='max-h-[220px] overflow-y-auto'>
+          <>
+            <input
+              // biome-ignore lint/a11y/noAutofocus: the popover opens for typing
+              autoFocus
+              value={filter}
+              onChange={(e) => {
+                setFilter(e.target.value)
+                setActive(0)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setActive(Math.min(activeIdx + 1, shown.length - 1))
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setActive(Math.max(activeIdx - 1, 0))
+                } else if (e.key === 'Enter') {
+                  e.preventDefault()
+                  const k = shown[activeIdx]
+                  if (k !== undefined) pick(k)
+                }
+              }}
+              role='combobox'
+              aria-expanded='true'
+              aria-controls={listId}
+              aria-activedescendant={
+                shown.length ? `${listId}-${String(shown[activeIdx])}` : undefined
+              }
+              aria-label={`${label}: type to find`}
+              placeholder='Type to find…'
+              data-plan-add-filter
+              className='mb-1 h-7 w-full rounded border border-slate-200 bg-background px-2 text-[12.5px] outline-none focus:border-slate-400 dark:border-border'
+            />
             {free.length === 0 && (
-              <li className='px-2 py-1.5 text-[12px] text-slate-500'>Every one is already here.</li>
+              <p className='px-2 py-1.5 text-[12px] text-slate-500'>Every one is already here.</p>
             )}
-            {free.map((k) => (
-              <li key={String(k)}>
+            {free.length > 0 && shown.length === 0 && (
+              <p className='px-2 py-1.5 text-[12px] text-slate-500'>
+                Nothing matches “{filter.trim()}”.
+              </p>
+            )}
+            <div id={listId} role='listbox' className='max-h-[220px] overflow-y-auto'>
+              {shown.map((k, i) => (
                 <button
+                  key={String(k)}
+                  id={`${listId}-${String(k)}`}
                   type='button'
+                  role='option'
+                  aria-selected={i === activeIdx}
+                  tabIndex={-1}
                   data-plan-add-key={String(k)}
-                  onClick={() => {
-                    onAdd(k)
-                    setOpen(false)
-                  }}
-                  className='w-full rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                  onClick={() => pick(k)}
+                  onMouseEnter={() => setActive(i)}
+                  className={cn(
+                    'block w-full rounded px-2 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200',
+                    i === activeIdx && 'bg-accent'
+                  )}
                 >
                   {String(k)}
                 </button>
-              </li>
-            ))}
-          </ul>
+              ))}
+            </div>
+          </>
         ) : (
           <form
             onSubmit={(e) => {
@@ -2860,4 +2924,14 @@ function AddKeyButton(props: {
       </PopoverContent>
     </Popover>
   )
+}
+
+/** The Add-year list narrowed by what is typed: an exact match first, then the
+ *  keys that contain the text, in list order. */
+export function filterAddKeys(keys: Array<string | number>, typed: string): Array<string | number> {
+  const t = typed.trim().toLowerCase()
+  if (!t) return keys
+  const hits = keys.filter((k) => String(k).toLowerCase().includes(t))
+  const exact = hits.filter((k) => String(k).toLowerCase() === t)
+  return [...exact, ...hits.filter((k) => String(k).toLowerCase() !== t)]
 }

@@ -337,7 +337,7 @@ describe('views', () => {
       alerted_at: null
     })
     expect(v).toMatchObject({ expected: 'set', actual: 'set', secret: true })
-    expect(findingLine(v)).toBe('efp_api: env.DB_PASSWORD changed (docker service update)')
+    expect(findingLine(v)).toBe('efp_api: a secret variable changed (docker service update)')
   })
 
   it('normalizeService keeps the previous spec only when asked', () => {

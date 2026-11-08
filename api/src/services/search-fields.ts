@@ -136,3 +136,39 @@ export function searchGroupOf(browserConfig: unknown): { by: string | null; deta
   }
   return { by, detail: (parseFieldList(browserConfig, 'search_detail') ?? []).slice(0, 3) }
 }
+
+/**
+ * `browser_config.search_internal_fields` (army 11 a3 G): columns that hold another
+ * system's ids (an invoice's Fusion `invoice_id` / `key`). A value pasted WHOLE still
+ * finds its record (exact equality), but the column is never matched by its start or its
+ * contents and global search never shows its value — no "Invoice Id: 100200585-…"
+ * subtitle, no noise rows whose internal id merely starts with the typed number.
+ * Same shape and rules as `search_fields`; unset = none.
+ */
+export function searchInternalFieldsOf(browserConfig: unknown): string[] {
+  return parseFieldList(browserConfig, 'search_internal_fields') ?? []
+}
+
+const PATH = /^[A-Za-z_][A-Za-z0-9_]{0,127}(\.[A-Za-z_][A-Za-z0-9_]{0,127})?$/
+
+/**
+ * `browser_config.search_group_detail` (army 11 a3 G): what tells ONE grouped palette
+ * row from another that shares its label — four vendors' invoices all numbered 10020.
+ * Field names or one relation hop (`vendor.name`), at most three, read AS THE CALLER;
+ * the row's second line becomes "DEPLOYMENT TECHNOLOGIES INC · Oct 12, 2026". Unset /
+ * malformed = none (the row keeps its snippet).
+ */
+export function searchGroupDetailOf(browserConfig: unknown): string[] {
+  try {
+    const bc =
+      typeof browserConfig === 'string'
+        ? (JSON.parse(browserConfig) as Record<string, unknown>)
+        : (browserConfig as Record<string, unknown> | null)
+    const raw = bc?.search_group_detail
+    if (!Array.isArray(raw)) return []
+    const paths = raw.map((v) => String(v ?? '').trim()).filter((v) => PATH.test(v))
+    return [...new Set(paths)].slice(0, 3)
+  } catch {
+    return []
+  }
+}

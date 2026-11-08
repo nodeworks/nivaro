@@ -63,3 +63,39 @@ describe('daily digest owned lines', () => {
     expect(lines).toHaveLength(1)
   })
 })
+
+describe('daily digest held updates (army 11)', () => {
+  it('one linked line per record, newest first, with the summary sentence and "+N earlier"', async () => {
+    const { deferredLines } = await import('../../../services/daily-digest.js')
+    const snip = (t: string, i: string) => JSON.stringify({ t, c: 'workflows', i })
+    const lines = await deferredLines(
+      [
+        {
+          subject: 'Approve — CR26-1 is now Level 4',
+          snippet: snip('From Level 3 to Level 4.', '1'),
+          created_at: '2026-11-08T10:00:00Z'
+        },
+        {
+          subject: 'Approve — CR26-1 is now Level 5',
+          snippet: snip('From Level 4 to Level 5.', '1'),
+          created_at: '2026-11-08T11:00:00Z'
+        },
+        {
+          subject: 'Old plain row',
+          snippet: 'Engineering Finance Portal EFP',
+          created_at: '2026-11-08T09:00:00Z'
+        }
+      ],
+      'U1',
+      async (c, i) => `https://portal.test/records/${c}/${i}`
+    )
+    expect(lines).toEqual([
+      {
+        text: 'Approve — CR26-1 is now Level 5',
+        sub: 'From Level 4 to Level 5. · +1 earlier update',
+        url: 'https://portal.test/records/workflows/1'
+      },
+      { text: 'Old plain row', sub: null, url: null }
+    ])
+  })
+})

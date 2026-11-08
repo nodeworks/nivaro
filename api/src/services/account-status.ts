@@ -42,7 +42,6 @@ export async function suspensionReason(userId: string): Promise<SuspensionReason
       'is_redacted',
       'redacted_at',
       'directory_status',
-      'directory_checked_at',
       'first_name',
       'email'
     )) as Record<string, unknown> | undefined
@@ -120,18 +119,9 @@ export async function suspensionReason(userId: string): Promise<SuspensionReason
       by: null
     }
   }
-  if (user.directory_status === 'missing' || user.directory_status === 'disabled') {
-    return {
-      source: 'directory',
-      text:
-        user.directory_status === 'missing'
-          ? 'Not found in the company directory on the last sync'
-          : 'Disabled in the company directory on the last sync',
-      at:
-        user.directory_checked_at instanceof Date ? user.directory_checked_at.toISOString() : null,
-      by: null
-    }
-  }
+  // An account the legacy system anonymised ("Redacted Redacted · Redacted_<id>@…") is that
+  // first, whatever the directory now says about the stand-in address (army 11: these read
+  // "Not found in the company directory" with the date of the last directory CHECK).
   if (
     String(user.first_name ?? '') === 'Redacted' ||
     /^Redacted_/i.test(String(user.email ?? ''))
@@ -139,6 +129,19 @@ export async function suspensionReason(userId: string): Promise<SuspensionReason
     return {
       source: 'legacy-redaction',
       text: 'Redacted by the legacy nightly retention job (36 months without activity) and carried over by the user sync',
+      at: null,
+      by: null
+    }
+  }
+  if (user.directory_status === 'missing' || user.directory_status === 'disabled') {
+    return {
+      source: 'directory',
+      text:
+        user.directory_status === 'missing'
+          ? 'Not found in the company directory on the last sync'
+          : 'Disabled in the company directory on the last sync',
+      // directory_checked_at is when the directory was last READ, not when the account was
+      // suspended — no row says when, so no date (a wrong date is worse than none).
       at: null,
       by: null
     }

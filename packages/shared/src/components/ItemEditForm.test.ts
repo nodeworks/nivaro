@@ -13,6 +13,7 @@ import {
   isRuleFill,
   keepCollisionBase,
   keptAmong,
+  keptLinksAmong,
   type M2MFieldState,
   mergeRuleResults,
   ownEditFields,
@@ -587,6 +588,16 @@ describe('isRuleFill', () => {
 
 // army9 b01: picking a project funded in two years wiped an auto-filled
 // Funding Year that was one of them.
+describe('keptLinksAmong (army11 f1: a two-year project wiped Funding Year)', () => {
+  it('keeps the linked year the new project also has', () => {
+    expect(keptLinksAmong(['2026'], [2025, 2026])).toEqual(['2026'])
+  })
+  it('keeps nothing when the held year is not offered, or nothing was held', () => {
+    expect(keptLinksAmong(['2027'], [2025, 2026])).toEqual([])
+    expect(keptLinksAmong(undefined, [2025, 2026])).toEqual([])
+  })
+})
+
 describe('keptAmong', () => {
   it('keeps a held value the new record allows', () => {
     expect(keptAmong('5', [4, 5])).toBe(5)

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { guardPasses, renderTemplate } from '../../../services/action-guards.js'
+import { firstFailingRule, guardPasses, renderTemplate } from '../../../services/action-guards.js'
 import {
   accessAllows,
+  guardMissReason,
   normalizeAccess,
   normalizeGuard,
   summarize
@@ -93,5 +94,36 @@ describe('normalizeGuard / summarize', () => {
     expect(
       summarize('update_fields', { set: { is_priority: false } }, { is_priority: 'Priority' })
     ).toBe('Sets Priority to No')
+  })
+})
+
+// Army 11 N7: the bulk preview read "#372994 — nothing to change (guard not met)".
+describe('guardMissReason', () => {
+  it('reads a yes/no guard as "already …" / "not …"', () => {
+    const hold = { field: 'is_on_hold', op: 'neq', value: true }
+    expect(firstFailingRule([hold], { is_on_hold: true })).toEqual(hold)
+    expect(guardMissReason(hold)).toBe('already on hold')
+    expect(guardMissReason({ field: 'is_on_hold', op: 'eq', value: true })).toBe('not on hold')
+    expect(guardMissReason({ field: 'is_priority', op: 'neq', value: true }, 'Priority')).toBe(
+      'already Priority'
+    )
+  })
+  it('names any other field without its raw value (a link id, an enum key)', () => {
+    const r = guardMissReason({ field: 'workflow_type', op: 'neq', value: 2 }, 'Type of Workflow')
+    expect(r).toBe('does not apply to this record’s Type of Workflow')
+    expect(r).not.toContain('2')
+    expect(guardMissReason({ field: 'po_number', op: 'null' }, 'PO Number')).toBe(
+      'PO Number is already filled in'
+    )
+  })
+  it('the first failing rule is the one named', () => {
+    const g = [
+      { field: 'is_priority', op: 'neq', value: true },
+      { field: 'workflow_type', op: 'neq', value: 2 }
+    ]
+    expect(firstFailingRule(g, { is_priority: false, workflow_type: 2 })?.field).toBe(
+      'workflow_type'
+    )
+    expect(firstFailingRule(g, { is_priority: false, workflow_type: 1 })).toBeNull()
   })
 })

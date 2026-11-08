@@ -5,8 +5,21 @@
 import { db } from '../db/index.js'
 import { AUTO_FAILURE_TABLE, memoryAvailable } from './auto-transition-memory.js'
 import { selectInChunks } from './db-batch.js'
+import { getObligationKind } from './integration-obligations.js'
 import { importCadence, isImportStale } from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
+
+/** How a person reads an obligation kind: its registered label, else the API
+ *  name and the kind's key in words (never "wf.nuvolo_status"). */
+export function obligationKindLabel(api: string, kind: string): string {
+  const label = getObligationKind(api, kind)?.label?.trim()
+  if (label) return label
+  const words = kind
+    .replace(/^[a-z]+\./, '')
+    .replace(/[._-]+/g, ' ')
+    .trim()
+  return `${api}: ${words || kind}`
+}
 
 export function isAuthFailure(status: number | null, error: string | null): boolean {
   if (status === 401 || status === 403) return true
@@ -393,8 +406,10 @@ export function registerCoreIntegrationSignals(): void {
           rows.map((r) => ({
             key: `${r.collection}:${r.item}:${r.kind}`,
             group: `${r.api}:${r.kind}`,
-            group_label: `${r.api} · ${r.kind}`,
-            title: `${r.api}: ${r.kind}`,
+            // The kind's registered label ("LinX — workflow status write-back"),
+            // never the raw key "wf.nuvolo_status" (army 11 O4-12).
+            group_label: obligationKindLabel(r.api, r.kind),
+            title: obligationKindLabel(r.api, r.kind),
             detail: r.reason ?? undefined,
             since: new Date(r.due_at ?? r.created_at).toISOString(),
             occurrence: `obl:${r.id}`,

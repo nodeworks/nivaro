@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus } from 'lucide-react'
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useNivaroClient, useParentDraft } from '../../context'
+import { type ParentDraftContextValue, useNivaroClient, useParentDraft } from '../../context'
 import { get, patch, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, titleCase } from '../../lib/utils'
@@ -36,10 +36,14 @@ export function QuickCreateButton({
   targetCollection,
   config,
   value,
+  field,
   onCreated
 }: {
   targetCollection: string
   config: QuickCreateConfig
+  /** The parent form field this button fills: the record made here follows the
+   *  form while the draft still holds it there, even with this step unmounted. */
+  field?: string
   /** The field's current value — while it still holds the record made here,
    *  that record keeps following the form's seeds (see below). */
   value?: unknown
@@ -117,37 +121,29 @@ export function QuickCreateButton({
   // and Region, then failed the picker's own narrowing at Create ("Not an
   // available option", army9 b02 HIGH) and was left behind as an orphan.
   // While the field still holds the record made here, each seed the form
-  // fills in later is written to that record too.
-  const createdRef = useRef<{ id: unknown; written: Record<string, string> } | null>(null)
-  const seedSig = JSON.stringify(seedFields.map((f) => resolveSeed(f.from) ?? null))
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on the listed inputs only; the helpers it calls read refs
+  // fills in later is written to that record too. The follow lives in a
+  // module registry, NOT in this component: the stepper unmounts step 1 when
+  // the person moves on, so a component-local follow never saw the later
+  // seeds (army 11 f2 HIGH). Every field on the form drives the registry
+  // (useQuickCreateFollow in FieldRenderer), whichever step is showing.
+  const followKey = useRef<string | null>(null)
+  const [ownKey, setOwnKey] = useState<string | null>(null)
   useEffect(() => {
-    const made = createdRef.current
-    if (!made) return
-    if (value == null || String(value) !== String(made.id)) {
-      // Another record picked (or cleared): this one no longer follows.
-      if (value != null && value !== '') createdRef.current = null
-      return
-    }
-    const body = seedFollowPatch(seedFields, resolveSeed, made.written, m2mAliases)
-    if (!body) return
-    const t = setTimeout(() => {
-      client
-        .request(patch(`/items/${targetCollection}/${made.id}`, body.patch))
-        .then(() => {
-          if (createdRef.current?.id === made.id)
-            createdRef.current = { id: made.id, written: { ...made.written, ...body.written } }
-          // The picker re-judges the value against its narrowing.
-          void qc.invalidateQueries({ queryKey: ['relation-avail', targetCollection] })
-          void qc.invalidateQueries({ queryKey: ['relation-opts', targetCollection] })
-          void qc.invalidateQueries({ queryKey: ['relation-single', targetCollection] })
-        })
-        .catch(() => {
-          /* the picker's own "not available" flag still tells the person */
-        })
-    }, 500)
-    return () => clearTimeout(t)
-  }, [seedSig, value, m2mAliases, targetCollection])
+    const key = followKey.current
+    if (!key) return
+    const job = followJobs.get(key)
+    if (job && !job.field) job.value = value
+  }, [value])
+  useQuickCreateFollow(parentDraft, parentDraft?.formKey ? null : ownKey)
+  // Without a form identity the follow cannot outlive this button.
+  useEffect(
+    () => () => {
+      const key = followKey.current
+      const job = key ? followJobs.get(key) : undefined
+      if (job && !job.formKey) dropFollow(job)
+    },
+    []
+  )
 
   // ── Popover position: portaled, so a short step card never clips it ──────
   const [pos, setPos] = useState<CSSProperties | null>(null)
@@ -282,7 +278,24 @@ export function QuickCreateButton({
         setValues({})
         return
       }
-      createdRef.current = { id, written }
+      followKey.current = startQuickCreateFollow({
+        id,
+        targetCollection,
+        parentCollection: parentDraft?.collection ?? null,
+        formKey: parentDraft?.formKey ?? null,
+        field,
+        seeds: seedFields,
+        written,
+        m2mAliases: m2mAliases ?? new Set(),
+        request: (cmd) => client.request(cmd),
+        invalidate: () => {
+          // The picker re-judges the value against its narrowing.
+          void qc.invalidateQueries({ queryKey: ['relation-avail', targetCollection] })
+          void qc.invalidateQueries({ queryKey: ['relation-opts', targetCollection] })
+          void qc.invalidateQueries({ queryKey: ['relation-single', targetCollection] })
+        }
+      })
+      setOwnKey(followKey.current)
       onCreated(id)
       setOpen(false)
       setValues({})
@@ -551,4 +564,148 @@ function linkIds(v: unknown): Array<string | number> {
     if ((typeof id === 'string' && id !== '') || typeof id === 'number') out.push(id)
   }
   return out
+}
+
+// ── Follow registry ────────────────────────────────────────────────────────
+// One entry per record made by a "＋ New" button. It outlives the button (the
+// stepper unmounts step 1), so the seeds the form fills in on later steps
+// still reach the record before Create. It belongs to the ONE form instance
+// that made the record (`formKey`) and only while that record is still new:
+// no other open form may write to it or cancel it (army 11 review HIGH 1 — a
+// global follow PATCHed a project from an unrelated workflow that used it).
+// It ends when that form is saved (isNew turns false), when the form unmounts
+// (endQuickCreateFollows) or when another record is picked.
+
+interface FollowJob {
+  key: string
+  id: unknown
+  targetCollection: string
+  parentCollection: string | null
+  /** The form instance that made the record; null = no form identity (only the
+   *  mounted button itself drives the follow). */
+  formKey: string | null
+  /** The parent field holding the record; without it the mounted button reports `value`. */
+  field?: string
+  value?: unknown
+  seeds: QuickCreateConfig['fields']
+  written: Record<string, string>
+  m2mAliases: Set<string>
+  request: (cmd: ReturnType<typeof patch>) => Promise<unknown>
+  invalidate: () => void
+  timer: ReturnType<typeof setTimeout> | null
+  pendingSig: string | null
+  at: number
+}
+
+const followJobs = new Map<string, FollowJob>()
+/** A form left open longer than this no longer moves the record it made. */
+const FOLLOW_TTL_MS = 60 * 60_000
+export const FOLLOW_DEBOUNCE_MS = 500
+
+export function startQuickCreateFollow(
+  job: Omit<FollowJob, 'key' | 'timer' | 'pendingSig' | 'at' | 'value'>
+): string {
+  const key = `${job.formKey ?? ''}|${job.parentCollection ?? ''}|${job.targetCollection}|${String(job.id)}`
+  const prev = followJobs.get(key)
+  if (prev?.timer) clearTimeout(prev.timer)
+  followJobs.set(key, { ...job, key, timer: null, pendingSig: null, at: Date.now() })
+  return key
+}
+
+/** The form instance is gone (unmounted, saved elsewhere): its follows end. */
+export function endQuickCreateFollows(formKey: string | null | undefined): void {
+  if (!formKey) return
+  for (const job of [...followJobs.values()]) if (job.formKey === formKey) dropFollow(job)
+}
+
+/** Test seam: forget every follow (timers included). */
+export function resetQuickCreateFollows(): void {
+  for (const job of followJobs.values()) if (job.timer) clearTimeout(job.timer)
+  followJobs.clear()
+}
+
+function dropFollow(job: FollowJob): void {
+  if (job.timer) clearTimeout(job.timer)
+  followJobs.delete(job.key)
+}
+
+function idOf(v: unknown): unknown {
+  return v != null && typeof v === 'object' ? (v as { id?: unknown }).id : v
+}
+
+/** Judge every follow against the parent form's current draft: PATCH the seeds
+ *  it filled in since (debounced), stop following once another record is picked. */
+export function runQuickCreateFollow(
+  draft: Record<string, unknown> | undefined,
+  collection: string | undefined,
+  scope: { formKey?: string | null; isNew?: boolean; mine?: string | null } = {}
+): void {
+  if (followJobs.size === 0 || !draft) return
+  const now = Date.now()
+  for (const job of [...followJobs.values()]) {
+    if (now - job.at > FOLLOW_TTL_MS) {
+      dropFollow(job)
+      continue
+    }
+    // Only the form that made the record drives (or ends) its follow. A job
+    // with no form identity is driven by its own mounted button alone.
+    if (job.formKey ? job.formKey !== scope.formKey : job.key !== scope.mine) continue
+    if (job.parentCollection && collection && job.parentCollection !== collection) continue
+    // The creating form was saved: the record is part of it now, follow ends.
+    if (scope.isNew === false) {
+      dropFollow(job)
+      continue
+    }
+    const current = idOf(job.field ? draft[job.field] : job.value)
+    // Cleared: dormant (picking it again resumes); another record: stop.
+    if (current === null || current === undefined || current === '') continue
+    if (String(current) !== String(job.id)) {
+      dropFollow(job)
+      continue
+    }
+    const resolve = (from: unknown) =>
+      typeof from === 'string' && from.startsWith('$parent.')
+        ? (draft[from.slice('$parent.'.length)] ?? null)
+        : from
+    const body = seedFollowPatch(job.seeds, resolve, job.written, job.m2mAliases)
+    if (!body) {
+      if (job.timer) clearTimeout(job.timer)
+      job.timer = null
+      job.pendingSig = null
+      continue
+    }
+    const sig = JSON.stringify(body.patch)
+    if (job.timer && job.pendingSig === sig) continue
+    if (job.timer) clearTimeout(job.timer)
+    job.pendingSig = sig
+    job.timer = setTimeout(() => {
+      job.timer = null
+      job.pendingSig = null
+      job
+        .request(patch(`/items/${job.targetCollection}/${job.id}`, body.patch))
+        .then(() => {
+          job.written = { ...job.written, ...body.written }
+          job.invalidate()
+        })
+        .catch(() => {
+          /* the picker's own "not available" flag still tells the person */
+        })
+    }, FOLLOW_DEBOUNCE_MS)
+  }
+}
+
+/** Drives the follow registry from any component inside the parent form —
+ *  only for records THIS form made (its `formKey`). `mine` = the key of a job
+ *  the calling button started (forms without a formKey). */
+export function useQuickCreateFollow(
+  ctx: ParentDraftContextValue | null | undefined,
+  mine?: string | null
+): void {
+  const draft = ctx?.draft
+  const collection = ctx?.collection
+  const formKey = ctx?.formKey
+  const isNew = ctx?.isNew
+  useEffect(() => {
+    runQuickCreateFollow(draft, collection, { formKey, isNew, mine })
+  }, [draft, collection, formKey, isNew, mine])
 }

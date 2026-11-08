@@ -50,4 +50,17 @@ describe('invalidateRecordData', () => {
     ).toBe(false)
     expect(predicate!({ queryKey: ['item', 'inventory_requests', '32842'] })).toBe(false)
   })
+
+  it("re-reads the record's item actions (Push to Fusion) after a move (army 11 a1 F-12)", () => {
+    const calls: Call[] = []
+    invalidateRecordData({ invalidateQueries: (o: Call) => calls.push(o) }, 'workflows', '372991')
+    const preds = calls.map((c) => c.predicate).filter(Boolean) as Array<
+      NonNullable<Call['predicate']>
+    >
+    const hits = (k: unknown[]) => preds.some((p) => p({ queryKey: k }))
+    expect(hits(['item-actions', 'workflows', '372991'])).toBe(true)
+    expect(hits(['item-actions', 'workflows', 372991])).toBe(true)
+    expect(hits(['ext-item-actions', 'workflows', '372991'])).toBe(true)
+    expect(hits(['item-actions', 'workflows', '372990'])).toBe(false)
+  })
 })

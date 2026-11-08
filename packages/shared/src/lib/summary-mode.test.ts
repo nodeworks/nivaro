@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  holdSummaryReresolve,
   NO_STATE,
   normalizeSummaryModeRules,
   resolveSummaryMode,
+  sameSummaryRecord,
+  summaryResolveSignature,
   summaryRulesNeedRecord,
   summaryRulesNeedRole,
   summaryRulesNeedState
@@ -112,5 +115,28 @@ describe('edit_lock pass-through', () => {
     const out = normalizeSummaryModeRules({ default: 'summary', rules: [], edit_lock: lock })
     expect(out.edit_lock).toEqual(lock)
     expect(normalizeSummaryModeRules({ default: 'edit', rules: [] }).edit_lock).toBeUndefined()
+  })
+})
+
+describe('summary mode signature (army 11 a2 F5)', () => {
+  it('changes with the state and the role, and remembers the record', () => {
+    const a = summaryResolveSignature('workflows|1', 'started', 'Admin')
+    expect(summaryResolveSignature('workflows|1', 'started', 'admin')).toBe(a)
+    expect(summaryResolveSignature('workflows|1', 'level_1', 'Admin')).not.toBe(a)
+    expect(summaryResolveSignature('workflows|1', 'started', 'Approver')).not.toBe(a)
+    expect(sameSummaryRecord(a, 'workflows|1')).toBe(true)
+    expect(sameSummaryRecord(a, 'workflows|2')).toBe(false)
+    expect(sameSummaryRecord(null, 'workflows|1')).toBe(false)
+    // A record key with the old separator in it still compares whole.
+    expect(sameSummaryRecord(summaryResolveSignature('a|b|c', null, null), 'a|b|c')).toBe(true)
+  })
+})
+
+describe('summary re-resolve waits for unsaved work (army 11 review #4)', () => {
+  it('holds for a dirty field, staged lines or a typed line editor; never on the first resolve', () => {
+    expect(holdSummaryReresolve({ first: false, unsaved: false, lineDrafts: 0 })).toBe(false)
+    expect(holdSummaryReresolve({ first: false, unsaved: true, lineDrafts: 0 })).toBe(true)
+    expect(holdSummaryReresolve({ first: false, unsaved: false, lineDrafts: 1 })).toBe(true)
+    expect(holdSummaryReresolve({ first: true, unsaved: true, lineDrafts: 2 })).toBe(false)
   })
 })

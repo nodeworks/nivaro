@@ -5,6 +5,7 @@ import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import { encodeDeferredSnippet } from './deferred-snippet.js'
 import { useZonedDates } from './liquid-dates.js'
 import {
   applySenderName,
@@ -211,6 +212,12 @@ export async function isOwnAppUrl(url: string): Promise<boolean> {
   return own.has(want)
 }
 
+/** A Profile link opens on the notification rules card (ProfileView scrolls to the hash), not
+ *  the top of the page — "Change how you're notified" should land on the rules (army 11). */
+export function toRulesCard(url: string): string {
+  return /\/profile\/?$/.test(url) ? `${url.replace(/\/$/, '')}#notification-rules` : url
+}
+
 /**
  * The "why me" footer context: `why` + a link to the recipient's
  * notification rules in the app THEY use (portal vs admin). A single
@@ -230,14 +237,14 @@ export async function whyContext(
   // Only a link into one of this instance's own apps: a webhook-triggered
   // flow's payload is outside input (Fable review M8).
   if (typeof rulesUrl === 'string' && (await isOwnAppUrl(rulesUrl)))
-    return { why: text, rules_url: rulesUrl.trim() }
+    return { why: text, rules_url: toRulesCard(rulesUrl.trim()) }
   try {
     const { linkTo, userIdForEmail } = await import('./app-links.js')
     const list = (Array.isArray(to) ? to : String(to).split(/[,;]/))
       .map((s) => s.trim())
       .filter(Boolean)
     const userId = list.length === 1 ? await userIdForEmail(list[0]) : null
-    const rules_url = await linkTo('profile', {}, { recipientUserId: userId })
+    const rules_url = toRulesCard(await linkTo('profile', {}, { recipientUserId: userId }))
     return { why: text, rules_url }
   } catch {
     return { why: text }
@@ -461,8 +468,14 @@ export function applyMailTestMode(
  * than silently swallowing the mail.
  */
 export async function dropInactiveRecipients(
-  to: string[]
+  to: string[],
+  /** See MailOptions.rolePicked: machine accounts are skipped only among these. */
+  rolePicked?: boolean | string[]
 ): Promise<{ kept: string[]; skipped: Array<{ address: string; reason: string }> }> {
+  const byRole = new Set(
+    Array.isArray(rolePicked) ? rolePicked.map((a) => String(a).trim().toLowerCase()) : []
+  )
+  const pickedByRole = (email: string) => rolePicked === true || byRole.has(email)
   if (to.length === 0) return { kept: to, skipped: [] }
   try {
     const rows = (await db('nivaro_users')
@@ -470,19 +483,33 @@ export async function dropInactiveRecipients(
         db.raw('LOWER(email)') as never,
         to.map((a) => a.toLowerCase())
       )
-      .select('email', 'status', 'is_redacted')) as Array<{
+      .select('email', 'status', 'is_redacted', 'account_kind')) as Array<{
       email: string | null
       status?: string | null
       is_redacted?: boolean | number
+      account_kind?: string | null
     }>
     const blocked = new Map<string, string>()
     for (const r of rows) {
       const redacted = r.is_redacted === true || r.is_redacted === 1
       const suspended = String(r.status ?? '').toLowerCase() === 'suspended'
-      if (redacted || suspended)
+      // A machine identity (integration / service / agent account) is never a person: it is
+      // never mailed as a record's creator, owner or subscriber (role-picked addresses only;
+      // an address an admin configured still gets its mail — review rev11-api) (army 11: the legacy LinX
+      // integration mailbox got "Approve — PW26-80906 …" as the workflow's creator).
+      // Placeholders stand in for people and keep their old handling.
+      const machine =
+        !!r.account_kind &&
+        r.account_kind !== 'placeholder' &&
+        pickedByRole(String(r.email ?? '').toLowerCase())
+      if (redacted || suspended || machine)
         blocked.set(
           String(r.email ?? '').toLowerCase(),
-          redacted ? 'account redacted' : 'account suspended'
+          machine
+            ? 'machine account (not a person)'
+            : redacted
+              ? 'account redacted'
+              : 'account suspended'
         )
     }
     if (blocked.size === 0) return { kept: to, skipped: [] }
@@ -530,7 +557,9 @@ async function applyDigestDeferral(
   explicitCategory?: NotifyCategory,
   senderCadence?: boolean,
   /** Filled with the addresses left out because their rules say "No email". */
-  offOut?: string[]
+  offOut?: string[],
+  /** The record the mail is about: the daily summary links the held line to it. */
+  record?: { collection?: string | null; item?: string | number | null }
 ): Promise<string[]> {
   if (skip || recipients.length === 0) return recipients
   try {
@@ -598,13 +627,8 @@ async function applyDigestDeferral(
     const kept = off.size > 0 ? recipients.filter((r) => !off.has(r.toLowerCase())) : recipients
     if (offOut && off.size > 0) offOut.push(...recipients.filter((r) => off.has(r.toLowerCase())))
     if (daily.size === 0) return kept
-    const snippet = String(htmlOrText)
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&[a-z]+;|&#\d+;/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 300)
+    // The useful sentence + the record, not the stripped page (services/deferred-snippet.ts).
+    const snippet = encodeDeferredSnippet(htmlOrText, record)
     const now = new Date()
     const deferredRows = kept
       .filter((r) => daily.has(r.toLowerCase()))
@@ -729,6 +753,10 @@ export interface MailOptions {
   text?: string
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
+  /** Addresses picked BY ROLE (creator, owner, watcher, subscriber, summary reader) — `true` =
+   *  all of them. A machine account among them is skipped (it is not a person); an address an
+   *  administrator typed (a scheduled report to a shared mailbox) is never skipped for that. */
+  rolePicked?: boolean | string[]
   /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
   category?: NotifyCategory
   /** 'sender' = the caller already chose when this goes out (a subscription
@@ -894,7 +922,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     .map((s) => s.trim())
     .filter(Boolean)
   const recordCtx = { template: opts.template, collection: opts.collection, item: opts.item }
-  const inactive = await dropInactiveRecipients(original)
+  const inactive = await dropInactiveRecipients(original, opts.rolePicked)
   await logSkipped(inactive.skipped, opts.subject, recordCtx)
   const active = inactive.kept
   if (active.length === 0) return { status: 'dropped', log_id: null }
@@ -906,7 +934,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     opts.skipDigest,
     opts.category,
     opts.cadence === 'sender',
-    off
+    off,
+    { collection: opts.collection, item: opts.item }
   )
   await logSkipped(
     off.map((address) => ({ address, reason: NO_EMAIL_REASON })),
@@ -1011,6 +1040,10 @@ export async function sendRawMail(opts: {
   wrap?: boolean
   /** Bypass daily-digest deferral (the digest email itself, test sends). */
   skipDigest?: boolean
+  /** Addresses picked BY ROLE (creator, owner, watcher, subscriber, summary reader) — `true` =
+   *  all of them. A machine account among them is skipped (it is not a person); an address an
+   *  administrator typed (a scheduled report to a shared mailbox) is never skipped for that. */
+  rolePicked?: boolean | string[]
   /** Notification-rules category this mail belongs to (see NotifyUserOptions.category). */
   category?: NotifyCategory
   /** See MailOptions.cadence. */
@@ -1066,7 +1099,7 @@ export async function sendRawMail(opts: {
     .filter(Boolean)
   const logTemplate = opts.template ?? null
   const recordCtx = { template: logTemplate, collection: opts.collection, item: opts.item }
-  const inactive = await dropInactiveRecipients(original)
+  const inactive = await dropInactiveRecipients(original, opts.rolePicked)
   await logSkipped(inactive.skipped, opts.subject, recordCtx)
   const active2 = inactive.kept
   if (active2.length === 0) return { status: 'dropped', log_id: null }
@@ -1078,7 +1111,8 @@ export async function sendRawMail(opts: {
     opts.skipDigest,
     opts.category,
     opts.cadence === 'sender',
-    off
+    off,
+    { collection: opts.collection, item: opts.item }
   )
   await logSkipped(
     off.map((address) => ({ address, reason: NO_EMAIL_REASON })),

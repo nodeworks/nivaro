@@ -1,12 +1,36 @@
 import { describe, expect, it } from 'vitest'
+import {
+  clearObligationKinds,
+  registerObligationKind
+} from '../../../services/integration-obligations.js'
 import type { SignalRow } from '../../../services/integration-signals.js'
 import {
   ageWords,
   failureStreak,
   formatInboundCaller,
   isAuthFailure,
+  obligationKindLabel,
   uniqueByKey
 } from '../../../services/integration-signals-core.js'
+
+// Army 11 O4-12: Firefight printed "LinX: wf.nuvolo_status".
+describe('obligationKindLabel', () => {
+  it('uses the registered label, else words — never the raw key', () => {
+    clearObligationKinds()
+    registerObligationKind({
+      api: 'LinX',
+      kind: 'wf.nuvolo_status',
+      collection: 'workflows',
+      label: 'LinX — workflow status write-back',
+      matches: () => true
+    } as never)
+    expect(obligationKindLabel('LinX', 'wf.nuvolo_status')).toBe(
+      'LinX — workflow status write-back'
+    )
+    expect(obligationKindLabel('Fusion', 'wf.po_number')).toBe('Fusion: po number')
+    clearObligationKinds()
+  })
+})
 
 describe('failureStreak', () => {
   it('counts consecutive failures from the newest call and flags auth', () => {

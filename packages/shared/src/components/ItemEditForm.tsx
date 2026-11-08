@@ -33,6 +33,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState
@@ -49,6 +50,7 @@ import {
   StaleFieldReportContext,
   useApiFetchConfig,
   useItemNavigation,
+  useNavigation,
   useNivaroClient,
   useRecordSurface
 } from '../context'
@@ -106,6 +108,7 @@ import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
+import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -128,9 +131,12 @@ import { reportCodeError, userErrorMessage } from '../lib/safe-error'
 import { formSkeletonFromLayout } from '../lib/skeleton-shapes'
 import { stagedRowLabel } from '../lib/staged-row-labels'
 import {
+  holdSummaryReresolve,
   normalizeSummaryModeRules,
   resolveSummaryMode,
   type SummaryModeRules,
+  sameSummaryRecord,
+  summaryResolveSignature,
   summaryRulesNeedRecord,
   summaryRulesNeedRole,
   summaryRulesNeedState
@@ -176,6 +182,7 @@ import {
 } from './item-edit/ChangeReasonDialog'
 import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
+import { CascadeClearNoticeContext, useCascadeClearNotices } from './item-edit/cascade-clear-notice'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
@@ -263,11 +270,13 @@ import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombob
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { LineCollisionDialog, MidairCollisionDialog } from './item-edit/MidairCollisionDialog'
 import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
+import { moveBlockedAfterSave, newFieldError, unsavedBeforeMove } from './item-edit/move-guard'
 import {
   LiveRowsContext,
   type LiveRowsCtx,
   O2MStagingContext,
   type O2MStagingCtx,
+  type OpenEditorCommit,
   StagedRelationsContext,
   type StagedRelationsCtx,
   type StagedRelOps
@@ -284,6 +293,7 @@ import {
   usePlacementTextContext
 } from './item-edit/placement-behaviour'
 import { QueueReturnChip } from './item-edit/QueueReturnChip'
+import { endQuickCreateFollows } from './item-edit/QuickCreateButton'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
@@ -303,6 +313,7 @@ import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutb
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { RuleHiddenNotes } from './item-edit/RuleHiddenNotes'
+import { isNarrowRecordWidth } from './item-edit/rail-width'
 import { recordLookupsFor, rememberRecordLookups } from './item-edit/record-lookups'
 import { useStableFieldAffordances } from './item-edit/render-stability'
 import { groupHasReadableField, ruleHiddenGroups } from './item-edit/rule-hidden'
@@ -1582,6 +1593,14 @@ export function computeM2MEffectiveIds(
 // re-render. This is the actual dedup guarantee for staged M2M links —
 // every stageLink call goes through it, so no caller (rule-staging or
 // otherwise) can ever produce a duplicate entry for the same field.
+/** The linked ids held before a pick that the new pick also offers (as the
+ *  ids the source gives) — a two-year project keeps the year already chosen. */
+export function keptLinksAmong(held: string[] | undefined, ids: unknown[]): string[] {
+  if (!held?.length) return []
+  const offered = new Set(ids.map(String))
+  return held.filter((h) => offered.has(String(h)))
+}
+
 /** `held` when it is one of `ids` (as the id the source gives), else undefined. */
 export function keptAmong(held: unknown, ids: unknown[]): unknown {
   if (held === null || held === undefined || held === '') return undefined
@@ -2365,6 +2384,19 @@ function ItemEditFormView({
   // The 'Can't save yet' summary shows after a failed save until dismissed or
   // the errors clear (it derives from validationErrors, so it never lingers).
   const [showValidationSummary, setShowValidationSummary] = useState(false)
+  // The newest field error that appeared outside a Save attempt (army11 review #7).
+  const [liveFieldError, setLiveFieldError] = useState('')
+  const prevErrorsRef = useRef<Record<string, string>>({})
+  useEffect(() => {
+    const prev = prevErrorsRef.current
+    prevErrorsRef.current = validationErrors
+    if (showValidationSummary) return
+    const fresh = newFieldError(prev, validationErrors)
+    if (!fresh) return
+    const fc = (fieldConfig ?? []).find((f) => f.field === fresh.field)
+    setLiveFieldError(`${fc?.label || titleCase(fresh.field)}: ${fresh.message}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- announces error changes only
+  }, [validationErrors])
   // Change-reason challenge: a 422 from the items service pauses the save
   // until the user supplies a justification, then retries with _change_reason
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
@@ -2779,9 +2811,26 @@ function ItemEditFormView({
   // A line editor's first keystroke claims the edit lock (army9 b09) — set
   // once the lock hook exists (below), read at call time.
   const lineEditIntentRef = useRef<() => void>(() => {})
+  // Line editors holding a typed change not yet staged (army 11 f4 L1): the
+  // lock counts them as unsaved work, so it is not let go mid-typing.
+  const [lineDrafts, setLineDrafts] = useState<ReadonlySet<string>>(() => new Set())
+  // Open line editors (army11 f1): a move commits each one before it saves.
+  const openEditorsRef = useRef<Map<string, () => Promise<OpenEditorCommit>>>(new Map())
   const o2mStagingCtx = useMemo<O2MStagingCtx>(
     () => ({
       noteEditIntent: () => lineEditIntentRef.current(),
+      noteLineDraft: (key, holding) =>
+        setLineDrafts((prev) => {
+          if (prev.has(key) === holding) return prev
+          const next = new Set(prev)
+          if (holding) next.add(key)
+          else next.delete(key)
+          return next
+        }),
+      registerOpenEditor: (key, commit) => {
+        if (commit) openEditorsRef.current.set(key, commit)
+        else openEditorsRef.current.delete(key)
+      },
       getPendingRows: (rc, mf) => pendingO2MRows.get(`${rc}.${mf}`) ?? [],
       queueRow: (rc, mf, data) =>
         setPendingO2MRows((prev) => {
@@ -3869,7 +3918,11 @@ function ItemEditFormView({
       if (
         !stored ||
         !draftHasContent(stored) ||
-        (isNew && !draftMatchesPrefill(stored, prefillSig))
+        (isNew && !draftMatchesPrefill(stored, prefillSig)) ||
+        // A new form seeded by a file import (Import BID Template, BOM Upload)
+        // IS the person's starting point: an older draft offered over it
+        // would mix an abandoned form into the import (army11 f1).
+        (isNew && !!initialImportResult)
       ) {
         setRecovery({ state: 'none' })
         return
@@ -4378,6 +4431,17 @@ function ItemEditFormView({
   // the same returned ids twice.
   const m2mAliasFieldStatesRef = useRef(m2mAliasFieldStates)
   m2mAliasFieldStatesRef.current = m2mAliasFieldStates
+  // Per pick source: the linked fields' ids just before that pick undid its
+  // previous derivations (see keptLinksAmong).
+  const heldLinksBeforeRef = useRef<Map<string, Record<string, string[]>>>(new Map())
+  const undoneLinksRef = useRef<Map<string, Array<{ parent: string; ids: string[] }>>>(new Map())
+  const aliasLinksSnapshot = (): Record<string, string[]> =>
+    Object.fromEntries(
+      Object.entries(m2mAliasFieldStatesRef.current ?? {}).map(([k, v]) => [
+        k,
+        ((v as { ids?: unknown[] } | undefined)?.ids ?? []).map(String)
+      ])
+    )
   stagingKeyToFieldRef.current = new Map(
     [...m2mAliasFieldsForRules.entries()].map(([f, info]) => [info.stagingKey, f])
   )
@@ -4497,9 +4561,9 @@ function ItemEditFormView({
   // Undo everything a previous pick on `source` derived: unstage its links
   // and clear origin markers, so a NEW pick replaces rather than stacks.
   const undoDerivedFills = useCallback(
-    (source: string) => {
+    (source: string): Array<{ parent: string; ids: string[] }> => {
       const entries = derivedFillsRef.current.get(source)
-      if (!entries) return
+      if (!entries) return []
       crossFillInFlightRef.current += 1
       try {
         for (const e of entries) {
@@ -4511,6 +4575,10 @@ function ItemEditFormView({
         crossFillInFlightRef.current -= 1
       }
       derivedFillsRef.current.delete(source)
+      // Unstaging renders later: callers that read the linked fields in the
+      // same turn subtract these (army11 f1 — the Funding Year a previous
+      // project filled still read as "set", so the new pick skipped it).
+      return entries.map((e) => ({ parent: e.parent, ids: e.ids.map(String) }))
     },
     [m2mStagingCtx]
   )
@@ -4532,9 +4600,23 @@ function ItemEditFormView({
       // cycle-guarded so a config loop can't ping-pong.
       if (depth > 3) return
       const root = rootSource ?? field
+      // What the linked fields held BEFORE this pick's undo: a value the new
+      // pick also allows stays (army11 f1 — a project funded in 2025 and 2026
+      // wiped the Funding Year 2026 the previous project had filled).
+      if (depth === 0) heldLinksBeforeRef.current.set(root, aliasLinksSnapshot())
       // A fresh pick REPLACES the previous pick's derivations (changing the
       // region must swap the derived zone, not add a second one).
-      if (depth === 0) undoDerivedFills(root)
+      if (depth === 0) undoneLinksRef.current.set(root, undoDerivedFills(root))
+      const linkedNow = (parent: string) => {
+        const gone = new Set(
+          (undoneLinksRef.current.get(root) ?? [])
+            .filter((u) => u.parent === parent)
+            .flatMap((u) => u.ids)
+        )
+        return (m2mAliasFieldStatesRef.current[parent]?.ids ?? [])
+          .map(String)
+          .filter((id) => !gone.has(id))
+      }
       const chainSeen = seen ?? new Set<string>()
       const seenKey = `${field}:${String(pickedId)}`
       if (chainSeen.has(seenKey)) return
@@ -4580,7 +4662,7 @@ function ItemEditFormView({
             // project ⇄ project_type it was 500ing on alias field selects).
             const parentField = rule.parent_field
             if (m2mAliasFieldsForRules.has(parentField)) {
-              if ((m2mAliasFieldStatesRef.current[parentField]?.ids ?? []).length > 0) continue
+              if (linkedNow(parentField).length > 0) continue
             } else {
               const existingParent = draftRef.current[parentField]
               if (existingParent !== null && existingParent !== undefined && existingParent !== '')
@@ -4685,9 +4767,7 @@ function ItemEditFormView({
             const parent = rule.parent_field
             if (m2mAliasFieldsForRules.has(parent)) {
               const info = m2mAliasFieldsForRules.get(parent)!
-              const already = new Set(
-                (m2mAliasFieldStatesRef.current[parent]?.ids ?? []).map((x) => String(x))
-              )
+              const already = new Set(linkedNow(parent))
               // Fill only EMPTY parents: a set parent already agreed with this
               // pick (the option filter guaranteed compatibility) — stacking
               // the picked record's OTHER links on top replaces the user's
@@ -4699,8 +4779,13 @@ function ItemEditFormView({
                 parentMeta?.options ?? null
               )?.max_values
               // More values than the field allows = ambiguous, fill nothing
-              // (a 5-region project cannot answer a single-region field).
-              if (maxVals != null && values.length > maxVals) continue
+              // (a 5-region project cannot answer a single-region field) —
+              // unless what the field held before this pick is among them.
+              if (maxVals != null && values.length > maxVals) {
+                const kept = keptLinksAmong(heldLinksBeforeRef.current.get(root)?.[parent], values)
+                if (kept.length === 0 || kept.length > maxVals) continue
+                values = kept
+              }
               const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
@@ -4782,6 +4867,9 @@ function ItemEditFormView({
         // What the targets held before this pick took its earlier fills back:
         // a value the new record still allows is kept (below).
         const heldBefore = { ...draftRef.current }
+        // Read in the pick's own turn: an undo below (or the upstream pass's)
+        // has not rendered yet, so this is what the fields held before it.
+        const heldLinksBefore = aliasLinksSnapshot()
         if (depth === 0 && !fillEmptyOnly) undoDerivedFills(field)
         const map = cfg.field_map
         // Alias-mapped source fields must stay OUT of the readOne fields= —
@@ -4853,7 +4941,8 @@ function ItemEditFormView({
                 .then((r) => r.data ?? [])
               return rows.map((jr) => jr[rel.junction_field as string]).filter((x) => x != null)
             }
-            const stageInto = (target: string, ids: unknown[]) => {
+            const stageInto = (target: string, idsIn: unknown[]) => {
+              let ids = idsIn
               const info = m2mAliasFieldsForRules.get(target)
               if (!info) return
               const already = new Set(
@@ -4866,7 +4955,12 @@ function ItemEditFormView({
               const maxV = parseJson<{ max_values?: number | null }>(
                 targetMeta?.options ?? null
               )?.max_values
-              if (maxV != null && ids.length > maxV) return
+              if (maxV != null && ids.length > maxV) {
+                // Several to choose from: the one held before this pick stays.
+                const kept = keptLinksAmong(heldLinksBefore[target], ids)
+                if (kept.length === 0 || kept.length > maxV) return
+                ids = kept
+              }
               const stagedNow: string[] = []
               crossFillInFlightRef.current += 1
               try {
@@ -5752,6 +5846,22 @@ function ItemEditFormView({
     [editLock?.open_fields]
   )
   const editLockPartial = !!editLockMessage && editLockOpenFields.size > 0
+  // army 11 f4 M4: the record moved to a step this person may not change
+  // while they had unsaved edits (someone else's Submit / Cancel): say so
+  // once, instead of a form that silently turns read-only over their work.
+  // The server's named notice (lock:moved — who, where) wins when it came.
+  const prevEditLockMessageRef = useRef<string | null>(editLockMessage)
+  useEffect(() => {
+    const prev = prevEditLockMessageRef.current
+    prevEditLockMessageRef.current = editLockMessage
+    const holding = hasUnsaved || lineDrafts.size > 0
+    if (prev || !editLockMessage || !holding || isNew || designOn || itemId == null) return
+    if (namedMovedNoticeRecent(collection, String(itemId))) return
+    toast.warning(lockedAfterMoveText(editLockMessage), {
+      id: movedNoticeId(collection, String(itemId)),
+      duration: 30_000
+    })
+  }, [editLockMessage, hasUnsaved, lineDrafts.size, isNew, designOn, collection, itemId])
 
   // ── Item lock ──────────────────────────────────────────────────────────────
   // Summary mode neither takes nor honours the edit lock: the lock is
@@ -5794,8 +5904,9 @@ function ItemEditFormView({
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled, {
     lazy: true,
     active: active && surfaceActive,
-    // a10-4: a clean form (saved, or edits undone) lets the lock go.
-    dirty: hasUnsaved
+    // a10-4: a clean form (saved, or edits undone) lets the lock go. A line
+    // editor still holding a typed change is not clean (army 11 f4 L1).
+    dirty: hasUnsaved || lineDrafts.size > 0
   })
   const isReadOnly = lockReadOnly || !!recordGone || (!!editLockMessage && !editLockPartial)
   readOnlyRef.current = isReadOnly && !isNew
@@ -6258,6 +6369,7 @@ function ItemEditFormView({
   // record still exist?" — answered "yes" for exactly the case the user cares
   // about, a record that exists but is no longer a valid choice.
   const [staleFields, setStaleFields] = useState<Set<string>>(() => new Set())
+  const staleBlocksSaveRef = useRef<(field: string) => boolean>(() => false)
   const reportStaleField = useCallback((field: string, stale: boolean) => {
     setStaleFields((prev) => {
       if (prev.has(field) === stale) return prev
@@ -6266,6 +6378,17 @@ function ItemEditFormView({
       else next.delete(field)
       return next
     })
+    // army11 f3: a value a parent change left outside its list (Region TEX
+    // after Zone 1) is said under the field AT ONCE, and the open "Can't save
+    // yet" list counts it — it used to read "Fixed" until the next Create.
+    // Only where it would block the save (see staleBlocksSave).
+    if (stale) {
+      const v = draftRef.current[field]
+      if (v !== null && v !== undefined && v !== '' && staleBlocksSaveRef.current(field))
+        setValidationErrors((prev) =>
+          prev[field] ? prev : { ...prev, [field]: UNAVAILABLE_OPTION_ERROR }
+        )
+    }
     // The picker found the value valid again (re-picked, parent changed back):
     // the save-blocking error it caused goes with it.
     if (!stale)
@@ -6281,7 +6404,8 @@ function ItemEditFormView({
   // cascade parents (a Region switched under the picked locations). A value
   // stored long ago that nobody touched keeps saving — an old record must
   // never get stuck on a field the person is not working on.
-  const staleBlocksSave = (field: string): boolean => {
+  staleBlocksSaveRef.current = (field) => staleBlocksSave(field)
+  function staleBlocksSave(field: string): boolean {
     if (isNew) return true
     if (!valuesEqual(draftRef.current[field], initialDataRef.current[field])) return true
     const fc = (fieldConfig ?? []).find((f) => f.field === field)
@@ -6793,6 +6917,34 @@ function ItemEditFormView({
     if (readDesignSummaryCollapsed(authUserId) !== null) return
     if (width - 256 < DESIGN_SUMMARY_MIN_CANVAS) setSummaryCollapsed(true)
   }, [designOn, summaryEnabled, railHost, authUserId])
+  // Record pages below 768 px (army11 f1/f3 HIGH): the 232 px rail squeezed the
+  // form to ~120 px. Narrow, the rail starts folded and opens OVER the form;
+  // widening again puts back what it was doing before it was folded here.
+  const [railNarrow, setRailNarrow] = useState(false)
+  const railFoldedForNarrow = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (designOn || !summaryEnabled || !railHost || typeof ResizeObserver === 'undefined') return
+    const judge = () => {
+      const w = railHost.clientWidth
+      if (!w) return
+      setRailNarrow(isNarrowRecordWidth(w))
+    }
+    judge()
+    const ro = new ResizeObserver(judge)
+    ro.observe(railHost)
+    return () => ro.disconnect()
+  }, [designOn, summaryEnabled, railHost])
+  useEffect(() => {
+    if (railNarrow) {
+      if (railFoldedForNarrow.current === null) railFoldedForNarrow.current = summaryCollapsed
+      setSummaryCollapsed(true)
+    } else if (railFoldedForNarrow.current !== null) {
+      setSummaryCollapsed(railFoldedForNarrow.current)
+      railFoldedForNarrow.current = null
+    }
+    // summaryCollapsed deliberately not a dep — this reacts to the width class only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railNarrow])
   // Design mode: the canvas grows with the form and its scroller is an ancestor, so a long
   // summary rail used to stretch the whole row and leave blank canvas under the last section
   // ("scrolls past the bottom"). The rail instead sticks to the top of the canvas scroller,
@@ -8856,6 +9008,51 @@ function ItemEditFormView({
   // the category; a role that may not set it has it derived) are named before
   // anything is created — the Submit dialog already asks about this very
   // side effect, Duplicate used to apply it silently ($2 → $1).
+  // Merge facts for a line collision (Rob, army 11): the edit this person sent,
+  // the line as the newer save left it (read as them) and its write-computed
+  // fields, recomputed in the merge preview — never merged as values.
+  async function addLineMergeFacts(
+    entry: LineCollision,
+    rc: string,
+    rowId: string,
+    edit: Record<string, unknown>
+  ): Promise<void> {
+    entry.edit = { ...edit }
+    const [row, cfg] = await Promise.all([
+      client
+        .request<{ data: Record<string, unknown> | null }>(
+          get(`/items/${rc}/${encodeURIComponent(rowId)}`)
+        )
+        .then((r) => r.data ?? null)
+        .catch(() => null),
+      qc
+        .fetchQuery({
+          queryKey: ['field-config', rc, null],
+          queryFn: () =>
+            client
+              .request<{ data: CMSField[] }>(get(`/field-config/${rc}`))
+              .then((r) => r.data ?? []),
+          staleTime: 60_000
+        })
+        .catch(() => null)
+    ])
+    entry.current = row
+    entry.derived = ((cfg as CMSField[] | null) ?? [])
+      .filter(
+        (f) =>
+          (f as { computed_type?: string | null }).computed_type === 'write' &&
+          typeof (f as { computed_formula?: unknown }).computed_formula === 'string'
+      )
+      .map((f) => ({
+        field: f.field,
+        formula: String((f as { computed_formula?: unknown }).computed_formula)
+      }))
+  }
+  // The merge preview never shows a link as its id: a line's own M2O columns are hidden.
+  const lineMergeHides = (line: LineCollision, field: string): boolean => {
+    const rc = line.key.split('.')[0]
+    return relations.some((r) => r.many_collection === rc && r.many_field === field)
+  }
   const [copiedChanges, setCopiedChanges] = useState<CopiedLineChange[] | null>(null)
   const copiedRehearsedRef = useRef(false)
   async function rehearseCopiedLines(): Promise<CopiedLineChange[]> {
@@ -9761,7 +9958,7 @@ function ItemEditFormView({
                   o2mBaseRevRef.current.delete(`${rc}:${rowId}`)
                   rowBaseBookFor(client, rc).forget(rowId)
                 })
-                .catch((err) => {
+                .catch(async (err) => {
                   hasErr = true
                   rowPatchFailed = true
                   const challenge = changeReasonChallenge(err)
@@ -9770,17 +9967,25 @@ function ItemEditFormView({
                     flushChallenge = challenge
                     updateStep(stepId, { status: 'error', error: 'Waiting for a change reason' })
                   } else if (coll) {
-                    const label = lineLabelOf(savedLines, rowId)
+                    // A grid that knows how people name its rows (the catalog picker: the
+                    // item number) names it — "Line 2" was a position (army 11 f4 M1).
+                    const label = lineLabelOf(savedLines, rowId, null, (row) =>
+                      stagedRowLabel(rc, String(row.id))
+                    )
                     const mine: Record<string, unknown> = {}
                     for (const c of coll.conflicts) mine[c.field] = cleanChanges[c.field]
-                    lineCollisions.push({
+                    const entry: LineCollision = {
                       key,
                       rowId,
                       label,
                       conflicts: coll.conflicts,
                       latest: coll.latest,
                       mine
-                    })
+                    }
+                    // Merge (Rob, army 11) needs the whole edit, the newer row and
+                    // the line's derived fields; a failed read only thins the preview.
+                    await addLineMergeFacts(entry, rc, rowId, cleanChanges)
+                    lineCollisions.push(entry)
                     updateStep(stepId, {
                       status: 'error',
                       error: `${label} was changed by someone else — pick which value wins`
@@ -9789,7 +9994,7 @@ function ItemEditFormView({
                     // A refused line (validation rule, field fit …): named on
                     // the step AND in the closing message, never a green
                     // "Changes saved" over it (army5 b02-N7).
-                    const refusal = `${lineLabelOf(savedLines, rowId)}: ${errMsg(err)}`
+                    const refusal = `${lineLabelOf(savedLines, rowId, null, (row) => stagedRowLabel(rc, String(row.id)))}: ${errMsg(err)}`
                     saveNoticeRef.current.childFailed = true
                     saveNoticeRef.current.childErrors = [
                       ...(saveNoticeRef.current.childErrors ?? []),
@@ -10287,7 +10492,8 @@ function ItemEditFormView({
   const recordSurface = useRecordSurface()
   const [leaveAsk, setLeaveAsk] = useState<{ go: () => void } | null>(null)
   const guardLeave = hasUnsaved && recordSurface.active && !designOn && !saveMut.isPending
-  useLeaveLinkGuard(guardLeave, (go) => setLeaveAsk({ go }), formRootRef)
+  const leaveNavigate = useNavigation().navigate
+  useLeaveLinkGuard(guardLeave, (go) => setLeaveAsk({ go }), formRootRef, leaveNavigate)
   // The header's ← Back asks the same question a sidebar link does (army9
   // b01: it left a dirty form without a word).
   const backWithGuard = onBack
@@ -10394,9 +10600,43 @@ function ItemEditFormView({
   // then transition. A transition that fails (a blocked partner push, a 422)
   // must never cost the person the values they had just entered: they are
   // on the record before the transition is attempted, and a reload shows them.
+  //
+  // army11 f1 HIGH / a1 F-3: staged LINES (a line edit kept with the line's
+  // Save, a forecast cell, a new forecast year) never set `isDirty`, so the
+  // move went ahead on the stored amounts — owners were mailed $101.50 while
+  // the screen showed $600.50, and the edit stayed pending. Every unsaved
+  // thing the Leave dialog counts is saved first, and a line still open in
+  // its editor is committed (or the move stops and says which line).
   const saveThenTransition = async (): Promise<boolean> => {
+    const commits = await Promise.all(
+      [...openEditorsRef.current.values()].map((commit) =>
+        commit().catch((): OpenEditorCommit => ({ ok: false, committed: false }))
+      )
+    )
+    const refused = commits.find((c) => !c.ok)
+    if (refused) {
+      toast.error(`${refused.label ?? 'A line'} has a problem — nothing was moved`, {
+        description:
+          'Fix the line (the reason is under the field) or cancel its edit, then try again.'
+      })
+      return false
+    }
+    // A line just staged: let the form render it, so the save below carries it.
+    if (commits.some((c) => c.committed)) await nextFormRender()
+    return saveLatestThenTransitionRef.current()
+  }
+  const saveLatestThenTransitionRef = useRef<() => Promise<boolean>>(async () => false)
+  saveLatestThenTransitionRef.current = async () => {
+    // A Theirs / Mine chooser still open (a line or header field met a newer
+    // save): the record does not move until it is answered (army11 review #3).
+    if (lineCollision || collision) {
+      toast.warning('Choose Theirs or Mine first — nothing was moved', {
+        description: 'Someone else saved this record after you opened it.'
+      })
+      return false
+    }
     if (!validateAll()) return false
-    if (!isDirty) return true
+    if (!unsavedBeforeMove({ isDirty, staged: unsavedSummary })) return true
     // #2705: a confirm-on-change field asks first; the move waits for that save.
     const confirmFirst = layoutConfirmChallenge()
     if (confirmFirst) {
@@ -10406,13 +10646,46 @@ function ItemEditFormView({
     nudgeRecommended()
     try {
       await saveMut.mutateAsync()
-      return true
     } catch {
       // The save reports its own failure; transitioning on top of unsaved
       // edits would apply the state change to values the record does not have.
       return false
     }
+    // A refused line stays staged (its message says why), and a line that met
+    // someone else's newer save waits on the Theirs / Mine chooser: the record
+    // must not move on amounts it does not have (army11 review #3).
+    if (
+      moveBlockedAfterSave({
+        childRefused: childRefusedRef.current,
+        lineConflicts: saveNoticeRef.current.lineConflicts,
+        reasonWaiting: saveNoticeRef.current.reasonWaiting
+      })
+    ) {
+      if (saveNoticeRef.current.lineConflicts)
+        toast.warning('Choose Theirs or Mine first — nothing was moved', {
+          description: 'A line you changed was also changed by someone else.'
+        })
+      return false
+    }
+    // The confirm panel reads the record's brief — it must see what was just saved.
+    void qc.invalidateQueries({ queryKey: ['approval-brief', collection, String(itemId)] })
+    return true
   }
+  // Resolves after the form's next commit (effects run in order, so useMutation
+  // has taken the new render's save function by then).
+  const renderWaitersRef = useRef<Array<() => void>>([])
+  useEffect(() => {
+    if (renderWaitersRef.current.length === 0) return
+    const waiters = renderWaitersRef.current
+    renderWaitersRef.current = []
+    for (const w of waiters) w()
+  })
+  const nextFormRender = () =>
+    new Promise<void>((resolve) => {
+      renderWaitersRef.current.push(resolve)
+      // Never hang the move: a commit that changed nothing renders nothing.
+      setTimeout(resolve, 400)
+    })
 
   const deleteMut = useMutation({
     mutationFn: () => client.request(del(`/items/${collection}/${itemId}`)),
@@ -10804,26 +11077,48 @@ function ItemEditFormView({
   // state — after both lookups the rules need have answered, so a state rule
   // never judges an unloaded state as "no state". The toggle flips it for this
   // mount only (never stored).
+  // Resolved again when the record's STATE or the viewer's ROLE changes (army 11
+  // a2 F5): after Submit, or a View-as switch, the page used to stay in Edit
+  // with Save showing at a step the person only reviews. Never while the form
+  // holds unsaved work — that waits until it is saved or dropped.
   const summaryResolvedFor = useRef<string | null>(null)
   useEffect(() => {
     const key = summaryRecordKey
-    if (summaryResolvedFor.current === key || isNew || !summaryRules || designOn) return
+    if (isNew || !summaryRules || designOn) return
     if (summaryNeedsRole && currentUserData === undefined && !currentUserError) return
     if (summaryNeedsState && pipelineInstanceData === undefined && !pipelineInstanceError) return
     // A rule on the record's own values (#737) waits for the record.
     if (summaryRulesNeedRecord(summaryRules) && itemData === undefined && !itemLoadError) return
     const stateId = pipelineInstanceData?.instance?.current_state ?? null
     const stateKey = pipelineInstanceData?.states?.find((s) => s.id === stateId)?.key ?? null
-    summaryResolvedFor.current = key
+    const role = currentUserData?.role ? String(currentUserData.role) : null
+    // Only what the rules read: a role that loads after the first answer must
+    // not re-judge rules that never look at the role.
+    const sig = summaryResolveSignature(
+      key,
+      summaryNeedsState ? stateKey : null,
+      summaryNeedsRole ? role : null
+    )
+    const prev = summaryResolvedFor.current
+    if (prev === sig) return
+    const first = !sameSummaryRecord(prev, key)
+    // Never over the person's work: staged lines and a line editor holding typed
+    // text count too (they never set isDirty) — the moved note says why instead.
+    if (holdSummaryReresolve({ first, unsaved: hasUnsaved, lineDrafts: lineDrafts.size })) return
+    summaryResolvedFor.current = sig
     const mode = resolveSummaryMode(summaryRules, {
-      role: currentUserData?.role ? String(currentUserData.role) : null,
+      role,
       stateKey,
       isNew,
       record: itemData ?? null
     })
-    if (mode === 'summary') setReadModeRaw(true)
+    if (first) {
+      if (mode === 'summary') setReadModeRaw(true)
+    } else setReadModeRaw(mode === 'summary')
     setSummaryResolvedKey(key)
   }, [
+    hasUnsaved,
+    lineDrafts.size,
     summaryRecordKey,
     designOn,
     isNew,
@@ -10907,18 +11202,39 @@ function ItemEditFormView({
   // The same context object while nothing a field reads changed — a fresh
   // object here re-rendered every (memoized) field row on every form render.
   const fieldAffordances = useStableFieldAffordances(fieldAffordancesRaw)
+  // Cascade auto-clear (Rob 2026-11-08): one notice per chain of cleared children.
+  const cascadeClearNotify = useCascadeClearNotices({
+    labelOf: (f) => {
+      const fc = (fieldConfig ?? []).find((x) => x.field === f)
+      return (fc && placementFieldText(fc, placementTextCtx).label) || fc?.label || titleCase(f)
+    },
+    editSeq: (f) => fieldEditSeqRef.current.get(f) ?? (userTouchedRef.current.has(f) ? 0 : -1)
+  })
   // One object per draft / label / filter change: an inline literal re-rendered
   // every consumer (each field row and picker) on every form render.
   // dirtyFields is the live Set; its writes always come with a draft change.
+  // New Unit follows run only from the form that created it, while it is new
+  // (fix11-ir-bom review HIGH); a form going away ends its follows.
+  const quickCreateFormKey = useId()
+  useEffect(() => () => endQuickCreateFollows(quickCreateFormKey), [quickCreateFormKey])
   const parentDraftCtxValue = useMemo(
     () => ({
       draft: parentDraftWithAliases,
       collection,
       dirtyFields: userTouchedRef.current,
       fieldLabels: parentFieldLabels,
-      fieldOptionFilters: parentFieldOptionFilters
+      fieldOptionFilters: parentFieldOptionFilters,
+      formKey: quickCreateFormKey,
+      isNew
     }),
-    [parentDraftWithAliases, collection, parentFieldLabels, parentFieldOptionFilters]
+    [
+      parentDraftWithAliases,
+      collection,
+      parentFieldLabels,
+      parentFieldOptionFilters,
+      quickCreateFormKey,
+      isNew
+    ]
   )
 
   // ── Design mode shells ─────────────────────────────────────────────────────
@@ -12700,1084 +13016,1135 @@ function ItemEditFormView({
               <ParentDraftContext.Provider value={parentDraftCtxValue}>
                 <GridFlushContext.Provider value={isNew ? null : gridFlushCtx}>
                   <StaleFieldReportContext.Provider value={reportStaleField}>
-                    <O2MStagingContext.Provider value={o2mStagingCtx}>
-                      <LiveRowsContext.Provider value={liveRowsCtx}>
-                        <StagedRelationsContext.Provider value={stagedRelsCtx}>
-                          <M2MStagingContext.Provider value={m2mStagingCtx}>
-                            <FieldContexts
-                              affordances={fieldAffordances}
-                              personalDefaults={personalDefaults.context}
-                              sources={fieldSources}
-                              fieldComments={fieldComments}
-                            >
-                              {/* Instant tooltips for truncated header values. Self-deduplicating —
+                    <CascadeClearNoticeContext.Provider value={cascadeClearNotify}>
+                      <O2MStagingContext.Provider value={o2mStagingCtx}>
+                        <LiveRowsContext.Provider value={liveRowsCtx}>
+                          <StagedRelationsContext.Provider value={stagedRelsCtx}>
+                            <M2MStagingContext.Provider value={m2mStagingCtx}>
+                              <FieldContexts
+                                affordances={fieldAffordances}
+                                personalDefaults={personalDefaults.context}
+                                sources={fieldSources}
+                                fieldComments={fieldComments}
+                              >
+                                {/* Instant tooltips for truncated header values. Self-deduplicating —
           only the first live instance listens, so a form rendered inside a
           collection browser doesn't double up. */}
-                              <TipLayer />
-                              <Dialog
-                                open={!!leaveAsk}
-                                onOpenChange={(open) => {
-                                  if (!open) setLeaveAsk(null)
-                                }}
-                              >
-                                <DialogContent className='max-w-md' data-nvr-leave-ask>
-                                  <DialogHeader>
-                                    <DialogTitle className='text-[15px]'>
-                                      Leave without saving?
-                                    </DialogTitle>
-                                  </DialogHeader>
-                                  <DialogBody>
-                                    <p className='text-[13px] text-slate-600 dark:text-slate-300'>
-                                      {unsavedSummary.text
-                                        ? `You have unsaved changes: ${unsavedSummary.text}.`
-                                        : 'You have unsaved changes.'}{' '}
-                                      They stay on this device as a draft — open this{' '}
-                                      {isNew ? 'form' : 'record'} again to restore them.
-                                    </p>
-                                  </DialogBody>
-                                  <DialogFooter>
-                                    <Button
-                                      variant='outline'
-                                      size='sm'
-                                      onClick={() => {
-                                        const go = leaveAsk?.go
-                                        setLeaveAsk(null)
-                                        go?.()
-                                      }}
-                                    >
-                                      Leave
-                                    </Button>
-                                    <Button
-                                      size='sm'
-                                      className='bg-nvr-cyan text-white'
-                                      autoFocus
-                                      onClick={() => setLeaveAsk(null)}
-                                    >
-                                      Stay
-                                    </Button>
-                                  </DialogFooter>
-                                </DialogContent>
-                              </Dialog>
-                              <SaveProgressDialog
-                                open={saveDialogOpen}
-                                steps={saveSteps}
-                                onClose={() => setSaveDialogOpen(false)}
-                                record={
-                                  !isNew && itemId != null
-                                    ? { collection, itemId: String(itemId) }
-                                    : null
-                                }
-                              />
-                              {/* Mounted only while it has something to ask: a closed Radix
-                                  dialog still takes ids (useId) and would shift every id
-                                  after it in normal mode. */}
-                              {copiedChanges && (
+                                <TipLayer />
+                                {/* Errors that appear while typing (before any Save): one
+                                    polite announcement — field messages are tied to their
+                                    controls, the Save summary is the alert (army11 review #7). */}
+                                <p className='sr-only' aria-live='polite' data-live-field-error>
+                                  {liveFieldError}
+                                </p>
                                 <Dialog
-                                  open
+                                  open={!!leaveAsk}
                                   onOpenChange={(open) => {
-                                    if (!open) setCopiedChanges(null)
+                                    if (!open) setLeaveAsk(null)
                                   }}
                                 >
-                                  <DialogContent className='max-w-md' data-nvr-copied-changes>
+                                  <DialogContent className='max-w-md' data-nvr-leave-ask>
                                     <DialogHeader>
                                       <DialogTitle className='text-[15px]'>
-                                        Some copied line values will change
+                                        Leave without saving?
                                       </DialogTitle>
                                     </DialogHeader>
                                     <DialogBody>
                                       <p className='text-[13px] text-slate-600 dark:text-slate-300'>
-                                        These values were copied from the original record, but the
-                                        new record will store them differently — a rule or your
-                                        access sets them.
+                                        {unsavedSummary.text
+                                          ? `You have unsaved changes: ${unsavedSummary.text}.`
+                                          : 'You have unsaved changes.'}{' '}
+                                        They stay on this device as a draft — open this{' '}
+                                        {isNew ? 'form' : 'record'} again to restore them.
                                       </p>
-                                      <ul className='mt-3 space-y-1.5 text-[12.5px]'>
-                                        {(copiedChanges ?? []).map((c) => {
-                                          const row = pendingO2MRows.get(c.key)?.[c.index] ?? {}
-                                          const label = copiedLineLabel(row, c.index)
-                                          return (
-                                            <li
-                                              key={`${c.key}:${c.index}:${c.field}`}
-                                              className='flex flex-wrap items-baseline gap-x-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-border dark:bg-muted'
-                                            >
-                                              <span className='font-medium text-slate-800 dark:text-slate-100'>
-                                                {label}
-                                              </span>
-                                              <span className='text-slate-600 dark:text-slate-300'>
-                                                {titleCase(c.field)}:
-                                              </span>
-                                              <span className='tabular-nums text-slate-500 line-through dark:text-slate-400'>
-                                                <ChangeValue
-                                                  value={c.from}
-                                                  field={null}
-                                                  m2oTarget={null}
-                                                />
-                                              </span>
-                                              <span aria-hidden='true' className='text-slate-400'>
-                                                →
-                                              </span>
-                                              <span className='tabular-nums font-medium text-slate-800 dark:text-slate-100'>
-                                                <ChangeValue
-                                                  value={c.to}
-                                                  field={null}
-                                                  m2oTarget={null}
-                                                />
-                                              </span>
-                                            </li>
-                                          )
-                                        })}
-                                      </ul>
                                     </DialogBody>
                                     <DialogFooter>
                                       <Button
                                         variant='outline'
                                         size='sm'
-                                        onClick={() => setCopiedChanges(null)}
+                                        onClick={() => {
+                                          const go = leaveAsk?.go
+                                          setLeaveAsk(null)
+                                          go?.()
+                                        }}
                                       >
-                                        Cancel
+                                        Leave
                                       </Button>
                                       <Button
                                         size='sm'
                                         className='bg-nvr-cyan text-white'
                                         autoFocus
-                                        onClick={() => {
-                                          copiedRehearsedRef.current = true
-                                          setCopiedChanges(null)
-                                          handleSave()
-                                        }}
+                                        onClick={() => setLeaveAsk(null)}
                                       >
-                                        Create anyway
+                                        Stay
                                       </Button>
                                     </DialogFooter>
                                   </DialogContent>
                                 </Dialog>
-                              )}
-                              <Dialog
-                                open={!!reimportDialog}
-                                onOpenChange={(open) => {
-                                  if (!open && !reimportApplying) setReimportDialog(null)
-                                }}
-                              >
-                                <DialogContent>
-                                  <DialogHeader>
-                                    <DialogTitle>Update this record from file</DialogTitle>
-                                  </DialogHeader>
-                                  <DialogBody className='space-y-3'>
-                                    {reimportDialog && (
-                                      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-                                        {reimportDialog.diff.updates.length} will update ·{' '}
-                                        {reimportDialog.diff.creates.length} new ·{' '}
-                                        {reimportDialog.diff.deletes.length} will delete ·{' '}
-                                        {reimportDialog.diff.matchedUnchanged} unchanged
-                                      </p>
-                                    )}
-                                    {reimportDialog?.pendingNotice && (
-                                      <p
-                                        role='status'
-                                        data-reimport-pending-notice
-                                        className='rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
-                                      >
-                                        {reimportDialog.pendingNotice}
-                                      </p>
-                                    )}
-                                    {reimportDialog && (
-                                      <ImportColumnChips
-                                        diff={reimportDialog.diff}
-                                        fields={fieldConfig ?? []}
-                                      />
-                                    )}
-                                    {reimportDialog && (
-                                      <ImportIssuesPanel issues={reimportDialog.result.issues} />
-                                    )}
-                                  </DialogBody>
-                                  <DialogFooter>
-                                    <Button
-                                      variant='outline'
-                                      onClick={() => setReimportDialog(null)}
-                                      disabled={reimportApplying}
-                                    >
-                                      Cancel
-                                    </Button>
-                                    <Button
-                                      onClick={async () => {
-                                        if (!reimportDialog) return
-                                        setReimportApplying(true)
-                                        await applyReimportStaging(
-                                          reimportDialog.diff,
-                                          reimportDialog.result,
-                                          reimportDialog.template,
-                                          reimportDialog.existingRows,
-                                          reimportDialog.restored
-                                        )
-                                        setReimportApplying(false)
-                                        setReimportDialog(null)
-                                      }}
-                                      disabled={reimportApplying}
-                                    >
-                                      {reimportApplying ? (
-                                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                      ) : (
-                                        'Apply to form'
-                                      )}
-                                    </Button>
-                                  </DialogFooter>
-                                </DialogContent>
-                              </Dialog>
-                              <div
-                                ref={formRootRef}
-                                data-form-density={
-                                  formDensity === 'compact' ? 'compact' : undefined
-                                }
-                                className={cn('flex flex-1 min-h-0 flex-col', className)}
-                              >
-                                {showHeader && (
-                                  <header
-                                    className={cn(
-                                      'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-x-3 gap-y-2 max-md:[&[data-nvr-header-row]]:flex-wrap [&[data-nvr-header-wrap]]:flex-wrap max-md:[&[data-nvr-header-row]]:px-4 transition-[padding] duration-200',
-                                      headerCondensed ? 'py-1.5' : 'py-3.5',
-                                      headerClassName
-                                    )}
-                                    data-nvr-header-row
-                                    data-nvr-condensed={headerCondensed || undefined}
+                                <SaveProgressDialog
+                                  open={saveDialogOpen}
+                                  steps={saveSteps}
+                                  onClose={() => setSaveDialogOpen(false)}
+                                  record={
+                                    !isNew && itemId != null
+                                      ? { collection, itemId: String(itemId) }
+                                      : null
+                                  }
+                                />
+                                {/* Mounted only while it has something to ask: a closed Radix
+                                  dialog still takes ids (useId) and would shift every id
+                                  after it in normal mode. */}
+                                {copiedChanges && (
+                                  <Dialog
+                                    open
+                                    onOpenChange={(open) => {
+                                      if (!open) setCopiedChanges(null)
+                                    }}
                                   >
-                                    {backWithGuard && (
-                                      <button
-                                        type='button'
-                                        onClick={backWithGuard}
-                                        aria-label='Back'
-                                        className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
-                                      >
-                                        <ArrowLeft
-                                          aria-hidden
-                                          className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
+                                    <DialogContent className='max-w-md' data-nvr-copied-changes>
+                                      <DialogHeader>
+                                        <DialogTitle className='text-[15px]'>
+                                          Some copied line values will change
+                                        </DialogTitle>
+                                      </DialogHeader>
+                                      <DialogBody>
+                                        <p className='text-[13px] text-slate-600 dark:text-slate-300'>
+                                          These values were copied from the original record, but the
+                                          new record will store them differently — a rule or your
+                                          access sets them.
+                                        </p>
+                                        <ul className='mt-3 space-y-1.5 text-[12.5px]'>
+                                          {(copiedChanges ?? []).map((c) => {
+                                            const row = pendingO2MRows.get(c.key)?.[c.index] ?? {}
+                                            const label = copiedLineLabel(row, c.index)
+                                            return (
+                                              <li
+                                                key={`${c.key}:${c.index}:${c.field}`}
+                                                className='flex flex-wrap items-baseline gap-x-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 dark:border-border dark:bg-muted'
+                                              >
+                                                <span className='font-medium text-slate-800 dark:text-slate-100'>
+                                                  {label}
+                                                </span>
+                                                <span className='text-slate-600 dark:text-slate-300'>
+                                                  {titleCase(c.field)}:
+                                                </span>
+                                                <span className='tabular-nums text-slate-500 line-through dark:text-slate-400'>
+                                                  <ChangeValue
+                                                    value={c.from}
+                                                    field={null}
+                                                    m2oTarget={null}
+                                                  />
+                                                </span>
+                                                <span aria-hidden='true' className='text-slate-400'>
+                                                  →
+                                                </span>
+                                                <span className='tabular-nums font-medium text-slate-800 dark:text-slate-100'>
+                                                  <ChangeValue
+                                                    value={c.to}
+                                                    field={null}
+                                                    m2oTarget={null}
+                                                  />
+                                                </span>
+                                              </li>
+                                            )
+                                          })}
+                                        </ul>
+                                      </DialogBody>
+                                      <DialogFooter>
+                                        <Button
+                                          variant='outline'
+                                          size='sm'
+                                          onClick={() => setCopiedChanges(null)}
+                                        >
+                                          Cancel
+                                        </Button>
+                                        <Button
+                                          size='sm'
+                                          className='bg-nvr-cyan text-white'
+                                          autoFocus
+                                          onClick={() => {
+                                            copiedRehearsedRef.current = true
+                                            setCopiedChanges(null)
+                                            handleSave()
+                                          }}
+                                        >
+                                          Create anyway
+                                        </Button>
+                                      </DialogFooter>
+                                    </DialogContent>
+                                  </Dialog>
+                                )}
+                                <Dialog
+                                  open={!!reimportDialog}
+                                  onOpenChange={(open) => {
+                                    if (!open && !reimportApplying) setReimportDialog(null)
+                                  }}
+                                >
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Update this record from file</DialogTitle>
+                                    </DialogHeader>
+                                    <DialogBody className='space-y-3'>
+                                      {reimportDialog && (
+                                        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+                                          {reimportDialog.diff.updates.length} will update ·{' '}
+                                          {reimportDialog.diff.creates.length} new ·{' '}
+                                          {reimportDialog.diff.deletes.length} will delete ·{' '}
+                                          {reimportDialog.diff.matchedUnchanged} unchanged
+                                        </p>
+                                      )}
+                                      {reimportDialog?.pendingNotice && (
+                                        <p
+                                          role='status'
+                                          data-reimport-pending-notice
+                                          className='rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                                        >
+                                          {reimportDialog.pendingNotice}
+                                        </p>
+                                      )}
+                                      {reimportDialog && (
+                                        <ImportColumnChips
+                                          diff={reimportDialog.diff}
+                                          fields={fieldConfig ?? []}
                                         />
-                                      </button>
-                                    )}
-                                    {/* min-width floor: without it flex crushes this block to
+                                      )}
+                                      {reimportDialog && (
+                                        <ImportIssuesPanel issues={reimportDialog.result.issues} />
+                                      )}
+                                    </DialogBody>
+                                    <DialogFooter>
+                                      <Button
+                                        variant='outline'
+                                        onClick={() => setReimportDialog(null)}
+                                        disabled={reimportApplying}
+                                      >
+                                        Cancel
+                                      </Button>
+                                      <Button
+                                        onClick={async () => {
+                                          if (!reimportDialog) return
+                                          setReimportApplying(true)
+                                          await applyReimportStaging(
+                                            reimportDialog.diff,
+                                            reimportDialog.result,
+                                            reimportDialog.template,
+                                            reimportDialog.existingRows,
+                                            reimportDialog.restored
+                                          )
+                                          setReimportApplying(false)
+                                          setReimportDialog(null)
+                                        }}
+                                        disabled={reimportApplying}
+                                      >
+                                        {reimportApplying ? (
+                                          <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                        ) : (
+                                          'Apply to form'
+                                        )}
+                                      </Button>
+                                    </DialogFooter>
+                                  </DialogContent>
+                                </Dialog>
+                                <div
+                                  ref={formRootRef}
+                                  data-form-density={
+                                    formDensity === 'compact' ? 'compact' : undefined
+                                  }
+                                  className={cn('flex flex-1 min-h-0 flex-col', className)}
+                                >
+                                  {showHeader && (
+                                    <header
+                                      className={cn(
+                                        'shrink-0 border-b border-slate-200 dark:border-border bg-white dark:bg-card px-8 flex items-center gap-x-3 gap-y-2 max-md:[&[data-nvr-header-row]]:flex-wrap [&[data-nvr-header-wrap]]:flex-wrap max-md:[&[data-nvr-header-row]]:px-4 transition-[padding] duration-200',
+                                        headerCondensed ? 'py-1.5' : 'py-3.5',
+                                        headerClassName
+                                      )}
+                                      data-nvr-header-row
+                                      data-nvr-condensed={headerCondensed || undefined}
+                                    >
+                                      {backWithGuard && (
+                                        <button
+                                          type='button'
+                                          onClick={backWithGuard}
+                                          aria-label='Back'
+                                          className='group/back shrink-0 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
+                                        >
+                                          <ArrowLeft
+                                            aria-hidden
+                                            className='h-4 w-4 transition-transform duration-150 group-hover/back:-translate-x-0.5'
+                                          />
+                                        </button>
+                                      )}
+                                      {/* min-width floor: without it flex crushes this block to
                                       zero width before the row ever overflows, so HeaderTools'
                                       scrollWidth check never fires and the toolbar squishes the
                                       title instead of collapsing (the 1700-2050px squish bug).
                                       The layout editor canvas is far narrower than the viewport
                                       the md: floor reads, so design mode keeps a smaller floor
                                       or the folded toolbar's Create/Save clips at the edge. */}
-                                    <div
-                                      className={
-                                        designMode
-                                          ? 'flex min-w-[200px] flex-col'
-                                          : 'flex min-w-[180px] flex-col md:min-w-[260px]'
-                                      }
-                                    >
-                                      <div className='group/title flex items-center gap-1.5'>
-                                        <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
-                                          {isNew ? `New ${singularTitle}` : itemTitle}
-                                        </h1>
-                                        {!isNew &&
-                                          itemTitle &&
-                                          (copiedHeaderField === '__title__' ? (
-                                            <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                                          ) : (
-                                            <button
-                                              type='button'
-                                              aria-label='Copy title'
-                                              className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
-                                              onClick={() => {
-                                                navigator.clipboard
-                                                  .writeText(itemTitle ?? '')
-                                                  .catch(() => {})
-                                                setCopiedHeaderField('__title__')
-                                                setTimeout(
-                                                  () =>
-                                                    setCopiedHeaderField((prev) =>
-                                                      prev === '__title__' ? null : prev
-                                                    ),
-                                                  1500
-                                                )
-                                              }}
-                                            >
-                                              <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                                            </button>
-                                          ))}
-                                      </div>
-                                      {lastTouchText && (
-                                        <p
-                                          className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
-                                          data-tip={
-                                            lastTouch
-                                              ? new Date(lastTouch.timestamp).toLocaleString()
-                                              : undefined
-                                          }
-                                          data-last-touch
-                                        >
-                                          {lastTouchText}
-                                          {completeness?.hasRequired && (
-                                            <span
-                                              data-completeness-chip
-                                              className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
-                                                completeness.requiredMissing.length > 0
-                                                  ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
-                                                  : completeness.issues > 0
-                                                    ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
-                                                    : completeness.pct >= 100
-                                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
-                                                      : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
-                                              }`}
-                                              data-completeness-issues={
-                                                completeness.issues || undefined
-                                              }
-                                              data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
-                                                completeness.requiredMissing.length > 0
-                                                  ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
-                                                  : ''
-                                              }${
-                                                completeness.issues > 0
-                                                  ? ` · ${completeness.issues} data integrity issue${completeness.issues === 1 ? '' : 's'} to fix`
-                                                  : ''
-                                              }`}
-                                            >
-                                              <span key={completeness.pct} className='nvr-fade-in'>
-                                                {/* army6 I14: required fields, not the work ("100% complete" read
-                                                    as done with money still left to forecast). */}
-                                                {completeness.pct >= 100
-                                                  ? 'Required fields complete'
-                                                  : `${completeness.pct}% of required fields`}
-                                                {completeness.issues > 0
-                                                  ? ` · ${completeness.issues} issue${completeness.issues === 1 ? '' : 's'}`
-                                                  : ''}
-                                              </span>
-                                            </span>
-                                          )}
-                                          {(completeness?.recommendedMissing.length ?? 0) > 0 && (
-                                            <span
-                                              data-recommended-chip
-                                              className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[9.5px] font-semibold tabular-nums text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
-                                              data-tip={`${completeness?.recommendedFilled} of ${completeness?.recommendedTotal} recommended fields filled · missing: ${completeness?.recommendedMissing.slice(0, 5).join(', ')}${(completeness?.recommendedMissing.length ?? 0) > 5 ? '…' : ''}`}
-                                            >
-                                              {completeness?.recommendedMissing.length} recommended
-                                              to fill
-                                            </span>
-                                          )}
-                                          {provenance && !provenance.api && (
-                                            <span
-                                              data-provenance-chip
-                                              className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
-                                              data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
-                                            >
-                                              {provenance.origin}
-                                            </span>
-                                          )}
-                                          {provenance?.api && (
-                                            <ApiProvenanceChip
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                              origin={provenance.origin}
-                                              userName={provenance.user_name}
-                                              timestamp={provenance.timestamp}
-                                              api={provenance.api}
-                                            />
-                                          )}
-                                          {/* Admin-only: the route 403s everyone else anyway. */}
-                                          {isAdmin && !isNew && itemId && !designOn && (
-                                            <RecordViewersChip
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                            />
-                                          )}
-                                        </p>
-                                      )}
-                                      {subtitleParts.length > 0 && !headerCondensed && (
-                                        <div className='group/subtitle mt-0.5 flex items-center gap-1'>
-                                          {/* Capped to 350px on one line — a long subtitle used to wrap
-                      and push the whole header taller. The full text rides in
-                      data-tip, so hovering shows it instantly (TipLayer). */}
-                                          <div
-                                            data-tip={subtitleFullText}
-                                            className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
-                                          >
-                                            {subtitleParts.map((p, i) => {
-                                              const weightClass =
-                                                p.weight === 'bold'
-                                                  ? 'font-bold'
-                                                  : p.weight === 'semibold'
-                                                    ? 'font-semibold'
-                                                    : p.weight === 'medium'
-                                                      ? 'font-medium'
-                                                      : 'font-normal'
-                                              const colorClass =
-                                                p.color === 'cyan'
-                                                  ? 'text-nvr-cyan'
-                                                  : p.color === 'blue'
-                                                    ? 'text-blue-600 dark:text-blue-400'
-                                                    : p.color === 'green'
-                                                      ? 'text-emerald-600 dark:text-emerald-400'
-                                                      : p.color === 'amber'
-                                                        ? 'text-amber-600 dark:text-amber-400'
-                                                        : p.color === 'red'
-                                                          ? 'text-red-600 dark:text-red-400'
-                                                          : p.color === 'purple'
-                                                            ? 'text-purple-600 dark:text-purple-400'
-                                                            : 'text-slate-500 dark:text-slate-400'
-                                              const isPill = p.display_as === 'pill'
-                                              const isTag = p.display_as === 'tag'
-                                              const sep = subtitleConfig?.separator ?? ' | '
-                                              return (
-                                                <span
-                                                  key={i}
-                                                  className='inline-flex items-center gap-1 align-middle'
-                                                >
-                                                  {i > 0 && !isPill && !isTag && (
-                                                    <span className='text-[11px] text-slate-300 dark:text-slate-600'>
-                                                      {sep}
-                                                    </span>
-                                                  )}
-                                                  <span
-                                                    className={[
-                                                      'text-[12px]',
-                                                      weightClass,
-                                                      colorClass,
-                                                      isPill
-                                                        ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]'
-                                                        : '',
-                                                      isTag
-                                                        ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]'
-                                                        : ''
-                                                    ]
-                                                      .filter(Boolean)
-                                                      .join(' ')}
-                                                  >
-                                                    {p.value}
-                                                  </span>
-                                                </span>
-                                              )
-                                            })}
-                                          </div>
-                                          {copiedHeaderField === '__subtitle__' ? (
-                                            <Check className='h-3 w-3 shrink-0 text-emerald-500' />
-                                          ) : (
-                                            <button
-                                              type='button'
-                                              aria-label='Copy subtitle'
-                                              className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
-                                              onClick={() => {
-                                                navigator.clipboard
-                                                  .writeText(subtitleFullText)
-                                                  .catch(() => {})
-                                                setCopiedHeaderField('__subtitle__')
-                                                setTimeout(
-                                                  () =>
-                                                    setCopiedHeaderField((prev) =>
-                                                      prev === '__subtitle__' ? null : prev
-                                                    ),
-                                                  1500
-                                                )
-                                              }}
-                                            >
-                                              <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
-                                            </button>
-                                          )}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
-                                      {headerExtra}
-                                      <HeaderTools>
-                                        {isNew && (
-                                          <ImportFromFileButton
-                                            collection={collection}
-                                            onParsed={applyImportResult}
-                                          />
-                                        )}
-                                        {isNew && !isReadOnly && (
-                                          <DocumentAutofillButton
-                                            collection={collection}
-                                            onApply={applyDocumentProposal}
-                                            initialProposalId={autofillProposalId ?? null}
-                                            onProposalConsumed={onAutofillConsumed}
-                                          />
-                                        )}
-                                        {isNew && quickPickerSteps.length > 0 && !isReadOnly && (
-                                          <Popover
-                                            open={quickPickOpen}
-                                            onOpenChange={setQuickPickOpen}
-                                          >
-                                            <PopoverTrigger asChild>
+                                      <div
+                                        className={
+                                          designMode
+                                            ? 'flex min-w-[200px] flex-col'
+                                            : 'flex min-w-[180px] flex-col md:min-w-[260px]'
+                                        }
+                                      >
+                                        <div className='group/title flex items-center gap-1.5'>
+                                          <h1 className='truncate text-[17px] font-bold leading-tight text-slate-900 dark:text-slate-50'>
+                                            {isNew ? `New ${singularTitle}` : itemTitle}
+                                          </h1>
+                                          {!isNew &&
+                                            itemTitle &&
+                                            (copiedHeaderField === '__title__' ? (
+                                              <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                            ) : (
                                               <button
                                                 type='button'
-                                                title='Quick pick — walk the related fields in order'
-                                                data-quick-pick-toggle
-                                                className={cn(
-                                                  'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors',
-                                                  quickPickOpen
-                                                    ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                                                    : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
-                                                )}
+                                                aria-label='Copy title'
+                                                className='cursor-pointer opacity-0 transition-opacity group-hover/title:opacity-100'
+                                                onClick={() => {
+                                                  navigator.clipboard
+                                                    .writeText(itemTitle ?? '')
+                                                    .catch(() => {})
+                                                  setCopiedHeaderField('__title__')
+                                                  setTimeout(
+                                                    () =>
+                                                      setCopiedHeaderField((prev) =>
+                                                        prev === '__title__' ? null : prev
+                                                      ),
+                                                    1500
+                                                  )
+                                                }}
                                               >
-                                                <Wand2 className='h-3.5 w-3.5' />
-                                                Quick pick
+                                                <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
                                               </button>
-                                            </PopoverTrigger>
-                                            {/* Slides through the layout's relation steps beside the
+                                            ))}
+                                        </div>
+                                        {lastTouchText && (
+                                          <p
+                                            className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
+                                            data-tip={
+                                              lastTouch
+                                                ? new Date(lastTouch.timestamp).toLocaleString()
+                                                : undefined
+                                            }
+                                            data-last-touch
+                                          >
+                                            {lastTouchText}
+                                            {completeness?.hasRequired && (
+                                              <span
+                                                data-completeness-chip
+                                                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-px text-[9.5px] font-semibold tabular-nums transition-colors duration-300 ${
+                                                  completeness.requiredMissing.length > 0
+                                                    ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
+                                                    : completeness.issues > 0
+                                                      ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                                      : completeness.pct >= 100
+                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                                        : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                                }`}
+                                                data-completeness-issues={
+                                                  completeness.issues || undefined
+                                                }
+                                                data-tip={`${completeness.filled} of ${completeness.total} required fields filled${
+                                                  completeness.requiredMissing.length > 0
+                                                    ? ` · missing: ${completeness.requiredMissing.slice(0, 5).join(', ')}${completeness.requiredMissing.length > 5 ? '…' : ''}`
+                                                    : ''
+                                                }${
+                                                  completeness.issues > 0
+                                                    ? ` · ${completeness.issues} data integrity issue${completeness.issues === 1 ? '' : 's'} to fix`
+                                                    : ''
+                                                }`}
+                                              >
+                                                <span
+                                                  key={completeness.pct}
+                                                  className='nvr-fade-in'
+                                                >
+                                                  {/* army6 I14: required fields, not the work ("100% complete" read
+                                                    as done with money still left to forecast). */}
+                                                  {completeness.pct >= 100
+                                                    ? 'Required fields complete'
+                                                    : `${completeness.pct}% of required fields`}
+                                                  {completeness.issues > 0
+                                                    ? ` · ${completeness.issues} issue${completeness.issues === 1 ? '' : 's'}`
+                                                    : ''}
+                                                </span>
+                                              </span>
+                                            )}
+                                            {(completeness?.recommendedMissing.length ?? 0) > 0 && (
+                                              <span
+                                                data-recommended-chip
+                                                className='inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[9.5px] font-semibold tabular-nums text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300'
+                                                data-tip={`${completeness?.recommendedFilled} of ${completeness?.recommendedTotal} recommended fields filled · missing: ${completeness?.recommendedMissing.slice(0, 5).join(', ')}${(completeness?.recommendedMissing.length ?? 0) > 5 ? '…' : ''}`}
+                                              >
+                                                {completeness?.recommendedMissing.length}{' '}
+                                                recommended to fill
+                                              </span>
+                                            )}
+                                            {provenance && !provenance.api && (
+                                              <span
+                                                data-provenance-chip
+                                                className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+                                                data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
+                                              >
+                                                {provenance.origin}
+                                              </span>
+                                            )}
+                                            {provenance?.api && (
+                                              <ApiProvenanceChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                origin={provenance.origin}
+                                                userName={provenance.user_name}
+                                                timestamp={provenance.timestamp}
+                                                api={provenance.api}
+                                              />
+                                            )}
+                                            {/* Admin-only: the route 403s everyone else anyway. */}
+                                            {isAdmin && !isNew && itemId && !designOn && (
+                                              <RecordViewersChip
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                              />
+                                            )}
+                                          </p>
+                                        )}
+                                        {subtitleParts.length > 0 && !headerCondensed && (
+                                          <div className='group/subtitle mt-0.5 flex items-center gap-1'>
+                                            {/* Capped to 350px on one line — a long subtitle used to wrap
+                      and push the whole header taller. The full text rides in
+                      data-tip, so hovering shows it instantly (TipLayer). */}
+                                            <div
+                                              data-tip={subtitleFullText}
+                                              className='max-w-[350px] overflow-hidden text-ellipsis whitespace-nowrap'
+                                            >
+                                              {subtitleParts.map((p, i) => {
+                                                const weightClass =
+                                                  p.weight === 'bold'
+                                                    ? 'font-bold'
+                                                    : p.weight === 'semibold'
+                                                      ? 'font-semibold'
+                                                      : p.weight === 'medium'
+                                                        ? 'font-medium'
+                                                        : 'font-normal'
+                                                const colorClass =
+                                                  p.color === 'cyan'
+                                                    ? 'text-nvr-cyan'
+                                                    : p.color === 'blue'
+                                                      ? 'text-blue-600 dark:text-blue-400'
+                                                      : p.color === 'green'
+                                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                                        : p.color === 'amber'
+                                                          ? 'text-amber-600 dark:text-amber-400'
+                                                          : p.color === 'red'
+                                                            ? 'text-red-600 dark:text-red-400'
+                                                            : p.color === 'purple'
+                                                              ? 'text-purple-600 dark:text-purple-400'
+                                                              : 'text-slate-500 dark:text-slate-400'
+                                                const isPill = p.display_as === 'pill'
+                                                const isTag = p.display_as === 'tag'
+                                                const sep = subtitleConfig?.separator ?? ' | '
+                                                return (
+                                                  <span
+                                                    key={i}
+                                                    className='inline-flex items-center gap-1 align-middle'
+                                                  >
+                                                    {i > 0 && !isPill && !isTag && (
+                                                      <span className='text-[11px] text-slate-300 dark:text-slate-600'>
+                                                        {sep}
+                                                      </span>
+                                                    )}
+                                                    <span
+                                                      className={[
+                                                        'text-[12px]',
+                                                        weightClass,
+                                                        colorClass,
+                                                        isPill
+                                                          ? 'rounded-full px-2 py-0.5 bg-current/10 text-[11px]'
+                                                          : '',
+                                                        isTag
+                                                          ? 'rounded px-1.5 py-0.5 border border-current/30 text-[11px]'
+                                                          : ''
+                                                      ]
+                                                        .filter(Boolean)
+                                                        .join(' ')}
+                                                    >
+                                                      {p.value}
+                                                    </span>
+                                                  </span>
+                                                )
+                                              })}
+                                            </div>
+                                            {copiedHeaderField === '__subtitle__' ? (
+                                              <Check className='h-3 w-3 shrink-0 text-emerald-500' />
+                                            ) : (
+                                              <button
+                                                type='button'
+                                                aria-label='Copy subtitle'
+                                                className='cursor-pointer opacity-0 transition-opacity group-hover/subtitle:opacity-100'
+                                                onClick={() => {
+                                                  navigator.clipboard
+                                                    .writeText(subtitleFullText)
+                                                    .catch(() => {})
+                                                  setCopiedHeaderField('__subtitle__')
+                                                  setTimeout(
+                                                    () =>
+                                                      setCopiedHeaderField((prev) =>
+                                                        prev === '__subtitle__' ? null : prev
+                                                      ),
+                                                    1500
+                                                  )
+                                                }}
+                                              >
+                                                <Copy className='h-3 w-3 text-slate-300 hover:text-slate-500 dark:text-slate-600 dark:hover:text-slate-400' />
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className='ml-auto flex items-center gap-1.5 [&_button]:whitespace-nowrap'>
+                                        {headerExtra}
+                                        <HeaderTools>
+                                          {isNew && (
+                                            <ImportFromFileButton
+                                              collection={collection}
+                                              onParsed={applyImportResult}
+                                            />
+                                          )}
+                                          {isNew && !isReadOnly && (
+                                            <DocumentAutofillButton
+                                              collection={collection}
+                                              onApply={applyDocumentProposal}
+                                              initialProposalId={autofillProposalId ?? null}
+                                              onProposalConsumed={onAutofillConsumed}
+                                            />
+                                          )}
+                                          {isNew && quickPickerSteps.length > 0 && !isReadOnly && (
+                                            <Popover
+                                              open={quickPickOpen}
+                                              onOpenChange={setQuickPickOpen}
+                                            >
+                                              <PopoverTrigger asChild>
+                                                <button
+                                                  type='button'
+                                                  title='Quick pick — walk the related fields in order'
+                                                  data-quick-pick-toggle
+                                                  className={cn(
+                                                    'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium shadow-sm transition-colors',
+                                                    quickPickOpen
+                                                      ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                                                      : 'border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                                                  )}
+                                                >
+                                                  <Wand2 className='h-3.5 w-3.5' />
+                                                  Quick pick
+                                                </button>
+                                              </PopoverTrigger>
+                                              {/* Slides through the layout's relation steps beside the
                                               button, bound to the live draft — every pick is a
                                               normal edit; Done just closes. */}
-                                            <PopoverContent
-                                              align='end'
-                                              sideOffset={6}
-                                              className='w-[440px] max-w-[calc(100vw-24px)] p-3'
-                                              data-quick-picker-modal
-                                            >
-                                              <QuickPicker
-                                                collection={collection}
-                                                itemId={itemId}
-                                                steps={quickPickerSteps}
-                                                fieldConfig={fieldConfig ?? []}
-                                                relations={relations}
-                                                draft={draft}
-                                                getM2M={getM2MEffectiveIds}
-                                                onChange={handleFieldChange}
-                                                onM2MChange={setQuickPickerM2M}
-                                                fieldLabels={parentFieldLabels}
-                                                fieldOptionFilters={parentFieldOptionFilters}
-                                                onFinish={() => setQuickPickOpen(false)}
-                                                finishLabel='Done'
-                                                finishRequiresComplete={false}
-                                              />
-                                            </PopoverContent>
-                                          </Popover>
-                                        )}
-                                        {/* Record tools: one compact icon group instead of a strip of
+                                              <PopoverContent
+                                                align='end'
+                                                sideOffset={6}
+                                                className='w-[440px] max-w-[calc(100vw-24px)] p-3'
+                                                data-quick-picker-modal
+                                              >
+                                                <QuickPicker
+                                                  collection={collection}
+                                                  itemId={itemId}
+                                                  steps={quickPickerSteps}
+                                                  fieldConfig={fieldConfig ?? []}
+                                                  relations={relations}
+                                                  draft={draft}
+                                                  getM2M={getM2MEffectiveIds}
+                                                  onChange={handleFieldChange}
+                                                  onM2MChange={setQuickPickerM2M}
+                                                  fieldLabels={parentFieldLabels}
+                                                  fieldOptionFilters={parentFieldOptionFilters}
+                                                  onFinish={() => setQuickPickOpen(false)}
+                                                  finishLabel='Done'
+                                                  finishRequiresComplete={false}
+                                                />
+                                              </PopoverContent>
+                                            </Popover>
+                                          )}
+                                          {/* Record tools: one compact icon group instead of a strip of
                                           equal-weight buttons. Each tool keeps its own popover /
                                           dialog; the group supplies border + dividers. */}
-                                        {/* Summary ⇄ Edit — a labelled segmented control, not an
+                                          {/* Summary ⇄ Edit — a labelled segmented control, not an
                                           icon pill: the active side is filled so the current mode
                                           reads at a glance ("make it obvious what mode I'm in"). */}
-                                        {!isNew &&
-                                        itemId &&
-                                        colMeta?.read_mode_toggle &&
-                                        summaryModeSettled ? (
-                                          <div
-                                            role='radiogroup'
-                                            aria-label='Form mode'
-                                            data-summary-mode-toggle
-                                            data-mode={readMode ? 'summary' : 'edit'}
-                                            className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background p-0.5 text-[11.5px] font-medium shadow-sm'
-                                          >
-                                            <button
-                                              type='button'
-                                              role='radio'
-                                              aria-checked={readMode}
-                                              data-summary-mode-option='summary'
-                                              title='Summary mode — a read-only view of this record'
-                                              onClick={() => setReadMode(true)}
-                                              className={cn(
-                                                'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
-                                                readMode
-                                                  ? 'bg-nvr-cyan text-white shadow-sm'
-                                                  : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                                              )}
+                                          {!isNew &&
+                                          itemId &&
+                                          colMeta?.read_mode_toggle &&
+                                          summaryModeSettled ? (
+                                            <div
+                                              role='radiogroup'
+                                              aria-label='Form mode'
+                                              data-summary-mode-toggle
+                                              data-mode={readMode ? 'summary' : 'edit'}
+                                              className='inline-flex h-9 shrink-0 items-center overflow-hidden rounded-md border border-input bg-background p-0.5 text-[11.5px] font-medium shadow-sm'
                                             >
-                                              <BookOpen className='h-3.5 w-3.5' strokeWidth={2} />
-                                              Summary
-                                            </button>
-                                            <button
-                                              type='button'
-                                              role='radio'
-                                              aria-checked={!readMode}
-                                              data-summary-mode-option='edit'
-                                              title={
-                                                editLockMessage && !editLockPartial
-                                                  ? `Form view — read-only: ${editLockMessage}`
-                                                  : 'Edit mode — change this record'
-                                              }
-                                              onClick={() => setReadMode(false)}
-                                              className={cn(
-                                                'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
-                                                !readMode
-                                                  ? 'bg-nvr-cyan text-white shadow-sm'
-                                                  : 'text-slate-600 hover:bg-muted dark:text-slate-300'
-                                              )}
-                                            >
-                                              {/* An approval-locked record is not offered "Edit":
+                                              <button
+                                                type='button'
+                                                role='radio'
+                                                aria-checked={readMode}
+                                                data-summary-mode-option='summary'
+                                                title='Summary mode — a read-only view of this record'
+                                                onClick={() => setReadMode(true)}
+                                                className={cn(
+                                                  'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                                  readMode
+                                                    ? 'bg-nvr-cyan text-white shadow-sm'
+                                                    : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                                )}
+                                              >
+                                                <BookOpen className='h-3.5 w-3.5' strokeWidth={2} />
+                                                Summary
+                                              </button>
+                                              <button
+                                                type='button'
+                                                role='radio'
+                                                aria-checked={!readMode}
+                                                data-summary-mode-option='edit'
+                                                title={
+                                                  editLockMessage && !editLockPartial
+                                                    ? `Form view — read-only: ${editLockMessage}`
+                                                    : 'Edit mode — change this record'
+                                                }
+                                                onClick={() => setReadMode(false)}
+                                                className={cn(
+                                                  'inline-flex h-full items-center gap-1.5 rounded px-2.5 transition-colors',
+                                                  !readMode
+                                                    ? 'bg-nvr-cyan text-white shadow-sm'
+                                                    : 'text-slate-600 hover:bg-muted dark:text-slate-300'
+                                                )}
+                                              >
+                                                {/* An approval-locked record is not offered "Edit":
                                                   the full form still opens, read-only. */}
-                                              {editLockMessage && !editLockPartial ? (
-                                                <>
-                                                  <Lock className='h-3.5 w-3.5' strokeWidth={2} />
-                                                  Form
-                                                </>
-                                              ) : (
-                                                <>
-                                                  <PencilLine
-                                                    className='h-3.5 w-3.5'
-                                                    strokeWidth={2}
+                                                {editLockMessage && !editLockPartial ? (
+                                                  <>
+                                                    <Lock className='h-3.5 w-3.5' strokeWidth={2} />
+                                                    Form
+                                                  </>
+                                                ) : (
+                                                  <>
+                                                    <PencilLine
+                                                      className='h-3.5 w-3.5'
+                                                      strokeWidth={2}
+                                                    />
+                                                    Edit
+                                                  </>
+                                                )}
+                                              </button>
+                                            </div>
+                                          ) : null}
+                                          {!isNew && itemId ? (
+                                            <HeaderToolGroup>
+                                              {lockEnabled &&
+                                                !lockHolder &&
+                                                (lockAcquired || lockReleased) && (
+                                                  <LockHolderButton
+                                                    note={lockNote}
+                                                    onSave={saveLockNote}
+                                                    waiting={lockQueue}
+                                                    onRelease={releaseLock}
+                                                    releasing={releasingLock}
+                                                    released={lockReleased && !lockAcquired}
+                                                    onRelock={relockLock}
                                                   />
-                                                  Edit
-                                                </>
-                                              )}
-                                            </button>
-                                          </div>
-                                        ) : null}
-                                        {!isNew && itemId ? (
-                                          <HeaderToolGroup>
-                                            {lockEnabled &&
-                                              !lockHolder &&
-                                              (lockAcquired || lockReleased) && (
-                                                <LockHolderButton
-                                                  note={lockNote}
-                                                  onSave={saveLockNote}
-                                                  waiting={lockQueue}
-                                                  onRelease={releaseLock}
-                                                  releasing={releasingLock}
-                                                  released={lockReleased && !lockAcquired}
-                                                  onRelock={relockLock}
+                                                )}
+                                              <FindInRecordButton
+                                                compact
+                                                fields={findableFields}
+                                                onJump={jumpToField}
+                                              />
+                                              {showFormVideosButton(
+                                                itemId,
+                                                hideHelpVideoButton
+                                              ) && (
+                                                <HelpVideoButton
+                                                  compact
+                                                  collection={collection}
+                                                  item={itemId}
                                                 />
                                               )}
+                                              <button
+                                                type='button'
+                                                title='Copy a plain-text summary of this record (fields + link) for chat or email'
+                                                onClick={() => void copyRecordSummary()}
+                                                disabled={copyingSummary}
+                                                aria-label='Copy record summary'
+                                                className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
+                                              >
+                                                {copyingSummary ? (
+                                                  <Loader2 className='h-4 w-4 animate-spin' />
+                                                ) : (
+                                                  <Clipboard className='h-4 w-4' />
+                                                )}
+                                              </button>
+                                              <button
+                                                type='button'
+                                                title='Relationships — see and explore every record linked to this one'
+                                                onClick={() => setGraphOpen(true)}
+                                                aria-label='Relationships'
+                                                data-record-graph-open
+                                                className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+                                              >
+                                                <Waypoints className='h-4 w-4' />
+                                              </button>
+                                              {!inPopout && (
+                                                <button
+                                                  type='button'
+                                                  data-tip='Pop out — open this record in its own window (stays live and in step with this tab)'
+                                                  onClick={popOutRecord}
+                                                  aria-label='Pop out'
+                                                  data-record-popout
+                                                  className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+                                                >
+                                                  <PictureInPicture2 className='h-4 w-4' />
+                                                </button>
+                                              )}
+                                              {isAdmin &&
+                                                colMeta?.browser_config?.copy_as !== false && (
+                                                  <CopyAsButton
+                                                    compact
+                                                    collection={collection}
+                                                    itemId={String(itemId)}
+                                                    fields={copyAsFields}
+                                                  />
+                                                )}
+                                              <RecordSubscribeButton
+                                                compact
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                              />
+                                              <RecordInsightsButton
+                                                compact
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                              />
+                                              <RecordChatActions
+                                                compact
+                                                collection={collection}
+                                                itemDraft={draft}
+                                              />
+                                              {effectiveShowRevisions && (
+                                                <RevisionsPanel
+                                                  compact
+                                                  collection={collection}
+                                                  item={itemId}
+                                                  onRollback={() =>
+                                                    qc.invalidateQueries({
+                                                      queryKey: ['item', collection, itemId]
+                                                    })
+                                                  }
+                                                />
+                                              )}
+                                            </HeaderToolGroup>
+                                          ) : (
                                             <FindInRecordButton
-                                              compact
                                               fields={findableFields}
                                               onJump={jumpToField}
                                             />
-                                            {showFormVideosButton(itemId, hideHelpVideoButton) && (
-                                              <HelpVideoButton
-                                                compact
+                                          )}
+                                          {/* Secondary tools — one "More" menu; the rows are the same
+                                          components (dialogs, sheets, confirms unchanged). */}
+                                          {!isNew && itemId && (
+                                            <HeaderMenu>
+                                              <ImportFromFileButton
                                                 collection={collection}
-                                                item={itemId}
+                                                templateFilter={(t) =>
+                                                  reimportAllowed(t, recordStateKey, isAdmin)
+                                                }
+                                                getLabel={(t) =>
+                                                  t.reimport?.button_label ?? t.button_label
+                                                }
+                                                onParsed={handleReimportParsed}
                                               />
-                                            )}
-                                            <button
-                                              type='button'
-                                              title='Copy a plain-text summary of this record (fields + link) for chat or email'
-                                              onClick={() => void copyRecordSummary()}
-                                              disabled={copyingSummary}
-                                              aria-label='Copy record summary'
-                                              className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60'
-                                            >
-                                              {copyingSummary ? (
-                                                <Loader2 className='h-4 w-4 animate-spin' />
-                                              ) : (
-                                                <Clipboard className='h-4 w-4' />
+                                              {fileLayouts.map((fl) => (
+                                                <Button
+                                                  key={fl.id}
+                                                  type='button'
+                                                  variant='outline'
+                                                  size='sm'
+                                                  disabled={pdfLoading === fl.id}
+                                                  onClick={() => void downloadPdf(fl.id)}
+                                                  className='gap-1.5'
+                                                >
+                                                  {pdfLoading === fl.id ? (
+                                                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                  ) : (
+                                                    <FileDown className='h-3.5 w-3.5' />
+                                                  )}
+                                                  {fl.pdf_button_label || 'Export PDF'}
+                                                </Button>
+                                              ))}
+                                              {!!(
+                                                activeLayoutData?.layout as
+                                                  | { dossier_enabled?: boolean | number }
+                                                  | undefined
+                                              )?.dossier_enabled && (
+                                                <button
+                                                  type='button'
+                                                  data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
+                                                  onClick={async () => {
+                                                    // #641 — server assembles the whole story; this just
+                                                    // streams the PDF down with the caller's own auth.
+                                                    try {
+                                                      const res = await fetch(
+                                                        `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
+                                                        {
+                                                          headers: fetchCfg.authHeaders,
+                                                          credentials: fetchCfg.credentials
+                                                        }
+                                                      )
+                                                      if (!res.ok)
+                                                        throw new Error(String(res.status))
+                                                      const blob = await res.blob()
+                                                      const url = URL.createObjectURL(blob)
+                                                      const a = document.createElement('a')
+                                                      a.href = url
+                                                      a.download = `dossier-${collection}-${itemId}.pdf`
+                                                      a.click()
+                                                      setTimeout(
+                                                        () => URL.revokeObjectURL(url),
+                                                        30_000
+                                                      )
+                                                    } catch {
+                                                      toast.error('Dossier export failed')
+                                                    }
+                                                  }}
+                                                  className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                                >
+                                                  <FileDown className='h-3.5 w-3.5' />
+                                                  {(
+                                                    activeLayoutData?.layout as
+                                                      | { dossier_label?: string | null }
+                                                      | undefined
+                                                  )?.dossier_label || 'Dossier'}
+                                                </button>
                                               )}
-                                            </button>
-                                            <button
-                                              type='button'
-                                              title='Relationships — see and explore every record linked to this one'
-                                              onClick={() => setGraphOpen(true)}
-                                              aria-label='Relationships'
-                                              data-record-graph-open
-                                              className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
-                                            >
-                                              <Waypoints className='h-4 w-4' />
-                                            </button>
-                                            {!inPopout && (
-                                              <button
-                                                type='button'
-                                                data-tip='Pop out — open this record in its own window (stays live and in step with this tab)'
-                                                onClick={popOutRecord}
-                                                aria-label='Pop out'
-                                                data-record-popout
-                                                className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
-                                              >
-                                                <PictureInPicture2 className='h-4 w-4' />
-                                              </button>
-                                            )}
-                                            {isAdmin &&
-                                              colMeta?.browser_config?.copy_as !== false && (
-                                                <CopyAsButton
-                                                  compact
+                                              {grantedTools.disablePickers && (
+                                                <PickerExclusionToggle
                                                   collection={collection}
                                                   itemId={String(itemId)}
-                                                  fields={copyAsFields}
+                                                  layoutSlug={layoutSlug ?? null}
                                                 />
                                               )}
-                                            <RecordSubscribeButton
-                                              compact
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                            />
-                                            <RecordInsightsButton
-                                              compact
-                                              collection={collection}
-                                              itemId={String(itemId)}
-                                            />
-                                            <RecordChatActions
-                                              compact
-                                              collection={collection}
-                                              itemDraft={draft}
-                                            />
-                                            {effectiveShowRevisions && (
-                                              <RevisionsPanel
-                                                compact
-                                                collection={collection}
-                                                item={itemId}
-                                                onRollback={() =>
-                                                  qc.invalidateQueries({
-                                                    queryKey: ['item', collection, itemId]
-                                                  })
-                                                }
-                                              />
-                                            )}
-                                          </HeaderToolGroup>
-                                        ) : (
-                                          <FindInRecordButton
-                                            fields={findableFields}
-                                            onJump={jumpToField}
-                                          />
-                                        )}
-                                        {/* Secondary tools — one "More" menu; the rows are the same
-                                          components (dialogs, sheets, confirms unchanged). */}
-                                        {!isNew && itemId && (
-                                          <HeaderMenu>
-                                            <ImportFromFileButton
-                                              collection={collection}
-                                              templateFilter={(t) =>
-                                                reimportAllowed(t, recordStateKey, isAdmin)
-                                              }
-                                              getLabel={(t) =>
-                                                t.reimport?.button_label ?? t.button_label
-                                              }
-                                              onParsed={handleReimportParsed}
-                                            />
-                                            {fileLayouts.map((fl) => (
-                                              <Button
-                                                key={fl.id}
-                                                type='button'
-                                                variant='outline'
-                                                size='sm'
-                                                disabled={pdfLoading === fl.id}
-                                                onClick={() => void downloadPdf(fl.id)}
-                                                className='gap-1.5'
-                                              >
-                                                {pdfLoading === fl.id ? (
-                                                  <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                                ) : (
-                                                  <FileDown className='h-3.5 w-3.5' />
-                                                )}
-                                                {fl.pdf_button_label || 'Export PDF'}
-                                              </Button>
-                                            ))}
-                                            {!!(
-                                              activeLayoutData?.layout as
-                                                | { dossier_enabled?: boolean | number }
-                                                | undefined
-                                            )?.dossier_enabled && (
-                                              <button
-                                                type='button'
-                                                data-tip='Download a PDF dossier — field values, workflow history, comments and tasks in one document'
-                                                onClick={async () => {
-                                                  // #641 — server assembles the whole story; this just
-                                                  // streams the PDF down with the caller's own auth.
-                                                  try {
-                                                    const res = await fetch(
-                                                      `${fetchCfg.apiBase}/dossier/${collection}/${itemId}`,
-                                                      {
-                                                        headers: fetchCfg.authHeaders,
-                                                        credentials: fetchCfg.credentials
-                                                      }
-                                                    )
-                                                    if (!res.ok) throw new Error(String(res.status))
-                                                    const blob = await res.blob()
-                                                    const url = URL.createObjectURL(blob)
-                                                    const a = document.createElement('a')
-                                                    a.href = url
-                                                    a.download = `dossier-${collection}-${itemId}.pdf`
-                                                    a.click()
-                                                    setTimeout(
-                                                      () => URL.revokeObjectURL(url),
-                                                      30_000
-                                                    )
-                                                  } catch {
-                                                    toast.error('Dossier export failed')
-                                                  }
-                                                }}
-                                                className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                              >
-                                                <FileDown className='h-3.5 w-3.5' />
-                                                {(
-                                                  activeLayoutData?.layout as
-                                                    | { dossier_label?: string | null }
-                                                    | undefined
-                                                )?.dossier_label || 'Dossier'}
-                                              </button>
-                                            )}
-                                            {grantedTools.disablePickers && (
-                                              <PickerExclusionToggle
-                                                collection={collection}
-                                                itemId={String(itemId)}
-                                                layoutSlug={layoutSlug ?? null}
-                                              />
-                                            )}
-                                            {grantedTools.schedule && (
-                                              <ScheduleChangeButton
-                                                collection={collection}
-                                                itemId={String(itemId)}
-                                                fields={scheduleFields}
-                                                layoutSlug={layoutSlug ?? null}
-                                              />
-                                            )}
-                                            <div data-nvr-menu-divider />
-                                            {onDuplicate && (
-                                              <button
-                                                type='button'
-                                                title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
-                                                onClick={async () => {
-                                                  // Copy what a person would re-create: plain scalars + M2O
-                                                  // FKs, the M2M link sets (Zone, funding years…), and the
-                                                  // O2M grids' child rows. Excluded: id, audit stamps,
-                                                  // auto-id fields (they regenerate), computed fields
-                                                  // (server re-derives), attachments.
-                                                  const AUDIT = new Set([
-                                                    'id',
-                                                    'user_created',
-                                                    'date_created',
-                                                    'user_updated',
-                                                    'date_updated',
-                                                    'created_at',
-                                                    'updated_at',
-                                                    'created',
-                                                    'changed',
-                                                    'creator',
-                                                    'last_state_change'
-                                                  ])
-                                                  // Only fields the form actually SHOWS copy — hidden columns
-                                                  // are integration/system state (external ids, status
-                                                  // mirrors) that must not follow the record.
-                                                  const copyable = new Set<string>()
-                                                  const skip = new Set<string>(AUDIT)
-                                                  for (const fc of fieldConfig ?? []) {
-                                                    const opts = fc.options as Record<
-                                                      string,
-                                                      unknown
-                                                    > | null
-                                                    if (
-                                                      opts &&
-                                                      typeof opts === 'object' &&
-                                                      (opts as { auto_id?: unknown }).auto_id
-                                                    )
-                                                      skip.add(fc.field)
-                                                    if (
-                                                      isDerivedForRecord(
-                                                        fc as { computed_type?: string | null },
-                                                        draft
-                                                      )
-                                                    )
-                                                      skip.add(fc.field)
-                                                    const readonlyFc = Boolean(
-                                                      (fc as { readonly?: boolean }).readonly
-                                                    )
-                                                    const noDupe = Boolean(
-                                                      opts &&
-                                                        typeof opts === 'object' &&
-                                                        (opts as { no_duplicate?: unknown })
-                                                          .no_duplicate
-                                                    )
-                                                    if (
-                                                      !fc.hidden &&
-                                                      !readonlyFc &&
-                                                      !noDupe &&
-                                                      (fc as { layout_assigned?: boolean })
-                                                        .layout_assigned !== false
-                                                    ) {
-                                                      copyable.add(fc.field)
-                                                    }
-                                                  }
-                                                  // Copy the record as it is NOW, not the copy this
-                                                  // tab loaded: a junction edit (Zone, funding year)
-                                                  // made elsewhere never reaches an open form, and the
-                                                  // duplicate carried values the record no longer had.
-                                                  // The person's own unsaved edits still win.
-                                                  const fresh = await client
-                                                    .request<{ data: Record<string, unknown> }>(
-                                                      get(`/items/${collection}/${itemId}`)
-                                                    )
-                                                    .then((r) => r.data ?? null)
-                                                    .catch(() => null)
-                                                  const source: Record<string, unknown> = fresh
-                                                    ? { ...fresh }
-                                                    : { ...draft }
-                                                  if (fresh)
-                                                    for (const k of userTouchedRef.current)
+                                              {grantedTools.schedule && (
+                                                <ScheduleChangeButton
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                  fields={scheduleFields}
+                                                  layoutSlug={layoutSlug ?? null}
+                                                />
+                                              )}
+                                              <div data-nvr-menu-divider />
+                                              {onDuplicate && (
+                                                <button
+                                                  type='button'
+                                                  title='Duplicate this record into a new prefilled form — fields, linked values, and line items come along (attachments do not)'
+                                                  onClick={async () => {
+                                                    // Copy what a person would re-create: plain scalars + M2O
+                                                    // FKs, the M2M link sets (Zone, funding years…), and the
+                                                    // O2M grids' child rows. Excluded: id, audit stamps,
+                                                    // auto-id fields (they regenerate), computed fields
+                                                    // (server re-derives), attachments.
+                                                    const AUDIT = new Set([
+                                                      'id',
+                                                      'user_created',
+                                                      'date_created',
+                                                      'user_updated',
+                                                      'date_updated',
+                                                      'created_at',
+                                                      'updated_at',
+                                                      'created',
+                                                      'changed',
+                                                      'creator',
+                                                      'last_state_change'
+                                                    ])
+                                                    // Only fields the form actually SHOWS copy — hidden columns
+                                                    // are integration/system state (external ids, status
+                                                    // mirrors) that must not follow the record.
+                                                    const copyable = new Set<string>()
+                                                    const skip = new Set<string>(AUDIT)
+                                                    for (const fc of fieldConfig ?? []) {
+                                                      const opts = fc.options as Record<
+                                                        string,
+                                                        unknown
+                                                      > | null
                                                       if (
-                                                        !valuesEqual(
-                                                          draft[k],
-                                                          initialDataRef.current[k]
+                                                        opts &&
+                                                        typeof opts === 'object' &&
+                                                        (opts as { auto_id?: unknown }).auto_id
+                                                      )
+                                                        skip.add(fc.field)
+                                                      if (
+                                                        isDerivedForRecord(
+                                                          fc as { computed_type?: string | null },
+                                                          draft
                                                         )
                                                       )
-                                                        source[k] = draft[k]
-                                                  const freshLinks = await Promise.all(
-                                                    [...m2mAliasFieldsForRules.values()].map(
-                                                      (info) =>
-                                                        qc
-                                                          .fetchQuery({
-                                                            queryKey: [
-                                                              'm2m-items',
-                                                              info.manyCollection,
-                                                              info.manyField,
-                                                              itemId
-                                                            ],
-                                                            queryFn: () =>
-                                                              client
-                                                                .request<{
-                                                                  data: Record<string, unknown>[]
-                                                                }>(
-                                                                  get(
-                                                                    `/items/${info.manyCollection}`,
-                                                                    {
-                                                                      filter: JSON.stringify({
-                                                                        [info.manyField]: {
-                                                                          _eq: itemId
-                                                                        }
-                                                                      }),
-                                                                      limit: 200,
-                                                                      fields: `id,${info.junctionField}`
-                                                                    }
-                                                                  )
-                                                                )
-                                                                .then((r) => r.data ?? []),
-                                                            staleTime: 0
-                                                          })
-                                                          .then(
-                                                            (rows) =>
-                                                              [
-                                                                info.stagingKey,
-                                                                computeM2MEffectiveIds(
-                                                                  rows,
-                                                                  info.junctionField,
-                                                                  m2mLinks.get(info.stagingKey),
-                                                                  m2mUnlinks.get(info.stagingKey)
-                                                                )
-                                                              ] as const
-                                                          )
-                                                          .catch(() => null)
-                                                    )
-                                                  )
-                                                  const freshIds = new Map(
-                                                    freshLinks.filter(
-                                                      (e): e is readonly [string, string[]] => !!e
-                                                    )
-                                                  )
-                                                  const values: Record<string, unknown> = {}
-                                                  for (const [k, v] of Object.entries(source)) {
-                                                    if (
-                                                      !copyable.has(k) ||
-                                                      skip.has(k) ||
-                                                      k.includes('.') ||
-                                                      k.startsWith('__')
-                                                    )
-                                                      continue
-                                                    if (v === undefined || v === null || v === '')
-                                                      continue
-                                                    if (typeof v === 'object') continue
-                                                    values[k] = v
-                                                  }
-                                                  // M2M links — every alias's committed id set, staged on the
-                                                  // new form exactly like hand-picked selections.
-                                                  const links: Record<string, unknown[]> = {}
-                                                  for (const [
-                                                    aliasField,
-                                                    info
-                                                  ] of m2mAliasFieldsForRules.entries()) {
-                                                    // Attachments never copy — file links belong to the original.
-                                                    if (
-                                                      aliasField === 'files' ||
-                                                      /_files$/i.test(info.manyCollection)
-                                                    )
-                                                      continue
-                                                    const aliasFc = (fieldConfig ?? []).find(
-                                                      (f) => f.field === aliasField
-                                                    )
-                                                    if (aliasFc && isNoDuplicate(aliasFc)) continue
-                                                    const ids =
-                                                      freshIds.get(info.stagingKey) ??
-                                                      m2mAliasFieldStates[aliasField]?.ids ??
-                                                      []
-                                                    if (ids.length) links[info.stagingKey] = ids
-                                                  }
-                                                  // O2M child rows for the grids this layout shows (files
-                                                  // and audit children are not grids, so they never copy).
-                                                  const rows: Record<
-                                                    string,
-                                                    Array<Record<string, unknown>>
-                                                  > = {}
-                                                  for (const fc of fieldConfig ?? []) {
-                                                    // A child set the record marks "do not
-                                                    // duplicate" (integration logs, queue rows) or
-                                                    // read-only never follows the copy.
-                                                    if (
-                                                      fc.hidden ||
-                                                      fc.readonly ||
-                                                      isNoDuplicate(fc)
-                                                    )
-                                                      continue
-                                                    const rel = (relations ?? []).find(
-                                                      (r) =>
-                                                        r.one_collection === collection &&
-                                                        !r.junction_field &&
-                                                        (r.one_field === fc.field ||
-                                                          r.many_collection === fc.field)
-                                                    )
-                                                    if (!rel?.many_collection || !rel.many_field)
-                                                      continue
-                                                    const key = `${rel.many_collection}.${rel.many_field}`
-                                                    if (rows[key]) continue
-                                                    try {
-                                                      const [res, childConfig] = await Promise.all([
-                                                        client.request(
-                                                          get<{
-                                                            data: Array<Record<string, unknown>>
-                                                          }>(`/items/${rel.many_collection}`, {
-                                                            limit: 200,
-                                                            filter: JSON.stringify({
-                                                              [rel.many_field]: { _eq: itemId }
-                                                            })
-                                                          })
-                                                        ) as Promise<{
-                                                          data: Array<Record<string, unknown>>
-                                                        }>,
-                                                        // The line's own field config: its
-                                                        // read-only / "do not duplicate" columns
-                                                        // (a sales order number, shipped qty)
-                                                        // stay behind. Unreadable = copy as before.
-                                                        qc
-                                                          .fetchQuery({
-                                                            queryKey: [
-                                                              'field-config',
-                                                              rel.many_collection,
-                                                              null
-                                                            ],
-                                                            queryFn: () =>
-                                                              client
-                                                                .request<{ data: CMSField[] }>(
-                                                                  get(
-                                                                    `/field-config/${rel.many_collection}`
-                                                                  )
-                                                                )
-                                                                .then((r) => r.data ?? []),
-                                                            staleTime: 60_000
-                                                          })
-                                                          .catch(() => null)
-                                                      ])
-                                                      const childRows = (res.data ?? []).map((r0) =>
-                                                        duplicateChildRow(
-                                                          r0,
-                                                          rel.many_field as string,
-                                                          childConfig
-                                                        )
+                                                        skip.add(fc.field)
+                                                      const readonlyFc = Boolean(
+                                                        (fc as { readonly?: boolean }).readonly
                                                       )
-                                                      if (childRows.length) rows[key] = childRows
-                                                    } catch {
-                                                      /* a grid that fails to read just doesn't copy */
+                                                      const noDupe = Boolean(
+                                                        opts &&
+                                                          typeof opts === 'object' &&
+                                                          (opts as { no_duplicate?: unknown })
+                                                            .no_duplicate
+                                                      )
+                                                      if (
+                                                        !fc.hidden &&
+                                                        !readonlyFc &&
+                                                        !noDupe &&
+                                                        (fc as { layout_assigned?: boolean })
+                                                          .layout_assigned !== false
+                                                      ) {
+                                                        copyable.add(fc.field)
+                                                      }
                                                     }
-                                                  }
-                                                  onDuplicate({
-                                                    values,
-                                                    links,
-                                                    rows,
-                                                    layout_slug:
-                                                      (
-                                                        layoutMeta as
-                                                          | { slug?: string | null }
-                                                          | undefined
-                                                      )?.slug ?? null
-                                                  })
+                                                    // Copy the record as it is NOW, not the copy this
+                                                    // tab loaded: a junction edit (Zone, funding year)
+                                                    // made elsewhere never reaches an open form, and the
+                                                    // duplicate carried values the record no longer had.
+                                                    // The person's own unsaved edits still win.
+                                                    const fresh = await client
+                                                      .request<{ data: Record<string, unknown> }>(
+                                                        get(`/items/${collection}/${itemId}`)
+                                                      )
+                                                      .then((r) => r.data ?? null)
+                                                      .catch(() => null)
+                                                    const source: Record<string, unknown> = fresh
+                                                      ? { ...fresh }
+                                                      : { ...draft }
+                                                    if (fresh)
+                                                      for (const k of userTouchedRef.current)
+                                                        if (
+                                                          !valuesEqual(
+                                                            draft[k],
+                                                            initialDataRef.current[k]
+                                                          )
+                                                        )
+                                                          source[k] = draft[k]
+                                                    const freshLinks = await Promise.all(
+                                                      [...m2mAliasFieldsForRules.values()].map(
+                                                        (info) =>
+                                                          qc
+                                                            .fetchQuery({
+                                                              queryKey: [
+                                                                'm2m-items',
+                                                                info.manyCollection,
+                                                                info.manyField,
+                                                                itemId
+                                                              ],
+                                                              queryFn: () =>
+                                                                client
+                                                                  .request<{
+                                                                    data: Record<string, unknown>[]
+                                                                  }>(
+                                                                    get(
+                                                                      `/items/${info.manyCollection}`,
+                                                                      {
+                                                                        filter: JSON.stringify({
+                                                                          [info.manyField]: {
+                                                                            _eq: itemId
+                                                                          }
+                                                                        }),
+                                                                        limit: 200,
+                                                                        fields: `id,${info.junctionField}`
+                                                                      }
+                                                                    )
+                                                                  )
+                                                                  .then((r) => r.data ?? []),
+                                                              staleTime: 0
+                                                            })
+                                                            .then(
+                                                              (rows) =>
+                                                                [
+                                                                  info.stagingKey,
+                                                                  computeM2MEffectiveIds(
+                                                                    rows,
+                                                                    info.junctionField,
+                                                                    m2mLinks.get(info.stagingKey),
+                                                                    m2mUnlinks.get(info.stagingKey)
+                                                                  )
+                                                                ] as const
+                                                            )
+                                                            .catch(() => null)
+                                                      )
+                                                    )
+                                                    const freshIds = new Map(
+                                                      freshLinks.filter(
+                                                        (e): e is readonly [string, string[]] => !!e
+                                                      )
+                                                    )
+                                                    const values: Record<string, unknown> = {}
+                                                    for (const [k, v] of Object.entries(source)) {
+                                                      if (
+                                                        !copyable.has(k) ||
+                                                        skip.has(k) ||
+                                                        k.includes('.') ||
+                                                        k.startsWith('__')
+                                                      )
+                                                        continue
+                                                      if (v === undefined || v === null || v === '')
+                                                        continue
+                                                      if (typeof v === 'object') continue
+                                                      values[k] = v
+                                                    }
+                                                    // M2M links — every alias's committed id set, staged on the
+                                                    // new form exactly like hand-picked selections.
+                                                    const links: Record<string, unknown[]> = {}
+                                                    for (const [
+                                                      aliasField,
+                                                      info
+                                                    ] of m2mAliasFieldsForRules.entries()) {
+                                                      // Attachments never copy — file links belong to the original.
+                                                      if (
+                                                        aliasField === 'files' ||
+                                                        /_files$/i.test(info.manyCollection)
+                                                      )
+                                                        continue
+                                                      const aliasFc = (fieldConfig ?? []).find(
+                                                        (f) => f.field === aliasField
+                                                      )
+                                                      if (aliasFc && isNoDuplicate(aliasFc))
+                                                        continue
+                                                      const ids =
+                                                        freshIds.get(info.stagingKey) ??
+                                                        m2mAliasFieldStates[aliasField]?.ids ??
+                                                        []
+                                                      if (ids.length) links[info.stagingKey] = ids
+                                                    }
+                                                    // O2M child rows for the grids this layout shows (files
+                                                    // and audit children are not grids, so they never copy).
+                                                    const rows: Record<
+                                                      string,
+                                                      Array<Record<string, unknown>>
+                                                    > = {}
+                                                    for (const fc of fieldConfig ?? []) {
+                                                      // A child set the record marks "do not
+                                                      // duplicate" (integration logs, queue rows) or
+                                                      // read-only never follows the copy.
+                                                      if (
+                                                        fc.hidden ||
+                                                        fc.readonly ||
+                                                        isNoDuplicate(fc)
+                                                      )
+                                                        continue
+                                                      const rel = (relations ?? []).find(
+                                                        (r) =>
+                                                          r.one_collection === collection &&
+                                                          !r.junction_field &&
+                                                          (r.one_field === fc.field ||
+                                                            r.many_collection === fc.field)
+                                                      )
+                                                      if (!rel?.many_collection || !rel.many_field)
+                                                        continue
+                                                      const key = `${rel.many_collection}.${rel.many_field}`
+                                                      if (rows[key]) continue
+                                                      try {
+                                                        const [res, childConfig] =
+                                                          await Promise.all([
+                                                            client.request(
+                                                              get<{
+                                                                data: Array<Record<string, unknown>>
+                                                              }>(`/items/${rel.many_collection}`, {
+                                                                limit: 200,
+                                                                filter: JSON.stringify({
+                                                                  [rel.many_field]: { _eq: itemId }
+                                                                })
+                                                              })
+                                                            ) as Promise<{
+                                                              data: Array<Record<string, unknown>>
+                                                            }>,
+                                                            // The line's own field config: its
+                                                            // read-only / "do not duplicate" columns
+                                                            // (a sales order number, shipped qty)
+                                                            // stay behind. Unreadable = copy as before.
+                                                            qc
+                                                              .fetchQuery({
+                                                                queryKey: [
+                                                                  'field-config',
+                                                                  rel.many_collection,
+                                                                  null
+                                                                ],
+                                                                queryFn: () =>
+                                                                  client
+                                                                    .request<{ data: CMSField[] }>(
+                                                                      get(
+                                                                        `/field-config/${rel.many_collection}`
+                                                                      )
+                                                                    )
+                                                                    .then((r) => r.data ?? []),
+                                                                staleTime: 60_000
+                                                              })
+                                                              .catch(() => null)
+                                                          ])
+                                                        const childRows = (res.data ?? []).map(
+                                                          (r0) =>
+                                                            duplicateChildRow(
+                                                              r0,
+                                                              rel.many_field as string,
+                                                              childConfig
+                                                            )
+                                                        )
+                                                        if (childRows.length) rows[key] = childRows
+                                                      } catch {
+                                                        /* a grid that fails to read just doesn't copy */
+                                                      }
+                                                    }
+                                                    onDuplicate({
+                                                      values,
+                                                      links,
+                                                      rows,
+                                                      layout_slug:
+                                                        (
+                                                          layoutMeta as
+                                                            | { slug?: string | null }
+                                                            | undefined
+                                                        )?.slug ?? null
+                                                    })
+                                                  }}
+                                                  className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                                  data-duplicate-record
+                                                >
+                                                  <svg
+                                                    width='13'
+                                                    height='13'
+                                                    viewBox='0 0 24 24'
+                                                    fill='none'
+                                                    stroke='currentColor'
+                                                    strokeWidth='2'
+                                                    strokeLinecap='round'
+                                                    strokeLinejoin='round'
+                                                    aria-hidden='true'
+                                                  >
+                                                    <rect
+                                                      x='9'
+                                                      y='9'
+                                                      width='13'
+                                                      height='13'
+                                                      rx='2'
+                                                    />
+                                                    <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                                  </svg>
+                                                  Duplicate
+                                                </button>
+                                              )}
+                                              <button
+                                                type='button'
+                                                title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
+                                                data-save-as-template
+                                                onClick={() => {
+                                                  setTemplateName('')
+                                                  setTemplateShared(false)
+                                                  setTemplateDialogOpen(true)
                                                 }}
                                                 className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                                data-duplicate-record
                                               >
                                                 <svg
                                                   width='13'
@@ -13790,919 +14157,1076 @@ function ItemEditFormView({
                                                   strokeLinejoin='round'
                                                   aria-hidden='true'
                                                 >
-                                                  <rect x='9' y='9' width='13' height='13' rx='2' />
-                                                  <path d='M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' />
+                                                  <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
+                                                  <polyline points='17 21 17 13 7 13 7 21' />
+                                                  <polyline points='7 3 7 8 15 8' />
                                                 </svg>
-                                                Duplicate
+                                                Save as template
                                               </button>
-                                            )}
-                                            <button
-                                              type='button'
-                                              title='Save this record as a reusable pre-fill template — plain field values only (same exclusions as Duplicate)'
-                                              data-save-as-template
-                                              onClick={() => {
-                                                setTemplateName('')
-                                                setTemplateShared(false)
-                                                setTemplateDialogOpen(true)
-                                              }}
-                                              className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                            >
-                                              <svg
-                                                width='13'
-                                                height='13'
-                                                viewBox='0 0 24 24'
-                                                fill='none'
-                                                stroke='currentColor'
-                                                strokeWidth='2'
-                                                strokeLinecap='round'
-                                                strokeLinejoin='round'
-                                                aria-hidden='true'
-                                              >
-                                                <path d='M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z' />
-                                                <polyline points='17 21 17 13 7 13 7 21' />
-                                                <polyline points='7 3 7 8 15 8' />
-                                              </svg>
-                                              Save as template
-                                            </button>
-                                            {!isAdmin && !isNew && itemId && (
-                                              <button
-                                                type='button'
-                                                data-tip='Tell the administrators how this form could work better'
-                                                data-suggest-form-change-open
-                                                data-nvr-menu-close
-                                                onClick={(e) => {
-                                                  // The row's menu closes with this click: anchor to its button.
-                                                  setSuggestAnchor(
-                                                    document.querySelector<HTMLElement>(
-                                                      '[data-nvr-header-tools-btn][aria-expanded="true"]'
-                                                    ) ??
-                                                      document.querySelector<HTMLElement>(
-                                                        '[data-nvr-header-menu-btn][aria-expanded="true"]'
-                                                      ) ??
-                                                      e.currentTarget
-                                                  )
-                                                  setSuggestOpen(true)
-                                                }}
-                                                className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                              >
-                                                <MessageSquarePlus className='h-3.5 w-3.5' />
-                                                Suggest a form change
-                                              </button>
-                                            )}
-                                            {isAdmin && (
-                                              <>
-                                                <div data-nvr-menu-divider />
-                                                <Button
+                                              {!isAdmin && !isNew && itemId && (
+                                                <button
                                                   type='button'
-                                                  variant='outline'
-                                                  size='sm'
+                                                  data-tip='Tell the administrators how this form could work better'
+                                                  data-suggest-form-change-open
                                                   data-nvr-menu-close
-                                                  onClick={() => setRawEditOpen(true)}
-                                                  title='Edit every field with conditional logic bypassed (admin)'
-                                                  className='gap-1.5'
-                                                >
-                                                  <Wrench className='h-3.5 w-3.5' />
-                                                  Raw edit
-                                                </Button>
-                                                {!isNew && (
-                                                  <Button
-                                                    type='button'
-                                                    variant='outline'
-                                                    size='sm'
-                                                    onClick={() => setViewAsOpen(true)}
-                                                    title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
-                                                    className='gap-1.5'
-                                                    data-view-as-role-open
-                                                  >
-                                                    <Eye className='h-3.5 w-3.5' />
-                                                    View as role…
-                                                  </Button>
-                                                )}
-                                                {effectiveShowClone && (
-                                                  // lint-traps-ok: self-triggered; HeaderTools ignores clicks inside dialogs it opened
-                                                  <CloneDialog
-                                                    collection={collection}
-                                                    itemId={itemId}
-                                                    fields={fieldConfig ?? []}
-                                                    relations={relations}
-                                                    currentValues={itemData ?? {}}
-                                                    onSuccess={(newId) => onSaved?.(String(newId))}
-                                                  />
-                                                )}
-                                              </>
-                                            )}
-                                            {moreMenuItems}
-                                            {canDelete && <div data-nvr-menu-divider />}
-                                            {canDelete &&
-                                              (confirmDelete ? (
-                                                <>
-                                                  <span className='text-sm text-muted-foreground'>
-                                                    Delete?
-                                                  </span>
-                                                  <Button
-                                                    type='button'
-                                                    size='sm'
-                                                    variant='destructive'
-                                                    className='gap-1.5'
-                                                    onClick={() => deleteMut.mutate()}
-                                                    disabled={deleteMut.isPending}
-                                                  >
-                                                    {deleteMut.isPending ? (
-                                                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                                    ) : (
-                                                      'Yes, delete'
-                                                    )}
-                                                  </Button>
-                                                  <Button
-                                                    type='button'
-                                                    size='sm'
-                                                    variant='outline'
-                                                    onClick={() => setConfirmDelete(false)}
-                                                  >
-                                                    Cancel
-                                                  </Button>
-                                                </>
-                                              ) : (
-                                                <Button
-                                                  type='button'
-                                                  size='sm'
-                                                  variant='outline'
-                                                  className='gap-1.5 text-destructive hover:text-destructive'
-                                                  aria-label='Delete this record'
-                                                  data-tip='Delete this record (asks to confirm)'
-                                                  onClick={() => setConfirmDelete(true)}
-                                                >
-                                                  <Trash2 className='h-3.5 w-3.5' />
-                                                  Delete
-                                                </Button>
-                                              ))}
-                                          </HeaderMenu>
-                                        )}
-                                        {templateDialogOpen &&
-                                          createPortal(
-                                            <div className='fixed inset-0 z-[130] flex items-center justify-center'>
-                                              {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
-                                              <div
-                                                className='absolute inset-0 bg-black/30'
-                                                onClick={() => setTemplateDialogOpen(false)}
-                                              />
-                                              <div
-                                                role='dialog'
-                                                aria-label='Save as template'
-                                                className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
-                                                onKeyDown={(e) => {
-                                                  if (e.key === 'Escape')
-                                                    setTemplateDialogOpen(false)
-                                                }}
-                                              >
-                                                <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-                                                  Save as template
-                                                </p>
-                                                <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
-                                                  This record's plain field values become a reusable
-                                                  pre-fill template — same exclusions as Duplicate
-                                                  (no ids, audit stamps, computed fields, or line
-                                                  items).
-                                                </p>
-                                                <input
-                                                  // biome-ignore lint/a11y/noAutofocus: dialog's single input
-                                                  autoFocus
-                                                  value={templateName}
-                                                  onChange={(e) => setTemplateName(e.target.value)}
-                                                  onKeyDown={(e) => {
-                                                    if (e.key === 'Enter' && templateName.trim()) {
-                                                      ;(
-                                                        document.querySelector(
-                                                          '[data-template-save-btn]'
-                                                        ) as HTMLButtonElement | null
-                                                      )?.click()
-                                                    }
+                                                  onClick={(e) => {
+                                                    // The row's menu closes with this click: anchor to its button.
+                                                    setSuggestAnchor(
+                                                      document.querySelector<HTMLElement>(
+                                                        '[data-nvr-header-tools-btn][aria-expanded="true"]'
+                                                      ) ??
+                                                        document.querySelector<HTMLElement>(
+                                                          '[data-nvr-header-menu-btn][aria-expanded="true"]'
+                                                        ) ??
+                                                        e.currentTarget
+                                                    )
+                                                    setSuggestOpen(true)
                                                   }}
-                                                  placeholder='Template name'
-                                                  className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
-                                                />
-                                                <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-                                                  <input
-                                                    type='checkbox'
-                                                    checked={templateShared}
-                                                    onChange={(e) =>
-                                                      setTemplateShared(e.target.checked)
-                                                    }
-                                                    className='h-3.5 w-3.5'
-                                                  />
-                                                  Share with everyone (otherwise it's just yours)
-                                                </label>
-                                                <div className='mt-4 flex justify-end gap-2'>
-                                                  <button
+                                                  className='inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                                >
+                                                  <MessageSquarePlus className='h-3.5 w-3.5' />
+                                                  Suggest a form change
+                                                </button>
+                                              )}
+                                              {isAdmin && (
+                                                <>
+                                                  <div data-nvr-menu-divider />
+                                                  <Button
                                                     type='button'
-                                                    onClick={() => setTemplateDialogOpen(false)}
-                                                    className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+                                                    variant='outline'
+                                                    size='sm'
+                                                    data-nvr-menu-close
+                                                    onClick={() => setRawEditOpen(true)}
+                                                    title='Edit every field with conditional logic bypassed (admin)'
+                                                    className='gap-1.5'
                                                   >
-                                                    Cancel
-                                                  </button>
-                                                  <button
+                                                    <Wrench className='h-3.5 w-3.5' />
+                                                    Raw edit
+                                                  </Button>
+                                                  {!isNew && (
+                                                    <Button
+                                                      type='button'
+                                                      variant='outline'
+                                                      size='sm'
+                                                      onClick={() => setViewAsOpen(true)}
+                                                      title='Render this form exactly as a chosen role sees it (nothing is saved as them)'
+                                                      className='gap-1.5'
+                                                      data-view-as-role-open
+                                                    >
+                                                      <Eye className='h-3.5 w-3.5' />
+                                                      View as role…
+                                                    </Button>
+                                                  )}
+                                                  {effectiveShowClone && (
+                                                    // lint-traps-ok: self-triggered; HeaderTools ignores clicks inside dialogs it opened
+                                                    <CloneDialog
+                                                      collection={collection}
+                                                      itemId={itemId}
+                                                      fields={fieldConfig ?? []}
+                                                      relations={relations}
+                                                      currentValues={itemData ?? {}}
+                                                      onSuccess={(newId) =>
+                                                        onSaved?.(String(newId))
+                                                      }
+                                                    />
+                                                  )}
+                                                </>
+                                              )}
+                                              {moreMenuItems}
+                                              {canDelete && <div data-nvr-menu-divider />}
+                                              {canDelete &&
+                                                (confirmDelete ? (
+                                                  <>
+                                                    <span className='text-sm text-muted-foreground'>
+                                                      Delete?
+                                                    </span>
+                                                    <Button
+                                                      type='button'
+                                                      size='sm'
+                                                      variant='destructive'
+                                                      className='gap-1.5'
+                                                      onClick={() => deleteMut.mutate()}
+                                                      disabled={deleteMut.isPending}
+                                                    >
+                                                      {deleteMut.isPending ? (
+                                                        <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                                      ) : (
+                                                        'Yes, delete'
+                                                      )}
+                                                    </Button>
+                                                    <Button
+                                                      type='button'
+                                                      size='sm'
+                                                      variant='outline'
+                                                      onClick={() => setConfirmDelete(false)}
+                                                    >
+                                                      Cancel
+                                                    </Button>
+                                                  </>
+                                                ) : (
+                                                  <Button
                                                     type='button'
-                                                    data-template-save-btn
-                                                    disabled={
-                                                      !templateName.trim() || templateSaving
+                                                    size='sm'
+                                                    variant='outline'
+                                                    className='gap-1.5 text-destructive hover:text-destructive'
+                                                    aria-label='Delete this record'
+                                                    data-tip='Delete this record (asks to confirm)'
+                                                    onClick={() => setConfirmDelete(true)}
+                                                  >
+                                                    <Trash2 className='h-3.5 w-3.5' />
+                                                    Delete
+                                                  </Button>
+                                                ))}
+                                            </HeaderMenu>
+                                          )}
+                                          {templateDialogOpen &&
+                                            createPortal(
+                                              <div className='fixed inset-0 z-[130] flex items-center justify-center'>
+                                                {/* biome-ignore lint/a11y/useKeyWithClickEvents: backdrop dismiss */}
+                                                <div
+                                                  className='absolute inset-0 bg-black/30'
+                                                  onClick={() => setTemplateDialogOpen(false)}
+                                                />
+                                                <div
+                                                  role='dialog'
+                                                  aria-label='Save as template'
+                                                  className='relative w-[380px] rounded-xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-border dark:bg-card'
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Escape')
+                                                      setTemplateDialogOpen(false)
+                                                  }}
+                                                >
+                                                  <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                                                    Save as template
+                                                  </p>
+                                                  <p className='mt-1 text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                                                    This record's plain field values become a
+                                                    reusable pre-fill template — same exclusions as
+                                                    Duplicate (no ids, audit stamps, computed
+                                                    fields, or line items).
+                                                  </p>
+                                                  <input
+                                                    // biome-ignore lint/a11y/noAutofocus: dialog's single input
+                                                    autoFocus
+                                                    value={templateName}
+                                                    onChange={(e) =>
+                                                      setTemplateName(e.target.value)
                                                     }
-                                                    onClick={async () => {
-                                                      // Same harvest rules as Duplicate: visible,
-                                                      // editable, non-computed, non-auto-id scalars
-                                                      // + M2O FKs only.
-                                                      const AUDIT = new Set([
-                                                        'id',
-                                                        'user_created',
-                                                        'date_created',
-                                                        'user_updated',
-                                                        'date_updated',
-                                                        'created_at',
-                                                        'updated_at',
-                                                        'created',
-                                                        'changed',
-                                                        'creator',
-                                                        'last_state_change'
-                                                      ])
-                                                      const values: Record<string, unknown> = {}
-                                                      for (const fc of fieldConfig ?? []) {
-                                                        const opts = fc.options as Record<
-                                                          string,
-                                                          unknown
-                                                        > | null
-                                                        if (AUDIT.has(fc.field)) continue
-                                                        if (
-                                                          opts &&
-                                                          typeof opts === 'object' &&
-                                                          (opts as { auto_id?: unknown }).auto_id
-                                                        )
-                                                          continue
-                                                        if (
-                                                          isDerivedForRecord(
-                                                            fc as { computed_type?: string | null },
-                                                            draft
-                                                          )
-                                                        )
-                                                          continue
-                                                        if (
-                                                          fc.hidden ||
-                                                          (fc as { readonly?: boolean }).readonly
-                                                        )
-                                                          continue
-                                                        if (
-                                                          (fc as { layout_assigned?: boolean })
-                                                            .layout_assigned === false
-                                                        )
-                                                          continue
-                                                        const v = draft[fc.field]
-                                                        if (
-                                                          v === undefined ||
-                                                          v === null ||
-                                                          v === ''
-                                                        )
-                                                          continue
-                                                        if (typeof v === 'object') continue
-                                                        values[fc.field] = v
-                                                      }
-                                                      // M2M / M2A links (a contact picker) ride
-                                                      // as `__links` — the prefill contract —
-                                                      // instead of being left out. Files stay
-                                                      // with their record.
-                                                      const links = templateLinks(
-                                                        fieldConfig ?? [],
-                                                        m2mAliasFieldsForRules,
-                                                        m2mAliasFieldStates,
-                                                        relations
-                                                      )
-                                                      if (links) values.__links = links
-                                                      if (Object.keys(values).length === 0) {
-                                                        toast.error(
-                                                          'Nothing to save — no plain field values on this record'
-                                                        )
-                                                        return
-                                                      }
-                                                      setTemplateSaving(true)
-                                                      try {
-                                                        await client.request(
-                                                          post('/record-templates', {
-                                                            collection,
-                                                            name: templateName.trim(),
-                                                            data: values,
-                                                            is_shared: templateShared
-                                                          })
-                                                        )
-                                                        toast.success(
-                                                          `Template "${templateName.trim()}" saved`
-                                                        )
-                                                        setTemplateDialogOpen(false)
-                                                      } catch {
-                                                        toast.error('Failed to save template')
-                                                      } finally {
-                                                        setTemplateSaving(false)
+                                                    onKeyDown={(e) => {
+                                                      if (
+                                                        e.key === 'Enter' &&
+                                                        templateName.trim()
+                                                      ) {
+                                                        ;(
+                                                          document.querySelector(
+                                                            '[data-template-save-btn]'
+                                                          ) as HTMLButtonElement | null
+                                                        )?.click()
                                                       }
                                                     }}
-                                                    className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
-                                                  >
-                                                    {templateSaving ? 'Saving…' : 'Save template'}
-                                                  </button>
+                                                    placeholder='Template name'
+                                                    className='mt-3 h-9 w-full rounded-md border border-slate-200 bg-background px-3 text-[13px] dark:border-border'
+                                                  />
+                                                  <label className='mt-2.5 flex cursor-pointer items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+                                                    <input
+                                                      type='checkbox'
+                                                      checked={templateShared}
+                                                      onChange={(e) =>
+                                                        setTemplateShared(e.target.checked)
+                                                      }
+                                                      className='h-3.5 w-3.5'
+                                                    />
+                                                    Share with everyone (otherwise it's just yours)
+                                                  </label>
+                                                  <div className='mt-4 flex justify-end gap-2'>
+                                                    <button
+                                                      type='button'
+                                                      onClick={() => setTemplateDialogOpen(false)}
+                                                      className='h-8 rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-muted-foreground dark:hover:bg-muted'
+                                                    >
+                                                      Cancel
+                                                    </button>
+                                                    <button
+                                                      type='button'
+                                                      data-template-save-btn
+                                                      disabled={
+                                                        !templateName.trim() || templateSaving
+                                                      }
+                                                      onClick={async () => {
+                                                        // Same harvest rules as Duplicate: visible,
+                                                        // editable, non-computed, non-auto-id scalars
+                                                        // + M2O FKs only.
+                                                        const AUDIT = new Set([
+                                                          'id',
+                                                          'user_created',
+                                                          'date_created',
+                                                          'user_updated',
+                                                          'date_updated',
+                                                          'created_at',
+                                                          'updated_at',
+                                                          'created',
+                                                          'changed',
+                                                          'creator',
+                                                          'last_state_change'
+                                                        ])
+                                                        const values: Record<string, unknown> = {}
+                                                        for (const fc of fieldConfig ?? []) {
+                                                          const opts = fc.options as Record<
+                                                            string,
+                                                            unknown
+                                                          > | null
+                                                          if (AUDIT.has(fc.field)) continue
+                                                          if (
+                                                            opts &&
+                                                            typeof opts === 'object' &&
+                                                            (opts as { auto_id?: unknown }).auto_id
+                                                          )
+                                                            continue
+                                                          if (
+                                                            isDerivedForRecord(
+                                                              fc as {
+                                                                computed_type?: string | null
+                                                              },
+                                                              draft
+                                                            )
+                                                          )
+                                                            continue
+                                                          if (
+                                                            fc.hidden ||
+                                                            (fc as { readonly?: boolean }).readonly
+                                                          )
+                                                            continue
+                                                          if (
+                                                            (fc as { layout_assigned?: boolean })
+                                                              .layout_assigned === false
+                                                          )
+                                                            continue
+                                                          const v = draft[fc.field]
+                                                          if (
+                                                            v === undefined ||
+                                                            v === null ||
+                                                            v === ''
+                                                          )
+                                                            continue
+                                                          if (typeof v === 'object') continue
+                                                          values[fc.field] = v
+                                                        }
+                                                        // M2M / M2A links (a contact picker) ride
+                                                        // as `__links` — the prefill contract —
+                                                        // instead of being left out. Files stay
+                                                        // with their record.
+                                                        const links = templateLinks(
+                                                          fieldConfig ?? [],
+                                                          m2mAliasFieldsForRules,
+                                                          m2mAliasFieldStates,
+                                                          relations
+                                                        )
+                                                        if (links) values.__links = links
+                                                        if (Object.keys(values).length === 0) {
+                                                          toast.error(
+                                                            'Nothing to save — no plain field values on this record'
+                                                          )
+                                                          return
+                                                        }
+                                                        setTemplateSaving(true)
+                                                        try {
+                                                          await client.request(
+                                                            post('/record-templates', {
+                                                              collection,
+                                                              name: templateName.trim(),
+                                                              data: values,
+                                                              is_shared: templateShared
+                                                            })
+                                                          )
+                                                          toast.success(
+                                                            `Template "${templateName.trim()}" saved`
+                                                          )
+                                                          setTemplateDialogOpen(false)
+                                                        } catch {
+                                                          toast.error('Failed to save template')
+                                                        } finally {
+                                                          setTemplateSaving(false)
+                                                        }
+                                                      }}
+                                                      className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-semibold text-white disabled:opacity-50'
+                                                    >
+                                                      {templateSaving ? 'Saving…' : 'Save template'}
+                                                    </button>
+                                                  </div>
                                                 </div>
-                                              </div>
-                                            </div>,
-                                            document.body
-                                          )}
-                                      </HeaderTools>
-                                      {/* Hold / Remove Hold (registry header actions) sit right
+                                              </div>,
+                                              document.body
+                                            )}
+                                        </HeaderTools>
+                                        {/* Hold / Remove Hold (registry header actions) sit right
                                         beside More, ahead of the record and pipeline actions. */}
-                                      {!isNew && (
-                                        <RecordHeaderActionButtons
-                                          actions={headerRegistryActions}
-                                          onPick={setHeaderRegistryPick}
-                                        />
-                                      )}
-                                      {/* Request help is a primary action beside Save, never in the
+                                        {!isNew && (
+                                          <RecordHeaderActionButtons
+                                            actions={headerRegistryActions}
+                                            onPick={setHeaderRegistryPick}
+                                          />
+                                        )}
+                                        {/* Request help is a primary action beside Save, never in the
                                         folded ⋯ panel: on a locked record it is the way to a change. */}
-                                      {!isNew && itemId && (
-                                        <button
-                                          type='button'
-                                          data-tip='Ask the administrators to change something on this record'
-                                          data-request-change
-                                          onClick={() => setSupportOpen(true)}
-                                          className='inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                        >
-                                          <LifeBuoy className='h-3.5 w-3.5' />
-                                          Request help
-                                        </button>
-                                      )}
-                                      {/* Record actions stay inline beside Save, never in the
+                                        {!isNew && itemId && (
+                                          <button
+                                            type='button'
+                                            data-tip='Ask the administrators to change something on this record'
+                                            data-request-change
+                                            onClick={() => setSupportOpen(true)}
+                                            className='inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+                                          >
+                                            <LifeBuoy className='h-3.5 w-3.5' />
+                                            Request help
+                                          </button>
+                                        )}
+                                        {/* Record actions stay inline beside Save, never in the
                                         folded ⋯ panel: on a narrower screen Push to Fusion was
                                         only reachable behind an unlabeled ⋯ and read as gone. */}
-                                      {showItemActions && !isNew && (
-                                        <ItemActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                        />
-                                      )}
-                                      {/* Admin-defined no-code actions (#39) — always
+                                        {showItemActions && !isNew && (
+                                          <ItemActionButtons
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                          />
+                                        )}
+                                        {/* Admin-defined no-code actions (#39) — always
                                         mounted; renders nothing when none exist. */}
-                                      {!isNew && itemId && (
-                                        <CustomActionButtons
-                                          collection={collection}
-                                          itemId={String(itemId)}
-                                          draft={draft}
-                                        />
-                                      )}
-                                      {!!activeLayoutData?.layout?.changes_tray && !readMode && (
-                                        <ChangesTray
-                                          items={changeItems}
-                                          saving={saveMut.isPending}
-                                          onRevertAll={
-                                            changeItems.length > 1
-                                              ? () => {
-                                                  for (const it of changeItems) it.onRevert()
-                                                }
-                                              : undefined
-                                          }
-                                        />
-                                      )}
-                                      {!isStepsMode && (
-                                        <div className='relative'>
-                                          {isDirty && !saveMut.isPending && (
+                                        {!isNew && itemId && (
+                                          <CustomActionButtons
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                            draft={draft}
+                                          />
+                                        )}
+                                        {!!activeLayoutData?.layout?.changes_tray && !readMode && (
+                                          <ChangesTray
+                                            items={changeItems}
+                                            saving={saveMut.isPending}
+                                            onRevertAll={
+                                              changeItems.length > 1
+                                                ? () => {
+                                                    for (const it of changeItems) it.onRevert()
+                                                  }
+                                                : undefined
+                                            }
+                                          />
+                                        )}
+                                        {!isStepsMode && (
+                                          <div className='relative'>
+                                            {isDirty && !saveMut.isPending && (
+                                              <button
+                                                type='button'
+                                                onClick={() => setInspectorOpen((v) => !v)}
+                                                title='Unsaved changes — click to see what changed'
+                                                className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
+                                                data-unsaved-dot
+                                              >
+                                                <span
+                                                  className={cn(
+                                                    'nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card',
+                                                    dirtyIdle && 'nvr-idle-breathe'
+                                                  )}
+                                                />
+                                              </button>
+                                            )}
+                                            <UnsavedInspector
+                                              open={inspectorOpen && isDirty}
+                                              onClose={() => setInspectorOpen(false)}
+                                              collection={collection}
+                                              relations={relations}
+                                              fieldConfig={fieldConfig}
+                                              draft={draft}
+                                              initial={initialDataRef.current}
+                                              m2mLinks={m2mLinks}
+                                              m2mUnlinks={m2mUnlinks}
+                                              pendingRowCount={[...pendingO2MRows.values()].reduce(
+                                                (n, r) => n + r.length,
+                                                0
+                                              )}
+                                              pendingDeleteCount={[
+                                                ...pendingO2MDeletes.values()
+                                              ].reduce((n, r) => n + r.size, 0)}
+                                            />
+                                            <Button
+                                              type='button'
+                                              size='sm'
+                                              onClick={() => handleSave()}
+                                              disabled={
+                                                saveMut.isPending ||
+                                                isReadOnly ||
+                                                viewAs.active ||
+                                                everyFieldLocked
+                                              }
+                                              data-tip={
+                                                everyFieldLocked && !isReadOnly
+                                                  ? 'Every field here is locked — nothing to save'
+                                                  : undefined
+                                              }
+                                              className={cn(
+                                                'gap-1.5 transition-colors duration-300',
+                                                // Summary mode has nothing to save — the button would
+                                                // only contradict the "read-only" strip.
+                                                readMode && !isNew && 'hidden',
+                                                // L29 (army 6): a record this person cannot change
+                                                // (step-locked, every field locked, gone) shows no
+                                                // Save. Another editor's lock keeps it, disabled.
+                                                !isNew &&
+                                                  !isDirty &&
+                                                  !lockReadOnly &&
+                                                  (everyFieldLocked ||
+                                                    !!recordGone ||
+                                                    (!!editLockMessage && !editLockPartial)) &&
+                                                  'hidden',
+                                                justSaved &&
+                                                  'bg-emerald-500 hover:bg-emerald-500 text-white'
+                                              )}
+                                            >
+                                              {saveMut.isPending ? (
+                                                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                                              ) : justSaved ? (
+                                                <Check className='nvr-pop h-3.5 w-3.5' />
+                                              ) : (
+                                                <Save className='h-3.5 w-3.5' />
+                                              )}
+                                              {justSaved ? 'Saved' : isNew ? 'Create' : 'Save'}
+                                            </Button>
+                                          </div>
+                                        )}
+                                        {!isNew && addendumEnabled && addendumData.length > 0 && (
+                                          <div className='relative'>
                                             <button
                                               type='button'
-                                              onClick={() => setInspectorOpen((v) => !v)}
-                                              title='Unsaved changes — click to see what changed'
-                                              className='absolute -right-1 -top-1 z-10 h-3 w-3 rounded-full'
-                                              data-unsaved-dot
+                                              onClick={() => setAddendumViewDropdownOpen((o) => !o)}
+                                              className={cn(
+                                                'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
+                                                viewingAddendum
+                                                  ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
+                                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
+                                              )}
+                                              title='Choose which version the form and actions apply to'
                                             >
                                               <span
                                                 className={cn(
-                                                  'nvr-pop absolute inset-0.5 rounded-full bg-amber-400 ring-2 ring-white dark:ring-card',
-                                                  dirtyIdle && 'nvr-idle-breathe'
+                                                  'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                  viewingAddendum ? 'bg-amber-400' : 'bg-slate-400'
                                                 )}
                                               />
+                                              <span className='max-w-[160px] truncate'>
+                                                {viewingAddendum
+                                                  ? (addendumData.find(
+                                                      (a) => a.id === addendumViewId
+                                                    )?.title ?? 'Addendum')
+                                                  : 'Viewing: Current record'}
+                                              </span>
+                                              <ChevronDown className='h-3 w-3 opacity-60' />
                                             </button>
-                                          )}
-                                          <UnsavedInspector
-                                            open={inspectorOpen && isDirty}
-                                            onClose={() => setInspectorOpen(false)}
-                                            collection={collection}
-                                            relations={relations}
-                                            fieldConfig={fieldConfig}
-                                            draft={draft}
-                                            initial={initialDataRef.current}
-                                            m2mLinks={m2mLinks}
-                                            m2mUnlinks={m2mUnlinks}
-                                            pendingRowCount={[...pendingO2MRows.values()].reduce(
-                                              (n, r) => n + r.length,
-                                              0
-                                            )}
-                                            pendingDeleteCount={[
-                                              ...pendingO2MDeletes.values()
-                                            ].reduce((n, r) => n + r.size, 0)}
-                                          />
-                                          <Button
-                                            type='button'
-                                            size='sm'
-                                            onClick={() => handleSave()}
-                                            disabled={
-                                              saveMut.isPending ||
-                                              isReadOnly ||
-                                              viewAs.active ||
-                                              everyFieldLocked
-                                            }
-                                            data-tip={
-                                              everyFieldLocked && !isReadOnly
-                                                ? 'Every field here is locked — nothing to save'
-                                                : undefined
-                                            }
-                                            className={cn(
-                                              'gap-1.5 transition-colors duration-300',
-                                              // Summary mode has nothing to save — the button would
-                                              // only contradict the "read-only" strip.
-                                              readMode && !isNew && 'hidden',
-                                              // L29 (army 6): a record this person cannot change
-                                              // (step-locked, every field locked, gone) shows no
-                                              // Save. Another editor's lock keeps it, disabled.
-                                              !isNew &&
-                                                !isDirty &&
-                                                !lockReadOnly &&
-                                                (everyFieldLocked ||
-                                                  !!recordGone ||
-                                                  (!!editLockMessage && !editLockPartial)) &&
-                                                'hidden',
-                                              justSaved &&
-                                                'bg-emerald-500 hover:bg-emerald-500 text-white'
-                                            )}
-                                          >
-                                            {saveMut.isPending ? (
-                                              <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                                            ) : justSaved ? (
-                                              <Check className='nvr-pop h-3.5 w-3.5' />
-                                            ) : (
-                                              <Save className='h-3.5 w-3.5' />
-                                            )}
-                                            {justSaved ? 'Saved' : isNew ? 'Create' : 'Save'}
-                                          </Button>
-                                        </div>
-                                      )}
-                                      {!isNew && addendumEnabled && addendumData.length > 0 && (
-                                        <div className='relative'>
-                                          <button
-                                            type='button'
-                                            onClick={() => setAddendumViewDropdownOpen((o) => !o)}
-                                            className={cn(
-                                              'flex h-9 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors',
-                                              viewingAddendum
-                                                ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-400'
-                                                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-slate-300'
-                                            )}
-                                            title='Choose which version the form and actions apply to'
-                                          >
-                                            <span
-                                              className={cn(
-                                                'h-1.5 w-1.5 shrink-0 rounded-full',
-                                                viewingAddendum ? 'bg-amber-400' : 'bg-slate-400'
-                                              )}
-                                            />
-                                            <span className='max-w-[160px] truncate'>
-                                              {viewingAddendum
-                                                ? (addendumData.find((a) => a.id === addendumViewId)
-                                                    ?.title ?? 'Addendum')
-                                                : 'Viewing: Current record'}
-                                            </span>
-                                            <ChevronDown className='h-3 w-3 opacity-60' />
-                                          </button>
-                                          {addendumViewDropdownOpen && (
-                                            <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
-                                              <button
-                                                type='button'
-                                                onClick={() => {
-                                                  setAddendumViewId('original')
-                                                  setAddendumViewDropdownOpen(false)
-                                                }}
-                                                className={cn(
-                                                  'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]',
-                                                  addendumViewId === 'original' &&
-                                                    'font-semibold text-slate-900 dark:text-slate-100'
-                                                )}
-                                              >
-                                                <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
-                                                Current record
-                                              </button>
-                                              {addendumData.map((a) => (
+                                            {addendumViewDropdownOpen && (
+                                              <div className='absolute right-0 top-full z-30 mt-1 max-h-[320px] min-w-[240px] overflow-y-auto rounded-md border border-slate-200 bg-white py-0.5 shadow-lg dark:border-border dark:bg-card'>
                                                 <button
-                                                  key={a.id}
                                                   type='button'
                                                   onClick={() => {
-                                                    setAddendumViewId(a.id)
+                                                    setAddendumViewId('original')
                                                     setAddendumViewDropdownOpen(false)
                                                   }}
                                                   className={cn(
-                                                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10',
-                                                    addendumViewId === a.id &&
-                                                      'font-semibold text-amber-900 dark:text-amber-300'
+                                                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.04]',
+                                                    addendumViewId === 'original' &&
+                                                      'font-semibold text-slate-900 dark:text-slate-100'
                                                   )}
                                                 >
-                                                  <span
+                                                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400' />
+                                                  Current record
+                                                </button>
+                                                {addendumData.map((a) => (
+                                                  <button
+                                                    key={a.id}
+                                                    type='button'
+                                                    onClick={() => {
+                                                      setAddendumViewId(a.id)
+                                                      setAddendumViewDropdownOpen(false)
+                                                    }}
                                                     className={cn(
-                                                      'h-1.5 w-1.5 shrink-0 rounded-full',
-                                                      !a.workflow_state &&
-                                                        (a.status === 'approved'
-                                                          ? 'bg-emerald-400'
-                                                          : a.status === 'rejected'
-                                                            ? 'bg-red-400'
-                                                            : 'bg-amber-400')
-                                                    )}
-                                                    style={
-                                                      a.workflow_state?.color
-                                                        ? {
-                                                            backgroundColor: a.workflow_state.color
-                                                          }
-                                                        : a.workflow_state
-                                                          ? { backgroundColor: '#f59e0b' }
-                                                          : undefined
-                                                    }
-                                                  />
-                                                  <span className='flex-1 truncate'>{a.title}</span>
-                                                  <span
-                                                    className={cn(
-                                                      'text-[10px] text-slate-400',
-                                                      !a.workflow_state && 'capitalize'
+                                                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-amber-50 dark:hover:bg-amber-500/10',
+                                                      addendumViewId === a.id &&
+                                                        'font-semibold text-amber-900 dark:text-amber-300'
                                                     )}
                                                   >
-                                                    {a.workflow_state?.label ?? a.status}
-                                                  </span>
-                                                </button>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                      {!isNew &&
-                                        showPipeline &&
-                                        (!isStepsMode || viewingAddendum) && (
-                                          <PipelineTransitionButtons
-                                            wrap={false}
-                                            key={`${pipelineCollection}:${pipelineItem}`}
-                                            collection={pipelineCollection}
-                                            item={pipelineItem}
-                                            // Same as the header buttons: save first, then transition.
-                                            onBeforeTransition={saveThenTransition}
-                                          />
+                                                    <span
+                                                      className={cn(
+                                                        'h-1.5 w-1.5 shrink-0 rounded-full',
+                                                        !a.workflow_state &&
+                                                          (a.status === 'approved'
+                                                            ? 'bg-emerald-400'
+                                                            : a.status === 'rejected'
+                                                              ? 'bg-red-400'
+                                                              : 'bg-amber-400')
+                                                      )}
+                                                      style={
+                                                        a.workflow_state?.color
+                                                          ? {
+                                                              backgroundColor:
+                                                                a.workflow_state.color
+                                                            }
+                                                          : a.workflow_state
+                                                            ? { backgroundColor: '#f59e0b' }
+                                                            : undefined
+                                                      }
+                                                    />
+                                                    <span className='flex-1 truncate'>
+                                                      {a.title}
+                                                    </span>
+                                                    <span
+                                                      className={cn(
+                                                        'text-[10px] text-slate-400',
+                                                        !a.workflow_state && 'capitalize'
+                                                      )}
+                                                    >
+                                                      {a.workflow_state?.label ?? a.status}
+                                                    </span>
+                                                  </button>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
                                         )}
-                                    </div>
-                                  </header>
-                                )}
-                                {!isNew && itemId && (
-                                  <RecordHeaderActionDialog
-                                    action={headerRegistryPick}
-                                    collection={collection}
-                                    itemId={String(itemId)}
-                                    onClose={() => setHeaderRegistryPick(null)}
-                                  />
-                                )}
-                                {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
+                                        {!isNew &&
+                                          showPipeline &&
+                                          (!isStepsMode || viewingAddendum) && (
+                                            <PipelineTransitionButtons
+                                              wrap={false}
+                                              key={`${pipelineCollection}:${pipelineItem}`}
+                                              collection={pipelineCollection}
+                                              item={pipelineItem}
+                                              // Same as the header buttons: save first, then transition.
+                                              onBeforeTransition={saveThenTransition}
+                                            />
+                                          )}
+                                      </div>
+                                    </header>
+                                  )}
+                                  {!isNew && itemId && (
+                                    <RecordHeaderActionDialog
+                                      action={headerRegistryPick}
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      onClose={() => setHeaderRegistryPick(null)}
+                                    />
+                                  )}
+                                  {/* Dialogs live OUTSIDE HeaderTools: a collapsed header (⋯) unmounts its
                                 children, so a change-reason / collision prompt raised from Save never
                                 rendered once the tool strip had folded (reported 2026-09-14). */}
-                                {collision && (
-                                  <MidairCollisionDialog
-                                    collision={collision}
+                                  {collision && (
+                                    <MidairCollisionDialog
+                                      collision={collision}
+                                      fieldLabel={(f) => {
+                                        const fc = allFields.find((af) => af.field === f)
+                                        return fc?.label || titleCase(f)
+                                      }}
+                                      onCancel={() => setCollision(null)}
+                                      onResolve={(takeTheirs) => {
+                                        // The retry goes out against the NEWER base,
+                                        // which disarms the server's mid-air check —
+                                        // so the resolved values go into the
+                                        // synchronous mirrors the payload is built
+                                        // from (draftRef + its baseline) right here.
+                                        // A setDraft alone left draftRef on MINE and
+                                        // the retry wrote over a THEIRS pick (army5
+                                        // b09). THEIRS fields equal their new
+                                        // baseline and are not sent; MINE fields are.
+                                        const r = resolveHeaderCollision({
+                                          draft: draftRef.current,
+                                          initial: initialDataRef.current,
+                                          conflicts: collision.conflicts,
+                                          mine: collision.mine,
+                                          takeTheirs
+                                        })
+                                        draftRef.current = r.draft
+                                        initialDataRef.current = r.initial
+                                        setDraft(r.draft)
+                                        for (const f of r.theirs) userTouchedRef.current.delete(f)
+                                        setRemoteChanges((cur) => {
+                                          const next = { ...cur }
+                                          for (const c of collision.conflicts) delete next[c.field]
+                                          return next
+                                        })
+                                        keptTheirsRef.current = r.theirs.length
+                                        for (const c of collision.conflicts) {
+                                          restoreGuardRef.current.delete(c.field)
+                                          decidedConflictsRef.current.set(c.field, c.current_value)
+                                        }
+                                        if (collision.clientFound && draftBaseOverrideRef.current) {
+                                          // The restored draft's base stays armed
+                                          // (REVIEW-R5 M4): the server still judges
+                                          // every restored field the client could
+                                          // not compare; these decided ones settle
+                                          // without asking again.
+                                        } else {
+                                          // A client-found collision may not know the
+                                          // revision (0): then the form's own base.
+                                          baseRevisionOverrideRef.current =
+                                            collision.latest > 0 ? collision.latest : null
+                                          draftBaseOverrideRef.current = false
+                                        }
+                                        setCollision(null)
+                                        // Settled: the stale banner must not reappear about it (L44).
+                                        acknowledgeStale()
+                                        setTimeout(() => saveMut.mutate(), 0)
+                                      }}
+                                    />
+                                  )}
+                                  {lineCollision && (
+                                    <LineCollisionDialog
+                                      lines={lineCollision}
+                                      hideField={lineMergeHides}
+                                      onCancel={() => {
+                                        // Decide later: a later Save asks for its reason again.
+                                        lineReasonRef.current = null
+                                        setLineCollision(null)
+                                      }}
+                                      onResolve={resolveLineChooser}
+                                    />
+                                  )}
+                                  <ChangeReasonDialog
+                                    challenge={crChallenge}
                                     fieldLabel={(f) => {
                                       const fc = allFields.find((af) => af.field === f)
-                                      return fc?.label || titleCase(f)
-                                    }}
-                                    onCancel={() => setCollision(null)}
-                                    onResolve={(takeTheirs) => {
-                                      // The retry goes out against the NEWER base,
-                                      // which disarms the server's mid-air check —
-                                      // so the resolved values go into the
-                                      // synchronous mirrors the payload is built
-                                      // from (draftRef + its baseline) right here.
-                                      // A setDraft alone left draftRef on MINE and
-                                      // the retry wrote over a THEIRS pick (army5
-                                      // b09). THEIRS fields equal their new
-                                      // baseline and are not sent; MINE fields are.
-                                      const r = resolveHeaderCollision({
-                                        draft: draftRef.current,
-                                        initial: initialDataRef.current,
-                                        conflicts: collision.conflicts,
-                                        mine: collision.mine,
-                                        takeTheirs
-                                      })
-                                      draftRef.current = r.draft
-                                      initialDataRef.current = r.initial
-                                      setDraft(r.draft)
-                                      for (const f of r.theirs) userTouchedRef.current.delete(f)
-                                      setRemoteChanges((cur) => {
-                                        const next = { ...cur }
-                                        for (const c of collision.conflicts) delete next[c.field]
-                                        return next
-                                      })
-                                      keptTheirsRef.current = r.theirs.length
-                                      for (const c of collision.conflicts) {
-                                        restoreGuardRef.current.delete(c.field)
-                                        decidedConflictsRef.current.set(c.field, c.current_value)
-                                      }
-                                      if (collision.clientFound && draftBaseOverrideRef.current) {
-                                        // The restored draft's base stays armed
-                                        // (REVIEW-R5 M4): the server still judges
-                                        // every restored field the client could
-                                        // not compare; these decided ones settle
-                                        // without asking again.
-                                      } else {
-                                        // A client-found collision may not know the
-                                        // revision (0): then the form's own base.
-                                        baseRevisionOverrideRef.current =
-                                          collision.latest > 0 ? collision.latest : null
-                                        draftBaseOverrideRef.current = false
-                                      }
-                                      setCollision(null)
-                                      // Settled: the stale banner must not reappear about it (L44).
-                                      acknowledgeStale()
-                                      setTimeout(() => saveMut.mutate(), 0)
-                                    }}
-                                  />
-                                )}
-                                {lineCollision && (
-                                  <LineCollisionDialog
-                                    lines={lineCollision}
-                                    onCancel={() => {
-                                      // Decide later: a later Save asks for its reason again.
-                                      lineReasonRef.current = null
-                                      setLineCollision(null)
-                                    }}
-                                    onResolve={resolveLineChooser}
-                                  />
-                                )}
-                                <ChangeReasonDialog
-                                  challenge={crChallenge}
-                                  fieldLabel={(f) => {
-                                    const fc = allFields.find((af) => af.field === f)
-                                    return (
-                                      (fc && placementFieldText(fc, placementTextCtx).label) ||
-                                      titleCase(f)
-                                    )
-                                  }}
-                                  onCancel={() => setCrChallenge(null)}
-                                  onSubmit={(reason) => {
-                                    changeReasonRef.current = reason
-                                    setCrChallenge(null)
-                                    nudgeRecommended()
-                                    saveMut.mutate()
-                                  }}
-                                />
-                                {!isNew && itemId && (
-                                  <SupportRequestDialog
-                                    open={supportOpen}
-                                    onOpenChange={setSupportOpen}
-                                    collection={collection}
-                                    item={String(itemId)}
-                                    recordLabel={itemTitle ? String(itemTitle) : null}
-                                    onCreated={(t) =>
-                                      toast.success(`Request #${t.id} sent to the administrators`)
-                                    }
-                                  />
-                                )}
-                                {!isAdmin && !isNew && itemId && (
-                                  <SuggestFormChange
-                                    open={suggestOpen}
-                                    onOpenChange={setSuggestOpen}
-                                    anchor={suggestAnchor}
-                                    collection={collection}
-                                    item={String(itemId)}
-                                    layoutId={layoutMeta?.id != null ? Number(layoutMeta.id) : null}
-                                    layoutName={
-                                      typeof layoutMeta?.name === 'string' ? layoutMeta.name : null
-                                    }
-                                    fields={(fieldConfig ?? [])
-                                      .filter(
-                                        (f) =>
-                                          !f.hidden &&
-                                          (visibleFields.size === 0 || visibleFields.has(f.field))
+                                      return (
+                                        (fc && placementFieldText(fc, placementTextCtx).label) ||
+                                        titleCase(f)
                                       )
-                                      .map((f) => ({
-                                        field: f.field,
-                                        label: f.label || titleCase(f.field.replace(/_/g, ' '))
-                                      }))}
-                                    onSent={(r) =>
-                                      toast.success(
-                                        `Suggestion #${r.id} sent — follow it under My requests`
-                                      )
-                                    }
-                                  />
-                                )}
-                                {!isNew && itemId && (
-                                  <RecordGraphSheet
-                                    collection={collection}
-                                    itemId={String(itemId)}
-                                    open={graphOpen}
-                                    onOpenChange={setGraphOpen}
-                                  />
-                                )}
-                                {isAdmin && !isNew && itemId && (
-                                  <RawEditSheet
-                                    collection={collection}
-                                    itemId={String(itemId)}
-                                    open={rawEditOpen}
-                                    onClose={() => setRawEditOpen(false)}
-                                    onSaved={() => {
-                                      qc.invalidateQueries({
-                                        queryKey: ['item', collection, String(itemId)]
-                                      })
+                                    }}
+                                    onCancel={() => setCrChallenge(null)}
+                                    onSubmit={(reason) => {
+                                      changeReasonRef.current = reason
+                                      setCrChallenge(null)
+                                      nudgeRecommended()
+                                      saveMut.mutate()
                                     }}
                                   />
-                                )}
+                                  {!isNew && itemId && (
+                                    <SupportRequestDialog
+                                      open={supportOpen}
+                                      onOpenChange={setSupportOpen}
+                                      collection={collection}
+                                      item={String(itemId)}
+                                      recordLabel={itemTitle ? String(itemTitle) : null}
+                                      onCreated={(t) =>
+                                        toast.success(`Request #${t.id} sent to the administrators`)
+                                      }
+                                    />
+                                  )}
+                                  {!isAdmin && !isNew && itemId && (
+                                    <SuggestFormChange
+                                      open={suggestOpen}
+                                      onOpenChange={setSuggestOpen}
+                                      anchor={suggestAnchor}
+                                      collection={collection}
+                                      item={String(itemId)}
+                                      layoutId={
+                                        layoutMeta?.id != null ? Number(layoutMeta.id) : null
+                                      }
+                                      layoutName={
+                                        typeof layoutMeta?.name === 'string'
+                                          ? layoutMeta.name
+                                          : null
+                                      }
+                                      fields={(fieldConfig ?? [])
+                                        .filter(
+                                          (f) =>
+                                            !f.hidden &&
+                                            (visibleFields.size === 0 || visibleFields.has(f.field))
+                                        )
+                                        .map((f) => ({
+                                          field: f.field,
+                                          label: f.label || titleCase(f.field.replace(/_/g, ' '))
+                                        }))}
+                                      onSent={(r) =>
+                                        toast.success(
+                                          `Suggestion #${r.id} sent — follow it under My requests`
+                                        )
+                                      }
+                                    />
+                                  )}
+                                  {!isNew && itemId && (
+                                    <RecordGraphSheet
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      open={graphOpen}
+                                      onOpenChange={setGraphOpen}
+                                    />
+                                  )}
+                                  {isAdmin && !isNew && itemId && (
+                                    <RawEditSheet
+                                      collection={collection}
+                                      itemId={String(itemId)}
+                                      open={rawEditOpen}
+                                      onClose={() => setRawEditOpen(false)}
+                                      onSaved={() => {
+                                        qc.invalidateQueries({
+                                          queryKey: ['item', collection, String(itemId)]
+                                        })
+                                      }}
+                                    />
+                                  )}
 
-                                {(entryCfg.badge ||
-                                  (!designOn && entryMode.switchable) ||
-                                  (tourOn && tourSteps.size > 0)) && (
-                                  <EntryStrip
-                                    badge={entryCfg.badge}
-                                    mode={!designOn && entryMode.switchable ? entryMode.mode : null}
-                                    auto={entryMode.auto}
-                                    onMode={entryMode.set}
-                                    tour={
-                                      tourOn && tourSteps.size > 0 ? (
-                                        <FormTourButton onClick={() => setTourOpen(true)} />
-                                      ) : undefined
-                                    }
-                                  />
-                                )}
-                                {tourOpen && tourOn && (
-                                  <FormTour
-                                    key={tourLayoutId ?? 0}
-                                    rootRef={formRootRef}
-                                    steps={tourSteps}
-                                    formName={String(layoutMeta?.name ?? '')}
-                                    onClose={closeTour}
-                                  />
-                                )}
-                                {showHeader &&
-                                  (headerWidgets.length > 0 || headerFields.length > 0) && (
-                                    // Condensing HIDES rather than unmounts: a
-                                    // remount refires every header widget/chip
-                                    // fetch, which read as the sub-header
-                                    // "reloading" on scroll-up.
-                                    <div
-                                      ref={headerStripRef}
-                                      // A stat band (lib/header-strip.ts): tiles are content-sized
-                                      // and grow only to a cap, so a wide window shows a compact
-                                      // cluster on the left and the status dock pinned right — not
-                                      // six labels stretched 300px apart. Narrow windows wrap whole
-                                      // tiles; every tile draws its own top + left hairline and the
-                                      // row clips the outer ones, so dividers stay continuous.
-                                      className={`${HEADER_BAND} ${headerCondensed ? 'hidden' : 'block'}`}
-                                      data-header-dense={headerDense ? '' : undefined}
-                                    >
-                                      <div className={HEADER_ROW}>
-                                        <div className={HEADER_TILES} ref={headerTilesRef}>
-                                          {(() => {
-                                            const tiles = [
-                                              ...headerWidgets.map((w) => ({
-                                                type: 'widget' as const,
-                                                sort: w.sort,
-                                                key: w.field,
-                                                data: w
-                                              })),
-                                              ...headerFields.map((f) => ({
-                                                type: 'field' as const,
-                                                sort: f.sort,
-                                                key: f.field,
-                                                data: f
-                                              })),
-                                              ...headerSummaries.map((h) => ({
-                                                type: 'summary' as const,
-                                                sort: 9_000,
-                                                key: `__summary__${h.field}`,
-                                                data: h
-                                              }))
-                                            ]
-                                              .sort((a, b) => a.sort - b.sort)
-                                              .map((item) => {
-                                                const copyCell = (
-                                                  el: HTMLElement | null,
-                                                  field: string
-                                                ) => {
-                                                  if (!el) return
-                                                  const clone = el.cloneNode(true) as HTMLElement
-                                                  clone
-                                                    .querySelectorAll('[data-copy-skip], button')
-                                                    .forEach((n) => n.remove())
-                                                  const text = clone.textContent?.trim() ?? ''
-                                                  if (text) {
-                                                    navigator.clipboard
-                                                      .writeText(text)
-                                                      .catch(() => {})
-                                                    setCopiedHeaderField(field)
-                                                    setTimeout(
-                                                      () =>
-                                                        setCopiedHeaderField((prev) =>
-                                                          prev === field ? null : prev
-                                                        ),
-                                                      1500
+                                  {(entryCfg.badge ||
+                                    (!designOn && entryMode.switchable) ||
+                                    (tourOn && tourSteps.size > 0)) && (
+                                    <EntryStrip
+                                      badge={entryCfg.badge}
+                                      mode={
+                                        !designOn && entryMode.switchable ? entryMode.mode : null
+                                      }
+                                      auto={entryMode.auto}
+                                      onMode={entryMode.set}
+                                      tour={
+                                        tourOn && tourSteps.size > 0 ? (
+                                          <FormTourButton onClick={() => setTourOpen(true)} />
+                                        ) : undefined
+                                      }
+                                    />
+                                  )}
+                                  {tourOpen && tourOn && (
+                                    <FormTour
+                                      key={tourLayoutId ?? 0}
+                                      rootRef={formRootRef}
+                                      steps={tourSteps}
+                                      formName={String(layoutMeta?.name ?? '')}
+                                      onClose={closeTour}
+                                    />
+                                  )}
+                                  {showHeader &&
+                                    (headerWidgets.length > 0 || headerFields.length > 0) && (
+                                      // Condensing HIDES rather than unmounts: a
+                                      // remount refires every header widget/chip
+                                      // fetch, which read as the sub-header
+                                      // "reloading" on scroll-up.
+                                      <div
+                                        ref={headerStripRef}
+                                        // A stat band (lib/header-strip.ts): tiles are content-sized
+                                        // and grow only to a cap, so a wide window shows a compact
+                                        // cluster on the left and the status dock pinned right — not
+                                        // six labels stretched 300px apart. Narrow windows wrap whole
+                                        // tiles; every tile draws its own top + left hairline and the
+                                        // row clips the outer ones, so dividers stay continuous.
+                                        className={`${HEADER_BAND} ${headerCondensed ? 'hidden' : 'block'}`}
+                                        data-header-dense={headerDense ? '' : undefined}
+                                      >
+                                        <div className={HEADER_ROW}>
+                                          <div className={HEADER_TILES} ref={headerTilesRef}>
+                                            {(() => {
+                                              const tiles = [
+                                                ...headerWidgets.map((w) => ({
+                                                  type: 'widget' as const,
+                                                  sort: w.sort,
+                                                  key: w.field,
+                                                  data: w
+                                                })),
+                                                ...headerFields.map((f) => ({
+                                                  type: 'field' as const,
+                                                  sort: f.sort,
+                                                  key: f.field,
+                                                  data: f
+                                                })),
+                                                ...headerSummaries.map((h) => ({
+                                                  type: 'summary' as const,
+                                                  sort: 9_000,
+                                                  key: `__summary__${h.field}`,
+                                                  data: h
+                                                }))
+                                              ]
+                                                .sort((a, b) => a.sort - b.sort)
+                                                .map((item) => {
+                                                  const copyCell = (
+                                                    el: HTMLElement | null,
+                                                    field: string
+                                                  ) => {
+                                                    if (!el) return
+                                                    const clone = el.cloneNode(true) as HTMLElement
+                                                    clone
+                                                      .querySelectorAll('[data-copy-skip], button')
+                                                      .forEach((n) => n.remove())
+                                                    const text = clone.textContent?.trim() ?? ''
+                                                    if (text) {
+                                                      navigator.clipboard
+                                                        .writeText(text)
+                                                        .catch(() => {})
+                                                      setCopiedHeaderField(field)
+                                                      setTimeout(
+                                                        () =>
+                                                          setCopiedHeaderField((prev) =>
+                                                            prev === field ? null : prev
+                                                          ),
+                                                        1500
+                                                      )
+                                                    }
+                                                  }
+
+                                                  if (item.type === 'summary') {
+                                                    const h = item.data
+                                                    return (
+                                                      <HeaderSummaryChip
+                                                        key={item.key}
+                                                        collection={collection}
+                                                        itemId={itemId}
+                                                        field={h.field}
+                                                        config={h.config}
+                                                        onOpen={(t) => {
+                                                          jumpToField(h.field)
+                                                          // The grid may only mount after the tab
+                                                          // switch above — ask a few times.
+                                                          const detail = {
+                                                            collection: t.childCollection,
+                                                            field: t.fkField,
+                                                            rowId: t.rowId
+                                                          }
+                                                          for (const ms of [150, 500, 1100]) {
+                                                            window.setTimeout(
+                                                              () =>
+                                                                window.dispatchEvent(
+                                                                  new CustomEvent(
+                                                                    'nvr:grid-open-row',
+                                                                    {
+                                                                      detail
+                                                                    }
+                                                                  )
+                                                                ),
+                                                              ms
+                                                            )
+                                                          }
+                                                        }}
+                                                      />
                                                     )
                                                   }
-                                                }
-
-                                                if (item.type === 'summary') {
-                                                  const h = item.data
-                                                  return (
-                                                    <HeaderSummaryChip
-                                                      key={item.key}
-                                                      collection={collection}
-                                                      itemId={itemId}
-                                                      field={h.field}
-                                                      config={h.config}
-                                                      onOpen={(t) => {
-                                                        jumpToField(h.field)
-                                                        // The grid may only mount after the tab
-                                                        // switch above — ask a few times.
-                                                        const detail = {
-                                                          collection: t.childCollection,
-                                                          field: t.fkField,
-                                                          rowId: t.rowId
-                                                        }
-                                                        for (const ms of [150, 500, 1100]) {
-                                                          window.setTimeout(
-                                                            () =>
-                                                              window.dispatchEvent(
-                                                                new CustomEvent(
-                                                                  'nvr:grid-open-row',
-                                                                  {
-                                                                    detail
-                                                                  }
+                                                  if (item.type === 'widget') {
+                                                    const w = item.data
+                                                    const isBtnGroup =
+                                                      headerWidgetTypes[w.field] === 'button-group'
+                                                    return dwrapEl(
+                                                      { kind: 'header', field: w.field },
+                                                      <div
+                                                        key={w.field}
+                                                        // A widget may hold several figures side by side (a budget pair), so
+                                                        // the single-tile cap does not apply to it — each figure is
+                                                        // content-sized inside (StripCell).
+                                                        className={`${HEADER_TILE} !max-w-none !gap-0 !px-0 !py-0 !justify-stretch [[data-header-list]_&]:!h-auto [[data-header-list]_&]:!flex-col`}
+                                                        // Its figures are money: fold them last.
+                                                        data-header-money=''
+                                                      >
+                                                        <WidgetSlot
+                                                          widgetId={w.widgetId}
+                                                          inputBindings={w.inputBindings}
+                                                          itemDraft={effectiveDraft}
+                                                          itemCollection={collection}
+                                                          label={w.label ?? undefined}
+                                                          compact={true}
+                                                          strip={true}
+                                                          onWidgetType={(t) =>
+                                                            setHeaderWidgetTypes((prev) => ({
+                                                              ...prev,
+                                                              [w.field]: t
+                                                            }))
+                                                          }
+                                                        />
+                                                        {!isBtnGroup &&
+                                                          (copiedHeaderField === w.field ? (
+                                                            <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
+                                                          ) : (
+                                                            <button
+                                                              type='button'
+                                                              aria-label='Copy value'
+                                                              className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
+                                                              onClick={(e) =>
+                                                                copyCell(
+                                                                  e.currentTarget.closest<HTMLElement>(
+                                                                    '.group'
+                                                                  ),
+                                                                  w.field
                                                                 )
-                                                              ),
-                                                            ms
-                                                          )
-                                                        }
-                                                      }}
-                                                    />
-                                                  )
-                                                }
-                                                if (item.type === 'widget') {
-                                                  const w = item.data
-                                                  const isBtnGroup =
-                                                    headerWidgetTypes[w.field] === 'button-group'
-                                                  return dwrapEl(
-                                                    { kind: 'header', field: w.field },
-                                                    <div
-                                                      key={w.field}
-                                                      // A widget may hold several figures side by side (a budget pair), so
-                                                      // the single-tile cap does not apply to it — each figure is
-                                                      // content-sized inside (StripCell).
-                                                      className={`${HEADER_TILE} !max-w-none !gap-0 !px-0 !py-0 !justify-stretch [[data-header-list]_&]:!h-auto [[data-header-list]_&]:!flex-col`}
-                                                      // Its figures are money: fold them last.
-                                                      data-header-money=''
-                                                    >
-                                                      <WidgetSlot
-                                                        widgetId={w.widgetId}
-                                                        inputBindings={w.inputBindings}
-                                                        itemDraft={effectiveDraft}
-                                                        itemCollection={collection}
-                                                        label={w.label ?? undefined}
-                                                        compact={true}
-                                                        strip={true}
-                                                        onWidgetType={(t) =>
-                                                          setHeaderWidgetTypes((prev) => ({
-                                                            ...prev,
-                                                            [w.field]: t
-                                                          }))
-                                                        }
-                                                      />
-                                                      {!isBtnGroup &&
-                                                        (copiedHeaderField === w.field ? (
+                                                              }
+                                                            >
+                                                              <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
+                                                            </button>
+                                                          ))}
+                                                      </div>,
+                                                      { asChild: true }
+                                                    )
+                                                  }
+                                                  const f = item.data
+                                                  if (f.field === '__owners__') {
+                                                    return dwrapEl(
+                                                      { kind: 'header', field: '__owners__' },
+                                                      <div
+                                                        key='__owners__'
+                                                        // Empty roster reads dim. Pinned: who holds the
+                                                        // record never folds behind "+N more" (Rob 2026-10-26).
+                                                        className={`${HEADER_TILE} [&:has([data-roster-empty])]:opacity-60`}
+                                                        data-header-pin=''
+                                                      >
+                                                        <span
+                                                          className={HEADER_LABEL}
+                                                          data-header-label
+                                                        >
+                                                          {f.label}
+                                                        </span>
+                                                        <div
+                                                          className={HEADER_VALUE_LINE}
+                                                          data-header-value
+                                                        >
+                                                          <OwnersInlineCompact
+                                                            collection={pipelineCollection}
+                                                            itemId={pipelineItem}
+                                                          />
+                                                        </div>
+                                                        {copiedHeaderField === '__owners__' ? (
                                                           <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                                         ) : (
                                                           <button
                                                             type='button'
-                                                            aria-label='Copy value'
+                                                            aria-label='Copy owners'
                                                             className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
                                                             onClick={(e) =>
                                                               copyCell(
                                                                 e.currentTarget.closest<HTMLElement>(
                                                                   '.group'
                                                                 ),
-                                                                w.field
+                                                                '__owners__'
                                                               )
                                                             }
                                                           >
                                                             <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                           </button>
-                                                        ))}
-                                                    </div>,
-                                                    { asChild: true }
-                                                  )
-                                                }
-                                                const f = item.data
-                                                if (f.field === '__owners__') {
+                                                        )}
+                                                      </div>,
+                                                      { asChild: true }
+                                                    )
+                                                  }
+                                                  // M2M alias fields have no draft column — their value is the
+                                                  // committed junction id set the form already tracks (same
+                                                  // source SummaryPanel uses). Without this every M2M header
+                                                  // field renders '—' regardless of how many links exist.
+                                                  const aliasState = m2mAliasFieldStates[f.field]
+                                                  // A rollup header reads the live total while its grid is on
+                                                  // screen; otherwise the stored value, which is what the server
+                                                  // will recalculate to anyway.
+                                                  const liveRollup = liveRollupValues.get(f.field)
+                                                  const raw = aliasState
+                                                    ? aliasState.ids
+                                                    : (liveRollup ?? effectiveDraft[f.field])
+                                                  // Addendum view: a header value the addendum CHANGES reads amber,
+                                                  // matching the proposed-change styling everywhere else.
+                                                  // A rollup the addendum's proposed rows move counts too — the
+                                                  // addendum never stores the total itself.
+                                                  const changedByAddendum =
+                                                    viewingAddendum &&
+                                                    !aliasState &&
+                                                    ((addendumViewData != null &&
+                                                      f.field in addendumViewData &&
+                                                      String(draft[f.field] ?? '') !==
+                                                        String(addendumViewData[f.field] ?? '')) ||
+                                                      (liveRollup !== undefined &&
+                                                        Math.round(
+                                                          Number(draft[f.field] ?? 0) * 100
+                                                        ) !== Math.round(liveRollup * 100)))
+                                                  const thrColor = (() => {
+                                                    const rules = (
+                                                      f as {
+                                                        thresholds?: Array<{
+                                                          op: string
+                                                          value: number
+                                                          color: string
+                                                        }>
+                                                      }
+                                                    ).thresholds
+                                                    if (!rules?.length) return undefined
+                                                    const n =
+                                                      typeof raw === 'number'
+                                                        ? raw
+                                                        : typeof raw === 'string' &&
+                                                            raw.trim() !== ''
+                                                          ? Number(raw)
+                                                          : Number.NaN
+                                                    if (!Number.isFinite(n)) return undefined
+                                                    const hit = rules.find((r) =>
+                                                      r.op === 'lt'
+                                                        ? n < r.value
+                                                        : r.op === 'lte'
+                                                          ? n <= r.value
+                                                          : r.op === 'gt'
+                                                            ? n > r.value
+                                                            : r.op === 'gte'
+                                                              ? n >= r.value
+                                                              : r.op === 'eq'
+                                                                ? n === r.value
+                                                                : false
+                                                    )
+                                                    return hit?.color
+                                                  })()
+                                                  const fColor = thrColor ?? f.color
+                                                  const hColorClass = changedByAddendum
+                                                    ? 'text-amber-600 dark:text-amber-400'
+                                                    : fColor === 'cyan'
+                                                      ? 'text-nvr-cyan'
+                                                      : fColor === 'blue'
+                                                        ? 'text-blue-600 dark:text-blue-400'
+                                                        : fColor === 'green'
+                                                          ? 'text-emerald-600 dark:text-emerald-400'
+                                                          : fColor === 'amber'
+                                                            ? 'text-amber-600 dark:text-amber-400'
+                                                            : fColor === 'red'
+                                                              ? 'text-red-600 dark:text-red-400'
+                                                              : fColor === 'purple'
+                                                                ? 'text-purple-600 dark:text-purple-400'
+                                                                : 'text-slate-900 dark:text-slate-100'
+                                                  const hWeightClass =
+                                                    f.weight === 'bold'
+                                                      ? 'font-bold'
+                                                      : f.weight === 'semibold'
+                                                        ? 'font-semibold'
+                                                        : f.weight === 'medium'
+                                                          ? 'font-medium'
+                                                          : 'font-semibold'
+                                                  // Money figures lead the band (one size up); anything
+                                                  // without a value steps back so the populated facts
+                                                  // carry the row.
+                                                  const fmtOpts = f.cmsField
+                                                    ? (() => {
+                                                        try {
+                                                          const o = f.cmsField.options
+                                                          return (
+                                                            typeof o === 'string'
+                                                              ? JSON.parse(o)
+                                                              : (o ?? {})
+                                                          ) as { format?: string }
+                                                        } catch {
+                                                          return {} as { format?: string }
+                                                        }
+                                                      })()
+                                                    : ({} as { format?: string })
+                                                  const hero =
+                                                    f.displayFormat === 'currency' ||
+                                                    fmtOpts.format === 'currency' ||
+                                                    f.cmsField?.computed_type === 'rollup'
+                                                  const textCls = `text-[13px] ${hero ? 'tracking-[-0.01em]' : ''} ${hColorClass} ${hWeightClass}`
+                                                  const isEmpty =
+                                                    raw == null ||
+                                                    raw === '' ||
+                                                    (Array.isArray(raw) && raw.length === 0)
+                                                  const isPill = f.displayAs === 'pill'
+                                                  const isTag = f.displayAs === 'tag'
                                                   return dwrapEl(
-                                                    { kind: 'header', field: '__owners__' },
+                                                    { kind: 'header', field: f.field },
                                                     <div
-                                                      key='__owners__'
-                                                      // Empty roster reads dim. Pinned: who holds the
-                                                      // record never folds behind "+N more" (Rob 2026-10-26).
-                                                      className={`${HEADER_TILE} [&:has([data-roster-empty])]:opacity-60`}
-                                                      data-header-pin=''
+                                                      key={f.field}
+                                                      data-header-field={f.field}
+                                                      data-empty={isEmpty}
+                                                      data-header-money={hero ? '' : undefined}
+                                                      // self-stretch so the label sits the same distance from the
+                                                      // top as a widget cell's. The row is items-center, and a
+                                                      // widget stat cell already stretches to full height — a
+                                                      // centred field chip is shorter, so its label landed a few
+                                                      // pixels lower and the two read as misaligned.
+                                                      className={HEADER_TILE}
                                                     >
                                                       <span
                                                         className={HEADER_LABEL}
@@ -14710,30 +15234,174 @@ function ItemEditFormView({
                                                       >
                                                         {f.label}
                                                       </span>
-                                                      <div
-                                                        className={HEADER_VALUE_LINE}
+                                                      <span
                                                         data-header-value
+                                                        className={[
+                                                          HEADER_VALUE_LINE,
+                                                          isPill || isTag
+                                                            ? 'max-w-[232px] truncate leading-tight'
+                                                            : 'max-w-[232px] items-baseline truncate leading-tight',
+                                                          isPill
+                                                            ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
+                                                            : isTag
+                                                              ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
+                                                              : ''
+                                                        ]
+                                                          .filter(Boolean)
+                                                          .join(' ')}
                                                       >
-                                                        <OwnersInlineCompact
-                                                          collection={pipelineCollection}
-                                                          itemId={pipelineItem}
-                                                        />
-                                                      </div>
-                                                      {copiedHeaderField === '__owners__' ? (
+                                                        {(() => {
+                                                          if (
+                                                            addendumRollupLoading &&
+                                                            f.cmsField?.computed_type ===
+                                                              'rollup' &&
+                                                            !aliasState
+                                                          ) {
+                                                            return (
+                                                              <span
+                                                                aria-label='Loading'
+                                                                className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
+                                                              />
+                                                            )
+                                                          }
+                                                          const inner = f.cmsField ? (
+                                                            <>
+                                                              <StripFieldValue
+                                                                field={f.cmsField}
+                                                                val={raw}
+                                                                relations={relations}
+                                                                collection={collection}
+                                                                displayFormat={f.displayFormat}
+                                                                textClassName={textCls}
+                                                              />
+                                                              {/* A figure explains its arithmetic; a computed
+                                                              STATUS ("coalesce(∅, shipped)") would only leak
+                                                              its formula — the explainer rides numbers. */}
+                                                              {(f.cmsField.computed_type ===
+                                                                'rollup' ||
+                                                                ((f.cmsField.computed_type ===
+                                                                  'read' ||
+                                                                  f.cmsField.computed_type ===
+                                                                    'write') &&
+                                                                  hero)) &&
+                                                                !isNew &&
+                                                                !viewingAddendum && (
+                                                                  <HeaderRollupExplainer
+                                                                    collection={collection}
+                                                                    itemId={itemId}
+                                                                    field={f.cmsField.field}
+                                                                  />
+                                                                )}
+                                                            </>
+                                                          ) : (
+                                                            <span
+                                                              className={`${hero ? HEADER_VALUE_HERO : HEADER_VALUE} ${textCls}`}
+                                                            >
+                                                              {formatHeaderFieldValue(
+                                                                raw,
+                                                                f.displayFormat
+                                                              )}
+                                                            </span>
+                                                          )
+                                                          // Configured link template ({{value}} + any {{field}} from
+                                                          // the draft) turns the header value into an external link
+                                                          // — how e.g. an external system id deep-links to that system with
+                                                          // zero hardcoding (Table Editor header chip ⚙ → Link URL).
+                                                          const linkTemplate = (
+                                                            f as { linkTemplate?: string }
+                                                          ).linkTemplate
+                                                          if (
+                                                            !linkTemplate ||
+                                                            raw === null ||
+                                                            raw === undefined ||
+                                                            raw === '' ||
+                                                            Array.isArray(raw)
+                                                          )
+                                                            return inner
+                                                          const href = linkTemplate
+                                                            .replace(
+                                                              /\{\{\s*value\s*\}\}/g,
+                                                              encodeURIComponent(String(raw))
+                                                            )
+                                                            .replace(
+                                                              /\{\{\s*([\w.]+)\s*\}\}/g,
+                                                              (_m, k: string) =>
+                                                                encodeURIComponent(
+                                                                  String(draft[k] ?? '')
+                                                                )
+                                                            )
+                                                          if (!/^https?:\/\//i.test(href))
+                                                            return inner
+                                                          return (
+                                                            <a
+                                                              href={href}
+                                                              target='_blank'
+                                                              rel='noopener noreferrer'
+                                                              className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
+                                                              onClick={(e) => e.stopPropagation()}
+                                                            >
+                                                              {inner}
+                                                            </a>
+                                                          )
+                                                        })()}
+                                                      </span>
+                                                      {/* Who last changed it, as an info icon beside the
+                                                      copy button: a line under the value was cut off
+                                                      in short tiles and sat inside the value's link. */}
+                                                      {f.cmsField &&
+                                                        !f.cmsField.computed_type &&
+                                                        !isNew &&
+                                                        !viewingAddendum && (
+                                                          <HeaderFreshness
+                                                            collection={collection}
+                                                            itemId={itemId}
+                                                            field={f.cmsField.field}
+                                                            fields={headerTouchFields}
+                                                            className='absolute top-2 right-6'
+                                                          />
+                                                        )}
+                                                      {copiedHeaderField === f.field ? (
                                                         <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
                                                       ) : (
                                                         <button
                                                           type='button'
-                                                          aria-label='Copy owners'
-                                                          className='absolute top-2 right-2 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity'
-                                                          onClick={(e) =>
-                                                            copyCell(
+                                                          aria-label='Copy value'
+                                                          className='absolute top-2 right-2 flex h-3 w-3 cursor-pointer items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity'
+                                                          onClick={(e) => {
+                                                            const cell =
                                                               e.currentTarget.closest<HTMLElement>(
                                                                 '.group'
-                                                              ),
-                                                              '__owners__'
-                                                            )
-                                                          }
+                                                              )
+                                                            const valueSpan =
+                                                              cell?.querySelectorAll<HTMLElement>(
+                                                                ':scope > span'
+                                                              )[1]
+                                                            let text = ''
+                                                            if (valueSpan) {
+                                                              const clone = valueSpan.cloneNode(
+                                                                true
+                                                              ) as HTMLElement
+                                                              clone
+                                                                .querySelectorAll(
+                                                                  '[data-copy-skip]'
+                                                                )
+                                                                .forEach((el) => el.remove())
+                                                              text = clone.textContent?.trim() ?? ''
+                                                            }
+                                                            if (text) {
+                                                              navigator.clipboard
+                                                                .writeText(text)
+                                                                .catch(() => {})
+                                                              setCopiedHeaderField(f.field)
+                                                              setTimeout(
+                                                                () =>
+                                                                  setCopiedHeaderField((prev) =>
+                                                                    prev === f.field ? null : prev
+                                                                  ),
+                                                                1500
+                                                              )
+                                                            }
+                                                          }}
                                                         >
                                                           <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                         </button>
@@ -14741,885 +15409,598 @@ function ItemEditFormView({
                                                     </div>,
                                                     { asChild: true }
                                                   )
-                                                }
-                                                // M2M alias fields have no draft column — their value is the
-                                                // committed junction id set the form already tracks (same
-                                                // source SummaryPanel uses). Without this every M2M header
-                                                // field renders '—' regardless of how many links exist.
-                                                const aliasState = m2mAliasFieldStates[f.field]
-                                                // A rollup header reads the live total while its grid is on
-                                                // screen; otherwise the stored value, which is what the server
-                                                // will recalculate to anyway.
-                                                const liveRollup = liveRollupValues.get(f.field)
-                                                const raw = aliasState
-                                                  ? aliasState.ids
-                                                  : (liveRollup ?? effectiveDraft[f.field])
-                                                // Addendum view: a header value the addendum CHANGES reads amber,
-                                                // matching the proposed-change styling everywhere else.
-                                                // A rollup the addendum's proposed rows move counts too — the
-                                                // addendum never stores the total itself.
-                                                const changedByAddendum =
-                                                  viewingAddendum &&
-                                                  !aliasState &&
-                                                  ((addendumViewData != null &&
-                                                    f.field in addendumViewData &&
-                                                    String(draft[f.field] ?? '') !==
-                                                      String(addendumViewData[f.field] ?? '')) ||
-                                                    (liveRollup !== undefined &&
-                                                      Math.round(
-                                                        Number(draft[f.field] ?? 0) * 100
-                                                      ) !== Math.round(liveRollup * 100)))
-                                                const thrColor = (() => {
-                                                  const rules = (
-                                                    f as {
-                                                      thresholds?: Array<{
-                                                        op: string
-                                                        value: number
-                                                        color: string
-                                                      }>
-                                                    }
-                                                  ).thresholds
-                                                  if (!rules?.length) return undefined
-                                                  const n =
-                                                    typeof raw === 'number'
-                                                      ? raw
-                                                      : typeof raw === 'string' && raw.trim() !== ''
-                                                        ? Number(raw)
-                                                        : Number.NaN
-                                                  if (!Number.isFinite(n)) return undefined
-                                                  const hit = rules.find((r) =>
-                                                    r.op === 'lt'
-                                                      ? n < r.value
-                                                      : r.op === 'lte'
-                                                        ? n <= r.value
-                                                        : r.op === 'gt'
-                                                          ? n > r.value
-                                                          : r.op === 'gte'
-                                                            ? n >= r.value
-                                                            : r.op === 'eq'
-                                                              ? n === r.value
-                                                              : false
-                                                  )
-                                                  return hit?.color
-                                                })()
-                                                const fColor = thrColor ?? f.color
-                                                const hColorClass = changedByAddendum
-                                                  ? 'text-amber-600 dark:text-amber-400'
-                                                  : fColor === 'cyan'
-                                                    ? 'text-nvr-cyan'
-                                                    : fColor === 'blue'
-                                                      ? 'text-blue-600 dark:text-blue-400'
-                                                      : fColor === 'green'
-                                                        ? 'text-emerald-600 dark:text-emerald-400'
-                                                        : fColor === 'amber'
-                                                          ? 'text-amber-600 dark:text-amber-400'
-                                                          : fColor === 'red'
-                                                            ? 'text-red-600 dark:text-red-400'
-                                                            : fColor === 'purple'
-                                                              ? 'text-purple-600 dark:text-purple-400'
-                                                              : 'text-slate-900 dark:text-slate-100'
-                                                const hWeightClass =
-                                                  f.weight === 'bold'
-                                                    ? 'font-bold'
-                                                    : f.weight === 'semibold'
-                                                      ? 'font-semibold'
-                                                      : f.weight === 'medium'
-                                                        ? 'font-medium'
-                                                        : 'font-semibold'
-                                                // Money figures lead the band (one size up); anything
-                                                // without a value steps back so the populated facts
-                                                // carry the row.
-                                                const fmtOpts = f.cmsField
-                                                  ? (() => {
-                                                      try {
-                                                        const o = f.cmsField.options
-                                                        return (
-                                                          typeof o === 'string'
-                                                            ? JSON.parse(o)
-                                                            : (o ?? {})
-                                                        ) as { format?: string }
-                                                      } catch {
-                                                        return {} as { format?: string }
-                                                      }
-                                                    })()
-                                                  : ({} as { format?: string })
-                                                const hero =
-                                                  f.displayFormat === 'currency' ||
-                                                  fmtOpts.format === 'currency' ||
-                                                  f.cmsField?.computed_type === 'rollup'
-                                                const textCls = `text-[13px] ${hero ? 'tracking-[-0.01em]' : ''} ${hColorClass} ${hWeightClass}`
-                                                const isEmpty =
-                                                  raw == null ||
-                                                  raw === '' ||
-                                                  (Array.isArray(raw) && raw.length === 0)
-                                                const isPill = f.displayAs === 'pill'
-                                                const isTag = f.displayAs === 'tag'
-                                                return dwrapEl(
-                                                  { kind: 'header', field: f.field },
-                                                  <div
-                                                    key={f.field}
-                                                    data-header-field={f.field}
-                                                    data-empty={isEmpty}
-                                                    data-header-money={hero ? '' : undefined}
-                                                    // self-stretch so the label sits the same distance from the
-                                                    // top as a widget cell's. The row is items-center, and a
-                                                    // widget stat cell already stretches to full height — a
-                                                    // centred field chip is shorter, so its label landed a few
-                                                    // pixels lower and the two read as misaligned.
-                                                    className={HEADER_TILE}
-                                                  >
-                                                    <span
-                                                      className={HEADER_LABEL}
-                                                      data-header-label
+                                                })
+                                              const foldedCells = headerDense ? headerFolded : []
+                                              return (
+                                                <>
+                                                  <HeaderTiles
+                                                    tiles={tiles}
+                                                    folded={foldedCells}
+                                                    rows={headerDense ? headerRows : null}
+                                                  />
+                                                  {!isNew && itemId && (
+                                                    // Below lg the Integrations chip ends the last row
+                                                    // (the column dock is lg-only) — never a third shelf.
+                                                    // Ordered last: tiles packed first-fit carry
+                                                    // their row as a flex order (HeaderTiles).
+                                                    <div
+                                                      className={HEADER_DOCK_INLINE}
+                                                      data-header-tail
+                                                      style={{ order: 99 }}
                                                     >
-                                                      {f.label}
-                                                    </span>
-                                                    <span
-                                                      data-header-value
-                                                      className={[
-                                                        HEADER_VALUE_LINE,
-                                                        isPill || isTag
-                                                          ? 'max-w-[232px] truncate leading-tight'
-                                                          : 'max-w-[232px] items-baseline truncate leading-tight',
-                                                        isPill
-                                                          ? `rounded-full px-2 py-0.5 text-[11px] inline-block ${hColorClass} bg-current/10`
-                                                          : isTag
-                                                            ? `rounded px-1.5 py-0.5 border border-current/30 text-[11px] inline-block ${hColorClass}`
-                                                            : ''
-                                                      ]
-                                                        .filter(Boolean)
-                                                        .join(' ')}
-                                                    >
-                                                      {(() => {
-                                                        if (
-                                                          addendumRollupLoading &&
-                                                          f.cmsField?.computed_type === 'rollup' &&
-                                                          !aliasState
-                                                        ) {
-                                                          return (
-                                                            <span
-                                                              aria-label='Loading'
-                                                              className='inline-block h-3.5 w-16 animate-pulse rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]'
-                                                            />
-                                                          )
-                                                        }
-                                                        const inner = f.cmsField ? (
-                                                          <>
-                                                            <StripFieldValue
-                                                              field={f.cmsField}
-                                                              val={raw}
-                                                              relations={relations}
-                                                              collection={collection}
-                                                              displayFormat={f.displayFormat}
-                                                              textClassName={textCls}
-                                                            />
-                                                            {/* A figure explains its arithmetic; a computed
-                                                              STATUS ("coalesce(∅, shipped)") would only leak
-                                                              its formula — the explainer rides numbers. */}
-                                                            {(f.cmsField.computed_type ===
-                                                              'rollup' ||
-                                                              ((f.cmsField.computed_type ===
-                                                                'read' ||
-                                                                f.cmsField.computed_type ===
-                                                                  'write') &&
-                                                                hero)) &&
-                                                              !isNew &&
-                                                              !viewingAddendum && (
-                                                                <HeaderRollupExplainer
-                                                                  collection={collection}
-                                                                  itemId={itemId}
-                                                                  field={f.cmsField.field}
-                                                                />
-                                                              )}
-                                                          </>
-                                                        ) : (
-                                                          <span
-                                                            className={`${hero ? HEADER_VALUE_HERO : HEADER_VALUE} ${textCls}`}
-                                                          >
-                                                            {formatHeaderFieldValue(
-                                                              raw,
-                                                              f.displayFormat
-                                                            )}
-                                                          </span>
-                                                        )
-                                                        // Configured link template ({{value}} + any {{field}} from
-                                                        // the draft) turns the header value into an external link
-                                                        // — how e.g. an external system id deep-links to that system with
-                                                        // zero hardcoding (Table Editor header chip ⚙ → Link URL).
-                                                        const linkTemplate = (
-                                                          f as { linkTemplate?: string }
-                                                        ).linkTemplate
-                                                        if (
-                                                          !linkTemplate ||
-                                                          raw === null ||
-                                                          raw === undefined ||
-                                                          raw === '' ||
-                                                          Array.isArray(raw)
-                                                        )
-                                                          return inner
-                                                        const href = linkTemplate
-                                                          .replace(
-                                                            /\{\{\s*value\s*\}\}/g,
-                                                            encodeURIComponent(String(raw))
-                                                          )
-                                                          .replace(
-                                                            /\{\{\s*([\w.]+)\s*\}\}/g,
-                                                            (_m, k: string) =>
-                                                              encodeURIComponent(
-                                                                String(draft[k] ?? '')
-                                                              )
-                                                          )
-                                                        if (!/^https?:\/\//i.test(href))
-                                                          return inner
-                                                        return (
-                                                          <a
-                                                            href={href}
-                                                            target='_blank'
-                                                            rel='noopener noreferrer'
-                                                            className='underline decoration-dotted underline-offset-2 hover:decoration-solid'
-                                                            onClick={(e) => e.stopPropagation()}
-                                                          >
-                                                            {inner}
-                                                          </a>
-                                                        )
-                                                      })()}
-                                                    </span>
-                                                    {/* Who last changed it, as an info icon beside the
-                                                      copy button: a line under the value was cut off
-                                                      in short tiles and sat inside the value's link. */}
-                                                    {f.cmsField &&
-                                                      !f.cmsField.computed_type &&
-                                                      !isNew &&
-                                                      !viewingAddendum && (
-                                                        <HeaderFreshness
-                                                          collection={collection}
-                                                          itemId={itemId}
-                                                          field={f.cmsField.field}
-                                                          fields={headerTouchFields}
-                                                          className='absolute top-2 right-6'
-                                                        />
-                                                      )}
-                                                    {copiedHeaderField === f.field ? (
-                                                      <Check className='absolute top-2 right-2 h-3 w-3 text-green-500' />
-                                                    ) : (
-                                                      <button
-                                                        type='button'
-                                                        aria-label='Copy value'
-                                                        className='absolute top-2 right-2 flex h-3 w-3 cursor-pointer items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity'
-                                                        onClick={(e) => {
-                                                          const cell =
-                                                            e.currentTarget.closest<HTMLElement>(
-                                                              '.group'
-                                                            )
-                                                          const valueSpan =
-                                                            cell?.querySelectorAll<HTMLElement>(
-                                                              ':scope > span'
-                                                            )[1]
-                                                          let text = ''
-                                                          if (valueSpan) {
-                                                            const clone = valueSpan.cloneNode(
-                                                              true
-                                                            ) as HTMLElement
-                                                            clone
-                                                              .querySelectorAll('[data-copy-skip]')
-                                                              .forEach((el) => el.remove())
-                                                            text = clone.textContent?.trim() ?? ''
-                                                          }
-                                                          if (text) {
-                                                            navigator.clipboard
-                                                              .writeText(text)
-                                                              .catch(() => {})
-                                                            setCopiedHeaderField(f.field)
-                                                            setTimeout(
-                                                              () =>
-                                                                setCopiedHeaderField((prev) =>
-                                                                  prev === f.field ? null : prev
-                                                                ),
-                                                              1500
-                                                            )
-                                                          }
-                                                        }}
-                                                      >
-                                                        <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
-                                                      </button>
-                                                    )}
-                                                  </div>,
-                                                  { asChild: true }
-                                                )
-                                              })
-                                            const foldedCells = headerDense ? headerFolded : []
-                                            return (
-                                              <>
-                                                <HeaderTiles
-                                                  tiles={tiles}
-                                                  folded={foldedCells}
-                                                  rows={headerDense ? headerRows : null}
-                                                />
-                                                {!isNew && itemId && (
-                                                  // Below lg the Integrations chip ends the last row
-                                                  // (the column dock is lg-only) — never a third shelf.
-                                                  // Ordered last: tiles packed first-fit carry
-                                                  // their row as a flex order (HeaderTiles).
-                                                  <div
-                                                    className={HEADER_DOCK_INLINE}
-                                                    data-header-tail
-                                                    style={{ order: 99 }}
-                                                  >
-                                                    <ExternalRequestsChip
-                                                      collection={collection}
-                                                      itemId={String(itemId)}
-                                                    />
-                                                  </div>
-                                                )}
-                                              </>
-                                            )
-                                          })()}
-                                        </div>
-                                        {!isNew && itemId && (
-                                          <div className={HEADER_DOCK} data-header-dock>
-                                            <div className={HEADER_DOCK_CELL}>
-                                              <ExternalRequestsChip
-                                                collection={collection}
-                                                itemId={String(itemId)}
-                                              />
-                                            </div>
+                                                      <ExternalRequestsChip
+                                                        collection={collection}
+                                                        itemId={String(itemId)}
+                                                      />
+                                                    </div>
+                                                  )}
+                                                </>
+                                              )
+                                            })()}
                                           </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-
-                                <div
-                                  ref={designOn ? setRailHost : undefined}
-                                  className={cn(
-                                    'flex-1 min-h-0',
-                                    summaryEnabled ? 'flex overflow-hidden' : 'overflow-y-auto'
-                                  )}
-                                  onScroll={summaryEnabled ? undefined : condenseOnScroll}
-                                >
-                                  <div
-                                    ref={bodyRef}
-                                    data-form-body=''
-                                    className={cn(
-                                      'p-6 space-y-4',
-                                      summaryEnabled ? 'flex-1 overflow-y-auto' : ''
-                                    )}
-                                    onScroll={summaryEnabled ? condenseOnScroll : undefined}
-                                  >
-                                    {!isNew && <QueueReturnChip />}
-                                    {extraTopContent}
-                                    {showValidationSummary && validationSummaryItems.length > 0 && (
-                                      <ValidationSummary
-                                        items={validationSummaryItems}
-                                        onJump={focusFieldInput}
-                                        onDismiss={() => setShowValidationSummary(false)}
-                                      />
-                                    )}
-                                    {configUpdated && (
-                                      <div
-                                        data-form-config-changed
-                                        role='status'
-                                        className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'
-                                      >
-                                        <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
-                                        <span className='min-w-0 flex-1'>
-                                          This form was changed. Reload to see the new version
-                                          {isDirty ? ' — what you typed is kept.' : '.'}
-                                        </span>
-                                        <button
-                                          type='button'
-                                          onClick={() =>
-                                            window.setTimeout(
-                                              () => window.location.reload(),
-                                              isDirty ? 1200 : 0
-                                            )
-                                          }
-                                          className='h-6 shrink-0 rounded-md border border-nvr-cyan/40 bg-white px-2 text-[11.5px] font-medium hover:bg-nvr-cyan/10 dark:bg-transparent'
-                                        >
-                                          Reload
-                                        </button>
-                                      </div>
-                                    )}
-
-                                    {!designOn && layoutId != null && (
-                                      <FormWhatsNew layoutId={layoutId} />
-                                    )}
-                                    {viewAsOpen && (
-                                      <ViewAsRoleBar
-                                        roles={viewAs.roles}
-                                        roleId={viewAs.roleId}
-                                        onChange={(id) => {
-                                          viewAs.setRoleId(id)
-                                          if (!id) setViewAsOpen(false)
-                                        }}
-                                        preview={viewAs.preview}
-                                        loading={viewAs.loading}
-                                      />
-                                    )}
-                                    {!isNew && outboxEntry && (
-                                      <div className='nvr-expand-in'>
-                                        <RecordOutboxBanner
-                                          entry={outboxEntry}
-                                          labelFor={(f) =>
-                                            (fieldConfig ?? []).find((x) => x.field === f)?.label ??
-                                            ''
-                                          }
-                                          onReview={reviewOutbox}
-                                          onRetry={() => void retryRecordOutbox(collection, itemId)}
-                                          onDiscard={discardOutbox}
-                                        />
-                                      </div>
-                                    )}
-                                    {/* Never offer to restore edits onto a record this person
-                                        cannot change; the draft stays for when they can. */}
-                                    {recovery.state === 'offer' && !(isReadOnly && !isNew) && (
-                                      <div className='nvr-expand-in'>
-                                        <DraftRecoveryBanner
-                                          draft={recovery.draft}
-                                          labelFor={(f) =>
-                                            (fieldConfig ?? []).find((x) => x.field === f)?.label ??
-                                            ''
-                                          }
-                                          current={initialDataRef.current}
-                                          recordChanged={
-                                            !!recovery.draft.base_updated_at &&
-                                            !!(
-                                              initialDataRef.current.date_updated ??
-                                              initialDataRef.current.updated_at
-                                            ) &&
-                                            String(
-                                              initialDataRef.current.date_updated ??
-                                                initialDataRef.current.updated_at
-                                            ) !== recovery.draft.base_updated_at
-                                          }
-                                          onRestore={restoreDraft}
-                                          onDiscard={discardDraft}
-                                          createdId={recovery.createdId}
-                                          collection={collection}
-                                          renderValue={(f, v) => (
-                                            <ChangeValue
-                                              value={v}
-                                              field={
-                                                (fieldConfig ?? []).find((x) => x.field === f) ??
-                                                null
-                                              }
-                                              m2oTarget={
-                                                relations.find(
-                                                  (r) =>
-                                                    r.many_collection === collection &&
-                                                    r.many_field === f &&
-                                                    !r.junction_field
-                                                )?.one_collection ?? null
-                                              }
-                                            />
+                                          {!isNew && itemId && (
+                                            <div className={HEADER_DOCK} data-header-dock>
+                                              <div className={HEADER_DOCK_CELL}>
+                                                <ExternalRequestsChip
+                                                  collection={collection}
+                                                  itemId={String(itemId)}
+                                                />
+                                              </div>
+                                            </div>
                                           )}
-                                        />
+                                        </div>
                                       </div>
                                     )}
-                                    {/* No wrapper div: the strip renders null until there is a
+
+                                  <div
+                                    ref={setRailHost}
+                                    className={cn(
+                                      'flex-1 min-h-0',
+                                      summaryEnabled
+                                        ? 'relative flex overflow-hidden'
+                                        : 'overflow-y-auto'
+                                    )}
+                                    onScroll={summaryEnabled ? undefined : condenseOnScroll}
+                                  >
+                                    <div
+                                      ref={bodyRef}
+                                      data-form-body=''
+                                      className={cn(
+                                        'p-6 space-y-4',
+                                        summaryEnabled ? 'flex-1 overflow-y-auto' : ''
+                                      )}
+                                      onScroll={summaryEnabled ? condenseOnScroll : undefined}
+                                    >
+                                      {!isNew && <QueueReturnChip />}
+                                      {extraTopContent}
+                                      {showValidationSummary &&
+                                        validationSummaryItems.length > 0 && (
+                                          <ValidationSummary
+                                            items={validationSummaryItems}
+                                            onJump={focusFieldInput}
+                                            onDismiss={() => setShowValidationSummary(false)}
+                                          />
+                                        )}
+                                      {configUpdated && (
+                                        <div
+                                          data-form-config-changed
+                                          role='status'
+                                          className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'
+                                        >
+                                          <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
+                                          <span className='min-w-0 flex-1'>
+                                            This form was changed. Reload to see the new version
+                                            {isDirty ? ' — what you typed is kept.' : '.'}
+                                          </span>
+                                          <button
+                                            type='button'
+                                            onClick={() =>
+                                              window.setTimeout(
+                                                () => window.location.reload(),
+                                                isDirty ? 1200 : 0
+                                              )
+                                            }
+                                            className='h-6 shrink-0 rounded-md border border-nvr-cyan/40 bg-white px-2 text-[11.5px] font-medium hover:bg-nvr-cyan/10 dark:bg-transparent'
+                                          >
+                                            Reload
+                                          </button>
+                                        </div>
+                                      )}
+
+                                      {!designOn && layoutId != null && (
+                                        <FormWhatsNew layoutId={layoutId} />
+                                      )}
+                                      {viewAsOpen && (
+                                        <ViewAsRoleBar
+                                          roles={viewAs.roles}
+                                          roleId={viewAs.roleId}
+                                          onChange={(id) => {
+                                            viewAs.setRoleId(id)
+                                            if (!id) setViewAsOpen(false)
+                                          }}
+                                          preview={viewAs.preview}
+                                          loading={viewAs.loading}
+                                        />
+                                      )}
+                                      {!isNew && outboxEntry && (
+                                        <div className='nvr-expand-in'>
+                                          <RecordOutboxBanner
+                                            entry={outboxEntry}
+                                            labelFor={(f) =>
+                                              (fieldConfig ?? []).find((x) => x.field === f)
+                                                ?.label ?? ''
+                                            }
+                                            onReview={reviewOutbox}
+                                            onRetry={() =>
+                                              void retryRecordOutbox(collection, itemId)
+                                            }
+                                            onDiscard={discardOutbox}
+                                          />
+                                        </div>
+                                      )}
+                                      {/* Never offer to restore edits onto a record this person
+                                        cannot change; the draft stays for when they can. */}
+                                      {recovery.state === 'offer' && !(isReadOnly && !isNew) && (
+                                        <div className='nvr-expand-in'>
+                                          <DraftRecoveryBanner
+                                            draft={recovery.draft}
+                                            labelFor={(f) =>
+                                              (fieldConfig ?? []).find((x) => x.field === f)
+                                                ?.label ?? ''
+                                            }
+                                            current={initialDataRef.current}
+                                            recordChanged={
+                                              !!recovery.draft.base_updated_at &&
+                                              !!(
+                                                initialDataRef.current.date_updated ??
+                                                initialDataRef.current.updated_at
+                                              ) &&
+                                              String(
+                                                initialDataRef.current.date_updated ??
+                                                  initialDataRef.current.updated_at
+                                              ) !== recovery.draft.base_updated_at
+                                            }
+                                            onRestore={restoreDraft}
+                                            onDiscard={discardDraft}
+                                            createdId={recovery.createdId}
+                                            collection={collection}
+                                            renderValue={(f, v) => (
+                                              <ChangeValue
+                                                value={v}
+                                                field={
+                                                  (fieldConfig ?? []).find((x) => x.field === f) ??
+                                                  null
+                                                }
+                                                m2oTarget={
+                                                  relations.find(
+                                                    (r) =>
+                                                      r.many_collection === collection &&
+                                                      r.many_field === f &&
+                                                      !r.junction_field
+                                                  )?.one_collection ?? null
+                                                }
+                                              />
+                                            )}
+                                          />
+                                        </div>
+                                      )}
+                                      {/* No wrapper div: the strip renders null until there is a
                                       recap, and an EMPTY sibling inside this space-y stack still
                                       costs a 16px gap above the next banner (the "more top
                                       padding than side padding"). */}
-                                    {!isNew && itemId && !designOn && (
-                                      <RecordRecapStrip
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {!isNew &&
-                                      itemId &&
-                                      // Design mode: the live check stores its result.
-                                      !designOn &&
-                                      !activeLayoutData?.layout?.hide_integrity_banner &&
-                                      // Summary mode marks the affected fields instead —
-                                      // the banner would only push the record down.
-                                      !(readMode && summaryModeSettled) && (
-                                        <RecordIntegrityBanner
+                                      {!isNew && itemId && !designOn && (
+                                        <RecordRecapStrip
                                           collection={collection}
                                           itemId={String(itemId)}
-                                          onJumpToField={flashField}
                                         />
                                       )}
-                                    {isAdmin && !designOn && !!lockWhy.data?.hidden?.length && (
-                                      <HiddenByRulesNote
-                                        why={lockWhy.data}
-                                        fields={fieldConfig ?? []}
-                                        stepVisible={stepVisible}
-                                      />
-                                    )}
-                                    {!isNew &&
-                                      itemId &&
-                                      !activeLayoutData?.layout?.hide_sla_banner && (
-                                        // No wrapper div — an EMPTY sibling in this space-y stack
-                                        // still costs a 16px gap (the banner is null unless breached).
-                                        <SlaBreachBanner
-                                          collection={pipelineCollection}
-                                          itemId={String(pipelineItem)}
+                                      {!isNew &&
+                                        itemId &&
+                                        // Design mode: the live check stores its result.
+                                        !designOn &&
+                                        !activeLayoutData?.layout?.hide_integrity_banner &&
+                                        // Summary mode marks the affected fields instead —
+                                        // the banner would only push the record down.
+                                        !(readMode && summaryModeSettled) && (
+                                          <RecordIntegrityBanner
+                                            collection={collection}
+                                            itemId={String(itemId)}
+                                            onJumpToField={flashField}
+                                          />
+                                        )}
+                                      {isAdmin && !designOn && !!lockWhy.data?.hidden?.length && (
+                                        <HiddenByRulesNote
+                                          why={lockWhy.data}
+                                          fields={fieldConfig ?? []}
+                                          stepVisible={stepVisible}
                                         />
                                       )}
-                                    {/* #17 — null unless the record is under legal hold (no wrapper:
+                                      {!isNew &&
+                                        itemId &&
+                                        !activeLayoutData?.layout?.hide_sla_banner && (
+                                          // No wrapper div — an EMPTY sibling in this space-y stack
+                                          // still costs a 16px gap (the banner is null unless breached).
+                                          <SlaBreachBanner
+                                            collection={pipelineCollection}
+                                            itemId={String(pipelineItem)}
+                                          />
+                                        )}
+                                      {/* #17 — null unless the record is under legal hold (no wrapper:
                                       an empty sibling still costs this stack a gap). */}
-                                    {!isNew && itemId && !designOn && (
-                                      <LegalHoldBanner
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                      />
-                                    )}
-                                    {/* The partner-status lines live in the header's
+                                      {!isNew && itemId && !designOn && (
+                                        <LegalHoldBanner
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {/* The partner-status lines live in the header's
                                       Integrations chip popup (ExternalRequestsChip) —
                                       no banner in the body (2026-09-24). */}
-                                    {importIssues.length > 0 && (
-                                      <ImportIssuesPanel
-                                        issues={importIssues}
-                                        onDismiss={() => setImportIssues([])}
-                                      />
-                                    )}
-                                    {/* The banner is null without a holder — mount it only then, or its
-                                      empty wrapper costs a 16px gap in this space-y stack. */}
-                                    {editLockMessage && (
-                                      <div
-                                        className='nvr-expand-in flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
-                                        data-edit-lock-banner
-                                        role='status'
-                                      >
-                                        <Lock className='mt-0.5 h-4 w-4 shrink-0 text-amber-500' />
-                                        <span>{editLockMessage}</span>
-                                      </div>
-                                    )}
-                                    {showLockBanner && lockEnabled && lockHolder && (
-                                      <div className='nvr-expand-in'>
-                                        <ItemLockBanner
-                                          lockHolder={lockHolder}
-                                          onTakeOver={takeOver}
-                                          takingOver={takingOver}
-                                          isAdmin={isAdmin}
-                                          onRequestLock={requestLock}
-                                          requesting={requesting}
-                                          queue={lockQueue}
-                                          myPosition={lockQueuePosition}
-                                          onJoinQueue={joinLockQueue}
-                                          onLeaveQueue={leaveLockQueue}
-                                          joining={joiningLockQueue}
+                                      {importIssues.length > 0 && (
+                                        <ImportIssuesPanel
+                                          issues={importIssues}
+                                          onDismiss={() => setImportIssues([])}
                                         />
-                                      </div>
-                                    )}
-                                    {!isNew && !designOn && (
-                                      <RecordLiveSync
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                        dirty={isDirty}
-                                        loadDenied={itemLoadDenied}
-                                        onGoneChange={setRecordGone}
-                                      />
-                                    )}
-                                    {staleBy && staleMode !== 'auto-refresh' && (
+                                      )}
+                                      {/* The banner is null without a holder — mount it only then, or its
+                                      empty wrapper costs a 16px gap in this space-y stack. */}
+                                      {editLockMessage && (
+                                        <div
+                                          className='nvr-expand-in flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+                                          data-edit-lock-banner
+                                          role='status'
+                                        >
+                                          <Lock className='mt-0.5 h-4 w-4 shrink-0 text-amber-500' />
+                                          <span>{editLockMessage}</span>
+                                        </div>
+                                      )}
+                                      {showLockBanner && lockEnabled && lockHolder && (
+                                        <div className='nvr-expand-in'>
+                                          <ItemLockBanner
+                                            lockHolder={lockHolder}
+                                            onTakeOver={takeOver}
+                                            takingOver={takingOver}
+                                            isAdmin={isAdmin}
+                                            onRequestLock={requestLock}
+                                            requesting={requesting}
+                                            queue={lockQueue}
+                                            myPosition={lockQueuePosition}
+                                            onJoinQueue={joinLockQueue}
+                                            onLeaveQueue={leaveLockQueue}
+                                            joining={joiningLockQueue}
+                                          />
+                                        </div>
+                                      )}
+                                      {!isNew && !designOn && (
+                                        <RecordLiveSync
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          dirty={isDirty}
+                                          loadDenied={itemLoadDenied}
+                                          onGoneChange={setRecordGone}
+                                        />
+                                      )}
+                                      {staleBy && staleMode !== 'auto-refresh' && (
+                                        <div
+                                          className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+                                          data-stale-record-banner
+                                        >
+                                          <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
+                                          <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+                                            <span className='font-semibold'>{staleBy}</span> changed
+                                            this record while you had it open
+                                            {staleMode === 'review'
+                                              ? ' — review their changes before saving, or your edits may overwrite theirs.'
+                                              : ' — refresh to see the latest values.'}
+                                          </p>
+                                          <button
+                                            type='button'
+                                            onClick={refreshStaleRecord}
+                                            className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                                          >
+                                            {staleMode === 'review' ? 'Dismiss' : 'Refresh'}
+                                          </button>
+                                        </div>
+                                      )}
+                                      {!summaryModeSettled ? (
+                                        <div
+                                          data-summary-mode-pending
+                                          aria-busy='true'
+                                          className='space-y-4'
+                                        >
+                                          <Skeleton className='h-10 w-full' />
+                                          <div className='grid gap-4 lg:grid-cols-2'>
+                                            <Skeleton className='h-40 w-full' />
+                                            <Skeleton className='h-40 w-full' />
+                                          </div>
+                                          <Skeleton className='h-56 w-full' />
+                                        </div>
+                                      ) : readMode && !isNew && activeLayoutData?.layout ? (
+                                        <RecordReadView
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          // Section pencil → Edit mode, landing on the section's
+                                          // first field.
+                                          onEditSection={(_groupKey, firstField) => {
+                                            setReadMode(false)
+                                            if (firstField)
+                                              window.setTimeout(() => jumpToField(firstField), 350)
+                                          }}
+                                          // The collection's Summary layout when it has one (Table
+                                          // Editor → Layouts → type Summary), else the grouped layout
+                                          // rendered read-only.
+                                          layoutData={
+                                            (summaryLayoutData ??
+                                              activeLayoutData) as unknown as ReadViewLayout
+                                          }
+                                          flush
+                                          // Notes + tasks stay live in Summary mode — the record's
+                                          // FIELDS are read-only, the conversation about it is not —
+                                          // and the pipeline slot (state track, owners, approval
+                                          // chain) is what a reader wants first.
+                                          renderSlot={(key) =>
+                                            key === '__comments__' ||
+                                            key === '__tasks__' ||
+                                            key === '__pipeline__' ||
+                                            key === '__addendums__'
+                                              ? renderSentinel(key)
+                                              : null
+                                          }
+                                          // The integrity banner is hidden in Summary mode; the
+                                          // affected fields carry an amber mark instead.
+                                          integrityMarks
+                                          // Child grids are the REAL inline grid, read-only — PO
+                                          // match dots, row lints, submission errors, presets and
+                                          // the aggregate footer all come along ("linked lines
+                                          // to orders, highlighted errors, integration errors — just can't
+                                          // edit").
+                                          renderGrid={(a) => {
+                                            const f = (fieldConfig ?? []).find(
+                                              (x) => x.field === a.field
+                                            )
+                                            if (!f) return null
+                                            return (
+                                              <FieldRow
+                                                key={`summary-grid-${a.field}`}
+                                                field={{ ...f, readonly: true }}
+                                                draft={effectiveDraft}
+                                                onChange={handleFieldChange}
+                                                relations={relations}
+                                                collection={collection}
+                                                itemId={itemId}
+                                                visible={true}
+                                                locked={false}
+                                                layoutAiEnabled={layoutAiEnabled}
+                                                renderField={renderField}
+                                                onCountChange={handleM2MCountChange}
+                                              />
+                                            )
+                                          }}
+                                          gridCounts={o2mEffectiveCounts}
+                                        />
+                                      ) : hasTabs ? (
+                                        isStepsMode ? (
+                                          renderStepsMode()
+                                        ) : (
+                                          renderTabMode()
+                                        )
+                                      ) : (
+                                        renderSectionMode()
+                                      )}
+                                      {extraBottomContent}
+                                    </div>
+                                    {summaryEnabled && (
                                       <div
-                                        className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
-                                        data-stale-record-banner
+                                        data-summary-rail={railNarrow ? 'overlay' : ''}
+                                        className={cn(
+                                          'flex shrink-0 border-l border-slate-200 dark:border-border',
+                                          designOn && railViewportH && 'sticky top-0 self-start',
+                                          // Phone width: open, the rail lies OVER the form (with
+                                          // its own background) instead of squeezing it to 114 px.
+                                          railNarrow &&
+                                            !summaryCollapsed &&
+                                            'absolute inset-y-0 right-0 z-20 bg-white shadow-xl dark:bg-card'
+                                        )}
+                                        style={
+                                          designOn && railViewportH
+                                            ? { height: railViewportH }
+                                            : undefined
+                                        }
                                       >
-                                        <AlertTriangle className='h-4 w-4 shrink-0 text-amber-500' />
-                                        <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
-                                          <span className='font-semibold'>{staleBy}</span> changed
-                                          this record while you had it open
-                                          {staleMode === 'review'
-                                            ? ' — review their changes before saving, or your edits may overwrite theirs.'
-                                            : ' — refresh to see the latest values.'}
-                                        </p>
                                         <button
                                           type='button'
-                                          onClick={refreshStaleRecord}
-                                          className='shrink-0 rounded-md border border-amber-400 bg-white px-2.5 py-1 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/50 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/15'
+                                          onClick={() => {
+                                            const next = !summaryCollapsed
+                                            setSummaryCollapsed(next)
+                                            if (designOn)
+                                              writeDesignSummaryCollapsed(authUserId, next)
+                                          }}
+                                          // Design mode swallows canvas clicks; this one passes.
+                                          data-design-pass={designOn ? '' : undefined}
+                                          data-summary-toggle={designOn ? '' : undefined}
+                                          aria-expanded={
+                                            designOn || railNarrow ? !summaryCollapsed : undefined
+                                          }
+                                          aria-label={
+                                            summaryCollapsed ? 'Show summary' : 'Hide summary'
+                                          }
+                                          title={
+                                            summaryCollapsed ? 'Expand summary' : 'Collapse summary'
+                                          }
+                                          className={
+                                            designOn
+                                              ? DESIGN_RAIL_TOGGLE
+                                              : 'border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
+                                          }
                                         >
-                                          {staleMode === 'review' ? 'Dismiss' : 'Refresh'}
+                                          {designOn ? (
+                                            // Rides with the canvas scroll; folded, it says what comes back.
+                                            <span className='sticky top-3 flex flex-col items-center gap-2'>
+                                              {summaryCollapsed ? (
+                                                <ChevronLeft className='h-3.5 w-3.5' />
+                                              ) : (
+                                                <ChevronRight className='h-3.5 w-3.5' />
+                                              )}
+                                              {summaryCollapsed && (
+                                                <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300 [writing-mode:vertical-rl]'>
+                                                  Summary
+                                                </span>
+                                              )}
+                                            </span>
+                                          ) : summaryCollapsed ? (
+                                            <ChevronLeft className='h-3.5 w-3.5' />
+                                          ) : (
+                                            <ChevronRight className='h-3.5 w-3.5' />
+                                          )}
                                         </button>
-                                      </div>
-                                    )}
-                                    {!summaryModeSettled ? (
-                                      <div
-                                        data-summary-mode-pending
-                                        aria-busy='true'
-                                        className='space-y-4'
-                                      >
-                                        <Skeleton className='h-10 w-full' />
-                                        <div className='grid gap-4 lg:grid-cols-2'>
-                                          <Skeleton className='h-40 w-full' />
-                                          <Skeleton className='h-40 w-full' />
-                                        </div>
-                                        <Skeleton className='h-56 w-full' />
-                                      </div>
-                                    ) : readMode && !isNew && activeLayoutData?.layout ? (
-                                      <RecordReadView
-                                        collection={collection}
-                                        itemId={String(itemId)}
-                                        // Section pencil → Edit mode, landing on the section's
-                                        // first field.
-                                        onEditSection={(_groupKey, firstField) => {
-                                          setReadMode(false)
-                                          if (firstField)
-                                            window.setTimeout(() => jumpToField(firstField), 350)
-                                        }}
-                                        // The collection's Summary layout when it has one (Table
-                                        // Editor → Layouts → type Summary), else the grouped layout
-                                        // rendered read-only.
-                                        layoutData={
-                                          (summaryLayoutData ??
-                                            activeLayoutData) as unknown as ReadViewLayout
-                                        }
-                                        flush
-                                        // Notes + tasks stay live in Summary mode — the record's
-                                        // FIELDS are read-only, the conversation about it is not —
-                                        // and the pipeline slot (state track, owners, approval
-                                        // chain) is what a reader wants first.
-                                        renderSlot={(key) =>
-                                          key === '__comments__' ||
-                                          key === '__tasks__' ||
-                                          key === '__pipeline__' ||
-                                          key === '__addendums__'
-                                            ? renderSentinel(key)
-                                            : null
-                                        }
-                                        // The integrity banner is hidden in Summary mode; the
-                                        // affected fields carry an amber mark instead.
-                                        integrityMarks
-                                        // Child grids are the REAL inline grid, read-only — PO
-                                        // match dots, row lints, submission errors, presets and
-                                        // the aggregate footer all come along ("linked lines
-                                        // to orders, highlighted errors, integration errors — just can't
-                                        // edit").
-                                        renderGrid={(a) => {
-                                          const f = (fieldConfig ?? []).find(
-                                            (x) => x.field === a.field
-                                          )
-                                          if (!f) return null
-                                          return (
-                                            <FieldRow
-                                              key={`summary-grid-${a.field}`}
-                                              field={{ ...f, readonly: true }}
-                                              draft={effectiveDraft}
-                                              onChange={handleFieldChange}
+                                        <div
+                                          className='overflow-hidden transition-all duration-200'
+                                          style={{ width: summaryCollapsed ? 0 : 232 }}
+                                        >
+                                          <div className='w-[232px] overflow-y-auto h-full'>
+                                            <SummaryPanel
+                                              onRevertChange={(f) => revertByField[f]?.()}
+                                              layoutFields={
+                                                (activeLayoutData?.assignments?.length ?? 0) > 0
+                                                  ? new Set(
+                                                      (activeLayoutData?.assignments ?? []).map(
+                                                        (a) => a.field
+                                                      )
+                                                    )
+                                                  : null
+                                              }
+                                              allSteps={
+                                                allTabGroups.length > 0
+                                                  ? allTabGroups.map((g) => ({
+                                                      key: g.key,
+                                                      label: g.label
+                                                    }))
+                                                  : allSteps
+                                              }
+                                              groupedMap={groupedMap}
+                                              ungroupedFields={ungroupedFields}
+                                              sectionGroups={sectionGroups.filter(
+                                                (g) => g.type !== 'metadata'
+                                              )}
+                                              draft={draft}
                                               relations={relations}
                                               collection={collection}
                                               itemId={itemId}
-                                              visible={true}
-                                              locked={false}
-                                              layoutAiEnabled={layoutAiEnabled}
-                                              renderField={renderField}
-                                              onCountChange={handleM2MCountChange}
-                                            />
-                                          )
-                                        }}
-                                        gridCounts={o2mEffectiveCounts}
-                                      />
-                                    ) : hasTabs ? (
-                                      isStepsMode ? (
-                                        renderStepsMode()
-                                      ) : (
-                                        renderTabMode()
-                                      )
-                                    ) : (
-                                      renderSectionMode()
-                                    )}
-                                    {extraBottomContent}
-                                  </div>
-                                  {summaryEnabled && (
-                                    <div
-                                      className={cn(
-                                        'flex shrink-0 border-l border-slate-200',
-                                        designOn && railViewportH && 'sticky top-0 self-start'
-                                      )}
-                                      style={
-                                        designOn && railViewportH
-                                          ? { height: railViewportH }
-                                          : undefined
-                                      }
-                                    >
-                                      <button
-                                        type='button'
-                                        onClick={() => {
-                                          const next = !summaryCollapsed
-                                          setSummaryCollapsed(next)
-                                          if (designOn)
-                                            writeDesignSummaryCollapsed(authUserId, next)
-                                        }}
-                                        // Design mode swallows canvas clicks; this one passes.
-                                        data-design-pass={designOn ? '' : undefined}
-                                        data-summary-toggle={designOn ? '' : undefined}
-                                        aria-expanded={designOn ? !summaryCollapsed : undefined}
-                                        title={
-                                          summaryCollapsed ? 'Expand summary' : 'Collapse summary'
-                                        }
-                                        className={
-                                          designOn
-                                            ? DESIGN_RAIL_TOGGLE
-                                            : 'border-r flex w-6 shrink-0 items-start justify-center pt-3 bg-slate-100 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 transition-colors dark:bg-white/[0.04] dark:hover:bg-white/[0.08] dark:text-slate-500 dark:hover:text-slate-300'
-                                        }
-                                      >
-                                        {designOn ? (
-                                          // Rides with the canvas scroll; folded, it says what comes back.
-                                          <span className='sticky top-3 flex flex-col items-center gap-2'>
-                                            {summaryCollapsed ? (
-                                              <ChevronLeft className='h-3.5 w-3.5' />
-                                            ) : (
-                                              <ChevronRight className='h-3.5 w-3.5' />
-                                            )}
-                                            {summaryCollapsed && (
-                                              <span className='text-[11px] font-medium text-slate-600 dark:text-slate-300 [writing-mode:vertical-rl]'>
-                                                Summary
-                                              </span>
-                                            )}
-                                          </span>
-                                        ) : summaryCollapsed ? (
-                                          <ChevronLeft className='h-3.5 w-3.5' />
-                                        ) : (
-                                          <ChevronRight className='h-3.5 w-3.5' />
-                                        )}
-                                      </button>
-                                      <div
-                                        className='overflow-hidden transition-all duration-200'
-                                        style={{ width: summaryCollapsed ? 0 : 232 }}
-                                      >
-                                        <div className='w-[232px] overflow-y-auto h-full'>
-                                          <SummaryPanel
-                                            onRevertChange={(f) => revertByField[f]?.()}
-                                            layoutFields={
-                                              (activeLayoutData?.assignments?.length ?? 0) > 0
-                                                ? new Set(
-                                                    (activeLayoutData?.assignments ?? []).map(
-                                                      (a) => a.field
-                                                    )
-                                                  )
-                                                : null
-                                            }
-                                            allSteps={
-                                              allTabGroups.length > 0
-                                                ? allTabGroups.map((g) => ({
-                                                    key: g.key,
-                                                    label: g.label
-                                                  }))
-                                                : allSteps
-                                            }
-                                            groupedMap={groupedMap}
-                                            ungroupedFields={ungroupedFields}
-                                            sectionGroups={sectionGroups.filter(
-                                              (g) => g.type !== 'metadata'
-                                            )}
-                                            draft={draft}
-                                            relations={relations}
-                                            collection={collection}
-                                            itemId={itemId}
-                                            staging={m2mStagingCtx}
-                                            stagedO2MRows={pendingO2MRows}
-                                            stagedO2MDeletes={pendingO2MDeletes}
-                                            errors={validationErrors}
-                                            staleFields={staleFields}
-                                            changedFields={changedFieldMap}
-                                            // M2M alias values never live in the draft, so the panel
-                                            // cannot judge them empty on its own — it would mark a
-                                            // populated field "required". Hand it the state the form
-                                            // already tracks, and say nothing while it is unsettled.
-                                            aliasEmptiness={{
-                                              // O2M aliases: effective row count (saved − staged
-                                              // deletes + pending) — without this a populated grid
-                                              // read as "required" in the summary. Unsettled = null.
-                                              ...Object.fromEntries(
-                                                [...o2mAliasFields].map((field) => [
-                                                  field,
-                                                  field in o2mEffectiveCounts
-                                                    ? o2mEffectiveCounts[field] === 0
-                                                    : null
-                                                ])
-                                              ),
-                                              ...Object.fromEntries(
-                                                Object.entries(m2mAliasFieldStates).map(
-                                                  ([field, st]) => [
+                                              staging={m2mStagingCtx}
+                                              stagedO2MRows={pendingO2MRows}
+                                              stagedO2MDeletes={pendingO2MDeletes}
+                                              errors={validationErrors}
+                                              staleFields={staleFields}
+                                              changedFields={changedFieldMap}
+                                              // M2M alias values never live in the draft, so the panel
+                                              // cannot judge them empty on its own — it would mark a
+                                              // populated field "required". Hand it the state the form
+                                              // already tracks, and say nothing while it is unsettled.
+                                              aliasEmptiness={{
+                                                // O2M aliases: effective row count (saved − staged
+                                                // deletes + pending) — without this a populated grid
+                                                // read as "required" in the summary. Unsettled = null.
+                                                ...Object.fromEntries(
+                                                  [...o2mAliasFields].map((field) => [
                                                     field,
-                                                    st.known ? st.ids.length === 0 : null
-                                                  ]
-                                                )
-                                              )
-                                            }}
-                                            onFieldClick={(stepKey, fieldKey) => {
-                                              // An empty step key means the field belongs to no step
-                                              // (the Related child collections) — there is no tab to
-                                              // open, so go straight to where it is rendered.
-                                              if (stepKey) {
-                                                if (hasContainers) {
-                                                  const ownerContainer = containerGroups.find((c) =>
-                                                    groups.some(
-                                                      (g) =>
-                                                        g.type === 'tab' &&
-                                                        g.container_id === c.id &&
-                                                        g.key === stepKey
-                                                    )
+                                                    field in o2mEffectiveCounts
+                                                      ? o2mEffectiveCounts[field] === 0
+                                                      : null
+                                                  ])
+                                                ),
+                                                ...Object.fromEntries(
+                                                  Object.entries(m2mAliasFieldStates).map(
+                                                    ([field, st]) => [
+                                                      field,
+                                                      st.known ? st.ids.length === 0 : null
+                                                    ]
                                                   )
-                                                  if (ownerContainer) {
-                                                    setContainerTab(ownerContainer, stepKey)
-                                                    scrollBodyTop()
+                                                )
+                                              }}
+                                              onFieldClick={(stepKey, fieldKey) => {
+                                                // An empty step key means the field belongs to no step
+                                                // (the Related child collections) — there is no tab to
+                                                // open, so go straight to where it is rendered.
+                                                if (stepKey) {
+                                                  if (hasContainers) {
+                                                    const ownerContainer = containerGroups.find(
+                                                      (c) =>
+                                                        groups.some(
+                                                          (g) =>
+                                                            g.type === 'tab' &&
+                                                            g.container_id === c.id &&
+                                                            g.key === stepKey
+                                                        )
+                                                    )
+                                                    if (ownerContainer) {
+                                                      setContainerTab(ownerContainer, stepKey)
+                                                      scrollBodyTop()
+                                                    } else {
+                                                      setActiveTab(stepKey)
+                                                    }
                                                   } else {
                                                     setActiveTab(stepKey)
                                                   }
-                                                } else {
-                                                  setActiveTab(stepKey)
                                                 }
-                                              }
-                                              // Switching a tab mounts that panel, and an inline grid
-                                              // does not exist in the DOM until it does — one 80ms
-                                              // shot missed it and the click read as doing nothing.
-                                              // Poll briefly instead, then give up quietly.
-                                              let tries = 0
-                                              const find = () => {
-                                                const el = (document.querySelector(
-                                                  `[data-field="${fieldKey}"]`
-                                                ) ??
-                                                  document.querySelector(
-                                                    `[data-header-field="${fieldKey}"]`
-                                                  )) as HTMLElement | null
-                                                if (!el) {
-                                                  if (tries++ < 12) setTimeout(find, 60)
-                                                  return
+                                                // Switching a tab mounts that panel, and an inline grid
+                                                // does not exist in the DOM until it does — one 80ms
+                                                // shot missed it and the click read as doing nothing.
+                                                // Poll briefly instead, then give up quietly.
+                                                let tries = 0
+                                                const find = () => {
+                                                  const el = (document.querySelector(
+                                                    `[data-field="${fieldKey}"]`
+                                                  ) ??
+                                                    document.querySelector(
+                                                      `[data-header-field="${fieldKey}"]`
+                                                    )) as HTMLElement | null
+                                                  if (!el) {
+                                                    if (tries++ < 12) setTimeout(find, 60)
+                                                    return
+                                                  }
+                                                  el.scrollIntoView({
+                                                    behavior: 'smooth',
+                                                    block: 'center'
+                                                  })
+                                                  el.classList.add(
+                                                    'ring-2',
+                                                    'ring-nvr-cyan',
+                                                    'ring-offset-2',
+                                                    'rounded-md'
+                                                  )
+                                                  setTimeout(
+                                                    () =>
+                                                      el.classList.remove(
+                                                        'ring-2',
+                                                        'ring-nvr-cyan',
+                                                        'ring-offset-2',
+                                                        'rounded-md'
+                                                      ),
+                                                    1500
+                                                  )
+                                                  // Only pull focus for a field you can actually type
+                                                  // in; focusing a grid's first button scrolls it back
+                                                  // out from under the highlight.
+                                                  const input = el.querySelector(
+                                                    'input,textarea,select'
+                                                  ) as HTMLElement | null
+                                                  input?.focus()
                                                 }
-                                                el.scrollIntoView({
-                                                  behavior: 'smooth',
-                                                  block: 'center'
-                                                })
-                                                el.classList.add(
-                                                  'ring-2',
-                                                  'ring-nvr-cyan',
-                                                  'ring-offset-2',
-                                                  'rounded-md'
-                                                )
-                                                setTimeout(
-                                                  () =>
-                                                    el.classList.remove(
-                                                      'ring-2',
-                                                      'ring-nvr-cyan',
-                                                      'ring-offset-2',
-                                                      'rounded-md'
-                                                    ),
-                                                  1500
-                                                )
-                                                // Only pull focus for a field you can actually type
-                                                // in; focusing a grid's first button scrolls it back
-                                                // out from under the highlight.
-                                                const input = el.querySelector(
-                                                  'input,textarea,select'
-                                                ) as HTMLElement | null
-                                                input?.focus()
-                                              }
-                                              setTimeout(find, 60)
-                                            }}
-                                          />
+                                                setTimeout(find, 60)
+                                              }}
+                                            />
+                                          </div>
                                         </div>
                                       </div>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            </FieldContexts>
-                          </M2MStagingContext.Provider>
-                        </StagedRelationsContext.Provider>
-                      </LiveRowsContext.Provider>
-                    </O2MStagingContext.Provider>
+                              </FieldContexts>
+                            </M2MStagingContext.Provider>
+                          </StagedRelationsContext.Provider>
+                        </LiveRowsContext.Provider>
+                      </O2MStagingContext.Provider>
+                    </CascadeClearNoticeContext.Provider>
                   </StaleFieldReportContext.Provider>
                 </GridFlushContext.Provider>
               </ParentDraftContext.Provider>

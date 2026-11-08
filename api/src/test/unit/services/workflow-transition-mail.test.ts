@@ -91,3 +91,48 @@ describe('workflow_transition mail — how a move is described', () => {
     expect(out).not.toContain('Automatic update')
   })
 })
+
+describe('workflow_transition mail — resubmission (army 11 o3)', () => {
+  it('says it was resubmitted after a send back, by whom and why', async () => {
+    const out = text(
+      await renderMailTemplate('workflow_transition', {
+        ...base,
+        friendly_id: 'CR26-81439',
+        transition_label: 'Submit',
+        from_state: { key: 'started', label: 'Started' },
+        to_state: {
+          key: 'waiting_on_manager_approval',
+          label: 'Waiting on Level 1 Approval',
+          is_terminal: false
+        },
+        comment: null,
+        actor_name: 'Kristina Davison',
+        source: 'manual',
+        move_kind: 'resubmit',
+        resubmitted: {
+          sent_back_by: 'Bernard Kelly',
+          sent_back_from: 'Waiting on Level 2 Approval',
+          reason: 'add the 2026 forecast first',
+          at: '2026-11-08T20:15:39Z'
+        }
+      })
+    )
+    expect(out).toContain(
+      'Resubmitted after Bernard Kelly sent it back from Waiting on Level 2 Approval'
+    )
+    expect(out).toContain('They asked: "add the 2026 forecast first"')
+  })
+
+  it('a first submission says nothing of the kind', async () => {
+    const out = text(
+      await renderMailTemplate('workflow_transition', {
+        ...base,
+        actor_name: 'Kristina Davison',
+        source: 'manual',
+        move_kind: 'forward',
+        resubmitted: null
+      })
+    )
+    expect(out).not.toContain('Resubmitted')
+  })
+})

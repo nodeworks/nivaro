@@ -98,6 +98,31 @@ export function dropListLinkParam(): void {
 }
 
 /**
+ * Keep the list's on-screen state on the CURRENT history entry's address (army 11
+ * Q1-4: Back from a record, a reload, or a copied address bar returned the worklist
+ * to its defaults). `state` null takes `lv` off. Replaces — never pushes — and keeps
+ * `history.state` (the router's idx/key) as it is.
+ */
+export function replaceListLinkParam(key: string, state: Record<string, unknown> | null): void {
+  if (typeof window === 'undefined' || !window.history) return
+  const params = new URLSearchParams(window.location.search)
+  const next = state ? encodeListLink(key, state) : null
+  if ((params.get(LIST_LINK_PARAM) ?? null) === next) return
+  if (next) params.set(LIST_LINK_PARAM, next)
+  else params.delete(LIST_LINK_PARAM)
+  const qs = params.toString()
+  try {
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`
+    )
+  } catch {
+    /* a sandboxed frame may refuse — the list still works, only without the address */
+  }
+}
+
+/**
  * Copy the link for this view. Resolves 'copied', 'too-long' (the view is too
  * big for a link — save it as a shared view instead) or 'failed' (no clipboard).
  */

@@ -2,8 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
-import { humanHours } from '../../lib/utils'
-import { AdjustClockPopover, overrideSentence, slaStatusKey, useSlaStatus } from './SlaClock'
+import {
+  AdjustClockPopover,
+  overrideSentence,
+  slaClockText,
+  slaStatusKey,
+  stepAgeText,
+  useSlaStatus
+} from './SlaClock'
 
 /**
  * SLA strip for the record form's banner stack. Breached records show how
@@ -38,7 +44,6 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
   // Not breached: only an adjusted clock earns a strip.
   if (data.status !== 'breached') {
     if (!data.override || !data.status || data.status === 'none') return null
-    const left = (data.total_hours ?? 0) - (data.elapsed_hours ?? 0)
     return (
       <div
         data-sla-override-banner
@@ -46,7 +51,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
       >
         <p className='min-w-[min(16rem,100%)] flex-1 text-[12.5px] text-slate-700 dark:text-slate-200'>
           <span className='font-semibold'>SLA</span>
-          {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(left)} left ·{' '}
+          {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {slaClockText(data)} ·{' '}
           {overrideSentence(data.override)}
           <span className='block truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
             “{data.override.reason}”
@@ -59,13 +64,14 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
     )
   }
 
-  const hoursPast = Math.max(0, (data.elapsed_hours ?? 0) - (data.total_hours ?? 0))
+  const age = stepAgeText(data.entered_at)
 
   return (
     <div className='nvr-expand-in flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
       <p className='min-w-[min(16rem,100%)] flex-1 text-[12.5px] text-red-800 dark:text-red-300'>
         <span className='font-semibold'>SLA breached</span>
-        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {humanHours(hoursPast)} past the limit
+        {data.sla_rule?.name && ` — ${data.sla_rule.name}`} · {slaClockText(data)}
+        {age && ` · ${age}`}
         {data.acknowledged
           ? ` · acknowledged by ${data.acknowledged.by || 'someone'}`
           : data.has_ladder
@@ -80,7 +86,7 @@ export function SlaBreachBanner({ collection, itemId }: { collection: string; it
       {data.can_adjust && (
         <AdjustClockPopover collection={collection} itemId={itemId} data={data} tone='danger' />
       )}
-      {!data.acknowledged && (
+      {!data.acknowledged && data.can_ack !== false && (
         <>
           {ackOpen && (
             <input

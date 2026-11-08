@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { idleState } from '../../lib/idle'
+import { movedNoticeId, movedNoticeText, noteNamedMovedNotice } from '../../lib/moved-notice'
 import { updateTouches, useOptionalRealtime } from '../../lib/realtime'
 import { announceRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { noteTakeOverHold } from '../item-edit/FieldAffordances'
@@ -827,11 +828,24 @@ export function useItemLock(
         toast(`${p?.user_name ?? 'Someone'} is waiting to edit this record`, { duration: 8000 })
       void refreshLockInfo()
     })
+    // army 11 f4 M4: someone moved the record on while this person was editing
+    // (they were warned and went ahead). Say who and where, and whether the
+    // unsaved edits can still be saved — the form turns read-only on its own.
+    const unsubMoved = realtime.on('lock:moved', (p: any) => {
+      if (p?.collection !== collection || String(p?.item) !== String(item)) return
+      noteNamedMovedNotice(collection, item)
+      toast.warning(movedNoticeText(p ?? {}), {
+        id: movedNoticeId(collection, item),
+        duration: 30_000
+      })
+      void refreshLockInfo()
+    })
     return () => {
       unsubReq()
       unsubResp()
       unsubAvail()
       unsubQueued()
+      unsubMoved()
     }
   }, [realtime, collection, item, client, acquire, stopHeartbeat, refreshLockInfo])
 

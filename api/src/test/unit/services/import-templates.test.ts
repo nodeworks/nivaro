@@ -955,3 +955,141 @@ describe('parseSheetNumber (review L7)', () => {
     ])
   })
 })
+
+// army 11 f1 HIGH: a BID Labor line (Qty 1 × Line Price 500, Line Total 499.99)
+// came in as 1 × $1.00 because the line rules price Labor at $1, and the form
+// showed the file's $600.49 next to the grid's $101.50.
+describe('runImportPipeline — line money (army 11 f1)', () => {
+  const config = cfg({
+    header_map: [{ target: 'project', source: 'Project', steps: [] }],
+    line_map: {
+      target_field: 'workflow_lines',
+      row_filter: null,
+      columns: [
+        { target: 'category', source: 'Category', steps: [] },
+        { target: 'quantity', source: 'Line Quantity', steps: [] },
+        { target: 'price', source: 'Line Price', steps: [] },
+        { target: 'amount', source: 'Line Total', steps: [] }
+      ]
+    }
+  })
+  const lineFields = {
+    quantity: { type: 'decimal', label: 'Qty' },
+    price: { type: 'decimal', label: 'Price', currency: true },
+    amount: {
+      type: 'decimal',
+      label: 'Line $',
+      currency: true,
+      formula: 'item.price * item.quantity'
+    }
+  }
+  // Category 'L' = Labor: the rules price it at 1.
+  const laborPriceOne = async (line: Record<string, unknown>) =>
+    line.category === 'L' ? { ...line, price: 1 } : { ...line }
+  const rows = [
+    { Project: 9, Category: 'M', 'Line Quantity': 4, 'Line Price': 25.125, 'Line Total': 100.5 },
+    { Category: 'L', 'Line Quantity': 1, 'Line Price': 500, 'Line Total': 499.99 }
+  ]
+
+  it('a Labor line keeps its dollars as quantity × $1, and both totals agree', async () => {
+    const seen: Array<Record<string, unknown>> = []
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows,
+      lookup: NO_LOOKUP,
+      lineFields,
+      lineRuleValues: async (line, header) => {
+        seen.push(header)
+        return laborPriceOne(line)
+      }
+    })
+    expect(seen[0]).toEqual({ project: 9 })
+    expect(lines[0].values).toMatchObject({ quantity: 4, price: 25.125, amount: 100.5 })
+    expect(lines[1].values).toMatchObject({ quantity: 500, price: 1, amount: 500 })
+    const sum = lines.reduce((s, l) => s + Number(l.values.amount), 0)
+    expect(sum).toBe(600.5)
+    const msgs = issues.map((i) => i.message)
+    expect(msgs).toContain(
+      'Line Total $499.99 does not match Line Quantity × Line Price (1 × $500.00 = $500.00). The line comes in at $500.00 — check the file.'
+    )
+    expect(msgs).toContain(
+      'This line is priced at $1.00 by the line rules, so Line Quantity changed from 1 to 500 — the line stays $500.00.'
+    )
+    expect(issues.every((i) => i.severity === 'warn')).toBe(true)
+  })
+
+  it('without line rules the total is still quantity × price', async () => {
+    const { lines } = await runImportPipeline({ config, rows, lookup: NO_LOOKUP, lineFields })
+    expect(lines[1].values).toMatchObject({ quantity: 1, price: 500, amount: 500 })
+  })
+
+  it('a whole-number quantity that cannot carry the dollars is flagged, not hidden', async () => {
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [{ Category: 'L', 'Line Quantity': 3, 'Line Price': 2.5, 'Line Total': 7.5 }],
+      lookup: NO_LOOKUP,
+      lineFields: { ...lineFields, quantity: { type: 'integer', label: 'Qty' } },
+      lineRuleValues: async (line) => ({ ...line, price: 2 })
+    })
+    expect(lines[0].values).toMatchObject({ quantity: 3, price: 2, amount: 6 })
+    expect(issues.map((i) => i.message)).toContain(
+      'The line rules set Line Price to $2.00 for this line, so it comes to $6.00 instead of $7.50 — check the line before you save.'
+    )
+  })
+})
+
+describe('runImportPipeline — blank columns + yes/no (army 11 f1/f2)', () => {
+  it('a column in the sheet with only blank cells is not "not found"', async () => {
+    const config = cfg({
+      header_map: [{ target: 'contact', source: 'Additional Contact', steps: [] }],
+      line_map: {
+        target_field: 'materials',
+        row_filter: null,
+        columns: [
+          { target: 'cifa', source: 'cifa', steps: [] },
+          { target: 'price', source: 'price', steps: [] }
+        ]
+      }
+    })
+    const { issues } = await runImportPipeline({
+      config,
+      rows: [{ cifa: '301092' }],
+      lookup: NO_LOOKUP,
+      sheetColumns: ['Additional Contact', 'cifa', 'price']
+    })
+    expect(issues).toEqual([])
+    const missing = await runImportPipeline({
+      config,
+      rows: [{ cifa: '301092' }],
+      lookup: NO_LOOKUP
+    })
+    expect(missing.issues.map((i) => i.message)).toEqual([
+      'Column "Additional Contact" not found in sheet',
+      'Column "price" not found in sheet'
+    ])
+  })
+
+  it('yes/no header values are booleans, never the truthy string "false"', async () => {
+    const config = cfg({
+      header_map: [
+        { target: 'is_osp', source: 'is_osp', steps: [] },
+        { target: 'rush', source: 'rush', steps: [] },
+        { target: 'odd', source: 'odd', steps: [] }
+      ]
+    })
+    const { values, issues } = await runImportPipeline({
+      config,
+      rows: [{ is_osp: 'false', rush: 'Yes', odd: 'maybe' }],
+      lookup: NO_LOOKUP,
+      headerFields: {
+        is_osp: { type: 'boolean', label: 'Is OSP' },
+        rush: { type: 'boolean' },
+        odd: { type: 'boolean', label: 'Odd' }
+      }
+    })
+    expect(values.is_osp).toBe(false)
+    expect(values.rush).toBe(true)
+    expect('odd' in values).toBe(false)
+    expect(issues.map((i) => i.message)).toEqual(['Odd "maybe" is not yes or no — left blank'])
+  })
+})

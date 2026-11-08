@@ -106,7 +106,10 @@ export const RECORD_QUERY_HEADS = [
   'approval-brief',
   'erp-submissions',
   'record-integrations',
-  'record-integrity'
+  'record-integrity',
+  // Per-state extension actions (Push to Fusion): someone else's move changes them (army 11 F-12).
+  'item-actions',
+  'ext-item-actions'
 ] as const
 
 /** Remove every cached query about one record (any id spelling). */

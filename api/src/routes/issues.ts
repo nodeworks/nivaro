@@ -25,9 +25,22 @@ function ownIssues<Q extends Knex.QueryBuilder>(q: Q, userId: string, prefix = '
   ) as Q
 }
 
-function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
+/**
+ * What a non-admin reads as a server issue's title (army 11 o2): the stored title is
+ * "[server] GET /api/items/:collection: <driver message>", and the driver message can
+ * hold SQL text, table and column names. The person gets the route only — "A server
+ * error on GET /api/items/:collection" — never the message. Exported for tests.
+ */
+export function serverIssueTitleForViewer(title: unknown): string {
+  const m = /^\s*\[server\]\s+([A-Z]{3,7})\s+(\/[^\s:]*(?::[A-Za-z_][\w-]*[^\s:]*)*)/.exec(
+    String(title ?? '')
+  )
+  return m ? `A server error on ${m[1]} ${m[2]}` : 'A server error'
+}
+
+export function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
   if (isAdmin || row.source !== 'server') return row
-  return { ...row, details: null }
+  return { ...row, title: serverIssueTitleForViewer(row.title), details: null }
 }
 
 async function recordVisible(
@@ -77,11 +90,17 @@ async function notifyAssignment(
   assigneeId: string,
   senderId: string | null
 ): Promise<void> {
+  // A server issue's stored title carries the driver message (SQL): a notification
+  // names the route only, whoever the assignee is (army 11 o2).
+  const title =
+    (issue as { source?: unknown }).source === 'server'
+      ? serverIssueTitleForViewer(issue.title)
+      : issue.title
   const notification = {
     recipient: assigneeId,
     sender: senderId,
-    subject: `Issue assigned: ${issue.title}`.slice(0, 255),
-    message: `You have been assigned issue #${issue.id} (${issue.severity}): ${issue.title}`,
+    subject: `Issue assigned: ${title}`.slice(0, 255),
+    message: `You have been assigned issue #${issue.id} (${issue.severity}): ${title}`,
     status: 'inbox',
     timestamp: new Date(),
     // An issue without a source record still has a home — the issue log.
@@ -100,7 +119,7 @@ async function notifyAssignment(
       category: 'system',
       always_inbox: true,
       target: { kind: 'issue', id: issue.id, action: 'review' },
-      source: { kind: 'issue_assignment', label: issue.title, id: issue.id },
+      source: { kind: 'issue_assignment', label: title, id: issue.id },
       why: 'This issue was assigned to you.'
     })
   } catch (err) {

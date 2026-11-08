@@ -165,6 +165,11 @@ async function rulesFor(collection: string): Promise<Rule[]> {
   return cache.byCollection.get(collection) ?? []
 }
 
+/** The collection's many-to-many fields as junction legs (bulk-field-rules reads parents with it). */
+export function pickerAliases(collection: string): Promise<Map<string, Alias>> {
+  return aliasesOf(collection)
+}
+
 async function aliasesOf(collection: string): Promise<Map<string, Alias>> {
   const hit = aliasCache.get(collection)
   if (hit && Date.now() - hit.at < TTL) return hit.aliases
@@ -421,5 +426,57 @@ export async function enforcePickerRules(input: PickerRulesInput): Promise<void>
         where('picker_exclusion')
       )
     }
+  }
+}
+
+/**
+ * Army 11 N3: judge ONE value of a cascade picker field for ONE stored record,
+ * whether or not the field opts into enforcement — bulk "Update field" must
+ * not store what the record's form would never offer. Parents are read off
+ * the record (`row` = its stored columns; many-to-many parents from their
+ * links). Returns the refusal sentence, or null. A failure to read never
+ * refuses (the caller's other gates still run).
+ */
+export async function cascadeValueRefusal(input: {
+  collection: string
+  id: string | number
+  label: string
+  target: string
+  cascades: CascadeRule[]
+  value: unknown
+  row: Record<string, unknown>
+  /** Labels of the parent fields, for the sentence. */
+  parentLabels?: Record<string, string>
+}): Promise<string | null> {
+  const { value } = input
+  if (empty(value) || typeof value === 'object' || input.cascades.length === 0) return null
+  if (!IDENT.test(input.target)) return null
+  try {
+    const values = new Map<string, unknown>()
+    let aliases: Map<string, Alias> | null = null
+    for (const c of input.cascades) {
+      if (values.has(c.parent_field)) continue
+      let v: unknown = input.row[c.parent_field]
+      if (!(c.parent_field in input.row)) {
+        aliases ??= await aliasesOf(input.collection)
+        const a = aliases.get(c.parent_field)
+        if (a) {
+          const links = (await db(a.junction)
+            .where({ [a.parentFk]: input.id })
+            .select(a.targetFk)) as Array<Record<string, unknown>>
+          v = links.map((l) => l[a.targetFk]).filter((x) => x !== null && x !== undefined)
+        }
+      }
+      values.set(c.parent_field, v && typeof v === 'object' && !Array.isArray(v) ? undefined : v)
+    }
+    const { filter } = buildCascade(input.cascades, (f) => values.get(f))
+    if (!filter || (await offered(input.target, value, filter))) return null
+    const parents = input.cascades
+      .map((c) => c.parent_field)
+      .filter((p, i, arr) => arr.indexOf(p) === i && !empty(values.get(p)))
+      .map((p) => input.parentLabels?.[p] ?? p)
+    return `${input.label}: that value is not an option for this record’s ${parents.join(', ') || 'other fields'}`
+  } catch {
+    return null
   }
 }

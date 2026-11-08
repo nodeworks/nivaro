@@ -3,7 +3,7 @@ import type {
   NotificationKind,
   NotificationTargetSpec
 } from '@nivaro/extension-kit'
-import { linkTo, recordLink } from './app-links.js'
+import { adminPageBase, linkTo, recordLink } from './app-links.js'
 
 export type {
   NotificationAction,
@@ -66,6 +66,20 @@ const ACTIONS = new Set<NotificationAction>([
   'reply'
 ])
 
+/**
+ * An `external` target's URL, absolute. http(s) URLs pass as they are; an in-app PATH
+ * ('/data-integrity?tab=people') is an admin page — writers (directory sync, the inactive
+ * people notice, help videos, config review…) name admin screens that way — so it is made
+ * absolute on the admin host. Before army 11 a path was dropped silently and the notice
+ * opened nothing. Anything else (javascript:, //host, backslashes) is refused.
+ */
+export function absoluteTargetUrl(raw: string): string | null {
+  const url = raw.trim()
+  if (/^https?:\/\//i.test(url)) return url
+  if (/^\/(?![/\\])/.test(url) && !url.includes('\\')) return `${adminPageBase()}${url}`
+  return null
+}
+
 /** Validate + trim a caller-supplied spec (unknown kinds are dropped). */
 export function normalizeTarget(input: unknown): NotificationTargetSpec | null {
   if (!input || typeof input !== 'object') return null
@@ -80,7 +94,10 @@ export function normalizeTarget(input: unknown): NotificationTargetSpec | null {
   if (t.query != null) out.query = str(t.query, 500)
   if (t.focus != null) out.focus = str(t.focus)
   if (t.tab != null) out.tab = str(t.tab)
-  if (t.url != null && /^https?:\/\//i.test(String(t.url))) out.url = str(t.url, 2000)
+  if (t.url != null) {
+    const url = absoluteTargetUrl(String(t.url))
+    if (url) out.url = url.slice(0, 2000)
+  }
   if (t.task_id != null) out.task_id = typeof t.task_id === 'number' ? t.task_id : str(t.task_id)
   if (t.instance_id != null)
     out.instance_id = typeof t.instance_id === 'number' ? t.instance_id : str(t.instance_id)
@@ -139,7 +156,7 @@ export function deriveTarget(row: {
     return { kind: 'sla', collection: c, id: i, action: 'acknowledge' }
   if (/^approval requested/i.test(subject))
     return { kind: 'approval', collection: c, id: i, action: 'review' }
-  if (/requested access to/i.test(subject))
+  if (/requested access to|is asking for access to/i.test(subject))
     return { kind: 'access_request', collection: c, id: i, action: 'review' }
   if (/^task assigned/i.test(subject))
     return { kind: 'record', collection: c, id: i, action: 'open' }

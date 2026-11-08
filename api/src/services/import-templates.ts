@@ -325,7 +325,17 @@ export function parseSheetNumber(raw: string): number {
 }
 
 /** The type + label of a line column's target field (the child collection's). */
-export type LineFieldInfo = Record<string, { type?: string | null; label?: string | null }>
+export type LineFieldInfo = Record<
+  string,
+  {
+    type?: string | null
+    label?: string | null
+    /** A write-computed formula (`item.price * item.quantity`). */
+    formula?: string | null
+    /** The field shows money ($). */
+    currency?: boolean
+  }
+>
 
 /**
  * A line value must fit its field (army 9 b02): a BOM row with quantity 2.5
@@ -345,6 +355,18 @@ export function checkLineValueTypes(
   for (const [target, raw] of Object.entries(values)) {
     const info = fields[target]
     const type = String(info?.type ?? '').toLowerCase()
+    if (BOOLEAN_TYPES.has(type)) {
+      coerceSheetBoolean(
+        values,
+        target,
+        info,
+        issues,
+        `line[${rowNumber}]:${target}`,
+        rowNumber,
+        sourceFor(target)
+      )
+      continue
+    }
     if (!NUMBER_TYPES.has(type)) continue
     if (raw === null || raw === undefined || raw === '') continue
     if (typeof raw === 'object') continue
@@ -368,6 +390,213 @@ export function checkLineValueTypes(
     }
     values[target] = n
   }
+}
+
+const BOOLEAN_TYPES = new Set(['boolean', 'bool', 'bit'])
+const SHEET_TRUE = new Set(['true', 'yes', 'y', '1', 'x', 'on'])
+const SHEET_FALSE = new Set(['false', 'no', 'n', '0', 'off'])
+
+function fieldLabel(target: string, info: { label?: string | null } | undefined): string {
+  const plain = target.replace(/_/g, ' ')
+  return info?.label || plain.charAt(0).toUpperCase() + plain.slice(1)
+}
+
+/**
+ * A yes/no field read from a sheet: "false" / "No" / "0" are false, never the
+ * truthy STRING "false" (army 11 f2: a BOM row is_osp "false" showed the Is OSP
+ * switch ON while the record saved No). Blank stays blank; anything else is a
+ * warning and the value is left out.
+ */
+export function coerceSheetBoolean(
+  values: Record<string, unknown>,
+  target: string,
+  info: { label?: string | null } | undefined,
+  issues: ImportIssue[],
+  rule: string,
+  rowNumber: number | undefined,
+  column: string | undefined
+): void {
+  const raw = values[target]
+  if (raw === null || raw === undefined || typeof raw === 'boolean') return
+  if (typeof raw === 'number' && (raw === 0 || raw === 1)) {
+    values[target] = raw === 1
+    return
+  }
+  const s = String(raw).trim().toLowerCase()
+  if (s === '') {
+    values[target] = null
+    return
+  }
+  if (SHEET_TRUE.has(s)) values[target] = true
+  else if (SHEET_FALSE.has(s)) values[target] = false
+  else {
+    delete values[target]
+    issues.push({
+      severity: 'warn',
+      rule,
+      ...(rowNumber != null ? { row: rowNumber } : {}),
+      column,
+      message: `${fieldLabel(target, info)} "${String(raw)}" is not yes or no — left blank`
+    })
+  }
+}
+
+/** Header values that must fit their field: yes/no read as booleans. */
+export function coerceHeaderValues(
+  values: Record<string, unknown>,
+  fields: LineFieldInfo,
+  issues: ImportIssue[],
+  sourceFor: (target: string) => string | undefined
+): void {
+  for (const target of Object.keys(values)) {
+    const info = fields[target]
+    const type = String(info?.type ?? '').toLowerCase()
+    if (BOOLEAN_TYPES.has(type))
+      coerceSheetBoolean(
+        values,
+        target,
+        info,
+        issues,
+        `header:${target}`,
+        undefined,
+        sourceFor(target)
+      )
+  }
+}
+
+/** A line field written as the product of two other line fields
+ *  (`item.price * item.quantity`) — the line's money. */
+export function lineProductOf(
+  fields: LineFieldInfo | undefined
+): { product: string; factors: [string, string] } | null {
+  if (!fields) return null
+  for (const [name, info] of Object.entries(fields)) {
+    const m = /^\s*item\.(\w+)\s*\*\s*item\.(\w+)\s*$/.exec(info?.formula ?? '')
+    if (m && m[1] !== m[2] && m[1] !== name && m[2] !== name)
+      return { product: name, factors: [m[1], m[2]] }
+  }
+  return null
+}
+
+function sheetNum(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = typeof v === 'number' ? v : parseSheetNumber(String(v))
+  return Number.isFinite(n) ? n : null
+}
+
+function roundTo(n: number, places: number): number {
+  const f = 10 ** places
+  return Math.round((n + Number.EPSILON * Math.sign(n)) * f) / f
+}
+
+function fmtValue(n: number, currency: boolean | undefined): string {
+  const s = Math.abs(n).toLocaleString('en-US', {
+    minimumFractionDigits: currency ? 2 : 0,
+    maximumFractionDigits: currency ? 4 : 4
+  })
+  const sign = n < 0 ? '-' : ''
+  return currency ? `${sign}$${s}` : `${sign}${s}`
+}
+
+/**
+ * The line's money as the record will store it (army 11 f1 HIGH). The stored
+ * total is always factor × factor (a write-computed field), so:
+ *
+ *  - a file whose total disagrees with its own quantity × price is told so,
+ *    and the line comes in at quantity × price — the figure that will be
+ *    saved (the Summary showed the file's $600.49 while the grid and the save
+ *    used $101.50);
+ *  - a factor the line rules fix (a Labor line is priced $1, its quantity is
+ *    the dollars) keeps the line's money: the other factor takes the amount
+ *    (1 × $500 became 500 × $1), and the person is told. A $500 bid line never
+ *    turns silently into $1. When the other factor must stay whole and cannot
+ *    carry the amount, the line is left as the rules make it and flagged.
+ *
+ * `derived` is the line as the rules would leave it (null = no rules).
+ */
+export function reconcileLineMoney(
+  values: Record<string, unknown>,
+  product: { product: string; factors: [string, string] },
+  fields: LineFieldInfo,
+  derived: Record<string, unknown> | null,
+  issues: ImportIssue[],
+  rowNumber: number,
+  sourceFor: (target: string) => string | undefined
+): void {
+  const [fa, fb] = product.factors
+  const a = sheetNum(values[fa])
+  const b = sheetNum(values[fb])
+  if (a === null || b === null) return
+  const name = (t: string) => sourceFor(t) || fieldLabel(t, fields[t])
+  const money = (t: string, n: number) => fmtValue(n, fields[t]?.currency)
+  const fmtTotal = (n: number) => fmtValue(n, fields[product.product]?.currency !== false)
+  const computed = roundTo(a * b, 2)
+  const fileTotal = sheetNum(values[product.product])
+  if (fileTotal !== null && Math.abs(fileTotal - computed) > 0.005) {
+    issues.push({
+      severity: 'warn',
+      rule: `line[${rowNumber}]:${product.product}`,
+      row: rowNumber,
+      column: sourceFor(product.product),
+      // Quantity × Price reads better than Price × Quantity: the money factor last.
+      message: (() => {
+        const [x, y] = fields[fa]?.currency && !fields[fb]?.currency ? [fb, fa] : [fa, fb]
+        const xv = x === fa ? a : b
+        const yv = y === fa ? a : b
+        return `${name(product.product)} ${fmtTotal(fileTotal)} does not match ${name(x)} × ${name(y)} (${money(x, xv)} × ${money(y, yv)} = ${fmtTotal(computed)}). The line comes in at ${fmtTotal(computed)} — check the file.`
+      })()
+    })
+  }
+  let finalA = a
+  let finalB = b
+  if (derived) {
+    const pairs: Array<[string, string]> = [
+      [fa, fb],
+      [fb, fa]
+    ]
+    for (const [fix, other] of pairs) {
+      const was = fix === fa ? a : b
+      const otherWas = fix === fa ? b : a
+      const ruled = sheetNum(derived[fix])
+      if (ruled === null || ruled <= 0 || Math.abs(ruled - was) < 1e-9) continue
+      // The rules set the other factor too: they own the line, nothing to keep.
+      const otherRuled = sheetNum(derived[other])
+      if (otherRuled !== null && Math.abs(otherRuled - otherWas) > 1e-9) break
+      const scaled = roundTo(computed / ruled, 4)
+      const otherType = String(fields[other]?.type ?? '').toLowerCase()
+      if (INTEGER_TYPES.has(otherType) && !Number.isInteger(scaled)) {
+        issues.push({
+          severity: 'warn',
+          rule: `line[${rowNumber}]:${fix}`,
+          row: rowNumber,
+          column: sourceFor(fix),
+          message: `The line rules set ${name(fix)} to ${money(fix, ruled)} for this line, so it comes to ${fmtTotal(roundTo(ruled * otherWas, 2))} instead of ${fmtTotal(computed)} — check the line before you save.`
+        })
+        values[fix] = ruled
+        if (fix === fa) finalA = ruled
+        else finalB = ruled
+        break
+      }
+      values[fix] = ruled
+      values[other] = scaled
+      if (fix === fa) {
+        finalA = ruled
+        finalB = scaled
+      } else {
+        finalB = ruled
+        finalA = scaled
+      }
+      issues.push({
+        severity: 'warn',
+        rule: `line[${rowNumber}]:${other}`,
+        row: rowNumber,
+        column: sourceFor(other),
+        message: `This line is priced at ${money(fix, ruled)} by the line rules, so ${name(other)} changed from ${money(other, otherWas)} to ${money(other, scaled)} — the line stays ${fmtTotal(computed)}.`
+      })
+      break
+    }
+  }
+  if (product.product in values) values[product.product] = roundTo(finalA * finalB, 2)
 }
 
 /** Sheet rows whose line carries an error: they are left out of `lines`. */
@@ -959,13 +1188,35 @@ export async function runImportPipeline(opts: {
   m2mFields?: Set<string>
   /** The line target fields' types + labels: values are checked against them. */
   lineFields?: LineFieldInfo
+  /** The record's own fields (types + labels): yes/no header values are read as booleans. */
+  headerFields?: LineFieldInfo
+  /** The line as the form's line rules would leave it (row rules), given the header. */
+  lineRuleValues?: (
+    line: Record<string, unknown>,
+    header: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | null>
+  /** The sheet's header names: a mapped column that is there but blank is not "missing". */
+  sheetColumns?: string[]
 }): Promise<ImportParseResult> {
-  const { config, rows, lookup, applyLineFieldRules, m2mFields, lineFields } = opts
+  const {
+    config,
+    rows,
+    lookup,
+    applyLineFieldRules,
+    m2mFields,
+    lineFields,
+    headerFields,
+    lineRuleValues
+  } = opts
   const issues: ImportIssue[] = []
   const headerRow = rows[0] ?? {}
+  // A column the sheet has but left blank is not "not found" (army 11 f1/f2:
+  // 'Column "price" not found in sheet' for a price column with empty cells).
+  const sheetHas = new Set((opts.sheetColumns ?? []).map((c) => String(c).trim()))
+  const inSheet = (col: string) => sheetHas.has(col.trim())
 
   for (const rule of config.header_map) {
-    if (rule.source != null && !Object.hasOwn(headerRow, rule.source)) {
+    if (rule.source != null && !Object.hasOwn(headerRow, rule.source) && !inSheet(rule.source)) {
       issues.push({
         severity: 'warn',
         rule: `header:${rule.target}`,
@@ -982,6 +1233,10 @@ export async function runImportPipeline(opts: {
     lookup,
     m2mFields
   )
+  if (headerFields) {
+    const headerSource = new Map(config.header_map.map((r) => [r.target, r.source ?? undefined]))
+    coerceHeaderValues(values, headerFields, issues, (t) => headerSource.get(t))
+  }
 
   const lines: LineDraft[] = []
   const lineDraftByRowNumber = new Map<number, LineDraft>()
@@ -993,7 +1248,8 @@ export async function runImportPipeline(opts: {
     for (const col of lm.columns) {
       if (col.source != null) {
         const source = col.source
-        const missing = filteredRows.every(({ row }) => !Object.hasOwn(row, source))
+        const missing =
+          !inSheet(source) && filteredRows.every(({ row }) => !Object.hasOwn(row, source))
         if (missing) {
           issues.push({
             severity: 'warn',
@@ -1038,11 +1294,27 @@ export async function runImportPipeline(opts: {
       }
     }
 
+    const money = lineProductOf(lineFields)
+    const lineSource = new Map(lm.columns.map((c) => [c.target, c.source ?? undefined]))
     for (const result of lineResults) {
       if (refused.has(result.rowNumber)) continue
       const draft: LineDraft = { values: result.values }
       if (lm.apply_field_rules && applyLineFieldRules) {
         await applyLineFieldRules(draft.values)
+      }
+      if (money && lineFields) {
+        const derived = lineRuleValues
+          ? await lineRuleValues({ ...draft.values }, values).catch(() => null)
+          : null
+        reconcileLineMoney(
+          draft.values,
+          money,
+          lineFields,
+          derived,
+          issues,
+          result.rowNumber,
+          (t) => lineSource.get(t)
+        )
       }
       if (Object.keys(result.stubs).length > 0) draft.stubs = result.stubs
       lines.push(draft)

@@ -100,8 +100,19 @@ export const integrationObligations: DocSection = {
   },
 
   grace_minutes: 45,               // overrides the api's ack_grace_minutes
-  safe_to_refire: false            // Phase 2 only — may the sweep act alone?
+  safe_to_refire: false,           // Phase 2 only — may the sweep act alone?
+
+  // Optional: "Send current data". Build the request from the record as it
+  // is NOW (the same template the live sender renders). Offered to a person
+  // only — the sweep never calls it. Return { refused } when it cannot send.
+  async fresh_request(db, item) {
+    return { endpoint_path: '/push', body: await buildBody(db, item), summary: 'Approved, PO 1042' }
+  }
 })`
+    },
+    {
+      type: 'p',
+      text: 'Send now repeats a stored request: the obligation\'s own, or — for a `safe_to_refire` kind — the newest earlier one. When nothing is safe to repeat (a status push whose stored body may be out of date, or a send that never happened) and the kind declares `fresh_request`, the record banner and the board offer **Send current data** instead. Its confirm names exactly what goes out ("This sends the record\'s current data (Waiting on Level 3 Approval, requisition PW27-81371, no PO) to LinX now — not the original request."). It goes through the normal send path into a new request row, and the line moves with the answer. Never offered for a kind that belongs to a person (`human`, e.g. a Fusion submit). Routes: `GET /api/integration-obligations/:id/fresh-preview` (builds, sends nothing) and `POST /api/integration-obligations/:id/send {fresh: true}` (admin, remediation switch on).'
     },
     {
       type: 'note',

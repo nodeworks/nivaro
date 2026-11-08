@@ -36,6 +36,26 @@ export interface O2MStagingCtx {
    *  the form claims the record's edit lock like it does for a header field
    *  (army9 b09). Optional: a host without the lock just omits it. */
   noteEditIntent?: () => void
+  /** A line editor / bulk dialog holds (true) or no longer holds (false) a
+   *  typed, not-yet-staged change. While any does, the record's edit lock is
+   *  kept: the form counts it as unsaved work (army 11 f4 L1 — the lock went
+   *  ~2 s after the first keystroke because only staged lines counted).
+   *  Optional: a host without the lock omits it. */
+  noteLineDraft?: (key: string, holding: boolean) => void
+  /** A grid hands the form a way to commit its OPEN line editor (army11 f1:
+   *  Submit moved a record while a typed line sat in its editor). Called with
+   *  null when the grid goes away. Optional: a host without moves omits it. */
+  registerOpenEditor?: (key: string, commit: (() => Promise<OpenEditorCommit>) | null) => void
+}
+
+/** What committing an open line editor did. */
+export interface OpenEditorCommit {
+  /** false = the line was refused (its message is under the cell). */
+  ok: boolean
+  /** true = something was staged now (the form must re-render before saving). */
+  committed: boolean
+  /** "Line 2", "The new line" — names the line in a refusal. */
+  label?: string
 }
 
 export const O2MStagingContext = createContext<O2MStagingCtx | null>(null)

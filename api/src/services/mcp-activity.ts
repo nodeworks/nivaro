@@ -649,7 +649,7 @@ export async function undoAgentWrite(
       409
     )
   if (act.action === 'create') {
-    await deleteOne(user, act.collection, act.item, req)
+    await deleteOne(user, act.collection, act.item, req, undefined, { undoOwnCreate: true })
   } else {
     const prev = (await db('nivaro_revisions')
       .where({ collection: act.collection, item: act.item })

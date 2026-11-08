@@ -239,6 +239,11 @@ export interface QueueDisplayConfig {
     sla_breached: number
     at_risk: number
     age_hour_cap: number
+    /** Army 11 Q1-6: a weight per at-risk RULE NAME (case-insensitive) that replaces
+     *  `at_risk` for rows that rule flags — negative parks them below everything
+     *  else (an "On hold" record is deliberately parked; it must not lead the list).
+     *  Names, not ids, so the same config reads the same on every environment. */
+    at_risk_rule_weights?: Record<string, number> | null
   } | null
   /** Formula columns (#133): client-computed display columns over base +
    *  extra fields. Never cached, never filtered server-side. */
@@ -374,7 +379,8 @@ export function normalizeDisplayConfig(raw: unknown): QueueDisplayConfig {
         sla_warning: num(w.sla_warning, 0, 100000, 1000),
         sla_breached: num(w.sla_breached, 0, 100000, 2000),
         at_risk: num(w.at_risk, 0, 100000, 500),
-        age_hour_cap: num(w.age_hour_cap, 0, 10000, 499)
+        age_hour_cap: num(w.age_hour_cap, 0, 10000, 499),
+        at_risk_rule_weights: normalizeRuleWeights(w.at_risk_rule_weights)
       }
     })(),
     formula_columns: (() => {
@@ -515,6 +521,9 @@ export interface QueueStats {
    *  worklist hides its Warning / Breached tiles instead of a "0 Breached" that reads as
    *  "all on time" (army 9 b08 N-R9-4). Absent on paths that do not count it. */
   sla_tracked?: number
+  /** At-risk rows per matching rule name (army 11 Q1-6: "At Risk 148" was On hold 144 +
+   *  Sent back 4). Live path only — the cache never stores which rule matched. */
+  at_risk_by_rule?: Record<string, number>
 }
 
 export interface WorkloadRow {
@@ -683,9 +692,10 @@ export interface QueueGroupSummary {
 }
 
 /**
- * Calendar hours since `enteredAt` (one decimal), or null when unknown — the
+ * Calendar hours since `enteredAt` (three decimals ≈ 4 s), or null when unknown — the
  * queue's Aging on every source (army 6 M25). The SLA batch's elapsed_hours
- * counts business hours for a business-hours rule and is NOT aging.
+ * counts business hours for a business-hours rule and is NOT aging. Army 11 N1: one
+ * decimal (6 minutes) made a 3½-minute-old row read "6m" in the minute-level label.
  */
 export function calendarAgingHours(
   enteredAt: Date | string | null | undefined,
@@ -694,7 +704,12 @@ export function calendarAgingHours(
   if (enteredAt == null) return null
   const t = new Date(enteredAt).getTime()
   if (!Number.isFinite(t)) return null
-  return Math.round(Math.max(0, (now - t) / 3_600_000) * 10) / 10
+  return roundAgingHours(Math.max(0, (now - t) / 3_600_000))
+}
+
+/** Aging hours as sent: three decimals, so a minute-level label is never off (army 11 N1). */
+export function roundAgingHours(hours: number): number {
+  return Math.round(hours * 1000) / 1000
 }
 
 function agingBucketOf(hours: number | null): string {
@@ -914,6 +929,34 @@ export function applyColumnFilters(
   })
 }
 
+/** `{ruleName: weight}` kept only for real names and finite weights (±100000); null when empty. */
+export function normalizeRuleWeights(raw: unknown): Record<string, number> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const out: Record<string, number> = {}
+  for (const [name, v] of Object.entries(raw as Record<string, unknown>)) {
+    const key = name.trim()
+    const n = Number(v)
+    if (!key || key.length > 200 || !Number.isFinite(n)) continue
+    out[key] = Math.min(100000, Math.max(-100000, n))
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** The at-risk weight one row earns: its rule's own weight when configured, else `at_risk`. */
+export function atRiskWeight(
+  item: { at_risk?: boolean; at_risk_rule?: { name: string } | null },
+  w: Pick<PriorityWeights, 'at_risk' | 'at_risk_rule_weights'>
+): number {
+  if (!item.at_risk) return 0
+  const rule = item.at_risk_rule?.name?.trim().toLowerCase()
+  if (rule && w.at_risk_rule_weights) {
+    for (const [name, weight] of Object.entries(w.at_risk_rule_weights)) {
+      if (name.trim().toLowerCase() === rule) return weight
+    }
+  }
+  return w.at_risk
+}
+
 const SLA_SEVERITY: Record<string, number> = { ok: 0, warning: 1, breached: 2 }
 
 // Composite "do this first" score: SLA severity dominates (breached always
@@ -925,6 +968,8 @@ export interface PriorityWeights {
   sla_breached: number
   at_risk: number
   age_hour_cap: number
+  /** Per at-risk rule name — see QueueDisplayConfig.priority_weights. */
+  at_risk_rule_weights?: Record<string, number> | null
 }
 
 export function computePriorityScore(item: QueueItem, weights?: PriorityWeights | null): number {
@@ -937,7 +982,7 @@ export function computePriorityScore(item: QueueItem, weights?: PriorityWeights 
       : item.sla_status === 'warning'
         ? w.sla_warning
         : 0
-  return sla + (item.at_risk ? w.at_risk : 0) + Math.min(item.aging_hours ?? 0, w.age_hour_cap)
+  return sla + atRiskWeight(item, w) + Math.min(item.aging_hours ?? 0, w.age_hour_cap)
 }
 
 /** Owner names as one sortable string: name order, ', '-joined, null when none.
@@ -1089,26 +1134,80 @@ export function computeExtraValues(
   return out
 }
 
-export function computeAvailableValues(items: QueueItem[]): {
+export function computeAvailableValues(
+  items: QueueItem[],
+  filters?: Record<string, unknown>
+): {
   collection: string[]
   state: string[]
-  owners: Array<{ id: string; name: string }>
+  owners: Array<{ id: string; name: string; label?: string; inactive?: string }>
 } {
   const collections = new Set<string>()
   const states = new Set<string>()
-  const owners = new Map<string, string>()
   for (const item of items) {
     collections.add(item.collection)
     if (item.state) states.add(item.state)
-    for (const o of item.owners) if (!owners.has(o.id)) owners.set(o.id, o.name)
   }
+  // The Owners list narrows by the OTHER active filters, like every value list
+  // (army 11 Q1-3: 13 rows with 9 owners still offered ~45 names).
+  const others = Object.fromEntries(
+    Object.entries(filters ?? {}).filter(([k]) => k !== 'owners')
+  ) as Record<string, string | string[]>
+  const ownerRows = Object.keys(others).length > 0 ? applyColumnFilters(items, others) : items
+  const owners = new Map<string, { id: string; name: string; inactive?: string }>()
+  for (const item of ownerRows)
+    for (const o of item.owners)
+      if (!owners.has(o.id))
+        owners.set(o.id, {
+          id: o.id,
+          name: o.name,
+          ...((o as { inactive?: string }).inactive
+            ? { inactive: (o as { inactive?: string }).inactive }
+            : {})
+        })
   return {
     collection: [...collections].sort(),
     state: [...states].sort(),
-    owners: [...owners]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    owners: labelOwnerOptions([...owners.values()])
   }
+}
+
+/**
+ * Owner filter options a person can tell apart (army 11 Q1-3: "Nisha Uprety" twice,
+ * "Redacted Redacted" five times): people who can no longer act are tagged
+ * ("suspended" / "former user") and sort after those who can; names still alike get
+ * a running number. `label` is set only where it differs from the name.
+ */
+export function labelOwnerOptions(
+  owners: Array<{ id: string; name: string; inactive?: string }>
+): Array<{ id: string; name: string; label?: string; inactive?: string }> {
+  const tagged = owners.map((o) => ({
+    ...o,
+    base:
+      o.inactive === 'former'
+        ? `${o.name} (former user)`
+        : o.inactive
+          ? `${o.name} (${o.inactive})`
+          : o.name
+  }))
+  tagged.sort(
+    (a, b) =>
+      Number(!!a.inactive) - Number(!!b.inactive) ||
+      a.base.localeCompare(b.base) ||
+      a.id.localeCompare(b.id)
+  )
+  const counts = new Map<string, number>()
+  for (const o of tagged) counts.set(o.base, (counts.get(o.base) ?? 0) + 1)
+  const seen = new Map<string, number>()
+  return tagged.map(({ base, ...o }) => {
+    let label = base
+    if ((counts.get(base) ?? 0) > 1) {
+      const n = (seen.get(base) ?? 0) + 1
+      seen.set(base, n)
+      label = `${base} · ${n}`
+    }
+    return label === o.name ? o : { ...o, label }
+  })
 }
 
 export function paginateItems<T>(
@@ -1227,6 +1326,7 @@ export function computeStats(items: QueueItem[]): QueueStats {
   let at_risk = 0
   let sla_tracked = 0
   const aging = { d1: 0, d3: 0, d7: 0, over: 0 }
+  const at_risk_by_rule: Record<string, number> = {}
   for (const item of items) {
     const key = item.state ?? 'none'
     by_state[key] = (by_state[key] ?? 0) + 1
@@ -1234,7 +1334,11 @@ export function computeStats(items: QueueItem[]): QueueStats {
     if (countsAsSlaTracked(item)) sla_tracked++
     if (item.sla_status === 'warning') sla_warning++
     if (item.sla_status === 'breached') sla_breached++
-    if (item.at_risk) at_risk++
+    if (item.at_risk) {
+      at_risk++
+      const rule = item.at_risk_rule?.name
+      if (rule) at_risk_by_rule[rule] = (at_risk_by_rule[rule] ?? 0) + 1
+    }
     const h = item.aging_hours
     if (h != null) {
       if (h < 24) aging.d1++
@@ -1251,7 +1355,8 @@ export function computeStats(items: QueueItem[]): QueueStats {
     sla_breached,
     at_risk,
     aging,
-    sla_tracked
+    sla_tracked,
+    ...(Object.keys(at_risk_by_rule).length > 0 ? { at_risk_by_rule } : {})
   }
 }
 
@@ -1321,6 +1426,9 @@ export interface ExtraFieldMeta {
   cascade_from?: string
   /** The M2O column on THIS target that points at the parent's target. */
   cascade_field?: string
+  /** The final field's select choices ({value, text}) — the list shows "At Risk",
+   *  never the stored key "at_risk" (army 11 Q1-2). Absent for free-text fields. */
+  choices?: Array<{ value: string; text: string }>
 }
 
 /** Classify each configured extra-field path so the admin can render the right
@@ -1406,7 +1514,49 @@ export async function computeExtraFieldMeta(
       }
     }
   }
+  // Choice labels for select fields, so cells and filter lists read the label.
+  const ends = new Map<string, { collection: string; field: string }>()
+  for (const m of out) {
+    if (m.kind === 'relation' && m.target_collection && m.display_field && !m.aggregate)
+      ends.set(m.path, { collection: m.target_collection, field: m.display_field })
+    else if (m.kind === 'plain' && !m.path.includes('.') && paths.has(m.path))
+      ends.set(m.path, { collection: paths.get(m.path) as string, field: m.path })
+  }
+  if (ends.size > 0) {
+    const cols = [...new Set([...ends.values()].map((e) => e.collection))]
+    const fieldRows = (await Promise.resolve()
+      .then(() =>
+        database('nivaro_fields')
+          .whereIn('collection', cols)
+          .select('collection', 'field', 'options')
+      )
+      .catch(() => [])) as Array<{ collection: string; field: string; options: string | null }>
+    for (const m of out) {
+      const end = ends.get(m.path)
+      if (!end) continue
+      const row = fieldRows.find((r) => r.collection === end.collection && r.field === end.field)
+      const choices = choicesFromOptions(row?.options ?? null)
+      if (choices) m.choices = choices
+    }
+  }
   return out
+}
+
+/** `options.choices` of a field as [{value, text}] — null when it has none. */
+export function choicesFromOptions(raw: unknown): Array<{ value: string; text: string }> | null {
+  const opts = (typeof raw === 'string' ? parseJson(raw) : raw) as { choices?: unknown } | null
+  const list = Array.isArray(opts?.choices)
+    ? (opts?.choices as Array<Record<string, unknown>>)
+    : null
+  if (!list) return null
+  const out: Array<{ value: string; text: string }> = []
+  for (const c of list.slice(0, 200)) {
+    if (!c || typeof c !== 'object' || c.value == null) continue
+    const value = String(c.value)
+    const text = c.text == null || c.text === '' ? value : String(c.text)
+    out.push({ value, text })
+  }
+  return out.length > 0 ? out : null
 }
 
 export interface RelationSegmentInfo {
@@ -3583,7 +3733,10 @@ export async function fetchQueueItems(
   const withClaims = attachClaims(merged, claims)
   const scoped = applyScopeFilter(withClaims, scope, user.id)
   await attachLabels(scoped)
-  const availableValues = computeAvailableValues(scoped)
+  const availableValues = computeAvailableValues(
+    scoped,
+    (options.filters ?? undefined) as Record<string, unknown> | undefined
+  )
   const extraValues = computeExtraValues(
     scoped,
     (options.filters ?? undefined) as Record<string, string | string[]> | undefined

@@ -379,7 +379,12 @@ export async function checkDirectory(
       .select('u.id')) as Array<{ id: string }>
     const names = departed
       .slice(0, 10)
-      .map((c) => `${c.name} (${c.status === 'missing' ? 'not in directory' : 'disabled'})`)
+      // The mailbox tells two people with one name apart (army 11: a departed "Robert Lee" read
+      // as the administrator Robert Lee).
+      .map(
+        (c) =>
+          `${c.name}${c.email && !c.name.toLowerCase().includes(String(c.email).toLowerCase()) ? ` · ${String(c.email).toLowerCase()}` : ''} (${c.status === 'missing' ? 'not in directory' : 'disabled'})`
+      )
       .join(', ')
     const more = departed.length > 10 ? ` and ${departed.length - 10} more` : ''
     for (const a of admins) {

@@ -113,7 +113,8 @@ import {
 import {
   applyRowLocksOnWrite,
   applyRowRulesOnCreate,
-  applyRowRulesOnUpdate
+  applyRowRulesOnUpdate,
+  type VirtualParent
 } from './row-rules-autofill.js'
 import { fallbackSearchColumns, narrowSearchColumns, parseSearchFields } from './search-fields.js'
 import { BINARY_COLLATION, fastContainsKind, fastLike, textKindOf } from './search-like.js'
@@ -6496,7 +6497,7 @@ async function undoNestedCreates(
   const stuck: NestedCreated = []
   for (const c of [...created].reverse()) {
     try {
-      await deleteOne(user, c.collection, c.id, req)
+      await deleteOne(user, c.collection, c.id, req, undefined, { undoOwnCreate: true })
     } catch {
       try {
         await db(c.collection).where({ id: c.id }).del()
@@ -6739,11 +6740,11 @@ export async function rehearseCreate(
   data: Record<string, unknown>,
   req?: FastifyRequest,
   workspaceId?: string,
-  opts?: { insert?: boolean; callerPayload?: boolean }
+  opts?: { insert?: boolean; callerPayload?: boolean; parent?: VirtualParent }
 ): Promise<DryRunReport> {
   try {
     const out = await createOne(user, collection, structuredClone(data ?? {}), req, workspaceId, {
-      dryRun: { insert: opts?.insert !== false },
+      dryRun: { insert: opts?.insert !== false, ...(opts?.parent ? { parent: opts.parent } : {}) },
       callerPayload: opts?.callerPayload === true
     })
     if (out && typeof out === 'object' && dryReports.has(out)) return out as DryRunReport
@@ -6841,7 +6842,8 @@ export async function createOne(
   workspaceId?: string,
   opts?: {
     skipRollupRecalc?: boolean
-    dryRun?: { insert: boolean }
+    /** `parent`: a nested child's parent as it would be stored (it does not exist yet). */
+    dryRun?: { insert: boolean; parent?: VirtualParent }
     outcome?: CreateOutcome
     /** Judge this create with the create scope guard (create-scope-guard.ts). */
     scopeGuard?: boolean
@@ -7029,8 +7031,15 @@ export async function createOne(
   // the caller left out; never throws.
   // Locked child-row fields (layout 'lock' row rules) are never caller-set —
   // drop them first so the autofill below owns their value.
-  await applyRowLocksOnWrite(collection, ctx.payload, callerFields, null, req?.isAdmin ?? false)
-  await applyRowRulesOnCreate(collection, ctx.payload, callerFields)
+  await applyRowLocksOnWrite(
+    collection,
+    ctx.payload,
+    callerFields,
+    null,
+    req?.isAdmin ?? false,
+    dry?.parent
+  )
+  await applyRowRulesOnCreate(collection, ctx.payload, callerFields, dry?.parent)
 
   // Datetime auto-fields — on_create: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_create')
@@ -7112,9 +7121,13 @@ export async function createOne(
       for (let i = 0; i < w.rows.length; i++) {
         const { [w.fk]: _parent, ...row } = w.rows[i]
         try {
+          // The parent as it would be stored: row rules that read it (and
+          // the lock rules that drop a value this caller may not set) judge
+          // the child exactly as the real create will (army 11 f4 M3).
           const r = await rehearseCreate(user, w.collection, row, req, workspaceId, {
             insert: false,
-            callerPayload: opts?.callerPayload === true
+            callerPayload: opts?.callerPayload === true,
+            parent: { collection, row: { ...would } }
           })
           list.push({
             index: i,
@@ -7137,7 +7150,7 @@ export async function createOne(
     }
     if (nestedWrites.length > 0)
       notes.push(
-        'Child rows were checked without their parent, which does not exist: rules that read the parent record did not run for them.'
+        'Child rows were checked against the parent as it would be stored; hooks that read the stored parent record did not run for them.'
       )
     const childFailed = Object.values(nested).some((l) => l.some((r) => !r.ok))
     const filled = Object.keys(writable).filter(
@@ -7960,7 +7973,11 @@ export async function deleteOne(
   collection: string,
   id: string | number,
   req?: FastifyRequest,
-  workspaceId?: string
+  workspaceId?: string,
+  /** `undoOwnCreate`: the system taking back a row it (or the caller's agent) just
+   *  created — a failed nested write, an agent rollback. The in-flight rule is a
+   *  person's rule; an undo of a create is not a person deleting submitted work. */
+  opts: { undoOwnCreate?: boolean } = {}
 ) {
   await assertServable(user, collection, 'delete')
   assertRecordId(id)
@@ -7981,6 +7998,13 @@ export async function deleteOne(
   const writeScope = await writeScopeFor(user, collection)
   await assertWritableRow(collection, id, user, writeScope, rowFilter, workspaceId)
   await assertNotEditLocked(user, collection, { ids: [id] }, req)
+  // Army 11 N12: a person's delete of a record that has left its first step
+  // (submitted, in approval, finished) is refused — it is cancelled instead.
+  if (req && !opts.undoOwnCreate) {
+    const { assertDeletableByPerson } = await import('./delete-in-flight.js')
+    const { isAdminRole } = await import('./permissions.js')
+    await assertDeletableByPerson(collection, id, req.isAdmin === true || (await isAdminRole(user)))
+  }
 
   const prevQ = db(collection).where({ id }).select('*')
   await applyWorkspaceScope(prevQ, collection, workspaceId)

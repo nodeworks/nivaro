@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { outcomeName } from '../../lib/bulk-copy'
 import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
 import { errorToastOptions } from '../../lib/error-toast'
@@ -102,7 +103,7 @@ export interface BulkRunResult {
   succeeded: number
   failed: number
   skipped: number
-  errors: Array<{ item: string; error: string }>
+  errors: Array<{ item: string; label?: string; error: string }>
 }
 
 /** #1/#18 — dry-run verdict from POST /bulk-actions/preview. */
@@ -110,7 +111,13 @@ export interface BulkPreview {
   would_change: number
   skipped: number
   failed: number
-  outcomes: Array<{ item: string; outcome: 'change' | 'skip' | 'fail'; reason?: string }>
+  outcomes: Array<{
+    item: string
+    /** The record's friendly id, read by the server (army 11 N7). */
+    label?: string
+    outcome: 'change' | 'skip' | 'fail'
+    reason?: string
+  }>
 }
 
 /** Available actions per collection, for the viewer. */
@@ -303,7 +310,7 @@ export function BulkActionButtons({
       const msg = describeResult(a.label, total, count)
       const detail = total.errors
         .slice(0, 3)
-        .map((e) => `#${e.item}: ${e.error}`)
+        .map((e) => `${outcomeName(e, targets)}: ${e.error}`)
         .join('\n')
       if (total.failed > 0) toast.warning(msg, { description: detail || undefined, duration: 8000 })
       else toast.success(msg, { duration: 4000 })
@@ -431,8 +438,8 @@ export function BulkActionButtons({
                       {previewOpen && (
                         <ul className='mt-1 max-h-32 space-y-0.5 overflow-auto font-mono text-[10.5px] text-slate-600 dark:text-slate-300'>
                           {skips.slice(0, 50).map((o) => (
-                            <li key={`${o.item}:${o.outcome}`} data-bulk-preview-row={o.item}>
-                              #{o.item} — {o.reason ?? o.outcome}
+                            <li key={`${o.item}:${o.outcome}`} data-bulk-preview-row>
+                              {outcomeName(o, targets)} — {o.reason ?? o.outcome}
                             </li>
                           ))}
                         </ul>

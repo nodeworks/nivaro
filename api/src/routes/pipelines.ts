@@ -42,7 +42,11 @@ import {
   visibleIds
 } from '../services/record-access.js'
 import { pickInstance } from '../services/record-state.js'
-import { formatWorkflowState, runRecordTransition } from '../services/record-transition.js'
+import {
+  formatWorkflowState,
+  lockAckFrom,
+  runRecordTransition
+} from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
@@ -65,6 +69,8 @@ import {
   type TemplateSnapshot
 } from '../services/workflow-template-versions.js'
 import { resolveTransitionTarget } from '../services/workflow-transitions.js'
+import type { User } from '../types.js'
+import { matchingRules, parseActiveRules, referencedFields } from './at-risk.js'
 import { ownerMatrixVersionRoutes, registerOwnerMatrixCapture } from './owner-matrix-versions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -282,16 +288,62 @@ function normalizeCommentMode(v: unknown): 'none' | 'optional' | 'required' {
  * partner pushes it carries (`pushes`, #616) — the header's push-readiness
  * chip asks the server to pre-flight only the transitions that send something.
  */
-function stripTransitionActions<T extends { actions?: unknown }>(
+/**
+ * The active highlight (at-risk) rules one record matches, as chips: name +
+ * colour. Only rules whose fields the caller may read are judged (a rule on a
+ * hidden field would leak it). Never throws — a failed read shows no chips.
+ */
+export async function recordFlags(
+  user: User | undefined,
+  isAdmin: boolean,
+  collection: string,
+  item: string
+): Promise<Array<{ name: string; color: string }>> {
+  if (!user || collection.startsWith('nivaro_')) return []
+  try {
+    const rules = parseActiveRules(
+      await db('nivaro_at_risk_rules').where({ collection, is_active: true }).orderBy('id')
+    )
+    if (rules.length === 0) return []
+    const readable = isAdmin ? null : await getAllowedFields(user, 'read', collection)
+    const allowed = !readable || readable.includes('*') ? null : new Set(readable)
+    const usable = rules.filter((r) =>
+      referencedFields(r.conditions).every((f) => !allowed || allowed.has(f))
+    )
+    if (usable.length === 0) return []
+    const fields = [...new Set(usable.flatMap((r) => referencedFields(r.conditions)))]
+    const row = (await db(collection).where({ id: item }).first(fields)) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return []
+    return matchingRules(row, usable).map(({ name, color }) => ({ name, color }))
+  } catch {
+    return []
+  }
+}
+
+export function stripTransitionActions<T extends { actions?: unknown }>(
   t: T
-): Omit<T, 'actions'> & { pushes: number } {
+): Omit<T, 'actions'> & { pushes: number; order_partners: string[] } {
   const { actions, ...rest } = t
-  const pushes = Array.isArray(actions)
-    ? actions.filter(
+  const erp = Array.isArray(actions)
+    ? (actions.filter(
         (a) => !!a && typeof a === 'object' && (a as { type?: unknown }).type === 'erp_submit'
-      ).length
-    : 0
-  return { ...rest, pushes }
+      ) as Array<{ external_api?: unknown; blocking?: unknown }>)
+    : []
+  // The partners this move places an ORDER with: a blocking push (the move
+  // waits on the partner's yes). Status updates (non-blocking) are not
+  // orders. The panel styles these buttons apart from approvals and always
+  // asks first, naming the partner (army 11 a2 F2).
+  const order_partners = [
+    ...new Set(
+      erp
+        .filter((a) => a.blocking === true || a.blocking === 1 || a.blocking === 'true')
+        .map((a) => String(a.external_api ?? '').trim())
+        .filter(Boolean)
+    )
+  ]
+  return { ...rest, pushes: erp.length, order_partners }
 }
 
 function formatTransition(t: WorkflowTransition) {
@@ -2691,7 +2743,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // #1217: auto transitions the engine stopped re-firing because their
         // blocking push failed and nothing it would send has changed.
         auto_held: await heldForInstance(String(instance.id)),
-        edit_lock: editLock?.locked ? editLock : null
+        edit_lock: editLock?.locked ? editLock : null,
+        // The collection's highlight rules this record matches ("On hold",
+        // "Sent back") — chips beside the state, so an approver sees a hold
+        // before pressing Approve (army 11 a1 F-2).
+        flags: await recordFlags(req.user, isAdmin, collection, String(item))
       }
     })
   })
@@ -2809,10 +2865,17 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
-      const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
+      const body = req.body as {
+        transition_id: string
+        comment?: string
+        reviewed?: boolean
+        /** "<name> is editing this record" was shown and the person moves it anyway. */
+        lock_ack?: boolean
+      }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
       const r = await runRecordTransition({
+        lockAck: lockAckFrom(body.lock_ack),
         user: req.user!,
         isAdmin: req.isAdmin ?? false,
         collection,

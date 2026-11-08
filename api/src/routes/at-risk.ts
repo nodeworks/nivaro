@@ -214,6 +214,17 @@ export function parseActiveRules(rows: AtRiskRuleRow[]): ParsedRule[] {
   return rules
 }
 
+/** Every rule one row matches, in rule order — the record page's flag chips
+ *  ("On hold", "Sent back"), where a list row shows only the first. */
+export function matchingRules(
+  row: Record<string, unknown>,
+  rules: ParsedRule[]
+): Array<{ name: string; color: HighlightColor; rule_id: number }> {
+  return rules
+    .filter((rule) => ruleMatches(row, rule.conditions))
+    .map((rule) => ({ name: rule.name, color: rule.color, rule_id: rule.id }))
+}
+
 /** Evaluate rows against rules — returns map of id → first matching rule result. */
 export function evaluateRows(
   rows: Record<string, unknown>[],

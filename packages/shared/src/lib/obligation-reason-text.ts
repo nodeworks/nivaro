@@ -46,5 +46,8 @@ export function plainObligationReason(reason: string): string {
   if (m) return `the message could not be built (${m[1]})`
   m = /^flow condition rejected at "(.+)"$/.exec(r)
   if (m) return `a flow step ("${m[1]}") stopped it`
+  // The reconcile sweep's "missing" (integration-reconcile.ts) — what changed
+  // was never sent; how it happened is the board's question, not the reader's.
+  if (/^no send was ever attempted\b/.test(r)) return 'nothing was sent when this changed'
   return r
 }

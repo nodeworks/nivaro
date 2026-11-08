@@ -19,28 +19,28 @@ describe('whyContext rules link', () => {
   it("resolves the recipient's app when the sender names none", async () => {
     expect(await whyContext('a@x.com', 'you approve')).toEqual({
       why: 'you approve',
-      rules_url: 'https://admin.test/profile'
+      rules_url: 'https://admin.test/profile#notification-rules'
     })
   })
   it("keeps the sender's own rules link", async () => {
     linkTo.mockClear()
     expect(await whyContext('a@x.com', 'you approve', 'https://portal.test/profile')).toEqual({
       why: 'you approve',
-      rules_url: 'https://portal.test/profile'
+      rules_url: 'https://portal.test/profile#notification-rules'
     })
     expect(linkTo).not.toHaveBeenCalled()
   })
   it("ignores a link to a host that is not one of this instance's apps (review M8)", async () => {
     expect(
       (await whyContext('a@x.com', 'you approve', 'https://evil.example/profile')).rules_url
-    ).toBe('https://admin.test/profile')
+    ).toBe('https://admin.test/profile#notification-rules')
     expect((await whyContext('a@x.com', 'you approve', 'https://admin.test/x')).rules_url).toBe(
       'https://admin.test/x'
     )
   })
   it('ignores a rules link that is not a web address', async () => {
     expect((await whyContext('a@x.com', 'you approve', 'javascript:alert(1)')).rules_url).toBe(
-      'https://admin.test/profile'
+      'https://admin.test/profile#notification-rules'
     )
   })
 })

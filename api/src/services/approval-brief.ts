@@ -1,5 +1,5 @@
 import { db } from '../db/index.js'
-import { briefLinesFor, type BriefLine } from './approval-brief-lines.js'
+import { type BriefLine, briefLinesFor } from './approval-brief-lines.js'
 import { getLabels } from './queues.js'
 
 /**
@@ -14,6 +14,9 @@ export interface BriefFieldChange {
   label: string
   old: string
   new: string
+  /** The record derives this value itself (a built title, a write formula) —
+   *  shown as "updated automatically", never counted as someone's edit. */
+  auto?: boolean
 }
 
 export interface ApprovalBrief {
@@ -22,6 +25,8 @@ export interface ApprovalBrief {
   revisions: number
   field_changes: BriefFieldChange[]
   changed_total: number
+  /** changed_total without the values the record derives itself (a built title). */
+  changed_by_people: number
   comments: number
   addendums: { count: number; cost_impact: number }
   edited_by: string[]
@@ -40,6 +45,33 @@ const fmt = (v: unknown): string => {
   return String(v)
     .replace(/<[^>]+>/g, '')
     .slice(0, 120)
+}
+
+interface BriefFieldMeta {
+  field: string
+  label: string | null
+  type?: string | null
+  computed_type?: string | null
+  options?: unknown
+}
+
+export function isBooleanField(meta: BriefFieldMeta | undefined): boolean {
+  return String(meta?.type ?? '').toLowerCase() === 'boolean'
+}
+
+/** A value the record builds itself: a write-computed formula or an auto id/title pattern. */
+export function isDerivedField(meta: BriefFieldMeta | undefined): boolean {
+  if (!meta) return false
+  if (String(meta.computed_type ?? '').toLowerCase() === 'write') return true
+  let opts: unknown = meta.options
+  if (typeof opts === 'string') {
+    try {
+      opts = JSON.parse(opts)
+    } catch {
+      return false
+    }
+  }
+  return !!(opts && typeof opts === 'object' && (opts as { auto_id?: unknown }).auto_id)
 }
 
 export async function buildApprovalBrief(
@@ -130,9 +162,10 @@ export async function buildApprovalBrief(
     ? ((await db('nivaro_fields')
         .where({ collection })
         .whereIn('field', top)
-        .select('field', 'label')) as Array<{ field: string; label: string | null }>)
+        .select('field', 'label', 'type', 'computed_type', 'options')) as BriefFieldMeta[])
     : []
   const labelOf = new Map(fieldRows.map((f) => [f.field, f.label]))
+  const metaOf = new Map(fieldRows.map((f) => [f.field, f]))
   const rels = top.length
     ? ((await db('nivaro_relations')
         .where({ many_collection: collection })
@@ -162,6 +195,8 @@ export async function buildApprovalBrief(
     const t = targetOf.get(k)
     if (t && v != null && v !== '' && typeof v !== 'object')
       return labels[`${t}:${String(v)}`] ?? fmt(v)
+    // A yes/no field that was never set reads "No", not "(empty)" (army11 a1 F-4).
+    if (isBooleanField(metaOf.get(k))) return v === true || v === 1 || v === '1' ? 'Yes' : 'No'
     return fmt(v)
   }
 
@@ -169,8 +204,12 @@ export async function buildApprovalBrief(
     field,
     label: labelOf.get(field) || titleCase(field),
     old: field in oldRow ? show(field, oldRow[field]) : '',
-    new: show(field, changed.get(field))
+    new: show(field, changed.get(field)),
+    ...(isDerivedField(metaOf.get(field)) ? { auto: true } : {})
   }))
+  // "N fields changed by <person>" counts what people changed (army11 f3).
+  const autoKeys = new Set(fieldChanges.filter((f) => f.auto).map((f) => f.field))
+  const personTotal = keys.filter((k) => !autoKeys.has(k)).length
 
   let editorNames: string[] = []
   if (editors.size > 0) {
@@ -190,6 +229,7 @@ export async function buildApprovalBrief(
     revisions: inWindow.length,
     field_changes: fieldChanges,
     changed_total: keys.length,
+    changed_by_people: personTotal,
     comments: Number(commentCount?.c ?? 0),
     addendums: {
       count: addendums.length,

@@ -86,8 +86,9 @@ vi.mock('../../../db/index.js', () => {
   })
   return { db }
 })
+const masq = vi.hoisted(() => ({ byUser: new Map<string, string>() }))
 vi.mock('../../../services/masquerade-marker.js', () => ({
-  activeMasquerades: vi.fn(async () => new Map())
+  activeMasquerades: vi.fn(async () => masq.byUser)
 }))
 vi.mock('../../../services/huddle-presence.js', () => ({
   huddlingUsers: vi.fn(async () => new Set())
@@ -114,6 +115,7 @@ import {
   presenceOnlineCounters,
   presenceOnlineFor,
   resetPresenceOnlineCache,
+  scopesForViewer,
   visibilitySignature,
   visibleToViewer
 } from '../../../routes/presence.js'
@@ -136,6 +138,7 @@ beforeEach(() => {
   state.accounts = {}
   state.roles = []
   stuck.minutes = new Map()
+  masq.byUser = new Map()
   labelCalls.viewers = []
   presenceOnlineCounters.signatures = 0
   presenceOnlineCounters.persons = 0
@@ -179,6 +182,18 @@ describe('GET /presence/online cache', () => {
     expect(admin.data[0].current_path).toBe('/collections/secret/1')
     expect(plain.data[0].current_path).toBeUndefined()
     expect(plain.data[0]).not.toHaveProperty('stale_build')
+  })
+
+  it('who an administrator is viewing as is shown to administrators only (army 11)', async () => {
+    masq.byUser = new Map([['A', 'ADMIN-UUID']])
+    const admin = await presenceOnlineFor(app, user('ADM'), true)
+    const plain = await presenceOnlineFor(app, user('U1'), false)
+    expect(admin.data.find((r) => r.user_id === 'A')?.masquerade).toMatchObject({
+      admin_id: 'ADMIN-UUID'
+    })
+    const row = plain.data.find((r) => r.user_id === 'A')
+    expect(row?.masquerade).toBeNull()
+    expect(JSON.stringify(plain)).not.toContain('ADMIN-UUID')
   })
 
   it('an API-key caller is never served from the per-viewer cache', async () => {
@@ -405,5 +420,21 @@ describe('presenceIdentityChange', () => {
     expect(
       presenceIdentityChange({ method: 'PATCH', url: '/api/items/user_presence/70', ...admin })
     ).toBeNull()
+  })
+})
+
+describe('scopesForViewer (army 11)', () => {
+  const row = new Map([
+    ['zone', ['Zone 1', 'Zone 3']],
+    ['region', ['CRAN']]
+  ])
+  it('a non-admin sees only the labels they share, per dimension', () => {
+    expect(scopesForViewer(row, new Map([['zone', ['Zone 1', 'Zone 2']]]), false)).toEqual(
+      new Map([['zone', ['Zone 1']]])
+    )
+  })
+  it("an unrestricted viewer sees nobody else's zones; their own row stays whole", () => {
+    expect(scopesForViewer(row, undefined, false)).toEqual(new Map())
+    expect(scopesForViewer(row, undefined, true)).toBe(row)
   })
 })

@@ -88,6 +88,8 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'erp-submissions',
   'record-integrations',
   'record-integrity',
+  'item-actions',
+  'ext-item-actions',
   'cbv-items',
   'cbv-pipeline-instances',
   'cbv-owners',

@@ -37,6 +37,7 @@ import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { getLabels } from './queues.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
 import { isSendBackMove } from './send-back-skips.js'
+import { MACHINE_TRANSITION_COMMENT } from './transition-comment.js'
 import { TRIGGER_SAFE } from './trigger-safe.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -466,8 +467,119 @@ export async function evaluateSkipCriteria(
  * and templates: subject record (an addendum's parent), friendly id,
  * record_url, resolved owners of the new state.
  */
-const MACHINE_COMMENT =
-  /^(auto: |state-merge|legacy-|reforecast|linx-state-sync|instance-migration|natural-key upsert|import:)/i
+const MACHINE_COMMENT = MACHINE_TRANSITION_COMMENT
+
+/** One-line quote for in-app texts. */
+function quoteNote(text: string | null | undefined, max = 200): string {
+  const t = String(text ?? '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!t) return ''
+  return `“${t.length > max ? `${t.slice(0, max - 1)}…` : t}”`
+}
+
+export interface MoveContext {
+  kind: 'forward' | 'send_back' | 'resubmit' | 'other'
+  resubmitted: {
+    sent_back_by: string | null
+    sent_back_from: string | null
+    reason: string | null
+    at: string | null
+  } | null
+  ping_note: string
+}
+
+/** Pure: the in-app sentence for a move. */
+export function moveNote(
+  kind: MoveContext['kind'],
+  actorName: string | null,
+  comment: string | null,
+  resubmitted: MoveContext['resubmitted']
+): string {
+  if (kind === 'send_back') {
+    const q = quoteNote(comment)
+    return ` Sent back by ${actorName || 'someone'}${q ? `: ${q}` : ''}.`
+  }
+  if (kind === 'resubmit' && resubmitted) {
+    const q = quoteNote(resubmitted.reason)
+    const from = resubmitted.sent_back_from ? ` from ${resubmitted.sent_back_from}` : ''
+    return ` Resubmitted after ${resubmitted.sent_back_by || 'someone'} sent it back${from}${q ? ` (${q})` : ''}.`
+  }
+  return ''
+}
+
+/**
+ * Was this move a send back, a resubmission after one, or plain progress?
+ * A send back goes to a step sorting before the one left (never a finished
+ * state). A resubmission leaves the initial step after the record was sent
+ * back INTO it: the latest such send back names who, from where and why.
+ */
+async function moveContext(args: {
+  instanceId: string
+  prevStateId: string | null
+  newStateObj: WorkflowState | null
+  actorName: string | null
+  comment: string | null
+}): Promise<MoveContext> {
+  const none: MoveContext = { kind: 'other', resubmitted: null, ping_note: '' }
+  if (!args.prevStateId || !args.newStateObj) return none
+  const ids = [args.prevStateId, args.newStateObj.id]
+  const rows = (await db('nivaro_workflow_states')
+    .whereIn('id', ids)
+    .select('id', 'sort', 'is_initial', 'is_terminal')) as Array<{
+    id: string
+    sort: number | null
+    is_initial: unknown
+    is_terminal: unknown
+  }>
+  const by = (id: string) =>
+    rows.find((r) => String(r.id).toUpperCase() === String(id).toUpperCase())
+  const prev = by(args.prevStateId)
+  const next = by(args.newStateObj.id)
+  if (!prev || !next || prev.sort == null || next.sort == null) return none
+  if (Number(next.sort) < Number(prev.sort) && !coerceBool(next.is_terminal)) {
+    return {
+      kind: 'send_back',
+      resubmitted: null,
+      ping_note: moveNote('send_back', args.actorName, args.comment, null)
+    }
+  }
+  if (Number(next.sort) <= Number(prev.sort)) return none
+  if (!coerceBool(prev.is_initial)) return { kind: 'forward', resubmitted: null, ping_note: '' }
+  // Left the initial step: was it sent back into it last time it got there?
+  const entry = (await db('nivaro_workflow_history as h')
+    .join('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
+    .leftJoin('nivaro_users as u', 'u.id', 'h.user')
+    .where({ 'h.instance': args.instanceId, 'h.to_state': args.prevStateId })
+    .orderBy('h.timestamp', 'desc')
+    .first(
+      'h.comment',
+      'h.timestamp',
+      'fs.label as from_label',
+      'fs.sort as from_sort',
+      'u.first_name',
+      'u.last_name',
+      'u.email'
+    )) as Record<string, unknown> | undefined
+  if (!entry || entry.from_sort == null || Number(entry.from_sort) <= Number(prev.sort))
+    return { kind: 'forward', resubmitted: null, ping_note: '' }
+  const comment = entry.comment == null ? null : String(entry.comment)
+  const resubmitted = {
+    sent_back_by:
+      [entry.first_name, entry.last_name].filter(Boolean).join(' ') ||
+      (entry.email as string | null) ||
+      null,
+    sent_back_from: (entry.from_label as string | null) ?? null,
+    reason: comment && !MACHINE_COMMENT.test(comment) ? comment : null,
+    at: entry.timestamp ? new Date(entry.timestamp as string).toISOString() : null
+  }
+  return {
+    kind: 'resubmit',
+    resubmitted,
+    ping_note: moveNote('resubmit', args.actorName, args.comment, resubmitted)
+  }
+}
 
 export async function buildTransitionEventPayload(args: {
   instance: Pick<WorkflowInstance, 'id' | 'collection' | 'item' | 'template'>
@@ -571,7 +683,9 @@ export async function buildTransitionEventPayload(args: {
       : Promise.resolve(undefined),
     // The newest people comment on the subject record — the emails end with
     // it so a reader gets the latest human context without opening the record.
-    latestPeopleComment(subject.collection, subject.itemId).catch(() => null),
+    latestPeopleComment(subject.collection, subject.itemId, { skipText: args.comment }).catch(
+      () => null
+    ),
     args.onBehalfOf
       ? (db('nivaro_users')
           .where({ id: args.onBehalfOf })
@@ -625,7 +739,21 @@ export async function buildTransitionEventPayload(args: {
     String(prevStateObj.id ?? prevStateObj.key) !== String(newStateObj.id) &&
     /cancel|reject|abandon/i.test(newStateObj.key ?? '')
   const commentIsHuman = !!args.comment && !MACHINE_COMMENT.test(args.comment)
+  const move = await moveContext({
+    instanceId: String(instance.id),
+    prevStateId: prevStateObj?.id ?? null,
+    newStateObj,
+    actorName,
+    comment: commentIsHuman ? String(args.comment) : null
+  }).catch(() => ({ kind: 'forward' as const, resubmitted: null, ping_note: '' }))
   return {
+    // What kind of move people are told about (army 11 a1 F-9, o3): a send
+    // back says who and why; a resubmission after a send back says so —
+    // the approver who sent it back gets more than a first-submission mail.
+    move_kind: move.kind,
+    resubmitted: move.resubmitted,
+    // For in-app texts (no conditionals): " Sent back by X: “why”." / "".
+    ping_note: move.ping_note,
     record_card: recordCard,
     approval_chain: approvalChain,
     brief,
@@ -1740,12 +1868,24 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
  * whose condition_rules pass against the live record (dotted paths + date ops
  * supported). Chains until nothing more fires (cap 5). Never throws.
  */
-export async function runAutoTransitions(collection: string, item: string): Promise<void> {
+export async function runAutoTransitions(
+  collection: string,
+  item: string,
+  opts: {
+    /** The chain's events so far — a person's move that set this chain off
+     *  (army 11 o3: "Submitted in Fusion (manual)" mailed the requester "now
+     *  Order Submission — waiting on you" and, 0.5 s later, "now Completed").
+     *  Given, the hops join it and the CALLER flushes; the person's move is
+     *  then not the chain's last hop, so people hear only where it ended. */
+    deferred?: DeferredTransitionEvent[]
+  } = {}
+): Promise<void> {
+  const ownsChain = !opts.deferred
+  // Every hop's event waits for the chain to settle (flushChainEvents).
+  const deferred: DeferredTransitionEvent[] = opts.deferred ?? []
   // Mid-transition (a transition action's writeback fired this through the
   // record's after-hook): the transition's caller re-evaluates once it lands.
   if (isTransitionInFlight(collection, item)) return
-  // Every hop's event waits for the chain to settle (flushChainEvents).
-  const deferred: DeferredTransitionEvent[] = []
   try {
     // Each hop hangs under the history row of the hop before it, so a chain
     // of auto transitions reads as a chain, not as siblings.
@@ -1822,7 +1962,7 @@ export async function runAutoTransitions(collection: string, item: string): Prom
   } catch (err) {
     console.error({ err, collection, item }, 'runAutoTransitions failed')
   } finally {
-    flushChainEvents(deferred)
+    if (ownsChain) flushChainEvents(deferred)
   }
 }
 

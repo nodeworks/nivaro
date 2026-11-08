@@ -63,7 +63,8 @@ describe('bulkFieldSections', () => {
           writable: 0,
           offForm: 0,
           locked: 2,
-          reason: 'Locked for your role on this form'
+          reason: 'Locked for your role on this form',
+          required: false
         },
         2
       )
@@ -85,10 +86,71 @@ describe('bulkFieldSections', () => {
         key: '__no_form__',
         label: 'Fields',
         options: [
-          { field: 'a', label: 'A', writable: 2, offForm: 0, locked: 0, reason: null },
-          { field: 'b', label: 'B', writable: 2, offForm: 0, locked: 0, reason: null }
+          {
+            field: 'a',
+            label: 'A',
+            writable: 2,
+            offForm: 0,
+            locked: 0,
+            reason: null,
+            required: false
+          },
+          {
+            field: 'b',
+            label: 'B',
+            writable: 2,
+            offForm: 0,
+            locked: 0,
+            reason: null,
+            required: false
+          }
         ]
       }
     ])
+  })
+})
+
+// Army 11 N4: headings read "Header", "Container › Basic Info" — the layout's own names.
+describe('bulkFieldSections headings', () => {
+  it('uses the step’s own name and calls the header band "Record header"', () => {
+    const report: BulkFieldsReport = {
+      readable: 1,
+      no_form: 0,
+      forms: [
+        form({
+          groups: [
+            { id: 1, key: 'tabs', label: 'Container', type: 'tabs', sort: 1, container_id: null },
+            { id: 2, key: 'basic', label: 'Basic Info', type: 'section', sort: 1, container_id: 1 },
+            { id: 3, key: 'details', label: 'Details', type: 'section', sort: 2, container_id: 1 }
+          ],
+          placements: [
+            {
+              field: 'name',
+              group_key: '__header__',
+              sort: 0,
+              label_override: null,
+              is_visible: true
+            },
+            {
+              field: 'amount',
+              group_key: 'basic',
+              sort: 1,
+              label_override: null,
+              is_visible: true
+            },
+            { field: 'code', group_key: 'details', sort: 2, label_override: null, is_visible: true }
+          ]
+        })
+      ],
+      fields: {
+        name: { records: 1, locked: 0, reason: null },
+        amount: { records: 1, locked: 0, reason: null, required: true },
+        code: { records: 1, locked: 0, reason: null }
+      }
+    }
+    const out = bulkFieldSections(report)
+    expect(out.map((s) => s.label)).toEqual(['Record header', 'Basic Info', 'Details'])
+    expect(out[1].options[0]).toMatchObject({ field: 'amount', required: true })
+    expect(out[2].options[0].required).toBe(false)
   })
 })

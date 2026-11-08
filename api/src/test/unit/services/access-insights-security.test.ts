@@ -54,7 +54,11 @@ vi.mock('../../../services/access-explain.js', async () => {
   return { ...actual, explainAccess: vi.fn() }
 })
 
-import { explainAccess, viewerSafeReasons } from '../../../services/access-explain.js'
+import {
+  explainAccess,
+  scopeDeniedMessage,
+  viewerSafeReasons
+} from '../../../services/access-explain.js'
 import { explainDenied, TransitionNotFoundError } from '../../../services/denied-explain.js'
 import { type OwnerExplanation, redactOwnerFacts } from '../../../services/owner-explain.js'
 import { getAllowedFields } from '../../../services/permissions.js'
@@ -239,12 +243,19 @@ describe('viewerSafeReasons + denied explain (G3)', () => {
   it("keeps the person's own allowed values and drops the record side", () => {
     const [r] = viewerSafeReasons([{ ...scopeReason, trash_id: 9 }])
     expect(r.message).toBe(
-      'This record is not visible to you: your Zone filter limits you to Zone 1, Zone 2.'
+      'This record is outside your access. Your Zone access covers Zone 1 and Zone 2.'
     )
     expect(r).not.toHaveProperty('record_values')
     expect(r).not.toHaveProperty('record_ids')
     expect(r).not.toHaveProperty('trash_id')
     expect(JSON.stringify(r)).not.toContain('Zone 4')
+  })
+  it('names the allowed values in natural order (army 11 Q2-4)', () => {
+    expect(scopeDeniedMessage('Zone', ['Zone 3', 'Zone 1', 'Zone 2'])).toBe(
+      'This record is outside your access. Your Zone access covers Zone 1, Zone 2 and Zone 3.'
+    )
+    expect(scopeDeniedMessage('Zone', ['Zone 10', 'Zone 2'])).toContain('Zone 2 and Zone 10')
+    expect(scopeDeniedMessage(null, [])).toContain('covers no records')
   })
   it('explainDenied for a non-admin carries no record-side value', async () => {
     vi.mocked(explainAccess).mockResolvedValue({ access: false, reasons: [{ ...scopeReason }] })
@@ -255,8 +266,8 @@ describe('viewerSafeReasons + denied explain (G3)', () => {
       action: 'update'
     })
     expect(JSON.stringify(out)).not.toContain('Zone 4')
-    expect(out.summary).toContain('not visible to you')
-    expect(out.summary).toContain('Zone 1, Zone 2')
+    expect(out.summary).toContain('outside your access')
+    expect(out.summary).toContain('Zone 1 and Zone 2')
   })
 })
 

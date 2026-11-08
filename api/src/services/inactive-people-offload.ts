@@ -1,3 +1,4 @@
+import { db } from '../db/index.js'
 import { suspensionReason } from './account-status.js'
 import { tenantState } from './ai-tenant-state.js'
 import {
@@ -6,6 +7,7 @@ import {
   scanInactiveUserLinks
 } from './inactive-user-links.js'
 import { sharedGatedRead } from './read-gate.js'
+import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
 
 /**
  * "People to offload" — suspended or redacted people who still hold work that has to be handed
@@ -25,8 +27,17 @@ export interface OffloadPerson {
   email: string | null
   status: string | null
   reason: 'suspended' | 'redacted' | 'anonymised'
-  /** When the account stopped being able to act, when anything recorded it. */
+  /** The one word every screen uses for the state: 'Suspended' or 'Redacted' (anonymised = redacted). */
+  state_label: 'Suspended' | 'Redacted'
+  /** When the account stopped being able to act — only a date something actually recorded
+   *  (an activity row, redacted_at), never the last directory check. */
   since: string | null
+  /** Last sign-in — tells two "Former user" rows apart. */
+  last_access: string | null
+  /** Role the account still holds (name, never an id). */
+  role: string | null
+  /** Zones / regions the account was restricted to (User Scope labels). */
+  zones: string[]
   /** Why, in a sentence (the same text the user page shows). */
   why: string | null
   why_source: string | null
@@ -97,7 +108,11 @@ export function offloadFromScan(scan: {
       email: u.user.email,
       status: u.user.status,
       reason: u.user.reason as OffloadPerson['reason'],
+      state_label: u.user.reason === 'suspended' ? 'Suspended' : 'Redacted',
       since: null,
+      last_access: u.user.last_access ?? null,
+      role: null,
+      zones: [],
       why: null,
       why_source: null,
       total,
@@ -139,6 +154,7 @@ export async function loadOffloadReport(opts: { fresh?: boolean } = {}): Promise
         })
       )
     }
+    await addRolesAndZones(shown).catch(() => {})
     return {
       people: shown,
       total_people: all.length,
@@ -153,6 +169,36 @@ export async function loadOffloadReport(opts: { fresh?: boolean } = {}): Promise
     if (cache.value === run) cache.value = null
   })
   return run
+}
+
+const ID_LIKE = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
+/** Role name + restricted zones for the rows on screen: what tells two "Former user" rows apart. */
+async function addRolesAndZones(people: OffloadPerson[]): Promise<void> {
+  if (people.length === 0) return
+  const ids = people.map((p) => p.id)
+  const roles = (await db('nivaro_users as u')
+    .leftJoin('nivaro_roles as r', 'r.id', 'u.role')
+    .whereIn('u.id', ids)
+    .select('u.id', 'r.name as role_name')) as Array<{ id: string; role_name: string | null }>
+  const roleOf = new Map(roles.map((r) => [String(r.id).toUpperCase(), r.role_name ?? null]))
+  let zonesOf = new Map<string, Map<string, string[]>>()
+  try {
+    const dims = (await listScopeDimensions()).filter((d) => d.is_active !== false)
+    zonesOf = await resolveScopeLabelsForUsers(
+      ids,
+      dims.map((d) => d.name)
+    )
+  } catch {
+    // scopes are a nicety on this card
+  }
+  for (const p of people) {
+    p.role = roleOf.get(p.id.toUpperCase()) ?? null
+    const perDim = zonesOf.get(p.id) ?? zonesOf.get(p.id.toUpperCase())
+    const labels = perDim ? [...perDim.values()].flat() : []
+    // A label the lookup could not resolve falls back to its id there — never show those.
+    p.zones = [...new Set(labels.filter((l) => l && !ID_LIKE.test(l)))].slice(0, 4)
+  }
 }
 
 /** Upper-cased ids of people who still hold work, with their totals — the notifier's "still own work". */

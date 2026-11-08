@@ -42,7 +42,8 @@ vi.mock('../../../services/chain-roots.js', () => ({
   recordReplayRoot: vi.fn(async () => undefined)
 }))
 vi.mock('../../../services/integration-remediation.js', () => ({
-  remediationEnabled: vi.fn(async () => false)
+  remediationEnabled: vi.fn(async () => false),
+  sendOptionsFor: vi.fn(() => ({ can_resend: false, can_send_current: false }))
 }))
 vi.mock('../../../services/branch-instances.js', () => ({
   findRecordInstance: vi.fn(async () => null)

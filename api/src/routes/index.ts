@@ -60,6 +60,7 @@ import { blueprintsRoutes } from './blueprints.js'
 import { bulkActionsRoutes } from './bulk-actions.js'
 import { bulkRecipeRoutes } from './bulk-recipes.js'
 import { cacheConfigRoutes } from './cache-config.js'
+import { catalogRelatedRoutes } from './catalog-related.js'
 import { changeSetsRoutes } from './change-sets.js'
 import { changesRoutes } from './changes.js'
 import { chaosRoutes } from './chaos.js'
@@ -462,6 +463,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(lastTouchRoutes)
   // Several small GETs in one round trip, each run as the caller (services/batch-get.ts).
   await app.register(batchGetRoutes)
+  // Catalog related columns counted for everyone alike (`count_all`, army 11 a2 F3).
+  await app.register(catalogRelatedRoutes)
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
   await app.register(recordViewRoutes)

@@ -462,7 +462,7 @@ export const apiItems: DocSection = {
     { type: 'h3', text: 'Several small GETs in one request' },
     {
       type: 'p',
-      text: '`POST /api/batch-get` carries up to 20 GETs of the small configuration and side-panel routes a record page reads (layouts, field config, field rules, relations, settings, roles, pins, last touch, SLA status, comment counts and similar). Each `path` is the GET\'s path under `/api` with its query string. The server runs every part through its own route with the caller\'s own credentials and headers, so each answers exactly what that GET would — same status, same body, same refusal — and one refused part never fails the others. A path outside the list answers that part 400 (send it on its own). The caller must be signed in. A part carries `body` only when its route answered JSON, plus `request_id` and `retry_after` when the route sent them. A host gets this for free: `NivaroProvider batchReads` gathers the listed GETs its components ask in the same ~10 ms into one batch (`createGetBatcher` + `shareGetLoader` let a host\'s own fetch helper join it).'
+      text: "`POST /api/batch-get` carries up to 20 GETs of the small configuration and side-panel routes a record page reads (layouts, field config, field rules, relations, settings, roles, pins, last touch, SLA status, comment counts and similar). Each `path` is the GET's path under `/api` with its query string. The server runs every part through its own route with the caller's own credentials and headers, so each answers exactly what that GET would — same status, same body, same refusal — and one refused part never fails the others. A path outside the list answers that part 400 (send it on its own). The caller must be signed in. A part carries `body` only when its route answered JSON, plus `request_id` and `retry_after` when the route sent them. A host gets this for free: `NivaroProvider batchReads` gathers the listed GETs its components ask in the same ~10 ms into one batch (`createGetBatcher` + `shareGetLoader` let a host's own fetch helper join it)."
     },
     {
       type: 'pre',
@@ -1315,6 +1315,10 @@ export const apiUsers: DocSection = {
     {
       type: 'note',
       text: 'Use `me` as the ID to target the currently-authenticated user. Token endpoints are also covered in the Static Tokens section above.'
+    },
+    {
+      type: 'p',
+      text: 'Filtering the list (administrators): `filter=<JSON>` or the bracket form `filter[role][_eq]=<id>`, `filter[status]=suspended` (no operator = `_eq`), `filter[last_name][_in]=Kelly,Kanniappan` — both forms together must both hold. Operators `_eq`, `_neq`, `_in`, `_nin` on the people columns. Anything the list cannot apply — malformed JSON or bracket keys, an unknown or withheld column, another operator, `_or` — is a 400 `INVALID_FILTER` that says why, never the whole list as if filtered. The people directory non-administrators read narrows by `search=` only; a filter there is a 400. Suspended people appear only with `include_suspended=true`.'
     },
     { type: 'h3', text: 'List users example' },
     {

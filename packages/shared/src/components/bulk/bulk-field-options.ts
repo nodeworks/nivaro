@@ -1,4 +1,9 @@
-import { type FormSection, formSections, mergeFormSections } from '../../lib/form-sections'
+import {
+  type FormSection,
+  formSections,
+  HEADER_SECTION_KEY,
+  mergeFormSections
+} from '../../lib/form-sections'
 import { titleCase } from '../../lib/utils'
 
 /**
@@ -35,7 +40,10 @@ export interface BulkFieldsReport {
   no_form: number
   capped?: boolean
   forms: BulkFieldsForm[]
-  fields: Record<string, { records: number; locked: number; reason: string | null }>
+  fields: Record<
+    string,
+    { records: number; locked: number; reason: string | null; required?: boolean }
+  >
 }
 
 export interface BulkFieldOption {
@@ -47,6 +55,8 @@ export interface BulkFieldOption {
   offForm: number
   locked: number
   reason: string | null
+  /** The form requires it: an empty value is never applied (army 11 N3). */
+  required: boolean
 }
 
 export interface BulkFieldSection {
@@ -89,13 +99,28 @@ export function bulkFieldSections(
           writable: Math.max(0, r.records - r.locked),
           offForm: Math.max(0, report.readable - r.records),
           locked: r.locked,
-          reason: r.reason
+          reason: r.reason,
+          required: r.required === true
         }
       ]
     })
     if (options.length) out.push({ key: s.key, label: s.label, options })
   }
-  return out
+  return withStepLabels(out)
+}
+
+/**
+ * Section headings as the form's steps read them (army 11 N4: "Container ›
+ * Basic Info" named the layout's tab container): the section's own name, the
+ * full path only where two sections share a name, and the header band as
+ * "Record header".
+ */
+function withStepLabels(sections: BulkFieldSection[]): BulkFieldSection[] {
+  const leaf = (s: BulkFieldSection) =>
+    s.key === HEADER_SECTION_KEY ? 'Record header' : (s.label.split(' › ').pop() ?? s.label)
+  const counts = new Map<string, number>()
+  for (const s of sections) counts.set(leaf(s), (counts.get(leaf(s)) ?? 0) + 1)
+  return sections.map((s) => ({ ...s, label: (counts.get(leaf(s)) ?? 0) > 1 ? s.label : leaf(s) }))
 }
 
 /** One line under a field: who the write skips, in plain words; null = every record. */

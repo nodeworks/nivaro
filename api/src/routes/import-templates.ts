@@ -5,6 +5,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getCollection, getFields, getRelations } from '../services/collections.js'
 import { chunkArray, selectInChunks } from '../services/db-batch.js'
+import { evaluateRowRules, RowRuleLookupCache } from '../services/field-rules.js'
 import { getFile, readFileBuffer, type StoredFile, uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
 import type {
@@ -31,7 +32,9 @@ import { normalizeImportTemplateConfig } from '../services/import-templates-conf
 import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { getRollupContributors, recalcRollupsForParent } from '../services/rollups.js'
+import { gridRuleConfigsFor } from '../services/row-rules-apply.js'
 import { runUnit } from '../services/unit-of-work.js'
+import { CallerRuleLookupCache } from './field-rules.js'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const MODES = ['prefill', 'direct', 'both'] as const
@@ -186,13 +189,76 @@ async function lineFieldInfo(childCollection: string | null): Promise<LineFieldI
       field: string
       type?: string | null
       label?: string | null
+      computed_formula?: string | null
+      computed_type?: string | null
+      options?: unknown
     }>
     const out: LineFieldInfo = {}
-    for (const f of fields) out[f.field] = { type: f.type ?? null, label: f.label ?? null }
+    for (const f of fields) {
+      const opts = (f.options && typeof f.options === 'object' ? f.options : {}) as {
+        format?: unknown
+      }
+      out[f.field] = {
+        type: f.type ?? null,
+        label: f.label ?? null,
+        // Only a formula the WRITE derives is what the record will store.
+        formula: f.computed_type === 'write' ? (f.computed_formula ?? null) : null,
+        currency: opts.format === 'currency' || f.type === 'currency' || f.type === 'money'
+      }
+    }
     return out
   } catch {
     return undefined
   }
+}
+
+/**
+ * The line as the form's line rules leave it (the grid's `options.row_rules`
+ * on the record's active layout), with the parsed header as its parent. The
+ * import uses it to keep a line's money when a rule fixes a factor (a Labor
+ * line is priced $1 — army 11 f1 HIGH: a $500 bid line became 1 × $1). The
+ * rules' related reads run as the caller. Unknown grid / no rules = undefined.
+ */
+async function lineRowRuleDeriver(
+  req: FastifyRequest,
+  parentCollection: string,
+  targetField: string,
+  childCollection: string | null
+): Promise<
+  | ((
+      line: Record<string, unknown>,
+      header: Record<string, unknown>
+    ) => Promise<Record<string, unknown> | null>)
+  | undefined
+> {
+  if (!childCollection) return undefined
+  const cfg = (await gridRuleConfigsFor(parentCollection).catch(() => [])).find(
+    (c) =>
+      c.childCollection === childCollection &&
+      (c.aliasField === targetField || c.aliasField === childCollection)
+  )
+  if (!cfg || !cfg.rowRules.some((r) => r.target_type === 'set')) return undefined
+  const wanted = new Set(cfg.parentContextFields)
+  for (const rule of cfg.rowRules) {
+    const tf = rule.trigger_field
+    if (typeof tf === 'string' && tf.startsWith('$parent.')) wanted.add(tf.slice(8))
+  }
+  const cache = req.isAdmin ? new RowRuleLookupCache(db) : new CallerRuleLookupCache(req)
+  return async (line, header) => {
+    const parentContext: Record<string, unknown> = {}
+    for (const f of wanted) parentContext[f] = header[f] ?? null
+    const working = { ...line }
+    await evaluateRowRules(db, childCollection, working, parentContext, cfg.rowRules, undefined, {
+      cache,
+      isAdmin: !!req.isAdmin
+    })
+    return working
+  }
+}
+
+/** The record's own field types + labels (yes/no header values are read as booleans). */
+async function headerFieldInfo(collection: string | null): Promise<LineFieldInfo | undefined> {
+  return lineFieldInfo(collection)
 }
 
 /** Lookup misses in plain words: the searched collection by its display name. */
@@ -987,7 +1053,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     }
 
     const config = templateRowToConfig(template)
-    const { rows, issues: sheetIssues } = readSpreadsheet(buffer, multipart.filename, config)
+    const {
+      rows,
+      issues: sheetIssues,
+      columns: sheetColumns
+    } = readSpreadsheet(buffer, multipart.filename, config)
     const structuralErrors = sheetIssues.filter((i) => i.severity === 'error')
     if (structuralErrors.length > 0 && rows.length === 0) {
       return reply.code(422).send({ error: 'File could not be parsed', issues: sheetIssues })
@@ -1016,7 +1086,12 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       ),
       applyLineFieldRules,
       m2mFields: new Set(m2mMap.keys()),
-      lineFields: await lineFieldInfo(childCollection)
+      lineFields: await lineFieldInfo(childCollection),
+      headerFields: await headerFieldInfo(collection),
+      lineRuleValues: config.line_map
+        ? await lineRowRuleDeriver(req, collection, config.line_map.target_field, childCollection)
+        : undefined,
+      sheetColumns
     })
     const issues = await plainIssues([...sheetIssues, ...result.issues, ...lookupIssues])
 
@@ -1583,7 +1658,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid template config', details: errors })
     }
 
-    const { rows, issues: sheetIssues } = readSpreadsheet(buffer, multipart.filename, config)
+    const {
+      rows,
+      issues: sheetIssues,
+      columns: sheetColumns
+    } = readSpreadsheet(buffer, multipart.filename, config)
     const structuralErrors = sheetIssues.filter((i) => i.severity === 'error')
     if (structuralErrors.length > 0 && rows.length === 0) {
       return reply.code(422).send({ error: 'File could not be parsed', issues: sheetIssues })
@@ -1615,7 +1694,13 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       ),
       applyLineFieldRules,
       m2mFields: new Set(m2mMap.keys()),
-      lineFields: await lineFieldInfo(childCollection)
+      lineFields: await lineFieldInfo(childCollection),
+      headerFields: typeof collection === 'string' ? await headerFieldInfo(collection) : undefined,
+      lineRuleValues:
+        config.line_map && typeof collection === 'string'
+          ? await lineRowRuleDeriver(req, collection, config.line_map.target_field, childCollection)
+          : undefined,
+      sheetColumns
     })
     const issues = await plainIssues([...sheetIssues, ...result.issues, ...lookupIssues])
 
@@ -1644,7 +1729,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
     buffer: Buffer,
     filename: string
   ) => {
-    const { rows, issues: sheetIssues } = readSpreadsheet(buffer, filename, config)
+    const {
+      rows,
+      issues: sheetIssues,
+      columns: sheetColumns
+    } = readSpreadsheet(buffer, filename, config)
     let applyLineFieldRules: ((draft: Record<string, unknown>) => Promise<void>) | undefined
     let childCollection: string | null = null
     if (config.line_map) {
@@ -1664,7 +1753,9 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       ),
       applyLineFieldRules,
       m2mFields: new Set(m2mMap.keys()),
-      lineFields: await lineFieldInfo(childCollection)
+      lineFields: await lineFieldInfo(childCollection),
+      headerFields: await headerFieldInfo(collection),
+      sheetColumns
     })
     return {
       values: result.values,

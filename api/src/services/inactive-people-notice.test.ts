@@ -40,6 +40,7 @@ import {
   COALESCE_MS,
   flushAllDeactivationBatches,
   noteUsersDeactivated,
+  noticePersonName,
   setInactivePeopleNoticeApp
 } from './inactive-people-notice.js'
 
@@ -52,7 +53,7 @@ describe('buildDeactivationNotice', () => {
       withWork: [{ id: 'A1', total: 7 }],
       names: new Map([['A1', 'Ann Lee']])
     })
-    expect(n.subject).toBe('40 accounts were suspended by directory sync — 1 still own open work')
+    expect(n.subject).toBe('40 accounts were suspended by directory sync — 1 still owns open work')
     expect(n.message).toContain('Ann Lee (7)')
   })
   it('stays short when nobody holds work', () => {
@@ -65,6 +66,36 @@ describe('buildDeactivationNotice', () => {
     })
     expect(n.subject).toBe('1 account was redacted by an administrator')
     expect(n.message).toMatch(/no open work/)
+  })
+  it('never says "none of them hold no open work" (double negative)', () => {
+    const n = buildDeactivationNotice({
+      count: 3,
+      reason: 'directory_sync',
+      verb: 'suspended',
+      withWork: [],
+      names: new Map()
+    })
+    expect(n.message).toBe('None of them hold open work that needs handing on.')
+  })
+})
+
+describe('noticePersonName', () => {
+  it('adds the mailbox so two people with one name are told apart', () => {
+    expect(
+      noticePersonName({ first_name: 'Robert', last_name: 'Lee', email: 'Robert_Lee2@X.com' })
+    ).toBe('Robert Lee · robert_lee2@x.com')
+  })
+  it('a redacted or legacy-anonymised account reads "Former user", never its stand-in email', () => {
+    expect(
+      noticePersonName({
+        first_name: 'Redacted',
+        last_name: 'Redacted',
+        email: 'Redacted_AB@redact.x'
+      })
+    ).toBe('Former user')
+    expect(
+      noticePersonName({ first_name: 'A', last_name: 'B', email: 'a@b', is_redacted: 1 })
+    ).toBe('Former user')
   })
 })
 

@@ -626,10 +626,41 @@ export async function resolveWidgetData(
       } as never
     )
     if (!readable) return { value: null }
-    const snaps = (await db('nivaro_queue_stat_snapshots')
-      .where({ queue_id: queueId })
-      .orderBy('snapshot_date')
-      .limit(90)) as Array<Record<string, unknown>>
+    // Army 11 Q2-7: the snapshots and the cache are counted as the queue's OWNER (and
+    // the cache holds every row) — a viewer with other restrict-mode User Scopes would
+    // read the owner's counts as their own (and out-of-scope work with them). They get
+    // no figure; snapshots of an older queue definition are no points on the line.
+    const { queueDefSources, snapshotsFitViewer } = await import('./queue-snapshot-access.js')
+    if (!(await snapshotsFitViewer(queueRow as { owner: string }, user as never)))
+      return { value: null, series: [] }
+    if (queueRow.materialized) {
+      const { accessSigFor } = await import('./queue-snapshot-access.js')
+      if ((await accessSigFor(user as never)) !== '[]') {
+        // The cache counted through this viewer's own access (as the badges do).
+        if (metric !== 'total' && metric !== 'unowned' && metric !== 'sla_breached')
+          return { value: null, series: [] }
+        const { fetchMaterializedBadgeCounts } = await import('./queue-materialization-read.js')
+        const c = await fetchMaterializedBadgeCounts(queueId, user as never).catch(() => null)
+        return { value: c ? c[metric] : null, series: [] }
+      }
+    }
+    const { queueDefinitionHash, snapshotMatchesDefinition } = await import(
+      './queue-trend-guard.js'
+    )
+    const defSources = await queueDefSources(queueId)
+    const defHash = queueDefinitionHash(defSources)
+    const snaps = (
+      (await db('nivaro_queue_stat_snapshots')
+        .where({ queue_id: queueId })
+        .orderBy('snapshot_date')
+        .limit(90)) as Array<Record<string, unknown>>
+    ).filter((sn) =>
+      snapshotMatchesDefinition(
+        (parseJson(sn.by_state as string) as Record<string, unknown> | null) ?? null,
+        defSources,
+        defHash
+      )
+    )
     const series = snaps.map((sn) => ({
       dim: String(sn.snapshot_date).slice(0, 10),
       value: Number(sn[metric] ?? 0)

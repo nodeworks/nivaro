@@ -6,6 +6,7 @@ import { recordLink } from '../services/app-links.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getRelations } from '../services/collections.js'
 import { sendMail } from '../services/mail.js'
+import { buildRecordCard } from '../services/mail-record-card.js'
 import { detailColumn, notificationRowMeta } from '../services/notification-channels.js'
 import { rawWriterReason, reasonColumn } from '../services/notification-reason.js'
 import {
@@ -806,6 +807,7 @@ async function fireSubscriptionNotifications(
           collection,
           item,
           to: sub.email,
+          rolePicked: true,
           subject,
           category: 'watch',
           cadence: 'sender',
@@ -872,6 +874,34 @@ export function stateMarkerLabel(
   if (!m[2].includes('_')) return label
   const words = m[2].replace(/_/g, ' ')
   return `${m[1]}: ${words.charAt(0).toUpperCase()}${words.slice(1)}`
+}
+
+/** Subject of a state-subscription mail: record, new state once, who. */
+export function subscriptionTransitionSubject(
+  friendly: string | number | null | undefined,
+  stateLabel: string,
+  actorName?: string | null
+): string {
+  return `${friendly ?? 'A record'} moved to ${stateLabel}${actorName ? ` — by ${actorName}` : ''}`
+}
+
+/** Footer reason: "you follow workflows entering Waiting on Level 1 Approval" — the collection's
+ *  own plural name, never the table key. */
+export async function subscriptionWhy(collection: string, stateLabel: string | null) {
+  let plural = collection.replace(/_/g, ' ')
+  try {
+    const meta = (await db('nivaro_collections')
+      .where({ collection })
+      .first('display_name', 'singular')) as
+      | { display_name: string | null; singular: string | null }
+      | undefined
+    plural = (meta?.display_name || plural).toLowerCase()
+  } catch {
+    /* the key reads as words */
+  }
+  return stateLabel
+    ? `you follow ${plural} entering ${stateLabel}`
+    : `you follow state changes on ${plural}`
 }
 
 /**
@@ -1102,9 +1132,9 @@ export async function fireWorkflowStateSubscriptions(opts: {
         ? `Watching ${friendly}`
         : stateMarkerLabel(sub.label, opts.stateKey, opts.stateLabel) ||
           `${opts.collection} workflow`
-      let subject = `${recordScoped ? label : `${label} ${friendly}`}: ${opts.transitionLabel} → ${opts.stateLabel}${
-        actorName ? ` by ${actorName}` : ''
-      }`
+      // "CR26-81439 moved to Waiting on Level 1 Approval — by Kristina Davison": the record
+      // first, the state once (army 11: "Workflow state: X CR26-…: Submit → X by …").
+      let subject = subscriptionTransitionSubject(friendly, opts.stateLabel, actorName)
       let message = actorName
         ? `${actorName} moved ${friendly} to "${opts.stateLabel}" (${opts.transitionLabel})`
         : `${friendly} moved to "${opts.stateLabel}" (${opts.transitionLabel})`
@@ -1182,20 +1212,23 @@ export async function fireWorkflowStateSubscriptions(opts: {
           collection: opts.collection,
           item: opts.item,
           to: sub.email,
+          rolePicked: true,
           subject,
           category: 'workflow',
           cadence: 'sender',
           template: 'notification',
           why: recordScoped
             ? 'you watch this record'
-            : `you subscribed to ${opts.collection.replace(/_/g, ' ')} state changes${
-                sub.filter_value ? ` into ${opts.stateLabel}` : ''
-              }`,
+            : await subscriptionWhy(opts.collection, sub.filter_value ? opts.stateLabel : null),
           data: {
             first_name: sub.first_name,
             message,
             action_url: await recordUrlFor(opts.collection, opts.item, sub.user),
-            action_label: 'View item'
+            action_label: `Open ${friendly}`,
+            // The same record card the owners' mail carries for this event.
+            record_card: await buildRecordCard(opts.collection, opts.item, {
+              recipientUserId: sub.user
+            }).catch(() => null)
           }
         }).catch((err) => {
           console.warn('[notification-subscriptions] workflow email send failed:', err)

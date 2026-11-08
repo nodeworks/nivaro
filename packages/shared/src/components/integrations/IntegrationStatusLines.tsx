@@ -9,6 +9,7 @@ import { requestTransitionRun } from '../../lib/run-transition'
 import { cn } from '../../lib/utils'
 import { colorPair } from '../QueryTable'
 import { roleForTone } from './IntegrationObligationsView'
+import { SendCurrentDataButton } from './SendCurrentData'
 
 /**
  * One line per partner on the record: were they told, when, and if not, why
@@ -56,6 +57,8 @@ function SendNowButton({
         post(`/integration-obligations/${obligationId}/send`)
       ),
     onSuccess: (res) => {
+      // Nothing safe to repeat: the server points at "Send current data" (shown
+      // beside this button when the kind supports it) rather than refusing flat.
       toast.message(res?.data?.detail ?? 'Sent')
       void qc.invalidateQueries({
         queryKey: ['integration-obligations', 'record', collection, String(itemId)]
@@ -76,7 +79,7 @@ function SendNowButton({
       disabled={send.isPending || !enabled}
       title={
         enabled
-          ? 'Re-send the newest request for this partner (admins)'
+          ? 'Send the stored request again, unchanged (admins)'
           : 'Remediation is off for this deployment — an admin turns it on under Integrations › Remediation, then this sends from here'
       }
       onClick={() => {
@@ -167,6 +170,7 @@ export function IntegrationStatusLines({
   remediationEnabled: boolean
   actions?: IntegrationLineActions
 }) {
+  const qc = useQueryClient()
   if (lines.length === 0) return null
   return (
     <div className='space-y-1.5' data-integration-lines>
@@ -174,7 +178,8 @@ export function IntegrationStatusLines({
         const role = roleForTone(l.tone)
         const [accent, accentDark] = role ? colorPair(role) : [null, null]
         const open = l.outcome === 'failed' || l.outcome === 'missing' || l.outcome === 'overdue'
-        const canSend = open
+        const canSend = open && l.can_resend !== false
+        const canSendCurrent = open && l.can_send_current === true
         const newest = actions?.newestSubmissionByApi?.get(l.api.toLowerCase())
         const submissionId = l.submission_id ?? newest?.id ?? null
         const canRetry =
@@ -288,6 +293,19 @@ export function IntegrationStatusLines({
                   collection={collection}
                   itemId={itemId}
                   enabled={remediationEnabled}
+                />
+              )}
+              {canSendCurrent && (
+                <SendCurrentDataButton
+                  obligationId={l.obligation_id}
+                  api={l.api}
+                  enabled={remediationEnabled}
+                  onSent={() => {
+                    void qc.invalidateQueries({
+                      queryKey: ['integration-obligations', 'record', collection, String(itemId)]
+                    })
+                    actions?.onCheck?.()
+                  }}
                 />
               )}
             </span>

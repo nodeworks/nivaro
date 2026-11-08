@@ -702,7 +702,12 @@ async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, Work
   }
   const sla = new Map<
     string,
-    { status: string | null; elapsed_hours: number; remaining_hours?: number | null }
+    {
+      status: string | null
+      elapsed_hours: number
+      remaining_hours?: number | null
+      entered_at?: Date | string | null
+    }
   >()
   const labels = new Map<string, string>()
   for (const [c, idSet] of byCollection) {
@@ -741,7 +746,11 @@ async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, Work
         state_label: labels.get(key) ?? null,
         state_color: (it.state_color as string | null) ?? null,
         sla_status: (e?.status as 'ok' | 'warning' | 'breached' | null) ?? null,
-        aging_hours: e?.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10,
+        // Calendar time in the step — the age every list shows. The SLA
+        // elapsed counts BUSINESS hours on a business-hours rule, and the
+        // team card printed 343 of them ÷ 24 as "14d" for a record 60 days
+        // in its step (army 11 a4).
+        aging_hours: agingOf(e),
         remaining_hours: e?.remaining_hours ?? null
       }
     })
@@ -752,6 +761,19 @@ async function resolveWorkingOnMany(userIds: string[]): Promise<Map<string, Work
     out.set(u, enriched)
   }
   return out
+}
+
+/** Calendar hours in the current step (one decimal); the SLA elapsed only when no entry time is known. */
+export function agingOf(
+  e: { elapsed_hours?: number | null; entered_at?: Date | string | null } | undefined,
+  now: number = Date.now()
+): number | null {
+  if (!e) return null
+  if (e.entered_at != null) {
+    const t = new Date(e.entered_at).getTime()
+    if (Number.isFinite(t)) return Math.round(Math.max(0, (now - t) / 3_600_000) * 10) / 10
+  }
+  return e.elapsed_hours == null ? null : Math.round(e.elapsed_hours * 10) / 10
 }
 
 /** Fill the working-on cache for everyone in `userIds` not already cached, in one resolution. */

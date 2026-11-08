@@ -17,6 +17,7 @@ import type { TeamsActivity } from './activity.js'
 import { type AdaptiveCard, resultCard } from './cards.js'
 import { connectCard } from './connect-card.js'
 import { resolveTeamsUser } from './links.js'
+import { teamsLockedMoveText } from './locked-move.js'
 
 // Action.Execute handler (spec §6.1, §8). Every action runs AS the linked sender through the same
 // services the web app uses; the nonce only stops double presses — it is not a secret.
@@ -283,11 +284,15 @@ async function runTransition(
     item,
     transitionId: p.action,
     comment: p.comment || null,
-    log: app.log
+    log: app.log,
+    // A person pressed it: someone else's live edit is honoured like on the
+    // record page — and a card has no "move anyway" (army 11 review).
+    lockAsPerson: true
   })
   const body = (r.body ?? {}) as {
     error?: string
     code?: string
+    locked_by_name?: string | null
     first?: { user_name?: string | null }
     data?: { new_state?: { label?: string } | null }
   }
@@ -298,6 +303,11 @@ async function runTransition(
       keep: true
     }
   }
+  if (r.status === 409 && body.code === 'RECORD_LOCKED')
+    return {
+      card: await openCard(teamsLockedMoveText(body.locked_by_name), collection, item, user.id),
+      keep: true
+    }
   if (r.status === 409 && body.code === 'TRANSITION_DUPLICATE') {
     const who = body.first?.user_name
     return {

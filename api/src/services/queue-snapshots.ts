@@ -1,6 +1,8 @@
 import { db } from '../db/index.js'
 import type { CronManager } from '../plugins/cron.js'
 import type { User } from '../types.js'
+import { queueDefinitionHash, SNAPSHOT_DEF_KEY } from './queue-trend-guard.js'
+import type { QueueSourceRow } from './queues.js'
 import { fetchQueueItems } from './queues.js'
 
 // Daily stat snapshots per queue, powering the stat-tile sparklines/deltas on the
@@ -28,6 +30,23 @@ export async function snapshotAllQueues(): Promise<{ ok: number; failed: number 
         continue
       }
       const { stats, items } = await fetchQueueItems(queue.id, ownerUser, 'all', {})
+      // The definition this snapshot was taken under (army 11 Q1-1): trends compare only
+      // snapshots of the queue as it is defined today.
+      const sources = (await db('nivaro_queue_sources')
+        .where({ queue_id: queue.id })
+        .select(
+          'type',
+          'collection',
+          'filters',
+          'state_values',
+          'state_mode',
+          'sla_filter'
+        )) as Array<
+        Pick<
+          QueueSourceRow,
+          'type' | 'collection' | 'filters' | 'state_values' | 'state_mode' | 'sla_filter'
+        >
+      >
 
       // Per-owner rollup from the same resolved item set — an item with N
       // owners counts once for each of them.
@@ -65,7 +84,10 @@ export async function snapshotAllQueues(): Promise<{ ok: number; failed: number 
           sla_warning: stats.sla_warning,
           sla_breached: stats.sla_breached,
           at_risk: stats.at_risk,
-          by_state: JSON.stringify(stats.by_state),
+          by_state: JSON.stringify({
+            ...stats.by_state,
+            [SNAPSHOT_DEF_KEY]: queueDefinitionHash(sources)
+          }),
           created_at: new Date()
         })
         await trx('nivaro_queue_owner_snapshots')

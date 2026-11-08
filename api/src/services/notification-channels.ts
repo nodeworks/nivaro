@@ -784,7 +784,10 @@ export function laneFromRow(row: {
   if (row.action && row.action !== 'open') return 'needs_you'
   if (category === 'mentions' || category === 'sla') return 'needs_you'
   if (row.actions && row.actions.length > 0) return 'needs_you'
-  if (/^(task assigned|approval requested)/i.test(subject) || /requested access/i.test(subject))
+  if (
+    /^(task assigned|approval requested)/i.test(subject) ||
+    /requested access|is asking for access/i.test(subject)
+  )
     return 'needs_you'
   return 'fyi'
 }
@@ -1266,6 +1269,8 @@ export async function notifyUser(
         try {
           const mail = await sendMail({
             to: user.email,
+            // A notification goes to a PERSON: a machine account is never mailed one.
+            rolePicked: true,
             subject: opts.subject,
             template: opts.template ?? 'notification',
             why,

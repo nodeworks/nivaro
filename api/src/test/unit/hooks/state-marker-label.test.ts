@@ -45,3 +45,17 @@ describe('recordUrlFor', () => {
     )
   })
 })
+
+describe('state subscription mail subject (army 11)', () => {
+  it('names the record first and the state once', async () => {
+    const { subscriptionTransitionSubject } = await import(
+      '../../../hooks/notification-subscriptions.js'
+    )
+    expect(
+      subscriptionTransitionSubject('CR26-81439', 'Waiting on Level 1 Approval', 'Kristina Davison')
+    ).toBe('CR26-81439 moved to Waiting on Level 1 Approval — by Kristina Davison')
+    expect(subscriptionTransitionSubject('CR26-81439', 'Completed', null)).toBe(
+      'CR26-81439 moved to Completed'
+    )
+  })
+})

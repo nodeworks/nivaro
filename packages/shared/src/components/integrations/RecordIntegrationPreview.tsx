@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Loader2,
   PencilLine,
+  Send,
   Zap
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -337,15 +337,17 @@ export function PushReadinessChip({
               "after:absolute after:-inset-1.5 after:content-['']",
               'text-white transition-[filter,transform] duration-150 ease-out hover:brightness-110 active:scale-90',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+              // Ready to send = a neutral send disc, never a green ✓ that reads
+              // as "approved / recommended" on an order button (army 11 a2 F2).
               state === 'ready'
-                ? 'h-3.5 w-3.5 bg-[#047857]'
+                ? 'h-3.5 w-3.5 bg-[#475569] dark:bg-[#64748b]'
                 : state === 'block'
                   ? 'h-4 min-w-4 px-1 bg-[#dc2626]'
                   : 'h-4 min-w-4 px-1 bg-[#b45309]'
             )}
           >
             {state === 'ready' ? (
-              <Check className='h-2.5 w-2.5' strokeWidth={3.5} />
+              <Send className='h-2 w-2' strokeWidth={3} aria-hidden />
             ) : issues.length > 0 ? (
               <span className='text-[10px] font-semibold leading-none tabular-nums'>
                 {issues.length > 9 ? '9+' : issues.length}

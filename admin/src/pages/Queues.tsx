@@ -131,6 +131,8 @@ interface QueueDisplayConfig {
     sla_breached: number
     at_risk: number
     age_hour_cap: number
+    /** Weight per at-risk rule name (e.g. {"On hold": -5000} parks held records last). */
+    at_risk_rule_weights?: Record<string, number> | null
   } | null
   /** Formula columns (#133) — display-only computed columns. */
   formula_columns?: Array<{
@@ -2179,6 +2181,9 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                           setDisplayConfig((prev) => ({
                             ...prev,
                             priority_weights: {
+                              // Keep the per-rule weights (army 11 Q1-6) — rebuilding the
+                              // object without them dropped them on every edit.
+                              ...(prev.priority_weights ?? {}),
                               sla_warning: prev.priority_weights?.sla_warning ?? 1000,
                               sla_breached: prev.priority_weights?.sla_breached ?? 2000,
                               at_risk: prev.priority_weights?.at_risk ?? 500,
@@ -2192,6 +2197,59 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                     </label>
                   ))}
                 </div>
+                {/* Army 11 Q1-6: a parked record (on hold) must not lead the priority sort. */}
+                <label className='block space-y-1 pt-1 text-[12px]'>
+                  <span className='text-slate-500 dark:text-muted-foreground'>
+                    Rank these at-risk rules last (rule names, comma-separated)
+                  </span>
+                  <input
+                    defaultValue={Object.entries(
+                      displayConfig.priority_weights?.at_risk_rule_weights ?? {}
+                    )
+                      .filter(([, w]) => w < 0)
+                      .map(([name]) => name)
+                      .join(', ')}
+                    disabled={!canEdit}
+                    placeholder='On hold'
+                    onBlur={(e) => {
+                      const names = e.target.value
+                        .split(',')
+                        .map((n) => n.trim())
+                        .filter(Boolean)
+                      // Only a real edit writes (rev11-ui #8): a blur with the same
+                      // names must not rewrite the weights or mark the queue changed.
+                      const current = Object.entries(
+                        displayConfig.priority_weights?.at_risk_rule_weights ?? {}
+                      )
+                        .filter(([, w]) => w < 0)
+                        .map(([n]) => n)
+                      const same =
+                        names.length === current.length &&
+                        [...names].sort().join('\u0000') === [...current].sort().join('\u0000')
+                      if (same) return
+                      setDisplayConfig((prev) => ({
+                        ...prev,
+                        priority_weights: {
+                          ...(prev.priority_weights ?? {}),
+                          sla_warning: prev.priority_weights?.sla_warning ?? 1000,
+                          sla_breached: prev.priority_weights?.sla_breached ?? 2000,
+                          at_risk: prev.priority_weights?.at_risk ?? 500,
+                          age_hour_cap: prev.priority_weights?.age_hour_cap ?? 499,
+                          at_risk_rule_weights: (() => {
+                            // Keep rules weighted up (≥ 0) and each parked rule's own weight.
+                            const prevRules = prev.priority_weights?.at_risk_rule_weights ?? {}
+                            const kept = Object.fromEntries(
+                              Object.entries(prevRules).filter(([, w]) => w >= 0)
+                            )
+                            for (const n of names) kept[n] = prevRules[n] < 0 ? prevRules[n] : -5000
+                            return Object.keys(kept).length > 0 ? kept : null
+                          })()
+                        }
+                      }))
+                    }}
+                    className='h-7 w-full rounded-md border border-slate-200 bg-background px-2 dark:border-border'
+                  />
+                </label>
               </div>
 
               {/* Formula columns (#133) */}

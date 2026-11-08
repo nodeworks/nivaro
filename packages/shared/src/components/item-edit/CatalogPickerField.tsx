@@ -27,6 +27,7 @@ import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { matchesSearch, tokenize } from '../../lib/search-text'
+import { registerStagedRowLabel } from '../../lib/staged-row-labels'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
 import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
@@ -153,6 +154,11 @@ export interface CatalogModeConfig {
      *  across ALL matching rows per item (e.g. open-order quantity per item),
      *  instead of the default last-row value. */
     aggregate?: 'sum'
+    /** An aggregate counted over EVERY matching row, the same for every viewer
+     *  (army 11 a2 F3: "Open Orders" read 1,354 for the creator and 6 for the
+     *  warehouse approver). The server computes it from the stored layout
+     *  (GET /catalog-related/count-all) and answers only the per-item number. */
+    count_all?: boolean
     /** This column is the item's STOCK (on-hand at the match's place): the
      *  catalog gets an "In stock at <place>" toggle beside its search that keeps
      *  search results, favorites and section rows to items whose value is > 0.
@@ -253,6 +259,43 @@ export interface CatalogBuilderConfig {
 // like {warehouse: {regions: {_some: {regions_id: {_eq: '$parent.region'}}}}}
 // scope a lookup to the warehouses of the record's region. Returns null while
 // any referenced parent field is still empty (query gates until resolved).
+/**
+ * What a staged line takes from the catalog (army 11 f2): each copied column
+ * that is empty — or still holds the value filled here last time (a warehouse
+ * change re-prices it) — takes the catalog's value. A value the person typed,
+ * or the file carried, is kept. Null = nothing to change.
+ */
+export function stagedCatalogFill(
+  row: Record<string, unknown>,
+  targets: string[],
+  source: (target: string) => unknown,
+  autoBefore: Record<string, string> | undefined
+): { updates: Record<string, unknown>; auto: Record<string, string> } | null {
+  const updates: Record<string, unknown> = {}
+  const auto: Record<string, string> = { ...(autoBefore ?? {}) }
+  for (const t of targets) {
+    const cur = row[t]
+    const empty = cur === null || cur === undefined || cur === ''
+    const ours = !empty && autoBefore?.[t] !== undefined && autoBefore[t] === String(cur)
+    if (!empty && !ours) continue
+    const v = source(t)
+    if (v === null || v === undefined || v === '') continue
+    if (!empty && String(v) === String(cur)) continue
+    updates[t] = v
+    auto[t] = String(v)
+  }
+  return Object.keys(updates).length > 0 ? { updates, auto } : null
+}
+
+/** The `$parent.<field>` names a related column's match uses. */
+export function relatedParentTokens(match: unknown, out = new Set<string>()): Set<string> {
+  if (typeof match === 'string' && match.startsWith('$parent.')) out.add(match.slice(8))
+  else if (Array.isArray(match)) for (const v of match) relatedParentTokens(v, out)
+  else if (match && typeof match === 'object')
+    for (const v of Object.values(match)) relatedParentTokens(v, out)
+  return out
+}
+
 function resolveRelatedMatch(
   matchCfg: Record<string, unknown> | undefined,
   parentDraft: Record<string, unknown> | null | undefined
@@ -340,6 +383,9 @@ export { MAX_LINE_MONEY } from './line-qty'
  *  same check commitQty makes, with "Whole numbers only" for a decimal on a
  *  whole-number column. */
 export function qtyEntryProblem(raw: string, qtyType: string | null | undefined): string | null {
+  // "1e3" is a number to the browser but not what anyone means to order:
+  // 1,000 went in silently (army 11 f2).
+  if (/e/i.test(raw.trim())) return 'Type the quantity in full digits'
   const n = Number(raw)
   if (isIntegerFieldType(qtyType) && raw.trim() !== '' && !Number.isNaN(n) && !Number.isInteger(n))
     return 'Whole numbers only'
@@ -471,6 +517,7 @@ export function CatalogPickerField({
   manyField,
   parentId,
   parentCollection,
+  field,
   config,
   readOnly = false
 }: {
@@ -478,6 +525,9 @@ export function CatalogPickerField({
   manyField: string
   parentId: string
   parentCollection?: string
+  /** The record form field this grid is placed on (its layout assignment) —
+   *  names the column for `count_all` lookups. */
+  field?: string
   config: CatalogModeConfig
   readOnly?: boolean
 }) {
@@ -1321,6 +1371,31 @@ export function CatalogPickerField({
         ],
         queryFn: async () => {
           const map: Record<string, unknown> = {}
+          if (rc.count_all && rc.aggregate === 'sum' && parentCollection && field) {
+            // Counted on the server over every matching row (count_all): the
+            // same figure for everyone deciding on the record. A saved record's
+            // values are read there as the viewer; only a new form sends the
+            // $parent values its filter names (each checked as readable).
+            const parentVals: Record<string, unknown> = {}
+            if (isNew)
+              for (const t of relatedParentTokens(rc.match))
+                parentVals[t] = parentDraft?.[t] ?? null
+            for (let i = 0; i < relatedIds.length; i += 200) {
+              const chunk = relatedIds.slice(i, i + 200)
+              const r = await client.request<{ data: Record<string, number> }>(
+                get('/catalog-related/count-all', {
+                  collection: parentCollection,
+                  field,
+                  key: rc.key,
+                  record: isNew ? 'new' : parentId,
+                  ...(isNew ? { parent: JSON.stringify(parentVals) } : {}),
+                  ids: chunk.join(',')
+                })
+              )
+              Object.assign(map, r.data ?? {})
+            }
+            return map
+          }
           const isSum = rc.aggregate === 'sum'
           // Aggregate lookups need EVERY matching row, and the server clamps a
           // read at 1000 rows — smaller id chunks + paging until a short page.
@@ -1799,6 +1874,26 @@ export function CatalogPickerField({
       pinnedRowsData.find((r) => String(r.id) === catalogId)
     return row ? applyDisplayTemplate(tmpl, row) : `#${catalogId}`
   }
+  // A saved line is named by its catalog item ("100340 · Fiber splice…") in
+  // the record's change list and the Theirs / Mine chooser — never "Line 2"
+  // or an id (army 11 f4 M1).
+  const labelForRef = useRef(labelFor)
+  labelForRef.current = labelFor
+  const childRowsRef = useRef(childRows)
+  childRowsRef.current = childRows
+  useEffect(
+    () =>
+      registerStagedRowLabel(relatedCollection, (rowId) => {
+        const row = childRowsRef.current.find((r) => String(r.id) === String(rowId))
+        const raw = row?.[config.item_field]
+        const catalogId =
+          raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : (raw as unknown)
+        if (catalogId == null || catalogId === '') return null
+        const text = labelForRef.current(String(catalogId))
+        return text.startsWith('#') ? null : text
+      }),
+    [relatedCollection, config.item_field]
+  )
   const catalogRowFor = (catalogId: string): Record<string, unknown> =>
     catalogById.get(catalogId) ??
     extraLabelRows.find((r) => String(r.id) === catalogId) ??
@@ -1917,6 +2012,47 @@ export function CatalogPickerField({
     const src = config.copy_fields?.[field]
     return src ? catalogRowFor(catalogId)[src] : undefined
   }
+  // Lines staged by a file (BOM Upload) arrive with no price: the line showed
+  // "$0.00 · No catalog price" and TOTAL $0.00 up to Create, while the save
+  // priced it from the warehouse ($16,773.38 — army 11 f2). A staged line
+  // with no price takes the price the catalog gives it (the warehouse price
+  // first) and follows a warehouse change; a price typed or carried in by
+  // the file is never touched.
+  const autoFilledRef = useRef<Map<string, Record<string, string>>>(new Map())
+  const copyTargets = useMemo(() => {
+    const out = new Set(Object.keys(config.copy_fields ?? {}))
+    for (const rc of config.related_columns ?? []) if (rc.copy_to) out.add(rc.copy_to)
+    return [...out]
+  }, [config.copy_fields, config.related_columns])
+  const fillSig = JSON.stringify([
+    pendingRows.map((r) => [r[config.item_field], ...copyTargets.map((t) => r[t] ?? null)]),
+    relatedResults.map((r) => r.dataUpdatedAt),
+    catalogRows.length,
+    extraLabelRows.length
+  ])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fillSig is the content key of what this reads
+  useEffect(() => {
+    if (readOnly || !staging || copyTargets.length === 0) return
+    pendingRows.forEach((row, idx) => {
+      const key = row[config.item_field]
+      if (key == null) return
+      const fill = stagedCatalogFill(
+        row,
+        copyTargets,
+        (t) => catalogSourceValue(String(key), t),
+        autoFilledRef.current.get(String(key))
+      )
+      if (!fill) return
+      autoFilledRef.current.set(String(key), fill.auto)
+      const next: Record<string, unknown> = { ...row, ...fill.updates }
+      for (const [dst, formula] of Object.entries(config.compute_fields ?? {})) {
+        const v = evalClientFormula(formula, next)
+        if (v !== null) next[dst] = v
+      }
+      staging.updateRow(relatedCollection, manyField, idx, next)
+    })
+  }, [fillSig, readOnly, copyTargets])
+
   /** A Summary cell the viewer may type in: editable, not read-only, and not
    *  a catalog-locked field the catalog already prices (non-admins). */
   const cellEditable = (catalogId: string, field: string): boolean => {
@@ -2256,7 +2392,7 @@ export function CatalogPickerField({
           >
             <AlertCircle className='mt-px h-3 w-3 shrink-0' />
             {issue.message}
-            {qty && qty > 0 ? ` — still ${qty}` : ''}
+            {qty && qty > 0 ? ` — still ${qty.toLocaleString('en-US')}` : ''}
           </span>
         )}
         {issue?.kind === 'remove' && (
@@ -2831,6 +2967,7 @@ export function CatalogPickerField({
                   value={null}
                   onChange={(v) => void addArbitrary(v)}
                   placeholder='＋ Add any item…'
+                  displayTemplate={catalogOptionTemplate(tmpl, config.columns)}
                 />
               </div>
             </div>
@@ -4126,4 +4263,19 @@ function FavoritesManagerDrawer({
     </div>,
     container
   )
+}
+
+/**
+ * The "Add any item" option label: the catalog's own label (an item number)
+ * plus the first plain-text column the summary shows (its description) —
+ * "100571 · FIBER JUMPER, MM DUPLEX…", never a bare number (army11 f1).
+ */
+export function catalogOptionTemplate(
+  tmpl: string | null | undefined,
+  columns: Array<{ field: string; format?: string; sections_only?: boolean }> | undefined
+): string | null {
+  if (!tmpl) return null
+  const desc = (columns ?? []).find((c) => !c.format && !c.sections_only)?.field
+  if (!desc || tmpl.includes(`{{${desc}}}`)) return tmpl
+  return `${tmpl} · {{${desc}}}`
 }

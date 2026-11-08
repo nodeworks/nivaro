@@ -291,3 +291,49 @@ describe('ReviewListWidget names the group, not its raw key', () => {
     expect(host.textContent).not.toContain('Nov 3, 2026')
   })
 })
+
+// Army 11 a3-I: a label that is not a verb gets its own confirm question.
+describe('confirmTitle', () => {
+  it('uses the option template when it names {name}, else "<label> <noun> <name>?"', async () => {
+    const { confirmTitle } = await import('./ReviewListWidget')
+    const name = { title: '#INV-1', subtitle: 'ACME' }
+    expect(
+      confirmTitle({ value: 'approved', label: 'Approve', color: 'green' }, name, 'invoice')
+    ).toBe('Approve invoice #INV-1 · ACME?')
+    expect(
+      confirmTitle(
+        {
+          value: 'under_review',
+          label: 'In review',
+          color: 'amber',
+          confirm_title: 'Mark {name} in review?'
+        },
+        name,
+        'invoice'
+      )
+    ).toBe('Mark invoice #INV-1 · ACME in review?')
+  })
+})
+
+// Army 11 a3-K: an invoice's lines listed 2, 6, 3, 1, 4, 5, 7.
+describe('sortGroupRows', () => {
+  it('orders rows by a numeric field, blanks last, stable', async () => {
+    const { sortGroupRows } = await import('./ReviewListWidget')
+    const row = (id: number, n: unknown) => ({
+      id,
+      group: 'A',
+      values: { line_item_number: n },
+      status: null,
+      stamp_user: null,
+      stamp_date: null
+    })
+    const rows = [row(1, 2), row(2, '6'), row(3, 3), row(4, null), row(5, 1), row(6, 10)]
+    expect(sortGroupRows(rows, { field: 'line_item_number' }).map((r) => r.id)).toEqual([
+      5, 1, 3, 2, 6, 4
+    ])
+    expect(
+      sortGroupRows(rows, { field: 'line_item_number', direction: 'desc' }).map((r) => r.id)
+    ).toEqual([6, 2, 3, 1, 5, 4])
+    expect(sortGroupRows(rows, null)).toBe(rows)
+  })
+})

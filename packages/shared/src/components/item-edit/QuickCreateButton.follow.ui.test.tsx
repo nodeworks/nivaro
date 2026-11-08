@@ -3,14 +3,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { NivaroProvider, ParentDraftContext } from '../../context'
+import { NivaroProvider, ParentDraftContext, useParentDraft } from '../../context'
 import {
+  endQuickCreateFollows,
+  FOLLOW_DEBOUNCE_MS,
   fieldLimit,
   pendingOptionalSeeds,
   QuickCreateButton,
   type QuickCreateConfig,
+  resetQuickCreateFollows,
+  runQuickCreateFollow,
   seedFollowPatch,
-  seedKey
+  seedKey,
+  startQuickCreateFollow,
+  useQuickCreateFollow
 } from './QuickCreateButton'
 
 // army9 b02 HIGH: New Unit sits on step 1, before the fields it seeds from.
@@ -95,6 +101,7 @@ afterEach(() => {
   act(() => root?.unmount())
   root = null
   document.body.replaceChildren()
+  resetQuickCreateFollows()
 })
 const tick = async () => {
   for (let i = 0; i < 10; i++) await act(async () => new Promise((r) => setTimeout(r, 0)))
@@ -194,6 +201,98 @@ describe('QuickCreateButton', () => {
     expect(patches[0].body).toEqual({ project_type: 3, project: 8161 })
   })
 
+  // army 11 f2 HIGH: the stepper unmounts step 1 (Unit Selection) when the
+  // person moves on, so the follow that lived in the button never saw the
+  // seeds filled in on step 2 and Create still failed. The follow now outlives
+  // the button: any field on the visible step drives it.
+  it('keeps following after the step holding the button is unmounted', async () => {
+    const calls: Array<{ method?: string; path: string; body?: unknown }> = []
+    const client = {
+      url: 'http://test',
+      getToken: () => null,
+      request: vi.fn(async (cmd: { _method?: string; _path: string; _body?: unknown }) => {
+        calls.push({ method: cmd._method, path: cmd._path, body: cmd._body })
+        if (cmd._path === '/collections/units') return { data: { relations: [] } }
+        if (cmd._path === '/field-config/units') return { data: [] }
+        if (cmd._path === '/items/units' && cmd._method === 'POST') return { data: { id: 273029 } }
+        return { data: {} }
+      })
+    }
+    function Follower() {
+      useQuickCreateFollow(useParentDraft())
+      return <span>step 2</span>
+    }
+    let setDraft: (fn: (d: Record<string, unknown>) => Record<string, unknown>) => void = () => {}
+    let setStep: (n: number) => void = () => {}
+    function Host() {
+      const [draft, sd] = useState<Record<string, unknown>>({ region: 2, division: 1, unit: null })
+      const [step, ss] = useState(1)
+      setDraft = sd
+      setStep = ss
+      return (
+        <ParentDraftContext.Provider
+          value={{ draft, collection: 'inventory_request', formKey: 'form-A', isNew: true }}
+        >
+          {step === 1 ? (
+            <QuickCreateButton
+              targetCollection='units'
+              config={CONFIG}
+              field='unit'
+              value={draft.unit}
+              onCreated={(id) => sd((d) => ({ ...d, unit: id }))}
+            />
+          ) : (
+            <Follower />
+          )}
+        </ParentDraftContext.Provider>
+      )
+    }
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const host = document.createElement('div')
+    document.body.append(host)
+    root = createRoot(host)
+    await act(async () =>
+      root?.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <Host />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    )
+    await act(async () => document.querySelector<HTMLButtonElement>('button')?.click())
+    await tick()
+    const input = document.querySelector('[data-quick-create-panel] input') as HTMLInputElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'ARMY11 PM Unit A'
+      )
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () =>
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    )
+    await tick()
+    // Next: step 1 (and the button) unmount; step 2 fills the seeds.
+    await act(async () => setStep(2))
+    expect(document.querySelector('[data-quick-create-panel]')).toBeNull()
+    await act(async () => setDraft((d) => ({ ...d, project_type: 3 })))
+    await act(async () => setDraft((d) => ({ ...d, project: 8161, funding_year: 7 })))
+    await act(async () => new Promise((r) => setTimeout(r, 600)))
+    await tick()
+    const patches = calls.filter((c) => c.method === 'PATCH')
+    expect(patches).toHaveLength(1)
+    expect(patches[0].path).toBe('/items/units/273029')
+    expect(patches[0].body).toEqual({ project_type: 3, project: 8161, funding_years: 7 })
+
+    // Another unit picked: the one made here stops following.
+    await act(async () => setDraft((d) => ({ ...d, unit: 99, project: 9000 })))
+    await act(async () => new Promise((r) => setTimeout(r, 600)))
+    await tick()
+    expect(calls.filter((c) => c.method === 'PATCH')).toHaveLength(1)
+  })
+
   // army9 review L4: Escape in the popover closed a drill sheet around it —
   // Radix listens on document in the capture phase, before React's handlers.
   it('Escape closes the popover only, never the sheet around it', async () => {
@@ -236,5 +335,99 @@ describe('QuickCreateButton', () => {
     document.removeEventListener('keydown', onDoc, true)
     expect(document.querySelector('[data-quick-create-panel]')).toBeNull()
     expect(sheetEscape).not.toHaveBeenCalled()
+  })
+})
+
+// army 11 review HIGH 1: the follow was global — another open form holding the
+// same record (with other seeds) PATCHed it, or cancelled the follow.
+describe('follow scope (one form instance, while new)', () => {
+  const SEEDS: QuickCreateConfig['fields'] = [
+    { field: 'project', from: '$parent.project' },
+    { field: 'region', from: '$parent.region' }
+  ]
+  function start(request: ReturnType<typeof vi.fn>) {
+    return startQuickCreateFollow({
+      id: 77,
+      targetCollection: 'units',
+      parentCollection: 'inventory_request',
+      formKey: 'form-A',
+      field: 'unit',
+      seeds: SEEDS,
+      written: { region: '2' },
+      m2mAliases: new Set(),
+      request: request as never,
+      invalidate: () => {}
+    })
+  }
+  const settle = () => new Promise((r) => setTimeout(r, FOLLOW_DEBOUNCE_MS + 50))
+
+  it('another form holding the same record never PATCHes it nor cancels the follow', async () => {
+    const request = vi.fn(async () => ({}))
+    start(request)
+    // form-B: an unrelated record that uses unit 77 with another region.
+    runQuickCreateFollow({ unit: 77, region: 9, project: 5 }, 'inventory_request', {
+      formKey: 'form-B',
+      isNew: false
+    })
+    // form-B with a different unit picked must not cancel form-A's follow either.
+    runQuickCreateFollow({ unit: 12, region: 9 }, 'inventory_request', { formKey: 'form-B' })
+    await settle()
+    expect(request).not.toHaveBeenCalled()
+    runQuickCreateFollow({ unit: 77, region: 2, project: 8161 }, 'inventory_request', {
+      formKey: 'form-A',
+      isNew: true
+    })
+    await settle()
+    expect(request).toHaveBeenCalledTimes(1)
+    expect((request.mock.calls[0] as unknown[])[0]).toMatchObject({
+      _path: '/items/units/77',
+      _body: { project: 8161 }
+    })
+  })
+
+  it('the creating form unmounting ends the follow', async () => {
+    const request = vi.fn(async () => ({}))
+    start(request)
+    endQuickCreateFollows('form-A')
+    runQuickCreateFollow({ unit: 77, project: 8161 }, 'inventory_request', {
+      formKey: 'form-A',
+      isNew: true
+    })
+    await settle()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('Create saved the form (no longer new): the follow ends, nothing more is written', async () => {
+    const request = vi.fn(async () => ({}))
+    start(request)
+    runQuickCreateFollow({ unit: 77, project: 8161 }, 'inventory_request', {
+      formKey: 'form-A',
+      isNew: false
+    })
+    runQuickCreateFollow({ unit: 77, project: 8161 }, 'inventory_request', {
+      formKey: 'form-A',
+      isNew: true
+    })
+    await settle()
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('a form with no identity only follows from its own mounted button', async () => {
+    const request = vi.fn(async () => ({}))
+    const key = startQuickCreateFollow({
+      id: 5,
+      targetCollection: 'units',
+      parentCollection: 'inventory_request',
+      formKey: null,
+      seeds: SEEDS,
+      written: {},
+      m2mAliases: new Set(),
+      request: request as never,
+      invalidate: () => {}
+    })
+    runQuickCreateFollow({ project: 1 }, 'inventory_request', {})
+    await settle()
+    expect(request).not.toHaveBeenCalled()
+    expect(key).toContain('units|5')
   })
 })

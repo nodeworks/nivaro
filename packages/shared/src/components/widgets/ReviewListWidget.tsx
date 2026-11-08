@@ -25,6 +25,10 @@ export interface ReviewListStatusOption {
   /** The confirm's last line for this decision — who is told, whether it can
    *  be taken back. Unset = the generic "Nothing changes until you confirm". */
   confirm_notice?: string | null
+  /** The confirm's question when "<label> <noun> <name>?" reads wrong (a label
+   *  that is not a verb: "In review invoice #1?"). `{name}` = the group noun +
+   *  name, e.g. "Mark {name} in review?" → "Mark invoice #1 · ACME in review?". */
+  confirm_title?: string | null
 }
 
 export type ReviewListColumnFormat = 'currency' | 'number' | 'date' | 'datetime' | 'flag'
@@ -74,6 +78,10 @@ export interface ReviewListConfig {
    *  whole invoice late. Groups missing the field keep the key order, last. */
   group_sort?: { field: string; direction?: 'asc' | 'desc' }
   line_columns?: Array<string | ReviewListColumnSpec>
+  /** Order a group's rows by one of their values (`{field:'line_item_number'}`
+   *  lists an invoice's lines 1, 2, 3 … — army 11 a3-K: they came 2, 6, 3, 1).
+   *  Numbers and dates compare as such, other text naturally; blanks last. */
+  line_sort?: { field: string; direction?: 'asc' | 'desc' } | null
   /** What a group is ("invoice") and a row is ("line"); unset = none / "row". */
   group_noun?: string | null
   row_noun?: string | null
@@ -213,9 +221,39 @@ interface ReviewGroup {
   mixedStatus: boolean
 }
 
+/** A group's rows in `line_sort` order (stable; blanks last). */
+export function sortGroupRows(
+  rows: ReviewListRow[],
+  spec: ReviewListConfig['line_sort']
+): ReviewListRow[] {
+  if (!spec?.field) return rows
+  const dir = spec.direction === 'desc' ? -1 : 1
+  const key = (r: ReviewListRow): number | string | null => {
+    const raw = r.values[spec.field]
+    if (raw == null || raw === '') return null
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    if (Number.isFinite(n)) return n
+    const t = Date.parse(String(raw))
+    return Number.isNaN(t) ? String(raw) : t
+  }
+  return rows
+    .map((r, i) => ({ r, i, k: key(r) }))
+    .sort((a, b) => {
+      if (a.k == null || b.k == null)
+        return a.k == null && b.k == null ? a.i - b.i : a.k == null ? 1 : -1
+      const c =
+        typeof a.k === 'number' && typeof b.k === 'number'
+          ? a.k - b.k
+          : String(a.k).localeCompare(String(b.k), undefined, { numeric: true })
+      return c === 0 ? a.i - b.i : c * dir
+    })
+    .map((x) => x.r)
+}
+
 function buildGroups(
   data: ReviewListResult,
-  aggregateSum: string | null | undefined
+  aggregateSum: string | null | undefined,
+  lineSort?: ReviewListConfig['line_sort']
 ): ReviewGroup[] {
   const map = new Map<string, ReviewListRow[]>()
   for (const row of data.rows) {
@@ -224,7 +262,8 @@ function buildGroups(
     if (existing) existing.push(row)
     else map.set(key, [row])
   }
-  const groups: ReviewGroup[] = Array.from(map.entries()).map(([key, rows]) => {
+  const groups: ReviewGroup[] = Array.from(map.entries()).map(([key, unsorted]) => {
+    const rows = sortGroupRows(unsorted, lineSort)
     const statusSet = new Set(rows.map((r) => String(r.status ?? '')))
     const mixedStatus = statusSet.size > 1
     const uniformStatus = mixedStatus ? null : rows[0].status
@@ -287,7 +326,10 @@ export function confirmTitle(
   groupNoun: string | null | undefined
 ): string {
   const noun = groupNoun?.trim() ? `${groupNoun.trim()} ` : ''
-  return `${option.label} ${noun}${name.title}${name.subtitle ? ` · ${name.subtitle}` : ''}?`
+  const named = `${noun}${name.title}${name.subtitle ? ` · ${name.subtitle}` : ''}`
+  const tpl = option.confirm_title?.trim()
+  if (tpl?.includes('{name}')) return tpl.replace('{name}', named)
+  return `${option.label} ${named}?`
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -329,7 +371,7 @@ export function ReviewListWidget({
   useBackCloses(() => setNoteAsk(null), noteAsk != null)
 
   const groups = useMemo(() => {
-    const built = data ? buildGroups(data, config.aggregate_sum) : []
+    const built = data ? buildGroups(data, config.aggregate_sum, config.line_sort) : []
     const gs = config.group_sort
     if (!gs?.field) return built
     const desc = gs.direction === 'desc'
@@ -341,7 +383,7 @@ export function ReviewListWidget({
       if (bv == null) return -1
       return desc ? bv - av : av - bv
     })
-  }, [data, config.aggregate_sum, config.group_sort])
+  }, [data, config.aggregate_sum, config.group_sort, config.line_sort])
   // Row enrichment (verdict chips, per-row act permission) from an extension
   // endpoint — the widget stays domain-blind; the endpoint owns the rules.
   const rowIds = useMemo(() => (data?.rows ?? []).map((r) => String(r.id)), [data])

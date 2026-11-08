@@ -26,40 +26,48 @@ function norm(v: unknown): string {
   return String(v ?? '')
 }
 
-export function guardPasses(rules: GuardRule[] | null, record: Record<string, unknown>): boolean {
-  for (const r of rules ?? []) {
-    if (!r || typeof r.field !== 'string') continue
-    const v = record[r.field]
-    const want = r.value
-    const ok = (() => {
-      switch (r.op) {
-        case 'eq':
-          return norm(v) === norm(want)
-        case 'neq':
-          // A NULL/empty value is "not equal" to any concrete value — so
-          // `is_on_hold neq true` passes for records that were never held.
-          return norm(v) !== norm(want)
-        case 'null':
-          return isEmpty(v)
-        case 'nnull':
-          return !isEmpty(v)
-        case 'in':
-          return String(want ?? '')
-            .split(',')
-            .map((x) => norm(x.trim()))
-            .includes(norm(v))
-        case 'nin':
-          return !String(want ?? '')
-            .split(',')
-            .map((x) => norm(x.trim()))
-            .includes(norm(v))
-        default:
-          return false
-      }
-    })()
-    if (!ok) return false
+/** Does one guard rule hold for the record? (Malformed rules are skipped = hold.) */
+function ruleHolds(r: GuardRule, record: Record<string, unknown>): boolean {
+  if (!r || typeof r.field !== 'string') return true
+  const v = record[r.field]
+  const want = r.value
+  switch (r.op) {
+    case 'eq':
+      return norm(v) === norm(want)
+    case 'neq':
+      // A NULL/empty value is "not equal" to any concrete value — so
+      // `is_on_hold neq true` passes for records that were never held.
+      return norm(v) !== norm(want)
+    case 'null':
+      return isEmpty(v)
+    case 'nnull':
+      return !isEmpty(v)
+    case 'in':
+      return String(want ?? '')
+        .split(',')
+        .map((x) => norm(x.trim()))
+        .includes(norm(v))
+    case 'nin':
+      return !String(want ?? '')
+        .split(',')
+        .map((x) => norm(x.trim()))
+        .includes(norm(v))
+    default:
+      return false
   }
-  return true
+}
+
+export function guardPasses(rules: GuardRule[] | null, record: Record<string, unknown>): boolean {
+  return firstFailingRule(rules, record) === null
+}
+
+/** The first rule the record fails, or null when the guard passes. */
+export function firstFailingRule(
+  rules: GuardRule[] | null,
+  record: Record<string, unknown>
+): GuardRule | null {
+  for (const r of rules ?? []) if (!ruleHolds(r, record)) return r
+  return null
 }
 
 /** {{field}} → record value; unknown tokens render empty. */

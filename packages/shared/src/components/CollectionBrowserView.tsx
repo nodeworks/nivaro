@@ -41,12 +41,21 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { useSlowReason } from '../hooks/useSlowReason'
+import { rowActionSentence } from '../lib/bulk-copy'
 import {
   endBulkProgress,
   newBulkProgressId,
   startBulkProgress,
   useBulkProgressFeed
 } from '../lib/bulk-progress'
+import {
+  type CbvVirtualKind,
+  csvDateTime,
+  csvNumber,
+  readExportExtras,
+  VIRTUAL_HEADERS,
+  virtualExportCell
+} from '../lib/cbv-export'
 import { warmPageLookups } from '../lib/cbv-page-warm'
 import { del, get, patch, post } from '../lib/commands'
 import {
@@ -57,6 +66,7 @@ import {
   formatDateFilter,
   parseDateFilter
 } from '../lib/date-filter'
+import { type DeleteOfferRun, rowDeleteOffered } from '../lib/delete-offer'
 import { errorSentence } from '../lib/error-message'
 import { errorToastOptions, toastError } from '../lib/error-toast'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
@@ -121,12 +131,20 @@ import {
   fetchCascadeRelations
 } from '../lib/quick-filter-cascade'
 import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
-import { copyWhenReady, friendlyIdOf, rowMenuRef, shareableRecordId } from '../lib/record-ref'
+import {
+  copyWhenReady,
+  friendlyIdFieldOf,
+  friendlyIdOf,
+  recordRefLabel,
+  rowMenuRef,
+  shareableRecordId
+} from '../lib/record-ref'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import { userErrorMessage } from '../lib/safe-error'
 import { logSearch, logSearchOpen } from '../lib/search-log'
 import { type CellShape, type SkeletonColumn, shapeForField } from '../lib/skeleton-shapes'
 import { knownTotalFrom } from '../lib/slow-reason'
+import { nextSortValue } from '../lib/sort-cycle'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -140,6 +158,7 @@ import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
   BulkActionButtons,
+  bulkActionEnabled,
   guardMatches,
   mergeBulkActions,
   useAvailableBulkActions,
@@ -897,7 +916,6 @@ export function RowActionsMenu({
     enabled: open && !isAdmin,
     staleTime: 5 * 60_000
   })
-  const mayDelete = isAdmin || roleMayDelete(myPermissions, collection)
   // Admin-only row tools: leave this record out of every relation picker, or offer it again.
   const pickerExclusion = usePickerExclusion(collection, String(id), {
     enabled: open && isAdmin,
@@ -937,16 +955,15 @@ export function RowActionsMenu({
     comment_mode?: string | null
   }
   type RowState = { id: string; label: string; color?: string | null }
-  const { data: instance } = useQuery<{
+  type RowInstance = {
     available_transitions?: RowTransition[]
     states?: RowState[]
-  } | null>({
+  } & DeleteOfferRun
+  const { data: instance } = useQuery<RowInstance | null>({
     queryKey: ['cbv-row-instance', collection, String(id)],
     queryFn: () =>
       client
-        .request<{
-          data: { available_transitions?: RowTransition[]; states?: RowState[] } | null
-        }>(get(`/pipelines/instance/${collection}/${id}`))
+        .request<{ data: RowInstance | null }>(get(`/pipelines/instance/${collection}/${id}`))
         .then((r) => r.data)
         .catch(() => null),
     enabled: open && hasPipeline,
@@ -963,6 +980,20 @@ export function RowActionsMenu({
   // fetched only once the menu opens, one request per collection (react-query
   // dedupes across rows). Built-ins are the bar's own buttons, never listed.
   const { data: bulkData } = useAvailableBulkActions(open ? [collection] : [])
+  // Delete (army 11 N12): the record page's rule — administrators, or a person
+  // whose role may delete, where the collection's Delete built-in is open to
+  // them, on a record that has never left its first step (the server refuses
+  // the rest; lib/delete-offer.ts is its twin).
+  const mayDelete = rowDeleteOffered({
+    isAdmin,
+    roleMayDelete: roleMayDelete(myPermissions, collection),
+    builtinOpen: bulkData
+      ? (bulkData[collection] ?? []).some((a) => a.source === 'builtin' && a.key === 'delete') &&
+        bulkActionEnabled(bulkEnabledKeys, collection, 'delete')
+      : undefined,
+    hasPipeline,
+    run: !hasPipeline ? null : instance === undefined ? undefined : instance
+  })
   const rowCandidates = useMemo(
     () =>
       open
@@ -1126,9 +1157,10 @@ export function RowActionsMenu({
           ...(comment?.trim() ? { comment: comment.trim() } : {})
         })
       ),
-    onSuccess: () => {
+    onSuccess: (_d, vars) => {
       setOpen(false)
-      toast.success('Transitioned')
+      const moved = transitions.find((t) => t.id === vars.transitionId)
+      toast.success(moved ? `${ref.name} moved to ${optionLabel(moved)}` : `${ref.name} moved`)
       invalidateCbvRowQueries(qc, collection)
       invalidateRecordQueries(qc, collection, [id])
       onAfterTransition?.()
@@ -1153,6 +1185,7 @@ export function RowActionsMenu({
                 skipped?: number
                 failed?: number
                 errors?: Array<{ error: string }>
+                outcomes?: Array<{ outcome: string; reason?: string }>
               }
             }>(post('/bulk-actions/run', { ...body, key: action.key }))
           : await client.request<{
@@ -1161,21 +1194,26 @@ export function RowActionsMenu({
                 skipped?: number
                 failed?: number
                 errors?: Array<{ error: string }>
+                outcomes?: Array<{ outcome: string; reason?: string }>
               }
             }>(post(`/bulk-actions/${action.key}/execute`, body))
       return { action, result: res.data ?? {} }
     },
     onSuccess: ({ action, result }) => {
       setOpen(false)
+      // Toasts name the record by its friendly id (army 11 N2), never "the selected records".
       if (result.failed) {
-        toast.error(`${action.label} failed`, { description: result.errors?.[0]?.error })
+        toast.error(`${action.label} failed on ${ref.name}`, {
+          description: result.errors?.[0]?.error
+        })
         return
       }
       if (!result.succeeded && result.skipped) {
-        toast.info(`${action.label}: nothing to change`)
+        const why = result.outcomes?.find((o) => o.outcome === 'skip')?.reason
+        toast.info(`${ref.name}: ${why ?? 'nothing to change'}`)
         return
       }
-      toast.success(action.label)
+      toast.success(`${action.label} — done on ${ref.name}`)
       invalidateCbvRowQueries(qc, collection)
       // The record page skips this tab's own writes: a record opened next must not show the
       // pre-action values from cache (#priority "Priority: No" right after setting it).
@@ -1219,6 +1257,14 @@ export function RowActionsMenu({
     }
   })
 
+  // Why Confirm is dimmed, said under the box (army 11 N2).
+  const reasonMissing =
+    !!confirm &&
+    !confirm.push &&
+    reason.trim().length === 0 &&
+    (confirm.action
+      ? confirm.action.require_reason
+      : transitions.find((t) => t.id === confirm.picked)?.comment_mode === 'required')
   const item = (label: string, onClick: () => void, danger = false) => (
     <button
       type='button'
@@ -1269,8 +1315,11 @@ export function RowActionsMenu({
                   ‹ {confirm.label}
                 </button>
                 {confirm.action && (
-                  <p className='mb-1.5 px-1 text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'>
-                    {confirm.action.confirm_text ?? confirm.action.summary}
+                  <p
+                    className='mb-1.5 px-1 text-[11.5px] leading-snug text-slate-500 dark:text-slate-400'
+                    data-row-action-sentence
+                  >
+                    {rowActionSentence(confirm.action, ref.name)}
                   </p>
                 )}
                 {confirm.push && (
@@ -1343,8 +1392,23 @@ export function RowActionsMenu({
                           : 'Reason (optional)…'
                     }
                     rows={2}
+                    aria-label={
+                      confirm.push?.kind === 'push'
+                        ? (confirm.push.action.confirm?.input?.label ?? 'Note')
+                        : 'Reason'
+                    }
+                    aria-describedby={reasonMissing ? `row-reason-hint-${String(id)}` : undefined}
                     className='w-full resize-none rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[12px] outline-none focus:border-nvr-cyan/50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100'
                   />
+                )}
+                {reasonMissing && (
+                  <p
+                    id={`row-reason-hint-${String(id)}`}
+                    className='mt-1 px-1 text-[11px] text-slate-500 dark:text-slate-400'
+                    data-row-reason-hint
+                  >
+                    Add a reason to continue.
+                  </p>
                 )}
                 <div className='mt-1.5 flex gap-1.5'>
                   <button
@@ -1586,7 +1650,7 @@ export function RowActionsMenu({
                     {confirmDelete ? (
                       <div className='px-3 py-1.5' data-row-delete-confirm>
                         <p className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
-                          Delete record {id}? It moves to trash.
+                          Delete {ref.name}? It moves to the trash, where it can be restored.
                         </p>
                         <div className='mt-1.5 flex gap-1.5'>
                           <button
@@ -6221,6 +6285,12 @@ export function CollectionBrowserView({
     const t = fieldByName.get(key)?.type
     return t === 'integer' || t === 'decimal' || t === 'float'
   }
+  /** A plain timestamp / date column (the CSV writes it sortable, army 11 N8). */
+  const isDateCol = (key: string) => {
+    if (key.includes('.') || key in aliasPathByField) return false
+    const t = String(fieldByName.get(key)?.type ?? '').toLowerCase()
+    return t === 'timestamp' || t === 'datetime' || t === 'date'
+  }
   /** Apply a column's ColumnFormatConfig to a resolved display string
    *  (multi-value aware — preserves ', ' joins and '+N more'). */
   const fmtCell = (val: string, key: string, rowId?: unknown) => {
@@ -6576,7 +6646,16 @@ export function CollectionBrowserView({
   })
   const deleteRow = useMutation({
     mutationFn: (id: string | number) => client.request(del(`/items/${collection}/${id}`)),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
+    onSuccess: () => {
+      toast.success('Moved to the trash')
+      void qc.invalidateQueries({ queryKey: ['cbv-items', collection] })
+    },
+    // The server's own sentence (a submitted record is cancelled, not deleted — army 11 N12).
+    onError: (err: unknown) =>
+      toast.error(
+        userErrorMessage(err, 'Could not delete this record'),
+        errorToastOptions(err, { action: 'Delete' })
+      )
   })
   const deleteView = useMutation({
     mutationFn: (id: number) => client.request(del(`/saved-views/${id}`)),
@@ -6703,11 +6782,7 @@ export function CollectionBrowserView({
                 return typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) ? Number(v) : v
               })
             : null
-          return num == null
-            ? ''
-            : cfg
-              ? formatValue(String(num), cfg)
-              : Math.round(num * 100) / 100
+          return num == null ? '' : Math.round(num * 100) / 100
         }
         if (c.includes('.') || c in aliasPathByField) {
           const path = c.includes('.') ? c : aliasPathByField[c]
@@ -6719,11 +6794,88 @@ export function CollectionBrowserView({
         if (m2o && v != null && v !== '') return m2oLabel(m2o, exportResolved[String(r.id)]) || v
         if (userColSet.has(c) && v != null && v !== '')
           return userNames.get(String(v).toUpperCase()) ?? v
+        // Numbers and dates stay what a spreadsheet can sum and sort (army 11 N8).
+        if (v != null && v !== '' && (cfg?.type === 'number' || isNumericCol(c)))
+          return csvNumber(v)
+        if (v != null && v !== '' && (cfg?.type === 'datetime' || isDateCol(c)))
+          return csvDateTime(v)
+        if (c === 'id') return friendlyIdOf(meta, r) ?? v
         return cfg && v != null ? formatValue(String(v), cfg) : v
       }
+      // The columns on screen, in their order — the State / Owners / Aging …
+      // columns included; never the row's internal id (army 11 N8).
+      const exportCols = orderedCols.filter((c) => c.kind !== 'actions')
+      const kinds = new Set(
+        exportCols.filter((c) => c.kind !== 'data' && c.kind !== 'formula').map((c) => c.kind)
+      ) as Set<CbvVirtualKind>
+      const ids = all.map((r) => String(r.id))
+      const extras = await readExportExtras(ids, kinds, {
+        instances: (chunk) =>
+          client
+            .request<{ data: PipelineInstancesMap | null }>(
+              get(`/pipelines/instances/${collection}`, { ids: chunk.join(',') })
+            )
+            .then((r) => r.data?.instances ?? {}),
+        owners: (chunk) =>
+          client
+            .request<{ data: Record<string, Array<{ id: string; name: string }>> }>(
+              post(`/pipelines/instance/${collection}/owners/batch`, { ids: chunk })
+            )
+            .then((r) => r.data ?? {}),
+        addendums: (chunk) =>
+          client
+            .request<{ data: Record<string, AddendumSummaryEntry> }>(
+              post('/addendums/summary', { collection, ids: chunk })
+            )
+            .then((r) => r.data ?? {}),
+        integrations: (chunk) =>
+          client
+            .request<{ data: Record<string, Array<{ api: string; outcome: string }>> }>(
+              post('/integration-obligations/summary', { collection, ids: chunk })
+            )
+            .then((r) => r.data ?? {}),
+        tasks: (chunk) =>
+          client
+            .request<{ data: Record<string, { open: number; overdue: number }> }>(
+              post('/tasks/counts', { collection, ids: chunk })
+            )
+            .then((r) => r.data ?? {})
+      })
+      // A collection with no friendly id keeps its id (it IS what people quote);
+      // one with a friendly id leads with it when it is not already a column.
+      const friendlyField = friendlyIdFieldOf(meta)
+      const lead: Array<{ header: string; cell: (r: Record<string, unknown>) => unknown }> =
+        !friendlyField
+          ? cols.includes('id')
+            ? []
+            : [{ header: 'ID', cell: (r) => r.id }]
+          : cols.includes(friendlyField) || cols.includes('id')
+            ? []
+            : [{ header: columnLabel(friendlyField), cell: (r) => r[friendlyField] }]
+      const headerOf = (c: CbvColDesc) =>
+        c.kind === 'data' || c.kind === 'formula'
+          ? columnLabel(c.key)
+          : c.kind === 'fulfilment' && bcFulfilment?.label
+            ? `${bcFulfilment.label} shipped`
+            : VIRTUAL_HEADERS[c.kind as CbvVirtualKind]
+      const now = Date.now()
       const lines = [
-        ['id', ...cols.map((c) => columnLabel(c))].map(esc).join(','),
-        ...all.map((r) => [r.id, ...cols.map((c) => cellFor(r, c))].map(esc).join(','))
+        [...lead.map((l) => l.header), ...exportCols.map(headerOf)].map(esc).join(','),
+        ...all.map((r) =>
+          [
+            ...lead.map((l) => l.cell(r)),
+            ...exportCols.map((c) =>
+              c.kind === 'data' || c.kind === 'formula'
+                ? cellFor(r, c.key)
+                : virtualExportCell(c.kind as CbvVirtualKind, String(r.id), extras, r, {
+                    now,
+                    fulfilment: bcFulfilment
+                  })
+            )
+          ]
+            .map(esc)
+            .join(',')
+        )
       ]
       // Past the stated ceiling the file itself says it is not everything.
       if (truncated) {
@@ -6861,9 +7013,7 @@ export function CollectionBrowserView({
     // meaningless to a reader. Falls back to the FK when no label resolves.
     const rel = isM2OField(relations, collection, field)
     const applyCycle = (key: string) => {
-      if (sort === key) setSort(`-${key}`)
-      else if (sort === `-${key}`) setSort('')
-      else setSort(key)
+      setSort(nextSortValue(sort, key, bc.default_sort ?? ''))
       setPage(1)
     }
     if (rel?.one_collection && !isSystemCol(rel.one_collection)) {
@@ -9130,7 +9280,25 @@ export function CollectionBrowserView({
                           onClick={() => {
                             if (!resolved) nextSort(key)
                           }}
-                          className={`${baseTh} relative ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600'} ${pinPart}`}
+                          // Sortable headers say their order and answer the keyboard (army 11 N6).
+                          aria-sort={
+                            resolved
+                              ? undefined
+                              : active
+                                ? desc
+                                  ? 'descending'
+                                  : 'ascending'
+                                : 'none'
+                          }
+                          tabIndex={resolved ? undefined : 0}
+                          onKeyDown={(e) => {
+                            if (resolved || e.target !== e.currentTarget) return
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              nextSort(key)
+                            }
+                          }}
+                          className={`${baseTh} relative ${isNumericCol(key) ? 'text-right' : 'text-left'} ${resolved ? '' : 'cursor-pointer hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'} ${pinPart}`}
                         >
                           {label}
                           {f?.computed_formula && (
@@ -9148,11 +9316,12 @@ export function CollectionBrowserView({
                           )}
                           {!resolved && (
                             <span
-                              className={`ml-1 inline-block transition-[transform,color] duration-200 ${
-                                active ? 'text-[#00a5cc]' : 'text-slate-300'
-                              } ${active && desc ? 'rotate-180' : ''}`}
+                              aria-hidden
+                              className={`ml-1 inline-block transition-colors duration-200 ${
+                                active ? 'text-[#00a5cc]' : 'text-slate-300 dark:text-slate-500'
+                              }`}
                             >
-                              {active ? '▲' : '⇅'}
+                              {active ? (desc ? '▼' : '▲') : '⇅'}
                             </span>
                           )}
                           {pinButton(key)}
@@ -9552,7 +9721,8 @@ export function CollectionBrowserView({
                                     type='checkbox'
                                     checked={isSelected}
                                     onChange={() => toggleRow(id)}
-                                    aria-label={`Select ${id}`}
+                                    // Named as people know the record (army 11 N5), never its row id.
+                                    aria-label={`Select ${recordRefLabel(meta, row, id, collection) || 'this record'}`}
                                   />
                                 )}
                               </span>

@@ -177,6 +177,50 @@ function list(raw: unknown): unknown[] {
   return Array.isArray(v) ? v : []
 }
 
+/** The form's relation (alias) fields the stored read did not carry and the caller did not pass. */
+export function aliasFieldsToLoad(rows: FormFieldRow[], stored: Obj, given: Obj): string[] {
+  const out: string[] = []
+  for (const r of rows) {
+    const f = r.field
+    if (!f || f in stored || f in given || out.includes(f)) continue
+    if (r.interface === 'relation-path' || r.computed_type) continue
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(f)) continue
+    out.push(f)
+  }
+  return out.slice(0, 40)
+}
+
+/**
+ * Each alias field's linked rows (`<field>.id`). One read for all; when that
+ * read is refused (a name that is not a relation), field by field — a field
+ * that still cannot be read is left out, never guessed.
+ */
+export async function loadLinkedValues(
+  fields: string[],
+  read: (fields: string[]) => Promise<Obj | null>
+): Promise<Obj> {
+  const out: Obj = {}
+  const take = (row: Obj | null, names: string[]) => {
+    for (const f of names) if (row && Array.isArray(row[f])) out[f] = row[f]
+  }
+  try {
+    take(await read(fields.map((f) => `${f}.id`)), fields)
+    return out
+  } catch {
+    /* one bad name refuses the whole read — try each */
+  }
+  await Promise.all(
+    fields.map(async (f) => {
+      try {
+        take(await read([`${f}.id`]), [f])
+      } catch {
+        /* not a relation the caller can read: left as it was */
+      }
+    })
+  )
+  return out
+}
+
 function isEmpty(v: unknown): boolean {
   return (
     v === null ||
@@ -518,6 +562,22 @@ export async function computeFormState(
   let rows = data as FormFieldRow[]
   // No form: every field the collection has, as the plain record page lists them.
   if (!merged) rows = rows.map((r) => ({ ...r, layout_assigned: true, group_key: null }))
+
+  // Relation fields (zones, funding years, lines…) hold no column value: the
+  // stored record read never carries them, and every required one read as
+  // "missing" on a record that had them (army 11 f4 M2). Their linked rows are
+  // read AS THE CALLER, like the form shows them; a value the caller passed wins.
+  if (item) {
+    const aliases = aliasFieldsToLoad(rows, stored, given)
+    if (aliases.length) {
+      const linked = await loadLinkedValues(
+        aliases,
+        (fields) =>
+          items.readOne(caller, collection, item, ws, ['id', ...fields]) as Promise<Obj | null>
+      )
+      for (const [f, v] of Object.entries(linked)) if (!(f in given)) working[f] = v
+    }
+  }
 
   const [canRead, readable, updatable, canUpdate] = await Promise.all([
     principalAdmin ? Promise.resolve(true) : can(principal, 'read', collection).catch(() => false),

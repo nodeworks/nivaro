@@ -517,6 +517,21 @@ const NOTE_KIND_LABELS: Record<NoteKind, string> = {
   integration: 'Integration'
 }
 
+/** One-line preview of a thread entry: a comment's markup and mention
+ *  tokens flattened; a recorded note's text exactly as typed. */
+export function notePreviewText(
+  e:
+    | { kind: 'comment'; comment: { text: string } }
+    | { kind: 'related' | 'note'; note: { text: string } }
+): string {
+  const raw = e.kind === 'comment' ? e.comment.text : e.note.text
+  const flat = e.kind === 'comment' ? raw.replace(/<[^>]*>/g, ' ') : raw
+  return flat
+    .replace(/@\[([^\]]+)\]/g, '@$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** Note sources named `integrations:<collection>` are the obligation ledger
  *  (api services/integration-notes.ts), not an integration event source. */
 const OBLIGATION_NOTE_PREFIX = 'integrations:'
@@ -1032,11 +1047,10 @@ export function CommentPanel({
               last.kind === 'comment'
                 ? displayName(last.comment.user)
                 : (last.note.user_name ?? 'System')
-            const text = (last.kind === 'comment' ? last.comment.text : last.note.text)
-              .replace(/<[^>]*>/g, ' ')
-              .replace(/@\[([^\]]+)\]/g, '@$1')
-              .replace(/\s+/g, ' ')
-              .trim()
+            // A recorded note (a Send Back reason) is plain text as typed —
+            // "qty <5 per site>" must not lose its words to the tag strip a
+            // comment's markup needs (army 11 a1 F-5).
+            const text = notePreviewText(last)
             if (!text) return null
             return (
               <span className='mt-1 w-full truncate pl-6 text-[11.5px] text-slate-400'>

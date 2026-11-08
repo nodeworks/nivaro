@@ -295,9 +295,17 @@ export function resolveNotificationTargetFor(
       case 'home':
         hit = { type: 'path', path: '/' }
         break
-      case 'external':
-        hit = spec.url ? { type: 'external', url: spec.url } : null
+      case 'external': {
+        // A link into THIS app (the server makes admin paths absolute) navigates in place
+        // instead of opening a second tab of the same app.
+        const local = spec.url ? sameOriginPath(spec.url) : null
+        hit = local
+          ? { type: 'path', path: local }
+          : spec.url
+            ? { type: 'external', url: spec.url }
+            : null
         break
+      }
     }
     if (hit) return hit
     if (n.url) {

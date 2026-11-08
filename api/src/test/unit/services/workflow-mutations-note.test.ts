@@ -36,7 +36,8 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
   applyTransition: vi.fn(async () => ({ updatedInstance: { id: 'inst-1' }, newStateObj: null })),
   coerceBool: (v: unknown) => v === true || v === 1 || v === '1',
   resolveTransitionTarget: vi.fn(),
-  runAutoTransitions: vi.fn(async () => {})
+  runAutoTransitions: vi.fn(async () => {}),
+  flushChainEvents: vi.fn()
 }))
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn(() => {

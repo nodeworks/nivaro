@@ -87,12 +87,33 @@ export function buildDeactivationNotice(input: {
   const more = withWork.length > 5 ? ` and ${withWork.length - 5} more` : ''
   const message =
     withWork.length === 0
-      ? `${count === 1 ? 'They hold' : 'None of them hold'} no open work that needs handing on.`
+      ? count === 1
+        ? 'They hold no open work that needs handing on.'
+        : 'None of them hold open work that needs handing on.'
       : `${withWork.length} still ${withWork.length === 1 ? 'owns' : 'own'} open work that needs handing on: ${who}${more}. Hand it on from the Inactive people tool.`
   return {
-    subject: `${subject}${withWork.length ? ` — ${withWork.length} still own open work` : ''}`,
+    subject: `${subject}${withWork.length ? ` — ${withWork.length} still ${withWork.length === 1 ? 'owns' : 'own'} open work` : ''}`,
     message
   }
+}
+
+/**
+ * How the notice names a person: the name plus the mailbox, so "Robert Lee" the departed
+ * colleague is never read as "Robert Lee" the administrator (army 11). A redacted or
+ * legacy-anonymised account's own name/email ARE the stand-in, so it reads "Former user".
+ */
+export function noticePersonName(r: {
+  first_name?: unknown
+  last_name?: unknown
+  email?: unknown
+  is_redacted?: unknown
+}): string {
+  const email = String(r.email ?? '').trim()
+  if (r.is_redacted === true || r.is_redacted === 1 || /^Redacted_/i.test(email))
+    return 'Former user'
+  const name = [r.first_name, r.last_name].filter(Boolean).join(' ').trim()
+  if (!name) return email || 'Someone'
+  return email ? `${name} · ${email.toLowerCase()}` : name
 }
 
 /** Record people who just became unable to act. Synchronous, never throws. */
@@ -168,11 +189,10 @@ export async function flushDeactivationBatch(reason: DeactivationReason): Promis
           'id',
           withWork.slice(0, 5).map((p) => p.id)
         )
-        .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
-      for (const r of rows) {
-        const n = [r.first_name, r.last_name].filter(Boolean).join(' ') || String(r.email ?? '')
-        names.set(String(r.id).toUpperCase(), n || 'Someone')
-      }
+        .select('id', 'first_name', 'last_name', 'email', 'is_redacted')) as Array<
+        Record<string, unknown>
+      >
+      for (const r of rows) names.set(String(r.id).toUpperCase(), noticePersonName(r))
     }
   } catch {
     // The scan is the slow, optional part: the notice still goes, without the work count.

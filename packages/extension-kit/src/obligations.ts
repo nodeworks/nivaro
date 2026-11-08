@@ -73,4 +73,25 @@ export interface ObligationKindDef {
   /** The endpoint this kind's send goes to, as stored on the submission.
    *  Required before the sweep may re-fire anything. */
   endpoint_path?: string | null
+  /** Build the request from the record's CURRENT data — what the kind's own
+   *  sender would send right now. Offered to a PERSON as "Send current data"
+   *  when the stored request may be stale or there is none; the sweep never
+   *  calls it. Read-only: core sends the result through its normal send path.
+   *  Never declare it on a `human` kind. */
+  fresh_request?(database: Knex, item: string): Promise<FreshObligationRequest | FreshRefusal>
+}
+
+/** A request built from the record as it is now (see `fresh_request`). */
+export interface FreshObligationRequest {
+  /** Must be the kind's own `endpoint_path`. */
+  endpoint_path: string
+  body: Record<string, unknown>
+  /** What the partner will be told, in plain words for the confirm —
+   *  e.g. "Waiting on Level 3 Approval, requisition PW27-81371, no PO". */
+  summary: string
+}
+
+/** The record cannot be sent as it is (e.g. it has no partner id yet). */
+export interface FreshRefusal {
+  refused: string
 }

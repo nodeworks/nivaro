@@ -87,6 +87,8 @@ export async function portalRegistration(): Promise<LinkRegistration | null> {
 // The same resolver every other admin link uses — ADMIN_URL alone is the
 // portal on deployments where the headless frontend proxies /api.
 const adminBase = () => adminBaseUrl() ?? config.ADMIN_URL.replace(/\/$/, '')
+/** The admin app's origin (no trailing slash) — for in-app admin paths that need to be absolute. */
+export const adminPageBase = (): string => adminBase().replace(/\/$/, '')
 
 function fill(template: string, params: LinkParams): string {
   return template.replace(/\{(\w+)\}/g, (_, k: string) => {

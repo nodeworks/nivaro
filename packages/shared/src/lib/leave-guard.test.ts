@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { isLeavingLink } from './leave-guard'
+import { isLeavingControl, isLeavingLink, replayLeave } from './leave-guard'
 
 const here = { origin: window.location.origin, pathname: '/records/workflows/new', search: '' }
 const click = {
@@ -53,5 +53,53 @@ describe('isLeavingLink', () => {
     // The form inside a sheet: a link elsewhere in that sheet still leaves.
     sheet.appendChild(form)
     expect(isLeavingLink(click, link('/dashboard', {}, sheet), here, form)).toBe(true)
+  })
+})
+
+describe('isLeavingControl (army11 f3: New ▸ PO Request left without asking)', () => {
+  const click = {
+    button: 0,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    defaultPrevented: false
+  }
+  it('holds a control that opts in', () => {
+    const b = document.createElement('button')
+    b.setAttribute('data-leave-guard', '')
+    document.body.appendChild(b)
+    expect(isLeavingControl(click, b)).toBe(true)
+    expect(isLeavingControl({ ...click, metaKey: true }, b)).toBe(false)
+    b.remove()
+  })
+  it('ignores controls without the marker and ones inside the form', () => {
+    const form = document.createElement('div')
+    const b = document.createElement('button')
+    form.appendChild(b)
+    expect(isLeavingControl(click, b)).toBe(false)
+    b.setAttribute('data-leave-guard', '')
+    expect(isLeavingControl(click, b, form)).toBe(false)
+  })
+})
+
+describe('replayLeave (army11 review #2: Leave did nothing on the New menu)', () => {
+  it('clicks a control still on the page', () => {
+    const b = document.createElement('button')
+    document.body.appendChild(b)
+    let clicks = 0
+    b.addEventListener('click', () => clicks++)
+    expect(replayLeave(b, '/records/workflows/new', () => {})).toBe('clicked')
+    expect(clicks).toBe(1)
+    b.remove()
+  })
+  it('a menu row unmounted before Leave goes to its path through the host navigate', () => {
+    const b = document.createElement('button')
+    const go: string[] = []
+    expect(replayLeave(b, '/records/workflows/new', (p) => go.push(p))).toBe('navigated')
+    expect(go).toEqual(['/records/workflows/new'])
+  })
+  it('nothing to replay: says so instead of pretending', () => {
+    expect(replayLeave(document.createElement('button'), null, () => {})).toBe('lost')
   })
 })

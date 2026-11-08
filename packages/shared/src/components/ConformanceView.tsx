@@ -4,8 +4,9 @@ import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { get, post, put } from '../lib/commands'
 import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
 import { userErrorMessage } from '../lib/safe-error'
-import { cn } from '../lib/utils'
+import { cn, titleCase } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
+import { useOverviewFields } from './layout-editor/overview/overview-api'
 import { TipLayer } from './TipLayer'
 
 /**
@@ -150,6 +151,18 @@ const RULE_META: Record<string, { label: string; cls: string }> = {
     label: 'Not an option the picker offers',
     cls: 'bg-purple-500/10 text-purple-700 dark:text-purple-400'
   }
+}
+
+/** A finding's record as a person names it (army 11 O4-9: "#372501" was the
+ *  workflows row id of a record with no number). Never the internal id. */
+export function findingRecordName(label: string | null | undefined): string {
+  const l = String(label ?? '').trim()
+  return l || 'Record with no number'
+}
+
+/** Field names as their labels (army 11 O4-9: "workflow_lines · 159,295"). */
+export function findingFieldLabel(labels: Record<string, string>, field: string): string {
+  return labels[field] || titleCase(field)
 }
 
 /** Extension rules arrive as kebab ids ('forecast-missing') — read them as words. */
@@ -633,7 +646,7 @@ function RunHistory({
                 {relTime(r.started_at)}
               </td>
               <td className='px-3 py-1.5 text-slate-500 dark:text-muted-foreground'>
-                {r.triggered_by_name ?? '—'}
+                {r.triggered_by_name ?? 'Scheduled'}
               </td>
             </tr>
           ))}
@@ -675,6 +688,12 @@ function RunDetail({
   const [rule, setRule] = useState('')
   const [field, setField] = useState('')
   const [grouped, setGrouped] = useState(false)
+  const { data: fieldRows } = useOverviewFields(run.collection)
+  const fieldLabels = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const f of fieldRows ?? []) if (f.label) out[f.field] = f.label
+    return out
+  }, [fieldRows])
 
   const { data } = useQuery<{
     findings: Array<Finding | FindingGroup>
@@ -790,13 +809,13 @@ function RunDetail({
                 setPage(1)
               }}
               className={cn(
-                'rounded border px-1.5 py-0.5 font-mono text-[10.5px] transition-colors',
+                'rounded border px-1.5 py-0.5 text-[11px] transition-colors',
                 field === f.field
                   ? 'border-nvr-cyan/50 bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
                   : 'border-slate-200 text-slate-500 dark:border-border dark:text-muted-foreground'
               )}
             >
-              {f.field} · {Number(f.c).toLocaleString()}
+              {findingFieldLabel(fieldLabels, f.field)} · {Number(f.c).toLocaleString()}
             </button>
           ))}
         </div>
@@ -841,7 +860,7 @@ function RunDetail({
                     onClick={() => onOpenItem(g.item_id)}
                     className='text-[12.5px] font-medium text-nvr-cyan underline decoration-dotted underline-offset-2'
                   >
-                    {g.item_label || `#${g.item_id}`}
+                    {findingRecordName(g.item_label)}
                   </button>
                   <span className='rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-background dark:text-muted-foreground'>
                     {g.count} issue{g.count === 1 ? '' : 's'}
@@ -854,9 +873,9 @@ function RunDetail({
                         type='button'
                         onClick={() => onOpenItem(g.item_id, f.field)}
                         data-tip='Open the record at this field'
-                        className='w-[150px] shrink-0 text-left font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
+                        className='w-[150px] shrink-0 text-left text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
                       >
-                        {f.field}
+                        {findingFieldLabel(fieldLabels, f.field)}
                       </button>
                       <span
                         className={cn(
@@ -889,7 +908,7 @@ function RunDetail({
                       onClick={() => onOpenItem(f.item_id)}
                       className='text-left text-nvr-cyan underline decoration-dotted underline-offset-2'
                     >
-                      {f.item_label || `#${f.item_id}`}
+                      {findingRecordName(f.item_label)}
                     </button>
                   </td>
                   <td className='w-[160px] px-2 py-1.5'>
@@ -897,9 +916,9 @@ function RunDetail({
                       type='button'
                       onClick={() => onOpenItem(f.item_id, f.field)}
                       data-tip='Open the record at this field'
-                      className='font-mono text-[11px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
+                      className='text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-nvr-cyan dark:text-muted-foreground'
                     >
-                      {f.field}
+                      {findingFieldLabel(fieldLabels, f.field)}
                     </button>
                   </td>
                   <td className='w-[150px] px-2 py-1.5'>

@@ -8,6 +8,7 @@ import {
   Loader2,
   Minus,
   Search,
+  Send,
   UserPlus,
   Users,
   X,
@@ -36,7 +37,7 @@ import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-t
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { userCardQuery } from '../../lib/user-cards'
-import { cn, formatRelative, humanHours } from '../../lib/utils'
+import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
@@ -93,6 +94,9 @@ interface PipelineTransition {
   /** How many partner pushes the transition carries (#616) — the header
    *  pre-flights only these. */
   pushes?: number
+  /** Partners this move places an ORDER with (blocking pushes) — styled apart
+   *  from approvals and always confirmed, naming the partner (army 11 a2 F2). */
+  order_partners?: string[]
 }
 interface PipelineHistoryEntry {
   id: number
@@ -200,6 +204,12 @@ interface PipelinePanelData {
   /** Automatic transitions the engine stopped re-firing (#1217): their push
    *  was refused and nothing they would send has changed since. */
   auto_held?: HeldAutoTransition[]
+  /** Highlight rules this record matches ("On hold", "Sent back"). */
+  flags?: RecordFlag[]
+}
+interface RecordFlag {
+  name: string
+  color: string
 }
 interface HeldAutoTransition {
   transition_id: string
@@ -308,6 +318,27 @@ export function refusalCode(err: unknown): string | null {
 }
 
 /**
+ * A move refused because someone else is editing the record right now
+ * (409 RECORD_LOCKED with `move_anyway`, api record-transition.ts): the plain
+ * reason to show and that it may be done anyway. Null for anything else.
+ */
+export function lockedMoveOffer(err: unknown): { message: string; holder: string | null } | null {
+  if (refusalCode(err) !== 'RECORD_LOCKED') return null
+  const resp = (err as { response?: Record<string, unknown> & { data?: Record<string, unknown> } })
+    ?.response
+  const body = (resp?.data && typeof resp.data === 'object' ? resp.data : resp) as
+    | Record<string, unknown>
+    | undefined
+  if (body?.move_anyway !== true) return null
+  const holder = typeof body.locked_by_name === 'string' ? body.locked_by_name : null
+  const message =
+    typeof body.error === 'string' && body.error.trim()
+      ? body.error
+      : `${holder ?? 'Someone else'} is editing this record right now.`
+  return { message, holder }
+}
+
+/**
  * A refusal the record page can fix in place: the refusal code → the key of
  * the registry action that fixes it. Offered only when that action is
  * available to the caller for this collection (/bulk-actions/available judges
@@ -315,7 +346,10 @@ export function refusalCode(err: unknown): string | null {
  * Priority could only be set from the list's row menu).
  */
 export const REFUSAL_FIX_ACTIONS: Readonly<Record<string, string>> = {
-  PRIORITY_REQUIRED: 'priority'
+  PRIORITY_REQUIRED: 'priority',
+  // A held record does not move forward (efp-ops hold-gate, army 11): taking
+  // the hold off is one deliberate, noted step, then the move is tried again.
+  ON_HOLD: 'remove-hold'
 }
 
 export interface RefusalFixOffer {
@@ -372,6 +406,11 @@ function useTransitionSettle(queryKey: readonly unknown[]) {
 
 /** How long a button that newly appeared in the transition slot stays inert. */
 export const FRESH_BUTTON_MS = 1500
+/** The hover rule's end: past this a press always goes through, pointer or not.
+ *  A pointer that never moves (the person waited on the spot, a keyboard press,
+ *  an assistive click) left the next step's button dead until a reload (army 11
+ *  a1 F-12: "Fusion Submitted did nothing" four times over a minute). */
+export const FRESH_HOVER_MAX_MS = 4000
 
 /**
  * Buttons that appear in the transition slot after the panel first showed its
@@ -411,6 +450,7 @@ export class FreshButtonGuard {
   inert(id: string, now: number): boolean {
     const f = this.fresh.get(String(id).toUpperCase())
     if (!f) return false
+    if (now - f.at >= FRESH_HOVER_MAX_MS) return false
     return now - f.at < FRESH_BUTTON_MS || (f.hovered && !f.left)
   }
 
@@ -424,7 +464,7 @@ export class FreshButtonGuard {
       f.left = false
       return false
     }
-    if (f.hovered && !f.left) return false
+    if (f.hovered && !f.left && now - f.at < FRESH_HOVER_MAX_MS) return false
     this.fresh.delete(key)
     return true
   }
@@ -498,8 +538,16 @@ type ApprovalBriefData = {
   entered_at: string
   days_in_state: number
   revisions: number
-  field_changes: Array<{ field: string; old?: unknown; new: unknown }>
+  /** `auto`: a value the record derives itself (a built title), not typed by the editor. */
+  field_changes: Array<{
+    field: string
+    label?: string
+    old?: unknown
+    new: unknown
+    auto?: boolean
+  }>
   changed_total: number
+  changed_by_people?: number
   comments: number
   addendums: { count: number; cost_impact: number }
   edited_by: string[]
@@ -525,6 +573,47 @@ function fetchApprovalBrief(
 /** Brief lines that make a forward move ask first (army6 D6): tone warn or danger. */
 export function briefWarnings(lines: BriefLineView[] | null | undefined): BriefLineView[] {
   return (lines ?? []).filter((l) => l.tone === 'warn' || l.tone === 'danger')
+}
+
+/** One brief line's identity — the strip and the amber warning say a line once. */
+export function briefLineKey(l: Pick<BriefLineView, 'label' | 'text'>): string {
+  return `${(l.label ?? '').trim().toLowerCase()}|${(l.text ?? '').trim().toLowerCase()}`
+}
+
+/** "today" / "1 day ago" / "12 days ago" — never "0d ago". */
+export function briefAgeText(days: number | null | undefined): string {
+  const d = Math.max(0, Math.floor(Number(days) || 0))
+  if (d === 0) return 'today'
+  return d === 1 ? '1 day ago' : `${d} days ago`
+}
+
+/**
+ * Old / new values of one change, cut to `max` characters around where they
+ * first differ: "…f4 lock test A S1 B…" vs "…f4 lock test A S1 B4" instead of
+ * two identical "BT26CM 202014 ARMY11 Sudharsan f4 lo…". An empty old value
+ * (the field was blank) reads "(empty)"; `old: null` = there was no old value.
+ */
+export function briefDiffPair(
+  oldV: unknown,
+  newV: unknown,
+  max = 40
+): { old: string | null; new: string } {
+  const text = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(v))
+  const a = text(oldV)
+  const b = text(newV)
+  const shown = (s: string) => (s === '' ? '(empty)' : s)
+  if (oldV === undefined) return { old: null, new: cut(shown(b), 0, max) }
+  if (a.length <= max && b.length <= max) return { old: shown(a), new: shown(b) }
+  let p = 0
+  while (p < a.length && p < b.length && a[p] === b[p]) p++
+  const start = p > max / 2 ? p - Math.floor(max / 3) : 0
+  return { old: cut(shown(a), start, max), new: cut(shown(b), start, max) }
+}
+
+function cut(s: string, start: number, max: number): string {
+  const from = Math.min(start, Math.max(0, s.length - max))
+  const body = s.slice(from, from + max)
+  return `${from > 0 ? '…' : ''}${body}${from + max < s.length ? '…' : ''}`
 }
 
 /** How long a forward move waits for the brief before it goes on without it. */
@@ -590,6 +679,113 @@ function isSendBack(
   )
   const to = states.find((st) => String(st.id).toUpperCase() === String(tx.to_state).toUpperCase())
   return !!cur && !!to && to.sort < cur.sort
+}
+
+/**
+ * Moves that always stop and ask, whatever their note setting: a move into a
+ * finished state (PO Received → Completed closed a $60,000 request in one
+ * click, army 11 a1 F-11) and a move that places a partner order (a2 F2).
+ * Send backs and cancels keep their own rules.
+ */
+export function asksFirst(
+  tx: Pick<PipelineTransition, 'to_state' | 'order_partners'> | undefined,
+  states: Array<Pick<PipelineState, 'id' | 'sort' | 'is_terminal' | 'key'>>,
+  currentStateId: string | null | undefined
+): boolean {
+  if (!tx) return false
+  if ((tx.order_partners?.length ?? 0) > 0) return true
+  if (isSendBack(tx, states, currentStateId)) return false
+  const to = states.find((st) => String(st.id).toUpperCase() === String(tx.to_state).toUpperCase())
+  return !!to?.is_terminal && !/(^|_)cancel/i.test(String(to.key ?? ''))
+}
+
+const FLAG_TONE: Record<string, string> = {
+  red: 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300',
+  amber:
+    'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
+  yellow:
+    'border-yellow-200 bg-yellow-50 text-yellow-800 dark:border-yellow-500/30 dark:bg-yellow-500/10 dark:text-yellow-300',
+  green:
+    'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300',
+  blue: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300',
+  purple:
+    'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300'
+}
+
+/** The record's highlight flags as chips beside its state ("On hold"). */
+export function RecordFlagChips({ flags }: { flags?: RecordFlag[] | null }) {
+  if (!flags || flags.length === 0) return null
+  return (
+    <>
+      {flags.map((f) => (
+        <span
+          key={f.name}
+          data-record-flag={f.name}
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 self-center rounded-full border px-2 py-0.5 text-[11px] font-semibold',
+            FLAG_TONE[f.color] ?? FLAG_TONE.amber
+          )}
+        >
+          <span className='h-1.5 w-1.5 rounded-full bg-current' aria-hidden />
+          {f.name}
+        </span>
+      ))}
+    </>
+  )
+}
+
+/** A partner name as people say it ("Fusion IIP" → "Fusion"). */
+function partnerName(api: string): string {
+  return api.replace(/\s+IIP$/i, '')
+}
+
+/**
+ * In the confirm of a move that places an order: which partner gets it for
+ * THIS record (the pre-flight the button's chip already read) and that it
+ * cannot be called back from here.
+ */
+function OrderSendNote({
+  collection,
+  item,
+  tx
+}: {
+  collection: string
+  item: string
+  tx: Pick<PipelineTransition, 'id' | 'order_partners'> | null | undefined
+}) {
+  const client = useNivaroClient()
+  const partners = tx?.order_partners ?? []
+  const { data } = useQuery({
+    queryKey: ['push-preflight', collection, item, 't', tx?.id ?? ''],
+    queryFn: () =>
+      client
+        .request<{ data: { pushes?: Array<{ api_name: string; status: string }> } }>(
+          get(`/integration-preview/${collection}/${encodeURIComponent(item)}/preflight`, {
+            transition_id: tx?.id ?? ''
+          })
+        )
+        .then((r) => r.data),
+    enabled: partners.length > 0 && !!tx?.id,
+    staleTime: 20_000
+  })
+  if (partners.length === 0) return null
+  const sending = data?.pushes
+    ? data.pushes
+        .filter((p) => p.status === 'would_push' && partners.includes(p.api_name))
+        .map((p) => partnerName(p.api_name))
+    : null
+  const names = [...new Set(sending ?? partners.map(partnerName))]
+  return (
+    <p
+      data-order-send-note
+      className='flex items-start gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[12px] text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200'
+    >
+      <Send className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+      {sending && sending.length === 0
+        ? 'Nothing is sent to a partner for this record — it only moves the record on.'
+        : `This places an order with ${names.join(' or ')}. It cannot be called back from here.`}
+    </p>
+  )
 }
 
 /** Is a send back on offer in these answers (decides whether the chain is read)? */
@@ -838,7 +1034,7 @@ function RefusalFixPanel({
       data-refusal-fix={offer.code}
     >
       <p className='text-[12px] text-amber-950 dark:text-amber-100'>
-        You can fix this here: {action.label.toLowerCase()} this record, then it is tried again.
+        You can fix this here: {action.label}, then the move is tried again.
       </p>
       {action.require_reason && (
         <input
@@ -1099,6 +1295,7 @@ function StateTrack({
       .sort((a, b) => a.sort - b.sort)
   })()
   if (relevant.length < 2) return null
+  const currentIndex = relevant.findIndex((st) => st.id === currentStateId)
 
   // Who moved the record across this gap. Position-based, not exact-pair:
   // a transition that SKIPS steps (manager approval jumping straight to VP)
@@ -1118,7 +1315,10 @@ function StateTrack({
         const f = trackIndex.get(h.from_state)
         const t = trackIndex.get(h.to_state)
         if (f == null || t == null) return false
-        return (f === i && t > i) || (t === i && f > i)
+        // A forward hop sits on the segment leaving its origin; a send back
+        // on the segment leading INTO the step that sent it back (army 11
+        // a1 F-8: it sat beside the destination, far from who sent it).
+        return (f === i && t > i) || (t < f && f - 1 === i)
       })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
   }
@@ -1169,7 +1369,11 @@ function StateTrack({
           {relevant.map((s, i) => {
             const isCurrent = s.id === currentStateId
             const isVisited = visitedIds.has(s.id)
-            const isDone = isVisited && !isCurrent
+            // A step after the current one is not done THIS round, even when
+            // the record passed it before a send back (army 11 a1 F-8: Level 2
+            // kept its ✓ while the record was back at Level 1).
+            const isDone = isVisited && !isCurrent && (currentIndex < 0 || i < currentIndex)
+            const doneBefore = isVisited && !isCurrent && !isDone
             const crossed = !isVisited && !isCurrent ? crossedBy.get(s.id) : undefined
             const predicted = !isVisited && !isCurrent ? skippedStates?.get(s.id) : undefined
             const skipReasons =
@@ -1194,7 +1398,12 @@ function StateTrack({
                       isCurrent || isDone ? 'nvr-fill-sweep' : ''
                     }`}
                     // Per-state help text (#81) — instant tip via TipLayer.
-                    data-tip={s.description || undefined}
+                    data-tip={
+                      doneBefore
+                        ? `Passed before the record was sent back — it needs this step again.${s.description ? ` ${s.description}` : ''}`
+                        : s.description || undefined
+                    }
+                    data-track-again={doneBefore || undefined}
                     style={{
                       backgroundColor:
                         isCurrent || isDone ? nodeColor : isSkipped ? 'transparent' : '#f1f5f9',
@@ -1251,10 +1460,15 @@ function StateTrack({
                     </Tooltip>
                   ) : (
                     <span
-                      className='w-full break-words text-center leading-snug'
+                      // Steps still to come: slate-500 on white (4.8:1) — the old
+                      // #94a3b8 was near-invisible in light mode (army 11 a1).
+                      className={cn(
+                        'w-full break-words text-center leading-snug',
+                        !isCurrent && !isDone && 'text-slate-500 dark:text-slate-400'
+                      )}
                       style={{
                         fontSize: '11px',
-                        color: isCurrent ? nodeColor : isDone ? '#475569' : '#94a3b8',
+                        color: isCurrent ? nodeColor : isDone ? '#475569' : undefined,
                         fontWeight: isCurrent ? 600 : isDone ? 500 : 400,
                         wordBreak: 'break-word'
                       }}
@@ -2284,7 +2498,16 @@ export function PipelinePanel({
  * untouched since entering the state renders one quiet line rather than
  * nothing, because "no changes" is itself the answer.
  */
-function ApprovalBriefStrip({ collection, item }: { collection: string; item: string | number }) {
+function ApprovalBriefStrip({
+  collection,
+  item,
+  omitLines
+}: {
+  collection: string
+  item: string | number
+  /** Brief lines already shown in the amber warning below — said once (army11 f4 M5). */
+  omitLines?: BriefLineView[]
+}) {
   const client = useNivaroClient()
   const { data } = useQuery({
     queryKey: approvalBriefKey(collection, item),
@@ -2293,12 +2516,10 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
     retry: false
   })
   if (!data) return null
-
-  const fmt = (v: unknown) => {
-    if (v === null || v === undefined || v === '') return '—'
-    const s = String(v)
-    return s.length > 36 ? `${s.slice(0, 36)}…` : s
-  }
+  // What people changed — a title the record rebuilt is not someone's edit.
+  const byPeople = data.changed_by_people ?? data.changed_total
+  const omitted = new Set((omitLines ?? []).map(briefLineKey))
+  const lines = (data.lines ?? []).filter((l) => !omitted.has(briefLineKey(l)))
 
   return (
     <div className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[11.5px] dark:border-border dark:bg-card'>
@@ -2306,20 +2527,26 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
         <span className='font-medium text-slate-700 dark:text-foreground'>
           Since entering this state
         </span>{' '}
-        ({data.days_in_state}d ago):{' '}
+        ({briefAgeText(data.days_in_state)}):{' '}
         {data.changed_total === 0 && data.comments === 0 && data.addendums.count === 0 ? (
           <span>no changes to this record.</span>
         ) : (
           <>
-            {data.changed_total > 0 && (
+            {byPeople > 0 && (
               <span>
-                {data.changed_total} field{data.changed_total === 1 ? '' : 's'} changed
+                {byPeople} field{byPeople === 1 ? '' : 's'} changed
                 {data.edited_by.length > 0 ? ` by ${data.edited_by.join(', ')}` : ''}
               </span>
             )}
+            {byPeople === 0 &&
+              data.changed_total > 0 &&
+              data.comments === 0 &&
+              data.addendums.count === 0 && (
+                <span>only values the record fills in itself changed.</span>
+              )}
             {data.comments > 0 && (
               <span>
-                {data.changed_total > 0 ? ' · ' : ''}
+                {byPeople > 0 ? ' · ' : ''}
                 {data.comments} comment{data.comments === 1 ? '' : 's'}
               </span>
             )}
@@ -2337,22 +2564,31 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
       </p>
       {data.field_changes.length > 0 && (
         <div className='mt-1 space-y-0.5'>
-          {data.field_changes.slice(0, 5).map((f) => (
-            <p
-              key={f.field}
-              className='font-mono text-[10.5px] text-slate-500 dark:text-muted-foreground'
-            >
-              {f.field}:{' '}
-              {f.old !== undefined && (
-                <>
-                  <span className='text-red-600 line-through dark:text-red-400'>
-                    {fmt(f.old)}
-                  </span>{' '}
-                </>
-              )}
-              <span className='text-emerald-600 dark:text-emerald-400'>{fmt(f.new)}</span>
-            </p>
-          ))}
+          {data.field_changes.slice(0, 5).map((f) => {
+            // Labels, not column keys (army11 f3/f4 M5, a1 F-4); a long value is cut
+            // around where the two differ, so the change itself stays visible.
+            const pair = briefDiffPair(f.old, f.new)
+            return (
+              <p
+                key={f.field}
+                data-brief-change={f.field}
+                className='text-[11px] text-slate-500 dark:text-muted-foreground'
+              >
+                <span className='font-medium text-slate-700 dark:text-foreground'>
+                  {f.label || titleCase(f.field)}
+                </span>
+                {f.auto ? <span> (updated automatically)</span> : null}:{' '}
+                {pair.old !== null && (
+                  <>
+                    <span className='text-red-600 line-through dark:text-red-400'>{pair.old}</span>
+                    <span aria-hidden='true'> → </span>
+                    <span className='sr-only'> changed to </span>
+                  </>
+                )}
+                <span className='text-emerald-700 dark:text-emerald-400'>{pair.new}</span>
+              </p>
+            )
+          })}
           {data.field_changes.length > 5 && (
             <p className='text-[10.5px] text-slate-400'>
               +{data.field_changes.length - 5} more — see History for the full trail
@@ -2360,7 +2596,7 @@ function ApprovalBriefStrip({ collection, item }: { collection: string; item: st
           )}
         </div>
       )}
-      {(data.lines ?? []).map((l) => (
+      {lines.map((l) => (
         <p
           key={`${l.label}:${l.text}`}
           data-brief-line={l.label}
@@ -2436,7 +2672,7 @@ function PipelinePanelInner({
   // guard below is awaited, so the button had not disabled yet) and the twin
   // came back as an error toast.
   const transitionBusyRef = useRef(false)
-  const runTransition = (vars: { transition_id: string; comment?: string }) => {
+  const runTransition = (vars: { transition_id: string; comment?: string; lock_ack?: boolean }) => {
     if (transitionBusyRef.current) return
     transitionBusyRef.current = true
     setFixOffer(null)
@@ -2476,6 +2712,8 @@ function PipelinePanelInner({
     // transition is configured to want a note.
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
+    // Terminal moves and partner orders always ask (army 11).
+    const always = asksFirst(tx, data?.states ?? [], data?.instance?.current_state)
     if (mode !== 'optional' && mode !== 'required') {
       // army6 D6 — a forward move whose brief warns (forecast over / left) asks first.
       if (tx && !isSendBack(tx, data?.states ?? [], data?.instance?.current_state)) {
@@ -2486,11 +2724,16 @@ function PipelinePanelInner({
         } finally {
           transitionBusyRef.current = false
         }
-        if (warnings.length > 0) {
+        if (warnings.length > 0 || always) {
           setForwardWarning(warnings)
           setPendingTransition(txId)
           return
         }
+      }
+      if (always) {
+        setForwardWarning([])
+        setPendingTransition(txId)
+        return
       }
       runTransition({ transition_id: txId })
       return
@@ -2591,18 +2834,22 @@ function PipelinePanelInner({
     mutationFn: ({
       transition_id,
       comment,
-      reviewed
+      reviewed,
+      lock_ack
     }: {
       transition_id: string
       comment?: string
       /** Set by the requirements dialog's re-submit: the rows were just reviewed. */
       reviewed?: boolean
+      /** "<name> is editing this record" was shown and the person moves it anyway. */
+      lock_ack?: boolean
     }) =>
       client.request(
         post(`/pipelines/instance/${collection}/${item}/transition`, {
           transition_id,
           comment,
-          ...(reviewed ? { reviewed: true } : {})
+          ...(reviewed ? { reviewed: true } : {}),
+          ...(lock_ack ? { lock_ack: true } : {})
         })
       ),
     onMutate: (variables) => ({
@@ -2636,6 +2883,26 @@ function PipelinePanelInner({
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {
         queryClient.invalidateQueries({ queryKey })
+        return
+      }
+      // Someone else is editing it right now (army 11 f4 M4): say who, and let
+      // the person wait or move it anyway — never a dead "Failed" toast.
+      const lockedMove = lockedMoveOffer(err)
+      if (lockedMove) {
+        setPendingTransition(null)
+        const label =
+          [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+            (t) => t.id === variables.transition_id
+          )?.label ?? 'Move'
+        toast.warning(lockedMove.message, {
+          id: `nvr-locked-move:${collection}:${String(item)}`,
+          duration: 20_000,
+          action: {
+            label: `${label} anyway`,
+            onClick: () => runTransition({ ...variables, lock_ack: true })
+          },
+          cancel: { label: 'Wait', onClick: () => {} }
+        })
         return
       }
       const requirements = transitionRequirementsFromError(err)
@@ -2870,7 +3137,8 @@ function PipelinePanelInner({
         )}
       </div>
       <LandingNote landing={landing} />
-      <ApprovalBriefStrip collection={collection} item={item} />
+      <OrderSendNote collection={collection} item={String(item)} tx={pendingTx} />
+      <ApprovalBriefStrip collection={collection} item={item} omitLines={forwardWarning} />
       <ForwardMoveWarning lines={forwardWarning} />
       <input
         type='text'
@@ -2950,6 +3218,7 @@ function PipelinePanelInner({
               </span>
             )}
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+            <RecordFlagChips flags={data?.flags} />
             {(data?.auto_held?.length ?? 0) > 0 && (
               <span
                 className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'
@@ -3232,7 +3501,7 @@ function PipelineTransitionButtonsInner({
   // guard below is awaited, so the button had not disabled yet) and the twin
   // came back as an error toast.
   const transitionBusyRef = useRef(false)
-  const runTransition = (vars: { transition_id: string; comment?: string }) => {
+  const runTransition = (vars: { transition_id: string; comment?: string; lock_ack?: boolean }) => {
     if (transitionBusyRef.current) return
     transitionBusyRef.current = true
     setFixOffer(null)
@@ -3272,6 +3541,8 @@ function PipelineTransitionButtonsInner({
     // transition is configured to want a note.
     const tx = (transitions ?? []).find((t) => t.id === txId)
     const mode = String((tx as { comment_mode?: string } | undefined)?.comment_mode ?? 'none')
+    // Terminal moves and partner orders always ask (army 11).
+    const always = asksFirst(tx, data?.states ?? [], data?.instance?.current_state)
     if (mode !== 'optional' && mode !== 'required') {
       // army6 D6 — a forward move whose brief warns (forecast over / left) asks first.
       if (tx && !isSendBack(tx, data?.states ?? [], data?.instance?.current_state)) {
@@ -3282,11 +3553,16 @@ function PipelineTransitionButtonsInner({
         } finally {
           transitionBusyRef.current = false
         }
-        if (warnings.length > 0) {
+        if (warnings.length > 0 || always) {
           setForwardWarning(warnings)
           setPendingTransition(txId)
           return
         }
+      }
+      if (always) {
+        setForwardWarning([])
+        setPendingTransition(txId)
+        return
       }
       runTransition({ transition_id: txId })
       return
@@ -3345,18 +3621,22 @@ function PipelineTransitionButtonsInner({
     mutationFn: ({
       transition_id,
       comment,
-      reviewed
+      reviewed,
+      lock_ack
     }: {
       transition_id: string
       comment?: string
       /** Set by the requirements dialog's re-submit: the rows were just reviewed. */
       reviewed?: boolean
+      /** "<name> is editing this record" was shown and the person moves it anyway. */
+      lock_ack?: boolean
     }) =>
       client.request(
         post(`/pipelines/instance/${collection}/${item}/transition`, {
           transition_id,
           comment,
-          ...(reviewed ? { reviewed: true } : {})
+          ...(reviewed ? { reviewed: true } : {}),
+          ...(lock_ack ? { lock_ack: true } : {})
         })
       ),
     onMutate: (variables) => ({
@@ -3390,6 +3670,26 @@ function PipelineTransitionButtonsInner({
       // request): nothing was done twice — refresh quietly, no error toast.
       if (isDuplicateTransition(err)) {
         queryClient.invalidateQueries({ queryKey })
+        return
+      }
+      // Someone else is editing it right now (army 11 f4 M4): say who, and let
+      // the person wait or move it anyway — never a dead "Failed" toast.
+      const lockedMove = lockedMoveOffer(err)
+      if (lockedMove) {
+        setPendingTransition(null)
+        const label =
+          [...(data?.available_transitions ?? []), ...(data?.all_transitions ?? [])].find(
+            (t) => t.id === variables.transition_id
+          )?.label ?? 'Move'
+        toast.warning(lockedMove.message, {
+          id: `nvr-locked-move:${collection}:${String(item)}`,
+          duration: 20_000,
+          action: {
+            label: `${label} anyway`,
+            onClick: () => runTransition({ ...variables, lock_ack: true })
+          },
+          cancel: { label: 'Wait', onClick: () => {} }
+        })
         return
       }
       const requirements = transitionRequirementsFromError(err)
@@ -3575,8 +3875,13 @@ function PipelineTransitionButtonsInner({
               : 'flex shrink-0 items-center justify-end gap-2'
           }
         >
+          {/* A hold is seen where Approve is pressed (army 11 a1 F-2). */}
+          <RecordFlagChips flags={data?.flags} />
           {Array.from(byLabel.entries()).map(([label, txs]) => {
-            const txColor = txs[0]?.color ?? null
+            // A partner order never wears an approval colour (army 11 a2 F2):
+            // neutral outline + a send glyph, and it always asks first.
+            const isOrder = txs.some((t) => (t.order_partners?.length ?? 0) > 0)
+            const txColor = isOrder ? null : (txs[0]?.color ?? null)
             const isActive = txs.some((t) => t.id === pendingTransition)
             const colorStyle = (active: boolean) =>
               txColor
@@ -3603,7 +3908,11 @@ function PipelineTransitionButtonsInner({
                     if (freshTx.press(tx.id)) void trySetPending(tx.id)
                   }}
                 >
-                  {running && <Loader2 className='h-3 w-3 animate-spin' />}
+                  {running ? (
+                    <Loader2 className='h-3 w-3 animate-spin' />
+                  ) : (
+                    isOrder && <Send className='h-3 w-3' aria-hidden />
+                  )}
                   {label}
                 </Button>
               )
@@ -3674,7 +3983,8 @@ function PipelineTransitionButtonsInner({
             )}
           </div>
           <LandingNote landing={landing} />
-          <ApprovalBriefStrip collection={collection} item={item} />
+          <OrderSendNote collection={collection} item={String(item)} tx={pendingTx} />
+          <ApprovalBriefStrip collection={collection} item={item} omitLines={forwardWarning} />
           <ForwardMoveWarning lines={forwardWarning} />
           <input
             type='text'

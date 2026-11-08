@@ -17,7 +17,16 @@ import {
   Zap
 } from 'lucide-react'
 import type React from 'react'
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { createPortal } from 'react-dom'
 import {
   type ChangeReasonChallenge,
@@ -132,10 +141,10 @@ import {
   useReimportHandler
 } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { isOwnWrite } from '../../lib/own-writes'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions } from '../../lib/format-value'
+import { isOwnWrite } from '../../lib/own-writes'
 import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import { midairCollisionOf } from '../../lib/record-outbox'
@@ -164,6 +173,7 @@ import {
   useCompareSeries
 } from './CompareSeries'
 import { FieldRenderer, resolveOptionFilterTokens } from './FieldRenderer'
+import { nameFieldControl, primaryControl } from './field-a11y'
 import { GridBulkEditDialog } from './GridBulkEditDialog'
 import {
   applyDisplayTemplate,
@@ -196,6 +206,7 @@ import { LineCollisionDialog } from './MidairCollisionDialog'
 import { NestedRelationEditor } from './NestedRelationEditor'
 import {
   type LiveRowsCtx,
+  type OpenEditorCommit,
   type StagedRelOps,
   useLiveRows,
   useO2MStaging,
@@ -2121,6 +2132,10 @@ export function InlineTableField({
      *  validation rule, a computed total too large) — highlighted like a
      *  missing one but never labelled "required" (army6 L2). */
     invalid?: string[]
+    /** Why each `invalid` cell was refused — said under the cell, tied to its
+     *  input (army11 f1/f3: "Quantity can't be negative" printed under the
+     *  grid's SUM row, far from QTY, or not seen at all). */
+    messages?: Record<string, string>
   }
   /** Fields a 'lock' rule can make read-only — the ones that wait on the
    *  first lock evaluation before accepting input. */
@@ -2134,6 +2149,11 @@ export function InlineTableField({
     [rowRules]
   )
   const [editState, setEditState] = useState<GridEditState | null>(null)
+  // Ids for the line editor's cells: each caption names its control and each
+  // refusal message describes it (army11 f3: no editor field had a name).
+  const editorIdBase = useId()
+  const lineCellId = (field: string, part: 'cell' | 'label' | 'error') =>
+    `${editorIdBase}-${field}-${part}`
   const editStateRef = useRef<GridEditState | null>(null)
   // Row presence: tell the host which SAVED row this user is editing right
   // now (window event — the record-presence hook relays it into the record
@@ -2216,7 +2236,65 @@ export function InlineTableField({
   })
   useEffect(() => {
     editStateRef.current = editState
+    if (!editState) editorTypedRef.current = null
   }, [editState])
+  // army11 f1 — the record's moves (Submit, Approve…) commit an open line
+  // editor first: a typed-but-unstaged line used to stay in its editor while
+  // the record moved on the old amount. Only an editor the person typed in
+  // counts; an untouched open editor holds nothing.
+  const editorTypedRef = useRef<string | null>(null)
+  const saveEditFlightRef = useRef<Promise<boolean> | null>(null)
+  const commitOpenEditorRef = useRef<() => Promise<OpenEditorCommit>>(async () => ({
+    ok: true,
+    committed: false
+  }))
+  commitOpenEditorRef.current = async () => {
+    const st = editStateRef.current
+    if (!st) {
+      // Its outside-click commit may still be running.
+      const flight = saveEditFlightRef.current
+      return flight ? { ok: await flight, committed: true } : { ok: true, committed: false }
+    }
+    if (editorTypedRef.current !== st.rowId && !saveEditFlightRef.current)
+      return { ok: true, committed: false }
+    const label =
+      st.rowId === 'new'
+        ? 'The new line'
+        : st.rowId.startsWith('pending:')
+          ? `Line ${Number(st.rowId.slice('pending:'.length)) + rows.length + 1}`
+          : lineLabelOf(rows, st.rowId, rowOrderField)
+    const ok = await saveEdit()
+    return { ok, committed: ok, label }
+  }
+  // army 11 f4 L1: while the row editor holds a typed change (or the bulk
+  // dialog was typed in and is still open), the form keeps the edit lock.
+  const noteLineDraft = staging?.noteLineDraft
+  const editorHolding = !!editState && editorTypedRef.current === (editState.rowId ?? null)
+  useEffect(() => {
+    if (!noteLineDraft) return
+    noteLineDraft(`${editorIdBase}:row`, editorHolding)
+  }, [noteLineDraft, editorIdBase, editorHolding])
+  const [bulkTyped, setBulkTyped] = useState(false)
+  useEffect(() => {
+    if (!bulkEditOpen) setBulkTyped(false)
+  }, [bulkEditOpen])
+  useEffect(() => {
+    if (!noteLineDraft) return
+    noteLineDraft(`${editorIdBase}:bulk`, bulkEditOpen && bulkTyped)
+  }, [noteLineDraft, editorIdBase, bulkEditOpen, bulkTyped])
+  useEffect(
+    () => () => {
+      noteLineDraft?.(`${editorIdBase}:row`, false)
+      noteLineDraft?.(`${editorIdBase}:bulk`, false)
+    },
+    [noteLineDraft, editorIdBase]
+  )
+  const registerOpenEditor = staging?.registerOpenEditor
+  useEffect(() => {
+    if (!registerOpenEditor) return
+    registerOpenEditor(editorIdBase, () => commitOpenEditorRef.current())
+    return () => registerOpenEditor(editorIdBase, null)
+  }, [registerOpenEditor, editorIdBase])
   // Clicking anywhere outside the row editor commits it — same as Save.
   // Portaled layers (combobox panels, Radix poppers, dialogs, overlays) are
   // part of the interaction even though they live outside the table's DOM.
@@ -5603,6 +5681,35 @@ export function InlineTableField({
     setTimelineOpen(false)
   }
 
+  /** A line Save refused for cell VALUES: each message goes under its cell
+   *  (aria-invalid + describedby), and focus goes to the first one. The bar
+   *  under the grid is kept for refusals no single cell owns. */
+  function refuseLineCells(errs: Array<{ field: string; message: string }>) {
+    setUniqueError(null)
+    setEditState((s) =>
+      s
+        ? {
+            ...s,
+            invalid: errs.map((b) => b.field),
+            messages: Object.fromEntries(errs.map((b) => [b.field, b.message])),
+            missing: undefined
+          }
+        : s
+    )
+    if (typeof document === 'undefined' || errs.length === 0) {
+      setUniqueError(errs.map((b) => b.message).join(' · ') || null)
+      return
+    }
+    requestAnimationFrame(() => {
+      // A refused cell the editor does not show (a computed total kept off the
+      // panel) still needs its words: those go to the bar under the grid.
+      const unshown = errs.filter((b) => !document.getElementById(lineCellId(b.field, 'cell')))
+      if (unshown.length) setUniqueError(unshown.map((b) => b.message).join(' · '))
+      const first = errs.find((b) => !unshown.includes(b))
+      if (first) primaryControl(document.getElementById(lineCellId(first.field, 'cell')))?.focus()
+    })
+  }
+
   function startNew() {
     if (readOnly) return
     setEditState({ rowId: 'new', draft: { ...rowDefaultSeed }, locksPending: lockTargets.size > 0 })
@@ -5634,6 +5741,7 @@ export function InlineTableField({
     staging?.noteEditIntent?.()
     const cur = editStateRef.current
     const rowId = cur?.rowId ?? null
+    editorTypedRef.current = rowId
     if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
     for (const k of Object.keys(patch)) draftKeySeqRef.current.seqs.set(k, ++ruleEvalSeqRef.current)
     const nextDraft = applyComputedFields({ ...(cur?.draft ?? {}), ...patch })
@@ -5646,6 +5754,7 @@ export function InlineTableField({
     staging?.noteEditIntent?.()
     const cur = editStateRef.current
     const rowId = cur?.rowId ?? null
+    editorTypedRef.current = rowId
     if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
     const seq = ++ruleEvalSeqRef.current
     draftKeySeqRef.current.seqs.set(k, seq)
@@ -5725,7 +5834,18 @@ export function InlineTableField({
   /** Resolves true when the row COMMITTED (saved, staged, or closed as a
    *  no-op) and false when it stayed open — a required field missing, a
    *  unique conflict, a change-reason challenge, or a failed write. */
-  async function saveEdit(): Promise<boolean> {
+  // One line commit at a time: the outside-click commit (mousedown on the
+  // header's Submit) and the move's own commit (the form asks every open
+  // editor first) must not stage the same line twice.
+  function saveEdit(): Promise<boolean> {
+    if (saveEditFlightRef.current) return saveEditFlightRef.current
+    const p = saveEditNow().finally(() => {
+      if (saveEditFlightRef.current === p) saveEditFlightRef.current = null
+    })
+    saveEditFlightRef.current = p
+    return p
+  }
+  async function saveEditNow(): Promise<boolean> {
     if (!editState) return false
     // If the user opened ANOTHER row while this save was in flight (outside
     // click commits, then the click lands on the next row), finishing must
@@ -5795,10 +5915,7 @@ export function InlineTableField({
       return check.ok ? [] : [{ field: c.field, message: check.message }]
     })
     if (badNumbers.length > 0) {
-      setUniqueError(badNumbers.map((b) => b.message).join(' · '))
-      setEditState((s) =>
-        s ? { ...s, invalid: badNumbers.map((b) => b.field), missing: undefined } : s
-      )
+      refuseLineCells(badNumbers)
       return false
     }
     // The line collection's validation_rules (min 0 on a quantity, …), judged
@@ -5819,10 +5936,7 @@ export function InlineTableField({
       savedForCheck ? { ...savedForCheck, ...editState.draft } : editState.draft
     )
     if (ruleErrs.length > 0) {
-      setUniqueError(ruleErrs.map((b) => b.message).join(' · '))
-      setEditState((s) =>
-        s ? { ...s, invalid: ruleErrs.map((b) => b.field), missing: undefined } : s
-      )
+      refuseLineCells(ruleErrs)
       return false
     }
     // army6 M4: the line's computed money columns (Amount = qty × price) are
@@ -5839,10 +5953,7 @@ export function InlineTableField({
           : lineLabelOf(rows, editState.rowId, rowOrderField)
     )
     if (computedErrs.length > 0) {
-      setUniqueError(computedErrs.map((b) => b.message).join(' · '))
-      setEditState((s) =>
-        s ? { ...s, invalid: computedErrs.map((b) => b.field), missing: undefined } : s
-      )
+      refuseLineCells(computedErrs)
       return false
     }
     // Sum cap (options.sum_cap): the grid's total for `field` — with this
@@ -7476,9 +7587,22 @@ export function InlineTableField({
             }
             const isRequiredMiss = !!editState?.missing?.includes(c.field)
             const isMissing = isRequiredMiss || !!editState?.invalid?.includes(c.field)
+            const cellMessage = editState?.invalid?.includes(c.field)
+              ? editState?.messages?.[c.field]
+              : undefined
+            const labelId = lineCellId(c.field, 'label')
+            const errorId = lineCellId(c.field, 'error')
+            const a11y = {
+              required: !!c.required,
+              hasError: isMissing,
+              errorId,
+              describe: !!cellMessage
+            }
             return (
               <div
                 key={c.field}
+                id={lineCellId(c.field, 'cell')}
+                ref={(el) => nameFieldControl(el, labelId, a11y)}
                 data-grid-cell={cellKey(args.rowId, c.field)}
                 className={cn(
                   'flex min-w-0 flex-col gap-1',
@@ -7492,7 +7616,7 @@ export function InlineTableField({
                     isMissing ? 'text-red-600 dark:text-red-400' : 'text-slate-400'
                   )}
                 >
-                  {label}
+                  <span id={labelId}>{label}</span>
                   {isRequiredMiss && (
                     <span className='ml-1 normal-case tracking-normal'>· required</span>
                   )}
@@ -7626,6 +7750,16 @@ export function InlineTableField({
                       </div>
                     )
                   })()}
+                {cellMessage && (
+                  <p
+                    id={errorId}
+                    role='alert'
+                    data-line-cell-error={c.field}
+                    className='text-[11.5px] leading-snug text-red-600 dark:text-red-400'
+                  >
+                    {cellMessage}
+                  </p>
+                )}
               </div>
             )
           })}
@@ -7791,7 +7925,19 @@ export function InlineTableField({
       />
       {lineConflicts && lineConflicts.length > 0 && (
         <LineCollisionDialog
-          lines={lineConflicts}
+          lines={lineConflicts.map((l) => ({
+            ...l,
+            // Merge recomputes these from the merged inputs (Rob, army 11).
+            derived: computedWriteCols.map((c) => ({
+              field: c.field,
+              formula: String(c.computed_formula)
+            }))
+          }))}
+          hideField={(_l, f) =>
+            childRelations.some(
+              (r) => r.many_collection === relatedCollection && r.many_field === f
+            ) || !!cols.find((c) => c.field === f)?.hidden
+          }
           intro='Someone else saved these line values after this table loaded, so your change was not written. Pick which value wins for each.'
           cancelLabel='Keep theirs'
           fieldLabel={(f) => cols.find((c) => c.field === f)?.label || titleCase(f)}
@@ -10227,7 +10373,10 @@ export function InlineTableField({
         collection={relatedCollection}
         cascadeFilters={fieldCascadeFilters}
         onApply={applyBulkEdit}
-        onEditIntent={() => staging?.noteEditIntent?.()}
+        onEditIntent={() => {
+          staging?.noteEditIntent?.()
+          setBulkTyped(true)
+        }}
       />
 
       <RowHistorySheet

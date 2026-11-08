@@ -8,8 +8,21 @@ import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
 import { canUserReadQueue } from '../services/queue-access.js'
-import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
+import {
+  breachedCountsByQueue,
+  fetchMaterializedBadgeCounts
+} from '../services/queue-materialization-read.js'
 import { markInactiveOwners } from '../services/queue-owner-status.js'
+import {
+  accessSigFor,
+  queueDefSources,
+  snapshotsFitViewer
+} from '../services/queue-snapshot-access.js'
+import {
+  publicByState,
+  queueDefinitionHash,
+  snapshotMatchesDefinition
+} from '../services/queue-trend-guard.js'
 import type {
   QueueItemsQuery,
   QueueRow,
@@ -247,7 +260,16 @@ export async function queuesRoutes(app: FastifyInstance) {
       const breached = await breachedCountsByQueue(matIds).catch(
         () => ({}) as Record<string, number>
       )
+      // The cache holds every row; a viewer whom a User Scope narrows gets the cache
+      // counted through their own access gates (army 11 Q2-7, rev11-api #5) — never the
+      // tenant-wide count (a leak), never "unknown" (a live resolve per worklist).
+      const viewerNarrowed = (await accessSigFor(req.user)) !== '[]'
       for (const q of readable.filter((x) => x.materialized)) {
+        if (viewerNarrowed) {
+          const c = await fetchMaterializedBadgeCounts(q.id, req.user!).catch(() => null)
+          out[q.id] = c ? { ...c, source: 'cache', as_of: null } : badgeFromSnapshot(undefined)
+          continue
+        }
         const row = counts.find((c) => c.queue_id === q.id)
         out[q.id] = {
           total: Number(row?.total ?? 0),
@@ -269,9 +291,24 @@ export async function queuesRoutes(app: FastifyInstance) {
         total: number
         sla_breached: number
         unowned: number
+        by_state?: string | null
       }>
+      const ownerSigs = new Map<string, Promise<string>>()
       for (const qid of liveIds) {
-        out[qid] = badgeFromSnapshot(snaps.find((sn) => sn.queue_id === qid))
+        const q = readable.find((x) => x.id === qid)!
+        const snap = snaps.find((sn) => sn.queue_id === qid)
+        // A snapshot of another definition, or one counted under other access than the
+        // viewer's, is no answer (army 11 Q1-1 / Q2-7): unknown → the caller reads live.
+        let fits = !!snap && (await snapshotsFitViewer(q, req.user, ownerSigs))
+        if (fits && snap) {
+          const defSources = await queueDefSources(qid)
+          fits = snapshotMatchesDefinition(
+            parseJson(snap.by_state ?? null) as Record<string, unknown> | null,
+            defSources,
+            queueDefinitionHash(defSources)
+          )
+        }
+        out[qid] = badgeFromSnapshot(fits ? snap : undefined)
       }
     }
     return reply.send({ data: out })
@@ -954,31 +991,12 @@ export async function queuesRoutes(app: FastifyInstance) {
     const since = new Date(Date.now() - days * 86_400_000)
 
     const scope = (req.query as { scope?: string }).scope === 'mine' ? 'mine' : 'all'
-
-    if (scope === 'mine') {
-      // Per-owner series for the REQUESTING user (nivaro_queue_owner_snapshots
-      // accumulates from deploy — no retroactive backlog history exists).
-      const mineRows = (await db('nivaro_queue_owner_snapshots')
-        .where({ queue_id: id, user: req.user!.id })
-        .where('snapshot_date', '>=', since)
-        .orderBy('snapshot_date', 'asc')
-        .select('snapshot_date', 'owned', 'sla_warning', 'sla_breached', 'at_risk')) as Array<
-        Record<string, unknown>
-      >
-      return reply.send({
-        data: mineRows.map((r) => ({
-          snapshot_date: r.snapshot_date,
-          total: r.owned,
-          unowned: 0,
-          sla_warning: r.sla_warning,
-          sla_breached: r.sla_breached,
-          at_risk: r.at_risk,
-          by_state: {}
-        }))
-      })
-    }
-
-    const rows = (await db('nivaro_queue_stat_snapshots')
+    // Army 11 Q1-1: only snapshots taken under the queue's CURRENT definition are points
+    // on the line; a day counted under another one (a state the queue no longer lists)
+    // is dropped, for both the queue-wide and the per-owner series.
+    const defSources = await queueDefSources(id)
+    const defHash = queueDefinitionHash(defSources)
+    const queueSnaps = (await db('nivaro_queue_stat_snapshots')
       .where({ queue_id: id })
       .where('snapshot_date', '>=', since)
       .orderBy('snapshot_date', 'asc')
@@ -991,9 +1009,57 @@ export async function queuesRoutes(app: FastifyInstance) {
         'at_risk',
         'by_state'
       )) as Array<Record<string, unknown>>
+    const dayOf = (d: unknown) =>
+      d instanceof Date ? d.toISOString().slice(0, 10) : String(d ?? '').slice(0, 10)
+    const brokenDays = new Set<string>()
+    const fitting = queueSnaps.filter((r) => {
+      const ok = snapshotMatchesDefinition(
+        parseJson(r.by_state as string) as Record<string, unknown> | null,
+        defSources,
+        defHash
+      )
+      if (!ok) brokenDays.add(dayOf(r.snapshot_date))
+      return ok
+    })
 
+    if (scope === 'mine') {
+      // Per-owner series for the REQUESTING user (nivaro_queue_owner_snapshots
+      // accumulates from deploy — no retroactive backlog history exists).
+      const mineRows = (await db('nivaro_queue_owner_snapshots')
+        .where({ queue_id: id, user: req.user!.id })
+        .where('snapshot_date', '>=', since)
+        .orderBy('snapshot_date', 'asc')
+        .select('snapshot_date', 'owned', 'sla_warning', 'sla_breached', 'at_risk')) as Array<
+        Record<string, unknown>
+      >
+      return reply.send({
+        data: mineRows
+          .filter((r) => !brokenDays.has(dayOf(r.snapshot_date)))
+          .map((r) => ({
+            snapshot_date: r.snapshot_date,
+            total: r.owned,
+            unowned: 0,
+            sla_warning: r.sla_warning,
+            sla_breached: r.sla_breached,
+            at_risk: r.at_risk,
+            by_state: {}
+          }))
+      })
+    }
+
+    // Army 11 Q2-7: the queue-wide series is resolved as the queue's owner. A viewer
+    // whose User Scope narrows it otherwise gets no series (the client then shows no
+    // arrows / sparkline) — a delta would be the slice one of them cannot see, and it
+    // would hand a scoped person counts of work outside their access.
+    if (!(await snapshotsFitViewer(queue, req.user))) {
+      return reply.send({ data: [], withheld: 'scope' })
+    }
     return reply.send({
-      data: rows.map((r) => ({ ...r, by_state: parseJson(r.by_state as string) ?? {} }))
+      data: fitting.map((r) => ({
+        ...r,
+        by_state: publicByState(parseJson(r.by_state as string) as Record<string, unknown> | null)
+      })),
+      ...(brokenDays.size > 0 ? { definition_changed: true } : {})
     })
   })
 

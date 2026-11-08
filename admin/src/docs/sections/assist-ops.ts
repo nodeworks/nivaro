@@ -229,7 +229,10 @@ export const slaScheduleDocs: DocSection = {
       items: [
         'Every SLA reader honours it: the record banner, queue SLA columns and sorts, My Work, breach notifications and escalation ladders.',
         'The adjustment is written as a note on the record ("SLA clock") and the banner shows who set it, when and why. "Back to the rule" removes it.',
-        'Only one adjustment is active per stay; a new one replaces the old.'
+        'Only one adjustment is active per stay; a new one replaces the old.',
+        'An owner\'s manager (the manager set on any current owner\'s profile) may adjust the clock and acknowledge too. Once the step is past its deadline, the late owner cannot lengthen their own deadline — their manager or an admin can. "Back to the rule" stays open to the owner.',
+        'Acknowledge on a breached record (which stops any escalation) is for the late step\'s owners, their managers and admins. The banner says "escalating until acknowledged" only when the rule names someone to escalate to.',
+        'A business-hours rule is always shown in working hours ("52 working hours past the 24 working-hour limit"), followed by the calendar days the record has spent in the step — the same age the lists and the team card show.'
       ]
     },
     {

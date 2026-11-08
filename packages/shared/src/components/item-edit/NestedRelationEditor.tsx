@@ -3,7 +3,7 @@ import { Loader2, Pencil, X } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
-import { cn, formatNumber, titleCase, toLocalDateString } from '../../lib/utils'
+import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { FieldRenderer } from './FieldRenderer'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, SENTINEL_FIELDS } from './helpers'
 import type { CMSField, CMSRelation, NestedOps } from './types'
@@ -453,6 +453,11 @@ export function NestedRelationEditor({
     : 0
   // Money to the cent (army6 L2): "remaining: -301.515" read 3 decimals.
   const remaining = roundCents(cap - sum)
+  // A money sum reads as money ($1,234.50), never "1,234.5" (army11 f1).
+  const sumIsMoney = hint
+    ? (grandFields.find((f) => f.field === hint.sum_field)?.options as { format?: string } | null)
+        ?.format === 'currency'
+    : false
 
   if (relationsLoading && !matchCollection) return null
   if (!grandCollection || (!fkField && !matchCollection)) return null
@@ -484,7 +489,7 @@ export function NestedRelationEditor({
               remaining < 0 ? 'text-red-600' : 'text-slate-500'
             )}
           >
-            remaining: {formatNumber(remaining)}
+            remaining: {formatRemaining(remaining, sumIsMoney)}
           </span>
         )}
       </div>
@@ -700,4 +705,13 @@ export function NestedRelationEditor({
       )}
     </div>
   )
+}
+
+/** The "remaining" hint: money as $ to the cent; other figures to at most 2 decimals. */
+export function formatRemaining(n: number, money: boolean): string {
+  if (money) return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
+  return n.toLocaleString('en-US', {
+    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+    maximumFractionDigits: 2
+  })
 }

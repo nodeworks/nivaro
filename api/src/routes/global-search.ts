@@ -11,8 +11,21 @@ import { withReadGate } from '../services/read-gate.js'
 import { fallbackDisplayRef, recordDisplayRefs } from '../services/record-display-ref.js'
 import { safeRecordLabel } from '../services/record-label-fallback.js'
 import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
+import {
+  type AccessClause,
+  andAccess,
+  onIdExpr,
+  searchAccessClause,
+  searchAccessClauses
+} from '../services/search-access.js'
 import { SearchBudget } from '../services/search-budget.js'
-import { labelSearchFieldsOf, parseSearchFields, searchGroupOf } from '../services/search-fields.js'
+import {
+  labelSearchFieldsOf,
+  parseSearchFields,
+  searchGroupDetailOf,
+  searchGroupOf,
+  searchInternalFieldsOf
+} from '../services/search-fields.js'
 import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
 import {
   fastLike,
@@ -188,6 +201,11 @@ interface PlanEntry {
   /** `browser_config.search_group_by` / `search_detail` (services/search-fields.ts). */
   groupBy?: string | null
   detail?: string[]
+  /** `browser_config.search_group_detail`: a grouped row's second line (`vendor.name`). */
+  groupDetail?: string[]
+  /** `browser_config.search_internal_fields`: another system's ids — equality only,
+   *  never shown (army 11 a3 G). */
+  internal?: string[]
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -393,7 +411,11 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
     for (const c of available) {
       if (c.endsWith('_id') && c !== 'id' && !picked.includes(c)) picked.push(c)
     }
-    const columns = picked.filter((c) => IDENT_RE.test(c)).slice(0, MAX_COLS_PER_COLLECTION)
+    // Another system's ids (search_internal_fields) are never contains-matched.
+    const internal = searchInternalFieldsOf(col.browser_config)
+    const columns = picked
+      .filter((c) => IDENT_RE.test(c) && !internal.includes(c))
+      .slice(0, MAX_COLS_PER_COLLECTION)
     const labelSearch = parseLabelSearchFields(col.browser_config).filter((c) => available.has(c))
     // A template that shows only non-text fields has no label to match: the
     // collection sits out of a labels-only search. No template: the label is the
@@ -423,13 +445,16 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
       collection: col.collection,
       display_name: col.display_name,
       columns: small ? columns : [],
-      labelColumns: small ? [...new Set([...baseLabel, ...labelSearch])] : [],
+      labelColumns: small
+        ? [...new Set([...baseLabel, ...labelSearch])].filter((c) => !internal.includes(c))
+        : [],
       labelSearch,
       idColumns: seekOnly ? seekOnly.cols : idColumns,
       numIdColumns: seekOnly ? seekOnly.nums : numIdColumns,
       ...(seekOnly ? { seekOnly: true } : {}),
       template: col.display_template,
       ...searchGroupPlan(col.browser_config),
+      ...(internal.length ? { internal } : {}),
       rows,
       textSearchable,
       kinds,
@@ -609,6 +634,22 @@ export function toHit(
   )
 }
 
+/** A hit matched through another system's id (search_internal_fields) shows its label,
+ *  never that id (army 11 a3 G: "Invoice Id: 100200585-131222-…"). Exported for tests. */
+export function hideInternalMatch<
+  H extends {
+    label: string
+    snippet: string
+    matched_field?: string
+    matched_label?: string
+    matched_value?: string
+  }
+>(h: H, p: Pick<PlanEntry, 'internal'>): H {
+  if (!h.matched_field || !(p.internal ?? []).includes(h.matched_field)) return h
+  const { matched_label: _l, matched_value: _v, ...rest } = h
+  return { ...rest, snippet: h.label } as H
+}
+
 function withRowFacts(h: Found, item: Record<string, unknown>): Found {
   for (const c of UPDATED_COLS) {
     const v = item[c]
@@ -629,6 +670,14 @@ function withRowFacts(h: Found, item: Record<string, unknown>): Found {
     }
   }
   return h
+}
+
+/** Higher id first (numeric ids numerically); the order ties keep (rankHits is stable). */
+export function newestFirst(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const x = Number(a.id)
+  const y = Number(b.id)
+  if (Number.isFinite(x) && Number.isFinite(y)) return y - x
+  return String(b.id).localeCompare(String(a.id))
 }
 
 /** Candidate ids per collection → the rows the caller may read (RBAC, row filters,
@@ -656,11 +705,15 @@ async function confirmRows(
   return out
 }
 
-function groupCandidates(rows: Array<{ c: string; id: string }>, cap: number) {
+function groupCandidates(
+  rows: Array<{ c: string; id: string }>,
+  cap: number | ((collection: string) => number)
+) {
   const by = new Map<string, string[]>()
+  const capOf = typeof cap === 'number' ? () => cap : cap
   for (const r of rows) {
     const list = by.get(r.c) ?? []
-    if (list.length < cap && !list.includes(r.id)) list.push(r.id)
+    if (list.length < capOf(r.c) && !list.includes(r.id)) list.push(r.id)
     by.set(r.c, list)
   }
   return by
@@ -692,7 +745,10 @@ export function textArm(
   likes: string[],
   ft: { cols: string[]; cond: { sql: string; bindings: string[] } } | null,
   perCollection: number,
-  mssql = onMssql()
+  mssql = onMssql(),
+  /** The caller's read gate (services/search-access.ts): judged before the TOP, so
+   *  the n rows taken are rows this person may read (army 11 Q2-3). */
+  access: AccessClause | null = null
 ): { sql: string; bindings: unknown[] } {
   const bindings: unknown[] = []
   let wheres: string
@@ -719,10 +775,13 @@ export function textArm(
   const pre = cols.map((c) =>
     fastLike(`[${c}]`, `${escapeLike(q)}%`, kindOfCol(p, c), { escape: '\\', mssql })
   )
+  const gate = andAccess(access)
+  bindings.push(...gate.bindings)
   const rank = `CASE WHEN ${eq.map((e) => e.sql).join(' OR ')} THEN 0 WHEN ${pre.map((e) => e.sql).join(' OR ')} THEN 1 ELSE 2 END`
   for (const e of [...eq, ...pre]) bindings.push(...e.bindings)
+  const where = gate.sql ? `(${wheres})${gate.sql}` : wheres
   return {
-    sql: `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${wheres} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`,
+    sql: `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${where} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`,
     bindings
   }
 }
@@ -807,6 +866,8 @@ interface SearchCtx {
   labelsOnly: boolean
   allowed: Map<string, string[] | null>
   labelOf: LabelOf
+  /** Per collection, the caller's read gate as SQL (null = nothing narrows them). */
+  access: Map<string, AccessClause | null>
 }
 
 /** Text pass: the union of contains-LIKEs (the original omnisearch), as Found hits. */
@@ -854,7 +915,16 @@ async function searchUnion(
     return {
       collection: p.collection,
       rows: p.rows,
-      ...textArm(p, colsOf(p), q, likes, ft ?? null, perCollection)
+      ...textArm(
+        p,
+        colsOf(p),
+        q,
+        likes,
+        ft ?? null,
+        perCollection,
+        undefined,
+        ctx.access.get(p.collection) ?? null
+      )
     }
   })
   // Every big table is its own statement with its own share of the search's time
@@ -900,10 +970,18 @@ interface ExactSpec {
   kinds?: Record<string, TextKind>
   /** true: every column leads an index (the arm is a seek); false: a scan. */
   indexed?: boolean
+  /** The caller's read gate, judged before the TOP (army 11 Q2-3). */
+  access?: AccessClause | null
+  /** Rows kept (default EXACT_SEEK_TOP). A grouped collection (one invoice = many
+   *  line rows, several invoices may share a number) keeps EXACT_GROUP_TOP, newest
+   *  first, so every invoice carrying the number is offered (army 11 a3 G). */
+  top?: number
 }
 
 /** Rows the exact-id pass keeps per collection (and per column when confirming). */
 const EXACT_SEEK_TOP = 2
+/** Rows the exact-id pass keeps for a `search_group_by` collection (rows are lines). */
+export const EXACT_GROUP_TOP = 60
 
 /**
  * Exact-id pass (item 1): an id-ish query equal to a business-id column of a
@@ -927,11 +1005,21 @@ export function exactStatement(
       typedEquals(`[${c}]`, q, b.kinds?.[c] ?? 'other', { indexed: b.indexed !== false, mssql })
     )
     if (preds.length + nums.length === 0) continue
-    const where = [...preds.map((p) => p.sql), ...nums.map((c) => `[${c}] = ?`)].join(' OR ')
+    const any = [...preds.map((p) => p.sql), ...nums.map((c) => `[${c}] = ?`)].join(' OR ')
+    const gate = andAccess(b.access)
+    const where = gate.sql ? `(${any})${gate.sql}` : any
+    const top = Math.max(1, Math.min(500, Math.floor(b.top ?? EXACT_SEEK_TOP)))
+    // More than the default: newest first (an arbitrary TOP of a number shared by
+    // several invoices showed the 2025 one and hid the held 2026 one).
+    const order = top > EXACT_SEEK_TOP ? ' ORDER BY id DESC' : ''
     parts.push(
-      `SELECT * FROM (SELECT TOP ${EXACT_SEEK_TOP} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}) AS [x_${b.collection}]`
+      `SELECT * FROM (SELECT TOP ${top} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}${order}) AS [x_${b.collection}]`
     )
-    bindings.push(...preds.flatMap((p) => p.bindings), ...nums.map(() => Number(q)))
+    bindings.push(
+      ...preds.flatMap((p) => p.bindings),
+      ...nums.map(() => Number(q)),
+      ...gate.bindings
+    )
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
 }
@@ -951,7 +1039,12 @@ const PREFIX_PER_COLUMN = 5
  * Exported for tests.
  */
 export function prefixStatement(
-  batch: Array<{ collection: string; cols: string[]; kinds?: Record<string, TextKind> }>,
+  batch: Array<{
+    collection: string
+    cols: string[]
+    kinds?: Record<string, TextKind>
+    access?: AccessClause | null
+  }>,
   q: string,
   mssql = onMssql()
 ): { sql: string; bindings: unknown[] } | null {
@@ -965,10 +1058,11 @@ export function prefixStatement(
       if (!IDENT_RE.test(c)) continue
       const ansi = mssql && b.kinds?.[c] === 'ansi'
       const bound = ansi ? 'CAST(? AS varchar(4000))' : '?'
+      const gate = andAccess(b.access)
       parts.push(
-        `SELECT * FROM (SELECT TOP ${PREFIX_PER_COLUMN} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE [${c}] LIKE ${bound} ESCAPE '\\') AS [p_${b.collection}_${c}]`
+        `SELECT * FROM (SELECT TOP ${PREFIX_PER_COLUMN} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE [${c}] LIKE ${bound} ESCAPE '\\'${gate.sql}) AS [p_${b.collection}_${c}]`
       )
-      bindings.push(pattern)
+      bindings.push(pattern, ...gate.bindings)
     }
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
@@ -993,16 +1087,22 @@ export function tabSeekStatement(
   cols: string[],
   q: string,
   perColumn = TAB_SEEK_PER_COLUMN,
-  mssql = onMssql()
+  mssql = onMssql(),
+  /** The caller's read gate, judged before each TOP (army 11 Q2-3). */
+  access: AccessClause | null = null,
+  /** Columns matched only when equal (search_internal_fields): never by their start. */
+  equalOnly: string[] = []
 ): { sql: string; bindings: unknown[] } | null {
   if (!IDENT_RE.test(p.collection) || q.length < 2) return null
-  const prefix = q.length >= PREFIX_MIN_LEN
+  const gate = andAccess(access)
+  const longEnough = q.length >= PREFIX_MIN_LEN
   const n = Math.max(1, Math.min(1000, Math.floor(perColumn)))
   const parts: string[] = []
   const bindings: unknown[] = []
   for (const c of cols) {
     if (!IDENT_RE.test(c)) continue
     const kind = p.kinds?.[c] ?? 'other'
+    const prefix = longEnough && !equalOnly.includes(c)
     let where: string
     if (prefix) {
       const bound = mssql && kind === 'ansi' ? 'CAST(? AS varchar(4000))' : '?'
@@ -1014,8 +1114,9 @@ export function tabSeekStatement(
       bindings.push(...eq.bindings)
     }
     parts.push(
-      `SELECT * FROM (SELECT TOP ${n} CAST(id AS nvarchar(64)) AS id, '${c}' AS k FROM [${p.collection}] WHERE ${where}) AS [t_${c}]`
+      `SELECT * FROM (SELECT TOP ${n} CAST(id AS nvarchar(64)) AS id, '${c}' AS k FROM [${p.collection}] WHERE ${where}${gate.sql}) AS [t_${c}]`
     )
+    bindings.push(...gate.bindings)
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
 }
@@ -1033,7 +1134,12 @@ export function splitExactSpecs(
   for (const s of specs) {
     const idx = new Set(s.indexedCols)
     const pick = (list: string[], indexed: boolean) => list.filter((c) => idx.has(c) === indexed)
-    const base = { collection: s.collection, kinds: s.kinds }
+    const base = {
+      collection: s.collection,
+      kinds: s.kinds,
+      ...(s.access ? { access: s.access } : {}),
+      ...(s.top ? { top: s.top } : {})
+    }
     const seekCols = pick(s.cols, true)
     const seekNums = digits ? pick(s.nums, true) : []
     if (seekCols.length + seekNums.length > 0)
@@ -1062,7 +1168,9 @@ async function searchExact(
         cols: readableOnly(p.idColumns, allowed),
         nums: readableOnly(p.numIdColumns, allowed),
         kinds: p.kinds,
-        indexedCols: p.indexed ?? []
+        indexedCols: p.indexed ?? [],
+        access: ctx.access.get(p.collection) ?? null,
+        ...(p.groupBy ? { top: EXACT_GROUP_TOP } : {})
       }
     })
     .filter((s) => s.cols.length + s.nums.length > 0)
@@ -1103,7 +1211,12 @@ async function searchExact(
   // 1b. Big (seek-only) tables: the start of an id, as a range seek per column. Never
   //     an exact hit — a prefix row ranks as a prefix match under any exact one.
   const prefixPass = (async () => {
-    const big = specs.filter((s) => s.p.seekOnly && s.cols.length > 0)
+    // Another system's ids (search_internal_fields) are matched whole only: a Fusion
+    // invoice id that merely STARTS with the typed number is noise (army 11 a3 G).
+    const big = specs
+      .filter((s) => s.p.seekOnly)
+      .map((s) => ({ ...s, cols: s.cols.filter((c) => !(s.p.internal ?? []).includes(c)) }))
+      .filter((s) => s.cols.length > 0)
     if (big.length === 0) return [] as Found[]
     const results = await Promise.all(
       big.map((s) => {
@@ -1117,10 +1230,38 @@ async function searchExact(
       })
     )
     const lower = q.toLowerCase()
-    return exactHits(ctx, specs, candidates, results.flat(), q, null, (v) => {
-      const t = v.toLowerCase()
-      return t.startsWith(lower) && t !== lower
+    return exactHits(ctx, big, candidates, results.flat(), q, null, {
+      tier: 'prefix',
+      cap: PREFIX_PER_COLUMN,
+      test: (v) => {
+        const t = v.toLowerCase()
+        return t.startsWith(lower) && t !== lower
+      }
     })
+  })()
+  // 1c. The number part of an id (army 11 a4): approvers say "81137" for HQ26-81137.
+  //     A digits-only query equal to everything after the last dash of a record's OWN
+  //     id (the column its label shows) is an exact match for it.
+  const numberPartPass = (async () => {
+    const arms = numberPartArms(ctx, candidates, q)
+    if (arms.length === 0) return [] as Found[]
+    const rows = await runArms(budget, arms, null, EXACT_PRIORITY)
+    const tail = `-${q.toLowerCase()}`
+    const hits = await exactHits(
+      ctx,
+      numberPartSpecs(ctx, candidates, q),
+      candidates,
+      rows,
+      q,
+      null,
+      {
+        tier: 'exact',
+        cap: EXACT_SEEK_TOP,
+        test: (v) => v.toLowerCase().endsWith(tail)
+      }
+    )
+    if (hits.length > 0) budget.shorten(EXACT_GRACE_MS)
+    return hits
   })()
   // 2. Id columns no index leads: scans, each big table on its own budget.
   const scanPass = (async () => {
@@ -1138,9 +1279,56 @@ async function searchExact(
     const rows = await runArms(budget, arms, null, EXACT_PRIORITY)
     return exactHits(ctx, specs, candidates, rows, q, scope)
   })()
-  const [a, b, c] = await Promise.all([seekPass, scanPass, prefixPass])
+  const [a, b, c, d] = await Promise.all([seekPass, scanPass, prefixPass, numberPartPass])
   const templates = new Map(candidates.map((p) => [p.collection, p.template]))
-  return demoteForeignExact([...a, ...b, ...c], (col) => templates.get(col) ?? null)
+  return demoteForeignExact([...a, ...b, ...d, ...c], (col) => templates.get(col) ?? null)
+}
+
+/** The shortest number part searched as an id ("812" is someone's number; "12" is noise). */
+const NUMBER_PART_MIN = 3
+
+/** The collections and own-id columns the number-part pass reads: a table the text pass
+ *  may scan (≤ ROW_BUDGET rows), string business-id columns its label template shows,
+ *  readable by the caller, never another system's ids. Exported for tests. */
+export function numberPartSpecs(
+  ctx: Pick<SearchCtx, 'allowed'>,
+  candidates: PlanEntry[],
+  q: string
+): Array<{ p: PlanEntry; collection: string; cols: string[]; nums: string[] }> {
+  if (!new RegExp(`^\\d{${NUMBER_PART_MIN},15}$`).test(q)) return []
+  return candidates
+    .filter((p) => !p.seekOnly && p.textSearchable)
+    .map((p) => {
+      const own = templateFields(p.template)
+      const cols = readableOnly(
+        p.idColumns.filter((c) => own.includes(c) && !(p.internal ?? []).includes(c)),
+        ctx.allowed.get(p.collection)
+      )
+      return { p, collection: p.collection, cols, nums: [] as string[] }
+    })
+    .filter((s) => s.cols.length > 0)
+}
+
+/** One budgeted arm per collection: `[col] LIKE '%-81137'` on its own id columns,
+ *  behind the caller's read gate. Exported for tests. */
+export function numberPartArms(
+  ctx: Pick<SearchCtx, 'allowed' | 'access'>,
+  candidates: PlanEntry[],
+  q: string,
+  mssql = onMssql()
+): Arm[] {
+  return numberPartSpecs(ctx, candidates, q).map((s) => {
+    const preds = s.cols.map((c) =>
+      fastLike(`[${c}]`, `%-${q}`, kindOfCol(s.p, c), { escape: '\\', mssql })
+    )
+    const gate = andAccess(ctx.access.get(s.collection))
+    return {
+      collection: s.collection,
+      rows: s.p.rows,
+      sql: `SELECT * FROM (SELECT TOP ${EXACT_SEEK_TOP} '${s.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${s.collection}] WHERE (${preds.map((x) => x.sql).join(' OR ')})${gate.sql} ORDER BY id DESC) AS [n_${s.collection}]`,
+      bindings: [...preds.flatMap((x) => x.bindings), ...gate.bindings]
+    }
+  })
 }
 
 /** The fields a display template shows (`{{project_id}} - {{name}}` → project_id, name). */
@@ -1171,27 +1359,37 @@ export function demoteForeignExact<
  *  query, as prefix-tier matches, never exact. */
 async function exactHits(
   ctx: SearchCtx,
-  specs: Array<{ p: PlanEntry; collection: string; cols: string[]; nums: string[] }>,
+  specs: Array<{
+    p: PlanEntry
+    collection: string
+    cols: string[]
+    nums: string[]
+    top?: number
+  }>,
   candidates: PlanEntry[],
   found: Array<{ c: string; id: string }>,
   q: string,
   scope: string | null,
-  prefix?: (value: string) => boolean
+  /** A looser match than equality: the big-table prefix seeks (tier prefix) and the
+   *  number part of an id (tier exact). */
+  mode?: { tier: 'prefix' | 'exact'; cap: number; test: (value: string) => boolean }
 ): Promise<Found[]> {
   if (found.length === 0) return []
-  const rows = await confirmRows(
-    ctx.user,
-    groupCandidates(found, prefix ? PREFIX_PER_COLUMN : EXACT_SEEK_TOP)
-  )
+  const prefix = mode?.tier === 'prefix'
+  const capOf = (c: string) =>
+    mode?.cap ?? specs.find((s) => s.collection === c)?.top ?? EXACT_SEEK_TOP
+  const rows = await confirmRows(ctx.user, groupCandidates(found, capOf))
   const lower = q.toLowerCase()
-  const matches = prefix ?? ((v: string) => v.toLowerCase() === lower)
+  const matches = mode?.test ?? ((v: string) => v.toLowerCase() === lower)
   const out: Found[] = []
   for (const [collection, items] of rows) {
     const spec = specs.find((s) => s.collection === collection)
     const p = spec?.p ?? candidates.find((c) => c.collection === collection)
     if (!p) continue
     const idReadable = readableOnly(['id'], ctx.allowed.get(collection)).length > 0
-    for (const item of items) {
+    // Several records share the value (four vendors' invoices numbered 10020): the
+    // newest first, so ties under one score read newest-first (army 11 a3 G).
+    for (const item of [...items].sort(newestFirst)) {
       let col = [...(spec?.cols ?? []), ...(spec?.nums ?? [])].find(
         (c) => item[c] != null && matches(String(item[c]))
       )
@@ -1206,7 +1404,8 @@ async function exactHits(
       if (!col) continue
       const value = String(item[col])
       // A pk match shows no pk: the label falls back and no "ID: 123" chip rides along.
-      const byPk = col === 'id'
+      // Nor does another system's id (search_internal_fields, army 11 a3 G).
+      const byPk = col === 'id' || (p.internal ?? []).includes(col)
       const label = hitLabel(p, item, byPk ? '' : value)
       out.push(
         withRowFacts(
@@ -1233,14 +1432,19 @@ async function exactHits(
 /** The typo pass statement (item 4): rows where enough 3-letter chunks of the
  *  query appear in a name column, best first. Exported for tests. */
 export function fuzzyStatement(
-  batch: Array<{ collection: string; cols: string[]; kinds?: Record<string, TextKind> }>,
+  batch: Array<{
+    collection: string
+    cols: string[]
+    kinds?: Record<string, TextKind>
+    access?: AccessClause | null
+  }>,
   q: string,
   mssql = onMssql()
-): { sql: string; bindings: string[] } | null {
+): { sql: string; bindings: unknown[] } | null {
   const { chunks, need } = fuzzyChunks(q)
   if (chunks.length < 2) return null
   const parts: string[] = []
-  const bindings: string[] = []
+  const bindings: unknown[] = []
   for (const b of batch) {
     if (b.cols.length === 0) continue
     const likes = b.cols.map((c) =>
@@ -1254,12 +1458,15 @@ export function fuzzyStatement(
     const sums = likes.map(
       (ls, i) => `(${ls.map((l) => `CASE WHEN ${l.sql} THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
     )
-    const where = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
+    const any = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
+    const gate = andAccess(onIdExpr(b.access, 't.[id]'))
+    const where = gate.sql ? `(${any})${gate.sql}` : any
     const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
     parts.push(
       `SELECT * FROM (SELECT TOP ${FUZZY_PER_COLLECTION} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
     )
     for (const ls of likes) for (const l of ls) bindings.push(...l.bindings)
+    bindings.push(...gate.bindings)
   }
   return parts.length ? { sql: parts.join(' UNION ALL '), bindings } : null
 }
@@ -1276,14 +1483,15 @@ async function searchFuzzy(ctx: SearchCtx, candidates: PlanEntry[], q: string): 
         collection: p.collection,
         rows: p.rows,
         kinds: p.kinds,
-        cols: (named.length ? named : cols).slice(0, 2)
+        cols: (named.length ? named : cols).slice(0, 2),
+        access: ctx.access.get(p.collection) ?? null
       }
     })
     .filter((s) => s.cols.length > 0)
   const arms = specs
     .map((s) => ({ collection: s.collection, rows: s.rows, stmt: fuzzyStatement([s], q) }))
     .filter(
-      (a): a is { collection: string; rows: number; stmt: { sql: string; bindings: string[] } } =>
+      (a): a is { collection: string; rows: number; stmt: { sql: string; bindings: unknown[] } } =>
         a.stmt != null
     )
     .map((a) => ({ collection: a.collection, rows: a.rows, ...a.stmt }))
@@ -1465,9 +1673,11 @@ export function finishHits(
 
 function searchGroupPlan(browserConfig: unknown): { groupBy?: string; detail?: string[] } {
   const g = searchGroupOf(browserConfig)
+  const groupDetail = g.by ? searchGroupDetailOf(browserConfig) : []
   return {
     ...(g.by ? { groupBy: g.by } : {}),
-    ...(g.detail.length ? { detail: g.detail } : {})
+    ...(g.detail.length ? { detail: g.detail } : {}),
+    ...(groupDetail.length ? { groupDetail } : {})
   }
 }
 
@@ -1565,6 +1775,8 @@ export function groupsMayHaveMore(args: {
   per: number
   cut: boolean
   grouped: string[]
+  /** Rows the exact pass keeps per collection (grouped collections keep more). */
+  exactTop?: (collection: string) => number
 }): Set<string> {
   const count = (list: Array<{ collection: string }>) => {
     const by = new Map<string, number>()
@@ -1573,9 +1785,83 @@ export function groupsMayHaveMore(args: {
   }
   const out = new Set<string>()
   for (const [c, n] of count(args.found)) if (n >= args.per) out.add(c)
-  for (const [c, n] of count(args.exact)) if (n >= EXACT_SEEK_TOP) out.add(c)
+  for (const [c, n] of count(args.exact))
+    if (n >= (args.exactTop?.(c) ?? EXACT_SEEK_TOP)) out.add(c)
   if (args.cut) for (const c of args.grouped) out.add(c)
   return out
+}
+
+/**
+ * A grouped row's second line from `search_group_detail` (army 11 a3 G: four vendors'
+ * invoices all read "10020"): the vendor and date, read AS THE CALLER, replace a snippet
+ * that only repeats the label. A value the caller cannot read is simply missing. Pure
+ * apart from `read` (exported for tests; `read` stands in for the items-service read).
+ */
+export async function withGroupDetail<T extends RecordHit>(
+  user: User,
+  plan: Array<Pick<PlanEntry, 'collection' | 'groupBy' | 'groupDetail'>>,
+  hits: T[],
+  read: (
+    collection: string,
+    ids: string[],
+    fields: string[]
+  ) => Promise<Array<Record<string, unknown>>> = async (collection, ids, fields) =>
+    (
+      await readItems(user, collection, {
+        filter: { id: { _in: ids } },
+        fields: ['id', ...fields],
+        limit: ids.length
+      })
+    ).data as Array<Record<string, unknown>>,
+  metaOf: (collection: string) => Promise<Array<Pick<CMSField, 'field' | 'type'>>> = (c) =>
+    getFields(c).catch(() => [])
+): Promise<T[]> {
+  const detailOf = new Map(
+    plan
+      .filter((p) => p.groupBy && p.groupDetail?.length)
+      .map((p) => [p.collection, p.groupDetail ?? []])
+  )
+  const repeats = (h: T) =>
+    (h.snippet ?? '').trim().toLowerCase() === h.label.trim().toLowerCase() || !h.matched_value
+  const want = new Map<string, string[]>()
+  for (const h of hits) {
+    if (!detailOf.has(h.collection) || !repeats(h)) continue
+    const list = want.get(h.collection) ?? []
+    list.push(String(h.id))
+    want.set(h.collection, list)
+  }
+  if (want.size === 0) return hits
+  const lines = new Map<string, string>()
+  await Promise.all(
+    [...want].map(async ([collection, ids]) => {
+      const paths = detailOf.get(collection) ?? []
+      try {
+        const [rows, metas] = await Promise.all([read(collection, ids, paths), metaOf(collection)])
+        const meta = new Map(metas.map((m) => [m.field, m]))
+        for (const row of rows) {
+          const parts = paths.flatMap((path) => {
+            const [head, tail] = path.split('.')
+            const raw = row[head]
+            const v =
+              tail == null
+                ? raw
+                : raw != null && typeof raw === 'object'
+                  ? (raw as Record<string, unknown>)[tail]
+                  : null
+            const text = previewValue(tail == null ? (meta.get(head) as never) : undefined, v)
+            return text ? [text] : []
+          })
+          if (parts.length) lines.set(hitKey(collection, row.id), parts.join(' · ').slice(0, 120))
+        }
+      } catch {
+        /* unreadable: the row keeps its snippet */
+      }
+    })
+  )
+  return hits.map((h) => {
+    const line = lines.get(hitKey(h.collection, h.id))
+    return line ? { ...h, snippet: line } : h
+  })
 }
 
 /** Grouped rows counted exactly per search (each one indexed equality count). */
@@ -1688,8 +1974,23 @@ async function searchRecords(
   if (scope) plan = plan.filter((p) => p.collection === scope)
   const empty = { records: [], exact: null, chips: [], text: parsed.text, suggestions: [] }
   if (plan.length === 0) return empty
-  const allowed = await allowedByCollection(user, plan)
-  const ctx: SearchCtx = { user, budget, labelsOnly, allowed, labelOf: fieldLabelMap(fieldRows) }
+  // The caller's read gate per collection, as SQL every candidate statement carries
+  // (army 11 Q2-3): a scoped person's TOP n are rows they can read.
+  const [allowed, access] = await Promise.all([
+    allowedByCollection(user, plan),
+    searchAccessClauses(
+      user,
+      plan.map((p) => p.collection)
+    ).catch(() => new Map<string, AccessClause | null>())
+  ])
+  const ctx: SearchCtx = {
+    user,
+    budget,
+    labelsOnly,
+    allowed,
+    labelOf: fieldLabelMap(fieldRows),
+    access
+  }
 
   const filters: FilterPlan = planFilters(parsed, readableMetas(plan, fieldRows, allowed), {
     scope
@@ -1743,12 +2044,16 @@ async function searchRecords(
     ownedAmong(String(user.id), byCollection).catch(() => new Set<string>()),
     friendlyIdsAmong(user, byCollection).catch(() => new Map<string, string>())
   ])
-  const finished = finishHits(found, { userId: String(user.id), learned, recent, owned }).map(
-    (r) => {
-      const f = friendly.get(`${r.collection}:${String(r.id)}`)
-      return f ? { ...r, friendly_id: f } : r
-    }
-  )
+  // Ranked in full, capped after grouping: a grouped collection's exact pass brings an
+  // invoice's lines (up to EXACT_GROUP_TOP rows) that collapse into one row per invoice.
+  const finished = finishHits(
+    found,
+    { userId: String(user.id), learned, recent, owned },
+    Number.POSITIVE_INFINITY
+  ).map((r) => {
+    const f = friendly.get(`${r.collection}:${String(r.id)}`)
+    return f ? { ...r, friendly_id: f } : r
+  })
   // Collections where a group may be larger than the hits seen (a full cap, a full exact
   // pass, a part cut short); the true count replaces "N+" where it is one indexed read.
   const capped = groupsMayHaveMore({
@@ -1756,11 +2061,18 @@ async function searchRecords(
     exact,
     per,
     cut: budget.timedOut.size + budget.trimmed.size > 0,
-    grouped: plan.filter((p) => p.groupBy).map((p) => p.collection)
+    grouped: plan.filter((p) => p.groupBy).map((p) => p.collection),
+    exactTop: (c) =>
+      plan.find((p) => p.collection === c)?.groupBy ? EXACT_GROUP_TOP : EXACT_SEEK_TOP
   })
   const groupRaw = new Map<string, unknown>()
+  const grouped = groupHits(
+    finished,
+    await groupValues(user, plan, finished, groupRaw),
+    capped
+  ).slice(0, RECORD_CAP)
   const records = await countGroupMembers(
-    groupHits(finished, await groupValues(user, plan, finished, groupRaw), capped),
+    await withGroupDetail(user, plan, grouped),
     plan,
     groupRaw,
     async (collection, field, value) => {
@@ -1924,7 +2236,9 @@ async function tabFilter(
   p: PlanEntry,
   parsed: ParsedQuery,
   labelsOnly: boolean,
-  allowed: string[] | null
+  allowed: string[] | null,
+  /** The caller, whose read gate the big-table seeks carry (army 11 Q2-3). */
+  user?: User
 ): Promise<{
   filter: Record<string, unknown>
   cols: string[]
@@ -1950,7 +2264,16 @@ async function tabFilter(
   if (p.seekOnly) {
     const seek = readableOnly(p.idColumns, allowed)
     if (text.length < 2 || !looksLikeId(text) || seek.length === 0) return null
-    const stmt = tabSeekStatement(p, seek, text)
+    const access = user ? await searchAccessClause(user, p.collection).catch(() => null) : null
+    const stmt = tabSeekStatement(
+      p,
+      seek,
+      text,
+      TAB_SEEK_PER_COLUMN,
+      undefined,
+      access,
+      p.internal ?? []
+    )
     if (!stmt) return null
     const rows = (await db.raw(stmt.sql, stmt.bindings as Knex.RawBinding[])) as unknown as Array<{
       id: string
@@ -2010,7 +2333,7 @@ export async function countMatches(
     await Promise.all(
       plan.slice(i, i + COUNT_CONCURRENCY).map(async (p) => {
         try {
-          const f = await tabFilter(p, parsed, labelsOnly, allowed.get(p.collection) ?? null)
+          const f = await tabFilter(p, parsed, labelsOnly, allowed.get(p.collection) ?? null, user)
           // A text-only search never scans a table over the row budget (a seek-only
           // table's filter is the ids its typed per-column TOP-N seeks found).
           if (!f || (!p.textSearchable && !p.seekOnly && !hasFilterTokens(parsed))) return
@@ -2094,7 +2417,7 @@ export async function searchCollectionPage(
   const parsed = parseSearchQuery(q, await loadSearchScopes())
   if (parsed.scope && parsed.scope !== collection) return { data: [], total: 0 }
   const allowed = await getAllowedFields(user, 'read', collection).catch(() => [])
-  const f = await tabFilter(p, parsed, labelsOnly, allowed)
+  const f = await tabFilter(p, parsed, labelsOnly, allowed, user)
   if (!f || (!p.textSearchable && !p.seekOnly && !hasFilterTokens(parsed)))
     return { data: [], total: 0 }
   const r = await withFastContains(fastKinds(p), () =>
@@ -2111,7 +2434,7 @@ export async function searchCollectionPage(
   const data = (r.data as Array<Record<string, unknown>>).map((item) => {
     const hit = forms.length ? toHit(p, item, f.cols, forms, labelOf) : null
     if (hit) {
-      const { tier: _t, similarity: _s, createdBy: _c, ...rest } = hit
+      const { tier: _t, similarity: _s, createdBy: _c, ...rest } = hideInternalMatch(hit, p)
       return rest as RecordHit
     }
     const matched = matchedText(p, item, f.cols.length ? f.cols : p.columns)

@@ -31,7 +31,7 @@ import {
   twinJsonPath
 } from './queue-materialization-extra.js'
 import type { QueueGroupSummary, QueueItem, QueueOwner, QueueScope, QueueStats } from './queues.js'
-import { normalizeDisplayConfig } from './queues.js'
+import { atRiskWeight, normalizeDisplayConfig } from './queues.js'
 
 // Returns true when the requested sort/filters touch a field this SQL-pushdown
 // path cannot (or intentionally does not) serve correctly: sla_status/
@@ -107,6 +107,9 @@ export interface NarrowScanRow {
   state: string | null
   collection: string
   at_risk: boolean
+  /** Name of the at-risk rule the record matches — read only when the queue weighs
+   *  rules by name (army 11 Q1-6); the cache stores at_risk, not which rule. */
+  at_risk_rule?: string | null
   has_owner: boolean
   sla_status: 'ok' | 'warning' | 'breached' | null
   aging_hours: number | null
@@ -156,6 +159,7 @@ export function filterAndOrderNarrowRows(
     sla_breached: number
     at_risk: number
     age_hour_cap: number
+    at_risk_rule_weights?: Record<string, number> | null
   } | null
 ): NarrowScanRow[] {
   let out = rows
@@ -189,7 +193,11 @@ export function filterAndOrderNarrowRows(
           : r.sla_status === 'warning'
             ? w.sla_warning
             : 0
-      return sla + (r.at_risk ? w.at_risk : 0) + Math.min(r.aging_hours ?? 0, w.age_hour_cap)
+      const risk = atRiskWeight(
+        { at_risk: r.at_risk, at_risk_rule: r.at_risk_rule ? { name: r.at_risk_rule } : null },
+        w
+      )
+      return sla + risk + Math.min(r.aging_hours ?? 0, w.age_hour_cap)
     }
     if (key === 'aging_hours') return r.aging_hours
     if (key === 'sla_status') return r.sla_status ? (SLA_RANK[r.sla_status] ?? null) : null
@@ -327,7 +335,8 @@ export function computeSla(
         row.sla_timezone ? { ...getSlaScheduleSync(), timeZone: row.sla_timezone } : undefined
       )
     : calendar
-  const aging_hours = Math.round(calendar * 10) / 10
+  // Three decimals like calendarAgingHours (army 11 N1: one decimal = 6-minute steps).
+  const aging_hours = Math.round(calendar * 1000) / 1000
   const sla_elapsed_hours = Math.round(elapsed * 10) / 10
   if (row.sla_duration_hours == null || row.sla_warning_pct == null) {
     return { status: null, aging_hours, sla_elapsed_hours }
@@ -770,6 +779,50 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
   }
 }
 
+/**
+ * Badge counts of a materialized worklist AS THIS VIEWER SEES IT (rev11-api #5): the
+ * cache filtered by the viewer's access gates — total, unowned and SLA-breached only,
+ * three cheap reads. Used for a viewer whom a User Scope narrows, instead of the
+ * tenant-wide cache count (a leak) or "unknown" (a live resolve per worklist).
+ */
+export async function fetchMaterializedBadgeCounts(
+  queueId: string,
+  user: User
+): Promise<{ total: number; unowned: number; sla_breached: number }> {
+  const gates = await cacheGatesFor(user, queueId)
+  const scopeBase = applyScope(db('nivaro_queue_items as qi'), queueId, user, 'all', gates)
+  const [totalRow, unownedRow, slaRows] = await Promise.all([
+    scopeBase.clone().count('* as n').first() as Promise<{ n: number } | undefined>,
+    scopeBase.clone().whereNotExists(activeOwnerOf).count('* as n').first() as Promise<
+      { n: number } | undefined
+    >,
+    scopeBase
+      .clone()
+      .whereNotNull('qi.sla_duration_hours')
+      .select(
+        'qi.entered_state_at',
+        'qi.sla_duration_hours',
+        'qi.sla_warning_pct',
+        'qi.sla_business_hours_only',
+        'qi.sla_timezone'
+      ) as Promise<
+      Array<{
+        entered_state_at: Date | null
+        sla_duration_hours: number | null
+        sla_warning_pct: number | null
+        sla_business_hours_only: boolean
+      }>
+    >
+  ])
+  let sla_breached = 0
+  for (const r of slaRows) if (computeSla(r).status === 'breached') sla_breached++
+  return {
+    total: Number(totalRow?.n ?? 0),
+    unowned: Number(unownedRow?.n ?? 0),
+    sla_breached
+  }
+}
+
 export async function fetchMaterializedStats(
   queueId: string,
   user: User,
@@ -1102,6 +1155,7 @@ export async function fetchMaterializedQueueItems(
       .clone()
       .select(
         'qi.id',
+        'qi.item_id',
         'qi.label',
         'qi.state',
         'qi.collection',
@@ -1138,6 +1192,7 @@ export async function fetchMaterializedQueueItems(
       sla_warning_pct: number | null
       sla_business_hours_only: boolean
       at_risk: boolean
+      item_id: string
       has_owner: number
       sort_val?: string | null
       sort_num?: number | string | null
@@ -1159,6 +1214,19 @@ export async function fetchMaterializedQueueItems(
         sort_day: r.sort_day ?? null
       }
     })
+    // Army 11 Q1-6: a queue that weighs at-risk rules by name ("On hold" last) learns
+    // which rule each AT-RISK row matches with one batched read per collection — the
+    // cached path stays the cached path (never the full live resolve).
+    if (sortKey === 'priority' && displayCfgWeights?.at_risk_rule_weights) {
+      const names = await atRiskRuleNames(
+        narrowRaw
+          .filter((r) => r.at_risk)
+          .map((r) => ({ collection: r.collection, item_id: String(r.item_id) }))
+      )
+      narrowRaw.forEach((r, i) => {
+        if (r.at_risk) narrow[i].at_risk_rule = names.get(`${r.collection}:${r.item_id}`) ?? null
+      })
+    }
     const orderedAll = filterAndOrderNarrowRows(narrow, filters, sort, displayCfgWeights)
     for (const r of orderedAll) {
       const k = r.state ?? 'none'
@@ -1392,4 +1460,44 @@ export async function fetchMaterializedQueueItems(
     truncated: false,
     total
   }
+}
+
+/**
+ * Which at-risk rule (first match, rule order — the list's own rule) each record
+ * matches: one read of the referenced fields per collection, chunked. Records that
+ * no longer match any rule are absent.
+ */
+export async function atRiskRuleNames(
+  rows: Array<{ collection: string; item_id: string }>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (rows.length === 0) return out
+  const { parseActiveRules, referencedFields, evaluateRows } = await import('../routes/at-risk.js')
+  const byCollection = new Map<string, string[]>()
+  for (const r of rows) {
+    const list = byCollection.get(r.collection) ?? []
+    list.push(r.item_id)
+    byCollection.set(r.collection, list)
+  }
+  for (const [collection, ids] of byCollection) {
+    const rules = parseActiveRules(
+      (await db('nivaro_at_risk_rules')
+        .where({ collection, is_active: true })
+        .orderBy('id')) as never
+    )
+    if (rules.length === 0) continue
+    const fields = new Set<string>(['id'])
+    for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
+    const records = await selectInChunks(
+      [...new Set(ids)],
+      500,
+      (chunk) =>
+        db(collection)
+          .whereIn('id', chunk)
+          .select([...fields]) as Promise<Record<string, unknown>[]>
+    )
+    const hits = evaluateRows(records, rules)
+    for (const [id, hit] of Object.entries(hits)) out.set(`${collection}:${id}`, hit.rule)
+  }
+  return out
 }

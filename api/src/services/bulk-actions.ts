@@ -7,7 +7,12 @@ import {
 } from '../extensions/bulk-actions.js'
 import { logActivity } from '../services/activity.js'
 import type { User } from '../types.js'
-import { type GuardRule, guardPasses, parseJsonLoose, renderTemplate } from './action-guards.js'
+import {
+  firstFailingRule,
+  type GuardRule,
+  parseJsonLoose,
+  renderTemplate
+} from './action-guards.js'
 import { adminOnlyTransitionRefusal, commentMissing } from './manual-transition-gate.js'
 import { can } from './permissions.js'
 import {
@@ -66,7 +71,8 @@ export const BUILTIN_BULK_ACTIONS: BuiltinBulkAction[] = [
     key: 'update-field',
     label: 'Update Field',
     summary: 'Set one field to one value on every selected record',
-    surfaces: ['browser'],
+    // Worklists too (army 11 N11) — one collection's records at a time.
+    surfaces: ['browser', 'queue'],
     variant: 'default',
     defaultAccess: { mode: 'everyone' }
   },
@@ -280,6 +286,31 @@ function valueWords(v: unknown): string {
   if (v === false || v === 'false') return 'No'
   if (v === '{{reason}}') return 'the reason you give'
   return String(v)
+}
+
+const isBoolWant = (v: unknown) =>
+  v === true || v === false || v === 'true' || v === 'false' || v === 1 || v === 0
+
+/**
+ * Why a record is skipped because the action's guard does not hold, in the
+ * words a person reads on the bulk preview and the row toast (army 11 N7:
+ * "nothing to change (guard not met)" was engine talk). A yes/no field reads
+ * "already on hold" / "not on hold"; any other field is named, never its raw
+ * value (it may be a link id or an enum key).
+ */
+export function guardMissReason(rule: GuardRule, label?: string | null): string {
+  const named = String(label ?? '').trim()
+  const words = fieldWords(rule.field, label)
+  const lower = named ? words : words.toLowerCase()
+  const want = rule.value
+  if (isBoolWant(want)) {
+    const yes = want === true || want === 'true' || want === 1
+    if (rule.op === 'neq') return yes ? `already ${lower}` : `not ${lower}`
+    if (rule.op === 'eq') return yes ? `not ${lower}` : `already ${lower}`
+  }
+  if (rule.op === 'null') return `${words} is already filled in`
+  if (rule.op === 'nnull') return `${words} is empty`
+  return `does not apply to this record’s ${words}`
 }
 
 /** What an action does, in plain words (lists, hover text). */
@@ -512,10 +543,16 @@ export interface BulkRunResult {
   succeeded: number
   failed: number
   skipped: number
-  errors: Array<{ item: string; error: string }>
+  errors: Array<{ item: string; label?: string; error: string }>
   skipped_items: string[]
   /** #1/#18 — per-record verdict (dry run and real run alike). */
-  outcomes: Array<{ item: string; outcome: 'change' | 'skip' | 'fail'; reason?: string }>
+  outcomes: Array<{
+    item: string
+    /** The record's friendly id ("MM26-81441") when it has one — what lists name it by. */
+    label?: string
+    outcome: 'change' | 'skip' | 'fail'
+    reason?: string
+  }>
 }
 
 /** Run a DB-defined action over ids as the requesting user. */
@@ -538,17 +575,40 @@ export async function runDefinition(
     skipped_items: [],
     outcomes: []
   }
+  // Friendly ids read off each record as it is judged (army 11 N7: lists name
+  // records "MM26-81441", never by row id).
+  const labels = new Map<string, string>()
+  const labelOf = (item: string) => {
+    const l = labels.get(item)
+    return l ? { label: l } : {}
+  }
+  const friendlyField = await import('./workflow-transitions.js')
+    .then((m) => m.friendlyIdField(def.collection))
+    .catch(() => null)
   const skip = (item: string, why: string) => {
     result.skipped++
     result.skipped_items.push(item)
-    result.outcomes.push({ item, outcome: 'skip', reason: why })
+    result.outcomes.push({ item, ...labelOf(item), outcome: 'skip', reason: why })
   }
   const fail = (item: string, why: string) => {
     result.failed++
-    result.errors.push({ item, error: why })
-    result.outcomes.push({ item, outcome: 'fail', reason: why })
+    result.errors.push({ item, ...labelOf(item), error: why })
+    result.outcomes.push({ item, ...labelOf(item), outcome: 'fail', reason: why })
   }
   const collection = def.collection
+  // Field labels for the plain skip reasons, read once per run when needed.
+  let labelsP: Promise<Record<string, string | null>> | null = null
+  const fieldLabels = () =>
+    (labelsP ??= (
+      db('nivaro_fields').where({ collection }).select('field', 'label') as Promise<
+        Array<{ field: string; label: string | null }>
+      >
+    )
+      .then(
+        (rows): Record<string, string | null> =>
+          Object.fromEntries(rows.map((r) => [r.field, r.label ?? null]))
+      )
+      .catch((): Record<string, string | null> => ({})))
 
   // Transition kind: resolve the template's transitions ONCE; the per-record
   // pick depends on the record's current state.
@@ -588,8 +648,14 @@ export async function runDefinition(
         fail(item, 'Record not found or not readable')
         continue
       }
-      if (!guardPasses(def.guard, record)) {
-        skip(item, 'nothing to change (guard not met)')
+      if (friendlyField) {
+        const v = record[friendlyField]
+        if (v != null && typeof v !== 'object' && String(v).trim())
+          labels.set(item, String(v).trim())
+      }
+      const missed = firstFailingRule(def.guard, record)
+      if (missed) {
+        skip(item, guardMissReason(missed, (await fieldLabels())[missed.field]))
         continue
       }
 
@@ -613,6 +679,7 @@ export async function runDefinition(
         result.succeeded++
         result.outcomes.push({
           item,
+          ...labelOf(item),
           outcome: 'change',
           reason: Object.keys(payload)
             .filter((k) => !k.startsWith('_'))
@@ -728,7 +795,12 @@ export async function runDefinition(
       }
       if (dryRun) {
         result.succeeded++
-        result.outcomes.push({ item, outcome: 'change', reason: `${transition.label}` })
+        result.outcomes.push({
+          item,
+          ...labelOf(item),
+          outcome: 'change',
+          reason: `${transition.label}`
+        })
         continue
       }
       try {
@@ -750,7 +822,7 @@ export async function runDefinition(
           comment: `→ ${toLabel} via ${transition.label} (bulk: ${def.label})${reason ? ` — "${reason}"` : ''}`
         })
         result.succeeded++
-        result.outcomes.push({ item, outcome: 'change', reason: `→ ${toLabel}` })
+        result.outcomes.push({ item, ...labelOf(item), outcome: 'change', reason: `→ ${toLabel}` })
       } catch (err) {
         if (err instanceof TransitionBlockedError) {
           fail(item, err.message)

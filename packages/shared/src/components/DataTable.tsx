@@ -183,6 +183,14 @@ export interface DataTableProps<T = Record<string, unknown>> {
   /** Changes whenever a fresh result set lands (e.g. the query's dataUpdatedAt);
    *  the body remounts so rows replay their staggered enter animation. */
   enterKey?: string | number
+  /** Keyboard rows (army 11 N10): set to make each row ONE Tab stop (roving — the
+   *  active row is tabbable, the others are reached with the arrow keys the host
+   *  handles), announced as current; Enter on the focused row runs onRowClick. */
+  onRowFocus?: (row: T) => void
+  /** rowKey of the active (highlighted) row for the roving tab stop. */
+  activeRowKey?: string | null
+  /** Accessible name of a focusable row (e.g. its record id and title). */
+  rowAriaLabel?: (row: T) => string | undefined
 }
 
 // ─── Sort helpers ─────────────────────────────────────────────────────────────
@@ -905,7 +913,10 @@ export function DataTable<T = Record<string, unknown>>({
   enterKey,
   rowGroups,
   collapsedGroups,
-  onToggleGroup
+  onToggleGroup,
+  onRowFocus,
+  activeRowKey,
+  rowAriaLabel
 }: DataTableProps<T>) {
   const totalPages = Math.ceil(total / limit)
   const start = (page - 1) * limit + 1
@@ -1026,9 +1037,23 @@ export function DataTable<T = Record<string, unknown>>({
   }, [filterDefs])
   const showColumnFilterRow = columnFilterRow && (filterDefs?.length ?? 0) > 0
 
+  // Roving rows: the ONE tabbable row is the active one while it is on screen, else
+  // the first shown row — a page / filter change must never leave the table with no
+  // Tab stop (rev11-ui #6).
+  const rovingKey = (() => {
+    if (!onRowFocus) return null
+    const shown = rowGroups
+      ? rowGroups.flatMap((g) => (collapsedGroups?.has(g.key) ? [] : g.rows))
+      : rows
+    const keyAt = (r: T, i: number) => (rowKey ? rowKey(r, i) : String(i))
+    if (activeRowKey && shown.some((r, i) => keyAt(r, i) === activeRowKey)) return activeRowKey
+    return shown.length > 0 ? keyAt(shown[0], 0) : null
+  })()
   const renderRow = (row: T, i: number) => {
     const rowId = rowKey ? rowKey(row, i) : String(i)
     const isSelected = selectedIds?.includes(rowId) ?? false
+    const roving = !!onRowFocus
+    const isActive = roving && rowId === rovingKey
     // Pinned cells use bg-inherit, so the row carries an opaque base bg (and a
     // solid hover) for the pinned column to cover horizontally scrolled content.
     return (
@@ -1040,6 +1065,8 @@ export function DataTable<T = Record<string, unknown>>({
           // their own local group, and claiming the unnamed one here would
           // make those reveal on row hover instead.
           'group/row nvr-row-enter border-slate-100 transition-colors duration-150',
+          onRowFocus &&
+            'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-nvr-cyan',
           (pinFirstColumn || pinsActive) && 'bg-white dark:bg-card',
           onRowClick &&
             (pinFirstColumn || pinsActive
@@ -1058,6 +1085,22 @@ export function DataTable<T = Record<string, unknown>>({
         title={rowTitle?.(row)}
         onClick={() => onRowClick?.(row)}
         onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(row, e) : undefined}
+        {...(roving
+          ? {
+              tabIndex: isActive ? 0 : -1,
+              'aria-current': isActive && activeRowKey === rowId ? ('true' as const) : undefined,
+              'aria-label': rowAriaLabel?.(row),
+              onFocus: (e: React.FocusEvent<HTMLTableRowElement>) => {
+                if (e.target === e.currentTarget) onRowFocus?.(row)
+              },
+              onKeyDown: (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+                // Only the row itself: Enter on a button inside it stays that button's.
+                if (e.key !== 'Enter' || e.target !== e.currentTarget || !onRowClick) return
+                e.preventDefault()
+                onRowClick(row)
+              }
+            }
+          : {})}
       >
         {onSelectionChange && (
           <TableCell

@@ -61,6 +61,16 @@ export function invalidateRecordData(
   void qc.invalidateQueries({ queryKey: ['last-touch', collection, itemId] })
   // A transition moves the record to another step's SLA clock.
   void qc.invalidateQueries({ queryKey: ['sla-breach', collection, itemId] })
+  // Extension item actions (Push to Fusion…) are offered per state: a move
+  // that makes one apply or stop applying must show at once, not after the
+  // 5-minute cache (army 11 a1 F-12: a live Push button at Waiting on PO).
+  // The header's copy keys the id as given, the row menu as a string.
+  void qc.invalidateQueries({
+    predicate: (q) =>
+      (q.queryKey[0] === 'item-actions' || q.queryKey[0] === 'ext-item-actions') &&
+      q.queryKey[1] === collection &&
+      String(q.queryKey[2]) === itemId
+  })
   invalidateRecordNotes(qc, collection, itemId)
 }
 

@@ -280,4 +280,75 @@ describe('POST /integration-obligations/:id/send', () => {
     expect(JSON.parse(res.body).data.detail).toMatch(/^not re-sent: /)
     expect(sendPayload).not.toHaveBeenCalled()
   })
+
+  it('200 — fresh: true sends the record’s current data (a person’s click), partner mocked', async () => {
+    const fresh = vi.fn(async () => ({
+      endpoint_path: '/push',
+      body: { Status: 'Waiting On Level 3 Approval' },
+      summary: 'Waiting on Level 3 Approval'
+    }))
+    registerObligationKind({
+      api: 'Partner',
+      kind: 'state',
+      collection: 'workflows',
+      label: 'x',
+      endpoint_path: '/push',
+      expect: async () => [],
+      fresh_request: fresh
+    })
+    const settings = settingsChain(true)
+    const row = {
+      id: 1,
+      outcome: 'missing',
+      api: 'Partner',
+      kind: 'state',
+      collection: 'workflows',
+      item: '1',
+      submission_id: null
+    }
+    const obligations = obligationChain(row)
+    const apis = obligationChain({ id: 4 })
+    const submissions = {
+      insert: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 31 }]) })),
+      where: vi.fn(),
+      update: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockResolvedValue({ attempts: 0 })
+    }
+    submissions.where.mockReturnValue(submissions)
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return settings
+      if (table === 'nivaro_integration_obligations') return obligations
+      if (table === 'nivaro_external_apis') return apis
+      if (table === 'nivaro_erp_submissions') return submissions
+      return obligationChain(undefined)
+    }) as never)
+    vi.mocked(sendPayload).mockResolvedValue({
+      status: 'accepted',
+      external_ref: null,
+      error: null,
+      response: null,
+      http_status: 200
+    })
+    const app = buildApp()
+
+    const plain = await app.inject({ method: 'POST', url: '/integration-obligations/1/send' })
+    expect(JSON.parse(plain.body).data.code).toBe('fresh_available')
+    expect(sendPayload).not.toHaveBeenCalled()
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/integration-obligations/1/send',
+      payload: { fresh: true }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(fresh).toHaveBeenCalledTimes(1)
+    expect(sendPayload).toHaveBeenCalledWith(
+      4,
+      expect.objectContaining({ endpoint_path: '/push' }),
+      'user-admin'
+    )
+    expect(JSON.parse(res.body).data.detail).toMatch(
+      /^sent current data \(Waiting on Level 3 Approval\)/
+    )
+  })
 })

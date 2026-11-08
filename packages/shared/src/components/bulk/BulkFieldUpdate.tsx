@@ -164,6 +164,12 @@ function BulkFieldPanel({
   if (picked) {
     const cfg = (fieldConfig.data ?? []).find((f) => f.field === picked.field)
     const note = bulkFieldNote(picked, total)
+    const isEmpty =
+      value == null ||
+      (typeof value === 'string' && value.trim() === '') ||
+      (Array.isArray(value) && value.length === 0)
+    // A required field is never cleared in bulk (army 11 N3; the server refuses it too).
+    const needsValue = picked.required && isEmpty
     return (
       <div className='flex flex-col' data-bulk-field-value>
         <div className='flex items-center gap-2 border-b border-border px-3 py-2.5'>
@@ -206,10 +212,16 @@ function BulkFieldPanel({
               className='h-9 w-full rounded-md border border-input bg-background px-3 text-[13px] text-foreground focus-visible:border-nvr-cyan focus-visible:outline-none'
             />
           )}
-          <p className='text-[11.5px] leading-4 text-muted-foreground'>
-            {value == null || value === ''
-              ? `Leave it empty to clear ${picked.label} on every record.`
-              : 'Records that already hold this value are left as they are.'}
+          <p
+            className='text-[11.5px] leading-4 text-muted-foreground'
+            id='bulk-field-hint'
+            data-bulk-field-hint
+          >
+            {needsValue
+              ? `${picked.label} is required — choose a value to apply.`
+              : isEmpty
+                ? `Leave it empty to clear ${picked.label} on every record.`
+                : 'Records that already hold this value are left as they are.'}
           </p>
           {note && (
             <p
@@ -241,12 +253,13 @@ function BulkFieldPanel({
           </button>
           <button
             type='button'
-            disabled={picked.writable === 0}
+            disabled={picked.writable === 0 || needsValue}
+            aria-describedby={needsValue ? 'bulk-field-hint' : undefined}
             onClick={() => onApply(picked.field, value)}
             data-bulk-field-apply
             className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white transition-colors hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 disabled:opacity-40'
           >
-            Apply to {picked.writable}
+            Apply to {picked.writable} record{picked.writable === 1 ? '' : 's'}
           </button>
         </div>
       </div>

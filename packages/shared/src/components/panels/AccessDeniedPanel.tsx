@@ -48,6 +48,9 @@ export function recordNoun(collection: string, singular?: string | null): string
   return words || 'record'
 }
 
+/** The access-request route keeps 300 characters of the note. */
+const NOTE_MAX = 300
+
 export function AccessDeniedPanel({
   collection,
   itemId,
@@ -64,9 +67,17 @@ export function AccessDeniedPanel({
   const noun = recordNoun(collection, nounProp)
   const client = useNivaroClient()
   const [requested, setRequested] = useState(false)
+  // Army 11: the person may say why — the administrator used to read only a canned sentence.
+  const [note, setNote] = useState('')
   const requestAccess = useMutation({
     mutationFn: () =>
-      client.request(post('/access-requests', { collection, item: String(itemId) })),
+      client.request(
+        post('/access-requests', {
+          collection,
+          item: String(itemId),
+          ...(note.trim() ? { note: note.trim().slice(0, NOTE_MAX) } : {})
+        })
+      ),
     onSuccess: () => {
       setRequested(true)
       toast.success('Access request sent — an administrator has been notified')
@@ -115,7 +126,9 @@ export function AccessDeniedPanel({
               <div className='animate-pulse h-4 w-3/4 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
               <div className='animate-pulse h-4 w-1/2 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))]' />
             </>
-          ) : reasons.length > 0 ? (
+          ) : notFound ? null : reasons.length > 0 ? (
+            // A missing record is said once, in the heading (army11 f3: the
+            // page gave two different reasons for the same thing).
             reasons.map((r, i) => (
               <div
                 key={`${r.type}-${r.dimension ?? i}`}
@@ -132,11 +145,28 @@ export function AccessDeniedPanel({
           )}
         </div>
 
-        {!notFound && !isLoading && reasons.length > 0 && (
-          <p className='mt-4 text-[12px] text-slate-500 dark:text-slate-400'>
-            If you need access, request it below — an administrator gets the record and the reason
-            attached, and can adjust your role's permissions or access filters.
-          </p>
+        {!notFound && !isLoading && !requested && (
+          <div className='mt-4'>
+            <label
+              htmlFor={`access-note-${collection}-${itemId}`}
+              className='block text-[12px] font-medium text-slate-700 dark:text-slate-300'
+            >
+              Need it? Say what for <span className='font-normal text-slate-500'>(optional)</span>
+            </label>
+            <textarea
+              id={`access-note-${collection}-${itemId}`}
+              value={note}
+              onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))}
+              rows={2}
+              maxLength={NOTE_MAX}
+              placeholder={`e.g. I approve this ${noun} for my team`}
+              className='mt-1.5 w-full resize-y rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30 dark:border-border dark:bg-background dark:text-slate-100'
+              data-request-access-note
+            />
+            <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
+              Every administrator gets your request with this {noun} and your note.
+            </p>
+          </div>
         )}
 
         {!notFound && !isLoading && (

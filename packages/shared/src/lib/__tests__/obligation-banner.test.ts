@@ -82,7 +82,7 @@ describe('bannerLines', () => {
       ],
       now
     )
-    expect(out[0].text).toBe('never told — no send was ever attempted — the trigger did not fire')
+    expect(out[0].text).toBe('never told — nothing was sent when this changed')
     expect(out[0].tone).toBe('danger')
   })
 
