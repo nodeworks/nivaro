@@ -32,4 +32,20 @@ describe('detectBodyAcceptance — did the partner say yes in the body?', () => 
     // The heuristic would say yes here; the configured rule does not.
     expect(detectBodyAcceptance(cfg, { status: true })).toBe(false)
   })
+
+  it('a `present` rule accepts when the path holds a value — MDSi answers with its sales order id', () => {
+    const cfg = { when: [{ path: 'salesOrderNumber', present: true }] }
+    expect(
+      detectBodyAcceptance(cfg, {
+        primaryReferenceNumber: 'MM26INV-37436-B1313-6052747',
+        salesOrderNumber: 'SO000638863'
+      })
+    ).toBe(true)
+    expect(detectBodyAcceptance(cfg, { salesOrderNumber: 12345 })).toBe(true)
+    expect(detectBodyAcceptance(cfg, { salesOrderNumber: '' })).toBe(false)
+    expect(detectBodyAcceptance(cfg, { salesOrderNumber: '  ' })).toBe(false)
+    expect(detectBodyAcceptance(cfg, { salesOrderNumber: null })).toBe(false)
+    expect(detectBodyAcceptance(cfg, { other: 'x' })).toBe(false)
+    expect(detectBodyAcceptance(cfg, null)).toBe(false)
+  })
 })

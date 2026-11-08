@@ -744,7 +744,10 @@ export function detectConfiguredBodyError(
  * OK / SUCCESS / ACCEPTED (some ERPs answer `{"api_status": "OK"}`).
  */
 export interface ResponseSuccessConfig {
-  when: Array<{ path: string; in: string[] }>
+  /** `in`: the path holds one of these strings (case-insensitive). `present`: the path holds
+   *  any non-empty value — for a partner whose yes is an id it hands back (MDSi
+   *  `salesOrderNumber`), never a status word. */
+  when: Array<{ path: string; in?: string[]; present?: boolean }>
 }
 
 const DEFAULT_SUCCESS_KEYS = ['status', 'api_status', 'result']
@@ -817,7 +820,14 @@ export function detectBodyAcceptance(
 ): boolean {
   if (cfg && Array.isArray(cfg.when) && cfg.when.length > 0) {
     return cfg.when.some((rule) => {
-      if (!rule?.path || !Array.isArray(rule.in) || rule.in.length === 0) return false
+      if (!rule?.path) return false
+      if (rule.present === true)
+        return collectPathValues(body, rule.path).some(
+          (v) =>
+            (typeof v === 'string' && v.trim() !== '') ||
+            (typeof v === 'number' && Number.isFinite(v))
+        )
+      if (!Array.isArray(rule.in) || rule.in.length === 0) return false
       const wanted = rule.in.map((v) => String(v).trim().toUpperCase())
       return collectPathValues(body, rule.path).some(
         (v) => typeof v === 'string' && wanted.includes(v.trim().toUpperCase())
