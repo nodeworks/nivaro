@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-08T16:52:18.505Z",
+  "generated_at": "2026-11-08T17:34:18.881Z",
   "releases": [
+    {
+      "version": "0.3.91",
+      "tag": "v0.3.91",
+      "date": "2026-11-08T12:34:02-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "infrastructure",
+              "text": "a service scaled to 0 reads as stopped, not failing",
+              "hash": "648b8dd21"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "queues",
+              "text": "one worklist read can answer both ends (tail=n)",
+              "hash": "7da17d771"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.90",
       "tag": "v0.3.90",
-      "date": "2026-11-08T11:52:00-05:00",
+      "date": "2026-11-08T11:52:18-05:00",
       "sections": [
         {
           "label": "Performance",
