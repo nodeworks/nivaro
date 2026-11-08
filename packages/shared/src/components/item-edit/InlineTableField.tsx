@@ -6738,6 +6738,14 @@ export function InlineTableField({
   // MUST sit above the loading early-return, or the hook order shifts once
   // data arrives.
 
+  // Hooks above the loading early-return (React #310 on prod 0.3.82).
+  /** The selected saved rows' bases, pinned when the bulk dialog OPENS (army9
+   *  b09 HIGH): the dialog can sit open while someone else saves one of those
+   *  lines; a live refresh then moves the grid's read-time base forward and
+   *  the Apply would have passed the mid-air check — Sudharsan's 6 overwritten
+   *  by Bernard's 8, "Changes saved", nothing said to either. */
+  const bulkBasesRef = useRef<Map<string, Promise<number | null>>>(new Map())
+
   if (colsLoading || (!isNew && rowsLoading))
     return (
       <div className='py-3 text-center text-[12px] text-slate-400'>
@@ -6897,12 +6905,6 @@ export function InlineTableField({
     )
     bulkBasesRef.current = new Map()
   }
-  /** The selected saved rows' bases, pinned when the bulk dialog OPENS (army9
-   *  b09 HIGH): the dialog can sit open while someone else saves one of those
-   *  lines; a live refresh then moves the grid's read-time base forward and
-   *  the Apply would have passed the mid-air check — Sudharsan's 6 overwritten
-   *  by Bernard's 8, "Changes saved", nothing said to either. */
-  const bulkBasesRef = useRef<Map<string, Promise<number | null>>>(new Map())
   function openBulkEdit() {
     bulkBasesRef.current =
       isNew || readOnly
