@@ -902,6 +902,9 @@ interface ExactSpec {
   indexed?: boolean
 }
 
+/** Rows the exact-id pass keeps per collection (and per column when confirming). */
+const EXACT_SEEK_TOP = 2
+
 /**
  * Exact-id pass (item 1): an id-ish query equal to a business-id column of a
  * collection (string `*_id` / `*_number`, numeric `*_number` for digits), or —
@@ -926,7 +929,7 @@ export function exactStatement(
     if (preds.length + nums.length === 0) continue
     const where = [...preds.map((p) => p.sql), ...nums.map((c) => `[${c}] = ?`)].join(' OR ')
     parts.push(
-      `SELECT * FROM (SELECT TOP 2 '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}) AS [x_${b.collection}]`
+      `SELECT * FROM (SELECT TOP ${EXACT_SEEK_TOP} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}) AS [x_${b.collection}]`
     )
     bindings.push(...preds.flatMap((p) => p.bindings), ...nums.map(() => Number(q)))
   }
@@ -1176,7 +1179,10 @@ async function exactHits(
   prefix?: (value: string) => boolean
 ): Promise<Found[]> {
   if (found.length === 0) return []
-  const rows = await confirmRows(ctx.user, groupCandidates(found, prefix ? PREFIX_PER_COLUMN : 2))
+  const rows = await confirmRows(
+    ctx.user,
+    groupCandidates(found, prefix ? PREFIX_PER_COLUMN : EXACT_SEEK_TOP)
+  )
   const lower = q.toLowerCase()
   const matches = prefix ?? ((v: string) => v.toLowerCase() === lower)
   const out: Found[] = []
@@ -1508,7 +1514,9 @@ export function groupHits<T extends RecordHit>(
 async function groupValues(
   user: User,
   plan: PlanEntry[],
-  hits: RecordHit[]
+  hits: RecordHit[],
+  /** Filled with each hit's value as stored (the returned map is lower-cased). */
+  raw: Map<string, unknown> = new Map()
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const by = new Map(plan.filter((p) => p.groupBy).map((p) => [p.collection, p.groupBy as string]))
@@ -1531,12 +1539,86 @@ async function groupValues(
         })
         for (const row of r.data as Array<Record<string, unknown>>) {
           const v = row[field]
-          if (v != null && typeof v !== 'object' && String(v).trim())
+          if (v != null && typeof v !== 'object' && String(v).trim()) {
             out.set(hitKey(collection, row.id), String(v).trim().toLowerCase())
+            raw.set(hitKey(collection, row.id), v)
+          }
         }
       } catch {
         /* unreadable: no grouping */
       }
+    })
+  )
+  return out
+}
+
+/**
+ * The collections whose grouped rows may hold more members than the search saw (army 10:
+ * "INV-PPC-000378 · 2 lines" for an invoice with 25). The exact-id pass keeps the first
+ * EXACT_SEEK_TOP rows per collection and an exact hit cuts the scans short, so neither a
+ * full per-collection cap nor a full exact pass nor a cut part proves the group complete.
+ * Pure; exported for tests.
+ */
+export function groupsMayHaveMore(args: {
+  found: Array<{ collection: string }>
+  exact: Array<{ collection: string }>
+  per: number
+  cut: boolean
+  grouped: string[]
+}): Set<string> {
+  const count = (list: Array<{ collection: string }>) => {
+    const by = new Map<string, number>()
+    for (const h of list) by.set(h.collection, (by.get(h.collection) ?? 0) + 1)
+    return by
+  }
+  const out = new Set<string>()
+  for (const [c, n] of count(args.found)) if (n >= args.per) out.add(c)
+  for (const [c, n] of count(args.exact)) if (n >= EXACT_SEEK_TOP) out.add(c)
+  if (args.cut) for (const c of args.grouped) out.add(c)
+  return out
+}
+
+/** Grouped rows counted exactly per search (each one indexed equality count). */
+const GROUP_COUNT_MAX = 3
+/** How long an exact group count may take before the row keeps its "N+". */
+const GROUP_COUNT_MS = 600
+
+/**
+ * Replace "N+" with the true member count where it is cheap (army 10): a grouped row
+ * flagged group_more whose group_by column leads an index is counted AS THE CALLER — one
+ * equality read through the items service, so row filters and User Scopes apply. A count
+ * that fails or runs past GROUP_COUNT_MS leaves the honest "N+". Exported for tests
+ * (`count` stands in for the items-service read).
+ */
+export async function countGroupMembers<T extends RecordHit>(
+  records: T[],
+  plan: Array<Pick<PlanEntry, 'collection' | 'groupBy' | 'indexed'>>,
+  raw: Map<string, unknown>,
+  count: (collection: string, field: string, value: unknown) => Promise<number | null>,
+  ms = GROUP_COUNT_MS
+): Promise<T[]> {
+  const targets = records
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.group_more === true && (r.group_size ?? 0) >= 2)
+    .slice(0, GROUP_COUNT_MAX)
+  if (targets.length === 0) return records
+  const out = [...records]
+  await Promise.all(
+    targets.map(async ({ r, i }) => {
+      const p = plan.find((x) => x.collection === r.collection)
+      const field = p?.groupBy
+      if (!field || !(p?.indexed ?? []).includes(field)) return
+      const value = raw.get(hitKey(r.collection, r.id))
+      if (value == null) return
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms)
+      })
+      const n = await Promise.race([count(r.collection, field, value).catch(() => null), late])
+      if (timer) clearTimeout(timer)
+      if (typeof n !== 'number' || !Number.isFinite(n)) return
+      const { group_more: _more, ...rest } = r
+      out[i] = { ...rest, group_size: Math.max(n, r.group_size ?? 0) } as T
     })
   )
   return out
@@ -1667,11 +1749,30 @@ async function searchRecords(
       return f ? { ...r, friendly_id: f } : r
     }
   )
-  // Collections whose hits filled their per-collection cap: a group there may be larger.
-  const perCollection = new Map<string, number>()
-  for (const h of found) perCollection.set(h.collection, (perCollection.get(h.collection) ?? 0) + 1)
-  const capped = new Set([...perCollection].filter(([, n]) => n >= per).map(([c]) => c))
-  const records = groupHits(finished, await groupValues(user, plan, finished), capped)
+  // Collections where a group may be larger than the hits seen (a full cap, a full exact
+  // pass, a part cut short); the true count replaces "N+" where it is one indexed read.
+  const capped = groupsMayHaveMore({
+    found,
+    exact,
+    per,
+    cut: budget.timedOut.size + budget.trimmed.size > 0,
+    grouped: plan.filter((p) => p.groupBy).map((p) => p.collection)
+  })
+  const groupRaw = new Map<string, unknown>()
+  const records = await countGroupMembers(
+    groupHits(finished, await groupValues(user, plan, finished, groupRaw), capped),
+    plan,
+    groupRaw,
+    async (collection, field, value) => {
+      const r = await readItems(user, collection, {
+        filter: { [field]: { _eq: value } },
+        fields: ['id'],
+        limit: 1
+      })
+      const total = (r as { total?: unknown }).total
+      return typeof total === 'number' ? total : null
+    }
+  )
   const exactHits = records.filter((r) => r.exact)
   // "Did you mean": only when nothing but near spellings came back.
   const suggestions =

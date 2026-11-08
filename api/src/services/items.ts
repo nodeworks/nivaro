@@ -32,6 +32,7 @@ import { shouldRecomputeWriteField } from '../lib/write-formula.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
+import { type AliasLink, dedupeAliasLinks, sameAliasLink } from './alias-links.js'
 import {
   applyAutoIdsExt,
   autoIdFieldsFor,
@@ -5916,12 +5917,6 @@ async function coerceRelationObjects(
 
 const ALIAS_WRITES = Symbol('aliasWrites')
 
-interface AliasLink {
-  id: string | number
-  /** Polymorphic link: the collection the id belongs to (the junction's discriminator value). */
-  collection?: string
-}
-
 interface AliasM2MWrite {
   field: string
   junction: string
@@ -6095,9 +6090,11 @@ async function extractAliasM2MWrites(
       } else adds = [raw]
     } else adds = [raw]
 
-    const links = adds
-      .map((e) => linkOf(e, jf, m2a))
-      .filter((l): l is AliasLink => !!l && l.id !== '')
+    // One person named twice in one body (a prefill plus a pick, two letter
+    // cases of one id) is one link — the junction gets one row.
+    const links = dedupeAliasLinks(
+      adds.map((e) => linkOf(e, jf, m2a)).filter((l): l is AliasLink => !!l && l.id !== '')
+    )
     const removals = removes
       .map((e) => linkOf(e, jf, m2a))
       .filter((l): l is AliasLink => !!l && l.id !== '')
@@ -6128,11 +6125,9 @@ async function extractAliasM2MWrites(
   return writes
 }
 
-// A stored link with no discriminator (rows written before it was set)
-// matches any collection: it must never be duplicated beside itself.
-const sameLink = (a: AliasLink, b: AliasLink) =>
-  String(a.id) === String(b.id) &&
-  (!a.collection || !b.collection || a.collection.toLowerCase() === b.collection.toLowerCase())
+// Link identity (case-blind ids; a stored link with no discriminator matches
+// any collection) lives in services/alias-links.ts.
+const sameLink = sameAliasLink
 
 /**
  * Write the junction rows an alias write asked for, through createOne and
@@ -6165,7 +6160,7 @@ async function applyAliasM2MWrites(
       }))
       for (const link of w.links) {
         if (have.some((h) => sameLink(h.link, link))) continue
-        await createOne(
+        const created = (await createOne(
           user,
           w.junction,
           {
@@ -6174,7 +6169,10 @@ async function applyAliasM2MWrites(
             ...(w.discriminator && link.collection ? { [w.discriminator]: link.collection } : {})
           },
           req
-        )
+        )) as { id?: string | number } | null
+        // The link now exists: a second spelling of it later in this write
+        // (upper- vs lower-case id) must not land as another row.
+        have.push({ junctionId: created?.id ?? '', link })
       }
       const gone = w.set
         ? have.filter((h) => !w.links.some((l) => sameLink(l, h.link)))

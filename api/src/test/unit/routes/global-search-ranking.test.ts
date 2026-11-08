@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   combinedFilter,
+  countGroupMembers,
   exactStatement,
   finishHits,
   fuzzyStatement,
   groupHits,
+  groupsMayHaveMore,
   mergeFound,
   parseLabelSearchFields,
   toHit,
@@ -225,4 +227,101 @@ describe('withDetail', () => {
       snippet: 'INV-1'
     }
   }
+})
+
+// Army 10: Cmd+K said "INV-PPC-000378 · 2 lines" for an invoice with 25 — the exact-id
+// pass keeps 2 rows per collection and its hit cut the scans short, and nothing said "more".
+describe('groupsMayHaveMore', () => {
+  const inv = { collection: 'invoices' }
+  it('a full exact pass may hide more members', () => {
+    const out = groupsMayHaveMore({
+      found: [inv, inv],
+      exact: [inv, inv],
+      per: 8,
+      cut: false,
+      grouped: ['invoices']
+    })
+    expect([...out]).toEqual(['invoices'])
+  })
+  it('a part cut short marks every grouped collection', () => {
+    const out = groupsMayHaveMore({
+      found: [inv],
+      exact: [],
+      per: 8,
+      cut: true,
+      grouped: ['invoices', 'po_lines']
+    })
+    expect([...out].sort()).toEqual(['invoices', 'po_lines'])
+  })
+  it('a complete search with room to spare flags nothing', () => {
+    const out = groupsMayHaveMore({
+      found: [inv, inv, inv],
+      exact: [inv],
+      per: 8,
+      cut: false,
+      grouped: ['invoices']
+    })
+    expect(out.size).toBe(0)
+  })
+})
+
+describe('countGroupMembers', () => {
+  const plan = [{ collection: 'invoices', groupBy: 'number', indexed: ['number', 'id'] }]
+  const raw = new Map<string, unknown>([['invoices:7', 'INV-PPC-000378']])
+  const row = {
+    collection: 'invoices',
+    display_name: 'Invoices',
+    id: 7,
+    label: 'INV-PPC-000378',
+    snippet: '',
+    exact: true,
+    group_size: 2,
+    group_more: true
+  }
+  it('counts the group as the caller and drops the "+"', async () => {
+    const asked: unknown[] = []
+    const out = await countGroupMembers([row], plan, raw, async (c, f, v) => {
+      asked.push([c, f, v])
+      return 25
+    })
+    expect(asked).toEqual([['invoices', 'number', 'INV-PPC-000378']])
+    expect(out[0]).toMatchObject({ group_size: 25 })
+    expect(out[0].group_more).toBeUndefined()
+  })
+  it('keeps "N+" when the count fails, is slow, or the column is not indexed', async () => {
+    const failed = await countGroupMembers([row], plan, raw, async () => {
+      throw new Error('boom')
+    })
+    expect(failed[0]).toMatchObject({ group_size: 2, group_more: true })
+    const slow = await countGroupMembers(
+      [row],
+      plan,
+      raw,
+      () => new Promise((r) => setTimeout(() => r(25), 200)),
+      20
+    )
+    expect(slow[0]).toMatchObject({ group_size: 2, group_more: true })
+    let called = false
+    const unindexed = await countGroupMembers(
+      [row],
+      [{ ...plan[0], indexed: ['id'] }],
+      raw,
+      async () => {
+        called = true
+        return 25
+      }
+    )
+    expect(called).toBe(false)
+    expect(unindexed[0]).toMatchObject({ group_size: 2, group_more: true })
+  })
+  it('never shrinks a group below the members seen; complete groups are not re-counted', async () => {
+    const out = await countGroupMembers([row], plan, raw, async () => 1)
+    expect(out[0]).toMatchObject({ group_size: 2 })
+    let called = false
+    await countGroupMembers([{ ...row, group_more: undefined }], plan, raw, async () => {
+      called = true
+      return 25
+    })
+    expect(called).toBe(false)
+  })
 })
