@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-11-08T04:15:22.726Z",
+  "generated_at": "2026-11-08T14:17:11.144Z",
   "releases": [
+    {
+      "version": "0.3.86",
+      "tag": "v0.3.86",
+      "date": "2026-11-08T09:16:56-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "heartbeats never answer with a server error",
+              "hash": "06295d77a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "no native confirm dialogs anywhere in shared components",
+              "hash": "569e4b392"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "batch a record page's small GETs into POST /api/batch-get",
+              "hash": "eb52a9666"
+            },
+            {
+              "section": "Performance",
+              "scope": "api",
+              "text": "activity action index script + sealer reads its filtered index",
+              "hash": "aef4e52e7"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.85",
       "tag": "v0.3.85",
-      "date": "2026-11-07T23:15:07-05:00",
+      "date": "2026-11-07T23:15:22-05:00",
       "sections": [
         {
           "label": "Fixed",
