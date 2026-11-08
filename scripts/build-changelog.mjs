@@ -33,10 +33,30 @@ const NOTES = (() => {
   }
 })()
 
-/** One entry with its plain-language note applied. */
+/**
+ * One commit's entries with its plain-language note applied. A note may carry
+ * `items` — several plain lines for one commit that fixed many things (army 9
+ * b11 N9-8: the 0.3.80 release, ~100 fixes in two commits, read "Fixes and
+ * improvements"); each becomes its own entry with the same hash and section.
+ */
 function applyNote(entry, notes = NOTES) {
   const note = entry.hash ? notes[entry.hash] : null
-  if (!note || typeof note !== 'object') return entry
+  if (!note || typeof note !== 'object') return [entry]
+  const items = Array.isArray(note.items)
+    ? note.items.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
+    : []
+  if (items.length > 0) {
+    return items.map((text) => ({
+      ...entry,
+      commit_text: entry.text,
+      text,
+      ...(note.audience === 'developer' ? { audience: 'developer' } : {})
+    }))
+  }
+  return [applyOneNote(entry, note)]
+}
+
+function applyOneNote(entry, note) {
   const out = { ...entry }
   if (typeof note.text === 'string' && note.text.trim()) {
     out.commit_text = entry.text
@@ -89,7 +109,7 @@ function entriesFor(fromTag, toTag) {
     const type = m?.[1]?.toLowerCase() ?? 'other'
     const section = SECTIONS.find((s) => s.key === type)?.label ?? 'Other'
     out.push(
-      applyNote({
+      ...applyNote({
         section,
         scope: m?.[2] ?? null,
         text: (m?.[3] ?? subject).trim(),
