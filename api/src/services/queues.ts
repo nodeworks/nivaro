@@ -1143,6 +1143,7 @@ export interface QueueItemsQuery {
   group_key?: string
   group_sums?: string
   after?: string
+  tail?: string
 }
 
 export interface ParsedQueueItemsQuery {
@@ -1155,6 +1156,9 @@ export interface ParsedQueueItemsQuery {
   limit?: number
   /** #2447 — keyset cursor (`start` or a `next_cursor`); only with page/limit. */
   after?: string
+  /** The LAST n rows of the same sorted set too (1–50), oldest-first in reverse — one read
+   *  answers both ends of a worklist (dashboard "Waiting on you" used to read twice). */
+  tail?: number
 }
 
 /**
@@ -1197,6 +1201,8 @@ export function parseQueueItemsQuery(
   // by state), so it omits both params to get everything.
   const paginationRequested = q.page !== undefined || q.limit !== undefined
   const { page, limit } = parsePaginationParams(q.page, q.limit)
+  const tailN = Number(q.tail)
+  const tail = !group && Number.isInteger(tailN) && tailN > 0 ? Math.min(tailN, 50) : 0
   return {
     ok: true,
     value: {
@@ -1207,7 +1213,8 @@ export function parseQueueItemsQuery(
       ...(paginationRequested ? { page, limit } : {}),
       ...(paginationRequested && typeof q.after === 'string' && q.after.length <= 2048
         ? { after: q.after }
-        : {})
+        : {}),
+      ...(tail ? { tail } : {})
     }
   }
 }
@@ -3402,6 +3409,8 @@ export async function fetchQueueItems(
     limit?: number
     /** #2447 — cursor for a materialized queue's next page; `page` is the fallback. */
     after?: string
+    /** Also answer the last n rows of the sorted set (reverse order) as `tail`. */
+    tail?: number
     /** Mark returned rows changed-since-you-looked (#643) — the worklist
      *  asks; digests, snapshots and feeds do not pay for it. */
     withUnseen?: boolean
@@ -3424,6 +3433,7 @@ export async function fetchQueueItems(
 ): Promise<{
   /** #2447 — the next page's cursor when this page was read by cursor (null at the end). */
   nextCursor?: string | null
+  tail?: QueueItem[]
   items: QueueItem[]
   groups?: QueueGroupSummary[]
   stats: QueueStats
@@ -3621,9 +3631,12 @@ export async function fetchQueueItems(
   // Headers-only (no group key): total is the whole grouped set, not the
   // empty page — an empty-queue explanation must not fire for it.
   const total = options.group && options.group.key == null ? sorted.length : pageTotal
+  const tailItems =
+    options.tail && !options.group ? pageSource.slice(-options.tail).reverse() : undefined
   if (options.withUnseen) {
-    const pageUnseen = unseenMap ?? (await unseenForItems(user.id, paged))
-    for (const it of paged) it.unseen = pageUnseen.get(`${it.collection}:${it.item_id}`) ?? null
+    const marked = tailItems ? [...paged, ...tailItems.filter((t) => !paged.includes(t))] : paged
+    const pageUnseen = unseenMap ?? (await unseenForItems(user.id, marked))
+    for (const it of marked) it.unseen = pageUnseen.get(`${it.collection}:${it.item_id}`) ?? null
   }
   // Prefer exact cache stats for a materialized queue on the live-fallback path —
   // fall back to live-computed stats if the cache read failed for any reason.
@@ -3651,6 +3664,7 @@ export async function fetchQueueItems(
       : null
   return {
     items: paged,
+    ...(tailItems ? { tail: tailItems } : {}),
     ...(groups ? { groups } : {}),
     stats: exact?.stats ?? liveExact ?? computeStats(scoped),
     filteredStats: hasActiveColumnFilters(options.filters) ? computeStats(filtered) : null,
