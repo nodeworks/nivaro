@@ -73,6 +73,15 @@ export const SECTION_META: OverviewSectionMeta[] = [
     defaultVisible: true
   },
   {
+    key: 'people-to-offload',
+    title: 'People to offload',
+    hint: 'Suspended or redacted people who still hold work that has to be handed on',
+    column: 'main',
+    adminOnly: true,
+    defaultOrder: 32,
+    defaultVisible: true
+  },
+  {
     key: 'pinned-widgets',
     title: 'Pinned widgets',
     hint: 'Dashboard widgets you pinned to this page',
@@ -159,6 +168,7 @@ export const EXTERNAL_SECTION_KEYS = [
   'problems',
   'config-changes',
   'people-waiting',
+  'people-to-offload',
   'usage',
   'following'
 ] as const

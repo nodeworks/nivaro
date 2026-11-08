@@ -9,6 +9,7 @@ import { registerAlertHooks, setApp as setAlertApp } from './hooks/alerts.js'
 import { registerCrossTriggerHooks, setApp as setCrossTriggerApp } from './hooks/cross-triggers.js'
 import { registerEmbeddingHooks, setApp as setEmbeddingApp } from './hooks/embeddings.js'
 import { registerFieldWatchHooks, setApp as setFieldWatchApp } from './hooks/field-watches.js'
+import { registerInactivePeopleHooks } from './hooks/inactive-people.js'
 import { registerSnoozeWakeHooks } from './hooks/notification-snooze.js'
 import {
   registerNotificationSubscriptionHooks,
@@ -36,6 +37,7 @@ import {
   storeBoot
 } from './services/boot-phases.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
+import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
 import { isRealtimeRole } from './services/process-role.js'
 import { NIVARO_VERSION } from './version.js'
@@ -74,6 +76,7 @@ async function main() {
   if (!process.env.CLOUD_META_DB_URL && !realtime) {
     registerActivityHooks()
     registerFieldWatchHooks()
+    registerInactivePeopleHooks()
     registerNotificationSubscriptionHooks()
     registerPipelineAutostartHooks()
     registerAlertHooks()
@@ -149,6 +152,8 @@ async function main() {
   // A stray rejected promise (e.g. a Redis command flushed while Redis restarts) is logged,
   // never a crash of a serving process.
   installProcessGuards(app.log)
+  // Administrators' people-were-suspended notice goes out through this app (cloud too).
+  setInactivePeopleNoticeApp(app)
 
   // These all query the static DB at startup — skip in cloud mode (and on a realtime process).
   if (!process.env.CLOUD_META_DB_URL && !realtime) {

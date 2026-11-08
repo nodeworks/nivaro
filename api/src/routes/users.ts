@@ -12,6 +12,7 @@ import {
 import { logActivity } from '../services/activity.js'
 import { joinDefaultChannelsSoon } from '../services/chat-default-joins.js'
 import { deleteDefaultsForUser } from '../services/field-defaults.js'
+import { noteUsersDeactivated } from '../services/inactive-people-notice.js'
 import { onCollectionTouched, publishCollectionTouched } from '../services/item-events.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
 import { NOTIFY_CATEGORIES } from '../services/notification-channels.js'
@@ -397,6 +398,13 @@ export async function usersRoutes(app: FastifyInstance) {
     }
     // Credentials never ride a response or a revision (getUser strips them; this says so).
     const user = safeUser(await updateUser(id, filtered))
+    // Suspended by an administrator's edit: tell the other administrators (one notice per batch).
+    if (
+      req.isAdmin &&
+      filtered.status === 'suspended' &&
+      String(previousUser?.status ?? 'active') !== 'suspended'
+    )
+      noteUsersDeactivated([id], { reason: 'admin', actor: req.user!.id, app })
     const activityId = await logActivity({
       action: 'update',
       user: req.user!.id,

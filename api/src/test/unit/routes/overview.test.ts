@@ -38,9 +38,13 @@ const loaders = vi.hoisted(() => ({
   loadProblems: vi.fn(async () => []),
   loadConfigChanges: vi.fn(async () => []),
   loadPeopleWaiting: vi.fn(async () => ({ people: [] })),
-  loadUsage: vi.fn(async () => ({}))
+  loadUsage: vi.fn(async () => ({})),
+  loadOffloadReport: vi.fn(async () => ({ people: [] }))
 }))
 vi.mock('../../../services/overview/data.js', () => loaders)
+vi.mock('../../../services/inactive-people-offload.js', () => ({
+  loadOffloadReport: loaders.loadOffloadReport
+}))
 
 import { overviewRoutes } from '../../../routes/overview.js'
 
@@ -50,7 +54,14 @@ async function build() {
   return app
 }
 
-const ADMIN_ONLY = ['timeline', 'problems', 'config-changes', 'people-waiting', 'usage']
+const ADMIN_ONLY = [
+  'timeline',
+  'problems',
+  'config-changes',
+  'people-waiting',
+  'people-to-offload',
+  'usage'
+]
 const EVERYONE = ['needs-you', 'health', 'following']
 
 describe('overview routes', () => {

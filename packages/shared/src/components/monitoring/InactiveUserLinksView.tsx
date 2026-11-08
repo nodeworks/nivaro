@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, RotateCw, Search, UserX } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
@@ -75,7 +75,17 @@ const REASON_CLS: Record<Reason, string> = {
 
 const n = (v: number) => v.toLocaleString()
 
-export function InactiveUserLinksView({ className }: { className?: string }) {
+export function InactiveUserLinksView({
+  className,
+  focusUserId,
+  onClearFocus
+}: {
+  className?: string
+  /** Show only this person, opened (a link from the "People to offload" card). */
+  focusUserId?: string | null
+  /** "Show everyone" on the focus chip; the host drops its `?person=` param. */
+  onClearFocus?: () => void
+}) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [openOnly, setOpenOnly] = useState(true)
@@ -84,7 +94,13 @@ export function InactiveUserLinksView({ className }: { className?: string }) {
   const [withSeats, setWithSeats] = useState(true)
   const [reason, setReason] = useState<Reason | null>(null)
   const [q, setQ] = useState('')
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(focusUserId ?? null)
+  const [focus, setFocus] = useState<string | null>(focusUserId ?? null)
+  // A different `?person=` (another card clicked while this page is open) re-focuses.
+  useEffect(() => {
+    setFocus(focusUserId ?? null)
+    if (focusUserId) setExpanded(focusUserId)
+  }, [focusUserId])
   const [fresh, setFresh] = useState(0)
 
   const scan = useQuery({
@@ -129,11 +145,12 @@ export function InactiveUserLinksView({ className }: { className?: string }) {
         return { ...p, links, total: links.reduce((a, l) => a + l.count, 0) }
       })
       .filter((p) => p.total > 0)
+      .filter((p) => !focus || p.user.id.toUpperCase() === focus.toUpperCase())
       .filter(
         (p) => !needle || `${p.user.name} ${p.user.email ?? ''}`.toLowerCase().includes(needle)
       )
       .sort((a, b) => b.total - a.total)
-  }, [scan.data, sources, q, visible])
+  }, [scan.data, sources, q, visible, focus])
 
   const byReason = useMemo(() => {
     const out: Record<Reason, number> = { suspended: 0, redacted: 0, anonymised: 0, placeholder: 0 }
@@ -199,6 +216,25 @@ export function InactiveUserLinksView({ className }: { className?: string }) {
           Scan again
         </button>
       </div>
+
+      {focus && (
+        <p
+          className='flex flex-wrap items-center gap-2 text-[12px] text-slate-600 dark:text-muted-foreground'
+          data-inactive-focus
+        >
+          Showing one person.
+          <button
+            type='button'
+            onClick={() => {
+              setFocus(null)
+              onClearFocus?.()
+            }}
+            className='font-medium text-slate-800 underline underline-offset-2 dark:text-foreground'
+          >
+            Show everyone
+          </button>
+        </p>
+      )}
 
       <div className='flex flex-wrap items-center gap-2'>
         <label className='relative'>

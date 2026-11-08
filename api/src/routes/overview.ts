@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { loadOffloadReport } from '../services/inactive-people-offload.js'
 import {
   loadConfigChanges,
   loadFollowing,
@@ -54,6 +55,11 @@ export async function overviewRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/people-waiting', { preHandler: requireAdmin }, async () => ({
     data: await loadPeopleWaiting()
+  }))
+
+  /** Suspended/redacted people who still hold work to hand on (the "People to offload" card). */
+  app.get('/people-to-offload', { preHandler: requireAdmin }, async () => ({
+    data: await loadOffloadReport()
   }))
 
   app.get('/usage', { preHandler: requireAdmin }, async () => ({

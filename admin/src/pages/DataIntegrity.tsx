@@ -75,7 +75,14 @@ export default function DataIntegrity() {
           {tab === 'conformance' ? (
             <ConformanceView />
           ) : tab === 'people' ? (
-            <InactiveUserLinksView />
+            <InactiveUserLinksView
+              focusUserId={params.get('person')}
+              onClearFocus={() => {
+                const next = new URLSearchParams(params)
+                next.delete('person')
+                setParams(next, { replace: true })
+              }}
+            />
           ) : (
             <QualityRulesView />
           )}

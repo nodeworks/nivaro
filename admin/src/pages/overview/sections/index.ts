@@ -4,6 +4,7 @@ import { FollowingSection } from './following'
 import { HealthSection } from './health'
 import type { SectionProps } from './kit'
 import { NeedsYouSection } from './needs-you'
+import { PeopleToOffloadSection } from './people-to-offload'
 import { PeopleWaitingSection } from './people-waiting'
 import { ProblemsSection } from './problems'
 import { TimelineSection } from './timeline'
@@ -24,6 +25,7 @@ export interface OverviewSectionDef {
     | 'problems'
     | 'config-changes'
     | 'people-waiting'
+    | 'people-to-offload'
     | 'usage'
     | 'following'
   title: string
@@ -48,6 +50,12 @@ export const OVERVIEW_SECTIONS: OverviewSectionDef[] = [
     component: PeopleWaitingSection,
     adminOnly: true
   },
+  {
+    key: 'people-to-offload',
+    title: 'People to offload',
+    component: PeopleToOffloadSection,
+    adminOnly: true
+  },
   { key: 'usage', title: 'Usage today', component: UsageSection, adminOnly: true },
   { key: 'following', title: 'Following', component: FollowingSection, adminOnly: false }
 ]
@@ -58,6 +66,7 @@ export {
   FollowingSection,
   HealthSection,
   NeedsYouSection,
+  PeopleToOffloadSection,
   PeopleWaitingSection,
   ProblemsSection,
   TimelineSection,

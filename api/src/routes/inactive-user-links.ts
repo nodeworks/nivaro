@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { loadOffloadReport } from '../services/inactive-people-offload.js'
 import {
   actOnPlatformEntries,
   listInactiveUserRecords,
@@ -19,6 +20,13 @@ export async function inactiveUserLinkRoutes(app: FastifyInstance) {
   app.get('/', async (req) => {
     const q = req.query as { fresh?: string }
     return { data: await scanInactiveUserLinks({ fresh: q.fresh === '1' }) }
+  })
+
+  // "People to offload" (dashboard widget + Overview section): suspended/redacted people who
+  // still hold work, most first, with counts per kind. Admin only (the hook above).
+  app.get('/offload', async (req) => {
+    const q = req.query as { fresh?: string }
+    return { data: await loadOffloadReport({ fresh: q.fresh === '1' }) }
   })
 
   app.get('/:userId/records', async (req, reply) => {
