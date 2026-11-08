@@ -114,9 +114,11 @@ import {
 } from '../../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from '../ai/ask-context'
 import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
+import { BulkCompareButton } from '../bulk/BulkCompareButton'
 import { BulkFieldUpdateButton } from '../bulk/BulkFieldUpdateButton'
 import { BulkRowMark } from '../bulk/BulkRowMark'
-import { RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
+import { BulkMessageButton } from '../bulk/MessageStakeholders'
+import { compareCell, RowActionsMenu, roleMayUpdate } from '../CollectionBrowserView'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
 import { FocusModeToggle } from '../FocusModeToggle'
@@ -5332,6 +5334,33 @@ export function QueueWorklist({
                 .map((r) => ({ collection: r.collection, id: r.item_id }))}
               disabled={bulkBusy}
               onDone={() => void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })}
+              className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+            />
+          )}
+          {/* The list bar's Compare (2–3 records of one kind) and Message… (army 11 N11). */}
+          {builtinGate('compare') && (
+            <BulkCompareButton
+              targets={items
+                .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
+                .map((r) => ({ collection: r.collection, id: r.item_id }))}
+              renderValue={(rels, f, v) =>
+                compareCell(
+                  items.find((r) => selectedIds.includes(rowId(r)))?.collection ?? '',
+                  rels,
+                  f,
+                  v
+                )
+              }
+              disabled={bulkBusy}
+              className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
+            />
+          )}
+          {builtinGate('message') && (
+            <BulkMessageButton
+              targets={items
+                .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
+                .map((r) => ({ collection: r.collection, id: r.item_id }))}
+              disabled={bulkBusy}
               className='rounded-md px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-muted'
             />
           )}

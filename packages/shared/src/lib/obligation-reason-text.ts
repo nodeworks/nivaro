@@ -10,7 +10,7 @@
  * can carry it). Change both.
  */
 
-const ACRONYMS = new Set(['id', 'po', 'req', 'url', 'sku', 'uom', 'erp', 'api', 'ids'])
+const ACRONYMS = new Set(['id', 'po', 'req', 'url', 'sku', 'uom', 'erp', 'api', 'ids', 'mwf'])
 
 /** `nuvolo_id` → "Nuvolo ID", `po_number` → "PO number". */
 function fieldWords(key: string): string {

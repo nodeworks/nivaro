@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { parseAllowedCollections } from '../../lib/allowed-collections'
 import { get } from '../../lib/commands'
@@ -37,6 +37,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { applyDisplayTemplate } from './helpers'
 import { useM2MStaging } from './M2MStagingContext'
+import { onlyCloseMatches } from './picker-search'
 import { RelatedItemLabel, useStaleTip } from './RelationCombobox'
 import type { CMSRelation } from './types'
 
@@ -171,7 +172,8 @@ export function M2MCombobox({
   const {
     options,
     isLoading: isLoadingOptions,
-    localSearch
+    localSearch,
+    closeMatches
   } = useM2MOptions({
     client,
     relatedCollection,
@@ -182,6 +184,7 @@ export function M2MCombobox({
     enabled: open && !!relatedCollection,
     labelOf: getLabel
   })
+  const guessSelection = useGuessSelection(!!closeMatches, search)
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
@@ -396,7 +399,12 @@ export function M2MCombobox({
           </div>
         </PopoverTrigger>
         <PopoverContent className='w-[320px] p-0' align='start'>
-          <Command shouldFilter={false}>
+          <Command
+            shouldFilter={false}
+            // Close matches are guesses: none is highlighted, so Enter never
+            // picks one — the person arrows or clicks (army11 typo pass).
+            {...guessSelection}
+          >
             <CommandInput
               placeholder='Search…'
               value={search}
@@ -412,6 +420,14 @@ export function M2MCombobox({
                 <CommandEmpty className='py-3 text-left text-[12px] text-muted-foreground px-3'>
                   No results
                 </CommandEmpty>
+              )}
+              {!isLoadingOptions && closeMatches && (
+                <p
+                  data-picker-close-matches
+                  className='px-3 pb-1 pt-2 text-[11.5px] text-muted-foreground'
+                >
+                  No exact match for “{search.trim()}” — did you mean:
+                </p>
               )}
               <CommandGroup>
                 {!isLoadingOptions &&
@@ -491,7 +507,13 @@ function useM2MOptions(args: {
   templateNestedFields: string | null
   enabled: boolean
   labelOf: (o: Record<string, unknown>) => string
-}): { options: Record<string, unknown>[]; isLoading: boolean; localSearch: boolean } {
+}): {
+  options: Record<string, unknown>[]
+  isLoading: boolean
+  localSearch: boolean
+  /** Every row is a typo-pass guess (fix11-search `fuzzy`): the exact search found nothing. */
+  closeMatches?: boolean
+} {
   const { client, relatedCollection, search, filterParam, serverSort, templateNestedFields } = args
   const fetchOptions = (text: string) =>
     client
@@ -499,6 +521,8 @@ function useM2MOptions(args: {
         get(`/items/${relatedCollection}`, {
           limit: M2M_OPTION_PAGE,
           search: text || undefined,
+          // Typo pass (fix11-search): close matches only when the exact search finds nothing.
+          ...(text ? { typo: '1' } : {}),
           filter: filterParam,
           picker: '1',
           // A dotted display template ({{core_category.name}}) needs the
@@ -532,7 +556,12 @@ function useM2MOptions(args: {
   })
   if (!askServer)
     return { options: base ?? [], isLoading: !base && baseFetching, localSearch: !!search }
-  return { options: searched ?? [], isLoading: !searched && searching, localSearch: false }
+  return {
+    options: searched ?? [],
+    isLoading: !searched && searching,
+    localSearch: false,
+    closeMatches: onlyCloseMatches(searched)
+  }
 }
 
 const M2M_OPTION_PAGE = 200
@@ -651,7 +680,8 @@ export function M2MSingleSelectCombobox({
   const {
     options,
     isLoading: isLoadingOptions,
-    localSearch
+    localSearch,
+    closeMatches
   } = useM2MOptions({
     client,
     relatedCollection,
@@ -662,6 +692,7 @@ export function M2MSingleSelectCombobox({
     enabled: open && !!relatedCollection,
     labelOf: getLabel
   })
+  const guessSelection = useGuessSelection(!!closeMatches, search)
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
@@ -806,7 +837,12 @@ export function M2MSingleSelectCombobox({
           </button>
         </PopoverTrigger>
         <PopoverContent className='w-[320px] p-0' align='start'>
-          <Command shouldFilter={false}>
+          <Command
+            shouldFilter={false}
+            // Close matches are guesses: none is highlighted, so Enter never
+            // picks one — the person arrows or clicks (army11 typo pass).
+            {...guessSelection}
+          >
             <CommandInput
               placeholder='Search…'
               value={search}
@@ -835,6 +871,14 @@ export function M2MSingleSelectCombobox({
                 <CommandEmpty className='py-3 text-left text-[12px] text-muted-foreground px-3'>
                   No results
                 </CommandEmpty>
+              )}
+              {!isLoadingOptions && closeMatches && (
+                <p
+                  data-picker-close-matches
+                  className='px-3 pb-1 pt-2 text-[11.5px] text-muted-foreground'
+                >
+                  No exact match for “{search.trim()}” — did you mean:
+                </p>
               )}
               {!isLoadingOptions && (
                 <CommandGroup>
@@ -895,4 +939,46 @@ export function M2MSingleSelectCombobox({
       {singleStaleTip.tip}
     </div>
   )
+}
+
+/** cmdk selection for a list of close matches: nothing highlighted until the
+ *  person moves (arrow keys or the pointer), and Enter picks nothing before
+ *  that. cmdk selects its first item on its own and keeps that in its store
+ *  even when `value` is controlled, so an unasked selection is answered by
+ *  flipping the controlled value between '' and ' ' (both trim to nothing),
+ *  which makes cmdk read it again. A new search starts over. */
+function useGuessSelection(
+  guesses: boolean,
+  search: string
+): {
+  value?: string
+  onValueChange?: (v: string) => void
+  onKeyDownCapture?: (e: KeyboardEvent<HTMLDivElement>) => void
+  onPointerMoveCapture?: () => void
+} {
+  const [picked, setPicked] = useState<string | null>(null)
+  const [flip, setFlip] = useState(false)
+  const armed = useRef(false)
+  useEffect(() => {
+    setPicked(null)
+    armed.current = false
+  }, [search])
+  if (!guesses) return {}
+  return {
+    value: picked ?? (flip ? ' ' : ''),
+    onValueChange: (v) => {
+      if (armed.current) setPicked(v)
+      else setFlip((f) => !f)
+    },
+    onKeyDownCapture: (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') armed.current = true
+      else if (e.key === 'Enter' && !armed.current) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    },
+    onPointerMoveCapture: () => {
+      armed.current = true
+    }
+  }
 }

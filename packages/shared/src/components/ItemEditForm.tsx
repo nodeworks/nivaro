@@ -142,7 +142,14 @@ import {
   summaryRulesNeedState
 } from '../lib/summary-mode'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
-import { choiceLabel, cn, formatRelative, titleCase, toLocalDateString } from '../lib/utils'
+import {
+  choiceLabel,
+  cn,
+  formatDate,
+  formatRelative,
+  titleCase,
+  toLocalDateString
+} from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import type { AvailableBulkAction } from './bulk/BulkActionButtons'
@@ -236,6 +243,7 @@ import {
   saveIsEcho,
   staleDraftConflicts
 } from './item-edit/header-midair'
+import { useHeaderPathPreview } from './item-edit/header-path-preview'
 import {
   applyDisplayTemplate,
   type CascadeRule,
@@ -250,6 +258,7 @@ import {
 import { evalClientFormula } from './item-edit/InlineTableField'
 import { LayoutContentBlock, SectionIntro } from './item-edit/LayoutContentBlock'
 import { deferredSections } from './item-edit/lazy-sections'
+import { type LineRevision, mergeEditOf, restoredLineConflicts } from './item-edit/line-merge'
 import {
   fetchLatestRevisions,
   type LineCollision,
@@ -892,8 +901,9 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
           num / 100
         )
   if (format === 'date') {
+    // One date style in the header ("Nov 8, 2026" — army 11 f2).
     try {
-      return toLocalDateString(value)
+      return formatDate(value as string) || toLocalDateString(value)
     } catch {
       return String(value)
     }
@@ -2388,6 +2398,7 @@ function ItemEditFormView({
   // The 'Can't save yet' summary shows after a failed save until dismissed or
   // the errors clear (it derives from validationErrors, so it never lingers).
   const [showValidationSummary, setShowValidationSummary] = useState(false)
+  const [formFallbackDismissed, setFormFallbackDismissed] = useState(false)
   // The newest field error that appeared outside a Save attempt (army11 review #7).
   const [liveFieldError, setLiveFieldError] = useState('')
   const prevErrorsRef = useRef<Record<string, string>>({})
@@ -2415,7 +2426,30 @@ function ItemEditFormView({
     mine: Record<string, unknown>
     /** Found by the restored-draft check on the client (no request sent). */
     clientFound?: boolean
+    /** Merge (army 11): everything the save carried, and the record as the
+     *  newer save left it (read when the chooser opens). */
+    edit?: Record<string, unknown>
+    current?: Record<string, unknown> | null
   } | null>(null)
+  // Merge (army 11): the record as the newer save left it, read once per
+  // chooser (as this person) for the "After the merge" preview.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one read per conflict revision
+  useEffect(() => {
+    if (!collision || collision.current !== undefined || isNew || itemId == null) return
+    let alive = true
+    client
+      .request<{ data: Record<string, unknown> | null }>(
+        get(`/items/${collection}/${encodeURIComponent(String(itemId))}`)
+      )
+      .then((r) => r.data ?? null)
+      .catch(() => null)
+      .then((row) => {
+        if (alive) setCollision((c) => (c && c.current === undefined ? { ...c, current: row } : c))
+      })
+    return () => {
+      alive = false
+    }
+  }, [collision?.latest, collision?.current === undefined, collection, itemId, isNew])
   const baseRevisionOverrideRef = useRef<number | null>(null)
   // A pressed Save is on its way (handleSave → saveMut settles).
   const saveStartedRef = useRef(false)
@@ -2433,6 +2467,16 @@ function ItemEditFormView({
     Map<string, { ids: string[]; result: Promise<Map<string, number | null>> }>
   >(new Map())
   const [lineCollision, setLineCollision] = useState<LineCollision[] | null>(null)
+  // The chooser was opened by a restored draft (army 11 f4 L4): its answer
+  // only shapes the draft — nothing is saved until the person presses Save.
+  const [lineChooserFromRestore, setLineChooserFromRestore] = useState(false)
+  // Restored line edits checked against saves made after the draft (L4).
+  const restoredLinesCheckRef = useRef<
+    (
+      edits: Record<string, Record<string, Record<string, unknown>>>,
+      bases: Record<string, number>
+    ) => void
+  >(() => {})
   /** A grid's saved rows as its query cached them (the key carries more
    *  segments — filter, layout — so prefix-match; either cache shape). */
   const cachedGridRows = (rc: string, mf: string): Array<Record<string, unknown>> => {
@@ -4217,6 +4261,12 @@ function ItemEditFormView({
       }
       setPendingO2MEdits(
         new Map(Object.entries(d.pending_edits).map(([k, e]) => [k, new Map(Object.entries(e))]))
+      )
+      // army 11 f4 L4: a line someone saved after the draft is asked about NOW,
+      // like a header field — not only when Save meets the server's 409.
+      restoredLinesCheckRef.current(
+        d.pending_edits as Record<string, Record<string, Record<string, unknown>>>,
+        (d.line_bases ?? {}) as Record<string, number>
       )
     }
     if (Object.keys(d.pending_deletes ?? {}).length)
@@ -8511,6 +8561,17 @@ function ItemEditFormView({
       ...fromLayout
     ]
   }, [activeLayoutData, fieldConfig, showPipeline, isNew])
+  // A header tile on a relation path (Unit = unit.name) shows the PICKED
+  // record's value on a new form or after a change, not "—" until save
+  // (army 11 f2 — fix11-ir-bom).
+  const headerPathPreview = useHeaderPathPreview({
+    collection,
+    relations,
+    paths: headerFields.filter((f) => f.field.includes('.')).map((f) => f.field),
+    draft,
+    saved: initialDataRef.current,
+    isNew
+  })
 
   useEffect(() => {
     if (!onHeaderWidgets) return
@@ -9074,9 +9135,58 @@ function ItemEditFormView({
         formula: String((f as { computed_formula?: unknown }).computed_formula)
       }))
   }
+  restoredLinesCheckRef.current = (edits, bases) => {
+    void (async () => {
+      const found: LineCollision[] = []
+      for (const [key, rows] of Object.entries(edits)) {
+        const dot = key.indexOf('.')
+        if (dot < 0) continue
+        const rc = key.slice(0, dot)
+        const mf = key.slice(dot + 1)
+        for (const [rowId, edit] of Object.entries(rows ?? {})) {
+          const base = bases[`${rc}:${rowId}`]
+          if (typeof base !== 'number' || !(base > 0)) continue
+          const revs = await client
+            .request<{ data: LineRevision[] }>(
+              get('/revisions', { collection: rc, item: rowId, limit: '50' })
+            )
+            .then((r) => r.data ?? [])
+            .catch(() => null)
+          if (!revs) continue
+          const r = restoredLineConflicts(edit, base, revs)
+          if (!r || r.conflicts.length === 0) continue
+          const label = lineLabelOf(cachedGridRows(rc, mf), rowId, null, (row) =>
+            stagedRowLabel(rc, String(row.id))
+          )
+          const mine: Record<string, unknown> = {}
+          for (const c of r.conflicts) mine[c.field] = edit[c.field]
+          const entry: LineCollision = {
+            key,
+            rowId,
+            label,
+            conflicts: r.conflicts,
+            latest: r.latest,
+            mine
+          }
+          await addLineMergeFacts(entry, rc, rowId, edit)
+          if (!entry.current) entry.current = r.current
+          found.push(entry)
+        }
+      }
+      if (found.length === 0) return
+      toast.warning(
+        found.length === 1
+          ? `Someone saved ${found[0].label} after your draft — pick which value wins`
+          : `Someone saved ${found.length} lines after your draft — pick which values win`,
+        { duration: 10_000 }
+      )
+      setLineChooserFromRestore(true)
+      setLineCollision((cur) => cur ?? found)
+    })()
+  }
   // The merge preview never shows a link as its id: a line's own M2O columns are hidden.
-  const lineMergeHides = (line: LineCollision, field: string): boolean => {
-    const rc = line.key.split('.')[0]
+  const lineMergeHides = (line: { key?: string }, field: string): boolean => {
+    const rc = (line.key ?? '').split('.')[0]
     return relations.some((r) => r.many_collection === rc && r.many_field === field)
   }
   const [copiedChanges, setCopiedChanges] = useState<CopiedLineChange[] | null>(null)
@@ -9557,6 +9667,7 @@ function ItemEditFormView({
             conflicts,
             latest: coll.latest,
             mine,
+            edit: mergeEditOf(payload),
             ...(clientFoundCollision ? { clientFound: true } : {})
           })
           throw err
@@ -10511,6 +10622,16 @@ function ItemEditFormView({
     if (keep > 0 && lineReasonRef.current && !changeReasonRef.current)
       changeReasonRef.current = lineReasonRef.current
     lineReasonRef.current = null
+    if (lineChooserFromRestore) {
+      // A restored draft: the picks shape the draft; Save sends it (L4).
+      setLineChooserFromRestore(false)
+      toast.success(
+        keep > 0
+          ? 'Your draft now holds your picks — press Save when you are ready'
+          : 'Kept the newer values'
+      )
+      return
+    }
     if (keep > 0) setLineResaveTick((t) => t + 1)
     else toast.success('Kept the newer values')
   }
@@ -10550,7 +10671,12 @@ function ItemEditFormView({
         if (check.conflicts.length > 0) {
           const mine: Record<string, unknown> = {}
           for (const c of check.conflicts) mine[c.field] = draftRef.current[c.field]
-          setCollision({ conflicts: check.conflicts, latest: check.latest ?? 0, mine })
+          setCollision({
+            conflicts: check.conflicts,
+            latest: check.latest ?? 0,
+            mine,
+            edit: mergeEditOf(draftRef.current)
+          })
           return
         }
         if (check.latest != null) baseRevisionOverrideRef.current = check.latest
@@ -10593,7 +10719,12 @@ function ItemEditFormView({
     if (e.status === 'conflict' && e.conflicts?.length) {
       const mine: Record<string, unknown> = {}
       for (const c of e.conflicts) mine[c.field] = e.payload[c.field]
-      setCollision({ conflicts: e.conflicts, latest: e.latest_revision ?? 0, mine })
+      setCollision({
+        conflicts: e.conflicts,
+        latest: e.latest_revision ?? 0,
+        mine,
+        edit: mergeEditOf(e.payload)
+      })
     } else if (e.base_revision != null) baseRevisionOverrideRef.current = e.base_revision
   }, [outboxEntry, collection, itemId])
   // A conflict found while this record was closed opens the merge dialog the
@@ -14744,6 +14875,26 @@ function ItemEditFormView({
                                   {collision && (
                                     <MidairCollisionDialog
                                       collision={collision}
+                                      merge={{
+                                        edit: collision.edit,
+                                        current: collision.current,
+                                        derived: allFields
+                                          .filter(
+                                            (f) =>
+                                              f.computed_type === 'write' &&
+                                              typeof f.computed_formula === 'string' &&
+                                              !!f.computed_formula.trim()
+                                          )
+                                          .map((f) => ({
+                                            field: f.field,
+                                            formula: String(f.computed_formula)
+                                          })),
+                                        hideField: (f) =>
+                                          relations.some(
+                                            (r) =>
+                                              r.many_collection === collection && r.many_field === f
+                                          ) || !!allFields.find((af) => af.field === f)?.hidden
+                                      }}
                                       fieldLabel={(f) => {
                                         const fc = allFields.find((af) => af.field === f)
                                         return fc?.label || titleCase(f)
@@ -14804,9 +14955,18 @@ function ItemEditFormView({
                                     <LineCollisionDialog
                                       lines={lineCollision}
                                       hideField={lineMergeHides}
+                                      applyLabel={
+                                        lineChooserFromRestore ? 'Apply to my draft' : undefined
+                                      }
+                                      mergeLabel={
+                                        lineChooserFromRestore
+                                          ? 'Use merged in my draft'
+                                          : undefined
+                                      }
                                       onCancel={() => {
                                         // Decide later: a later Save asks for its reason again.
                                         lineReasonRef.current = null
+                                        setLineChooserFromRestore(false)
                                         setLineCollision(null)
                                       }}
                                       onResolve={resolveLineChooser}
@@ -15138,7 +15298,10 @@ function ItemEditFormView({
                                                   const liveRollup = liveRollupValues.get(f.field)
                                                   const raw = aliasState
                                                     ? aliasState.ids
-                                                    : (liveRollup ?? effectiveDraft[f.field])
+                                                    : (liveRollup ??
+                                                      (f.field in headerPathPreview
+                                                        ? headerPathPreview[f.field]
+                                                        : effectiveDraft[f.field]))
                                                   // Addendum view: a header value the addendum CHANGES reads amber,
                                                   // matching the proposed-change styling everywhere else.
                                                   // A rollup the addendum's proposed rows move counts too — the
@@ -15564,6 +15727,29 @@ function ItemEditFormView({
                                           />
                                         </div>
                                       )}
+                                      {activeLayoutData?.requested_form_unavailable &&
+                                        !formFallbackDismissed && (
+                                          <div
+                                            role='status'
+                                            data-requested-form-unavailable
+                                            className='flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+                                          >
+                                            <span className='min-w-0 flex-1'>
+                                              The form in this link isn’t available to you — opened{' '}
+                                              {activeLayoutData.layout?.name
+                                                ? `“${activeLayoutData.layout.name}”`
+                                                : 'the usual form'}{' '}
+                                              instead.
+                                            </span>
+                                            <button
+                                              type='button'
+                                              onClick={() => setFormFallbackDismissed(true)}
+                                              className='shrink-0 rounded px-1.5 text-[12px] font-medium underline-offset-2 hover:underline'
+                                            >
+                                              Dismiss
+                                            </button>
+                                          </div>
+                                        )}
                                       {/* Never offer to restore edits onto a record this person
                                         cannot change; the draft stays for when they can. */}
                                       {recovery.state === 'offer' && !(isReadOnly && !isNew) && (

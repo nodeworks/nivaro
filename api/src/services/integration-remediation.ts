@@ -402,7 +402,7 @@ async function sendIntoNewRow(
 export function freshSendRefusal(def: ObligationKindDef | undefined): string | null {
   if (!def) return 'this kind is no longer registered — a person needs to look'
   if (def.human) return 'this send belongs to a person — open the record and push it there'
-  if (typeof def.fresh_request !== 'function') {
+  if (typeof def.fresh_request !== 'function' && !def.fresh_from_transition) {
     return 'this kind cannot rebuild its request from the current data'
   }
   if (!String(def.endpoint_path ?? '').trim()) {
@@ -434,7 +434,7 @@ type FreshBuild =
   | { ok: false; detail: string }
 
 /** Build (never send) the current-data request for one obligation. */
-async function buildFresh(obligationId: number): Promise<FreshBuild> {
+async function buildFresh(obligationId: number, userId: string | null): Promise<FreshBuild> {
   const row = (await db('nivaro_integration_obligations')
     .where({ id: obligationId })
     .first('id', 'api', 'kind', 'collection', 'item')) as
@@ -443,7 +443,16 @@ async function buildFresh(obligationId: number): Promise<FreshBuild> {
   if (!row) return { ok: false, detail: 'no such obligation' }
   const def = getObligationKind(row.api, row.kind)
   const refusal = freshSendRefusal(def)
-  if (refusal || !def?.fresh_request) return { ok: false, detail: `not sent: ${refusal}` }
+  if (refusal || !def) return { ok: false, detail: `not sent: ${refusal}` }
+  if (typeof def.fresh_request !== 'function' && def.fresh_from_transition) {
+    return buildFreshFromTransition(row, def, userId)
+  }
+  if (typeof def.fresh_request !== 'function') {
+    return {
+      ok: false,
+      detail: 'not sent: this kind cannot rebuild its request from the current data'
+    }
+  }
   const api = (await db('nivaro_external_apis').where({ name: row.api }).first('id')) as
     | { id: number }
     | undefined
@@ -469,11 +478,59 @@ async function buildFresh(obligationId: number): Promise<FreshBuild> {
   return { ok: true, row, apiId: Number(api.id), request: built }
 }
 
+/**
+ * The current-data request for a send a TRANSITION makes (e.g. MWF's state push): core's own
+ * erp_submit render for a transition into the record's current state
+ * (`buildErpPushForCurrentState`), as the clicking person.
+ */
+async function buildFreshFromTransition(
+  row: { id: number; api: string; kind: string; collection: string; item: string },
+  def: ObligationKindDef,
+  userId: string | null
+): Promise<FreshBuild> {
+  const { buildErpPushForCurrentState } = await import('./workflow-actions.js')
+  const { plainObligationReason } = await import('./obligation-reason-text.js')
+  let built: Awaited<ReturnType<typeof buildErpPushForCurrentState>>
+  try {
+    built = await buildErpPushForCurrentState({
+      collection: row.collection,
+      item: String(row.item),
+      apiName: row.api,
+      endpointPath: String(def.endpoint_path ?? ''),
+      userId,
+      states: {
+        only: def.fresh_from_transition?.only_states,
+        except: def.fresh_from_transition?.except_states
+      }
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      detail: `not sent: the message could not be built (${err instanceof Error ? err.message : String(err)})`
+    }
+  }
+  if ('refused' in built)
+    return { ok: false, detail: `not sent: ${plainObligationReason(built.refused)}` }
+  return {
+    ok: true,
+    row,
+    apiId: built.api_id,
+    request: {
+      endpoint_path: built.endpoint_path,
+      body: built.body,
+      summary: built.transition_label
+        ? `${built.state.label}, as “${built.transition_label}” sends it`
+        : built.state.label
+    }
+  }
+}
+
 /** What "Send current data" would send — for the confirm. Sends nothing. */
 export async function freshSendPreview(
-  obligationId: number
+  obligationId: number,
+  userId: string | null = null
 ): Promise<{ available: boolean; api?: string; summary?: string; detail?: string }> {
-  const b = await buildFresh(obligationId)
+  const b = await buildFresh(obligationId, userId)
   if (!b.ok) return { available: false, detail: b.detail }
   return { available: true, api: b.row.api, summary: b.request.summary }
 }
@@ -492,7 +549,7 @@ export async function sendFresh(
   if (!(await remediationEnabled())) {
     return { detail: 'remediation is off for this deployment' }
   }
-  const b = await buildFresh(obligationId)
+  const b = await buildFresh(obligationId, userId)
   if (!b.ok) return { detail: b.detail }
   const stored: StoredRequest = {
     endpoint_path: b.request.endpoint_path,

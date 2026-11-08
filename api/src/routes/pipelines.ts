@@ -28,6 +28,7 @@ import { can, getAllowedFields } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
 import {
   bustOwnerGroupCache,
+  isInactivePerson,
   resolveStateOwners,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
@@ -3763,12 +3764,41 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
       }
       const byKey = await resolveStateOwnersBatch(requests)
-      const out: Record<string, Array<{ id: string; name: string }>> = {}
+      // Who can no longer act, so the header names them as such (army 11 f2:
+      // a suspended owner showed as a bare avatar beside the active one).
+      const ownerIds = [...new Set([...byKey.values()].flat().map((o) => String(o.id)))]
+      const gone = new Map<string, 'suspended' | 'former'>()
+      if (ownerIds.length > 0) {
+        const rows = (await selectInChunks(ownerIds, 500, (chunk) =>
+          db('nivaro_users')
+            .whereIn('id', chunk)
+            .select('id', 'status', 'is_redacted', 'first_name', 'last_name')
+        )) as Array<{
+          id: string
+          status: string | null
+          is_redacted: boolean | number | null
+          first_name: string | null
+          last_name: string | null
+        }>
+        for (const r of rows) {
+          if (!isInactivePerson(r)) continue
+          const st = String(r.status ?? '').toLowerCase()
+          gone.set(String(r.id).toLowerCase(), st === 'suspended' ? 'suspended' : 'former')
+        }
+      }
+      const out: Record<
+        string,
+        Array<{ id: string; name: string; inactive?: 'suspended' | 'former' }>
+      > = {}
       for (const [k, owners] of byKey)
-        out[k] = owners.map((o) => ({
-          id: o.id,
-          name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email
-        }))
+        out[k] = owners.map((o) => {
+          const inactive = gone.get(String(o.id).toLowerCase())
+          return {
+            id: o.id,
+            name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email,
+            ...(inactive ? { inactive } : {})
+          }
+        })
       return reply.send({ data: out })
     }
   )

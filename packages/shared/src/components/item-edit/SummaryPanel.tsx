@@ -546,7 +546,8 @@ function O2MSummary({
               ? total.toLocaleString(undefined, {
                   style: 'currency',
                   currency: 'USD',
-                  maximumFractionDigits: total % 1 === 0 ? 0 : 2
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2
                 })
               : total.toLocaleString()}
           </span>
@@ -577,7 +578,8 @@ function O2MSummary({
                     ? n.toLocaleString(undefined, {
                         style: 'currency',
                         currency: 'USD',
-                        maximumFractionDigits: n % 1 === 0 ? 0 : 2
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
                       })
                     : n.toLocaleString()
                 })()}

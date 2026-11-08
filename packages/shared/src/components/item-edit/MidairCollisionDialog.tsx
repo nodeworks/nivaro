@@ -5,6 +5,8 @@ import { titleCase } from '../../lib/utils'
 import { collisionNumberText, differingTails } from './collision-format'
 import {
   classifyLineConflicts,
+  type DerivedField,
+  type MergeSource,
   mergedLinePreview,
   mergeReady,
   mergeTheirsKeys,
@@ -29,7 +31,9 @@ export function MidairCollisionDialog({
   cancelLabel = 'Cancel save',
   formatValue = collisionNumberText,
   topSlot,
-  replaceBody
+  replaceBody,
+  merge,
+  applyLabel = 'Apply & save'
 }: {
   collision: {
     conflicts: Array<{ field: string; current_value: unknown }>
@@ -47,7 +51,34 @@ export function MidairCollisionDialog({
   topSlot?: ReactNode
   /** Another view's list + buttons in place of the Theirs / Mine pairs (Merge). */
   replaceBody?: ReactNode
+  /** Record-level Merge (army 11): what this save carried, the record as the
+   *  newer save left it and its derived fields. Absent = Theirs / Mine only. */
+  /** The pick button ("Apply" when nothing is saved by it — a restored draft). */
+  applyLabel?: string
+  merge?: {
+    edit?: Record<string, unknown>
+    current?: Record<string, unknown> | null
+    derived?: DerivedField[]
+    hideField?: (field: string) => boolean
+  }
 }) {
+  const [mode, setMode] = useState<'pick' | 'merge'>('pick')
+  const ownMerge = !!merge && topSlot === undefined && replaceBody === undefined
+  const shownTop = ownMerge ? <ResolveModeSwitch mode={mode} onMode={setMode} /> : topSlot
+  const shownBody =
+    ownMerge && mode === 'merge' && merge ? (
+      <LineMergeBody
+        sources={[{ ...collision, ...merge }]}
+        label={fieldLabel}
+        formatValue={formatValue}
+        hideField={(_src, f) => !!merge.hideField?.(f)}
+        cancelLabel={cancelLabel}
+        onCancel={onCancel}
+        onResolve={onResolve}
+      />
+    ) : (
+      replaceBody
+    )
   const [takeTheirs, setTakeTheirs] = useState<Set<string>>(
     () => new Set(collision.conflicts.map((c) => c.field))
   )
@@ -110,8 +141,8 @@ export function MidairCollisionDialog({
           {title}
         </p>
         <p className='mt-1 text-[12.5px] text-slate-500 dark:text-muted-foreground'>{intro}</p>
-        {topSlot}
-        {replaceBody ?? (
+        {shownTop}
+        {shownBody ?? (
           <>
             <div className='mt-3 max-h-[320px] space-y-2 overflow-y-auto'>
               {collision.conflicts.map((c, ci) => {
@@ -191,7 +222,7 @@ export function MidairCollisionDialog({
                 onClick={() => onResolve(takeTheirs)}
                 className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white'
               >
-                Apply &amp; save
+                {applyLabel}
               </button>
             </div>
           </>
@@ -214,8 +245,13 @@ export function LineCollisionDialog({
   intro = 'These values were saved by someone else after you changed them. Pick which value wins for each — the rest of your changes are saved.',
   cancelLabel = 'Decide later',
   formatValue = collisionNumberText,
-  hideField
+  hideField,
+  applyLabel,
+  mergeLabel
 }: {
+  /** Button words when the choice saves nothing yet (a restored draft). */
+  applyLabel?: string
+  mergeLabel?: string
   lines: LineCollision[]
   fieldLabel?: (field: string) => string
   onCancel: () => void
@@ -225,7 +261,7 @@ export function LineCollisionDialog({
   /** A line value as a person reads it, by the line's own field name. */
   formatValue?: (field: string, v: unknown) => string | null
   /** Fields the merge preview never shows (links shown as ids, internal columns). */
-  hideField?: (line: LineCollision, field: string) => boolean
+  hideField?: (src: MergeSource, field: string) => boolean
 }) {
   const [mode, setMode] = useState<'pick' | 'merge'>('pick')
   const label = (f: string) => fieldLabel?.(f) || titleCase(f.replace(/_/g, ' '))
@@ -267,11 +303,13 @@ export function LineCollisionDialog({
       }}
       onCancel={onCancel}
       onResolve={onResolve}
+      applyLabel={applyLabel}
       topSlot={<ResolveModeSwitch mode={mode} onMode={setMode} />}
       replaceBody={
         mode === 'merge' ? (
           <LineMergeBody
-            lines={lines}
+            sources={lines}
+            saveLabel={mergeLabel}
             label={label}
             formatValue={formatValue}
             hideField={hideField}
@@ -324,18 +362,20 @@ function ResolveModeSwitch({
  * every conflict has a pick (line-merge.ts holds the rules).
  */
 function LineMergeBody({
-  lines,
+  sources: lines,
   label,
   formatValue,
   hideField,
   cancelLabel,
   onCancel,
-  onResolve
+  onResolve,
+  saveLabel = 'Save merged'
 }: {
-  lines: LineCollision[]
+  saveLabel?: string
+  sources: Array<MergeSource & { label?: string }>
   label: (field: string) => string
   formatValue: (field: string, v: unknown) => string | null
-  hideField?: (line: LineCollision, field: string) => boolean
+  hideField?: (src: MergeSource, field: string) => boolean
   cancelLabel: string
   onCancel: () => void
   onResolve: (theirsKeys: Set<string>) => void
@@ -368,18 +408,21 @@ function LineMergeBody({
               !derived.has(f) &&
               f !== 'id' &&
               !f.startsWith('_') &&
+              !(line.edit?.[f] !== null && typeof line.edit?.[f] === 'object') &&
               !hideField?.(line, f)
           )
           const merged = mergedLinePreview(line, picks)
           const shown = previewFields(line, (f) => !!hideField?.(line, f))
           return (
             <div
-              key={`${line.key}:${line.rowId}`}
+              key={`${line.key ?? 'record'}:${line.rowId ?? ''}`}
               className='rounded-md border border-slate-200 p-2.5 dark:border-border'
             >
-              <p className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
-                {line.label}
-              </p>
+              {line.label && (
+                <p className='text-[12.5px] font-semibold text-slate-800 dark:text-foreground'>
+                  {line.label}
+                </p>
+              )}
               <ul className='mt-1 space-y-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
                 {onlyMine.map((f) => (
                   <li key={`m:${f}`}>
@@ -406,7 +449,7 @@ function LineMergeBody({
                 .filter((f) => f.kind === 'conflict')
                 .map((f) => {
                   const side = picks.get(f.key)
-                  const id = `nvr-merge-${line.rowId}-${f.field}`
+                  const id = `nvr-merge-${line.rowId ?? 'record'}-${f.field}`
                   return (
                     <div key={f.key} className='mt-2'>
                       <p
@@ -498,7 +541,7 @@ function LineMergeBody({
           onClick={() => onResolve(mergeTheirsKeys(all, picks))}
           className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-50'
         >
-          Save merged
+          {saveLabel}
         </button>
       </div>
     </>

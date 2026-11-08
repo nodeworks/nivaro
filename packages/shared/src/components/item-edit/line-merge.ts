@@ -20,7 +20,7 @@
 
 import { evaluateNumeric } from '../../lib/expression'
 import { sameStoredValue } from '../../lib/write-formula'
-import { type LineCollision, lineConflictKey } from './line-midair'
+import { lineConflictKey } from './line-midair'
 
 export type MergeKind = 'same' | 'conflict' | 'derived'
 
@@ -38,8 +38,34 @@ export interface DerivedField {
   formula: string
 }
 
-/** Each server-reported conflict of a line, classified for the merge. */
-export function classifyLineConflicts(line: LineCollision): MergeField[] {
+/**
+ * What a merge works from — a line (LineCollision) or the record's own header
+ * fields (army 11: the same Merge for record-level conflicts). Keys: a line's
+ * `lineConflictKey`, a header field's own name.
+ */
+export interface MergeSource {
+  conflicts: Array<{ field: string; current_value: unknown }>
+  /** This person's value for each conflicting field. */
+  mine: Record<string, unknown>
+  /** Everything this person's save carried (non-conflicting fields too). */
+  edit?: Record<string, unknown>
+  /** The record / line as the newer save left it. */
+  current?: Record<string, unknown> | null
+  derived?: DerivedField[]
+  /** A line's identity — its conflicts are keyed with lineConflictKey. */
+  key?: string
+  rowId?: string
+}
+
+/** The chooser key of one field of a source. */
+export function mergeKeyOf(src: MergeSource, field: string): string {
+  return src.key != null && src.rowId != null
+    ? lineConflictKey({ key: src.key, rowId: src.rowId }, field)
+    : field
+}
+
+/** Each server-reported conflict of a line (or the header), classified for the merge. */
+export function classifyLineConflicts(line: MergeSource): MergeField[] {
   const derived = new Set((line.derived ?? []).map((d) => d.field))
   return line.conflicts.map((c) => {
     const mine = line.mine[c.field]
@@ -49,7 +75,7 @@ export function classifyLineConflicts(line: LineCollision): MergeField[] {
         ? 'same'
         : 'conflict'
     return {
-      key: lineConflictKey(line, c.field),
+      key: mergeKeyOf(line, c.field),
       field: c.field,
       theirs: c.current_value,
       mine,
@@ -102,7 +128,7 @@ export function recomputeDerived(
  * conflicting fields and this edit alone.
  */
 export function mergedLinePreview(
-  line: LineCollision,
+  line: MergeSource,
   picks: ReadonlyMap<string, 'theirs' | 'mine'>
 ): Record<string, unknown> {
   const fields = classifyLineConflicts(line)
@@ -122,10 +148,14 @@ export function mergedLinePreview(
 
 /** The fields a preview shows: everything this edit or the conflict touched,
  *  plus the derived ones — never ids, bookkeeping keys or hidden fields. */
-export function previewFields(line: LineCollision, hide?: (field: string) => boolean): string[] {
+export function previewFields(line: MergeSource, hide?: (field: string) => boolean): string[] {
   const out: string[] = []
+  const edit = line.edit ?? line.mine
   const add = (f: string) => {
     if (out.includes(f) || f === 'id' || f.startsWith('_') || /_id$/.test(f)) return
+    // A link set (zones, years…) or an object is never shown as raw data.
+    const v = edit[f]
+    if (v !== null && typeof v === 'object') return
     if (hide?.(f)) return
     out.push(f)
   }
@@ -133,4 +163,55 @@ export function previewFields(line: LineCollision, hide?: (field: string) => boo
   for (const c of line.conflicts) add(c.field)
   for (const d of line.derived ?? []) add(d.field)
   return out
+}
+
+/** What a save carried, as the merge reads it: the person's own fields only
+ *  (no bookkeeping keys, no id). */
+export function mergeEditOf(
+  payload: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(payload ?? {}))
+    if (k !== 'id' && !k.startsWith('_')) out[k] = v
+  return out
+}
+
+/** One revision of a line as GET /revisions answers it (newest first). */
+export interface LineRevision {
+  id: number | string
+  data?: Record<string, unknown> | null
+  delta?: Record<string, unknown> | null
+}
+
+const STAMP_FIELDS =
+  /^(date_created|date_updated|created|changed|user_created|user_updated|creator|modified_by|modified_on)$/i
+
+/**
+ * A restored line-edit draft against the line's revisions since the draft's
+ * base (army 11 f4 L4): the fields this draft changes that someone else saved
+ * after it was taken — the same answer the server's mid-air check gives at
+ * Save, found at restore so the person can decide there. Null = nothing newer.
+ */
+export function restoredLineConflicts(
+  edit: Record<string, unknown>,
+  base: number,
+  revisions: LineRevision[]
+): {
+  conflicts: Array<{ field: string; current_value: unknown }>
+  latest: number
+  current: Record<string, unknown> | null
+} | null {
+  const newer = revisions.filter((r) => Number(r.id) > base)
+  if (newer.length === 0) return null
+  const latestRev = newer.reduce((a, b) => (Number(b.id) > Number(a.id) ? b : a))
+  const changed = new Set<string>()
+  for (const r of newer)
+    for (const k of Object.keys(r.delta ?? {})) if (!STAMP_FIELDS.test(k)) changed.add(k)
+  const current = latestRev.data ?? null
+  const conflicts: Array<{ field: string; current_value: unknown }> = []
+  for (const f of Object.keys(edit)) {
+    if (f === 'id' || f.startsWith('_') || !changed.has(f)) continue
+    conflicts.push({ field: f, current_value: current ? current[f] : null })
+  }
+  return { conflicts, latest: Number(latestRev.id), current }
 }

@@ -48,6 +48,8 @@ interface OwnedRow {
   state_color: string | null
   url: string
   sla: SlaInfo | null
+  /** Every at-risk rule the record matches ("On hold", "Sent back") — army 11. */
+  flags?: Array<{ name: string; color: string }>
 }
 
 interface TaskRow {
@@ -670,6 +672,15 @@ export function MyWorkView({
                           <span className='hidden text-[11px] text-muted-foreground sm:inline'>
                             {o.collection.replace(/_/g, ' ')}
                           </span>
+                          {/* A parked record says so before it is opened (army 11 a1 F-2). */}
+                          {o.flags?.some((f) => /^on hold$/i.test(f.name.trim())) && (
+                            <span
+                              data-my-work-hold
+                              className='shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[10.5px] font-semibold text-amber-800 dark:text-amber-300'
+                            >
+                              On hold
+                            </span>
+                          )}
                           <StateChip state={o.state} color={o.state_color} />
                           <SlaChip sla={o.sla} />
                         </button>

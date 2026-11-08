@@ -23,6 +23,7 @@ import {
   queueDefinitionHash,
   snapshotMatchesDefinition
 } from '../services/queue-trend-guard.js'
+import { liveBadgeForViewer } from '../services/queue-viewer-badge.js'
 import type {
   QueueItemsQuery,
   QueueRow,
@@ -140,8 +141,13 @@ export interface QueueBadge {
   total: number
   sla_breached: number
   unowned: number
-  source: 'cache' | 'snapshot'
+  /** 'live' = the viewer's own count of the owner's shared live set (queue-viewer-badge.ts). */
+  source: 'cache' | 'snapshot' | 'live'
   as_of: string | null
+  /** Per-state counts + SLA warnings when the source has them (snapshot / live), so a
+   *  dashboard's "Your worklists" needs no live read of its own. */
+  by_state?: Record<string, number>
+  sla_warning?: number
   /**
    * No figure exists (a live queue before its first daily stat snapshot —
    * production until the snapshot cron runs after cutover, staging after
@@ -308,7 +314,25 @@ export async function queuesRoutes(app: FastifyInstance) {
             queueDefinitionHash(defSources)
           )
         }
-        out[qid] = badgeFromSnapshot(fits ? snap : undefined)
+        if (fits && snap) {
+          out[qid] = {
+            ...badgeFromSnapshot(snap),
+            by_state: publicByState(
+              parseJson(snap.by_state ?? null) as Record<string, unknown> | null
+            ),
+            sla_warning: Number((snap as { sla_warning?: number }).sla_warning ?? 0)
+          }
+          continue
+        }
+        // No usable snapshot for THIS viewer: count the owner's shared live set (one
+        // resolve per queue a minute, all viewers) through the viewer's own access —
+        // never a live resolve per viewer (coordinator, army 11). Null → unknown.
+        const live = await liveBadgeForViewer(q, req.user!, !!req.isAdmin, (queueId, owner) =>
+          fetchQueueItems(queueId, owner, 'all', {}).then((r) => r.items)
+        ).catch(() => null)
+        out[qid] = live
+          ? { ...live, source: 'live', as_of: new Date().toISOString() }
+          : badgeFromSnapshot(undefined)
       }
     }
     return reply.send({ data: out })

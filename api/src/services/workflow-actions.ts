@@ -1988,3 +1988,115 @@ export async function previewErpActions(opts: {
   }
   return out
 }
+
+/** What "Send current data" sends for a transition push, or why it cannot. */
+export type ErpPushNow =
+  | {
+      api_id: number
+      endpoint_path: string
+      /** Stored the way recordSubmission stores a push: scrubbed, so a body-secret VALUE inlined
+       *  into a template is its placeholder again (secret_paths are read off this body). */
+      body: Record<string, unknown>
+      state: { key: string; label: string }
+      transition_label: string
+    }
+  | { refused: string }
+
+/**
+ * "Send current data" for a push a transition makes (army 11 — the MWF state push): the
+ * erp_submit action, on a transition INTO the record's current state, that sends to this
+ * api + endpoint — rendered exactly as that push renders it: the action's own context query
+ * (over its template's lookups) for the record as it is now, the current state as `state`,
+ * the clicking person as `acting_user`, and the action's own gates (skip_when_empty, guard…).
+ * `push_when` is not consulted: a person asked to send. Builds; never sends.
+ * `states` narrows which current states qualify (a kind for the completion push only, or for
+ * every state but completion).
+ */
+export async function buildErpPushForCurrentState(opts: {
+  collection: string
+  item: string
+  apiName: string
+  endpointPath: string
+  userId: string | null
+  states?: { only?: string[]; except?: string[] }
+}): Promise<ErpPushNow> {
+  const { collection, item } = opts
+  const instance = (await db('nivaro_workflow_instances')
+    .where({ collection, item: String(item) })
+    .orderBy('id', 'desc')
+    .first('template', 'current_state')) as
+    | { template: string; current_state: string | null }
+    | undefined
+  if (!instance?.current_state) return { refused: 'this record is not in a workflow state' }
+  const state = (await db('nivaro_workflow_states')
+    .where({ id: instance.current_state })
+    .first('id', 'key', 'label', 'external_label')) as
+    | { id: string; key: string; label: string; external_label?: string | null }
+    | undefined
+  if (!state) return { refused: 'the record’s current state no longer exists' }
+  if (opts.states?.only?.length && !opts.states.only.includes(state.key)) {
+    return { refused: `this send is not made in “${state.label}”` }
+  }
+  if (opts.states?.except?.includes(state.key)) {
+    return { refused: `this send is not made in “${state.label}”` }
+  }
+  const apiRow = (await db('nivaro_external_apis').where({ name: opts.apiName }).first('id')) as
+    | { id: number }
+    | undefined
+  if (!apiRow) return { refused: `${opts.apiName} is not set up on this instance` }
+  const apiId = Number(apiRow.id)
+
+  const transitions = (await db('nivaro_workflow_transitions')
+    .where({ template: instance.template, to_state: instance.current_state })
+    .orderBy('sort', 'asc')
+    .select('id', 'label', 'actions')) as Array<{
+    id: string
+    label: string | null
+    actions: string | null
+  }>
+  let found: { action: TransitionActionDef; label: string } | null = null
+  for (const t of transitions) {
+    for (const a of parseActions(t.actions)) {
+      if (a.type !== 'erp_submit' || a.endpoint_path !== opts.endpointPath || !a.external_api) {
+        continue
+      }
+      if ((await resolveExternalApiId(a.external_api)) !== apiId) continue
+      found = { action: a, label: String(t.label ?? '') }
+      break
+    }
+    if (found) break
+  }
+  if (!found) {
+    return {
+      refused: `no step into “${state.label}” sends this to ${opts.apiName}, so there is nothing current to send`
+    }
+  }
+
+  const record = (await db(collection).where({ id: item }).first()) as
+    | Record<string, unknown>
+    | undefined
+  if (!record) return { refused: 'this record no longer exists' }
+  const context = await buildContext(await contextDefsFor(found.action), item, record, opts.userId)
+  const gate = erpActionGateDetail(found.action, record, context, { apiId })
+  if (gate) return { refused: gate.reason }
+  const scope = {
+    record,
+    context,
+    state: { key: state.key, label: state.label, external_label: state.external_label ?? null },
+    acting_user: await actingUser(opts.userId),
+    responses: [],
+    response: null
+  }
+  // The same render as the real push (a saved template wins over inline Liquid).
+  const body = await renderActionBody(found.action, scope, apiId)
+  const secrets = await secretsForScrub(apiId)
+  // Fail closed like recordSubmission: secrets that cannot be resolved = nothing stored or sent.
+  if (secrets === null) return { refused: `${opts.apiName}'s secrets could not be read` }
+  return {
+    api_id: apiId,
+    endpoint_path: opts.endpointPath,
+    body: applyScrub(body, secrets) as Record<string, unknown>,
+    state: { key: state.key, label: state.label },
+    transition_label: found.label
+  }
+}

@@ -32,6 +32,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
+import {
+  cascadeFilter,
+  fetchCascadeRelations,
+  restrictedScopeSelections
+} from '../lib/quick-filter-cascade'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
@@ -825,6 +830,7 @@ function ScopeDefaultsCard() {
             dimension={d}
             selected={scopes.defaults[d.name] ?? []}
             restricted={scopes.restricted[d.name]}
+            scopes={scopes}
             onSave={(values) => save.mutate({ dimension: d.name, values })}
           />
         ))}
@@ -837,23 +843,39 @@ function ScopeDimensionRow({
   dimension,
   selected,
   restricted,
+  scopes,
   onSave
 }: {
   dimension: UserScopesInfo['dimensions'][number]
   selected: Array<string | number>
   restricted?: Array<string | number>
+  /** The person's whole scope set: OTHER restricted dimensions narrow this list too. */
+  scopes?: UserScopesInfo | null
   onSave: (values: Array<string | number>) => void
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const lf = dimension.display_field ?? 'name'
   const [q, setQ] = useState('')
   const [focused, setFocused] = useState(false)
+  // Zones 1-3 → only those zones' regions (army 11 Q2-2: NTL was offered as a default).
+  const scopeSel = restrictedScopeSelections(dimension.target_collection, scopes)
+  const scopeNarrow = async () =>
+    scopeSel.length
+      ? cascadeFilter(
+          dimension.target_collection,
+          await fetchCascadeRelations(client as never, qc, dimension.target_collection),
+          scopeSel
+        )
+      : null
   const { data: options = [] } = useQuery({
-    queryKey: ['nvr-scope-options', dimension.name],
+    queryKey: ['nvr-scope-options', dimension.name, scopeSel],
     queryFn: async () => {
+      const narrow = await scopeNarrow()
       const res = (await client.request(
         readItems(dimension.target_collection, {
           fields: ['id', lf],
+          ...(narrow ? { filter: narrow as never } : {}),
           sort: dimension.options_sort ? [dimension.options_sort] : undefined,
           limit: 200
         })
@@ -874,12 +896,14 @@ function ScopeDimensionRow({
   const pickerMode = allowed.length > 24 || (options.length >= 200 && !restrictedSet)
 
   const { data: matches = [], isFetching: searching } = useQuery({
-    queryKey: ['nvr-scope-search', dimension.name, q],
+    queryKey: ['nvr-scope-search', dimension.name, q, scopeSel],
     queryFn: async () => {
+      const narrow = await scopeNarrow()
+      const contains = { [lf]: { _contains: q } }
       const res = (await client.request(
         readItems(dimension.target_collection, {
           fields: ['id', lf],
-          filter: { [lf]: { _contains: q } } as never,
+          filter: (narrow ? { _and: [contains, narrow] } : contains) as never,
           sort: dimension.options_sort ? [dimension.options_sort] : undefined,
           limit: 30
         })

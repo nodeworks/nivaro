@@ -1218,6 +1218,7 @@ export async function fetchMaterializedQueueItems(
     // which rule each AT-RISK row matches with one batched read per collection — the
     // cached path stays the cached path (never the full live resolve).
     if (sortKey === 'priority' && displayCfgWeights?.at_risk_rule_weights) {
+      const { atRiskRuleNames } = await import('./at-risk-flags.js')
       const names = await atRiskRuleNames(
         narrowRaw
           .filter((r) => r.at_risk)
@@ -1460,44 +1461,4 @@ export async function fetchMaterializedQueueItems(
     truncated: false,
     total
   }
-}
-
-/**
- * Which at-risk rule (first match, rule order — the list's own rule) each record
- * matches: one read of the referenced fields per collection, chunked. Records that
- * no longer match any rule are absent.
- */
-export async function atRiskRuleNames(
-  rows: Array<{ collection: string; item_id: string }>
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
-  if (rows.length === 0) return out
-  const { parseActiveRules, referencedFields, evaluateRows } = await import('../routes/at-risk.js')
-  const byCollection = new Map<string, string[]>()
-  for (const r of rows) {
-    const list = byCollection.get(r.collection) ?? []
-    list.push(r.item_id)
-    byCollection.set(r.collection, list)
-  }
-  for (const [collection, ids] of byCollection) {
-    const rules = parseActiveRules(
-      (await db('nivaro_at_risk_rules')
-        .where({ collection, is_active: true })
-        .orderBy('id')) as never
-    )
-    if (rules.length === 0) continue
-    const fields = new Set<string>(['id'])
-    for (const rule of rules) for (const f of referencedFields(rule.conditions)) fields.add(f)
-    const records = await selectInChunks(
-      [...new Set(ids)],
-      500,
-      (chunk) =>
-        db(collection)
-          .whereIn('id', chunk)
-          .select([...fields]) as Promise<Record<string, unknown>[]>
-    )
-    const hits = evaluateRows(records, rules)
-    for (const [id, hit] of Object.entries(hits)) out.set(`${collection}:${id}`, hit.rule)
-  }
-  return out
 }

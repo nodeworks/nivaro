@@ -498,7 +498,7 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       const id = Number(req.params.id)
       if (!Number.isFinite(id)) return reply.code(404).send({ error: 'No such obligation' })
       const { freshSendPreview } = await import('../services/integration-remediation.js')
-      return { data: await freshSendPreview(id) }
+      return { data: await freshSendPreview(id, req.user?.id ?? null) }
     }
   )
 

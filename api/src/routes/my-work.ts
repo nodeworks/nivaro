@@ -163,9 +163,20 @@ export async function myWorkRoutes(app: FastifyInstance) {
     // The agent has now read these answers: the next my_work does not repeat them.
     for (const q of answerRows) await markAnswerSeen(q)
 
+    // Army 11 a1 F-2: a held record says so on the row ("On hold" chip) — every
+    // at-risk rule each sent row matches, one batched read per collection.
+    const sent = owned.slice(0, 100)
+    const flags = await import('../services/at-risk-flags.js')
+      .then((m) => m.atRiskFlags(sent.map((o) => ({ collection: o.collection, item_id: o.item }))))
+      .catch(() => new Map<string, Array<{ name: string; color: string }>>())
+    const ownedRows = sent.map((o) => {
+      const f = flags.get(`${o.collection}:${o.item}`)
+      return f ? { ...o, flags: f } : o
+    })
+
     return reply.send({
       data: {
-        owned: owned.slice(0, 100),
+        owned: ownedRows,
         owned_total: owned.length,
         tasks: named(tasks as Array<Record<string, unknown>>),
         team_tasks: named(teamTasks as Array<Record<string, unknown>>),

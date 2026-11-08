@@ -88,7 +88,7 @@ export const BUILTIN_BULK_ACTIONS: BuiltinBulkAction[] = [
     key: 'message',
     label: 'Message…',
     summary: 'Notify the owners / creators of the selected records',
-    surfaces: ['browser'],
+    surfaces: ['browser', 'queue'],
     variant: 'default',
     defaultAccess: { mode: 'everyone' }
   },
@@ -96,7 +96,7 @@ export const BUILTIN_BULK_ACTIONS: BuiltinBulkAction[] = [
     key: 'compare',
     label: 'Compare',
     summary: 'Side-by-side field comparison of 2–3 records',
-    surfaces: ['browser'],
+    surfaces: ['browser', 'queue'],
     variant: 'default',
     defaultAccess: { mode: 'everyone' }
   },

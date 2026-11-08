@@ -471,6 +471,17 @@ export function pickSummaryLayout(
 }
 
 /** The PickReason fields for a screen version standing in for `desktop`. */
+/** A `slug` was asked for and the answer is not that form (or its phone /
+ *  tablet version): it does not exist, or the person may not open it. */
+export function slugFellThrough(
+  slug: string | null | undefined,
+  reason: { kind: string; desktop_kind?: string } | null | undefined
+): boolean {
+  if (!slug) return false
+  if (!reason) return true
+  return reason.kind !== 'slug' && reason.desktop_kind !== 'slug'
+}
+
 function screenReason(
   key: ScreenKey,
   desktop: Record<string, unknown>,
@@ -1251,7 +1262,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
-    const { row: layout } = await resolveLayout({
+    const resolved = await resolveLayout({
       collection,
       slug,
       item,
@@ -1260,7 +1271,12 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       userId: req.user?.id ? String(req.user.id) : null,
       viewport: parseViewport(viewport)
     })
+    const { row: layout } = resolved
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
+    // army11 f3: `?layout=<name>` that names no form this person may open fell
+    // back to the default form without a word. The answer says so; the form
+    // tells the person.
+    const requestedFormUnavailable = slugFellThrough(slug, resolved.reason)
 
     layout.conditions = shownConditions(parseConditions(layout.conditions), !!req.isAdmin)
     layout.record_conditions = parseRecordConditions(layout.record_conditions)
@@ -1315,7 +1331,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       data: {
         layout,
         ...stripEditorNotes(groups, assignments, { stripAiPrompt: !req.isAdmin }),
-        ungrouped_sort
+        ungrouped_sort,
+        ...(requestedFormUnavailable ? { requested_form_unavailable: true } : {})
       }
     })
   })

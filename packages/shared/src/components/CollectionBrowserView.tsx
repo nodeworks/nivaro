@@ -164,8 +164,10 @@ import {
   useAvailableBulkActions,
   useBuiltinGate
 } from './bulk/BulkActionButtons'
+import { BulkCompareButton } from './bulk/BulkCompareButton'
 import { BulkFieldUpdate } from './bulk/BulkFieldUpdate'
 import { BulkRowMark } from './bulk/BulkRowMark'
+import { MessageStakeholdersForm } from './bulk/MessageStakeholders'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
@@ -217,7 +219,6 @@ import {
 } from './panels'
 import { ConfirmButton } from './profile/primitives'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
-import { RecordCompareDialog } from './RecordCompare'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { RowPresence } from './RowPresence'
@@ -3754,154 +3755,6 @@ function RecordMergeForm({
   )
 }
 
-/** Bulk-bar "Message…" form: notifies the selection's current pipeline owners
- *  and/or creators, deduped server-side, with an optional email copy. */
-function MessageStakeholdersForm({
-  collection,
-  selectedIds,
-  onDone,
-  onCancel
-}: {
-  collection: string
-  selectedIds: Array<string | number>
-  onDone: (msg: string) => void
-  onCancel: () => void
-}) {
-  const client = useNivaroClient()
-  const [subject, setSubject] = useState('')
-  const [message, setMessage] = useState('')
-  const [owners, setOwners] = useState(true)
-  const [creators, setCreators] = useState(true)
-  const [email, setEmail] = useState(false)
-  // #64 — a critical send: Critical lane, bypasses mutes and quiet hours,
-  // and the sender gets read receipts (Notifications → Sent).
-  const [critical, setCritical] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  const { data: preview } = useQuery({
-    queryKey: ['cbv-msg-preview', collection, selectedIds.join(','), owners, creators],
-    queryFn: () =>
-      client.request<{ count: number; users: Array<{ id: string; name: string }> }>(
-        post('/notifications/message-stakeholders', {
-          collection,
-          ids: selectedIds,
-          include: { owners, creators },
-          preview: true
-        })
-      ),
-    enabled: owners || creators
-  })
-  const count = owners || creators ? (preview?.count ?? null) : 0
-
-  const send = async () => {
-    if (!subject.trim() || !message.trim()) return
-    setBusy(true)
-    setErr(null)
-    try {
-      const res = await client.request<{ sent: number; records: number }>(
-        post('/notifications/message-stakeholders', {
-          collection,
-          ids: selectedIds,
-          subject: critical ? `Critical: ${subject.trim()}` : subject.trim(),
-          message: message.trim(),
-          include: { owners, creators },
-          email
-        })
-      )
-      onDone(`Messaged ${res.sent} stakeholder(s) across ${res.records} record(s)`)
-    } catch (e) {
-      setErr(userErrorMessage(e, 'Failed to send'))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form
-      className='flex flex-wrap items-center gap-1.5'
-      onSubmit={(e) => {
-        e.preventDefault()
-        void send()
-      }}
-    >
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
-        <input
-          type='checkbox'
-          checked={owners}
-          onChange={(e) => setOwners(e.target.checked)}
-          className='h-3.5 w-3.5'
-        />
-        Owners
-      </label>
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
-        <input
-          type='checkbox'
-          checked={creators}
-          onChange={(e) => setCreators(e.target.checked)}
-          className='h-3.5 w-3.5'
-        />
-        Creators
-      </label>
-      <label className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'>
-        <input
-          type='checkbox'
-          checked={email}
-          onChange={(e) => setEmail(e.target.checked)}
-          className='h-3.5 w-3.5'
-        />
-        Also email
-      </label>
-      <label
-        className='flex cursor-pointer items-center gap-1 text-[12px] text-slate-300 dark:text-muted-foreground'
-        data-tip='Marks the message critical: it lands in the Critical lane, gets past mutes and quiet hours, and you can see who has read it under Notifications → Sent.'
-      >
-        <input
-          type='checkbox'
-          checked={critical}
-          onChange={(e) => setCritical(e.target.checked)}
-          className='h-3.5 w-3.5'
-          data-msg-critical
-        />
-        Critical
-      </label>
-      <span
-        className='text-[11.5px] text-nvr-cyan'
-        data-tip={preview?.users?.map((u) => u.name).join(', ')}
-      >
-        {count == null ? '…' : `${count} recipient${count === 1 ? '' : 's'}`}
-      </span>
-      <input
-        autoFocus
-        value={subject}
-        onChange={(e) => setSubject(e.target.value)}
-        placeholder='Subject'
-        className='h-8 w-44 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
-      />
-      <input
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        placeholder='Message'
-        className='h-8 w-64 rounded-md border border-white/20 dark:border-border bg-white/10 dark:bg-background px-2 text-[12.5px] text-white dark:text-foreground placeholder:text-slate-400 dark:placeholder:text-muted-foreground'
-      />
-      {err && <span className='text-[11.5px] text-red-300'>{err}</span>}
-      <button
-        type='submit'
-        disabled={busy || !subject.trim() || !message.trim() || count === 0}
-        className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
-      >
-        {busy ? 'Sending…' : 'Send'}
-      </button>
-      <button
-        type='button'
-        onClick={onCancel}
-        className='h-8 px-2 text-[12.5px] text-slate-300 dark:text-muted-foreground hover:text-white dark:hover:text-foreground'
-      >
-        Cancel
-      </button>
-    </form>
-  )
-}
-
 // ─── Bulk bar (admin components/bulk-action-bar.tsx port) ─────────────────────
 
 function BulkBar({
@@ -4011,7 +3864,6 @@ function BulkBar({
       })
     }
   }
-  const [comparing, setComparing] = useState(false)
   const [transitionId, setTransitionId] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -4078,15 +3930,6 @@ function BulkBar({
       <span className='text-[13px] font-medium text-nvr-cyan dark:text-nvr-cyan'>
         {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'} selected
       </span>
-      {comparing && (
-        <RecordCompareDialog
-          collection={collection}
-          ids={selectedIds.slice(0, 3)}
-          fields={fields}
-          renderValue={(f, v) => compareCell(collection, relations, f, v)}
-          onClose={() => setComparing(false)}
-        />
-      )}
       {note && (
         <span className='text-[12px] text-slate-300 dark:text-muted-foreground'>{note}</span>
       )}
@@ -4150,14 +3993,14 @@ function BulkBar({
               Open in tabs
             </button>
           )}
-          {builtin('compare') && selectedIds.length >= 2 && selectedIds.length <= 3 && (
-            <button
-              type='button'
-              onClick={() => setComparing(true)}
+          {builtin('compare') && (
+            <BulkCompareButton
+              targets={selectedIds.map((id) => ({ collection, id }))}
+              fields={fields}
+              relations={relations}
+              renderValue={(rels, f, v) => compareCell(collection, rels, f, v)}
               className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
-            >
-              Compare
-            </button>
+            />
           )}
           {builtin('merge') && selectedIds.length === 2 && auth.isAdmin && (
             <button
@@ -10324,8 +10167,9 @@ export function CollectionBrowserView({
   )
 }
 
-/** How a value reads in record compare (#2723): relations as labels, dates local. */
-function compareCell(
+/** How a value reads in record compare (#2723): relations as labels, dates local.
+ *  Exported for the worklist bar's Compare (army 11 N11). */
+export function compareCell(
   collection: string,
   relations: CMSRelation[],
   field: string,

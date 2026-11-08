@@ -81,3 +81,29 @@ export function fetchCascadeRelations(
     staleTime: 10 * 60_000
   })
 }
+
+/**
+ * Selections that a person's RESTRICT-mode User Scopes impose on `collection`'s options:
+ * every other restricted dimension, as row ids of its target (army 11 Q2-2: a Zones 1-3
+ * person was offered the National region in worklists, report filters and Profile →
+ * Default filters). Feed the result to cascadeFilter with the collection's relations.
+ */
+export function restrictedScopeSelections(
+  collection: string,
+  scopes:
+    | {
+        dimensions: Array<{ name: string; target_collection: string }>
+        restricted: Record<string, Array<string | number>>
+      }
+    | null
+    | undefined
+): CascadeSelection[] {
+  if (!scopes) return []
+  const out: CascadeSelection[] = []
+  for (const d of scopes.dimensions) {
+    const ids = scopes.restricted[d.name] ?? []
+    if (ids.length === 0 || d.target_collection === collection) continue
+    out.push({ collection: d.target_collection, field: 'id', values: ids })
+  }
+  return out
+}

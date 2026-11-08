@@ -35,7 +35,13 @@ import {
   NAMELESS_LABEL
 } from './option-disambiguate'
 import { type PickerMissPlacement, usePickerMissReport } from './picker-miss'
-import { labelOnlyMatches, narrowLocally, PICKER_PAGE, useLatestSearch } from './picker-search'
+import {
+  labelOnlyMatches,
+  narrowLocally,
+  onlyCloseMatches,
+  PICKER_PAGE,
+  useLatestSearch
+} from './picker-search'
 import { RelatedMissingLabel, retryRelatedRead } from './related-missing'
 
 /**
@@ -400,7 +406,9 @@ export function RelationCombobox({
         get(`/items/${collection}`, {
           limit: PICKER_PAGE,
           picker: '1',
-          ...(search.trim() ? { search: search.trim() } : {}),
+          // Typo pass (fix11-search): only when the exact search finds nothing,
+          // the server answers close matches, each marked `fuzzy`.
+          ...(search.trim() ? { search: search.trim(), typo: '1' } : {}),
           ...(filterStr ? { filter: filterStr } : {}),
           ...(tmplFields ? { fields: tmplFields } : {}),
           ...(serverSort ? { sort: serverSort } : {})
@@ -444,13 +452,15 @@ export function RelationCombobox({
   // a number (Funding Year = its id) answered "No results for 2026". When the
   // server finds nothing, the whole (short) list is read once and matched on
   // the labels the person sees. Same cache as the empty-box list.
+  // Close matches only (the typo pass) count as "found nothing" here: an exact
+  // label match on the whole list beats a guess.
   const serverFoundNothing =
     !!debouncedQuery.trim() &&
     query === debouncedQuery &&
     !isPlaceholderData &&
     !isLoadingOptions &&
     data !== undefined &&
-    data.length === 0
+    (data.length === 0 || onlyCloseMatches(data))
   const { data: wholeList } = useQuery<Item[]>({
     queryKey: ['relation-opts', collection, '', filterStr, tmplFields, serverSort ?? ''],
     queryFn: () => fetchOptions(''),
@@ -469,6 +479,9 @@ export function RelationCombobox({
     [serverFoundNothing, wholeList, effectiveTemplate, query]
   )
   const waitingOnLabels = serverFoundNothing && wholeList === undefined
+  // The list shows the server's close matches ("Did you mean…").
+  const showingCloseMatches =
+    !!data && onlyCloseMatches(data) && !(labelMatches && labelMatches.length > 0)
   usePickerMissReport({
     placement: missPlacement,
     open,
@@ -592,7 +605,7 @@ export function RelationCombobox({
   const optionsSettled = !isPlaceholderData && query === debouncedQuery && !waitingOnLabels
   const shownOptions = useMemo(
     () =>
-      labelMatches ??
+      (labelMatches && (labelMatches.length > 0 || !data?.length) ? labelMatches : null) ??
       narrowLocally(
         data ?? [],
         (item) => applyDisplayTemplate(tmpl, item) || `#${item.id}`,
@@ -703,8 +716,10 @@ export function RelationCombobox({
   // row only when nothing else is listed); an empty box highlights nothing
   // (Enter then picks only a sole option).
   useEffect(() => {
-    setActiveIndex(open && query.trim() ? navOffset : -1)
-  }, [open, query, navOffset])
+    // A close match (a guess at a typo) is never picked by Enter alone: the
+    // person arrows to it or clicks it.
+    setActiveIndex(open && query.trim() && !showingCloseMatches ? navOffset : -1)
+  }, [open, query, navOffset, showingCloseMatches])
   const optionDomId = (i: number) => `${listId}-opt-${i}`
   const pickPinned = () => {
     const id = pinnedItem?.id ?? pinned?.id
@@ -740,7 +755,7 @@ export function RelationCombobox({
     if (!optionsSettled) return
     pendingEnterRef.current = null
     if (active >= 0) pickAt(active)
-    else if (navCount === 1 && data !== undefined) pickAt(0)
+    else if (navCount === 1 && data !== undefined && !showingCloseMatches) pickAt(0)
   }, [open, query, optionsSettled, active, navCount])
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
@@ -764,7 +779,8 @@ export function RelationCombobox({
       else if (active >= 0) pickAt(active)
       // A sole option only once the list is in — while the first list loads
       // the pinned Default is the only row (army9 review L1).
-      else if (navCount === 1 && optionsSettled && data !== undefined) pickAt(0)
+      else if (navCount === 1 && optionsSettled && data !== undefined && !showingCloseMatches)
+        pickAt(0)
     } else if (e.key === 'Tab') {
       // The panel is portaled to the end of the page: move focus back to the
       // trigger first so Tab continues to the NEXT FIELD, not off the page.
@@ -1036,65 +1052,75 @@ export function RelationCombobox({
                   </p>
                 )
               ) : (
-                listOptions.map((item, i) => {
-                  const raw = applyDisplayTemplate(tmpl, item)
-                  const label = isNamelessLabel(raw) ? NAMELESS_LABEL : raw
-                  const sel = String(item.id) === String(value)
-                  const nav = i + navOffset
-                  return (
-                    <button
-                      key={String(item.id)}
-                      type='button'
-                      tabIndex={-1}
-                      id={optionDomId(nav)}
-                      role='option'
-                      aria-selected={sel}
-                      data-nav-index={nav}
-                      onClick={() => pickItem(item)}
-                      onMouseMove={() => active !== nav && setActiveIndex(nav)}
-                      className={cn(
-                        'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted',
-                        active === nav && 'bg-muted'
-                      )}
+                <>
+                  {showingCloseMatches && (
+                    <p
+                      data-picker-close-matches
+                      className='px-3 pb-1 pt-2 text-[11.5px] text-muted-foreground'
                     >
-                      <div
+                      No exact match for “{query.trim()}” — did you mean:
+                    </p>
+                  )}
+                  {listOptions.map((item, i) => {
+                    const raw = applyDisplayTemplate(tmpl, item)
+                    const label = isNamelessLabel(raw) ? NAMELESS_LABEL : raw
+                    const sel = String(item.id) === String(value)
+                    const nav = i + navOffset
+                    return (
+                      <button
+                        key={String(item.id)}
+                        type='button'
+                        tabIndex={-1}
+                        id={optionDomId(nav)}
+                        role='option'
+                        aria-selected={sel}
+                        data-nav-index={nav}
+                        onClick={() => pickItem(item)}
+                        onMouseMove={() => active !== nav && setActiveIndex(nav)}
                         className={cn(
-                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
-                          sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                          'flex w-full items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-muted',
+                          active === nav && 'bg-muted'
                         )}
                       >
-                        {sel && <Check className='h-2.5 w-2.5 text-white' />}
-                      </div>
-                      {isUserCollection && (
-                        <UserAvatar
-                          userId={item.id as string}
-                          className='h-4 w-4'
-                          fallback={
-                            <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
-                              {labelInitials(label)}
-                            </span>
-                          }
-                        />
-                      )}
-                      {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
-                        <span
-                          className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
-                          data-tip='Online now'
-                        />
-                      )}
-                      {/* The typed words marked in the label (lib/search-text.ts). */}
-                      <SearchHighlight text={label} query={query} />
-                      {dupDetail.has(String(item.id)) && (
-                        <span
-                          className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
-                          data-option-detail
+                        <div
+                          className={cn(
+                            'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors',
+                            sel ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300'
+                          )}
                         >
-                          {dupDetail.get(String(item.id))}
-                        </span>
-                      )}
-                    </button>
-                  )
-                })
+                          {sel && <Check className='h-2.5 w-2.5 text-white' />}
+                        </div>
+                        {isUserCollection && (
+                          <UserAvatar
+                            userId={item.id as string}
+                            className='h-4 w-4'
+                            fallback={
+                              <span className='flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/20 text-[8px] font-bold text-nvr-navy dark:text-nvr-cyan'>
+                                {labelInitials(label)}
+                              </span>
+                            }
+                          />
+                        )}
+                        {isUserCollection && onlineUsers.has(String(item.id).toUpperCase()) && (
+                          <span
+                            className='h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500'
+                            data-tip='Online now'
+                          />
+                        )}
+                        {/* The typed words marked in the label (lib/search-text.ts). */}
+                        <SearchHighlight text={label} query={query} />
+                        {dupDetail.has(String(item.id)) && (
+                          <span
+                            className='ml-auto max-w-[45%] shrink-0 truncate pl-2 text-[11.5px] text-muted-foreground'
+                            data-option-detail
+                          >
+                            {dupDetail.get(String(item.id))}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </>
               )}
             </div>
             {!isLoadingOptions && (

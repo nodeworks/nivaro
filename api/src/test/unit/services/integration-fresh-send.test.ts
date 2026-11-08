@@ -8,6 +8,10 @@ vi.mock('../../../services/erp-submission-status.js', () => ({
   propagateSubmissionStatus: vi.fn(async () => {})
 }))
 
+vi.mock('../../../services/workflow-actions.js', () => ({
+  buildErpPushForCurrentState: vi.fn()
+}))
+
 import { db } from '../../../db/index.js'
 import { sendPayload } from '../../../routes/erp-submissions.js'
 import {
@@ -26,6 +30,7 @@ import {
   sendNow,
   sendOptionsFor
 } from '../../../services/integration-remediation.js'
+import { buildErpPushForCurrentState } from '../../../services/workflow-actions.js'
 
 const mockedDb = () => vi.mocked(db as unknown as (table: string) => unknown)
 
@@ -235,5 +240,101 @@ describe('the automatic sweep never fresh-sends', () => {
     expect(r).toEqual({ refired: 0, queued: 0 })
     expect(kind.fresh_request).not.toHaveBeenCalled()
     expect(sendPayload).not.toHaveBeenCalled()
+  })
+})
+
+describe('MWF state push — current data from the transition into the current state', () => {
+  beforeEach(() => clearObligationKinds())
+  afterEach(() => vi.clearAllMocks())
+
+  const mwfKind = (): Kind =>
+    ({
+      api: 'MWF',
+      kind: 'wf.state',
+      collection: 'workflows',
+      label: 'MWF — workflow state',
+      endpoint_path: '/update_workflow.php',
+      safe_to_refire: false,
+      expect: async () => [],
+      fresh_from_transition: { except_states: ['completed'] }
+    }) as Kind
+
+  it('offers it, renders through core’s erp_submit builder, and sends through the normal path', async () => {
+    registerObligationKind(mwfKind())
+    expect(sendOptionsFor(mwfKind(), { submission_id: null }).can_send_current).toBe(true)
+    const submissions: Record<string, ReturnType<typeof vi.fn>> = {
+      insert: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 902 }]) }))
+    }
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return chain({ integration_remediation_enabled: true })
+      if (table === 'nivaro_integration_obligations') {
+        return chain({ ...OBLIGATION, api: 'MWF', kind: 'wf.state' })
+      }
+      if (table === 'nivaro_erp_submissions') return submissions
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    vi.mocked(buildErpPushForCurrentState).mockResolvedValue({
+      api_id: 1,
+      endpoint_path: '/update_workflow.php',
+      body: { token: '⟦nvr-secret:token⟧', efp_state: 'Waiting On Level 3 Approval' },
+      state: { key: 'waiting_on_level_3_approval', label: 'Waiting on Level 3 Approval' },
+      transition_label: 'Approve'
+    })
+    vi.mocked(sendPayload).mockResolvedValue({
+      status: 'accepted',
+      external_ref: null,
+      error: null,
+      response: null,
+      http_status: 200
+    })
+
+    expect((await freshSendPreview(7, 'user-rob')).summary).toBe(
+      'Waiting on Level 3 Approval, as “Approve” sends it'
+    )
+    expect(sendPayload).not.toHaveBeenCalled()
+
+    const r = await sendFresh(7, 'user-rob')
+    expect(buildErpPushForCurrentState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: 'workflows',
+        item: '372931',
+        apiName: 'MWF',
+        endpointPath: '/update_workflow.php',
+        userId: 'user-rob',
+        states: { only: undefined, except: ['completed'] }
+      })
+    )
+    const stored = JSON.parse(String(submissions.insert.mock.calls[0][0].payload))
+    // The template's own secret slot is the only one a resend may fill.
+    expect(stored.secret_paths).toEqual(['/token'])
+    expect(sendPayload).toHaveBeenCalledWith(1, expect.anything(), 'user-rob')
+    expect(r.detail).toMatch(
+      /^sent current data \(Waiting on Level 3 Approval, as “Approve” sends it\): accepted/
+    )
+  })
+
+  it('a gate refusal reads in plain words and sends nothing', async () => {
+    registerObligationKind(mwfKind())
+    wire()
+    mockedDb().mockImplementation(((table: string) => {
+      if (table === 'nivaro_settings') return chain({ integration_remediation_enabled: true })
+      if (table === 'nivaro_integration_obligations') {
+        return chain({ ...OBLIGATION, api: 'MWF', kind: 'wf.state' })
+      }
+      throw new Error(`unexpected table: ${table}`)
+    }) as never)
+    vi.mocked(buildErpPushForCurrentState).mockResolvedValue({
+      refused: 'skip_when_empty: mwf_queue empty'
+    })
+    const r = await sendFresh(7, 'user-rob')
+    expect(r.detail).toBe('not sent: this record has no MWF queue yet')
+    expect(sendPayload).not.toHaveBeenCalled()
+  })
+
+  it('the sweep never calls the builder', async () => {
+    registerObligationKind(mwfKind())
+    wire()
+    await runMissingRefirePass()
+    expect(buildErpPushForCurrentState).not.toHaveBeenCalled()
   })
 })

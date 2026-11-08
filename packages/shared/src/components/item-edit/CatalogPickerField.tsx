@@ -180,6 +180,9 @@ export interface CatalogModeConfig {
     qty_field?: string
     show_when?: Record<string, unknown>
     label?: string
+    /** The word for a line sent but not shipped yet (default "Order Sent" —
+     *  the same word as the record's order status). */
+    pending_label?: string
   }
   /** #19 — per-row lints judged on the CHILD row's own values: `when` is a
    *  boolean expression over the row ('{{shipped_qty}} > {{quantity}}');
@@ -1664,12 +1667,16 @@ export function CatalogPickerField({
           : {
               dot: 'bg-slate-300 dark:bg-slate-600',
               text: 'text-slate-500 dark:text-slate-400',
-              label: 'Requested'
+              // The header's ORDER STATUS word for the same order (army 11 a2 F8).
+              label: config.fulfilment.pending_label ?? 'Order Sent',
+              key: 'requested'
             }
     return (
       <span
         className='inline-flex items-center gap-1.5 whitespace-nowrap'
-        data-catalog-fulfilment={state.label.split(' ')[0].toLowerCase()}
+        data-catalog-fulfilment={
+          'key' in state ? state.key : state.label.split(' ')[0].toLowerCase()
+        }
         title={`${config.fulfilment.label ?? 'Warehouse'} · ${shipped} of ${qty} shipped`}
       >
         <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${state.dot}`} />
@@ -2316,7 +2323,7 @@ export function CatalogPickerField({
     if (readOnly)
       return (
         <span className='inline-block w-20 shrink-0 text-right tabular-nums text-slate-700 dark:text-slate-200'>
-          {qty && qty > 0 ? qty : '—'}
+          {qty && qty > 0 ? qty.toLocaleString('en-US') : '—'}
         </span>
       )
     const editVal = editing[catalogId]

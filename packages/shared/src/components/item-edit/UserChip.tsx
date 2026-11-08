@@ -131,12 +131,29 @@ function RosterAvatar({
 /** Stacked avatar cluster (+N) with a hover/pinnable portal roster whose rows
  *  are UserChips — the single user-display primitive for owners/user lists.
  *  Reused by the item-header Owners chip and the collection browser. */
+/** A person who can no longer act, as the header says it. */
+export type RosterInactive = 'suspended' | 'former'
+
+/** The visible label beside an owners cluster: the first person who can act,
+ *  "+N" for the rest, and the mark when nobody listed can act (army 11 f2:
+ *  the header showed bare initials). Pure. */
+export function rosterLabel(
+  users: Array<{ name: string; inactive?: RosterInactive }>
+): { name: string; more: number; mark: RosterInactive | null } | null {
+  if (users.length === 0) return null
+  const first = users.find((u) => !u.inactive) ?? users[0]
+  return { name: first.name, more: users.length - 1, mark: first.inactive ?? null }
+}
+
 export function UserRosterCluster({
   users,
-  showSingleName = true
+  showSingleName = true,
+  nameLabel = false
 }: {
-  users: Array<{ id: string; name: string }>
+  users: Array<{ id: string; name: string; inactive?: RosterInactive }>
   showSingleName?: boolean
+  /** Always name the first owner who can act (+N), not just a single one. */
+  nameLabel?: boolean
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -215,11 +232,29 @@ export function UserRosterCluster({
           +{extra}
         </span>
       )}
-      {showSingleName && users.length === 1 && (
-        <span className='ml-1.5 max-w-[130px] truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-          {users[0].name}
-        </span>
-      )}
+      {nameLabel
+        ? (() => {
+            const l = rosterLabel(users)
+            if (!l) return null
+            return (
+              <span
+                data-roster-label=''
+                className='ml-1.5 inline-flex max-w-[170px] items-baseline gap-1 text-[12px] font-medium text-slate-700 dark:text-slate-200'
+              >
+                <span className='truncate'>{l.name}</span>
+                {l.mark && <InactiveMark mark={l.mark} />}
+                {l.more > 0 && (
+                  <span className='shrink-0 text-slate-500 dark:text-slate-400'>+{l.more}</span>
+                )}
+              </span>
+            )
+          })()
+        : showSingleName &&
+          users.length === 1 && (
+            <span className='ml-1.5 max-w-[130px] truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>
+              {users[0].name}
+            </span>
+          )}
       {open &&
         createPortal(
           <div
@@ -243,13 +278,25 @@ export function UserRosterCluster({
                 (no text baseline) set it lower than an initials one, so the
                 rows were uneven. */}
             {users.map((o) => (
-              <div key={o.id} className='flex px-2 py-0.5'>
+              <div key={o.id} className='flex items-center gap-1.5 px-2 py-0.5'>
                 <UserChip userId={o.id} size='compact' />
+                {o.inactive && <InactiveMark mark={o.inactive} />}
               </div>
             ))}
           </div>,
           rosterPortalContainer(anchorRef.current)
         )}
+    </span>
+  )
+}
+
+function InactiveMark({ mark }: { mark: RosterInactive }) {
+  return (
+    <span
+      data-roster-inactive={mark}
+      className='shrink-0 rounded border border-amber-300 px-1 text-[10px] font-medium leading-tight text-amber-700 dark:border-amber-500/50 dark:text-amber-300'
+    >
+      {mark === 'suspended' ? 'suspended' : 'former'}
     </span>
   )
 }
@@ -288,13 +335,13 @@ export function OwnersInlineCompact({
     data: owners = [],
     isLoading,
     isFetching
-  } = useQuery<Array<{ id: string; name: string }>>({
+  } = useQuery<Array<{ id: string; name: string; inactive?: RosterInactive }>>({
     queryKey: ['pipeline-owners-resolved', collection, itemId],
     queryFn: () =>
       client!
-        .request<{ data: Record<string, Array<{ id: string; name: string }>> }>(
-          post(`/pipelines/instance/${collection}/owners/batch`, { ids: [itemId] })
-        )
+        .request<{
+          data: Record<string, Array<{ id: string; name: string; inactive?: RosterInactive }>>
+        }>(post(`/pipelines/instance/${collection}/owners/batch`, { ids: [itemId] }))
         .then((r) => r.data?.[itemId] ?? []),
     enabled: !!client && !!collection && !!itemId && itemId !== 'new',
     staleTime: 30_000,
@@ -309,7 +356,7 @@ export function OwnersInlineCompact({
     return (
       <span className='animate-pulse h-3 w-20 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] inline-block' />
     )
-  return <UserRosterCluster users={owners} />
+  return <UserRosterCluster users={owners} nameLabel />
 }
 
 // Inline owners display — renders pipeline state owners as avatar chips, no panel wrapper

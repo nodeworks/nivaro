@@ -79,6 +79,11 @@ export interface ObligationKindDef {
    *  calls it. Read-only: core sends the result through its normal send path.
    *  Never declare it on a `human` kind. */
   fresh_request?(database: Knex, item: string): Promise<FreshObligationRequest | FreshRefusal>
+  /** "Send current data" for a send a TRANSITION action makes (erp_submit): core renders the
+   *  push of a transition INTO the record's current state, exactly as that push renders it
+   *  (its context query, the current state, its gates). `only_states` / `except_states` are
+   *  state keys — e.g. a completion kind vs every other state. A person's click only. */
+  fresh_from_transition?: { only_states?: string[]; except_states?: string[] }
 }
 
 /** A request built from the record as it is now (see `fresh_request`). */

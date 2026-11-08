@@ -369,6 +369,11 @@ export const apiItems: DocSection = {
           'With `search`, `search_rank=1` orders the matches by how well they match the searched columns before the request’s own `sort`: the first `search_fields` column equal to the text, another column equal to it, the first column starting with it, another starting with it, every word starting a word of some column, then the rest. Only the order changes — which rows match stays the search, and only the readable columns the search reads are compared. Ignored with keyset paging (`after`). Catalog pickers rank their search this way.'
         ],
         ['picker', '0', 'When 1, applies picker filters and exclusions; used by relation pickers.'],
+        [
+          'typo',
+          '0',
+          'With `picker=1` and `search`: when the first page finds nothing, the same typo pass global search uses runs over the picker’s display fields (from `fields`, else the display template; at most two text fields; people pickers name and email only), and its matches are read again as you with the same `filter`, User Scopes and picker exclusions. Rows come back best first with `fuzzy: true` and `meta.fuzzy: true` (“Kristna” finds Kristina). Searches under four letters, ids and tables over 200,000 rows never get it; the pass has its own 1.2 s budget.'
+        ],
         ['translate', '0', 'When 1, includes `_translations` map for each translatable field.']
       ]
     },

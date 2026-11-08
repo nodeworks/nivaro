@@ -130,6 +130,9 @@ export interface ActiveLayoutData {
   groups: FieldGroup[]
   assignments: SlotAssignment[]
   ungrouped_sort?: number | null
+  /** The `?layout=` this page was opened with names no form the person may
+   *  open: the answer is the usual form, and the page says so (army11 f3). */
+  requested_form_unavailable?: boolean
 }
 
 export interface StepDef {

@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type LineCollision, lineConflictKey } from './line-midair'
-import { LineCollisionDialog } from './MidairCollisionDialog'
+import { LineCollisionDialog, MidairCollisionDialog } from './MidairCollisionDialog'
 
 let host: HTMLDivElement
 let root: Root
@@ -173,5 +173,62 @@ describe('LineCollisionDialog (grid + record form line chooser)', () => {
     expect(onResolve).toHaveBeenCalledWith(
       new Set([lineConflictKey(merge, 'amount'), lineConflictKey(merge, 'price')])
     )
+  })
+})
+
+describe('record-level Merge (army 11)', () => {
+  it('auto-merges same values, asks real conflicts with nothing preselected, previews, resolves by field', () => {
+    const onResolve = vi.fn()
+    act(() =>
+      root.render(
+        <MidairCollisionDialog
+          collision={{
+            conflicts: [
+              { field: 'description', current_value: 'Lock test A B4' },
+              { field: 'po_amount', current_value: 120 }
+            ],
+            mine: { description: 'Lock test A S2', po_amount: 120 }
+          }}
+          merge={{
+            edit: { description: 'Lock test A S2', po_amount: 120, vendor: 753, notes_flag: true },
+            current: { id: 1, description: 'Lock test A B4', po_amount: 120, vendor: 700 },
+            hideField: (f) => f === 'vendor'
+          }}
+          fieldLabel={(f) => ({ description: 'Description', po_amount: 'PO amount' })[f] ?? f}
+          onCancel={() => {}}
+          onResolve={onResolve}
+        />
+      )
+    )
+    act(() => {})
+    act(() => (document.querySelector('[data-resolve-mode="merge"]') as HTMLButtonElement).click())
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('PO amount: you both set $120.00')
+    expect(text).toContain('Description — you both changed it')
+    expect(text).not.toContain('753')
+    const save = byText('Save merged') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    act(() => (document.querySelector('[data-merge-pick="mine"]') as HTMLButtonElement).click())
+    expect(document.querySelector('[data-merge-preview]')?.textContent).toContain(
+      'Description Lock test A S2'
+    )
+    act(() => save.click())
+    // Header keys are field names: only the same-value field stays theirs.
+    expect(onResolve).toHaveBeenCalledWith(new Set(['po_amount']))
+  })
+
+  it('without merge facts the header chooser stays Theirs / Mine only', () => {
+    act(() =>
+      root.render(
+        <MidairCollisionDialog
+          collision={{ conflicts: [{ field: 'a', current_value: 1 }], mine: { a: 2 } }}
+          fieldLabel={(f) => f}
+          onCancel={() => {}}
+          onResolve={() => {}}
+        />
+      )
+    )
+    act(() => {})
+    expect(document.querySelector('[data-resolve-mode]')).toBeNull()
   })
 })

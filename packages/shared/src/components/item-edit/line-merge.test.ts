@@ -5,7 +5,8 @@ import {
   mergeReady,
   mergeTheirsKeys,
   previewFields,
-  recomputeDerived
+  recomputeDerived,
+  restoredLineConflicts
 } from './line-merge'
 import { type LineCollision, lineConflictKey } from './line-midair'
 
@@ -107,5 +108,33 @@ describe('line merge rules (Rob, army 11)', () => {
         (f) => f === 'workflow'
       )
     ).toEqual(['quantity', 'amount'])
+  })
+})
+
+describe('restored line draft vs a newer save (army 11 f4 L4)', () => {
+  const revs = [
+    {
+      id: 11487081,
+      data: { id: 163134, quantity: 5, price: 2.1, total: 10.5 },
+      delta: { quantity: 5, total: 10.5, date_updated: 'x', user_updated: 'u' }
+    },
+    { id: 11487076, data: { id: 163134, quantity: 12, price: 2.1, total: 25.2 }, delta: {} }
+  ]
+  it('names the fields the draft changes that someone saved after it', () => {
+    const r = restoredLineConflicts(
+      { quantity: 9, total: 18.9, _change_reason: 'x' },
+      11487076,
+      revs
+    )
+    expect(r?.latest).toBe(11487081)
+    expect(r?.conflicts).toEqual([
+      { field: 'quantity', current_value: 5 },
+      { field: 'total', current_value: 10.5 }
+    ])
+    expect(r?.current?.quantity).toBe(5)
+  })
+  it('a field only they changed is no conflict; nothing newer is null', () => {
+    expect(restoredLineConflicts({ price: 3 }, 11487076, revs)?.conflicts).toEqual([])
+    expect(restoredLineConflicts({ quantity: 9 }, 11487081, revs)).toBeNull()
   })
 })

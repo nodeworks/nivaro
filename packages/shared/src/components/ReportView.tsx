@@ -143,6 +143,11 @@ import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } 
 import { del, get, post, put } from '../lib/commands'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
+import {
+  cascadeFilter,
+  fetchCascadeRelations,
+  restrictedScopeSelections
+} from '../lib/quick-filter-cascade'
 import { buildReportTree, type ReportTreeNode } from '../lib/report-tree'
 import { uniqueByValue } from '../lib/unique-options'
 import {
@@ -297,16 +302,29 @@ function FilterChip({
   allowedValues?: Array<string | number>
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const [open, setOpen] = useState(false)
+  // A dimension the person is restricted on narrows this list too (army 11 Q2-2:
+  // Zones 1-3 → no National region), not only the restricted field's own list.
+  const { scopes: myScopes } = useMyScopes()
+  const scopeSel = optionSource ? restrictedScopeSelections(optionSource.collection, myScopes) : []
   const { data: options = [] } = useQuery({
-    queryKey: ['nivaro-report-filter-opts', reportId, field, optionSource ?? null],
+    queryKey: ['nivaro-report-filter-opts', reportId, field, optionSource ?? null, scopeSel],
     queryFn: async () => {
       if (optionSource) {
         const vf = optionSource.value_field ?? 'id'
         const lf = optionSource.label_field ?? vf
+        const narrow = scopeSel.length
+          ? cascadeFilter(
+              optionSource.collection,
+              await fetchCascadeRelations(client as never, qc, optionSource.collection),
+              scopeSel
+            )
+          : null
         const res = (await client.request(
           readItems(optionSource.collection, {
             fields: [...new Set(['id', vf, lf])],
+            ...(narrow ? { filter: narrow as never } : {}),
             sort: optionSource.sort ? [optionSource.sort] : undefined,
             limit: 200
           })

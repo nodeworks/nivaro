@@ -73,3 +73,9 @@ export function labelOnlyMatches<T>(
   if (!words || wholeList.length >= PICKER_PAGE) return []
   return wholeList.filter((item) => matchesAllTokens(labelOf(item), words))
 }
+
+/** Every row is a close match from the server's typo pass (fix11-search
+ *  marks them `fuzzy: true`): the exact search found nothing. */
+export function onlyCloseMatches(rows: Array<Record<string, unknown>> | null | undefined): boolean {
+  return !!rows && rows.length > 0 && rows.every((r) => r.fuzzy === true)
+}

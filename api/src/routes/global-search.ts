@@ -1439,9 +1439,12 @@ export function fuzzyStatement(
     access?: AccessClause | null
   }>,
   q: string,
-  mssql = onMssql()
+  mssql = onMssql(),
+  /** Rows kept per collection (a record picker's typo pass keeps more). */
+  top = FUZZY_PER_COLLECTION
 ): { sql: string; bindings: unknown[] } | null {
   const { chunks, need } = fuzzyChunks(q)
+  const n = Math.max(1, Math.min(50, Math.floor(top)))
   if (chunks.length < 2) return null
   const parts: string[] = []
   const bindings: unknown[] = []
@@ -1463,7 +1466,7 @@ export function fuzzyStatement(
     const where = gate.sql ? `(${any})${gate.sql}` : any
     const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
     parts.push(
-      `SELECT * FROM (SELECT TOP ${FUZZY_PER_COLLECTION} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
+      `SELECT * FROM (SELECT TOP ${n} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
     )
     for (const ls of likes) for (const l of ls) bindings.push(...l.bindings)
     bindings.push(...gate.bindings)

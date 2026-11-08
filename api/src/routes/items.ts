@@ -359,6 +359,33 @@ export async function itemsRoutes(app: FastifyInstance) {
         req,
         req.workspaceId ?? undefined
       )
+      // Record pickers opt in to typo tolerance (`typo=1`): a first-page search that found
+      // nothing gets global search's typo pass, re-read as the caller with the picker's
+      // own filter (services/picker-typo.ts); rows come back flagged `fuzzy: true`.
+      if (
+        q.picker === '1' &&
+        (q.typo === '1' || q.typo === 'true') &&
+        query.search?.trim() &&
+        !query.offset &&
+        !query.page &&
+        query.after === undefined &&
+        Array.isArray((result as { data?: unknown[] }).data) &&
+        (result as { data: unknown[] }).data.length === 0
+      ) {
+        const { pickerTypoRead } = await import('../services/picker-typo.js')
+        const typo = await pickerTypoRead(
+          req.user!,
+          collection,
+          query,
+          req,
+          (tq) =>
+            readItems(req.user!, collection, tq, req, req.workspaceId ?? undefined) as Promise<{
+              data: unknown[]
+              meta?: Record<string, unknown>
+            }>
+        ).catch(() => null)
+        if (typo) return reply.send({ ...(result as object), ...typo })
+      }
       return reply.send(result)
     } catch (err) {
       return handleError(err, reply)

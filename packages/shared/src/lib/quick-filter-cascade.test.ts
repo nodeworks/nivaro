@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { type CascadeRelation, cascadeFilter } from './quick-filter-cascade'
+import {
+  type CascadeRelation,
+  cascadeFilter,
+  restrictedScopeSelections
+} from './quick-filter-cascade'
 
 const RELS: CascadeRelation[] = [
   {
@@ -62,5 +66,33 @@ describe('cascadeFilter', () => {
         { collection: 'markets', field: 'id', values: [7] }
       ])
     ).toEqual({ _and: [{ division: { _in: [2] } }, { market: { _in: [7] } }] })
+  })
+})
+
+describe('restrictedScopeSelections (army 11 Q2-2)', () => {
+  const scopes = {
+    dimensions: [
+      { name: 'division', target_collection: 'divisions' },
+      { name: 'region', target_collection: 'regions' }
+    ],
+    restricted: { division: [1, 2, 3] }
+  }
+  const rels = [
+    {
+      many_collection: 'regions',
+      many_field: 'division',
+      one_collection: 'divisions',
+      one_field: null,
+      junction_field: null
+    }
+  ] as unknown as CascadeRelation[]
+  it("a Zones 1-3 person gets only those zones' regions", () => {
+    const sel = restrictedScopeSelections('regions', scopes)
+    expect(sel).toEqual([{ collection: 'divisions', field: 'id', values: [1, 2, 3] }])
+    expect(cascadeFilter('regions', rels, sel)).toEqual({ division: { _in: [1, 2, 3] } })
+  })
+  it('a dimension never narrows its own list; no scopes = nothing', () => {
+    expect(restrictedScopeSelections('divisions', scopes)).toEqual([])
+    expect(restrictedScopeSelections('regions', null)).toEqual([])
   })
 })

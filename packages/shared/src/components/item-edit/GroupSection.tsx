@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as LucideIcons from 'lucide-react'
 import { ChevronDown, ChevronRight, Loader2, Mail, User } from 'lucide-react'
-import React, { memo, type ReactNode, useEffect, useRef, useState } from 'react'
+import React, { memo, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import {
   type FieldDrilldownConfig,
   fieldDrilldownConfig,
+  RelationPathDataContext,
   useDrilldown,
   useNavigation,
   useOptionalNivaroClient
@@ -13,7 +14,7 @@ import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
-import { choiceLabel, cn, titleCase, toLocalDateString } from '../../lib/utils'
+import { choiceLabel, cn, formatDate, titleCase, toLocalDateString } from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
 import { GridGuides } from '../layout-editor/grid-guides'
@@ -245,7 +246,7 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
     if (/^0\.0+$/.test(df) && Number.isFinite(n)) return n.toFixed(df.length - 2)
     if (df === 'date' && typeof value === 'string') {
       const d = value.length === 10 ? new Date(`${value}T00:00:00`) : new Date(value)
-      if (!Number.isNaN(d.getTime())) return d.toLocaleDateString()
+      if (!Number.isNaN(d.getTime())) return formatDate(value)
     }
     if (df === 'datetime' && typeof value === 'string') {
       const d = new Date(value)
@@ -315,11 +316,11 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
       // how MSSQL `date` columns serialize — parse as UTC midnight; local
       // conversion would shift them a day (and first-of-month values a whole
       // MONTH) back. Render the stored calendar day from the string parts.
+      // One date style across read-only values ("Nov 8, 2026" — army 11 f2);
+      // formatDate keeps a calendar day on its stored day.
       const dm = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/)
-      if (dm) {
-        return new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])).toLocaleDateString()
-      }
-      return dateOnly ? new Date(s).toLocaleDateString() : new Date(s).toLocaleString()
+      if (dm) return formatDate(`${dm[1]}-${dm[2]}-${dm[3]}`)
+      return dateOnly ? formatDate(s) : new Date(s).toLocaleString()
     } catch {
       /* noop */
     }
@@ -681,6 +682,10 @@ export function StripFieldValue({
   textClassName?: string
 }) {
   const pulse = useChangePulse(val)
+  // A relation-path tile ("Unit" = unit.name) opens the record it reads from
+  // (army 11 f2: the unit name was dead text beside a linked MWF ID).
+  const pathData = useContext(RelationPathDataContext)?.[field.field]
+  const pathDrill = useDrilldown()
   // The host sets the size (a stat-band tile passes 13px or the 15px hero);
   // the default is the ordinary 13px figure.
   const base = cn(textClassName ?? 'text-[13px] text-slate-900 dark:text-slate-100', pulse)
@@ -801,7 +806,12 @@ export function StripFieldValue({
     }
     if (displayFormat === 'date') {
       try {
-        return <span className={`font-semibold ${base}`}>{toLocalDateString(val)}</span>
+        // One date style in the header ("Nov 8, 2026" — army 11 f2).
+        return (
+          <span className={`font-semibold ${base}`}>
+            {formatDate(val as string) || toLocalDateString(val)}
+          </span>
+        )
       } catch {
         /* fall through */
       }
@@ -817,7 +827,25 @@ export function StripFieldValue({
     }
   }
 
-  return <span className={`font-semibold ${base}`}>{formatDisplayValue(val, field)}</span>
+  const text = <span className={`font-semibold ${base}`}>{formatDisplayValue(val, field)}</span>
+  const target = pathData?.target_collection
+  if (pathDrill && target && pathData?.ids.length === 1) {
+    const id = pathData.ids[0]
+    return (
+      <button
+        type='button'
+        data-header-path-link=''
+        onClick={(e) => {
+          e.stopPropagation()
+          pathDrill.open({ collection: target, itemId: String(id), layoutId: null, width: '85%' })
+        }}
+        className='cursor-pointer text-left underline decoration-slate-300 underline-offset-[3px] hover:text-[#0284c7] hover:decoration-[#0284c7] dark:decoration-slate-600 dark:hover:text-sky-400'
+      >
+        {text}
+      </button>
+    )
+  }
+  return text
 }
 
 function SummaryStrip({
