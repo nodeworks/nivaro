@@ -1,9 +1,8 @@
-import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { CURRENT_SEAL_VERSION, HASH_RE } from './canonical.js'
 import { computeSeals } from './chain.js'
 import { TrailBusyError, withTrailLock } from './lock.js'
-import { ACTIVITY, presentCanonicalColumns, readHead, trailReady } from './store.js'
+import { ACTIVITY, presentCanonicalColumns, readHead, trailReady, unsealedSource } from './store.js'
 
 /**
  * The activity sealer (#16) — cron `activity-seal`, every minute, one process (the cron
@@ -35,7 +34,8 @@ function caseSql(pairs: Array<[number, string | number]>): string {
 }
 
 async function readUnsealed(columns: string[], limit: number): Promise<Record<string, unknown>[]> {
-  const from = isMssql(db) ? db.raw('?? WITH (READPAST)', [ACTIVITY]) : ACTIVITY
+  // READPAST + the filtered index of unsealed rows (store.ts unsealedSource).
+  const { from } = await unsealedSource({ readPast: true })
   return (await db
     .from(from as unknown as string)
     .whereNull('seal_hash')

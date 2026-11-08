@@ -1,6 +1,6 @@
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
-import { ACTIVITY, readHead, SEALS, trailReady } from './store.js'
+import { ACTIVITY, readHead, SEALS, trailReady, unsealedSource } from './store.js'
 import type { CheckpointRow } from './verify.js'
 
 /**
@@ -125,10 +125,15 @@ export async function trailStatus(): Promise<TrailStatus> {
   const [head, unsealed, oldest, lastRow, goodRow, brokenRow] = await Promise.all([
     readHead(),
     unsealedCount(),
-    db(ACTIVITY)
-      .whereNull('seal_hash')
-      .orderBy('id', 'asc')
-      .first('timestamp')
+    // Through the filtered index (unsealedSource): a plain TOP 1 walked every sealed row.
+    unsealedSource()
+      .then(({ from }) =>
+        db
+          .from(from as unknown as string)
+          .whereNull('seal_hash')
+          .orderBy('id', 'asc')
+          .first('timestamp')
+      )
       .catch(() => undefined) as Promise<{ timestamp: Date } | undefined>,
     db(SEALS).orderBy('id', 'desc').first() as Promise<CheckpointRow | undefined>,
     db(SEALS)

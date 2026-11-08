@@ -13,7 +13,8 @@ const state = vi.hoisted(() => ({
   ran: [] as FakeQuery[],
   unsealed: [] as Array<Record<string, unknown>>,
   updateCount: null as number | null,
-  served: false
+  served: false,
+  indexPresent: true
 }))
 
 vi.mock('../../../../db/index.js', async () => {
@@ -21,6 +22,7 @@ vi.mock('../../../../db/index.js', async () => {
   const fake = makeFakeDb((q) => {
     state.ran.push(q)
     if (q.method === 'first') return undefined // empty chain: genesis head
+    if (q.sql.includes('sys.indexes')) return state.indexPresent ? [{ ok: 1 }] : []
     if (q.method === 'select' && q.sql.includes('READPAST')) {
       if (state.served) return []
       state.served = true
@@ -44,11 +46,14 @@ vi.mock('../../../../services/activity-trail/store.js', async (importOriginal) =
 })
 
 import { sealPending } from '../../../../services/activity-trail/sealer.js'
+import { forgetUnsealedIndexProbe } from '../../../../services/activity-trail/store.js'
 
 beforeEach(() => {
   state.ran = []
   state.served = false
   state.updateCount = null
+  state.indexPresent = true
+  forgetUnsealedIndexProbe()
   state.unsealed = [
     { id: 5, action: 'create', timestamp: new Date('2026-10-29T00:00:00Z'), comment: 'a' },
     { id: 6, action: 'update', timestamp: new Date('2026-10-29T00:00:01Z'), comment: 'b' }
@@ -68,6 +73,24 @@ describe('sealPending', () => {
     expect(upd.sql).toContain(`WHEN 6 THEN '${h6}'`)
     expect(upd.sql).toContain('WHEN 5 THEN 1 WHEN 6 THEN 2')
     expect(upd.sql).toMatch(/\[seal_hash\] is null/i)
+  })
+
+  it('reads through the filtered index of unsealed rows when it exists', async () => {
+    // Left alone SQL Server walked every sealed row first (row-goal clustered scan, ~3.5 GB
+    // per batch on staging, 2026-11-08).
+    await sealPending()
+    const read = state.ran.find((q) => q.sql.includes('READPAST'))!
+    expect(read.sql).toContain(
+      '[nivaro_activity] WITH (READPAST, INDEX(ix_nivaro_activity_unsealed))'
+    )
+  })
+
+  it('keeps the plain READPAST read when the index is missing', async () => {
+    state.indexPresent = false
+    await sealPending()
+    const read = state.ran.find((q) => q.sql.includes('READPAST'))!
+    expect(read.sql).toContain('[nivaro_activity] WITH (READPAST)')
+    expect(read.sql).not.toContain('INDEX(')
   })
 
   it('stops (and reports more) when the update does not touch every row', async () => {

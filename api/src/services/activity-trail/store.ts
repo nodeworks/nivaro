@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { hasColumn } from '../../lib/column-probe.js'
@@ -32,6 +34,56 @@ export async function trailReady(): Promise<boolean> {
     hasTableCached(BRIDGES)
   ])
   return a && b && c && d && e
+}
+
+/** Migration 518's filtered index of the rows still to seal (SQL Server only). */
+export const UNSEALED_INDEX = 'ix_nivaro_activity_unsealed'
+const indexProbe = new Map<string, { ok: boolean; at: number }>()
+/** A present index is re-checked now and then (a rollback can drop it under a running API). */
+const HIT_TTL_MS = 10 * 60_000
+
+async function unsealedIndexPresent(): Promise<boolean> {
+  if (!isMssql(db)) return false
+  const key = getTenantId() ?? ''
+  const hit = indexProbe.get(key)
+  if (hit && Date.now() - hit.at < (hit.ok ? HIT_TTL_MS : MISS_TTL_MS)) return hit.ok
+  const rows = (await db
+    .raw('SELECT 1 AS ok FROM sys.indexes WHERE object_id = OBJECT_ID(?) AND name = ?', [
+      ACTIVITY,
+      UNSEALED_INDEX
+    ])
+    .catch(() => [])) as unknown[]
+  const ok = Array.isArray(rows) && rows.length > 0
+  indexProbe.set(key, { ok, at: Date.now() })
+  return ok
+}
+
+/** Tests: forget the cached index probe. */
+export function forgetUnsealedIndexProbe(): void {
+  indexProbe.clear()
+}
+
+/**
+ * The FROM for "unsealed rows in id order" (`WHERE seal_hash IS NULL ORDER BY id`, TOP n).
+ *
+ * On SQL Server it names the filtered index: left alone the optimizer reads that shape as an
+ * ordered scan of the clustered index with a row goal ("unsealed rows are spread evenly, 500
+ * of them turn up early"), but every unsealed row sits ABOVE every sealed one, so each read
+ * walked all sealed rows first — 9.3M rows / ~3.5 GB per sealer batch on staging, avg 4 s
+ * (max 15 s, then cancelled) over ~20k runs on production (Query Store, 2026-11-08). Through
+ * the index it reads the first n entries of the filtered index plus n key lookups. `readPast` keeps the sealer's skip of
+ * rows another transaction still holds.
+ */
+export async function unsealedSource(
+  opts: { readPast?: boolean } = {}
+): Promise<{ from: string | Knex.Raw }> {
+  // Wrapped: a knex Raw is thenable, so an async function returning one bare would run it.
+  if (!isMssql(db)) return { from: ACTIVITY }
+  const hints = [
+    ...(opts.readPast ? ['READPAST'] : []),
+    ...((await unsealedIndexPresent()) ? [`INDEX(${UNSEALED_INDEX})`] : [])
+  ]
+  return { from: hints.length ? db.raw(`?? WITH (${hints.join(', ')})`, [ACTIVITY]) : ACTIVITY }
 }
 
 /** The canonical columns this database has (a missing one reads as null in the hash). */

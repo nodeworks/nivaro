@@ -55,6 +55,7 @@
     "integrations:queries": "tsx extensions/efp-ops/scripts/integrations-console-queries.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
+    "index:activity-action": "tsx src/scripts/activity-action-index.ts",
     "owners:fingerprint": "tsx src/scripts/owner-fingerprint.ts",
     "backfill:start-history": "tsx src/scripts/backfill-start-history.ts",
     "repair:watch-targets": "tsx src/scripts/repair-watch-targets.ts",
