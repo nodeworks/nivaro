@@ -14763,14 +14763,22 @@ ENCRYPTION_KEY=4f8d...64-hex-chars...c2a1
         <div class="doc-section" id="s-retention-policies" data-toc='[{"id":"retention-policies","label":"Privacy &amp; Retention Policies"}]'>
           <!-- SYNC:retention-policies -->
           <h1 class="doc-h1" id="retention-policies">Privacy &amp; Retention Policies</h1>
-          <p class="doc-p">Retention policies identify users who have been inactive for a configurable period and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.</p>
+          <p class="doc-p">Retention policies identify people who have not signed in for a configurable period (and, optionally, have left the company per directory sync) and either redact their PII, delete the account, or suspend it. This supports GDPR/CCPA data minimisation requirements without manual intervention.</p>
+          <h3 class="doc-h3">Who is in scope</h3>
+          <p class="doc-p">A person is a candidate only when EVERY gate holds:</p>
+          <ul class="doc-ul">
+            <li>No sign-in since the cutoff: <code class="doc-code">nivaro_users.last_access</code> is empty or older than the threshold (months). A recent sign-in always protects. The activity log is not read.</li>
+            <li>**Left the company** (option <code class="doc-code">require_directory_gone</code>, Settings: "Only people who have left the company"): directory sync marks the account <code class="doc-code">missing</code> or <code class="doc-code">disabled</code> (<code class="doc-code">nivaro_users.directory_status</code>), with a verdict taken in the last 7 days.</li>
+            <li>Not a machine account (<code class="doc-code">account_kind</code> set, or an integration/bot address) — an idle integration is not a leaver.</li>
+            <li>Not under an active legal hold, not already redacted, and not in the protected addresses or roles.</li>
+          </ul>
+          <div class="doc-note doc-warn">A policy with "Only people who have left the company" on REFUSES to run — nothing is judged or written — while directory sync is off, has never completed, or last completed more than 7 days ago. The refusal is recorded as a run with its reason, and a scheduled run fails its job so Background Jobs shows it.</div>
           <h3 class="doc-h3">How it works</h3>
           <ul class="doc-ul">
-            <li>A policy defines an inactivity threshold (months), the action to take, which fields to redact, and protected addresses/roles that are never touched.</li>
-            <li>Users with no <code class="doc-code">nivaro_activity</code> rows since the cutoff — and not in any exclusion list — are candidates.</li>
-            <li>Redacted users get <code class="doc-code">is_redacted = true</code> and are automatically excluded from all user pickers and list endpoints throughout the UI.</li>
-            <li>Policies can be executed manually (with an optional dry-run preview) or scheduled via a cron expression.</li>
-            <li>Every execution is recorded in <code class="doc-code">nivaro_retention_runs</code> with an affected count and up to 50 sample IDs for audit.</li>
+            <li>Redacted users get <code class="doc-code">is_redacted = true</code>, are suspended, get one <code class="doc-code">user-retention-suspend</code> activity row each saying why, and are excluded from all user pickers and list endpoints.</li>
+            <li>Policies can be executed manually (Dry run / Run now) or on their own cron expression (<code class="doc-code">cron_schedule</code>). Each scheduled policy is a Background Jobs entry <code class="doc-code">retention-policy-&lt;id&gt;</code> on the background pool. Directory sync runs at 04:15, so a policy that needs it should run after that (e.g. <code class="doc-code">45 4 * * *</code>).</li>
+            <li>Dry-run mode on the policy makes every run — manual or scheduled — a preview: nothing is written, the run is still recorded.</li>
+            <li>Every execution (including a refusal) is recorded in <code class="doc-code">nivaro_retention_runs</code> with an affected count and up to 50 sample IDs for audit.</li>
           </ul>
           <h3 class="doc-h3">Actions</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -14788,7 +14796,7 @@ PATCH  /api/retention/:id         // update policy
 DELETE /api/retention/:id         // delete policy
 POST   /api/retention/:id/run     // execute (add ?dry_run=true for preview)
 GET    /api/retention/:id/runs    // run history</code></pre>
-          <div class="doc-note">All retention endpoints require admin access. The dry-run endpoint returns affected_count and up to 50 sample user IDs without writing any changes.</div>
+          <div class="doc-note">All retention endpoints require admin access. A run answers <code class="doc-code">affected_count</code>, <code class="doc-code">affected_ids</code> (up to 50), <code class="doc-code">dry_run</code> (true whenever nothing was written), <code class="doc-code">refused</code> (the reason, or null), <code class="doc-code">cutoff</code>, <code class="doc-code">candidates</code> (up to 500 people, each with <code class="doc-code">reasons</code> — one line per gate it matched), <code class="doc-code">candidates_truncated</code> and <code class="doc-code">skipped</code> (how many each gate kept out: machine, excluded, signed_in, directory_present).</div>
           <!-- /SYNC:retention-policies -->
         </div>
 

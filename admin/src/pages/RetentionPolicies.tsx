@@ -33,6 +33,8 @@ interface RetentionPolicy {
   cron_schedule: string | null
   is_active: boolean
   dry_run_mode: boolean
+  /** Only people directory sync marks as gone (missing / disabled). */
+  require_directory_gone: boolean
   last_run_at: string | null
   last_run_affected_count: number | null
 }
@@ -67,8 +69,35 @@ const emptyPolicy = (): Partial<RetentionPolicy> => ({
   exclusion_roles: [],
   cron_schedule: null,
   is_active: true,
-  dry_run_mode: false
+  dry_run_mode: false,
+  require_directory_gone: false
 })
+
+interface RunCandidate {
+  id: string
+  email: string | null
+  name: string
+  reasons: string[]
+}
+
+interface RunResultData {
+  affected_count: number
+  affected_ids: string[]
+  dry_run: boolean
+  errors: string[]
+  refused?: string | null
+  cutoff?: string
+  candidates?: RunCandidate[]
+  candidates_truncated?: boolean
+  skipped?: Record<string, number>
+}
+
+const SKIP_LABELS: Record<string, string> = {
+  machine: 'integration / service accounts',
+  excluded: 'protected addresses or roles',
+  signed_in: 'signed in since the cutoff',
+  directory_present: 'still in the directory (or not checked recently)'
+}
 
 // ─── Policy form ──────────────────────────────────────────────────────────────
 
@@ -140,7 +169,9 @@ function PolicyForm({
           className='h-8 w-32 text-[13px]'
         />
         <p className='text-[11px] text-slate-400'>
-          Users with no activity for this many months will be processed.
+          People who have not signed in for this many months (or never) are in scope. Integration
+          and service accounts, people under a legal hold and anyone already redacted are never
+          touched.
         </p>
       </div>
 
@@ -207,6 +238,25 @@ function PolicyForm({
         </div>
       )}
 
+      {/* Directory gate */}
+      <div className='flex items-start gap-2'>
+        <Switch
+          id='policy-directory-gone'
+          checked={form.require_directory_gone ?? false}
+          onCheckedChange={(v) => set('require_directory_gone', v)}
+        />
+        <div className='space-y-0.5'>
+          <Label htmlFor='policy-directory-gone' className='cursor-pointer text-[12px]'>
+            Only people who have left the company
+          </Label>
+          <p className='text-[11px] text-slate-400'>
+            Also requires directory sync to mark the person as not in the Microsoft directory, or
+            disabled there. The policy refuses to run while directory sync is off or has not
+            completed in the last 7 days.
+          </p>
+        </div>
+      </div>
+
       {/* Exclusion emails */}
       <div className='space-y-2'>
         <Label className='text-[12px]'>Protected email addresses</Label>
@@ -260,10 +310,14 @@ function PolicyForm({
         <Input
           value={form.cron_schedule ?? ''}
           onChange={(e) => set('cron_schedule', e.target.value || null)}
-          placeholder='0 2 1 * *  (1st of month at 2am)'
+          placeholder='45 4 * * *  (nightly, after directory sync)'
           className='h-8 w-64 font-mono text-[12px]'
         />
-        <p className='text-[11px] text-slate-400'>Leave blank for manual execution only.</p>
+        <p className='text-[11px] text-slate-400'>
+          Leave blank for manual execution only. Directory sync runs at 04:15, so a policy that
+          needs it should run after that. Scheduled runs honour dry-run mode and show in run history
+          and Background Jobs.
+        </p>
       </div>
 
       {/* Flags */}
@@ -310,53 +364,77 @@ function PolicyForm({
 
 // ─── Run result modal ─────────────────────────────────────────────────────────
 
-function RunResult({
-  result,
-  onClose
-}: {
-  result: { affected_count: number; affected_ids: string[]; dry_run: boolean; errors: string[] }
-  onClose: () => void
-}) {
+function RunResult({ result, onClose }: { result: RunResultData; onClose: () => void }) {
+  const candidates = result.candidates ?? []
+  const skipped = Object.entries(result.skipped ?? {}).filter(([, n]) => n > 0)
   return (
     <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
       <div className='flex items-center gap-2'>
-        {result.dry_run ? (
+        {result.refused ? (
+          <AlertTriangle className='h-4 w-4 text-red-500' />
+        ) : result.dry_run ? (
           <AlertTriangle className='h-4 w-4 text-amber-500' />
         ) : (
           <CheckCircle2 className='h-4 w-4 text-green-500' />
         )}
         <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100'>
-          {result.dry_run ? 'Dry run complete' : 'Policy executed'}
+          {result.refused
+            ? 'Policy did not run'
+            : result.dry_run
+              ? 'Dry run complete'
+              : 'Policy executed'}
         </p>
       </div>
-      <p className='text-[13px] text-slate-600 dark:text-slate-300'>
-        <span className='font-semibold text-slate-900 dark:text-slate-100'>
-          {result.affected_count}
-        </span>{' '}
-        user{result.affected_count !== 1 ? 's' : ''}{' '}
-        {result.dry_run ? 'would be affected' : 'processed'}.
-      </p>
-      {result.affected_ids.length > 0 && (
-        <div>
-          <p className='mb-1 text-[11px] font-medium text-slate-500'>Sample IDs:</p>
-          <div className='flex flex-wrap gap-1'>
-            {result.affected_ids.slice(0, 10).map((id) => (
-              <code
-                key={id}
-                className='rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] dark:bg-muted'
-              >
-                {id}
-              </code>
-            ))}
-            {result.affected_ids.length > 10 && (
-              <span className='text-[11px] text-slate-400'>
-                +{result.affected_ids.length - 10} more
-              </span>
-            )}
-          </div>
+      {result.refused ? (
+        <p className='text-[12px] text-red-600 dark:text-red-400'>{result.refused}</p>
+      ) : (
+        <p className='text-[13px] text-slate-600 dark:text-slate-300'>
+          <span className='font-semibold text-slate-900 dark:text-slate-100'>
+            {result.affected_count}
+          </span>{' '}
+          {result.affected_count !== 1 ? 'people' : 'person'}{' '}
+          {result.dry_run ? 'would be affected' : 'processed'}.
+        </p>
+      )}
+      {skipped.length > 0 && (
+        <p className='text-[11px] text-slate-500 dark:text-slate-400'>
+          Kept out: {skipped.map(([k, n]) => `${n} ${SKIP_LABELS[k] ?? k}`).join(' · ')}
+        </p>
+      )}
+      {candidates.length > 0 && (
+        <div className='max-h-[320px] overflow-y-auto rounded-md border border-slate-100 dark:border-border'>
+          <table className='w-full text-[11px]'>
+            <thead className='sticky top-0 bg-slate-50 dark:bg-muted'>
+              <tr>
+                <th className='px-3 py-1.5 text-left font-medium text-slate-500'>Person</th>
+                <th className='px-3 py-1.5 text-left font-medium text-slate-500'>Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {candidates.map((c) => (
+                <tr
+                  key={c.id}
+                  className='border-t border-slate-100 align-top dark:border-white/[0.05]'
+                >
+                  <td className='px-3 py-1.5 text-slate-700 dark:text-slate-200'>
+                    <div>{c.name || c.email || c.id}</div>
+                    {c.email && c.name && <div className='text-slate-400'>{c.email}</div>}
+                  </td>
+                  <td className='px-3 py-1.5 text-slate-500 dark:text-slate-400'>
+                    {c.reasons.join(' · ')}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {result.candidates_truncated && (
+            <p className='px-3 py-1.5 text-[11px] text-slate-400'>
+              Showing the first {candidates.length} of {result.affected_count}.
+            </p>
+          )}
         </div>
       )}
-      {result.errors.length > 0 && (
+      {!result.refused && result.errors.length > 0 && (
         <div>
           <p className='mb-1 text-[11px] font-medium text-red-600'>Errors:</p>
           {result.errors.map((e, i) => (
@@ -382,7 +460,7 @@ export function RetentionPoliciesPage() {
   const qc = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [runResult, setRunResult] = useState<Record<string, unknown> | null>(null)
+  const [runResult, setRunResult] = useState<RunResultData | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
 
@@ -435,7 +513,7 @@ export function RetentionPoliciesPage() {
   async function runPolicy(id: number, dryRun: boolean) {
     setRunningId(id)
     try {
-      const res = await api.post<{ data: Record<string, unknown> }>(
+      const res = await api.post<{ data: RunResultData }>(
         `/retention/${id}/run${dryRun ? '?dry_run=true' : ''}`
       )
       setRunResult(res.data.data)
@@ -525,10 +603,7 @@ export function RetentionPoliciesPage() {
         <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
           {runResult && (
             <div className='mb-4'>
-              <RunResult
-                result={runResult as Parameters<typeof RunResult>[0]['result']}
-                onClose={() => setRunResult(null)}
-              />
+              <RunResult result={runResult} onClose={() => setRunResult(null)} />
             </div>
           )}
 
@@ -561,6 +636,7 @@ export function RetentionPoliciesPage() {
                       <p className='text-[11px] text-slate-400'>
                         {selected.inactivity_threshold_months} months inactivity ·{' '}
                         {ACTION_LABELS[selected.action]}
+                        {selected.require_directory_gone && ' · left the company'}
                         {selected.cron_schedule && ` · ${selected.cron_schedule}`}
                       </p>
                     </div>
@@ -627,6 +703,12 @@ export function RetentionPoliciesPage() {
                       ['Action', ACTION_LABELS[selected.action]],
                       ['Status', selected.is_active ? 'Active' : 'Inactive'],
                       ['Mode', selected.dry_run_mode ? 'Dry run (no writes)' : 'Live'],
+                      [
+                        'Left the company',
+                        selected.require_directory_gone
+                          ? 'Required (directory sync)'
+                          : 'Not required'
+                      ],
                       ['Cron', selected.cron_schedule ?? 'Manual only'],
                       [
                         'Last run',
@@ -711,7 +793,13 @@ export function RetentionPoliciesPage() {
                               )}
                             </td>
                             <td className='px-4 py-2 text-red-500'>
-                              {r.errors?.length > 0 ? r.errors.length : '—'}
+                              {r.errors?.length > 0 ? (
+                                <span data-tip={r.errors.slice(0, 3).join('\n')}>
+                                  {r.errors.length}
+                                </span>
+                              ) : (
+                                '—'
+                              )}
                             </td>
                           </tr>
                         ))}

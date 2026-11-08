@@ -44,11 +44,21 @@ vi.mock('../../services/activity.js', () => ({
 
 vi.mock('../../services/retention.js', () => ({
   DEFAULT_REDACT_FIELDS: ['first_name', 'last_name', 'email'],
-  executeRetentionPolicy: vi.fn().mockResolvedValue({
+  CANDIDATE_LIST_MAX: 500,
+  runRetentionPolicy: vi.fn().mockResolvedValue({
     affectedCount: 2,
     affectedIds: ['user-a', 'user-b'],
-    errors: []
+    errors: [],
+    dryRun: true,
+    cutoff: '2023-11-08T00:00:00.000Z',
+    candidates: [],
+    skipped: { machine: 0, excluded: 0, signed_in: 0, directory_present: 0 }
   })
+}))
+
+vi.mock('../../lib/column-probe.js', () => ({
+  hasColumn: vi.fn(async () => true),
+  resetColumnProbes: vi.fn()
 }))
 
 vi.mock('../../services/files.js', () => ({

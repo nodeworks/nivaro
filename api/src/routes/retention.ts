@@ -1,8 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { DEFAULT_REDACT_FIELDS, executeRetentionPolicy } from '../services/retention.js'
+import {
+  CANDIDATE_LIST_MAX,
+  DEFAULT_REDACT_FIELDS,
+  type RetentionPolicy,
+  runRetentionPolicy
+} from '../services/retention.js'
 import { resyncAfterWrites } from '../services/row-schedules.js'
 
 function parseJson<T>(val: unknown): T {
@@ -28,9 +34,13 @@ function format(row: Record<string, unknown>) {
     ...row,
     redact_fields: parseJson(row.redact_fields),
     exclusion_emails: parseJson(row.exclusion_emails),
-    exclusion_roles: parseJson(row.exclusion_roles)
+    exclusion_roles: parseJson(row.exclusion_roles),
+    // Migration 524 — false on a database that has not run it yet.
+    require_directory_gone: row.require_directory_gone === true || row.require_directory_gone === 1
   }
 }
+
+const bool = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
 
 export async function retentionRoutes(app: FastifyInstance) {
   // A saved, edited or removed schedule takes effect at once, on every process.
@@ -64,6 +74,9 @@ export async function retentionRoutes(app: FastifyInstance) {
         cron_schedule: b.cron_schedule ?? null,
         is_active: b.is_active ?? true,
         dry_run_mode: b.dry_run_mode ?? false,
+        ...((await hasColumn('nivaro_retention_policies', 'require_directory_gone'))
+          ? { require_directory_gone: bool(b.require_directory_gone) }
+          : {}),
         created_by: req.user?.id ?? null
         // MSSQL/tedious returns row count on bare insert — OUTPUT the identity
       })
@@ -101,6 +114,12 @@ export async function retentionRoutes(app: FastifyInstance) {
     json('redact_fields')
     json('exclusion_emails')
     json('exclusion_roles')
+    if (
+      b.require_directory_gone !== undefined &&
+      (await hasColumn('nivaro_retention_policies', 'require_directory_gone'))
+    ) {
+      u.require_directory_gone = bool(b.require_directory_gone)
+    }
     if (Object.keys(u).length) {
       await db('nivaro_retention_policies').where({ id }).update(u)
       await logActivity({
@@ -138,31 +157,13 @@ export async function retentionRoutes(app: FastifyInstance) {
     const row = await db('nivaro_retention_policies').where({ id }).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
 
-    const started = new Date()
-    const result = await executeRetentionPolicy(
-      format(row) as Parameters<typeof executeRetentionPolicy>[0],
-      req.user?.id,
-      isDryRun
-    )
-
-    await logActivity({
-      action: 'retention-run',
-      user: req.user?.id,
-      collection: 'nivaro_retention_policies',
-      item: id,
-      comment: `${isDryRun ? 'dry run' : 'live run'}: ${result.affectedCount} affected`,
+    // Records the run (nivaro_retention_runs) and its activity row itself —
+    // the policy's own schedule goes through the same function.
+    const result = await runRetentionPolicy(format(row) as unknown as RetentionPolicy, {
+      triggeredBy: req.user?.id,
+      dryRun: isDryRun,
+      source: 'manual',
       req
-    })
-
-    await db('nivaro_retention_runs').insert({
-      policy_id: Number(id),
-      started_at: started,
-      finished_at: new Date(),
-      affected_count: result.affectedCount,
-      dry_run: isDryRun,
-      errors: result.errors.length ? JSON.stringify(result.errors) : null,
-      affected_ids: result.affectedIds.length ? JSON.stringify(result.affectedIds) : null,
-      triggered_by: req.user?.id ?? null
     })
 
     // Snake_case to match the admin RunResult shape (and GET /:id/runs)
@@ -171,7 +172,13 @@ export async function retentionRoutes(app: FastifyInstance) {
         affected_count: result.affectedCount,
         affected_ids: result.affectedIds,
         errors: result.errors,
-        dry_run: isDryRun
+        // What actually happened: a policy in dry-run mode never writes.
+        dry_run: result.dryRun,
+        refused: result.refused ?? null,
+        cutoff: result.cutoff,
+        candidates: result.candidates,
+        candidates_truncated: result.affectedCount > CANDIDATE_LIST_MAX,
+        skipped: result.skipped
       }
     })
   })
