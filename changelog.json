@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-11-08T18:05:13.291Z",
+  "generated_at": "2026-11-08T19:11:13.690Z",
   "releases": [
+    {
+      "version": "0.3.93",
+      "tag": "v0.3.93",
+      "date": "2026-11-08T14:10:58-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "retention",
+              "text": "tell admins once per redaction batch",
+              "hash": "95d7ca761"
+            },
+            {
+              "section": "Added",
+              "scope": "people",
+              "text": "one admin notice per batch of suspended/redacted people + People to offload card",
+              "hash": "0035b55a3"
+            },
+            {
+              "section": "Added",
+              "scope": "retention",
+              "text": "sign-in + directory-sync gates, scheduled runs recorded",
+              "hash": "f7a3c84e1"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.92",
       "tag": "v0.3.92",
-      "date": "2026-11-08T13:04:56-05:00",
+      "date": "2026-11-08T13:05:13-05:00",
       "sections": [
         {
           "label": "Fixed",
