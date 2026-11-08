@@ -871,7 +871,7 @@ export const presenceApiDoc: DocSection = {
         [
           'POST',
           '/api/presence/ping',
-          'Upsert a session in Redis with SESSION_TTL. Body: { sessionId, pageUrl, userId?, userEmail?, userName?, deviceType?, ... }'
+          'Upsert a session in Redis with SESSION_TTL. Body: { sessionId, pageUrl, userId?, userEmail?, userName?, deviceType?, ... }. Always 204 (never a server error): a beat that could not be recorded (Redis, database or sign-in check busy) answers 204 with x-presence-recorded: 0 and Retry-After — the next beat records it.'
         ],
         ['POST', '/api/presence/disconnect', 'Delete a session immediately. Body: { sessionId }.']
       ]

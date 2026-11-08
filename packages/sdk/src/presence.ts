@@ -50,6 +50,8 @@ export interface PresenceClient {
 }
 
 const STORAGE_KEY = 'nvr_presence_sid'
+/** How long a failed heartbeat waits before its one retry. */
+const PRESENCE_RETRY_MS = 3_000
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -115,12 +117,23 @@ export function createPresence(options: PresenceOptions): PresenceClient {
         return
       }
     } catch {}
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-      keepalive: true
-    }).catch(() => {})
+    const post = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true
+      })
+    // A heartbeat is best-effort: a server or proxy that is momentarily busy (5xx, or no
+    // answer) gets ONE quiet retry a few seconds later — never an error for the page.
+    post()
+      .then((r) => {
+        if (r.status >= 500 && path.endsWith('/ping'))
+          setTimeout(() => post().catch(() => {}), PRESENCE_RETRY_MS)
+      })
+      .catch(() => {
+        if (path.endsWith('/ping')) setTimeout(() => post().catch(() => {}), PRESENCE_RETRY_MS)
+      })
   }
 
   function ping(): void {

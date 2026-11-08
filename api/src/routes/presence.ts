@@ -37,21 +37,25 @@ const DEFAULT_SESSION_TTL = 90
 const DEFAULT_SWEEP_INTERVAL = 8_000
 const DEFAULT_PING_INTERVAL = 10_000
 
-// Simple 30s in-process cache so every ping doesn't hit the DB
-let _cfg: { ttl: number; sweep: number; cachedAt: number } | null = null
+// Simple 30s in-process cache so every ping doesn't hit the DB. Per tenant: in cloud mode one
+// process serves many tenants, each with its own presence settings.
+const _cfg = new Map<string, { ttl: number; sweep: number; cachedAt: number }>()
 
 async function getPresenceCfg() {
   const now = Date.now()
-  if (_cfg && now - _cfg.cachedAt < 30_000) return _cfg
+  const tenant = currentTenantKey() || '-'
+  const hit = _cfg.get(tenant)
+  if (hit && now - hit.cachedAt < 30_000) return hit
   const row = await db('nivaro_settings')
     .first('presence_session_ttl', 'presence_sweep_interval')
     .catch(() => null)
-  _cfg = {
+  const next = {
     ttl: row?.presence_session_ttl ?? DEFAULT_SESSION_TTL,
     sweep: row?.presence_sweep_interval ?? DEFAULT_SWEEP_INTERVAL,
     cachedAt: now
   }
-  return _cfg
+  _cfg.set(tenant, next)
+  return next
 }
 
 interface PresencePing {
@@ -74,6 +78,16 @@ interface PresenceSession extends PresencePing {
   userAgent: string | null
   firstSeen: string
   lastSeen: string
+}
+
+/** A stored session, or null when there is none or it does not parse. */
+function parseSession(raw: string | null | undefined): PresenceSession | null {
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as PresenceSession
+  } catch {
+    return null
+  }
 }
 
 function sanitizeId(id: string): string {
@@ -211,11 +225,16 @@ function embeddableScript(pingInterval: number): string {
     var body = JSON.stringify(data);
     // fetch+keepalive is the spec-recommended replacement for sendBeacon.
     // sendBeacon forces credentials:'include' which breaks cross-origin * CORS.
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true }).catch(function(){});
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true });
   }
 
-  function ping() { send('/api/presence/ping', payload()); }
-  function disconnect() { send('/api/presence/disconnect', { sessionId: sessionId }); }
+  // A heartbeat is best-effort: a busy server or proxy (5xx, no answer) gets one quiet retry.
+  function ping() {
+    var data = payload();
+    var retry = function(){ setTimeout(function(){ send('/api/presence/ping', data).catch(function(){}); }, 3000); };
+    send('/api/presence/ping', data).then(function(r){ if (r.status >= 500) retry(); }, retry);
+  }
+  function disconnect() { send('/api/presence/disconnect', { sessionId: sessionId }).catch(function(){}); }
 
   // ── Page-view analytics ───────────────────────────────────────────────────
   var _vid = null;
@@ -287,13 +306,51 @@ function embeddableScript(pingInterval: number): string {
  * names a person ONLY when its own credential (session cookie / bearer) does.
  */
 export async function pingIdentity(req: FastifyRequest, reply: FastifyReply): Promise<User | null> {
-  if (!req.headers.authorization && !req.headers.cookie) return null
+  return (await pingIdentityChecked(req, reply)).user
+}
+
+/**
+ * As pingIdentity, plus whether the answer is sure. A credential that was refused (4xx) makes an
+ * anonymous ping; one that could not be CHECKED (session store or database busy or down: 5xx,
+ * or an error with no status) is `unsure`, and the ping must not be written as anonymous — that
+ * would take a signed-in person off the people list until their next ping.
+ */
+export async function pingIdentityChecked(
+  req: FastifyRequest,
+  reply: FastifyReply
+): Promise<{ user: User | null; unsure: boolean }> {
+  if (!req.headers.authorization && !req.headers.cookie) return { user: null, unsure: false }
   try {
     await authenticate(req, reply)
-    return req.user ?? null
-  } catch {
-    return null
+    return { user: req.user ?? null, unsure: false }
+  } catch (err) {
+    const status = (err as { statusCode?: number } | null)?.statusCode
+    return { user: null, unsure: typeof status !== 'number' || status >= 500 }
   }
+}
+
+/** The presence heartbeat routes: best-effort, never answered with a server error. */
+export const PRESENCE_HEARTBEAT_ROUTES = new Set(['/api/presence/ping', '/api/presence/disconnect'])
+/** '0' on a heartbeat answer that recorded nothing — the next beat tries again. */
+export const PRESENCE_RECORDED_HEADER = 'x-presence-recorded'
+
+let lastNotRecordedLog = 0
+function logNotRecorded(req: FastifyRequest, detail: Record<string, unknown>) {
+  const now = Date.now()
+  if (now - lastNotRecordedLog < 60_000) return
+  lastNotRecordedLog = now
+  req.log.warn({ ...detail, url: req.routeOptions?.url }, 'presence heartbeat not recorded')
+}
+
+/**
+ * A heartbeat that could not be recorded: 204 + `x-presence-recorded: 0` + Retry-After, logged
+ * at most once a minute per process. Presence is a heartbeat — the next beat (10–15 s) records
+ * it — so a transient Redis / database / session-store refusal is not a failure the page should
+ * see or report (army 10: one 503 on /presence/ping during a reload).
+ */
+function notRecorded(req: FastifyRequest, reply: FastifyReply, why: string, err?: unknown) {
+  logNotRecorded(req, { why, err: err instanceof Error ? err.message : undefined })
+  return reply.code(204).header(PRESENCE_RECORDED_HEADER, '0').header('retry-after', '5').send()
 }
 
 /** An anonymous visitor's claimed name/email as a label that cannot pass for an account. */
@@ -307,6 +364,22 @@ export function unverifiedLabel(
 
 // Public routes — no auth, called from external sites under open CORS scope
 export async function presencePublicRoutes(app: FastifyInstance) {
+  // Anything ABOVE the handler that answers a heartbeat with a server error — the database
+  // fast-503 (db-health), the session store's AUTH_BACKEND_TIMEOUT, SERVER_BUSY, a tenant
+  // refusal — becomes the same quiet "not recorded" 204: a hook added in this plugin runs for
+  // every answer of its routes, wherever that answer was sent from.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (reply.statusCode < 500 || !PRESENCE_HEARTBEAT_ROUTES.has(req.routeOptions?.url ?? ''))
+      return payload
+    logNotRecorded(req, { status: reply.statusCode })
+    reply.code(204)
+    reply.header(PRESENCE_RECORDED_HEADER, '0')
+    reply.header('retry-after', '5')
+    reply.removeHeader('content-type')
+    reply.removeHeader('content-length')
+    return null
+  })
+
   // ── POST /ping ───────────────────────────────────────────────────────────
   app.post<{ Body: PresencePing }>(
     '/ping',
@@ -334,19 +407,25 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       }
     },
     async (req, reply) => {
-      if (!app.redis) return reply.code(503).send({ error: 'Redis unavailable' })
+      if (!app.redis) return notRecorded(req, reply, 'no redis')
       const body = req.body
       const sessionId = sanitizeId(body.sessionId)
       const key = sessionKeyPrefix() + sessionId
 
-      const existing = await app.redis.get(key)
-      const firstSeen = existing
-        ? (JSON.parse(existing) as PresenceSession).firstSeen
-        : new Date().toISOString()
+      let existing: string | null
+      try {
+        existing = await app.redis.get(key)
+      } catch (err) {
+        return notRecorded(req, reply, 'redis read', err)
+      }
+      const prior = parseSession(existing)
+      const firstSeen = prior?.firstSeen ?? new Date().toISOString()
 
+      // The credential could not be checked (session store or database busy): record nothing
+      // rather than rewrite a signed-in person's session as anonymous.
+      const { user: me, unsure } = await pingIdentityChecked(req, reply)
+      if (unsure) return notRecorded(req, reply, 'identity not checked')
       // An existing session that names a person is that person's alone.
-      const prior = existing ? (JSON.parse(existing) as PresenceSession) : null
-      const me = await pingIdentity(req, reply)
       if (
         prior?.userId &&
         String(prior.userId).toUpperCase() !== String(me?.id ?? '').toUpperCase()
@@ -378,7 +457,11 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       }
 
       const { ttl } = await getPresenceCfg()
-      await app.redis.setex(key, ttl, JSON.stringify(session))
+      try {
+        await app.redis.setex(key, ttl, JSON.stringify(session))
+      } catch (err) {
+        return notRecorded(req, reply, 'redis write', err)
+      }
       schedulePresenceBroadcast(app)
 
       return reply.code(204).send()
@@ -391,15 +474,19 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       const sessionId = sanitizeId(req.body.sessionId)
       if (sessionId) {
         const key = sessionKeyPrefix() + sessionId
-        const raw = await app.redis.get(key)
-        const owner = raw ? (JSON.parse(raw) as PresenceSession).userId : null
-        // A signed-in person's session ends only by that person (or its TTL).
-        if (owner) {
-          const me = await pingIdentity(req, reply)
-          if (String(me?.id ?? '').toUpperCase() !== String(owner).toUpperCase())
-            return reply.code(204).send()
+        try {
+          const owner = parseSession(await app.redis.get(key))?.userId ?? null
+          // A signed-in person's session ends only by that person (or its TTL).
+          if (owner) {
+            const me = await pingIdentity(req, reply)
+            if (String(me?.id ?? '').toUpperCase() !== String(owner).toUpperCase())
+              return reply.code(204).send()
+          }
+          await app.redis.del(key)
+        } catch (err) {
+          // The session lives out its TTL instead.
+          return notRecorded(req, reply, 'redis disconnect', err)
         }
-        await app.redis.del(key)
         schedulePresenceBroadcast(app)
       }
     }

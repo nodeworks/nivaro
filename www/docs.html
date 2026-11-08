@@ -10179,7 +10179,7 @@ DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule'
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/presence.js</td><td>Serve the embeddable tracker script. Ping interval is injected from settings. Cache-Control: no-cache.</td></tr>
-              <tr><td>POST</td><td>/api/presence/ping</td><td>Upsert a session in Redis with SESSION_TTL. Body: { sessionId, pageUrl, userId?, userEmail?, userName?, deviceType?, ... }</td></tr>
+              <tr><td>POST</td><td>/api/presence/ping</td><td>Upsert a session in Redis with SESSION_TTL. Body: { sessionId, pageUrl, userId?, userEmail?, userName?, deviceType?, ... }. Always 204 (never a server error): a beat that could not be recorded (Redis, database or sign-in check busy) answers 204 with x-presence-recorded: 0 and Retry-After — the next beat records it.</td></tr>
               <tr><td>POST</td><td>/api/presence/disconnect</td><td>Delete a session immediately. Body: { sessionId }.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Admin — requireAdmin</h3>
