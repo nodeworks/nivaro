@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { logActivity } from './activity.js'
 import { deleteDefaultsForUser } from './field-defaults.js'
+import { noteUsersDeactivated } from './inactive-people-notice.js'
 import { isMachineAccount } from './machine-accounts.js'
 
 export const DEFAULT_REDACT_FIELDS = [
@@ -444,7 +445,15 @@ export async function runRetentionPolicy(
   })
   // ── Batch finished ────────────────────────────────────────────────────────
   // Every run (Run now and the policy's own schedule) ends here. On a live run
-  // `result.redactedIds` names everyone written; a deactivated-accounts
-  // notifier hooks in at this point (not built here).
+  // `result.redactedIds` names everyone written: admins get ONE coalesced
+  // notice for the batch (services/inactive-people-notice.ts). Deleted
+  // accounts are gone, so they have no work left to hand on.
+  if (!result.dryRun && policy.action !== 'delete' && result.redactedIds.length > 0) {
+    noteUsersDeactivated(result.redactedIds, {
+      reason: 'retention',
+      actor: opts.triggeredBy ?? null,
+      verb: policy.action === 'suspend_only' ? 'suspended' : 'redacted'
+    })
+  }
   return result
 }
