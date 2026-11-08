@@ -43,6 +43,9 @@ export function useRecordHeaderActions(
      *  not offered (army5 b06 a07). A partial lock keeps them — its open
      *  fields are what such actions write, and the server judges each write. */
     fieldsLocked?: boolean
+    /** The record's values are still loading: a guard field they will carry
+     *  must not be read on its own meanwhile. */
+    valuesPending?: boolean
   } = {}
 ): AvailableBulkAction[] {
   const client = useNivaroClient()
@@ -73,7 +76,7 @@ export function useRecordHeaderActions(
         )
         .then((r) => r.data ?? {})
         .catch(() => ({})),
-    enabled: enabled && guardFields.length > 0,
+    enabled: enabled && guardFields.length > 0 && opts.valuesPending !== true,
     staleTime: 0
   })
   const fieldsLocked = opts.fieldsLocked === true

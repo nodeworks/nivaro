@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { landingState } from './landing-state'
+import { joinLabels, landingSkipGroups, landingState } from './landing-state'
 
 const states = [
   { id: 'L1', label: 'Waiting on Level 1 Approval', sort: 2 },
@@ -36,5 +36,39 @@ describe('landingState', () => {
     expect(landingState('L3', states, { L3: { skipped: false } })?.state.id).toBe('L3')
     expect(landingState('L3', states, null)?.state.id).toBe('L3')
     expect(landingState('nope', states, null)).toBeNull()
+  })
+})
+
+// Army 9 b06: the note quoted Level 3's threshold for Level 4 too.
+describe('landingSkipGroups', () => {
+  it('gives each skipped step its own reason', () => {
+    const l = landingState('L3', states, {
+      L3: { skipped: true, skip_reasons: ['requisition amount (5,000) is below 20,000'] },
+      L4: { skipped: true, skip_reasons: ['requisition amount (5,000) is below 50,000'] }
+    })
+    expect(landingSkipGroups(l)).toEqual([
+      {
+        labels: ['Waiting on Level 3 Approval'],
+        reason: 'requisition amount (5,000) is below 20,000'
+      },
+      {
+        labels: ['Waiting on Level 4 Approval'],
+        reason: 'requisition amount (5,000) is below 50,000'
+      }
+    ])
+  })
+  it('keeps steps with the same reason (or none) on one line', () => {
+    const l = landingState('L3', states, {
+      L3: { skipped: true, skip_reasons: ['No owners resolve for this record'] },
+      L4: { skipped: true, skip_reasons: ['No owners resolve for this record'] }
+    })
+    expect(landingSkipGroups(l)).toEqual([
+      {
+        labels: ['Waiting on Level 3 Approval', 'Waiting on Level 4 Approval'],
+        reason: 'No owners resolve for this record'
+      }
+    ])
+    expect(landingSkipGroups(null)).toEqual([])
+    expect(joinLabels(['A', 'B', 'C'])).toBe('A, B and C')
   })
 })

@@ -112,7 +112,14 @@ export const BATCH_READ_LIMIT = 20
 
 const ITEM_READ_PATH = /^\/items\/([A-Za-z_][A-Za-z0-9_]*)(?:\/([^/?#]+))?$/
 /** Second path segments that are routes, not record ids. */
-const NOT_A_RECORD = new Set(['aggregate', 'export', 'distinct', 'resolve-paths', 'batch-read'])
+const NOT_A_RECORD = new Set([
+  'aggregate',
+  'export',
+  'distinct',
+  'resolve-paths',
+  'batch-read',
+  'filter-check'
+])
 /** The query keys the batch endpoint understands — the list route's own. */
 const BATCH_QUERY_KEYS = new Set([
   'fields',
@@ -191,6 +198,13 @@ function readBatcher(client: NivaroClient) {
     }
     group.forEach((p, i) => {
       const r = results?.[i]
+      // A record the server says is not there answers exactly as its GET would
+      // (404, readOne as the caller) — re-sending it only asked twice. Every
+      // other refusal is re-sent on its own for the GET's own body.
+      if (r?.status === 404 && p.read.id !== undefined) {
+        p.reject(notFoundError())
+        return
+      }
       if (r?.status !== 200 || r === undefined) {
         void alone(p)
         return
@@ -360,11 +374,12 @@ const SETTLED_READ_PATHS =
  * configuration (record data outside system tables, view/lock/draft/presence
  * bookkeeping, chat, rule evaluation, read-like POSTs — the people-card batch
  * and the file check are reads by POST, and each used to drop every settled
- * answer mid-load). Every other write drops the settled answers — erring wide
- * only costs a re-read.
+ * answer mid-load; the session recorder's start and the page-view beacon did
+ * the same on every cold page). Every other write drops the settled answers —
+ * erring wide only costs a re-read. Twin: efp-new lib/client.ts NON_CONFIG_WRITE.
  */
 const NON_CONFIG_WRITES =
-  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade|project)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
+  /^\/(record-views|item-locks|drafts|presence|rum|analytics|session-recordings|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade|project)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
 
 function cannotChangeConfig(c: AnyCommand): boolean {
   const path = (c._path ?? '').split('?')[0]
@@ -417,6 +432,20 @@ interface InflightEntry {
   p: Promise<unknown>
   at: number
   epoch: number
+  /** settledEpoch when sent: only a write that may change configuration moves it. */
+  config: number
+}
+
+/**
+ * Whether a configuration read (isSettledRead) asked now may share the one in
+ * flight. Only a write that may change configuration (which moves the settled
+ * epoch) splits them: a presence ping, a record save or a view touch landing
+ * while the collection's layouts were still loading cannot change them — a
+ * cold record page re-asked the same layouts / collection a second time
+ * because one of those had gone out in between.
+ */
+export function mayJoinConfigInflight(entry: { config: number }, settled: number): boolean {
+  return entry.config === settled
 }
 
 /** Whether a read asked now may share the HTTP request `entry` already has in flight. */
@@ -505,7 +534,12 @@ export function withGetCoalescing(
         return Promise.resolve(cloneResult(hit.value as T))
     }
     const current = inflight.get(key)
-    if (current && mayJoinInflight(c, current, Date.now(), writeEpoch))
+    if (
+      current &&
+      (settles
+        ? mayJoinConfigInflight(current, settledEpoch)
+        : mayJoinInflight(c, current, Date.now(), writeEpoch))
+    )
       return (current.p as Promise<T>).then(cloneResult)
     // A signed-out tab stops asking who it is (signed-out.ts): one probe per backoff window.
     const identity = isIdentityRead(c._method, c._path, c._params)
@@ -529,7 +563,7 @@ export function withGetCoalescing(
       .finally(() => {
         if (inflight.get(key)?.p === p) inflight.delete(key)
       })
-    inflight.set(key, { p, at: Date.now(), epoch: writeEpoch })
+    inflight.set(key, { p, at: Date.now(), epoch: writeEpoch, config: settledEpoch })
     return p
   }
   return new Proxy(client, {

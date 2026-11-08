@@ -2154,10 +2154,11 @@ function ItemEditFormView({
             is_active?: boolean | number
             pdf_button_label?: string | null
           }>
-        }>(get('/collection-layouts', { collection, type: 'file' }))
-        // The list route ignores the type param — filter here or every layout
-        // on the collection would grow a PDF button. Inactive file layouts get
-        // no header button (that's how a PDF export is retired).
+        }>(get('/collection-layouts', { collection }))
+        // The plain collection list, filtered here: the same request as every
+        // other reader of this collection's layouts (the host's New menu, the
+        // addendum panel), so one settled answer serves them all. Inactive file
+        // layouts get no header button (that's how a PDF export is retired).
         .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'file' && !!l.is_active)),
     enabled: !!collection && !isNew,
     staleTime: 60_000
@@ -2315,6 +2316,16 @@ function ItemEditFormView({
       (itemLoadError as { response?: { status?: number } })?.response?.status
     return status === 403 || status === 404
   })()
+  // The record read said 403/404 and nothing is showing: every read about the
+  // record itself (lines, links, lock, addendums, paths, checks, previews)
+  // would answer the same refusal — they stay off (army 9 b14: a missing
+  // record still fired seven side reads that all 404'd).
+  const recordUnavailable = itemLoadDenied && !itemData
+  // Reads about the record's contents (its lines, link rows, addendums, the
+  // paths it resolves) wait for the record to answer: they went out beside the
+  // record read and, for a record that is not there, each answered 404. The
+  // form cannot show them before its own fields arrive anyway.
+  const recordAnswered = itemData !== undefined && itemData !== null
 
   // ── Draft state ────────────────────────────────────────────────────────────
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -4254,7 +4265,7 @@ function ItemEditFormView({
           })
         )
         .then((r) => r.data ?? {}),
-    enabled: !isNew && relationPathFields.length > 0,
+    enabled: !isNew && recordAnswered && relationPathFields.length > 0,
     staleTime: 30_000
   })
   const relationPathData = useMemo(() => {
@@ -4319,7 +4330,7 @@ function ItemEditFormView({
             })
           )
           .then((r) => r.data ?? []),
-      enabled: !!itemId && !isNew,
+      enabled: !!itemId && !isNew && recordAnswered,
       staleTime: 30_000
     }))
   })
@@ -5548,7 +5559,7 @@ function ItemEditFormView({
           .then((res) => res.data ?? []),
       select: (rows: Record<string, unknown>[]) => rows.length,
       // A grid only in a section that loads when opened waits for it (#2713).
-      enabled: !!itemId && !isNew && !deferred.fields.has(r.one_field as string),
+      enabled: !!itemId && !isNew && recordAnswered && !deferred.fields.has(r.one_field as string),
       staleTime: 30_000
     }))
   })
@@ -5678,6 +5689,16 @@ function ItemEditFormView({
     () => !!normalizeSummaryModeRules(colMeta?.summary_mode_rules).edit_lock,
     [colMeta?.summary_mode_rules]
   )
+  // The lock lookups below read the same /pipelines/instance answer the
+  // pipeline panel shows. The panel mounts a moment later and read it again on
+  // every cold record page; the first answer now seeds its cache (only while
+  // it has none — a transition's own refetch is never overwritten).
+  const seedPipelinePanel = (answer: unknown) => {
+    const key = ['pipeline-instance', collection, itemId]
+    if (answer && typeof answer === 'object' && qc.getQueryData(key) === undefined)
+      qc.setQueryData(key, answer)
+    return answer
+  }
   const { data: editLockInstance } = useQuery<{
     edit_lock?: {
       locked?: boolean
@@ -5691,7 +5712,12 @@ function ItemEditFormView({
     queryFn: () =>
       client
         .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
-        .then((r) => r.data as { edit_lock?: { locked?: boolean; allowed?: boolean } } | null)
+        .then(
+          (r) =>
+            seedPipelinePanel(r.data) as {
+              edit_lock?: { locked?: boolean; allowed?: boolean }
+            } | null
+        )
         .catch(() => null),
     staleTime: 30_000,
     enabled: editLockConfigured && !isNew && !designOn
@@ -5722,6 +5748,7 @@ function ItemEditFormView({
     !designOn &&
     showLockBanner &&
     !isNew &&
+    !recordUnavailable &&
     !!colMeta?.item_locking_enabled &&
     summaryModeSettled &&
     !readMode &&
@@ -5821,7 +5848,7 @@ function ItemEditFormView({
   // #2596: the exact rule behind a lock (and, for admins, what rules hide) —
   // fetched on the first hover of a locked field; admins with the form.
   const lockWhy = useLockWhy(collection, isNew ? null : itemId, {
-    enabled: !designCtx,
+    enabled: !designCtx && recordAnswered,
     eager: isAdmin
   })
 
@@ -5833,7 +5860,7 @@ function ItemEditFormView({
       .request<{ data: unknown }>(get(`/pipelines/instance/${collection}/${itemId}`))
       .then(
         (r) =>
-          r.data as {
+          seedPipelinePanel(r.data) as {
             instance?: { current_state?: string | null } | null
             states?: Array<{ id: string; key: string; label?: string | null }>
           }
@@ -5848,7 +5875,7 @@ function ItemEditFormView({
     queryKey: ['pipeline-instance-lock', collection, itemId],
     queryFn: fetchPipelineInstanceLock,
     staleTime: 30_000,
-    enabled: stateLookupNeeded && !isNew && !designStateKey
+    enabled: stateLookupNeeded && !isNew && !recordUnavailable && !designStateKey
   })
   // Record-page waterfall (#C5): both lookups above wait for the layout (and
   // the collection meta) to say they are needed. A collection whose last
@@ -5966,7 +5993,7 @@ function ItemEditFormView({
       client
         .request<{ data: AddendumRecord[] }>(get(`/addendums/${collection}/${itemId}`))
         .then((r) => r.data ?? []),
-    enabled: addendumEnabled,
+    enabled: addendumEnabled && recordAnswered,
     staleTime: 30_000
   })
 
@@ -6275,11 +6302,23 @@ function ItemEditFormView({
   // transitions; never on a new record. While an addendum is open they still act
   // on the record itself (Rob 2026-10-28: a record with an active addendum can be
   // put on hold), their guards read from the record, not the addendum's draft.
+  // The record's own values (with this person's edits over them) answer the
+  // guards: the form already holds every column of the record, so a guard on a
+  // field the layout does not show (Hold's is_on_hold) needs no read of its own.
+  const headerActionValues = useMemo(
+    () =>
+      viewingAddendum
+        ? (itemData ?? null)
+        : itemData
+          ? { ...(itemData as Record<string, unknown>), ...draft }
+          : draft,
+    [viewingAddendum, itemData, draft]
+  )
   const headerRegistryActions = useRecordHeaderActions(
     collection,
     isNew || designOn ? null : String(itemId),
-    viewingAddendum ? null : draft,
-    { fieldsLocked: !!editLockMessage && !editLockPartial }
+    headerActionValues,
+    { fieldsLocked: !!editLockMessage && !editLockPartial, valuesPending: !itemData }
   )
   const [headerRegistryPick, setHeaderRegistryPick] = useState<AvailableBulkAction | null>(null)
 
@@ -6457,7 +6496,7 @@ function ItemEditFormView({
               })
             )
             .then((res) => res.data ?? []),
-        enabled: !!itemId && !isNew,
+        enabled: !!itemId && !isNew && recordAnswered,
         staleTime: 30_000
       }
     })
@@ -7900,7 +7939,7 @@ function ItemEditFormView({
   // passed explicitly — this render sits above the M2MStagingContext provider.
   const autoIdSubtitlePreview = useAutoIdPreview({
     collection,
-    field: autoIdSubtitleMeta,
+    field: recordUnavailable ? null : autoIdSubtitleMeta,
     draft,
     itemId,
     staging: m2mStagingCtx
@@ -7983,7 +8022,13 @@ function ItemEditFormView({
   const integrity = useRecordIntegrity(
     collection,
     String(itemId ?? ''),
-    !isNew && !!itemId && !designOn && !activeLayoutData?.layout?.hide_integrity_banner
+    // Waits for the record itself: the check of a record that turns out not
+    // to exist (or not to be readable) only ever answered the same 404.
+    !isNew &&
+      !!itemId &&
+      !designOn &&
+      !!itemData &&
+      !activeLayoutData?.layout?.hide_integrity_banner
   )
   const integrityIssues =
     integrity.data?.enabled === false ? 0 : (integrity.data?.findings?.length ?? 0)
@@ -10078,38 +10123,41 @@ function ItemEditFormView({
       }
       const notice = saveNoticeRef.current
       const noun = colMeta?.singular || titleCase(collection)
+      // The closing message goes up the moment the write is acknowledged (army9 b09: it
+      // waited out the dialog's 1.2 s success display on top of the save itself); the
+      // dialog still closes, and onSaved still runs, after that brief display.
+      // One closing message (item-edit/save-outcome.ts): never "Changes saved" over a
+      // refused line, a change waiting on its reason (M29) or a save that sent nothing (L43).
+      const msg = saveClosingMessage(notice, { isNew, noun })
+      if (msg) {
+        const show =
+          msg.kind === 'error'
+            ? toast.error
+            : msg.kind === 'warning'
+              ? toast.warning
+              : msg.kind === 'success'
+                ? toast.success
+                : toast
+        // One toast slot for the save's outcome: the next save's message
+        // REPLACES the last one ("Not saved yet — give a reason" must not sit
+        // beside the "Changes saved" that followed it, army9 b09).
+        const slot = { id: SAVE_OUTCOME_TOAST_ID }
+        if (msg.duration) show(msg.text, { ...slot, duration: msg.duration })
+        else show(msg.text, slot)
+      }
+      if (notice.linkProblems.length > 0) {
+        toast.error(
+          `${isNew ? `The new ${noun.toLowerCase()} was created` : 'Saved'}, but some parts did not save: ${[
+            ...new Set(notice.linkProblems)
+          ].join(' · ')}`,
+          { duration: 20_000 }
+        )
+      }
       // Auto-close dialog after brief success display
       setTimeout(() => {
         // A refused line: the dialog stays open on its error steps ("Saved
         // with errors"), and the closing message names the refusal.
         if (!notice.childFailed) setSaveDialogOpen(false)
-        // One closing message (item-edit/save-outcome.ts): never "Changes saved" over a
-        // refused line, a change waiting on its reason (M29) or a save that sent nothing (L43).
-        const msg = saveClosingMessage(notice, { isNew, noun })
-        if (msg) {
-          const show =
-            msg.kind === 'error'
-              ? toast.error
-              : msg.kind === 'warning'
-                ? toast.warning
-                : msg.kind === 'success'
-                  ? toast.success
-                  : toast
-          // One toast slot for the save's outcome: the next save's message
-          // REPLACES the last one ("Not saved yet — give a reason" must not sit
-          // beside the "Changes saved" that followed it, army9 b09).
-          const slot = { id: SAVE_OUTCOME_TOAST_ID }
-          if (msg.duration) show(msg.text, { ...slot, duration: msg.duration })
-          else show(msg.text, slot)
-        }
-        if (notice.linkProblems.length > 0) {
-          toast.error(
-            `${isNew ? `The new ${noun.toLowerCase()} was created` : 'Saved'}, but some parts did not save: ${[
-              ...new Set(notice.linkProblems)
-            ].join(' · ')}`,
-            { duration: 20_000 }
-          )
-        }
         onSaved?.(id)
       }, 1200)
     },

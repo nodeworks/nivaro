@@ -1882,11 +1882,12 @@ export function AddendumPanel({
   const { data: addendumLayout, isLoading: isLoadingLayout } = useQuery<AddendumLayout | null>({
     queryKey: ['addendum-layout', collection, addendumLayoutId ?? 'default'],
     queryFn: async () => {
+      // The plain collection list, filtered here: the record form and the
+      // host's New menu read the same list moments earlier, so the settled
+      // answer is reused instead of a second request (cold record page).
       const layouts = await client
-        .request<{ data: AddendumLayout[] }>(
-          get('/collection-layouts', { collection, layout_type: 'addendum' })
-        )
-        .then((r) => r.data ?? [])
+        .request<{ data: AddendumLayout[] }>(get('/collection-layouts', { collection }))
+        .then((r) => (r.data ?? []).filter((l) => l.layout_type === 'addendum'))
       if (addendumLayoutId != null) {
         return layouts.find((l) => l.id === addendumLayoutId) ?? null
       }
@@ -1896,8 +1897,12 @@ export function AddendumPanel({
   })
 
   const resolvedLayoutId = addendumLayoutId ?? addendumLayout?.id ?? null
+  // The addendum form's fields and placements are needed to create one (the
+  // sheet) or to show the addendums there are — not by every record that has
+  // none: they waited on nothing and cost two requests per record opened.
+  const needsFormConfig = !!resolvedLayoutId && (sheetOpen || addendums.length > 0)
 
-  const { data: assignments = [] } = useQuery<LayoutAssignment[]>({
+  const { data: assignments = [], isPending: assignmentsPending } = useQuery<LayoutAssignment[]>({
     queryKey: ['addendum-layout-assignments', resolvedLayoutId],
     queryFn: () =>
       resolvedLayoutId
@@ -1907,11 +1912,11 @@ export function AddendumPanel({
             )
             .then((r) => r.data ?? [])
         : Promise.resolve([]),
-    enabled: !!resolvedLayoutId,
+    enabled: needsFormConfig,
     staleTime: 5 * 60 * 1000
   })
 
-  const { data: collectionFields = [] } = useQuery<CMSField[]>({
+  const { data: collectionFields = [], isPending: collectionFieldsPending } = useQuery<CMSField[]>({
     queryKey: ['collection-fields', collection, resolvedLayoutId],
     queryFn: () =>
       client
@@ -1922,9 +1927,12 @@ export function AddendumPanel({
           )
         )
         .then((r) => r.data ?? []),
-    enabled: resolvedLayoutId != null,
+    enabled: needsFormConfig,
     staleTime: 5 * 60 * 1000
   })
+  // The create sheet opens on the form's own config, never on empty placeholders.
+  const sheetConfigLoading =
+    sheetOpen && resolvedLayoutId != null && (assignmentsPending || collectionFieldsPending)
 
   const { data: relations = [] } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],
@@ -2118,7 +2126,7 @@ export function AddendumPanel({
 
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent side='right' className='w-[80vw] sm:max-w-[80vw] p-0 flex flex-col'>
-          {sheetOpen && isParentLoading ? (
+          {sheetOpen && (isParentLoading || sheetConfigLoading) ? (
             <div className='flex flex-col gap-3 p-6'>
               <Skeleton className='h-6 w-48' />
               <Skeleton className='h-9 w-full' />

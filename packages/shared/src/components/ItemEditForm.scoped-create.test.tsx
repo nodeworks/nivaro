@@ -605,6 +605,12 @@ describe('an edit that moves the record out of the editor’s scope', () => {
       })
       await settle(() => false, 5)
       await m.save()
+      // Army 9 b09: the closing message goes up as soon as the write is acknowledged — not
+      // after the save dialog's 1.2 s success display (onSaved still waits for that).
+      const told = () => toasts.success.mock.calls.length + toasts.warning.mock.calls.length > 0
+      await settle(told, 100)
+      expect(told()).toBe(true)
+      expect(m.onSaved).not.toHaveBeenCalled()
       await settle(() => m.onSaved.mock.calls.length > 0, 250)
       const patches = m.calls.filter((c) => (c._method ?? '').toUpperCase() === 'PATCH')
       expect(patches).toHaveLength(1)

@@ -100,6 +100,10 @@ describe('withoutSkippedSendBacks (b06-N6)', () => {
     ).toEqual(['back-a', 'back-b', 'fwd'])
     expect(withoutSkippedSendBacks(txs, states, 'C', null)).toBe(txs)
   })
+  it('never hides a return-to-previous move (Uncancel), like the server twin', () => {
+    const back = [{ id: 'uncancel', to_state: 'A', to_previous: true }]
+    expect(withoutSkippedSendBacks(back, states, 'C', new Map([['A', []]]))).toEqual(back)
+  })
 })
 
 describe('DeleteLineButton (b09-N7)', () => {

@@ -46,6 +46,7 @@ import {
   batchableRead,
   createGatedClient,
   forgetSettledReads,
+  mayJoinConfigInflight,
   mayJoinInflight,
   RECORD_JOIN_MS,
   releaseGatedReads,
@@ -109,6 +110,7 @@ describe('batchableRead', () => {
   it('refuses writes, sub-routes and query keys the batch does not know', () => {
     expect(batchableRead({ _method: 'POST', _path: '/items/regions' })).toBeNull()
     expect(batchableRead({ _method: 'GET', _path: '/items/regions/aggregate' })).toBeNull()
+    expect(batchableRead({ _method: 'GET', _path: '/items/regions/filter-check' })).toBeNull()
     expect(batchableRead({ _method: 'GET', _path: '/items/regions/4/resolve-paths' })).toBeNull()
     expect(batchableRead({ _method: 'GET', _path: '/collections/regions' })).toBeNull()
     expect(
@@ -152,10 +154,10 @@ describe('withGetCoalescing batchReads', () => {
         return {
           results: [
             { key: '0', status: 200, data: [] },
-            { key: '1', status: 404, error: 'Not found' }
+            { key: '1', status: 403, error: 'Forbidden' }
           ]
         }
-      return new Error('Not found')
+      return Object.assign(new Error('Forbidden'), { status: 403 })
     })
     const c = withGetCoalescing(client, { batchReads: true })
     const results = await Promise.allSettled([
@@ -168,6 +170,25 @@ describe('withGetCoalescing batchReads', () => {
       'POST /items/batch-read',
       'GET /items/regions/999'
     ])
+  })
+
+  // A missing record (army 9 b14 not-found page): the batch's 404 is the GET's
+  // own verdict, so it is answered as a 404 instead of asking a second time.
+  it('answers a record the batch says is missing as a 404, without re-sending', async () => {
+    const { client, calls } = fakeClient(() => ({
+      results: [
+        { key: '0', status: 200, data: [] },
+        { key: '1', status: 404, error: 'Not found', code: 'NOT_FOUND' }
+      ]
+    }))
+    const c = withGetCoalescing(client, { batchReads: true })
+    const results = await Promise.allSettled([
+      c.request(readItems('regions')),
+      c.request(readItem('regions', 999))
+    ])
+    expect(results[1].status).toBe('rejected')
+    expect((results[1] as PromiseRejectedResult).reason).toMatchObject({ status: 404 })
+    expect(calls.map((x) => `${x._method} ${x._path}`)).toEqual(['POST /items/batch-read'])
   })
 
   it('falls back to individual reads when the batch itself fails', async () => {
@@ -358,6 +379,74 @@ describe('withGetCoalescing speed kept (no regression from the write epoch)', ()
     await c.request({ _method: 'PATCH', _path: '/items/vendors/9', _body: { a: 1 } } as never)
     await Promise.all(Array.from({ length: 5 }, () => c.request(get('/items/zones') as never)))
     expect(calls.filter((x) => x._method === 'GET')).toHaveLength(1)
+  })
+})
+
+describe('withGetCoalescing config reads in flight across record writes (army 9 b14)', () => {
+  const get = (path: string, params?: Record<string, unknown>) =>
+    ({ _method: 'GET', _path: path, ...(params ? { _params: params } : {}) }) as Cmd
+
+  it('mayJoinConfigInflight follows only the settled (config) epoch', () => {
+    expect(mayJoinConfigInflight({ config: 4 }, 4)).toBe(true)
+    expect(mayJoinConfigInflight({ config: 4 }, 5)).toBe(false)
+  })
+
+  it('the recorder start and the page-view beacon keep settled config answers', async () => {
+    forgetSettledReads()
+    const { client, calls } = fakeClient(() => ({ data: [] }))
+    const c = withGetCoalescing(client)
+    await c.request(get('/collections/workflows') as never)
+    await c.request({ _method: 'POST', _path: '/session-recordings/start', _body: {} } as never)
+    await c.request({ _method: 'POST', _path: '/analytics/pageview', _body: {} } as never)
+    await c.request(get('/collections/workflows') as never)
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(1)
+  })
+
+  it('a layouts read still loading is shared after a presence ping or record save', async () => {
+    forgetSettledReads()
+    let release: (() => void) | null = null
+    const calls: Cmd[] = []
+    const client = {
+      request: vi.fn((cmd: Cmd) => {
+        calls.push(cmd)
+        if (cmd._method !== 'GET') return Promise.resolve({ data: null })
+        return new Promise((r) => {
+          release = () => r({ data: [{ id: 2 }] })
+        })
+      })
+    } as unknown as NivaroClient
+    const c = withGetCoalescing(client)
+    const layouts = get('/collection-layouts', { collection: 'workflows' })
+    const first = c.request(layouts as never)
+    await c.request({ _method: 'POST', _path: '/presence/ping', _body: {} } as never)
+    await c.request({ _method: 'PATCH', _path: '/items/workflows/1', _body: { a: 1 } } as never)
+    const second = c.request(layouts as never)
+    ;(release as unknown as () => void)()
+    expect(await second).toEqual(await first)
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(1)
+  })
+
+  it('a configuration write in between still splits them', async () => {
+    forgetSettledReads()
+    const releases: Array<() => void> = []
+    const calls: Cmd[] = []
+    const client = {
+      request: vi.fn((cmd: Cmd) => {
+        calls.push(cmd)
+        if (cmd._method !== 'GET') return Promise.resolve({ data: null })
+        return new Promise((r) => {
+          releases.push(() => r({ data: [] }))
+        })
+      })
+    } as unknown as NivaroClient
+    const c = withGetCoalescing(client)
+    const layouts = get('/collection-layouts', { collection: 'workflows' })
+    const first = c.request(layouts as never)
+    await c.request({ _method: 'PATCH', _path: '/collection-layouts/2', _body: {} } as never)
+    const second = c.request(layouts as never)
+    for (const r of releases) r()
+    await Promise.all([first, second])
+    expect(calls.filter((x) => x._method === 'GET')).toHaveLength(2)
   })
 })
 

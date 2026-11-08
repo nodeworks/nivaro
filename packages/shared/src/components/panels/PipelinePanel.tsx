@@ -58,7 +58,7 @@ import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
-import { landingState } from './landing-state'
+import { joinLabels, landingSkipGroups, landingState } from './landing-state'
 import { SlaClockLine } from './SlaClock'
 import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
 
@@ -612,9 +612,14 @@ function hasSendBackOffer(
 /**
  * Send-back buttons whose target is a chain step this record SKIPPED (no owner, or its skip
  * rule matched) are hidden: pressing one parks the record on a step nobody works (b06-N6).
- * Forward moves and sends back to steps that were on the path stay.
+ * Forward moves and sends back to steps that were on the path stay. A return-to-previous
+ * move (Uncancel) is never hidden: its target is only a fallback. Twin of the server's
+ * api/src/services/send-back-skips.ts, which drops the same moves from the instance read
+ * and refuses them (TARGET_SKIPPED) — change both.
  */
-export function withoutSkippedSendBacks<T extends Pick<PipelineTransition, 'to_state'>>(
+export function withoutSkippedSendBacks<
+  T extends Pick<PipelineTransition, 'to_state'> & { to_previous?: unknown }
+>(
   txs: T[],
   states: Array<Pick<PipelineState, 'id' | 'sort'>>,
   currentStateId: string | null | undefined,
@@ -624,7 +629,11 @@ export function withoutSkippedSendBacks<T extends Pick<PipelineTransition, 'to_s
   const skippedUp = new Set([...skipped.keys()].map((k) => String(k).toUpperCase()))
   return txs.filter(
     (t) =>
-      !(skippedUp.has(String(t.to_state).toUpperCase()) && isSendBack(t, states, currentStateId))
+      !(
+        !t.to_previous &&
+        skippedUp.has(String(t.to_state).toUpperCase()) &&
+        isSendBack(t, states, currentStateId)
+      )
   )
 }
 
@@ -1957,16 +1966,41 @@ function confirmLanding(
 
 function LandingNote({ landing }: { landing: ReturnType<typeof landingState<PipelineState>> }) {
   if (!landing || landing.skipped.length === 0) return null
-  const names = landing.skipped.map((s) => s.state.label)
-  const reason = landing.skipped.find((s) => s.reasons.length > 0)?.reasons[0]
+  const groups = landingSkipGroups(landing)
+  // One reason for every skipped step: one sentence, as before.
+  if (groups.length === 1) {
+    const g = groups[0]
+    return (
+      <p
+        data-confirm-skips
+        className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'
+      >
+        Goes straight to <span className='font-medium'>{landing.state.label}</span> —{' '}
+        {joinLabels(g.labels)} {g.labels.length === 1 ? 'is' : 'are'} skipped
+        {g.reason ? ` (${g.reason})` : ''}.
+      </p>
+    )
+  }
+  // Different reasons (army 9 b06: Level 3 below 20,000, Level 4 below 50,000):
+  // each skipped step with its own.
   return (
-    <p data-confirm-skips className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'>
-      Goes straight to <span className='font-medium'>{landing.state.label}</span> —{' '}
-      {names.length === 1
-        ? names[0]
-        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`}{' '}
-      {names.length === 1 ? 'is' : 'are'} skipped{reason ? ` (${reason})` : ''}.
-    </p>
+    <div
+      data-confirm-skips
+      className='text-[11.5px] leading-snug text-slate-600 dark:text-slate-300'
+    >
+      <p>
+        Goes straight to <span className='font-medium'>{landing.state.label}</span>. Skipped on the
+        way:
+      </p>
+      <ul className='mt-0.5 list-disc space-y-0.5 pl-4'>
+        {groups.map((g) => (
+          <li key={g.labels.join('|')}>
+            <span className='font-medium'>{joinLabels(g.labels)}</span>
+            {g.reason ? ` — ${g.reason}` : ''}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 

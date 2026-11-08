@@ -58,3 +58,35 @@ export function landingState<S extends LandingStateRow>(
   }
   return { state: at, skipped }
 }
+
+/** One line of the confirm panel's skip note: the steps that share one reason. */
+export interface LandingSkipGroup {
+  labels: string[]
+  /** Every reason the engine gave for these steps, joined; null when it gave none. */
+  reason: string | null
+}
+
+/**
+ * The skipped steps grouped by their reason, in pipeline order (army 9 b06): the
+ * note quoted only the first step's reason, so "Levels 3 and 4 are skipped
+ * (below the threshold amount of 20,000)" hid that Level 4's threshold is
+ * 50,000. Steps with the same reason stay on one line. Pure.
+ */
+export function landingSkipGroups<S extends LandingStateRow>(
+  landing: Landing<S> | null | undefined
+): LandingSkipGroup[] {
+  const groups: LandingSkipGroup[] = []
+  for (const s of landing?.skipped ?? []) {
+    const reason = s.reasons.length > 0 ? [...new Set(s.reasons)].join('; ') : null
+    const last = groups[groups.length - 1]
+    if (last && last.reason === reason) last.labels.push(s.state.label)
+    else groups.push({ labels: [s.state.label], reason })
+  }
+  return groups
+}
+
+/** "A", "A and B", "A, B and C". */
+export function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? ''
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
+}
