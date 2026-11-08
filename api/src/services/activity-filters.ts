@@ -243,3 +243,20 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
   }
   return qb
 }
+
+/**
+ * The FROM of the activity list's id page and count (alias `a`). On SQL Server it reads
+ * WITH (NOLOCK): a filter no index serves (`action=access-request` alone, 12M rows) runs a
+ * parallel scan that held thousands of page S locks — including the newest page every write
+ * appends to — for up to 15 s. Each item save logs an activity row, so the save queued behind
+ * the scan and every read of that page queued behind the save (army 9 b09: a one-line quantity
+ * save written at 0.3 s answered after 6.4 s, when a 15 s `action=access-request` read was
+ * cancelled; measured on EFP_Development: ~5,400 page S locks held at 11 s, none WITH (NOLOCK)).
+ * The log is append-only, so a dirty read can at most list an entry a moment early or count
+ * a row whose write then rolls back; the rows themselves are re-read by id (pageRows).
+ */
+export function activityListSource(knex: Knex, mssql: boolean): Knex.QueryBuilder {
+  return mssql
+    ? knex.from(knex.raw('?? AS a WITH (NOLOCK)', ['nivaro_activity']))
+    : knex('nivaro_activity as a')
+}

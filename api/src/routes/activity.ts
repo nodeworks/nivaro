@@ -5,6 +5,7 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  activityListSource,
   activityWindow,
   applyActivityFilters,
   hasActivityFilter,
@@ -148,7 +149,9 @@ export async function activityRoutes(app: FastifyInstance) {
     // The page in two steps: the ids by a narrow (timestamp, id) sort, then those rows with
     // their user. Sorting the whole joined row (comment text and all) over every match took
     // 8–11 s for the dashboard's ten newest on 11–12M rows (staging/dev, 2026-10-24).
-    const pageIds = db('nivaro_activity as a')
+    const mssql = isMssql(db)
+    // Read without shared locks: a slow filter must never hold up the saves that log here.
+    const pageIds = activityListSource(db, mssql)
       .select('a.id')
       .orderBy([
         { column: 'a.timestamp', order: 'desc' },
@@ -158,13 +161,12 @@ export async function activityRoutes(app: FastifyInstance) {
       .offset(offset)
 
     // The count needs no join (a left join on the users key never adds or drops a row).
-    const countQuery = db('nivaro_activity as a').count('* as count')
+    const countQuery = activityListSource(db, mssql).count('* as count')
 
     // #10 — one filter shape (user, action[], collection[], item, from/to/range, q), every
     // value bound (services/activity-filters.ts). Text search without a window reads 90 days.
     const parsed = normalizeActivityFilters(q)
     if (parsed.errors.length) return reply.code(400).send({ error: parsed.errors.join('; ') })
-    const mssql = isMssql(db)
     applyActivityFilters(pageIds, parsed.filters, { mssql })
     applyActivityFilters(countQuery, parsed.filters, { mssql })
     // Migration 516: one burst's rows (the Activity page's expanded group past the page).

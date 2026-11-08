@@ -44,6 +44,7 @@ import {
 import { pickInstance } from '../services/record-state.js'
 import { formatWorkflowState, runRecordTransition } from '../services/record-transition.js'
 import { labelSeatFilters } from '../services/seat-labels.js'
+import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import {
   pickRerunAction,
@@ -2576,6 +2577,26 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       item,
       transitions: offeredTransitions
     })
+
+    // Send backs to steps this record skips are not offered (army 9 b06): the
+    // move would be refused (TARGET_SKIPPED) — the panel hides the same ones.
+    if (!instance.completed_at) {
+      const skipped = await skippedSendBackTargets({
+        moves: offeredTransitions,
+        states,
+        currentStateId: currentState,
+        instanceId: String(instance.id),
+        collection,
+        item,
+        database: db
+      })
+      offeredTransitions = withoutSkippedSendBacks(
+        offeredTransitions,
+        states,
+        currentState,
+        skipped
+      )
+    }
 
     // Get history with joined state labels. #645: a delegate's move names the
     // out-of-office owner it stood in for (migration 395 — probed, so a

@@ -90,6 +90,11 @@ vi.mock('../../../db/index.js', () => {
     return b
   }
   const db = Object.assign(() => make(), {
+    // The list's FROM is `nivaro_activity AS a WITH (NOLOCK)` (activityListSource).
+    from: (src: unknown) => {
+      calls.list.push({ kind: 'from', detail: src })
+      return make()
+    },
     raw: async (sql: string) => {
       calls.list.push({ kind: 'raw', detail: sql })
       return [{ n: 12726469 }]
@@ -210,7 +215,14 @@ describe('GET /api/activity', () => {
       await a.inject({ method: 'GET', url: '/api/activity?limit=10&collection=workflows' })
     ).json()
     expect(one.total).toBe(5)
-    expect(calls.list.some((c) => c.kind === 'raw')).toBe(false)
+    expect(
+      calls.list.some((c) => c.kind === 'raw' && String(c.detail).includes('dm_db_partition_stats'))
+    ).toBe(false)
+    // Army 9 b09: the id page and the count read the log without shared locks.
+    expect(
+      calls.list.filter((c) => c.kind === 'raw' && String(c.detail).includes('WITH (NOLOCK)'))
+        .length
+    ).toBeGreaterThanOrEqual(2)
   })
 })
 

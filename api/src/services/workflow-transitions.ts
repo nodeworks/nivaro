@@ -36,6 +36,7 @@ import {
 import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { getLabels } from './queues.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
+import { isSendBackMove } from './send-back-skips.js'
 import { TRIGGER_SAFE } from './trigger-safe.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
@@ -921,7 +922,11 @@ export async function emitWorkflowStartEvent(opts: {
  */
 export class TransitionNoTargetError extends Error {
   statusCode = 409
-  code = 'NO_TARGET_OWNERS'
+  code: 'NO_TARGET_OWNERS' | 'TARGET_SKIPPED' = 'NO_TARGET_OWNERS'
+  constructor(message: string, code?: 'NO_TARGET_OWNERS' | 'TARGET_SKIPPED') {
+    super(message)
+    if (code) this.code = code
+  }
 }
 
 /** Pure: the refusal's sentence. `noOwners` = the target skips for want of owners. */
@@ -1402,9 +1407,29 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
   )
   const newState = resolvedTarget?.id ?? transition.to_state
 
+  // A person's send back to a step this record skips (army 9 b06): the engine
+  // would walk it forward again past the skipped steps — never to the step
+  // asked for. Refused before anything is written, like a bounce below; the
+  // instance read no longer offers these moves (send-back-skips.ts).
+  // Return-to-previous moves (Uncancel) are judged by the bounce rule only.
+  const skippedSendBack =
+    opts.source !== 'auto' &&
+    !coerceBool((transition as { to_previous?: boolean | number }).to_previous) &&
+    String(newState).toUpperCase() !== String(nominalTarget).toUpperCase() &&
+    previousState != null &&
+    isSendBackMove(
+      { to_state: nominalTarget },
+      (await db<WorkflowState>('nivaro_workflow_states')
+        .whereIn('id', [previousState, nominalTarget])
+        .select('id', 'sort')) as Array<{ id: string; sort: number | null }>,
+      previousState
+    )
   // A person's move that would only come back to where the record is: refuse
   // it, say why (army5 b06-N6). Auto transitions keep their own rules.
-  if (opts.source !== 'auto' && bouncesBack(previousState, nominalTarget, newState)) {
+  if (
+    skippedSendBack ||
+    (opts.source !== 'auto' && bouncesBack(previousState, nominalTarget, newState))
+  ) {
     const target = (await db<WorkflowState>('nivaro_workflow_states')
       .where({ id: nominalTarget })
       .first()) as WorkflowState | undefined
@@ -1427,7 +1452,8 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         target?.label ?? 'That step',
         !!noOwners,
         detail.reasons.find((r) => !/no owner/i.test(r)) ?? null
-      )
+      ),
+      noOwners ? 'NO_TARGET_OWNERS' : 'TARGET_SKIPPED'
     )
   }
 

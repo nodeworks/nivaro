@@ -303,8 +303,12 @@ export async function computeStateChain(
     ),
     Promise.all(
       states.map(async (s) => {
+        // The current step, and initial/terminal steps (the engine never
+        // skips those — resolveTransitionTarget), are never predicted skipped:
+        // the panel's send-back filter and the server's (send-back-skips.ts)
+        // must judge the same steps.
         const skip =
-          s.id === currentStateId
+          s.id === currentStateId || coerceBool(s.is_initial) || coerceBool(s.is_terminal)
             ? { skipped: false, reasons: [] as string[] }
             : await evaluateSkipCriteriaDetailed(
                 s.id,
