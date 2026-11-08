@@ -54,6 +54,7 @@ import { authRoutes } from './auth.js'
 import { automationTestRoutes } from './automation-tests.js'
 import { backgroundRunsRoutes } from './background-runs.js'
 import { backupsRoutes } from './backups.js'
+import { batchGetRoutes } from './batch-get.js'
 import { blackoutDatesRoutes } from './blackout-dates.js'
 import { blueprintsRoutes } from './blueprints.js'
 import { bulkActionsRoutes } from './bulk-actions.js'
@@ -79,10 +80,10 @@ import { collectionPresetsRoutes } from './collection-presets.js'
 import { collectionSnapshotRoutes } from './collection-snapshots.js'
 import { collectionsRoutes } from './collections.js'
 import { commandCenterRoutes } from './command-center.js'
-import { commandCenterTimeRoutes } from './command-center-time.js'
 import { commandCenterPlaceRoutes } from './command-center-place.js'
-import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commandCenterShellRoutes } from './command-center-shell.js'
+import { commandCenterTimeRoutes } from './command-center-time.js'
+import { commandCenterWorkRoutes } from './command-center-work.js'
 import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
@@ -459,6 +460,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
   await app.register(lastTouchRoutes)
+  // Several small GETs in one round trip, each run as the caller (services/batch-get.ts).
+  await app.register(batchGetRoutes)
   // What the record form shows about partner integrations (#609 #615 #616 #617).
   await app.register(recordIntegrationsRoutes)
   await app.register(recordViewRoutes)

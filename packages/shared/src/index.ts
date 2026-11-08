@@ -704,6 +704,19 @@ export {
   useAutofillRuns
 } from './lib/autofill-runs'
 export * from './lib/background-runs'
+export {
+  BATCH_GET_LIMIT,
+  BATCH_GET_WINDOW_MS,
+  BATCHABLE_GET,
+  type BatchedGet,
+  type BatchGetPart,
+  createGetBatcher,
+  type GetBatcherOptions,
+  type GetLoader,
+  isBatchableGetPath,
+  sharedGetLoader,
+  shareGetLoader
+} from './lib/batch-gets'
 export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
 export * from './lib/client-chaos'
@@ -1084,6 +1097,7 @@ export {
   BATCH_READ_LIMIT,
   type BatchableRead,
   batchableCollectionMeta,
+  batchableGet,
   batchableRead,
   COLLECTION_BATCH_LIMIT,
   COLLECTION_BATCH_WINDOW_MS,
@@ -1092,6 +1106,7 @@ export {
   forgetSettledReads,
   type GatedClient,
   isSettledRead,
+  movesWriteEpoch,
   releaseGatedReads,
   releaseGatedReadsOnSharedFetch,
   SETTLED_READ_MS,

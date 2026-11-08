@@ -1,4 +1,11 @@
 import type { Command, NivaroClient } from '@nivaro/sdk'
+import { errorBodyMessage, NivaroError } from '@nivaro/sdk'
+import {
+  type BatchGetPart,
+  createGetBatcher,
+  isBatchableGetPath,
+  sharedGetLoader
+} from './batch-gets'
 import { isRehearsalCommand, noteOwnWriteFromCommand } from './own-writes'
 import {
   claimIdentityCall,
@@ -99,6 +106,13 @@ export interface CoalescingOptions {
    * error they would have seen without batching. Writes never batch.
    */
   batchReads?: boolean
+  /**
+   * Small configuration / side-panel GETs (lib/batch-gets.ts BATCHABLE_GET) asked within
+   * BATCH_GET_WINDOW_MS ride one `POST /batch-get`, which runs each through its real route as
+   * the caller. Follows `batchReads` unless set; an older server without the route is
+   * detected and the loader steps aside.
+   */
+  batchGets?: boolean
   /**
    * Collection metadata reads (`GET /collections/<name>`) asked for within
    * ~10 ms ride one `GET /collections?names=`. On by default; an older server
@@ -350,6 +364,88 @@ function collectionMetaBatcher(client: NivaroClient) {
     })
 }
 
+// ─── Batched small GETs ────────────────────────────────────────────────────
+
+/**
+ * The query string the SDK puts on the wire for a command's params — built exactly as
+ * createNivaro's request() builds it (non-null values, String(), insertion order), so a
+ * batched part asks the server for the very URL its own GET would have.
+ */
+function wireQuery(params: unknown): string {
+  if (!params || typeof params !== 'object') return ''
+  return (
+    '?' +
+    new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params as Record<string, unknown>)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => [k, String(v)])
+      )
+    ).toString()
+  )
+}
+
+/**
+ * The path (under /api, with its query string) a GET command would request, when it may ride
+ * `POST /batch-get` — else null. Calls with their own headers never batch.
+ */
+export function batchableGet(command: unknown): string | null {
+  const c = command as AnyCommand & { _headers?: Record<string, string> }
+  if ((c._method ?? 'GET').toUpperCase() !== 'GET') return null
+  if (c._headers && Object.keys(c._headers).length > 0) return null
+  const path = c._path ?? ''
+  if (!isBatchableGetPath(path)) return null
+  return path + wireQuery(c._params)
+}
+
+function retryAfterMsOf(value: string | undefined): number | null {
+  if (!value) return null
+  const secs = Number(value)
+  if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000)
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null
+}
+
+/** The error the SDK would have thrown for this part's answer, had it been its own GET. */
+function partError(
+  command: Command<unknown>,
+  part: BatchGetPart & { status: number }
+): NivaroError {
+  const body = part.body
+  const b = (body ?? {}) as { code?: unknown; issues?: unknown }
+  return new NivaroError({
+    message: errorBodyMessage(body) || `HTTP ${part.status}`,
+    status: part.status,
+    code: typeof b.code === 'string' ? b.code : null,
+    requestId: part.request_id ?? null,
+    response: body,
+    method: 'GET',
+    path: command._path,
+    retryAfterMs: retryAfterMsOf(part.retry_after),
+    issues: b.issues
+  })
+}
+
+/**
+ * The shared client's small-GET loader (lib/batch-gets.ts createGetBatcher). The batch POST
+ * goes through the inner client, so it neither bumps the write epoch nor drops settled
+ * answers; a part re-sent alone is the command's own GET; a refused part rejects with the
+ * NivaroError that GET would have thrown (status, code, body, request id).
+ */
+function getBatcher(client: NivaroClient) {
+  const load = createGetBatcher({
+    post: (reads) =>
+      client.request({ _method: 'POST', _path: '/batch-get', _body: { reads } } as Command<unknown>)
+  })
+  // A host that batches its own fetch helper's GETs shares that loader (shareGetLoader):
+  // both transports' reads of one moment then ride one request.
+  return <T>(command: Command<T>, path: string): Promise<T> =>
+    (sharedGetLoader() ?? load)<T>(path, {
+      alone: () => client.request<T>(command),
+      error: (part) => partError(command as Command<unknown>, part)
+    })
+}
+
 // ─── Settled metadata reads ────────────────────────────────────────────────
 
 /**
@@ -366,8 +462,10 @@ function collectionMetaBatcher(client: NivaroClient) {
 export const SETTLED_READ_MS = 3000
 // `/users/me` too: the form (role), chat (preferences) and presence (id) each
 // read it under their own key and shape, a few hundred ms apart on one load.
+// `/settings` and `/roles` likewise: the shell (display prefs) and the record form each read
+// them ~300 ms apart on a cold record page; only a settings/role write changes them.
 const SETTLED_READ_PATHS =
-  /^\/(collections\/[A-Za-z_][A-Za-z0-9_-]*|field-config\/[A-Za-z_][A-Za-z0-9_-]*|collection-layouts(\/active|\/summary\/[A-Za-z_][A-Za-z0-9_-]*)?|chat\/room-types|users\/me)$/
+  /^\/(settings|roles|collections\/[A-Za-z_][A-Za-z0-9_-]*|field-config\/[A-Za-z_][A-Za-z0-9_-]*|collection-layouts(\/active|\/summary\/[A-Za-z_][A-Za-z0-9_-]*)?|chat\/room-types|users\/me)$/
 
 /**
  * Writes a record page makes all the time that can never change
@@ -379,7 +477,7 @@ const SETTLED_READ_PATHS =
  * erring wide only costs a re-read. Twin: efp-new lib/client.ts NON_CONFIG_WRITE.
  */
 const NON_CONFIG_WRITES =
-  /^\/(record-views|item-locks|drafts|presence|rum|analytics|session-recordings|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade|project)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
+  /^\/(record-views|item-locks|drafts|presence|rum|analytics|session-recordings|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade|project)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$|batch-get$)/
 
 function cannotChangeConfig(c: AnyCommand): boolean {
   const path = (c._path ?? '').split('?')[0]
@@ -418,6 +516,29 @@ interface SettledEntry {
  * sent just before the PATCH and put the old values back on the form).
  */
 let writeEpoch = 0
+
+/**
+ * POSTs that change nothing another read returns: reads by POST (a widget render, a child
+ * summary, an owners batch, people cards, the batch loaders) and telemetry bookkeeping
+ * (presence, page views, RUM, session recordings). They never split a read from one in
+ * flight — on a cold record page the session recorder's start and a render landing between
+ * two mounts made the pipeline panel ask for the instance the lock lookup was still reading.
+ * A record-view touch is not here: it moves the viewer's watermark, which reads report.
+ */
+const CHANGES_NO_READ =
+  /^\/(presence|rum|analytics|session-recordings)(\/|$)|^\/(items\/batch-read|batch-get|users\/cards|activity\/labels)$/
+
+/** Whether a write command may change what a read in flight is answering. */
+export function movesWriteEpoch(command: unknown): boolean {
+  const c = command as AnyCommand
+  const path = (c._path ?? '').split('?')[0]
+  if (CHANGES_NO_READ.test(path)) return false
+  return !(
+    (c._method ?? 'GET').toUpperCase() === 'POST' &&
+    READ_LIKE_POSTS.test(path) &&
+    !/\/touch$/.test(path)
+  )
+}
 
 /**
  * Record data (`/items/...`): a read joins one already in flight only when both
@@ -486,6 +607,7 @@ export function withGetCoalescing(
   const inflight = new Map<string, InflightEntry>()
   const batch = opts.batchReads ? readBatcher(client) : null
   const metaBatch = opts.batchCollections === false ? null : collectionMetaBatcher(client)
+  const getBatch = (opts.batchGets ?? opts.batchReads) ? getBatcher(client) : null
   const settled = new Map<string, SettledEntry>()
   let settledFor = settledEpoch
   const settle = (key: string, epoch: number, value: unknown) => {
@@ -513,9 +635,10 @@ export function withGetCoalescing(
       // and when it lands (a read sent meanwhile must not settle).
       const busts = !cannotChangeConfig(c)
       if (busts) forgetSettledReads()
-      writeEpoch++
+      const moves = movesWriteEpoch(c)
+      if (moves) writeEpoch++
       const sent = watchSignedOut(client.request<T>(command), false).finally(() => {
-        writeEpoch++
+        if (moves) writeEpoch++
       })
       return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
         if (!rehearsal) noteOwnWriteFromCommand(c._method, c._path, c._body, res)
@@ -546,12 +669,15 @@ export function withGetCoalescing(
     if (identity && !claimIdentityCall()) return Promise.reject(signedOutError())
     const read = batch ? batchableRead(c) : null
     const metaName = !read && metaBatch ? batchableCollectionMeta(c) : null
+    const getPath = !read && !metaName && getBatch && !identity ? batchableGet(c) : null
     const sent = watchSignedOut(
       read && batch
         ? batch<T>(command, read)
         : metaName && metaBatch
           ? metaBatch<T>(command, metaName)
-          : client.request<T>(command),
+          : getPath && getBatch
+            ? getBatch<T>(command, getPath)
+            : client.request<T>(command),
       identity
     )
     const epoch = settledEpoch

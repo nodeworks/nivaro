@@ -459,6 +459,26 @@ export const apiItems: DocSection = {
   { "key": "gone", "status": 404, "error": "Not found", "code": "NOT_FOUND" }
 ] }`
     },
+    { type: 'h3', text: 'Several small GETs in one request' },
+    {
+      type: 'p',
+      text: '`POST /api/batch-get` carries up to 20 GETs of the small configuration and side-panel routes a record page reads (layouts, field config, field rules, relations, settings, roles, pins, last touch, SLA status, comment counts and similar). Each `path` is the GET\'s path under `/api` with its query string. The server runs every part through its own route with the caller\'s own credentials and headers, so each answers exactly what that GET would — same status, same body, same refusal — and one refused part never fails the others. A path outside the list answers that part 400 (send it on its own). The caller must be signed in. A part carries `body` only when its route answered JSON, plus `request_id` and `retry_after` when the route sent them. A host gets this for free: `NivaroProvider batchReads` gathers the listed GETs its components ask in the same ~10 ms into one batch (`createGetBatcher` + `shareGetLoader` let a host\'s own fetch helper join it).'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/batch-get
+{ "reads": [
+  { "key": "rules", "path": "/field-rules?collection=orders" },
+  { "key": "sla", "path": "/sla/status/orders/41" },
+  { "key": "why", "path": "/access-explain/orders/999999" }
+] }
+
+{ "results": [
+  { "key": "rules", "status": 200, "request_id": "…", "body": { "data": [ ... ] } },
+  { "key": "sla", "status": 200, "request_id": "…", "body": { "status": "none", "can_adjust": false } },
+  { "key": "why", "status": 403, "request_id": "…", "body": { "error": "Forbidden" } }
+] }`
+    },
     { type: 'h3', text: 'Walking a large collection (`after`)' },
     {
       type: 'p',

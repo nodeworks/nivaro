@@ -43,6 +43,8 @@ export function maintenanceExemptPath(url: string): boolean {
     url.startsWith('/api/teams/messages') ||
     // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
     url.startsWith('/api/items/batch-read') ||
+    // Batched GETs (services/batch-get.ts): each part is its own in-process GET.
+    url.startsWith('/api/batch-get') ||
     url.startsWith('/api/users/cards') ||
     // Activity sentence labels (migration 516): a read carrying the page's refs.
     url.startsWith('/api/activity/labels') ||
