@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-08T22:35:55.287Z",
+  "generated_at": "2026-11-08T23:43:37.794Z",
   "releases": [
+    {
+      "version": "0.3.95",
+      "tag": "v0.3.95",
+      "date": "2026-11-08T18:43:14-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "army 11 deferred items",
+              "hash": "e6099e772"
+            },
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "a person's Zone pick clears Region and Project that no longer fit",
+              "hash": "9dccd3ddd"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.94",
       "tag": "v0.3.94",
-      "date": "2026-11-08T17:35:38-05:00",
+      "date": "2026-11-08T17:35:55-05:00",
       "sections": [
         {
           "label": "Fixed",
