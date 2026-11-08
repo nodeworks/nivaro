@@ -114,3 +114,25 @@ export function fallbackSearchColumns(collection: string, textCols: string[]): s
   const kept = cols.filter((c) => people.includes(c))
   return kept.length ? kept : cols
 }
+
+/**
+ * `browser_config.search_group_by` (army 9, opt-in): the field whose value several rows
+ * share as ONE thing people search for — an invoice's lines all carry its `number`.
+ * Global search shows one row per value in the palette answer (`group_size`), never on
+ * the paged per-collection list. `browser_config.search_detail`: fields that tell such
+ * rows apart on that list ("Line 22 · $2,115.19"). Unset / malformed = no grouping.
+ */
+export function searchGroupOf(browserConfig: unknown): { by: string | null; detail: string[] } {
+  let by: string | null = null
+  try {
+    const bc =
+      typeof browserConfig === 'string'
+        ? (JSON.parse(browserConfig) as Record<string, unknown>)
+        : (browserConfig as Record<string, unknown> | null)
+    const raw = String(bc?.search_group_by ?? '').trim()
+    if (raw && IDENT.test(raw) && raw !== 'id') by = raw
+  } catch {
+    by = null
+  }
+  return { by, detail: (parseFieldList(browserConfig, 'search_detail') ?? []).slice(0, 3) }
+}

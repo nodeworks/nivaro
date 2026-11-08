@@ -176,7 +176,8 @@ describe('statsFromNarrowRows', () => {
       sla_warning: 1,
       sla_breached: 1,
       at_risk: 1,
-      aging: expect.any(Object)
+      aging: expect.any(Object),
+      sla_tracked: 2
     })
   })
 })

@@ -4,11 +4,18 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
-import { type CascadeCheck, compileChecks, type OptionFilterCheck } from './config-conformance.js'
+import {
+  type CascadeCheck,
+  compileChecks,
+  lineHeadFor,
+  namedLine,
+  type OptionFilterCheck
+} from './config-conformance.js'
 import { RowRuleLookupCache } from './field-rules.js'
 import { integrityCheckById } from './integrity-checks.js'
-import { applyFilterToQuery, createOne, deleteOne, updateOne } from './items.js'
+import { applyFilterToQuery, createOne, deleteOne, readOne, updateOne } from './items.js'
 import { notifyUser } from './notification-channels.js'
+import { getAllowedFields } from './permissions.js'
 import { resolveStateOwners } from './pipeline-engine.js'
 import { getLabels } from './queues.js'
 import {
@@ -76,6 +83,8 @@ export interface Proposal {
   preview: ProposalPreview[]
   /** 'pick' proposals: the person chooses one; apply sends `choice`. */
   choices?: Array<{ id: string; label: string }>
+  /** A question the banner asks before applying (deletes). */
+  confirm?: string
   /** 'pick': which field on which row the choice writes to. */
   pick?: { collection: string; item_id: string; field: string; rederive?: boolean }
   /** 'notify': who gets the task. */
@@ -958,6 +967,93 @@ async function validationProposals(
   return out
 }
 
+/** Columns no person fills on a line: keys, stamps, ordering. */
+const LINE_MACHINE_FIELDS = new Set([
+  'id',
+  'created',
+  'changed',
+  'created_at',
+  'updated_at',
+  'date_created',
+  'date_updated',
+  'user_created',
+  'user_updated',
+  'sort',
+  'line_number',
+  'status'
+])
+/** Left out when a deleted line is put back: the database sets them. */
+const UNDO_SKIP_FIELDS = new Set([
+  'id',
+  'created',
+  'changed',
+  'created_at',
+  'updated_at',
+  'date_created',
+  'date_updated',
+  'user_created',
+  'user_updated'
+])
+/**
+ * The values an undo puts back for a deleted row: the caller's own read of it
+ * (already limited to what they may read), minus keys/stamps and minus any
+ * field they may not create (`creatable` null or '*' = every field).
+ */
+export function undoSnapshot(
+  readAsCaller: Record<string, unknown>,
+  creatable: string[] | null
+): Record<string, unknown> {
+  const all = creatable === null || creatable.includes('*')
+  const allowed = new Set(creatable ?? [])
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(readAsCaller)) {
+    if (UNDO_SKIP_FIELDS.has(k) || !(all || allowed.has(k))) continue
+    // Child lists (alias arrays) are never replayed; a related row the read
+    // expanded goes back by its key.
+    if (Array.isArray(v)) continue
+    if (v !== null && typeof v === 'object') {
+      const id = (v as { id?: unknown }).id
+      if (id !== undefined) out[k] = id
+      continue
+    }
+    out[k] = v
+  }
+  return out
+}
+
+/** A quantity on a line with no item, price or note counts nothing. */
+const QUANTITY_FIELD = /(^|_)(qty|quantity)$/i
+
+/**
+ * True when a line carries no input a person fills: every column other than
+ * the parent key, machine stamps, rule-derived targets and a bare quantity is
+ * empty (null, '', 0, false). A line with an item, a price, notes or any
+ * money is never "unused".
+ */
+export function lineIsUnused(
+  line: Record<string, unknown>,
+  opts: { fkField: string; derived: Set<string>; meta?: Map<string, { type: string | null }> }
+): boolean {
+  if (lineCarriesMoney(line)) return false
+  for (const [k, v] of Object.entries(line)) {
+    if (k === opts.fkField || LINE_MACHINE_FIELDS.has(k) || opts.derived.has(k)) continue
+    if (QUANTITY_FIELD.test(k)) continue
+    if (v === null || v === undefined || v === '' || v === 0 || v === false) continue
+    if (typeof v === 'string' && v.trim() === '') continue
+    return false
+  }
+  return true
+}
+
+/** A line with a non-zero amount, total, price or cost on it. */
+export function lineCarriesMoney(line: Record<string, unknown>): boolean {
+  return Object.entries(line).some(([k, v]) => {
+    if (!/(^|_)(amount|total|price|cost|value)(_|$)/i.test(k)) return false
+    const n = Number(v)
+    return v != null && v !== '' && Number.isFinite(n) && n !== 0
+  })
+}
+
 /** Majority value of `field` among `rows`, when it dominates. */
 function majority(
   rows: Array<Record<string, unknown>>,
@@ -994,8 +1090,9 @@ async function rowInputProposals(
     .limit(200)) as Array<Record<string, unknown>>
   const parentContext = parentContextFrom(cfg, row)
   const cache = new RowRuleLookupCache(db)
-  const lineName = (l: Record<string, unknown>) =>
-    !isEmpty(l.line_number) ? `Line ${String(l.line_number)}` : `Line #${String(l.id)}`
+  // Lines are named as the finding names them — never by row id (army9 b02).
+  const lineField = lines.length > 0 && 'line_number' in lines[0] ? 'line_number' : null
+  const lineName = (l: Record<string, unknown>) => lineHeadFor(lines, l, lineField)
   // Which triggers are empty on which lines (same rule the sweep applies).
   const triggers = [
     ...new Set(
@@ -1019,15 +1116,13 @@ async function rowInputProposals(
   )
   // The finding names ONE line ("Line 4: …") — propose for that line only;
   // the other lines have their own findings and their own Fix buttons.
-  const named = (finding.message ?? '').match(/^Line (#?)(\S+):/)
-  const targetLines = named
-    ? lines.filter((l) =>
-        named[1] === '#' ? String(l.id) === named[2] : String(l.line_number ?? '') === named[2]
-      )
-    : lines
+  const named = namedLine(lines, finding.message, lineField)
+  // A head that no longer matches a line (renumbered, removed since the check)
+  // proposes nothing — never every line (army9 review M3/M6).
+  const targetLines = named === undefined ? lines : named ? [named] : []
   // Pick lists are per trigger field, not per line — build each once.
   const pickCache = new Map<string, Array<{ id: string; label: string }>>()
-  for (const line of targetLines.length > 0 ? targetLines : lines) {
+  for (const line of targetLines) {
     for (const tf of triggers) {
       if (!isEmpty(line[tf])) continue
       const tm = childMeta.get(tf)
@@ -1097,7 +1192,37 @@ async function rowInputProposals(
           preview: pv
         })
       }
-      // c. pick
+      // c. a line with nothing on it is most likely one added by mistake (a BOM
+      // row whose item matched nothing); it may not even show in the grid, so
+      // the fix offers to remove it (army9 b02). Only for the ONE line the
+      // finding names, and only when every input a person fills is empty
+      // (army9 review M3) — the banner asks before it runs, and the apply
+      // keeps an undo that puts the line back.
+      const removeWrites: ProposalWrite[] = [
+        { op: 'delete', collection: cfg.childCollection, item_id: String(line.id) }
+      ]
+      const removeId = proposalId('clear', removeWrites, `remove|${String(line.id)}`)
+      if (
+        named &&
+        lineIsUnused(line, {
+          fkField: cfg.fkField,
+          derived: ruleTargets,
+          meta: childMeta
+        }) &&
+        !out.some((p) => p.id === removeId)
+      ) {
+        out.push({
+          id: removeId,
+          kind: 'clear',
+          label: `${lineName(line)}: remove this line`,
+          basis: `It has no ${tLabel} and nothing else filled in, so nothing on the record depends on it.`,
+          confidence: 'low',
+          writes: removeWrites,
+          preview: [],
+          confirm: `Remove ${lineName(line).toLowerCase()}? It goes to the trash; Undo puts it back.`
+        })
+      }
+      // d. pick
       if (tm?.related && IDENT.test(tm.related)) {
         let choices = pickCache.get(tf)
         if (!choices) {
@@ -1113,8 +1238,10 @@ async function rowInputProposals(
           const labels = await getLabels(new Map([[tm.related, new Set(ids)]])).catch(
             () => ({}) as Record<string, string>
           )
+          // A choice with no readable name is left out — never a raw id.
           choices = ids
-            .map((id) => ({ id, label: labels[`${tm.related}:${id}`] ?? `#${id}` }))
+            .filter((id) => !!labels[`${tm.related}:${id}`])
+            .map((id) => ({ id, label: labels[`${tm.related}:${id}`] as string }))
             .sort((a, b) => a.label.localeCompare(b.label))
           pickCache.set(tf, choices)
         }
@@ -1548,7 +1675,20 @@ export async function applyProposal(
           result.undo.push({ op: 'delete', collection: w.collection, item_id: String(created.id) })
         result.applied++
       } else if (w.op === 'delete' && w.item_id) {
+        // Undo puts the line back as it was (a new row with the same values;
+        // keys and stamps are the database's). The snapshot is read AS THE
+        // CALLER and kept to fields they may also create, so the undo answer
+        // never carries a column they cannot read, and replaying it goes
+        // through the same permission-checked create.
+        const before = (await readOne(user, w.collection, w.item_id).catch(() => null)) as Record<
+          string,
+          unknown
+        > | null
+        const creatable = await getAllowedFields(user, 'create', w.collection).catch(() => [])
         await deleteOne(user, w.collection, w.item_id, req)
+        const data = before ? undoSnapshot(before, creatable) : null
+        if (data && Object.keys(data).length > 0)
+          result.undo.push({ op: 'create', collection: w.collection, data })
         result.applied++
       }
     } catch (err) {

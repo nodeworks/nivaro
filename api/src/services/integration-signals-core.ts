@@ -57,6 +57,18 @@ export function uniqueByKey(rows: SignalRow[]): SignalRow[] {
  * email when they have none. An API key keeps its numeric handle (that's
  * what the retry/snooze actions key on) and gains its label when it has one.
  */
+/** Hours as a person reads them: "5 h", "3 days", "17 months" — never "12334 h"
+ *  (army 9 b14). Exported for tests. */
+export function ageWords(hours: number): string {
+  const h = Math.max(0, Math.floor(hours))
+  if (h < 48) return `${h} h`
+  const days = Math.floor(h / 24)
+  if (days < 60) return `${days} days`
+  const months = Math.floor(days / 30.44)
+  if (months < 24) return `${months} months`
+  return `${Math.floor(days / 365.25)} years`
+}
+
 export function formatInboundCaller(
   userId: string | null,
   apiKeyId: number | null,
@@ -569,7 +581,10 @@ export function registerCoreIntegrationSignals(): void {
                                         WHERE c.import_key = q.import_key AND c.status = 'completed'), 0)
                 ) AS first_fail_run_id
            FROM nivaro_import_queue q
-           JOIN nivaro_import_definitions d ON d.id = q.definition
+           -- By KEY, not by the queue row's definition id: legacy queue rows
+           -- point at another definition (staging: a 'forecasts' run read
+           -- "Cifa Items: last run failed", army 9 b11 N9-10).
+           JOIN nivaro_import_definitions d ON d.[key] = q.import_key
           WHERE q.id IN (SELECT MAX(id) FROM nivaro_import_queue WHERE status IN ('completed','error') GROUP BY import_key)
             AND q.status = 'error'
           ORDER BY q.finished_at DESC, q.id DESC`
@@ -627,9 +642,9 @@ export function registerCoreIntegrationSignals(): void {
       const rows = (await db.raw(
         `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok,
                 (SELECT MAX(COALESCE(q2.finished_at, q2.started_at, q2.created_at))
-                   FROM nivaro_import_queue q2 WHERE q2.definition = d.id) AS last_attempt
+                   FROM nivaro_import_queue q2 WHERE q2.import_key = d.[key]) AS last_attempt
            FROM nivaro_import_definitions d
-           LEFT JOIN nivaro_import_queue q ON q.definition = d.id AND q.status = 'completed'
+           LEFT JOIN nivaro_import_queue q ON q.import_key = d.[key] AND q.status = 'completed'
           WHERE d.is_active = 1
           GROUP BY d.id, d.[key], d.label
           ORDER BY d.[key]`
@@ -650,8 +665,8 @@ export function registerCoreIntegrationSignals(): void {
         const age = (Date.now() - new Date(r.last_ok).getTime()) / 3600_000
         out.push({
           key: `import:${r.import_key}`,
-          title: `${r.label}: no successful run in ${Math.floor(age)} h`,
-          detail: `Expected every ${hours} h`,
+          title: `${r.label}: no successful run in ${ageWords(age)}`,
+          detail: `Expected every ${ageWords(hours)}`,
           since: new Date(new Date(r.last_ok).getTime() + hours * 3600_000).toISOString(),
           // The last SUCCESSFUL run this staleness is measured from. Once a
           // fresh success lands and it later goes stale again, that is a

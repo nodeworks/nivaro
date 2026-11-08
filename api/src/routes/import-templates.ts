@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { getRelations } from '../services/collections.js'
+import { getCollection, getFields, getRelations } from '../services/collections.js'
 import { chunkArray, selectInChunks } from '../services/db-batch.js'
 import { getFile, readFileBuffer, type StoredFile, uploadFileBuffer } from '../services/files.js'
 import { IMPORT_ROW_CAP, readSpreadsheet } from '../services/import-spreadsheet.js'
@@ -15,6 +15,8 @@ import type {
 } from '../services/import-templates.js'
 import {
   collectCreateMisses,
+  type LineFieldInfo,
+  plainLookupIssues,
   resolveCreateDefaults,
   runImportPipeline
 } from '../services/import-templates.js'
@@ -172,6 +174,48 @@ async function resolveLineChildRelation(
     .where({ one_collection: collection, one_field: targetField })
     .first()) as { many_collection: string; many_field: string } | undefined
   return relation ? { collection: relation.many_collection, fkField: relation.many_field } : null
+}
+
+/** The line child collection's field types + labels — imported line values are
+ *  checked against them (a fractional quantity for a whole-number field is
+ *  refused, never truncated; army 9 b02). Unreadable metadata = no checks. */
+async function lineFieldInfo(childCollection: string | null): Promise<LineFieldInfo | undefined> {
+  if (!childCollection) return undefined
+  try {
+    const fields = (await getFields(childCollection)) as Array<{
+      field: string
+      type?: string | null
+      label?: string | null
+    }>
+    const out: LineFieldInfo = {}
+    for (const f of fields) out[f.field] = { type: f.type ?? null, label: f.label ?? null }
+    return out
+  } catch {
+    return undefined
+  }
+}
+
+/** Lookup misses in plain words: the searched collection by its display name. */
+async function plainIssues<T extends { lookup_collection?: string; message: string }>(
+  issues: T[]
+): Promise<T[]> {
+  const names = [...new Set(issues.map((i) => i.lookup_collection).filter(Boolean))] as string[]
+  if (!names.length) return issues
+  const labels = new Map<string, string>()
+  for (const name of names) {
+    if (name === '$users' || name === 'nivaro_users') {
+      labels.set(name, 'people')
+      continue
+    }
+    try {
+      const c = await getCollection(name)
+      const label = c?.plural || c?.display_name
+      if (label) labels.set(name, label)
+    } catch {
+      // keep the plain collection name
+    }
+  }
+  return plainLookupIssues(issues, (c) => labels.get(c))
 }
 
 /** Resolves just the O2M child collection for a line_map target_field — used where
@@ -971,9 +1015,10 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         req
       ),
       applyLineFieldRules,
-      m2mFields: new Set(m2mMap.keys())
+      m2mFields: new Set(m2mMap.keys()),
+      lineFields: await lineFieldInfo(childCollection)
     })
-    const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
+    const issues = await plainIssues([...sheetIssues, ...result.issues, ...lookupIssues])
 
     let file_id: string | null = null
     if (config.attach_file_field) {
@@ -1569,9 +1614,10 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         lookupIssues.push({ severity: 'error', rule: 'lookup', message })
       ),
       applyLineFieldRules,
-      m2mFields: new Set(m2mMap.keys())
+      m2mFields: new Set(m2mMap.keys()),
+      lineFields: await lineFieldInfo(childCollection)
     })
-    const issues = [...sheetIssues, ...result.issues, ...lookupIssues]
+    const issues = await plainIssues([...sheetIssues, ...result.issues, ...lookupIssues])
 
     return reply.send({
       data: {
@@ -1617,13 +1663,14 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
         lookupIssues.push({ severity: 'error', rule: 'lookup', message })
       ),
       applyLineFieldRules,
-      m2mFields: new Set(m2mMap.keys())
+      m2mFields: new Set(m2mMap.keys()),
+      lineFields: await lineFieldInfo(childCollection)
     })
     return {
       values: result.values,
       lines: result.lines,
       m2m: result.m2m,
-      issues: [...sheetIssues, ...result.issues, ...lookupIssues],
+      issues: await plainIssues([...sheetIssues, ...result.issues, ...lookupIssues]),
       rows: rows.length
     }
   }

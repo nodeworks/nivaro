@@ -98,6 +98,26 @@ export function accessRequestOutcome(
   }
 }
 
+/**
+ * Only an account still in the new-user flow may file a request (army9 b10):
+ * no role yet, the new-user role, or the review role. Anyone else — an
+ * authorized person, an administrator, or any account when the flow is not
+ * configured — would otherwise store a request nobody lists and tell every
+ * administrator about it. Role ids compare case-blind.
+ */
+export function mayRequestAccess(
+  currentRole: string | null,
+  startRole: string | null,
+  reviewRole: string | null,
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return false
+  const up = (v: string | null) => (v ? v.toUpperCase() : null)
+  const role = up(currentRole)
+  if (role === null) return true
+  return role === up(startRole) || role === up(reviewRole)
+}
+
 /** The stored request, if the preferences carry one. */
 export function storedRequest(
   prefs: Record<string, unknown> | null | undefined

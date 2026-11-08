@@ -374,6 +374,9 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
     }
     return body
   }
+  // A payload that names its own rules link (`rules_url`) keeps it: the mail
+  // belongs to one app and every link in it points there (army9 b13).
+  const ownRulesUrl = typeof dataRec.rules_url === 'string' ? dataRec.rules_url : null
   // Per-recipient context: why + rules link + the record link in THEIR app.
   const contextFor = async (email: string): Promise<Record<string, unknown>> => {
     // No stated reason → the honest default: the recipient's rules for the
@@ -386,7 +389,7 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
         ? `your notification rules for "${NOTIFY_CATEGORY_LABELS[category]}" send you email`
         : null)
     const { whyContext } = await import('./mail.js')
-    const ctxWhy = await whyContext(email, why)
+    const ctxWhy = await whyContext(email, why, ownRulesUrl)
     const out: Record<string, unknown> = { ...dataRec, recipient_email: email, ...ctxWhy }
     try {
       const { userIdForEmail, recordLink } = await import('./app-links.js')
@@ -442,7 +445,10 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
       split && previewFor
         ? await contextFor(previewFor)
         : sharedWhy
-          ? { ...dataRec, ...(await (await import('./mail.js')).whyContext(to, sharedWhy)) }
+          ? {
+              ...dataRec,
+              ...(await (await import('./mail.js')).whyContext(to, sharedWhy, ownRulesUrl))
+            }
           : dataRec
     const body = await renderBody(context)
     return {
@@ -490,7 +496,10 @@ async function runMail(op: FlowOperation, data: FlowData, ctx: ExecutionContext)
       return { status: 'resolve' as const, output: data }
     }
     const context = sharedWhy
-      ? { ...dataRec, ...(await (await import('./mail.js')).whyContext(to, sharedWhy)) }
+      ? {
+          ...dataRec,
+          ...(await (await import('./mail.js')).whyContext(to, sharedWhy, ownRulesUrl))
+        }
       : dataRec
     const body = await renderBody(context)
     await sendRawMail({

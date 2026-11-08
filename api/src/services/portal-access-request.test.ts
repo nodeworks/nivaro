@@ -45,6 +45,7 @@ import {
   ACCESS_REASON_MAX,
   accessRequestOutcome,
   existingIds,
+  mayRequestAccess,
   notifyAdminsOfAccessRequest,
   parseAccessRequestBody,
   sameRequest
@@ -159,5 +160,20 @@ describe('accessRequestOutcome', () => {
   })
   it('an identical resend writes nothing and logs nothing', () => {
     expect(accessRequestOutcome(prev, false, false)).toMatchObject({ write: false, notify: false })
+  })
+})
+
+describe('mayRequestAccess (army9 b10)', () => {
+  const START = 'aaaa-start'
+  const REVIEW = 'bbbb-review'
+  it('lets an account in the new-user flow (or with no role) file a request', () => {
+    expect(mayRequestAccess(null, START, REVIEW, false)).toBe(true)
+    expect(mayRequestAccess(START.toUpperCase(), START, REVIEW, false)).toBe(true)
+    expect(mayRequestAccess(REVIEW, START, REVIEW, false)).toBe(true)
+  })
+  it('refuses an authorized account, an administrator, and any role when the flow is off', () => {
+    expect(mayRequestAccess('cccc-approver', START, REVIEW, false)).toBe(false)
+    expect(mayRequestAccess(START, START, REVIEW, true)).toBe(false)
+    expect(mayRequestAccess('cccc-approver', null, null, false)).toBe(false)
   })
 })

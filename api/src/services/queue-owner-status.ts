@@ -28,6 +28,18 @@ interface PersonRow {
  */
 export function inactiveOwnerReason(u: Omit<PersonRow, 'id'>): InactiveOwner | null {
   if (!isInactivePerson(u)) return null
+  // Redaction first (army 9 b08 N-R9-2): legacy redacted accounts are ALSO status
+  // 'suspended', and "Redacted Redacted (suspended)" suggested they might come back.
+  if (u.is_redacted === true || u.is_redacted === 1) return 'former'
+  if (
+    String(u.first_name ?? '')
+      .trim()
+      .toLowerCase() === 'redacted' &&
+    String(u.last_name ?? '')
+      .trim()
+      .toLowerCase() === 'redacted'
+  )
+    return 'former'
   const status = String(u.status ?? '').toLowerCase()
   return status === 'suspended' || status === 'inactive' ? 'suspended' : 'former'
 }

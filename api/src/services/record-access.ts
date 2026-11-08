@@ -23,6 +23,7 @@ import type { User } from '../types.js'
 import { applyRowFilter, can, getRowFilter } from './permissions.js'
 import {
   applyScopeHops,
+  dimensionScopesTable,
   getUserScopes,
   listScopeDimensions,
   resolveRecordDimensionIds,
@@ -112,7 +113,7 @@ export async function routeScopeGates(
   for (const s of restricts) {
     const dim = dims.find((d) => d.name === s.dimension)
     if (!dim) continue
-    if (isReferenceTable && dim.target_collection !== collection) continue
+    if (isReferenceTable && !dimensionScopesTable(dim, collection)) continue
     const hops = await scopeHopsFor(dim, collection)
     if (!hops) {
       if (dim.strict && !strict) strict = { dimension: dim.name, label: dim.label }

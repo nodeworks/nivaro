@@ -4,9 +4,11 @@ import {
   exactStatement,
   finishHits,
   fuzzyStatement,
+  groupHits,
   mergeFound,
   parseLabelSearchFields,
-  toHit
+  toHit,
+  withDetail
 } from '../../../routes/global-search.js'
 
 // Search program 2026-10-28 (items 1/4/5/6/23): exact-id pass, typo pass,
@@ -152,4 +154,75 @@ describe('label search fields + filters', () => {
     })
     expect(combinedFilter(null, [{ s: 1 }])).toEqual({ s: 1 })
   })
+})
+
+// Army 9 b07/b14/b16 + Fable H2: an invoice's lines collapse by their shared NUMBER
+// (opt-in search_group_by), never by a label two different records happen to share.
+describe('groupHits', () => {
+  const hit = (id: number, label: string, extra: Record<string, unknown> = {}) => ({
+    collection: 'invoices',
+    display_name: 'Invoices',
+    id,
+    label,
+    snippet: label,
+    ...extra
+  })
+  it('collapses members of one group, keeps the best-ranked, stays exact', () => {
+    const groupOf = new Map([
+      ['invoices:1', 'inv-1'],
+      ['invoices:2', 'inv-1'],
+      ['invoices:3', 'inv-2']
+    ])
+    const out = groupHits(
+      [
+        hit(1, 'INV-1'),
+        { ...hit(9, 'Other'), collection: 'workflows' },
+        hit(2, 'INV-1', { exact: true }),
+        hit(3, 'INV-2')
+      ],
+      groupOf,
+      new Set(['invoices'])
+    )
+    expect(out.map((h) => h.id)).toEqual([1, 9, 3])
+    expect(out[0]).toMatchObject({ group_size: 2, group_more: true, exact: true })
+    expect((out[2] as { group_size?: number }).group_size).toBeUndefined()
+  })
+  it('never merges records that only share a label', () => {
+    const tasks = [
+      { ...hit(1, 'Follow up'), collection: 'tasks' },
+      { ...hit(2, 'Follow up'), collection: 'tasks' }
+    ]
+    expect(groupHits(tasks, new Map())).toHaveLength(2)
+  })
+})
+
+describe('withDetail', () => {
+  it('tells rows that read the same apart by the configured detail fields', () => {
+    const hits = [hit2(1), hit2(2), { ...hit2(3), snippet: 'matched vendor' }]
+    const rows = [
+      { id: 1, line_item_number: 22, amount: 2115.19 },
+      { id: 2, line_item_number: 8, amount: 2286 },
+      { id: 3, line_item_number: 1, amount: 1 }
+    ]
+    const fields = [
+      { field: 'line_item_number', type: 'integer' },
+      { field: 'amount', type: 'decimal', options: { format: 'currency' } }
+    ]
+    const out = withDetail(hits, rows, ['line_item_number', 'amount'], fields as never)
+    expect(out.map((h) => h.snippet)).toEqual([
+      'Line 22 · $2,115.19',
+      'Line 8 · $2,286.00',
+      'matched vendor'
+    ])
+    expect(out).toHaveLength(3)
+  })
+  function hit2(id: number) {
+    return {
+      collection: 'invoices',
+      display_name: 'Invoices',
+      id,
+      label: 'INV-1',
+      snippet: 'INV-1'
+    }
+  }
 })

@@ -633,6 +633,47 @@ async function alertsLinkFor(userId: string): Promise<string | null> {
   }
 }
 
+/**
+ * The reading one subscriber gets (army 9 b16): the rule fires on the engine's
+ * all-zones reading, but each person is told the value AS THEY SEE IT (the same
+ * resolveMetricValue-as-user the alerts page's "N now, as you see it" uses). A person
+ * whose own figure does not cross the threshold is not alerted; one it cannot be read
+ * for (no access, failed read) is told the rule fired, with no figure. Exported for tests.
+ */
+export async function subscriberReading(
+  rule: Pick<RuleRow, 'metric_source' | 'filters' | 'operator'>,
+  userId: string,
+  threshold: number,
+  deps: {
+    loadUser?: (id: string) => Promise<User | undefined>
+    isAdmin?: (user: User) => Promise<boolean>
+    resolve?: typeof resolveMetricValue
+  } = {}
+): Promise<{ notify: boolean; value: number | null }> {
+  const source = parseJsonSafe<MetricSource>(rule.metric_source)
+  if (!source) return { notify: true, value: null }
+  try {
+    const user = deps.loadUser
+      ? await deps.loadUser(userId)
+      : await (await import('./users.js')).getUser(userId)
+    if (!user) return { notify: false, value: null }
+    const isAdmin = deps.isAdmin
+      ? await deps.isAdmin(user)
+      : await (await import('./user-scopes.js')).isAdminRole(
+          (user.role as string | null | undefined) ?? null
+        )
+    const value = await (deps.resolve ?? resolveMetricValue)(
+      source,
+      normalizeMetricFilters(rule.filters),
+      { user, isAdmin: !!isAdmin }
+    )
+    if (value === null) return { notify: true, value: null }
+    return { notify: evaluateOperator(rule.operator, value, threshold), value }
+  } catch {
+    return { notify: true, value: null }
+  }
+}
+
 async function notifyImmediateSubscribers(
   app: FastifyInstance,
   rule: RuleRow,
@@ -652,9 +693,16 @@ async function notifyImmediateSubscribers(
   }>
 
   const subject = `Alert: ${rule.name}`
-  const message = `${rule.def_name} is now ${fmtValue(value, rule.def_unit)} (threshold: ${
-    OPERATOR_LABELS[rule.operator] ?? rule.operator
-  } ${fmtValue(threshold, rule.def_unit)})`
+  const opLabel = OPERATOR_LABELS[rule.operator] ?? rule.operator
+  const messageFor = (v: number | null) =>
+    v === null
+      ? `${rule.def_name} crossed its threshold (${opLabel} ${fmtValue(threshold, rule.def_unit)})`
+      : `${rule.def_name} is now ${fmtValue(v, rule.def_unit)} (threshold: ${opLabel} ${fmtValue(
+          threshold,
+          rule.def_unit
+        )})`
+  // The engine's own reading names no one's scope: only the chaos-drill note uses it.
+  const message = messageFor(value)
   // #2847 — during a chaos drill the alert is tagged (never silenced) and its people told too.
   const { drillAlert, tellDrillParticipants, withDrillNote } = await import(
     './chaos/drill-alerts.js'
@@ -677,11 +725,15 @@ async function notifyImmediateSubscribers(
   const now = new Date()
 
   for (const sub of subs) {
+    // Each person's own figure (their zones, row filters, query scope) — never the
+    // all-zones reading the rule fired on.
+    const mine = await subscriberReading(rule, sub.user, threshold)
+    if (!mine.notify) continue
     if (sub.delivery_in_app) {
       await notifyUser(app, sub.user, {
         subject,
         category: 'alerts',
-        message: withDrillNote(message, drill),
+        message: withDrillNote(messageFor(mine.value), drill),
         collection: 'nivaro_metric_alert_log',
         item: String(logId)
       }).catch(() => undefined)
@@ -701,9 +753,10 @@ async function notifyImmediateSubscribers(
           manage_url: await alertsLinkFor(sub.user),
           rule_name: rule.name,
           metric_name: rule.def_name,
-          metric_value: fmtValue(value, rule.def_unit),
+          metric_value:
+            mine.value === null ? 'Threshold crossed' : fmtValue(mine.value, rule.def_unit),
           threshold_value: fmtValue(threshold, rule.def_unit),
-          operator: OPERATOR_LABELS[rule.operator] ?? rule.operator
+          operator: opLabel
         }
       }).catch((e) => console.warn('[metric-alerts] email failed:', (e as Error).message))
     }
@@ -774,8 +827,10 @@ export async function runMetricAlertDigest(
         'l.threshold_value',
         'r.name as rule_name',
         'r.operator',
+        'r.filters',
         'd.name as def_name',
-        'd.unit as def_unit'
+        'd.unit as def_unit',
+        'd.metric_source'
       )) as Array<{
       id: number
       fired_at: string | Date
@@ -783,15 +838,27 @@ export async function runMetricAlertDigest(
       threshold_value: number
       rule_name: string
       operator: string
+      filters: string | null
       def_name: string
       def_unit: string
+      metric_source: string
     }>
-    if (!firing.length) continue
+    // Each alert at the value THIS person sees (army 9 b16), not the all-zones reading
+    // it fired on; one whose own figure is under the threshold is left out.
+    const readings = await Promise.all(
+      firing.map((e) => subscriberReading(e, userId, Number(e.threshold_value)))
+    )
+    const shownFiring = firing
+      .map((e, i) => ({ ...e, mine: readings[i] }))
+      .filter((e) => e.mine.notify)
+    if (!shownFiring.length) continue
+    const valueText = (e: (typeof shownFiring)[number]) =>
+      e.mine.value === null ? 'over its threshold' : fmtValue(e.mine.value, e.def_unit)
 
-    const subject = `Alert Digest (${frequency}): ${firing.length} active alert${firing.length !== 1 ? 's' : ''}`
-    const lines = firing.map(
+    const subject = `Alert Digest (${frequency}): ${shownFiring.length} active alert${shownFiring.length !== 1 ? 's' : ''}`
+    const lines = shownFiring.map(
       (e) =>
-        `• ${e.rule_name}: ${e.def_name} = ${fmtValue(Number(e.metric_value), e.def_unit)} (threshold: ${
+        `• ${e.rule_name}: ${e.def_name} = ${valueText(e)} (threshold: ${
           OPERATOR_LABELS[e.operator] ?? e.operator
         } ${fmtValue(Number(e.threshold_value), e.def_unit)})`
     )
@@ -805,7 +872,7 @@ export async function runMetricAlertDigest(
         category: 'alerts',
         message: lines.join('\n'),
         collection: 'nivaro_metric_alert_log',
-        item: String(firing[0].id)
+        item: String(shownFiring[0].id)
       }).catch(() => undefined)
     }
     const email = userSubs.find((s) => s.email)?.email
@@ -819,11 +886,11 @@ export async function runMetricAlertDigest(
         data: {
           manage_url: await alertsLinkFor(userId),
           frequency,
-          alert_count: firing.length,
-          alerts: firing.map((e) => ({
+          alert_count: shownFiring.length,
+          alerts: shownFiring.map((e) => ({
             rule_name: e.rule_name,
             metric_name: e.def_name,
-            metric_value: fmtValue(Number(e.metric_value), e.def_unit),
+            metric_value: valueText(e),
             threshold_value: fmtValue(Number(e.threshold_value), e.def_unit),
             operator: OPERATOR_LABELS[e.operator] ?? e.operator,
             fired_at: e.fired_at

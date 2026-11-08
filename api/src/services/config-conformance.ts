@@ -2135,6 +2135,64 @@ async function evaluate(
 }
 
 /**
+ * How a finding names a line: its own line number, else its place among the
+ * record's lines ("Line 3"), never the row id (army9 b02: "Line #163116").
+ * A line in a grid that HAS line numbers but is missing its own reads
+ * "Unnumbered line 3" so it never collides with a numbered "Line 3".
+ * `lines` = the record's lines ordered by id (the order the grid shows).
+ */
+export function lineHeadFor(
+  lines: Array<Record<string, unknown>>,
+  line: Record<string, unknown>,
+  lineField: string | null | undefined
+): string {
+  const n = lineField ? line[lineField] : null
+  if (n != null && n !== '') return `Line ${String(n)}`
+  const pos = lines.findIndex((l) => String(l.id) === String(line.id)) + 1
+  if (pos <= 0) return 'A line'
+  return lineField ? `Unnumbered line ${pos}` : `Line ${pos}`
+}
+
+/** The line a finding message names ("Line 3: …", "Unnumbered line 3: …", and
+ *  the old "Line #163116: …"), or null when it names none. */
+export function namedLine(
+  lines: Array<Record<string, unknown>>,
+  message: string | null | undefined,
+  lineField: string | null | undefined
+): Record<string, unknown> | null | undefined {
+  const m = (message ?? '').match(/^(Unnumbered line|Line) (#?)(\S+):/)
+  if (!m) return undefined
+  if (m[2] === '#') return lines.find((l) => String(l.id) === m[3]) ?? null
+  // On a numbered grid "Line N" is line NUMBER N — never position N: a line
+  // renumbered or removed since the check must not point at another line
+  // (army9 review M6).
+  if (m[1] === 'Line' && lineField)
+    return lines.find((l) => String(l[lineField] ?? '') === m[3]) ?? null
+  const pos = Number(m[3])
+  const at = Number.isInteger(pos) && pos >= 1 && pos <= lines.length ? lines[pos - 1] : null
+  // "Unnumbered line N" must still be unnumbered (it may have got a number since).
+  if (at && lineField && m[1] === 'Unnumbered line') {
+    const n = at[lineField]
+    if (n != null && n !== '') return null
+  }
+  return at
+}
+
+/** Group lines by parent, keeping id order. */
+function linesByParent(
+  lines: Array<Record<string, unknown>>,
+  fkField: string
+): Map<string, Array<Record<string, unknown>>> {
+  const m = new Map<string, Array<Record<string, unknown>>>()
+  for (const l of lines) {
+    const k = String(l[fkField])
+    if (!m.has(k)) m.set(k, [])
+    m.get(k)?.push(l)
+  }
+  return m
+}
+
+/**
  * One parent chunk of the row-rule check: fetch every child row of the chunk
  * in bulk, re-derive every rule target from scratch (the grid's "all" mode —
  * a rule deriving nothing never counts as drift), and report one finding per
@@ -2161,6 +2219,7 @@ async function evaluateRowFieldCheck(
     if (fc.rowFilter) await applyFilterToQuery(q, fc.rowFilter, fc.childCollection)
     return (await q) as Array<Record<string, unknown>>
   })
+  const fieldGroups = linesByParent(children, fc.fkField)
   for (const line of children) {
     const fails: string[] = []
     for (const f of fc.fields) {
@@ -2185,9 +2244,11 @@ async function evaluateRowFieldCheck(
       }
     }
     if (fails.length === 0) continue
-    const lineNo = fc.lineField ? line[fc.lineField] : null
-    const head =
-      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+    const head = lineHeadFor(
+      fieldGroups.get(String(line[fc.fkField])) ?? [line],
+      line,
+      fc.lineField
+    )
     out.push({
       item_id: String(line[fc.fkField]),
       field: fc.aliasField,
@@ -2212,12 +2273,11 @@ async function evaluateRowLintCheck(
         Array<Record<string, unknown>>
       >
   )
+  const lintGroups = linesByParent(children, lc.fkField)
   for (const line of children) {
     const fails = failingLints(line, lc.lints)
     if (fails.length === 0) continue
-    const lineNo = lc.lineField ? line[lc.lineField] : null
-    const head =
-      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+    const head = lineHeadFor(lintGroups.get(String(line[lc.fkField])) ?? [line], line, lc.lineField)
     out.push({
       item_id: String(line[lc.fkField]),
       field: lc.aliasField,
@@ -2293,9 +2353,7 @@ async function evaluateRowRuleCheck(
         missing.get(tf)?.add(rule.target_field)
       }
       for (const [tf, targets] of missing) {
-        const lineNo = rc.lineField ? line[rc.lineField] : null
-        const head =
-          lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(line.id)}`
+        const head = lineHeadFor(lines, line, rc.lineField)
         const names = [...targets].map((t) => rc.childFields.get(t)?.label ?? label(t))
         out.push({
           item_id: String(parent.id),
@@ -2342,7 +2400,8 @@ async function evaluateRowRuleCheck(
     const meta = rc.childFields.get(field)
     if (meta?.relatedCollection) {
       const l = labels[`${meta.relatedCollection}:${String(v)}`]
-      return l ? `"${l}"` : `#${String(v)}`
+      // Never a raw id: a row with no readable name says so.
+      return l ? `"${l}"` : 'an unnamed record'
     }
     const n = typeof v === 'number' ? v : Number(v)
     if (Number.isFinite(n) && String(v).trim() !== '') {
@@ -2352,9 +2411,7 @@ async function evaluateRowRuleCheck(
     return `"${String(v)}"`
   }
   for (const d of drifts) {
-    const lineNo = rc.lineField ? d.line[rc.lineField] : null
-    const head =
-      lineNo != null && lineNo !== '' ? `Line ${String(lineNo)}` : `Line #${String(d.line.id)}`
+    const head = lineHeadFor(byParent.get(d.parentId) ?? [d.line], d.line, rc.lineField)
     const parts = d.diffs.map((diff) => {
       const lbl = rc.childFields.get(diff.field)?.label ?? label(diff.field)
       return `${lbl} is ${fmt(diff.field, diff.was)} — rules derive ${fmt(diff.field, diff.now)}${diff.locked ? ' (locked)' : ''}`

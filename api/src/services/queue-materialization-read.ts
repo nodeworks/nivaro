@@ -234,10 +234,12 @@ export function statsFromNarrowRows(rows: NarrowScanRow[]): QueueStats {
   let sla_warning = 0
   let sla_breached = 0
   let at_risk = 0
+  let sla_tracked = 0
   for (const r of rows) {
     const stateKey = r.state ?? 'none'
     by_state[stateKey] = (by_state[stateKey] ?? 0) + 1
     if (!r.has_owner) unowned++
+    if (r.sla_status != null) sla_tracked++
     if (r.sla_status === 'warning') sla_warning++
     if (r.sla_status === 'breached') sla_breached++
     if (r.at_risk) at_risk++
@@ -249,7 +251,16 @@ export function statsFromNarrowRows(rows: NarrowScanRow[]): QueueStats {
       else aging.over++
     }
   }
-  return { total: rows.length, by_state, unowned, sla_warning, sla_breached, at_risk, aging }
+  return {
+    total: rows.length,
+    by_state,
+    unowned,
+    sla_warning,
+    sla_breached,
+    at_risk,
+    aging,
+    sla_tracked
+  }
 }
 
 /**
@@ -754,7 +765,8 @@ async function computeStatsForBuilder(baseFactory: () => Knex.QueryBuilder): Pro
     sla_warning,
     sla_breached,
     at_risk: Number(atRiskRow.n),
-    aging
+    aging,
+    sla_tracked: slaScanRows.length
   }
 }
 
@@ -856,7 +868,8 @@ export async function fetchMaterializedStats(
       sla_warning,
       sla_breached,
       at_risk: atRiskCount,
-      aging
+      aging,
+      sla_tracked: slaScanRows.length
     },
     availableValues: {
       collection: collectionsRow.map((r) => r.collection).sort(),

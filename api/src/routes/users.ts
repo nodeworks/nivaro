@@ -24,6 +24,7 @@ import {
 import {
   accessRequestOutcome,
   existingIds,
+  mayRequestAccess,
   notifyAdminsOfAccessRequest,
   parseAccessRequestBody,
   planAuthorization,
@@ -838,6 +839,26 @@ export async function usersRoutes(app: FastifyInstance) {
   // account still on the new-user role (or with no role at all) is moved —
   // a resubmit, or a real user, never changes role here; admins never move.
   app.post('/me/access-request', { preHandler: authenticate }, async (req, reply) => {
+    const me = req.user!.id
+    const row = await db('nivaro_users').where({ id: me }).first('preferences', 'role')
+    const settings = (await db('nivaro_settings')
+      .first('new_user_role', 'access_request_role')
+      .catch(() => null)) as {
+      new_user_role?: string | null
+      access_request_role?: string | null
+    } | null
+    const currentRole = row?.role ? String(row.role).toUpperCase() : null
+    const startRole = settings?.new_user_role ? String(settings.new_user_role).toUpperCase() : null
+    const nextRole = settings?.access_request_role
+      ? String(settings.access_request_role).toUpperCase()
+      : null
+    // army9 b10: only someone still waiting for access files a request — an
+    // authorized account used to store one nobody lists and notify every admin.
+    if (!mayRequestAccess(currentRole, startRole, nextRole, !!req.isAdmin))
+      return reply.code(409).send({
+        error: 'Your account already has access, so there is nothing to request.',
+        code: 'NOT_PENDING'
+      })
     const parsed = parseAccessRequestBody(req.body)
     if (!parsed.ok) return reply.code(400).send({ error: parsed.error, code: parsed.code })
     // Only ids that exist are stored: an approval writes them straight into
@@ -853,8 +874,6 @@ export async function usersRoutes(app: FastifyInstance) {
       vendor_name: vendor?.name ?? null
     }
 
-    const me = req.user!.id
-    const row = await db('nivaro_users').where({ id: me }).first('preferences', 'role')
     const prefs =
       typeof row?.preferences === 'string'
         ? (JSON.parse(row.preferences) as Record<string, unknown>)
@@ -869,17 +888,6 @@ export async function usersRoutes(app: FastifyInstance) {
     const patch: Record<string, unknown> = {}
     if (changed) patch.preferences = JSON.stringify({ ...prefs, access_request })
 
-    const settings = (await db('nivaro_settings')
-      .first('new_user_role', 'access_request_role')
-      .catch(() => null)) as {
-      new_user_role?: string | null
-      access_request_role?: string | null
-    } | null
-    const currentRole = row?.role ? String(row.role).toUpperCase() : null
-    const startRole = settings?.new_user_role ? String(settings.new_user_role).toUpperCase() : null
-    const nextRole = settings?.access_request_role
-      ? String(settings.access_request_role).toUpperCase()
-      : null
     let roleChanged = false
     if (
       nextRole &&

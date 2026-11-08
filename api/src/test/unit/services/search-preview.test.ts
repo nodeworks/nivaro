@@ -64,7 +64,12 @@ vi.mock('../../../routes/collection-layouts.js', () => ({
   resolveLayout: vi.fn(async () => ({ row: { header_fields: JSON.stringify(state.header) } }))
 }))
 
-import { buildSearchPreview, previewFieldOrder } from '../../../services/search-preview.js'
+import {
+  buildSearchPreview,
+  previewFieldOrder,
+  previewValue,
+  relationLabel
+} from '../../../services/search-preview.js'
 
 const user = { id: 'u-1', role: 'r-1' } as never
 
@@ -145,5 +150,77 @@ describe('previewFieldOrder', () => {
     expect(previewFieldOrder(row, [], null, wf)).toEqual(['name', 'requisition_amount'])
     // a layout's own header fields are the designer's choice and stay
     expect(previewFieldOrder(row, ['skip_forecast_cron'], null, wf)).toEqual(['skip_forecast_cron'])
+  })
+})
+
+// Army 9 b14/b16: the Cmd+K preview showed "2026-10-19T00:00:00.000Z", "Is Past Due false",
+// "Amount 95576", "Key 102-300137883-201943" and "Funding Year: Funding Years".
+describe('previewValue', () => {
+  it('writes dates the way the record page does', () => {
+    const dt = { type: 'datetime' }
+    expect(previewValue(dt, '2026-10-19T00:00:00.000Z')).toBe('Oct 19, 2026')
+    expect(previewValue(dt, new Date('2026-11-18T00:00:00.000Z'))).toBe('Nov 18, 2026')
+    expect(previewValue({ type: 'date' }, '2026-01-02')).toBe('Jan 2, 2026')
+    expect(previewValue(dt, '2026-10-19T18:30:00.000Z', 'America/New_York')).toBe(
+      'Oct 19, 2026, 2:30 PM'
+    )
+  })
+  it("switches read Yes/No or the field's own labels", () => {
+    expect(previewValue({ type: 'boolean' }, false)).toBe('No')
+    expect(previewValue({ type: 'boolean' }, 1)).toBe('Yes')
+    expect(
+      previewValue(
+        { type: 'boolean', display_options: { labelOn: 'Past due', labelOff: 'On time' } },
+        false
+      )
+    ).toBe('On time')
+  })
+  it('money by the field format or a money name, other numbers with separators', () => {
+    expect(
+      previewValue({ type: 'decimal', field: 'x', options: { format: 'currency' } }, 95576)
+    ).toBe('$95,576.00')
+    expect(previewValue({ type: 'decimal', field: 'non_recoverable_tax' }, '0')).toBe('$0.00')
+    expect(previewValue({ type: 'integer', field: 'payment_terms' }, 12345)).toBe('12,345')
+    expect(
+      previewValue({ type: 'decimal', field: 'rate', options: { format: 'percent' } }, 12.5)
+    ).toBe('12.5%')
+  })
+  it('choices by their text; objects and blanks are nothing', () => {
+    const f = {
+      type: 'string',
+      options: { choices: [{ text: 'Under Review', value: 'under_review' }] }
+    }
+    expect(previewValue(f, 'under_review')).toBe('Under Review')
+    expect(previewValue({ type: 'string' }, { a: 1 })).toBeNull()
+    expect(previewValue({ type: 'string' }, '')).toBeNull()
+  })
+})
+
+describe('relationLabel', () => {
+  it('a field template of {{id}} names the record by its key (a funding year)', () => {
+    expect(relationLabel({ id: 2026 }, '{{id}}', null)).toBe('2026')
+  })
+  it('never falls back to the collection title', () => {
+    expect(relationLabel({ id: 7 }, null, null)).toBeNull()
+    expect(relationLabel({ id: 7, name: 'Zone 3' }, null, '{{name}}')).toBe('Zone 3')
+  })
+})
+
+describe('previewFieldOrder internals', () => {
+  it('the fallback leaves out internal keys but keeps zeros', () => {
+    const fields = [
+      { field: 'key', sort: 1 },
+      { field: 'number', sort: 2 },
+      { field: 'discount_days', sort: 3 },
+      { field: 'amount', sort: 4 }
+    ]
+    expect(
+      previewFieldOrder(
+        { id: 1, key: 'a-b-c', number: 'N1', discount_days: 0, amount: 5 },
+        [],
+        null,
+        fields
+      )
+    ).toEqual(['number', 'discount_days', 'amount'])
   })
 })

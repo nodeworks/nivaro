@@ -1,7 +1,12 @@
 import { db } from '../db/index.js'
 import type { Policy, Role } from '../types.js'
 import { type Action, parsePolicyFields, parseRowFilter, type RowCondition } from './permissions.js'
-import { describeHops, listScopeDimensions, scopeHopsFor } from './user-scopes.js'
+import {
+  describeHops,
+  dimensionScopesTable,
+  listScopeDimensions,
+  scopeHopsFor
+} from './user-scopes.js'
 
 /**
  * OpenAPI per role (#1283) — the generated items-API contract narrowed to what
@@ -93,7 +98,7 @@ export async function roleAccessFor(
       if (reachable) {
         for (const dim of dims) {
           // A dimension target table is filtered only by its own dimension.
-          if (targets.has(collection) && dim.target_collection !== collection) continue
+          if (targets.has(collection) && !dimensionScopesTable(dim, collection)) continue
           const hops = await scopeHopsFor(dim, collection).catch(() => null)
           if (hops == null) {
             if (dim.strict)

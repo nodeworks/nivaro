@@ -885,7 +885,7 @@ async function physicalColumns(collection: string): Promise<Set<string>> {
 
 // ── My integrity ────────────────────────────────────────────────────────────
 
-const LINE_FINDING = /^Line (#?\S+):\s*/
+const LINE_FINDING = /^(?:Unnumbered line|Line) (#?\S+):\s*/
 
 /** 'Line 3: Category is empty' → { line: '3', message: 'Category is empty' };
  *  a record-level message → null. */

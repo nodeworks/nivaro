@@ -30,13 +30,22 @@ export function readSpreadsheet(
       issues: [{ severity: 'error', message: 'File could not be read as a spreadsheet' }]
     }
   }
-  const sheetName = config.sheet_match
-    ? workbook.SheetNames.find((s) => s.includes(config.sheet_match as string))
-    : workbook.SheetNames[0]
+  // A CSV is one sheet with no name of its own: it IS the sheet the template
+  // reads, whatever sheet_match says (army 9 b02 — every CSV failed with "No
+  // sheet matching "EFP Import" found" though the picker offered .csv).
+  const sheetName =
+    config.sheet_match && ext !== 'csv'
+      ? workbook.SheetNames.find((s) => s.includes(config.sheet_match as string))
+      : workbook.SheetNames[0]
   if (!sheetName) {
     return {
       rows: [],
-      issues: [{ severity: 'error', message: `No sheet matching "${config.sheet_match}" found` }]
+      issues: [
+        {
+          severity: 'error',
+          message: `This workbook has no sheet named "${config.sheet_match}". Put the rows on a sheet with that name, or upload them as a .csv file.`
+        }
+      ]
     }
   }
   let rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], {

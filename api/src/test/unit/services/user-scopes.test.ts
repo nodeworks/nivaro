@@ -412,6 +412,51 @@ describe('getUserScopeEnforcement — defaults are advisory, restrictions are no
     expect(out.filters).toHaveLength(2)
     expect(out.filters.map((f) => f.ids)).toEqual([[10], [99]])
   })
+
+  it('a reference table ignores other dimensions unless one names an override route for it', async () => {
+    const PROJECT_DIM = {
+      ...ZONE_DIM,
+      id: 5,
+      name: 'project',
+      label: 'Project',
+      target_collection: 'projects'
+    }
+    const relations = [
+      {
+        many_collection: 'project_divisions_junction',
+        many_field: 'project',
+        one_collection: 'projects',
+        one_field: 'divisions',
+        junction_field: 'division'
+      },
+      {
+        many_collection: 'project_divisions_junction',
+        many_field: 'division',
+        one_collection: 'divisions',
+        one_field: null,
+        junction_field: 'project'
+      }
+    ]
+    const scopes = [
+      scopeRow({ dimension: 'division', mode: 'restrict', values: JSON.stringify([10]) })
+    ]
+
+    installDb({ dimensions: [ZONE_DIM, PROJECT_DIM], scopes, relations })
+    expect((await getUserScopeEnforcement(makeUser(), 'projects')).filters).toHaveLength(0)
+
+    bustScopeDimensionCache()
+    bustUserScopeCache()
+    bustScopePathCache()
+    installDb({
+      dimensions: [{ ...ZONE_DIM, overrides: { projects: ['divisions'] } }, PROJECT_DIM],
+      scopes,
+      relations
+    })
+    const out = await getUserScopeEnforcement(makeUser(), 'projects')
+    expect(out.filters).toHaveLength(1)
+    expect(out.filters[0].ids).toEqual([10])
+    expect(out.filters[0].hops.length).toBeGreaterThan(0)
+  })
 })
 
 // ─── applyScopeEnforcement — the SQL it emits ──────────────────────────────

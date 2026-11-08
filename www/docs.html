@@ -14622,6 +14622,7 @@ Authorization: Bearer &lt;nvm_-token&gt;
             <li>The **coverage table** previews how the dimension resolves per collection: <code class="doc-code">self</code> (the target itself), <code class="doc-code">auto</code> (derived route via relations), <code class="doc-code">override</code> (pinned field path), <code class="doc-code">excluded</code>, or <code class="doc-code">unreachable</code>.</li>
             <li><code class="doc-code">strict</code> — restricted users are DENIED (zero rows) on collections the dimension cannot reach, instead of being left unfiltered.</li>
             <li><code class="doc-code">overrides</code> pin an explicit field path per collection; <code class="doc-code">exclusions</code> opt a collection out entirely.</li>
+            <li>Another dimension's target table (e.g. <code class="doc-code">projects</code> when a Project dimension exists) is reference data: other dimensions leave it unfiltered so labels and pickers keep working — unless a dimension names an override path for that table, which opts it in (e.g. Zone → <code class="doc-code">projects: ["divisions"]</code> makes projects follow the person's zones).</li>
           </ul>
           <h3 class="doc-h3">Per-user values</h3>
           <ul class="doc-ul">

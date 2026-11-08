@@ -111,6 +111,21 @@ describe('deep fields= paths (N2)', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('army9 b10: a caller with a field list gets the same answer for a made-up and a hidden name', async () => {
+    const readable = async () => ['id', 'name']
+    // Both dropped by the projection later — neither is judged here.
+    await expect(
+      assertFieldPathsExist('workflows', ['id', 'zzz_nope.*', 'zzz_nope.x'], readable)
+    ).resolves.toBeUndefined()
+    await expect(
+      assertFieldPathsExist('workflows', ['id', 'project.division.short_name'], readable)
+    ).resolves.toBeUndefined()
+    // A caller who may read everything still learns the name is wrong.
+    await expect(
+      assertFieldPathsExist('workflows', ['project.division.short_name'], async () => null)
+    ).rejects.toMatchObject({ code: 'UNKNOWN_FIELD' })
+  })
+
   it('a plain column as the middle segment is left to the expansion (no new refusal)', async () => {
     await expect(assertFieldPathsExist('workflows', ['name.x'])).resolves.toBeUndefined()
   })

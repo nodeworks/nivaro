@@ -7,6 +7,7 @@ import { canSeeRoom } from './chat.js'
 import { sendMail, sendRawMail } from './mail.js'
 import { sendTeamsNotification } from './microsoft.js'
 import { notifyUser } from './notification-channels.js'
+import { reportConditionNumber, reportConditionText } from './report-alert-words.js'
 import {
   type DateRange,
   parseJson,
@@ -180,7 +181,9 @@ export async function runReportAlertChecks(app: FastifyInstance): Promise<{
         })
         fired++
         const summary = conditions
-          .map((c) => `${c.field} ${c.op} ${c.value} (now ${metrics[c.field] ?? 0})`)
+          .map(
+            (c) => `${reportConditionText(c)} (now ${reportConditionNumber(metrics[c.field] ?? 0)})`
+          )
           .join(', ')
         if (alert.delivery_inapp) {
           await notifyUser(app, creator.id, {

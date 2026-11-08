@@ -360,7 +360,11 @@ export async function explainOwnerGapClusters(
       suggestion: c.suggestion
         ? {
             ...c.suggestion,
-            group_label: facts.suggestion?.group_label ?? c.suggestion.group_label
+            group_label: facts.suggestion?.group_label ?? c.suggestion.group_label,
+            // The same lists in words ("Project Type Small Electronics", never
+            // "project_type (wants 5)") — army 9 b11 N9-2.
+            matched_labels: facts.suggestion?.matched ?? [],
+            missing_labels: facts.suggestion?.missing ?? []
           }
         : null,
       uncovered,

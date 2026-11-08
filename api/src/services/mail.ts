@@ -178,6 +178,39 @@ export async function wrapMailFragment(
   }
 }
 
+/** Origins this instance's own apps answer on: the admin build
+ *  (adminBaseUrl), PUBLIC_URL and the registered portal / frontend app. */
+export async function isOwnAppUrl(url: string): Promise<boolean> {
+  const originOf = (u: string | null | undefined) => {
+    try {
+      const p = new URL(String(u ?? '').trim())
+      return p.protocol === 'http:' || p.protocol === 'https:' ? p.origin.toLowerCase() : null
+    } catch {
+      return null
+    }
+  }
+  const want = originOf(url)
+  if (!want) return false
+  const own = new Set<string>()
+  try {
+    const { adminBaseUrl } = await import('../admin-base.js')
+    const a = originOf(adminBaseUrl())
+    if (a) own.add(a)
+  } catch {
+    /* no admin host known */
+  }
+  const pub = originOf(config.PUBLIC_URL)
+  if (pub) own.add(pub)
+  try {
+    const { portalRegistration } = await import('./app-links.js')
+    const portal = originOf((await portalRegistration())?.base)
+    if (portal) own.add(portal)
+  } catch {
+    /* no portal registered */
+  }
+  return own.has(want)
+}
+
 /**
  * The "why me" footer context: `why` + a link to the recipient's
  * notification rules in the app THEY use (portal vs admin). A single
@@ -186,10 +219,18 @@ export async function wrapMailFragment(
  */
 export async function whyContext(
   to: string | string[],
-  why?: string | null
+  why?: string | null,
+  /** The sender's own rules link (a mail that belongs to one app — the EFP
+   *  invoice reminder's links are all portal links): one host per mail
+   *  (army9 b13), instead of the recipient's usual app. */
+  rulesUrl?: string | null
 ): Promise<{ why?: string; rules_url?: string }> {
   const text = String(why ?? '').trim()
   if (!text) return {}
+  // Only a link into one of this instance's own apps: a webhook-triggered
+  // flow's payload is outside input (Fable review M8).
+  if (typeof rulesUrl === 'string' && (await isOwnAppUrl(rulesUrl)))
+    return { why: text, rules_url: rulesUrl.trim() }
   try {
     const { linkTo, userIdForEmail } = await import('./app-links.js')
     const list = (Array.isArray(to) ? to : String(to).split(/[,;]/))

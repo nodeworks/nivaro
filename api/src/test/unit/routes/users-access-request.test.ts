@@ -158,6 +158,16 @@ describe('POST /me/access-request', () => {
     expect(state.notified).toBe(0)
   })
 
+  it('army9 b10: an authorized account cannot file a request or notify admins', async () => {
+    state.user = { role: 'C3C3C3C3-0000-4000-8000-000000000003', preferences: null }
+    const res = await submit(body)
+    expect(res.statusCode).toBe(409)
+    expect(JSON.parse(res.body).code).toBe('NOT_PENDING')
+    expect(state.updates).toHaveLength(0)
+    expect(state.activity).toHaveLength(0)
+    expect(state.notified).toBe(0)
+  })
+
   it('refuses a reason over 2000 characters instead of cutting it', async () => {
     const res = await submit({ ...body, reason: 'x'.repeat(2001) })
     expect(res.statusCode).toBe(400)

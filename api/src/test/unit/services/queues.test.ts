@@ -112,7 +112,8 @@ describe('computeStats', () => {
       sla_warning: 0,
       sla_breached: 0,
       at_risk: 0,
-      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 },
+      sla_tracked: 0
     })
   })
 
@@ -124,7 +125,8 @@ describe('computeStats', () => {
       sla_warning: 0,
       sla_breached: 0,
       at_risk: 0,
-      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 },
+      sla_tracked: 0
     })
   })
 
@@ -136,7 +138,8 @@ describe('computeStats', () => {
       sla_warning: 0,
       sla_breached: 0,
       at_risk: 0,
-      aging: { d1: 0, d3: 0, d7: 0, over: 0 }
+      aging: { d1: 0, d3: 0, d7: 0, over: 0 },
+      sla_tracked: 0
     })
   })
 
@@ -152,6 +155,24 @@ describe('computeStats', () => {
     expect(stats.sla_warning).toBe(1)
     expect(stats.sla_breached).toBe(2)
     expect(stats.at_risk).toBe(2)
+    // army 9 b08 N-R9-4: rows an SLA applies to (ok included) — item 5 has none.
+    expect(stats.sla_tracked).toBe(4)
+  })
+
+  // army 9 review L10: a task's due date is its SLA, but an on-time dated task alone
+  // must not keep "0 Breached" on a worklist whose records carry no SLA rule.
+  it('a due-date "SLA" counts as tracked only once due soon or past due', () => {
+    const due = computeStats([
+      item({ item_id: '1', sla_status: 'ok', sla_basis: 'due_date' }),
+      item({ item_id: '2', sla_status: null })
+    ])
+    expect(due.sla_tracked).toBe(0)
+    const late = computeStats([
+      item({ item_id: '1', sla_status: 'breached', sla_basis: 'due_date' }),
+      item({ item_id: '2', sla_status: 'warning', sla_basis: 'due_date' }),
+      item({ item_id: '3', sla_status: 'ok' })
+    ])
+    expect(late.sla_tracked).toBe(3)
   })
 })
 

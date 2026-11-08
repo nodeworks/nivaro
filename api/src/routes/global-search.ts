@@ -4,7 +4,7 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { tenantState } from '../services/ai-tenant-state.js'
-import { getCollection } from '../services/collections.js'
+import { getCollection, getFields } from '../services/collections.js'
 import { readItems } from '../services/items.js'
 import { getAllowedFields } from '../services/permissions.js'
 import { withReadGate } from '../services/read-gate.js'
@@ -12,7 +12,7 @@ import { fallbackDisplayRef, recordDisplayRefs } from '../services/record-displa
 import { safeRecordLabel } from '../services/record-label-fallback.js'
 import { MAX_LABEL_REFS, recordLabelsAsViewer } from '../services/record-labels-as-viewer.js'
 import { SearchBudget } from '../services/search-budget.js'
-import { labelSearchFieldsOf, parseSearchFields } from '../services/search-fields.js'
+import { labelSearchFieldsOf, parseSearchFields, searchGroupOf } from '../services/search-fields.js'
 import { ftsColumns, ftsCondition, searchAnswerCache } from '../services/search-fts.js'
 import {
   fastLike,
@@ -22,7 +22,7 @@ import {
   typedEquals,
   withFastContains
 } from '../services/search-like.js'
-import { buildSearchPreview } from '../services/search-preview.js'
+import { buildSearchPreview, previewValue } from '../services/search-preview.js'
 import {
   type FieldMeta,
   type FilterChip,
@@ -63,7 +63,7 @@ import {
 import { searchPhrases } from '../services/search-synonyms.js'
 import { systemReadableColumns } from '../services/system-collections.js'
 import { applyDirectoryListingRules } from '../services/user-directory-cols.js'
-import type { Policy, Role, User } from '../types.js'
+import type { CMSField, Policy, Role, User } from '../types.js'
 
 // ─── Static admin page registry ───────────────────────────────────────────────
 
@@ -185,6 +185,9 @@ interface PlanEntry {
   /** A table over ROW_BUDGET: its id columns are index-led only (bigTableSeekColumns) —
    *  exact and prefix seeks, never a scan. */
   seekOnly?: boolean
+  /** `browser_config.search_group_by` / `search_detail` (services/search-fields.ts). */
+  groupBy?: string | null
+  detail?: string[]
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -426,6 +429,7 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
       numIdColumns: seekOnly ? seekOnly.nums : numIdColumns,
       ...(seekOnly ? { seekOnly: true } : {}),
       template: col.display_template,
+      ...searchGroupPlan(col.browser_config),
       rows,
       textSearchable,
       kinds,
@@ -469,6 +473,11 @@ export type RecordHit = {
   updated_at?: string
   /** The record's readable id (#776) as the caller reads it — absent when it has none. */
   friendly_id?: string
+  /** How many matching records share this hit's `search_group_by` value (≥2): shown as
+   *  this one row — an invoice's lines (army 9 b07/b14/b16). Palette answer only. */
+  group_size?: number
+  /** The collection's hits were capped: the group may hold more than `group_size`. */
+  group_more?: boolean
 }
 
 /** A hit while it is being ranked. */
@@ -1448,6 +1457,91 @@ export function finishHits(
   return rankHits(scored).slice(0, cap)
 }
 
+function searchGroupPlan(browserConfig: unknown): { groupBy?: string; detail?: string[] } {
+  const g = searchGroupOf(browserConfig)
+  return {
+    ...(g.by ? { groupBy: g.by } : {}),
+    ...(g.detail.length ? { detail: g.detail } : {})
+  }
+}
+
+/**
+ * One palette row per shared value of a collection's `search_group_by` field (pure;
+ * exported for tests) — an invoice's 25 lines all carry its number (army 9 b07/b16).
+ * `groupOf` is the field's value per `collection:id`, read AS THE CALLER; a hit with no
+ * known value (no grouping configured, field not readable) is never merged, so two
+ * different records that only LOOK alike stay two rows (Fable H2). The kept row is the
+ * best-ranked one, exact when any member was, with `group_size` = members seen and
+ * `group_more` when that collection's hits were capped (there may be more).
+ */
+export function groupHits<T extends RecordHit>(
+  hits: T[],
+  groupOf: Map<string, string>,
+  cappedCollections: ReadonlySet<string> = new Set()
+): T[] {
+  const first = new Map<string, number>()
+  const out: T[] = []
+  for (const h of hits) {
+    const v = groupOf.get(hitKey(h.collection, h.id))
+    const k = v == null || v === '' ? null : `${h.collection}\u0000${v}`
+    const at = k ? first.get(k) : undefined
+    if (k == null || at === undefined) {
+      if (k) first.set(k, out.length)
+      out.push(h)
+      continue
+    }
+    const kept = out[at]
+    out[at] = {
+      ...kept,
+      group_size: (kept.group_size ?? 1) + 1,
+      ...(cappedCollections.has(h.collection) ? { group_more: true } : {}),
+      ...(h.exact && !kept.exact ? { exact: true } : {}),
+      ...(h.mine && !kept.mine ? { mine: true } : {})
+    }
+  }
+  return out
+}
+
+/** The `search_group_by` value of each hit in a grouped collection, read as the caller
+ *  by primary key (one read per grouped collection, ≤ RECORD_CAP ids — no count, no
+ *  scan; Fable M4 dropped the per-group COUNT). */
+async function groupValues(
+  user: User,
+  plan: PlanEntry[],
+  hits: RecordHit[]
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const by = new Map(plan.filter((p) => p.groupBy).map((p) => [p.collection, p.groupBy as string]))
+  const ids = new Map<string, string[]>()
+  for (const h of hits) {
+    if (!by.has(h.collection)) continue
+    const list = ids.get(h.collection) ?? []
+    list.push(String(h.id))
+    ids.set(h.collection, list)
+  }
+  await Promise.all(
+    [...ids].map(async ([collection, list]) => {
+      if (list.length < 2) return
+      const field = by.get(collection) as string
+      try {
+        const r = await readItems(user, collection, {
+          filter: { id: { _in: list } },
+          fields: ['id', field],
+          limit: list.length
+        })
+        for (const row of r.data as Array<Record<string, unknown>>) {
+          const v = row[field]
+          if (v != null && typeof v !== 'object' && String(v).trim())
+            out.set(hitKey(collection, row.id), String(v).trim().toLowerCase())
+        }
+      } catch {
+        /* unreadable: no grouping */
+      }
+    })
+  )
+  return out
+}
+
 interface RecordSearchResult {
   records: RecordHit[]
   exact: RecordHit | null
@@ -1567,12 +1661,17 @@ async function searchRecords(
     ownedAmong(String(user.id), byCollection).catch(() => new Set<string>()),
     friendlyIdsAmong(user, byCollection).catch(() => new Map<string, string>())
   ])
-  const records = finishHits(found, { userId: String(user.id), learned, recent, owned }).map(
+  const finished = finishHits(found, { userId: String(user.id), learned, recent, owned }).map(
     (r) => {
       const f = friendly.get(`${r.collection}:${String(r.id)}`)
       return f ? { ...r, friendly_id: f } : r
     }
   )
+  // Collections whose hits filled their per-collection cap: a group there may be larger.
+  const perCollection = new Map<string, number>()
+  for (const h of found) perCollection.set(h.collection, (perCollection.get(h.collection) ?? 0) + 1)
+  const capped = new Set([...perCollection].filter(([, n]) => n >= per).map(([c]) => c))
+  const records = groupHits(finished, await groupValues(user, plan, finished), capped)
   const exactHits = records.filter((r) => r.exact)
   // "Did you mean": only when nothing but near spellings came back.
   const suggestions =
@@ -1838,6 +1937,46 @@ export async function countMatches(
   return out.sort((a, b) => b.count - a.count)
 }
 
+/**
+ * Second lines that tell rows apart (pure; exported for tests): a hit whose snippet only
+ * repeats its label gets the collection's `search_detail` values as the record page
+ * shows them ("Line 22 · $2,115.19"). Values come from the caller's own row.
+ */
+export function withDetail(
+  hits: RecordHit[],
+  rows: Array<Record<string, unknown>>,
+  detail: string[],
+  fields: Array<Pick<CMSField, 'field' | 'type'> & Partial<CMSField>>
+): RecordHit[] {
+  const byId = new Map(rows.map((r) => [String(r.id), r]))
+  const meta = new Map(fields.map((f) => [f.field, f]))
+  return hits.map((h) => {
+    if ((h.snippet ?? '').trim().toLowerCase() !== h.label.trim().toLowerCase()) return h
+    const row = byId.get(String(h.id))
+    if (!row) return h
+    const parts = detail.flatMap((f) => {
+      const m = meta.get(f)
+      const v = previewValue(m, row[f])
+      if (!v) return []
+      const label = String((m as { label?: string | null } | undefined)?.label ?? '').trim()
+      // "Line 22": a number field reads with its name, money and text by value.
+      return [
+        /^(integer|bigint|int)$/i.test(String(m?.type ?? '')) ? `${label || detailWord(f)} ${v}` : v
+      ]
+    })
+    return parts.length ? { ...h, snippet: parts.join(' · ').slice(0, 120) } : h
+  })
+}
+
+const detailWord = (field: string) => {
+  const w = field
+    .replace(/_(number|no|num)$/i, '')
+    .replace(/_item$/i, '')
+    .replace(/_/g, ' ')
+    .trim()
+  return w ? w.charAt(0).toUpperCase() + w.slice(1) : field
+}
+
 /** One page of a collection's matches, read as the caller. Exported for tests. */
 export async function searchCollectionPage(
   user: User,
@@ -1884,7 +2023,16 @@ export async function searchCollectionPage(
     }
   })
   return {
-    data,
+    // Every record stays its own row on this paged list (paging counts rows); rows that
+    // share a label read apart by the collection's `search_detail` fields (army 9 b16).
+    data: p.detail?.length
+      ? withDetail(
+          data,
+          r.data as Array<Record<string, unknown>>,
+          p.detail,
+          await getFields(collection).catch(() => [])
+        )
+      : data,
     total: typeof r.total === 'number' ? r.total : null,
     ...(f.capped ? { capped: true } : {})
   }

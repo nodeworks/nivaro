@@ -3,6 +3,7 @@ import {
   labelSearchFieldsOf,
   narrowSearchColumns,
   parseSearchFields,
+  searchGroupOf,
   withLabelSearchFields
 } from '../../../services/search-fields.js'
 
@@ -66,5 +67,17 @@ describe('browser_config.label_search_fields', () => {
     expect(withLabelSearchFields(['request_number'], null, available)).toEqual(['request_number'])
     // A template with no text field (no label columns) can still be found by the extras.
     expect(withLabelSearchFields([], ['project'], available)).toEqual(['project'])
+  })
+})
+
+// Army 9 / Fable H2: grouping is opt-in per collection, by a real shared field.
+describe('searchGroupOf', () => {
+  it('reads search_group_by and search_detail', () => {
+    expect(
+      searchGroupOf('{"search_group_by":"number","search_detail":["line_item_number","amount"]}')
+    ).toEqual({ by: 'number', detail: ['line_item_number', 'amount'] })
+    expect(searchGroupOf(null)).toEqual({ by: null, detail: [] })
+    expect(searchGroupOf({ search_group_by: 'id' })).toEqual({ by: null, detail: [] })
+    expect(searchGroupOf({ search_group_by: 'a; drop' })).toEqual({ by: null, detail: [] })
   })
 })

@@ -512,6 +512,22 @@ export async function resolveRecordDimensionIds(
   return out
 }
 
+/**
+ * THE rule for whether a dimension filters a collection that is some
+ * dimension's TARGET (reference data every user reads to render a label):
+ * only its own dimension does — unless another dimension names an explicit
+ * override route for it, which opts it in (EFP: projects follow zones,
+ * regions and project types). Every enforcement/explain twin calls this
+ * (getUserScopeEnforcement, record-access routeScopeGates, picker
+ * narrowing, the role OpenAPI view), so they cannot drift.
+ */
+export function dimensionScopesTable(
+  dim: Pick<ScopeDimension, 'target_collection' | 'overrides'>,
+  collection: string
+): boolean {
+  return dim.target_collection === collection || (dim.overrides?.[collection]?.length ?? 0) > 0
+}
+
 /** Effective route for a dimension on a collection: exclusion > override > BFS.
  *  Overrides are FIELD-SEGMENT lists (M2O chains / alias names) resolved
  *  against live relations into hops. */
@@ -676,13 +692,17 @@ async function buildUserScopeEnforcement(
   // and ANDing several of them together made these tables resolve to zero rows,
   // which broke every relation label and picker in the app. A target table is
   // still scoped by its OWN dimension (you see divisions 1-3 and no others).
+  // A dimension that names an explicit override route FOR a target table opts
+  // that table in: a project lives in zones and regions, and its PUB is not
+  // reference data (army 9: a Zone 1 person read another zone's project
+  // through the items API while every page hid it).
   const targets = new Set(dims.map((d) => d.target_collection))
   const isReferenceTable = targets.has(collection)
   const out: ScopeEnforcement = { filters: [], deny: false }
   for (const s of restricts) {
     const dim = dims.find((d) => d.name === s.dimension)
     if (!dim) continue
-    if (isReferenceTable && dim.target_collection !== collection) continue
+    if (isReferenceTable && !dimensionScopesTable(dim, collection)) continue
     const hops = await scopeHopsFor(dim, collection)
     if (hops) out.filters.push({ hops, ids: s.values })
     else if (dim.strict) out.deny = true

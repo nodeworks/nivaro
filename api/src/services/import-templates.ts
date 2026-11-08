@@ -14,6 +14,10 @@ export interface ImportIssue {
   row?: number // 1-based sheet data row
   column?: string
   message: string
+  /** A lookup miss: the collection searched and the value not found — the
+   *  parse route rewrites the message with the collection's display name. */
+  lookup_collection?: string
+  value?: string
 }
 
 export interface LineDraft {
@@ -255,7 +259,11 @@ function resolveLookupOutcome(
         ? `No match for "${name}" — flagged as new`
         : step.on_miss === 'create'
           ? `No match for "${name}" — will be created on direct import`
-          : `No match for "${name}" in ${step.collection}`
+          : `"${name}" was not found in ${humanCollection(step.collection)}`
+  }
+  if (step.on_miss !== 'create_stub' && step.on_miss !== 'create') {
+    issue.lookup_collection = step.collection
+    issue.value = name
   }
   if (rowNumber != null) issue.row = rowNumber
   issues.push(issue)
@@ -263,6 +271,114 @@ function resolveLookupOutcome(
     return { value: undefined, stub: { is_new: true, name } }
   }
   return { value: undefined }
+}
+
+/** A collection named for people: `$users` → "people", `cifa_items` → "cifa items". */
+export function humanCollection(collection: string): string {
+  if (collection === '$users' || collection === 'nivaro_users') return 'people'
+  return collection.replace(/^\$/, '').replace(/_/g, ' ')
+}
+
+/**
+ * Lookup misses in plain words (army 9 b02): "No match for "999999999999" in
+ * cifa_items" read like a database error. Each miss is rewritten with the
+ * collection's display name; other issues pass through untouched.
+ */
+export function plainLookupIssues<
+  T extends { lookup_collection?: string; value?: string; message: string }
+>(issues: T[], labelFor: (collection: string) => string | null | undefined): T[] {
+  return issues.map((issue) => {
+    if (!issue.lookup_collection || issue.value == null) return issue
+    const label = labelFor(issue.lookup_collection)
+    if (!label) return issue
+    const raw = humanCollection(issue.lookup_collection)
+    return { ...issue, message: issue.message.split(` in ${raw}`).join(` in ${label}`) }
+  })
+}
+
+const INTEGER_TYPES = new Set(['integer', 'biginteger', 'bigint', 'int', 'smallint', 'tinyint'])
+const NUMBER_TYPES = new Set([
+  ...INTEGER_TYPES,
+  'decimal',
+  'float',
+  'double',
+  'numeric',
+  'real',
+  'money',
+  'currency'
+])
+
+/**
+ * A number as a sheet writes it: "1200", "1,200.50", "$3.10", "-$4". A comma
+ * is read ONLY as a thousands separator (groups of three before any point) —
+ * "1.200,50" or "1,5" (a comma for the decimal point) is NaN, never silently
+ * read as 1.2005 or 15 (review L7).
+ */
+export function parseSheetNumber(raw: string): number {
+  const s = raw.replace(/\s/g, '').replace(/^(-?)\$/, '$1')
+  if (s === '') return Number.NaN
+  if (s.includes(',')) {
+    if (!/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return Number.NaN
+    return Number(s.replace(/,/g, ''))
+  }
+  return Number(s)
+}
+
+/** The type + label of a line column's target field (the child collection's). */
+export type LineFieldInfo = Record<string, { type?: string | null; label?: string | null }>
+
+/**
+ * A line value must fit its field (army 9 b02): a BOM row with quantity 2.5
+ * was staged, the integer column stored 2 while the total kept 2.5 × price.
+ * Numbers are read the way a sheet writes them ("1,250", "$3.10") and stored
+ * as numbers; a value that is not a number, or not whole for a whole-number
+ * field, is an error on that row (the row is then left out — see
+ * runImportPipeline). Never rounds or truncates.
+ */
+export function checkLineValueTypes(
+  values: Record<string, unknown>,
+  fields: LineFieldInfo,
+  issues: ImportIssue[],
+  rowNumber: number,
+  sourceFor: (target: string) => string | undefined
+): void {
+  for (const [target, raw] of Object.entries(values)) {
+    const info = fields[target]
+    const type = String(info?.type ?? '').toLowerCase()
+    if (!NUMBER_TYPES.has(type)) continue
+    if (raw === null || raw === undefined || raw === '') continue
+    if (typeof raw === 'object') continue
+    const n = typeof raw === 'number' ? raw : parseSheetNumber(String(raw))
+    const plain = target.replace(/_/g, ' ')
+    const label = info?.label || plain.charAt(0).toUpperCase() + plain.slice(1)
+    const issue = (message: string): ImportIssue => ({
+      severity: 'error',
+      rule: `line[${rowNumber}]:${target}`,
+      row: rowNumber,
+      column: sourceFor(target),
+      message
+    })
+    if (!Number.isFinite(n)) {
+      issues.push(issue(`${label} "${String(raw)}" is not a number`))
+      continue
+    }
+    if (INTEGER_TYPES.has(type) && !Number.isInteger(n)) {
+      issues.push(issue(`${label} ${n} is not a whole number`))
+      continue
+    }
+    values[target] = n
+  }
+}
+
+/** Sheet rows whose line carries an error: they are left out of `lines`. */
+function rowsWithLineErrors(issues: ImportIssue[]): Set<number> {
+  const out = new Set<number>()
+  for (const i of issues) {
+    if (i.severity !== 'error') continue
+    const m = /^line\[(\d+)\]/.exec(i.rule)
+    if (m) out.add(Number(m[1]))
+  }
+  return out
 }
 
 function runRuleForRow(
@@ -841,8 +957,10 @@ export async function runImportPipeline(opts: {
   lookup: LookupFetcher
   applyLineFieldRules?: (draft: Record<string, unknown>) => Promise<void>
   m2mFields?: Set<string>
+  /** The line target fields' types + labels: values are checked against them. */
+  lineFields?: LineFieldInfo
 }): Promise<ImportParseResult> {
-  const { config, rows, lookup, applyLineFieldRules, m2mFields } = opts
+  const { config, rows, lookup, applyLineFieldRules, m2mFields, lineFields } = opts
   const issues: ImportIssue[] = []
   const headerRow = rows[0] ?? {}
 
@@ -896,7 +1014,32 @@ export async function runImportPipeline(opts: {
       (rowNumber, target) => `line[${rowNumber}]:${target}`
     )
 
+    if (lineFields) {
+      const sourceOf = new Map(lm.columns.map((c) => [c.target, c.source ?? undefined]))
+      for (const result of lineResults) {
+        checkLineValueTypes(result.values, lineFields, issues, result.rowNumber, (t) =>
+          sourceOf.get(t)
+        )
+      }
+    }
+
+    // A row with an error (an item not found under on_miss 'error', a quantity
+    // that is not a whole number…) is NOT staged as a line (army 9 b02: an
+    // unknown item was saved as an empty line still counted in the units). The
+    // person is told which rows were left out.
+    const refused = rowsWithLineErrors(issues)
+    if (refused.size > 0) {
+      const told = new Set<number>()
+      for (const issue of issues) {
+        if (issue.severity !== 'error' || issue.row == null || !refused.has(issue.row)) continue
+        if (told.has(issue.row) || !/^line\[/.test(issue.rule)) continue
+        told.add(issue.row)
+        issue.message = `${issue.message.replace(/[.\s]+$/, '')}. This row was not added.`
+      }
+    }
+
     for (const result of lineResults) {
+      if (refused.has(result.rowNumber)) continue
       const draft: LineDraft = { values: result.values }
       if (lm.apply_field_rules && applyLineFieldRules) {
         await applyLineFieldRules(draft.values)

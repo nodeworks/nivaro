@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { LineDraft } from '../../../services/import-templates.js'
 import {
   collectCreateMisses,
+  parseSheetNumber,
+  plainLookupIssues,
   resolveCreateDefaults,
   runImportPipeline
 } from '../../../services/import-templates.js'
@@ -799,6 +801,157 @@ describe('runImportPipeline — chained lookups (#718)', () => {
     // second query asks only for what the first one answered
     expect(lookup.mock.calls[1][0].values.sort()).toEqual(['1', '2'])
     expect(lines.map((l) => l.values.cifa)).toEqual(['200', '100', undefined, '200'])
-    expect(issues.filter((i) => /No match for "999"/.test(i.message))).toHaveLength(1)
+    expect(issues.filter((i) => /"999" was not found in cifa items/.test(i.message))).toHaveLength(
+      1
+    )
+  })
+})
+
+// Army 9 b02 (BOM Upload on IR 37827): rows 301092 × 5, 100340 × 2.5 @ 0.07 and
+// an unknown item 999999999999 × 1. The 2.5 was stored as 2 while the total kept
+// 2.5 × 0.07, and the unknown item was saved as an empty line counted in the units.
+describe('runImportPipeline — BOM lines (army 9 b02)', () => {
+  const bom = cfg({
+    line_map: {
+      target_field: 'materials',
+      row_filter: { column: 'cifa', op: 'nnull' },
+      columns: [
+        {
+          target: 'cifa',
+          source: 'cifa',
+          steps: [
+            { type: 'trim' },
+            {
+              type: 'lookup',
+              collection: 'cifa_items',
+              match_field: 'cifa_number',
+              on_miss: 'error',
+              take: 'id'
+            }
+          ]
+        },
+        { target: 'quantity', source: 'quantity', steps: [] },
+        { target: 'price', source: 'price', steps: [] }
+      ]
+    }
+  })
+  const catalog = [
+    { id: 39767, cifa_number: '301092' },
+    { id: 1281, cifa_number: '100340' }
+  ]
+  const lookup = async (req: { values: string[] }) =>
+    catalog.filter((r) => req.values.includes(r.cifa_number))
+  const lineFields = {
+    cifa: { type: 'integer', label: 'Item' },
+    quantity: { type: 'integer', label: 'Quantity' },
+    price: { type: 'decimal', label: 'Price' }
+  }
+
+  it('leaves out an unknown item and a fractional quantity, and says so', async () => {
+    const { lines, issues } = await runImportPipeline({
+      config: bom,
+      rows: [
+        { cifa: '301092', quantity: 5 },
+        { cifa: '100340', quantity: 2.5, price: 0.07 },
+        { cifa: '999999999999', quantity: 1 }
+      ],
+      lookup: async (req) => lookup(req as never),
+      lineFields
+    })
+    expect(lines.map((l) => l.values)).toEqual([{ cifa: 39767, quantity: 5, price: undefined }])
+    const errors = issues.filter((i) => i.severity === 'error')
+    expect(errors).toHaveLength(2)
+    expect(errors.find((i) => i.row === 2)?.message).toBe(
+      'Quantity 2.5 is not a whole number. This row was not added.'
+    )
+    expect(errors.find((i) => i.row === 3)).toMatchObject({
+      column: 'cifa',
+      lookup_collection: 'cifa_items',
+      value: '999999999999',
+      message: '"999999999999" was not found in cifa items. This row was not added.'
+    })
+  })
+
+  it('reads sheet-written numbers and keeps whole-number text', async () => {
+    const { lines, issues } = await runImportPipeline({
+      config: bom,
+      rows: [
+        { cifa: '301092', quantity: '1,200', price: '$3.10' },
+        { cifa: '100340', quantity: '2.0', price: 'abc' }
+      ],
+      lookup: async (req) => lookup(req as never),
+      lineFields
+    })
+    expect(lines.map((l) => l.values)).toEqual([{ cifa: 39767, quantity: 1200, price: 3.1 }])
+    expect(issues.map((i) => [i.row, i.message])).toEqual([
+      [2, 'Price "abc" is not a number. This row was not added.']
+    ])
+  })
+
+  it('without field types the values pass through (other callers)', async () => {
+    const { lines } = await runImportPipeline({
+      config: bom,
+      rows: [{ cifa: '100340', quantity: 2.5 }],
+      lookup: async (req) => lookup(req as never)
+    })
+    expect(lines[0].values.quantity).toBe(2.5)
+  })
+
+  it('plainLookupIssues names the collection by its display name', () => {
+    const out = plainLookupIssues(
+      [
+        {
+          severity: 'error',
+          rule: 'line[3]:cifa',
+          row: 3,
+          lookup_collection: 'cifa_items',
+          value: '9',
+          message: '"9" was not found in cifa items. This row was not added.'
+        },
+        { severity: 'warn', rule: 'header:x', message: 'Column "x" not found in sheet' }
+      ],
+      (c) => (c === 'cifa_items' ? 'the catalog' : null)
+    )
+    expect(out.map((i) => i.message)).toEqual([
+      '"9" was not found in the catalog. This row was not added.',
+      'Column "x" not found in sheet'
+    ])
+  })
+})
+
+describe('parseSheetNumber (review L7)', () => {
+  it('reads US sheet numbers', () => {
+    expect(parseSheetNumber('1,200')).toBe(1200)
+    expect(parseSheetNumber(' $1,200.50 ')).toBe(1200.5)
+    expect(parseSheetNumber('-$4')).toBe(-4)
+    expect(parseSheetNumber('1,234,567.5')).toBe(1234567.5)
+    expect(parseSheetNumber('0.07')).toBe(0.07)
+  })
+
+  it('refuses a comma used as the decimal point, never reads it silently', () => {
+    for (const v of ['1.200,50', '1,5', '12,34', '1,2345', ',5', '1,200,5', '']) {
+      expect(Number.isNaN(parseSheetNumber(v))).toBe(true)
+    }
+  })
+
+  it('a bigint quantity is a whole-number field too', async () => {
+    const config = cfg({
+      line_map: {
+        target_field: 'lines',
+        row_filter: null,
+        columns: [{ target: 'qty', source: 'qty', steps: [] }]
+      }
+    })
+    const { lines, issues } = await runImportPipeline({
+      config,
+      rows: [{ qty: '1.200,50' }, { qty: 2.5 }, { qty: '3' }],
+      lookup: NO_LOOKUP,
+      lineFields: { qty: { type: 'bigint', label: 'Qty' } }
+    })
+    expect(lines.map((l) => l.values.qty)).toEqual([3])
+    expect(issues.map((i) => i.message)).toEqual([
+      'Qty "1.200,50" is not a number. This row was not added.',
+      'Qty 2.5 is not a whole number. This row was not added.'
+    ])
   })
 })

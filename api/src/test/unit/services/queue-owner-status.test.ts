@@ -17,6 +17,13 @@ describe('inactiveOwnerReason — the same rule as isInactivePerson', () => {
       inactiveOwnerReason({ status: 'active', first_name: 'Redacted', last_name: 'Redacted' })
     ).toBe('former')
   })
+  // army 9 b08 N-R9-2: legacy redacted accounts are also status 'suspended'.
+  it('a redacted person whose status is suspended reads former, not suspended', () => {
+    expect(
+      inactiveOwnerReason({ status: 'suspended', first_name: 'Redacted', last_name: 'Redacted' })
+    ).toBe('former')
+    expect(inactiveOwnerReason({ status: 'suspended', is_redacted: true })).toBe('former')
+  })
   it('an active person is null', () => {
     expect(
       inactiveOwnerReason({ status: 'active', first_name: 'Ann', last_name: 'Lee' })

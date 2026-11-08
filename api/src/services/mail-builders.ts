@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { type LinkSpec, linkTo, recordLink } from './app-links.js'
 import { buildRecordCard, type RecordCard } from './mail-record-card.js'
+import { reportConditionNumber, reportConditionText } from './report-alert-words.js'
 
 /**
  * Builders for the emails that used to ride the plain `notification`
@@ -313,8 +314,8 @@ export async function buildReportAlertMail(args: {
       widget_title: args.widgetTitle,
       report_name: args.reportName ?? null,
       conditions: args.conditions.map((c) => ({
-        label: `${c.field} ${c.op} ${c.value}`,
-        now: String(c.now ?? 0)
+        label: reportConditionText(c),
+        now: reportConditionNumber(c.now ?? 0)
       })),
       report_url: reportUrl,
       manage_url: reportUrl,

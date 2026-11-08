@@ -145,3 +145,72 @@ describe('enforceValidationRules and soft (warning-only) rules — army4 a01-5',
     ).rejects.toMatchObject({ field: 'qty', rule: 'max' })
   })
 })
+
+// Army 9 b02: a BOM upload sent quantity 2.5 to the integer column; SQL Server
+// stored 2 while the write-computed total kept 2.5 × price.
+describe('whole-number fields refuse a fraction (army 9 b02)', () => {
+  it('refuses a fractional value the caller sent, never truncates', async () => {
+    meta.fields = [
+      { field: 'quantity', type: 'integer' },
+      { field: 'price', type: 'decimal' },
+      { field: 'total', type: 'integer' }
+    ]
+    await expect(
+      enforceValidationRules(
+        'inventory_request_materials',
+        { quantity: 2.5 },
+        new Set(['quantity'])
+      )
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      field: 'quantity',
+      rule: 'integer',
+      message: 'Quantity must be a whole number (2.5 was sent)'
+    })
+    await expect(
+      enforceValidationRules(
+        'inventory_request_materials',
+        { quantity: '1.5' },
+        new Set(['quantity'])
+      )
+    ).rejects.toMatchObject({ field: 'quantity' })
+    // bigint and biginteger are both whole-number types (review L7).
+    for (const type of ['bigint', 'biginteger']) {
+      meta.fields = [{ field: 'units', type }]
+      await expect(
+        enforceValidationRules('stock', { units: 7.25 }, new Set(['units']))
+      ).rejects.toMatchObject({ field: 'units', rule: 'integer' })
+    }
+  })
+
+  it('lets whole numbers, decimals on decimal fields, blanks and derived values through', async () => {
+    meta.fields = [
+      { field: 'quantity', type: 'integer', label: 'Qty' },
+      { field: 'price', type: 'decimal' },
+      { field: 'total', type: 'integer' }
+    ]
+    for (const quantity of [2, '3', '4.0', null, '']) {
+      await expect(
+        enforceValidationRules(
+          'inventory_request_materials',
+          { quantity, price: 0.07 },
+          new Set(['quantity', 'price'])
+        )
+      ).resolves.toBeUndefined()
+    }
+    // Float noise from arithmetic is a whole number, stored rounded.
+    const noisy: Record<string, unknown> = { quantity: 0.1 * 3 * 10 }
+    await expect(
+      enforceValidationRules('inventory_request_materials', noisy, new Set(['quantity']))
+    ).resolves.toBeUndefined()
+    expect(noisy.quantity).toBe(3)
+    // A field the caller did not send (a write-computed one) is not judged here.
+    await expect(
+      enforceValidationRules(
+        'inventory_request_materials',
+        { quantity: 2, total: 0.14 },
+        new Set(['quantity'])
+      )
+    ).resolves.toBeUndefined()
+  })
+})

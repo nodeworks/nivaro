@@ -557,7 +557,8 @@ export const securityUserScopes: DocSection = {
         'Manage dimensions at **Settings → User Scopes** (`/scope-dimensions`): name, label, target collection, display field.',
         'The **coverage table** previews how the dimension resolves per collection: `self` (the target itself), `auto` (derived route via relations), `override` (pinned field path), `excluded`, or `unreachable`.',
         '`strict` — restricted users are DENIED (zero rows) on collections the dimension cannot reach, instead of being left unfiltered.',
-        '`overrides` pin an explicit field path per collection; `exclusions` opt a collection out entirely.'
+        '`overrides` pin an explicit field path per collection; `exclusions` opt a collection out entirely.',
+        'Another dimension\'s target table (e.g. `projects` when a Project dimension exists) is reference data: other dimensions leave it unfiltered so labels and pickers keep working — unless a dimension names an override path for that table, which opts it in (e.g. Zone → `projects: ["divisions"]` makes projects follow the person\'s zones).'
       ]
     },
     { type: 'h3', text: 'Per-user values' },

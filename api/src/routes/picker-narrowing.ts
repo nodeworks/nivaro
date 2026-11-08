@@ -2,7 +2,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems } from '../services/items.js'
-import { getUserScopes, listScopeDimensions, scopeHopsFor } from '../services/user-scopes.js'
+import {
+  dimensionScopesTable,
+  getUserScopes,
+  listScopeDimensions,
+  scopeHopsFor
+} from '../services/user-scopes.js'
 
 // ─── Picker narrowing (#537) ─────────────────────────────────────────────────
 // A relation picker's option list is narrowed by up to four things: the field's
@@ -78,7 +83,7 @@ export async function pickerNarrowingRoutes(app: FastifyInstance): Promise<void>
           for (const s of scopes) {
             const dim = dims.find((d) => d.name === s.dimension)
             if (!dim) continue
-            if (targets.has(collection) && dim.target_collection !== collection) continue
+            if (targets.has(collection) && !dimensionScopesTable(dim, collection)) continue
             if ((await scopeHopsFor(dim, collection)) || dim.strict)
               scopeLabels.push(dim.label ?? dim.name)
           }

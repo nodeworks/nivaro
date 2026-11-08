@@ -456,6 +456,8 @@ export interface QueueItem {
   /** The SLA clock's elapsed hours (business hours for a business-hours rule)
    *  — what sla_status was judged on. Absent on sources with no SLA batch. */
   sla_elapsed_hours?: number | null
+  /** 'due_date' = sla_status comes from a task's due date, not an SLA rule (#1011). */
+  sla_basis?: 'due_date'
   /** When the record entered its current state (ISO). */
   state_entered_at?: string | null
   /** Every owner listed is suspended / redacted ("Redacted Redacted") — the
@@ -509,6 +511,10 @@ export interface QueueStats {
   at_risk: number
   /** Aging buckets (#116): counts by hours-in-state (0-24 / 24-72 / 72-168 / 168+). */
   aging?: { d1: number; d3: number; d7: number; over: number }
+  /** Rows an SLA rule applies to (any sla_status). 0 = no SLA is tracked here, so the
+   *  worklist hides its Warning / Breached tiles instead of a "0 Breached" that reads as
+   *  "all on time" (army 9 b08 N-R9-4). Absent on paths that do not count it. */
+  sla_tracked?: number
 }
 
 export interface WorkloadRow {
@@ -532,6 +538,22 @@ export interface SourceIdMeta {
   item_id: string
   state: string | null
   sla_status: 'ok' | 'warning' | 'breached' | null
+  /** See QueueItem.sla_basis. */
+  sla_basis?: 'due_date'
+}
+
+/**
+ * Whether a row counts toward `sla_tracked` (army 9 review L10): a row an SLA rule
+ * applies to always does; a task whose "SLA" is only its due date does once it is due
+ * soon or past due. Otherwise every dated task kept "0 Warning / 0 Breached" on a
+ * worklist (IR, Warehouse Submission) whose records carry no SLA at all.
+ */
+export function countsAsSlaTracked(r: {
+  sla_status: 'ok' | 'warning' | 'breached' | null
+  sla_basis?: 'due_date'
+}): boolean {
+  if (r.sla_status == null) return false
+  return r.sla_basis !== 'due_date' || r.sla_status !== 'ok'
 }
 
 export interface SourceResult {
@@ -558,6 +580,7 @@ export function computeStatsFromIdMeta(
   let total = 0
   let sla_warning = 0
   let sla_breached = 0
+  let sla_tracked = 0
   for (const batch of metaBatches) {
     for (const m of batch) {
       const key = `${m.collection}:${m.item_id}`
@@ -566,6 +589,7 @@ export function computeStatsFromIdMeta(
       total++
       const stateKey = m.state ?? 'none'
       by_state[stateKey] = (by_state[stateKey] ?? 0) + 1
+      if (countsAsSlaTracked(m)) sla_tracked++
       if (m.sla_status === 'warning') sla_warning++
       if (m.sla_status === 'breached') sla_breached++
     }
@@ -576,7 +600,7 @@ export function computeStatsFromIdMeta(
     if (isUnowned(item)) unowned++
     if (item.at_risk) at_risk++
   }
-  return { total, by_state, unowned, sla_warning, sla_breached, at_risk }
+  return { total, by_state, unowned, sla_warning, sla_breached, at_risk, sla_tracked }
 }
 
 export function applySanityCeiling(
@@ -1194,11 +1218,13 @@ export function computeStats(items: QueueItem[]): QueueStats {
   let sla_warning = 0
   let sla_breached = 0
   let at_risk = 0
+  let sla_tracked = 0
   const aging = { d1: 0, d3: 0, d7: 0, over: 0 }
   for (const item of items) {
     const key = item.state ?? 'none'
     by_state[key] = (by_state[key] ?? 0) + 1
     if (isUnowned(item)) unowned++
+    if (countsAsSlaTracked(item)) sla_tracked++
     if (item.sla_status === 'warning') sla_warning++
     if (item.sla_status === 'breached') sla_breached++
     if (item.at_risk) at_risk++
@@ -1210,7 +1236,16 @@ export function computeStats(items: QueueItem[]): QueueStats {
       else aging.over++
     }
   }
-  return { total: items.length, by_state, unowned, sla_warning, sla_breached, at_risk, aging }
+  return {
+    total: items.length,
+    by_state,
+    unowned,
+    sla_warning,
+    sla_breached,
+    at_risk,
+    aging,
+    sla_tracked
+  }
 }
 
 const UNASSIGNED_KEY = '__unassigned__'
@@ -3062,7 +3097,8 @@ export async function resolveTasksSource(
     collection: 'tasks',
     item_id: String(r.id),
     state: null,
-    sla_status: slaOf(r.due_date)
+    sla_status: slaOf(r.due_date),
+    ...(r.due_date ? { sla_basis: 'due_date' as const } : {})
   }))
   const scoped = truncated ? rows.slice(0, ceiling) : rows
 
@@ -3087,6 +3123,7 @@ export async function resolveTasksSource(
         ]
       : [],
     sla_status: slaOf(r.due_date),
+    ...(r.due_date ? { sla_basis: 'due_date' as const } : {}),
     at_risk: r.priority === 'urgent',
     at_risk_color: r.priority === 'urgent' ? 'red' : null,
     at_risk_rule: r.priority === 'urgent' ? { id: 0, name: 'Urgent task' } : null,

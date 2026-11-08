@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SignalRow } from '../../../services/integration-signals.js'
 import {
+  ageWords,
   failureStreak,
   formatInboundCaller,
   isAuthFailure,
@@ -74,5 +75,15 @@ describe('uniqueByKey', () => {
 
   it('handles an empty list', () => {
     expect(uniqueByKey([])).toEqual([])
+  })
+})
+
+// Army 9 b14: "Invoices: no successful run in 12334 h".
+describe('ageWords', () => {
+  it('reads hours, days, months and years', () => {
+    expect(ageWords(5.7)).toBe('5 h')
+    expect(ageWords(48)).toBe('2 days')
+    expect(ageWords(12334)).toBe('16 months')
+    expect(ageWords(24 * 800)).toBe('2 years')
   })
 })

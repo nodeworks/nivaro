@@ -266,6 +266,34 @@ function parseRules(raw: unknown): ValidationRule[] {
  * ORIGINAL request carried — machine-derived values (field rules, computed
  * fields, autofill) are never the caller's fault and must not 400 the write.
  */
+const WHOLE_NUMBER_TYPES = new Set([
+  'integer',
+  'biginteger',
+  'bigint',
+  'int',
+  'smallint',
+  'tinyint'
+])
+
+/** "Quantity must be a whole number" for a fractional value on an integer
+ *  field; null for anything else (empty, text, other types). */
+export function wholeNumberError(
+  f: { field: string; type?: string | null; label?: string | null },
+  value: unknown
+): string | null {
+  if (!WHOLE_NUMBER_TYPES.has(String(f.type ?? '').toLowerCase())) return null
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean')
+    return null
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const n = typeof value === 'number' ? value : Number(value.trim())
+  if (!Number.isFinite(n) || Number.isInteger(n)) return null
+  // Float noise from arithmetic (2.9999999999999996) is a whole number.
+  if (Math.abs(n - Math.round(n)) < 1e-9) return null
+  const plain = f.field.replace(/_/g, ' ')
+  const label = f.label || plain.charAt(0).toUpperCase() + plain.slice(1)
+  return `${label} must be a whole number (${n} was sent)`
+}
+
 export async function enforceValidationRules(
   collection: string,
   payload: Record<string, unknown>,
@@ -277,7 +305,12 @@ export async function enforceValidationRules(
 ): Promise<void> {
   if (collection.startsWith('nivaro_')) return
 
-  let fields: Array<{ field: string; validation_rules?: unknown; label?: string | null }>
+  let fields: Array<{
+    field: string
+    type?: string | null
+    validation_rules?: unknown
+    label?: string | null
+  }>
   try {
     fields = (await getFields(collection)) as typeof fields
   } catch {
@@ -286,6 +319,18 @@ export async function enforceValidationRules(
 
   const record = stored ? { ...stored, ...payload } : payload
   for (const f of fields) {
+    // A whole-number column never takes a fraction: SQL Server would store
+    // 2.5 as 2 while a write-computed total kept 2.5 × price (army 9 b02,
+    // BOM upload on IR 37827). Refused, never truncated — caller-sent only.
+    if (callerFields.has(f.field)) {
+      const error = wholeNumberError(f, payload[f.field])
+      if (error) throw new FieldValidationError(error, f.field, 'integer')
+      const v = payload[f.field]
+      if (typeof v === 'number' && !Number.isInteger(v) && Number.isFinite(v)) {
+        if (WHOLE_NUMBER_TYPES.has(String(f.type ?? '').toLowerCase()))
+          payload[f.field] = Math.round(v)
+      }
+    }
     const rules = parseRules(f.validation_rules)
     if (rules.length === 0) continue
     const label = f.field

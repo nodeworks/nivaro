@@ -53,6 +53,39 @@ export function healthFlips(
   return out
 }
 
+/** " — SE26INV-37443, CR26-81433": the records a reader opens first, by the
+ *  name people know them by — never `inventory_request #37826
+ *  (ir.order_submit)` (army9 b13: no internal ids in what people read). A
+ *  record with no label is left out; none at all → no tail. */
+export function incidentExampleTail(
+  examples: Array<{ collection: string; item: string }>,
+  labels: Record<string, string>
+): string {
+  const named = [
+    ...new Set(
+      examples
+        .map((e) => labels[`${e.collection}:${e.item}`]?.trim())
+        // a bare number is an id, not a name
+        .filter((l): l is string => !!l && !/^\d+$/.test(l))
+    )
+  ]
+  return named.length ? ` — ${named.join(', ')}` : ''
+}
+
+async function exampleTail(examples: Array<{ collection: string; item: string }>): Promise<string> {
+  try {
+    const { getLabels } = await import('./queues.js')
+    const by = new Map<string, Set<string>>()
+    for (const e of examples) {
+      if (!by.has(e.collection)) by.set(e.collection, new Set())
+      by.get(e.collection)?.add(String(e.item))
+    }
+    return incidentExampleTail(examples, await getLabels(by))
+  } catch {
+    return ''
+  }
+}
+
 /** Sample health, compare with the pre-sweep sample, and write the edges. */
 export async function recordIncidentFlips(before: ApiHealth[]): Promise<{ written: number }> {
   try {
@@ -71,9 +104,7 @@ export async function recordIncidentFlips(before: ApiHealth[]): Promise<{ writte
         kind: string
       }>
       const tail =
-        f.direction === 'degraded' && examples.length > 0
-          ? ` — ${examples.map((e) => `${e.collection} #${e.item} (${e.kind})`).join(', ')}`
-          : ''
+        f.direction === 'degraded' && examples.length > 0 ? await exampleTail(examples) : ''
       await logActivity({
         action: f.direction === 'recovered' ? 'integration-recovered' : 'integration-degraded',
         user: null,

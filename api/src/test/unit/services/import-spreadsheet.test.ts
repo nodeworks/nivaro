@@ -50,6 +50,27 @@ describe('readSpreadsheet', () => {
     expect(rows).toEqual([{ Vendor: 'Acme', 'Line Number': 1 }])
   })
 
+  it('reads a csv as the template sheet whatever sheet_match says (army 9 b02)', () => {
+    const buf = Buffer.from('cifa,quantity,price\n301092,5,\n100340,2,0.07\n', 'utf8')
+    const { rows, issues } = readSpreadsheet(buf, 'bom.csv', {
+      ...CONFIG,
+      sheet_match: 'EFP Import'
+    })
+    expect(issues).toEqual([])
+    expect(rows).toEqual([
+      { cifa: 301092, quantity: 5 },
+      { cifa: 100340, quantity: 2, price: 0.07 }
+    ])
+  })
+
+  it('a workbook without the sheet says how to fix it', () => {
+    const buf = xlsxBuffer({ Sheet1: [{ A: 1 }] })
+    const { issues } = readSpreadsheet(buf, 'bom.xlsx', { ...CONFIG, sheet_match: 'EFP Import' })
+    expect(issues[0].message).toBe(
+      'This workbook has no sheet named "EFP Import". Put the rows on a sheet with that name, or upload them as a .csv file.'
+    )
+  })
+
   it('rejects a disallowed extension', () => {
     const { issues } = readSpreadsheet(Buffer.from(''), 'bid.pdf', CONFIG)
     expect(issues[0].severity).toBe('error')

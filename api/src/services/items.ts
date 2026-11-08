@@ -2036,7 +2036,8 @@ async function withoutUnbuiltAliases(
  */
 export async function assertFieldPathsExist(
   collection: string,
-  fields: string[] | undefined
+  fields: string[] | undefined,
+  readableFields?: (collection: string) => Promise<string[] | null>
 ): Promise<void> {
   if (!Array.isArray(fields)) return
   for (const f of fields) {
@@ -2046,6 +2047,18 @@ export async function assertFieldPathsExist(
     for (let i = 0; i < segs.length - 1; i++) {
       const seg = segs[i]
       if (!seg || seg.includes('*') || seg.startsWith('$')) break
+      // A name outside the caller's field list is dropped by the projection
+      // whether it exists or not: judging it here answered 400 for a made-up
+      // name and 200 for a hidden real one — a schema oracle (army9 b10).
+      if (readableFields) {
+        const allowed = await readableFields(current)
+        if (
+          allowed !== null &&
+          !allowed.includes('*') &&
+          !allowed.some((a) => a.toLowerCase() === seg.toLowerCase())
+        )
+          break
+      }
       const rels = await getRelsForCollection(current)
       const m2o = rels.find(
         (r) => r.many_collection === current && r.many_field === seg && r.one_collection
@@ -4886,7 +4899,13 @@ export async function readItems(
   noteReadShape(collection, filter, sort, conditions, fields)
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
-  await assertFieldPathsExist(collection, fields)
+  await assertFieldPathsExist(collection, fields, (c) =>
+    c === collection
+      ? Promise.resolve(allowedFields)
+      : user
+        ? getAllowedFields(user, 'read', c)
+        : Promise.resolve(null)
+  )
   const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
     collection,
     parseFieldExpansion(fields)
@@ -5736,7 +5755,13 @@ export async function readOne(
   }
 
   const baseFields = allowedFields ?? ['*']
-  await assertFieldPathsExist(collection, fields)
+  await assertFieldPathsExist(collection, fields, (c) =>
+    c === collection
+      ? Promise.resolve(allowedFields)
+      : user
+        ? getAllowedFields(user, 'read', c)
+        : Promise.resolve(null)
+  )
   const { direct: directFields0, nested: nestedFieldMap } = await withoutUnbuiltAliases(
     collection,
     parseFieldExpansion(fields ?? baseFields)

@@ -6,7 +6,8 @@ import {
   currentRuleValues,
   nextMetricCatchUp,
   overdueMetricCheckJobs,
-  resetCurrentRuleValues
+  resetCurrentRuleValues,
+  subscriberReading
 } from '../../../services/metric-alerts.js'
 
 const viewer = { user: { id: 'u-virginia' } as never, isAdmin: false }
@@ -196,5 +197,50 @@ describe('nextMetricCatchUp', () => {
         new Map([[daily, '2026-11-07T11:35:00Z']])
       )
     ).toEqual([])
+  })
+})
+
+// Army 9 b16: subscriber notices carried the all-zones fire value (636) to a person
+// whose zones hold 617 — each subscriber is told their own figure.
+describe('subscriberReading', () => {
+  const rule = { metric_source: source, filters: '{"divisions":["Zone 1"]}', operator: 'gte' }
+  const loadUser = async (id: string) => ({ id, role: 'r-approver' }) as never
+  const isAdmin = async () => false
+
+  it('reads the metric AS the subscriber with the rule filters', async () => {
+    const resolve = vi.fn(async () => 617)
+    const out = await subscriberReading(rule, 'u-virginia', 200, {
+      loadUser,
+      isAdmin,
+      resolve: resolve as never
+    })
+    expect(out).toEqual({ notify: true, value: 617 })
+    expect(resolve).toHaveBeenCalledWith(
+      { type: 'custom_query', slug: 'efp-alert-invoices-past-due' },
+      { divisions: ['Zone 1'] },
+      { user: { id: 'u-virginia', role: 'r-approver' }, isAdmin: false }
+    )
+  })
+
+  it('does not alert a person whose own figure is under the threshold', async () => {
+    const out = await subscriberReading(rule, 'u-1', 200, {
+      loadUser,
+      isAdmin,
+      resolve: (async () => 150) as never
+    })
+    expect(out).toEqual({ notify: false, value: 150 })
+  })
+
+  it('an unreadable figure alerts with no number; an unknown person is not alerted', async () => {
+    expect(
+      await subscriberReading(rule, 'u-1', 200, {
+        loadUser,
+        isAdmin,
+        resolve: (async () => null) as never
+      })
+    ).toEqual({ notify: true, value: null })
+    expect(
+      await subscriberReading(rule, 'gone', 200, { loadUser: async () => undefined, isAdmin })
+    ).toEqual({ notify: false, value: null })
   })
 })

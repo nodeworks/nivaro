@@ -3,9 +3,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { singular as singularTitle } from '../services/access-words.js'
 import { logActivity } from '../services/activity.js'
+import { getCollection } from '../services/collections.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
+import { collectionTitle } from '../services/record-label-fallback.js'
 import { DEFAULT_TARGETS, loadSupportAnalytics } from '../services/support-analytics.js'
 import {
   canSeeTicket,
@@ -27,7 +30,7 @@ import {
   viewerOf
 } from '../services/support-tickets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
-import { resolveFriendlyId } from '../services/workflow-transitions.js'
+import { resolveFriendlyId, resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 /**
  * /api/support — support tickets (#999) on the Tasks system.
@@ -91,19 +94,35 @@ function ticketQuery() {
     )
 }
 
-async function recordLabels(rows: TicketRow[]): Promise<Map<string, string>> {
+/** Each linked record's name, one batched lookup per collection: its readable id, else its
+ *  display label — a purchase order reads "2971054", never its row id "134946" (army 9 b16).
+ *  A record nothing names reads as its collection ("Purchase Order"), never the row id. */
+export async function recordLabels(rows: TicketRow[]): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  const pairs = new Map<string, { c: string; i: string }>()
+  const byCollection = new Map<string, Set<string>>()
   for (const r of rows) {
-    if (r.collection && r.item)
-      pairs.set(`${r.collection}:${r.item}`, { c: r.collection, i: r.item })
+    if (!r.collection || !r.item) continue
+    const set = byCollection.get(r.collection) ?? new Set<string>()
+    set.add(String(r.item))
+    byCollection.set(r.collection, set)
   }
   await Promise.all(
-    [...pairs.entries()].map(async ([k, { c, i }]) => {
-      out.set(k, await resolveFriendlyId(c, i).catch(() => i))
+    [...byCollection.entries()].map(async ([c, ids]) => {
+      // One failed batch must not rename the whole collection (Fable L9): each id is then
+      // asked on its own.
+      const batch = await resolveFriendlyIds(c, [...ids]).catch(() => null)
+      for (const id of ids) {
+        const name = batch ? batch.get(id) : await resolveFriendlyId(c, id).catch(() => id)
+        out.set(`${c}:${id}`, name && name !== id ? name : await unnamedRecord(c))
+      }
     })
   )
   return out
+}
+
+async function unnamedRecord(collection: string): Promise<string> {
+  const col = await getCollection(collection).catch(() => null)
+  return singularTitle(collectionTitle(collection, col?.display_name))
 }
 
 async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>) {
@@ -129,8 +148,7 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
     priority: r.priority,
     collection: r.collection,
     item: r.item,
-    record_label:
-      r.collection && r.item ? (labels.get(`${r.collection}:${r.item}`) ?? r.item) : null,
+    record_label: r.collection && r.item ? (labels.get(`${r.collection}:${r.item}`) ?? null) : null,
     category_id: r.category_id,
     category_name: (r.category_name as string | null) ?? null,
     team_id: r.team_id,
