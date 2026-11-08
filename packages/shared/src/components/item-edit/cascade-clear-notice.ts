@@ -101,3 +101,23 @@ export function useCascadeClearNotices(opts: {
     }, SETTLE_MS)
   }, [])
 }
+
+/**
+ * A linked (M2M) field the PERSON changed (not a cross-record fill, not a
+ * staging the form did itself) is recorded like a typed field: in the set the
+ * cascades read as "fields the person changed" (dirtyFields) and with the
+ * newest edit number (the notice names it). Returns whether it was recorded.
+ * army11 browser check: Zone — an M2M on workflows — never counted, so a
+ * Region outside the new Zone stayed (flagged, not cleared) and the notice
+ * named Project Type.
+ */
+export function notePersonLinkEdit(
+  state: { touched: Set<string>; seq: Map<string, number>; next: () => number },
+  field: string,
+  by: { crossFill: number; notPerson: number }
+): boolean {
+  if (by.crossFill > 0 || by.notPerson > 0) return false
+  state.touched.add(field)
+  state.seq.set(field, state.next())
+  return true
+}

@@ -182,7 +182,11 @@ import {
 } from './item-edit/ChangeReasonDialog'
 import { type ChangeItem, ChangesTray } from './item-edit/ChangesTray'
 import { CloneDialog } from './item-edit/CloneDialog'
-import { CascadeClearNoticeContext, useCascadeClearNotices } from './item-edit/cascade-clear-notice'
+import {
+  CascadeClearNoticeContext,
+  notePersonLinkEdit,
+  useCascadeClearNotices
+} from './item-edit/cascade-clear-notice'
 import { columnLengthError } from './item-edit/column-length'
 import { configUpdateReaction } from './item-edit/config-update'
 import { DraftRecoveryBanner } from './item-edit/DraftRecoveryBanner'
@@ -2958,6 +2962,21 @@ function ItemEditFormView({
   // field whose value filled it and the value it wrote. Undoing a personal default walks
   // this to take back what that default brought in (only where the value is unchanged).
   const fillSourceRef = useRef<Map<string, { source: string; value: unknown }>>(new Map())
+  // A linked (M2M) field the PERSON changed counts like a typed field: the
+  // cascades below it judge their children (`clear_on_unavailable` reads
+  // dirtyFields = userTouchedRef) and the clear notice names it (fieldEditSeqRef).
+  // army11 browser check: Zone (an M2M on workflows) changed 1 → 2 left Region
+  // BLT flagged but not cleared, and the notice named Project Type instead.
+  const markLinkEdit = (field: string) =>
+    notePersonLinkEdit(
+      {
+        touched: userTouchedRef.current,
+        seq: fieldEditSeqRef.current,
+        next: () => ++ruleSeqRef.current
+      },
+      field,
+      { crossFill: crossFillInFlightRef.current, notPerson: notPersonStageRef.current }
+    )
   const m2mStagingCtx = useMemo<M2MStagingCtx>(
     () => ({
       getStagedLinks: (k) => m2mLinks.get(k) ?? [],
@@ -2978,6 +2997,7 @@ function ItemEditFormView({
           const field = stagingKeyToFieldRef.current.get(k)
           if (field) {
             if (notPersonStageRef.current === 0) {
+              markLinkEdit(field)
               // The person's own pick: no longer prefill, so what it derives is their work.
               // It is no longer DERIVED either (M9, army 6): a Zone the Region default filled
               // and the person then changed narrows the Region list again.
@@ -2991,14 +3011,19 @@ function ItemEditFormView({
           }
         }
       },
-      stageUnlink: (k, jId) =>
+      stageUnlink: (k, jId) => {
         setM2mUnlinks((prev) => {
           const next = new Map(prev)
           const s = new Set(next.get(k))
           s.add(jId)
           next.set(k, s)
           return next
-        }),
+        })
+        if (crossFillInFlightRef.current === 0 && notPersonStageRef.current === 0) {
+          const field = stagingKeyToFieldRef.current.get(k)
+          if (field) markLinkEdit(field)
+        }
+      },
       unstageLink: (k, id) => {
         setM2mLinks((prev) => {
           const next = new Map(prev)
@@ -3011,6 +3036,7 @@ function ItemEditFormView({
         if (crossFillInFlightRef.current === 0 && notPersonStageRef.current === 0) {
           const field = stagingKeyToFieldRef.current.get(k)
           if (field) {
+            markLinkEdit(field)
             derivedOriginRef.current.delete(field)
             pdQuietRef.current.delete(field)
             pdQuietRuleLinksRef.current.delete(k)

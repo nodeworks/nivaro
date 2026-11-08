@@ -3,7 +3,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider, ParentDraftContext } from '../../context'
-import { cascadeClearText, cascadeRootParent, joinLabels } from './cascade-clear-notice'
+import {
+  cascadeClearText,
+  cascadeRootParent,
+  joinLabels,
+  notePersonLinkEdit
+} from './cascade-clear-notice'
 import { CascadeEffectController, type CascadeRule } from './helpers'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -94,5 +99,35 @@ describe('cascade clear notice', () => {
     ]
     const seq = (f: string) => ({ division: 9, funding_year: 2 })[f] ?? -1
     expect(cascadeRootParent(notes, seq)).toBe('division')
+  })
+})
+
+describe('a person-changed linked parent (army11 browser check: Zone 1 → 2 kept Region BLT)', () => {
+  const state = () => {
+    let n = 10
+    return { touched: new Set<string>(), seq: new Map<string, number>(), next: () => ++n }
+  }
+  it('a Zone pick (M2M) counts as the person changing Zone, so Region is judged', () => {
+    const s = state()
+    expect(notePersonLinkEdit(s, 'divisions', { crossFill: 0, notPerson: 0 })).toBe(true)
+    expect(s.touched.has('divisions')).toBe(true)
+    expect(s.seq.get('divisions')).toBe(11)
+  })
+  it('a link the form filled itself (cross-record default, import) is not the person', () => {
+    const s = state()
+    expect(notePersonLinkEdit(s, 'divisions', { crossFill: 1, notPerson: 0 })).toBe(false)
+    expect(notePersonLinkEdit(s, 'divisions', { crossFill: 0, notPerson: 1 })).toBe(false)
+    expect(s.touched.size).toBe(0)
+  })
+  it('the notice names Zone, not an older Project Type pick', () => {
+    const s = state()
+    notePersonLinkEdit(s, 'project_type', { crossFill: 0, notPerson: 0 }) // earlier pick
+    notePersonLinkEdit(s, 'divisions', { crossFill: 0, notPerson: 0 }) // the Zone change
+    notePersonLinkEdit(s, 'regions', { crossFill: 0, notPerson: 0 }) // the clear itself
+    const notes = [
+      { field: 'regions', label: 'Region', parents: ['divisions', 'project'] },
+      { field: 'project', label: 'Project', parents: ['divisions', 'regions', 'project_type'] }
+    ]
+    expect(cascadeRootParent(notes, (f) => s.seq.get(f) ?? -1)).toBe('divisions')
   })
 })
