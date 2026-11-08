@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { splitDisplayName } from '../auth/oidc.js'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import {
@@ -8,7 +9,7 @@ import {
   fetchDirectoryPhotos,
   findDirectoryUsers
 } from './graph-directory.js'
-import { splitDisplayName } from '../auth/oidc.js'
+import { noteUsersDeactivated } from './inactive-people-notice.js'
 import { isMachineAccount } from './machine-accounts.js'
 import { notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
@@ -357,7 +358,18 @@ export async function checkDirectory(
       .catch(() => {})
   }
 
-  const departed = summary.changes.filter((c) => c.status !== 'active')
+  // Everyone this run suspended: ONE notice per run to the administrators, with how much work
+  // they still hold (services/inactive-people-notice.ts).
+  const suspendedIds = summary.changes.filter((c) => c.suspended).map((c) => c.id)
+  if (suspendedIds.length > 0)
+    noteUsersDeactivated(suspendedIds, {
+      reason: 'directory_sync',
+      actor: opts.actorId ?? null,
+      ...(app ? { app } : {})
+    })
+
+  // Departed but NOT suspended (the switch is off): the older "review them" notice.
+  const departed = suspend ? [] : summary.changes.filter((c) => c.status !== 'active')
   if (opts.notifyAdmins && app && departed.length > 0) {
     const admins = (await db('nivaro_users as u')
       .join('nivaro_roles as r', 'r.id', 'u.role')

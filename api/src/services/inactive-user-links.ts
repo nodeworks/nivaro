@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { tenantState } from './ai-tenant-state.js'
 import { selectInChunks } from './db-batch.js'
 import { getLabels } from './queues.js'
 
@@ -150,13 +151,30 @@ const BUILTIN: LinkSource[] = [
     scope: 'open',
     kind: 'builtin',
     reassignable: true
+  },
+  {
+    key: 'builtin:approvals',
+    collection: 'nivaro_approval_instances',
+    collection_label: 'Pending approvals',
+    field: 'approver',
+    label: 'Approver on a pending approval',
+    role: 'assignment',
+    scope: 'open',
+    kind: 'builtin',
+    // The approver is a step of the chain, not of the one request: change the chain.
+    reassignable: false
   }
 ]
 
-let sourceCache: { at: number; sources: LinkSource[] } | null = null
+// Per tenant: the sources are discovered from each tenant's own schema.
+const sourceCacheState = tenantState<{ at: number; sources: LinkSource[] | null }>(() => ({
+  at: 0,
+  sources: null
+}))
 
 export async function discoverLinkSources(): Promise<LinkSource[]> {
-  if (sourceCache && Date.now() - sourceCache.at < 60_000) return sourceCache.sources
+  const sourceCache = sourceCacheState()
+  if (sourceCache.sources && Date.now() - sourceCache.at < 60_000) return sourceCache.sources
 
   const [fkCols, collections, bindings, relations, fields] = await Promise.all([
     db.raw(`
@@ -302,7 +320,8 @@ export async function discoverLinkSources(): Promise<LinkSource[]> {
   }
 
   out.push(...BUILTIN)
-  sourceCache = { at: Date.now(), sources: out }
+  sourceCache.at = Date.now()
+  sourceCache.sources = out
   return out
 }
 
@@ -353,6 +372,13 @@ function sourceSql(s: LinkSource): { from: string; where: string; idExpr: string
       idExpr: 't.id'
     }
   }
+  if (s.key === 'builtin:approvals') {
+    return {
+      from: 'nivaro_approval_instances t JOIN nivaro_approval_chain_steps st ON st.chain = t.chain AND st.step_order = t.current_step JOIN nivaro_users u ON u.id = st.approver',
+      where: `t.status = 'pending'`,
+      idExpr: 't.id'
+    }
+  }
   if (s.key === 'builtin:tasks') {
     return {
       from: 'nivaro_tasks t JOIN nivaro_users u ON u.id = t.assignee',
@@ -377,19 +403,21 @@ async function pooled<T, R>(items: T[], width: number, fn: (item: T) => Promise<
   return out
 }
 
-let scanCache: {
-  at: number
-  value: { sources: LinkSource[]; users: InactiveUserLinks[]; failed: string[] }
-} | null = null
+type InactiveScan = { sources: LinkSource[]; users: InactiveUserLinks[]; failed: string[] }
+const scanCacheState = tenantState<{ at: number; value: InactiveScan | null }>(() => ({
+  at: 0,
+  value: null
+}))
 
 onOwnersChanged(() => bustInactiveLinkCache())
 
 export function bustInactiveLinkCache() {
-  scanCache = null
+  scanCacheState().value = null
 }
 
 export async function scanInactiveUserLinks(opts: { fresh?: boolean } = {}) {
-  if (!opts.fresh && scanCache && Date.now() - scanCache.at < 120_000) return scanCache.value
+  const scanCache = scanCacheState()
+  if (!opts.fresh && scanCache.value && Date.now() - scanCache.at < 120_000) return scanCache.value
   const sources = await discoverLinkSources()
   const failed: string[] = []
   const perSource = await pooled(sources, 6, async (s) => {
@@ -448,7 +476,8 @@ export async function scanInactiveUserLinks(opts: { fresh?: boolean } = {}) {
     users,
     failed
   }
-  scanCache = { at: Date.now(), value }
+  scanCache.at = Date.now()
+  scanCache.value = value
   return value
 }
 
@@ -467,6 +496,25 @@ export async function listInactiveUserRecords(userId: string, sourceKey: string,
     labels = await getLabels(new Map([[source.collection, new Set(ids)]])).catch(() => ({}))
   } else if (ids.length) {
     const table = source.collection
+    if (table === 'nivaro_approval_instances') {
+      const inst = (await db('nivaro_approval_instances as i')
+        .leftJoin('nivaro_approval_chains as c', 'c.id', 'i.chain')
+        .whereIn('i.id', ids)
+        .select('i.id', 'i.collection', 'i.item', 'c.name as chain')) as Array<{
+        id: string
+        collection: string
+        item: string
+        chain: string | null
+      }>
+      return {
+        source,
+        records: inst.map((i) => ({
+          id: String(i.item),
+          collection: i.collection,
+          label: i.chain ? `${i.chain} approval` : `${i.collection} ${i.item}`
+        }))
+      }
+    }
     const col = table === 'nivaro_tasks' ? 'title' : 'name'
     if (table === 'nivaro_pipeline_instance_owners') {
       const inst = (await db('nivaro_workflow_instances')

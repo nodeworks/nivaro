@@ -1,0 +1,973 @@
+{
+ "adminRoleDefault": {
+  "version": 1,
+  "items": [
+   {
+    "id": "a-fig",
+    "kind": "figures",
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 1
+   },
+   {
+    "id": "a-waiting",
+    "kind": "widget",
+    "x": 0,
+    "y": 1,
+    "w": 8,
+    "h": 7,
+    "key": "approver-waiting"
+   },
+   {
+    "id": "a-worklists",
+    "kind": "widget",
+    "x": 8,
+    "y": 1,
+    "w": 4,
+    "h": 3,
+    "key": "approver-worklists"
+   },
+   {
+    "id": "a-inbox",
+    "kind": "widget",
+    "x": 8,
+    "y": 4,
+    "w": 4,
+    "h": 4,
+    "key": "inbox"
+   },
+   {
+    "id": "a-brief",
+    "kind": "widget",
+    "x": 0,
+    "y": 8,
+    "w": 6,
+    "h": 6,
+    "key": "ai-summary"
+   },
+   {
+    "id": "a-pressure",
+    "kind": "widget",
+    "x": 6,
+    "y": 8,
+    "w": 6,
+    "h": 3,
+    "key": "admin-pressure"
+   },
+   {
+    "id": "a-people",
+    "kind": "widget",
+    "x": 6,
+    "y": 11,
+    "w": 6,
+    "h": 3,
+    "key": "people-attention"
+   },
+   {
+    "id": "a-access",
+    "kind": "widget",
+    "x": 0,
+    "y": 14,
+    "w": 12,
+    "h": 2,
+    "key": "admin-access-requests"
+   },
+   {
+    "id": "a-portal",
+    "kind": "section",
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 5,
+    "title": "Across the portal",
+    "children": [
+     {
+      "id": "a-queue",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "queue-items"
+     },
+     {
+      "id": "a-zones",
+      "kind": "widget",
+      "x": 6,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "zone-pulse"
+     }
+    ]
+   },
+   {
+    "id": "a-health",
+    "kind": "section",
+    "x": 0,
+    "y": 21,
+    "w": 12,
+    "h": 3,
+    "title": "Data health",
+    "children": [
+     {
+      "id": "a-integrity",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "integrity"
+     },
+     {
+      "id": "a-alerts",
+      "kind": "widget",
+      "x": 4,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "alerts-firing"
+     },
+     {
+      "id": "a-coverage",
+      "kind": "widget",
+      "x": 8,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "owner-coverage"
+     }
+    ]
+   },
+   {
+    "id": "a-system",
+    "kind": "section",
+    "x": 0,
+    "y": 24,
+    "w": 12,
+    "h": 13,
+    "title": "Budget, load and system",
+    "children": [
+     {
+      "id": "a-budget",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 2,
+      "key": "budget-headline"
+     },
+     {
+      "id": "a-owners",
+      "kind": "widget",
+      "x": 0,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "owner-load"
+     },
+     {
+      "id": "a-ready",
+      "kind": "widget",
+      "x": 6,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "readiness"
+     },
+     {
+      "id": "a-stock",
+      "kind": "widget",
+      "x": 0,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "stock-health"
+     },
+     {
+      "id": "a-ai",
+      "kind": "widget",
+      "x": 4,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "ai-usage"
+     },
+     {
+      "id": "a-vitals",
+      "kind": "widget",
+      "x": 8,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "vitals"
+     },
+     {
+      "id": "a-imports",
+      "kind": "widget",
+      "x": 0,
+      "y": 9,
+      "w": 12,
+      "h": 3,
+      "key": "import-runs"
+     }
+    ]
+   }
+  ]
+ },
+ "custom1": {
+  "version": 1,
+  "items": [
+   {
+    "id": "a-waiting",
+    "kind": "widget",
+    "x": 0,
+    "y": 4,
+    "w": 8,
+    "h": 7,
+    "key": "approver-waiting"
+   },
+   {
+    "id": "a-worklists",
+    "kind": "widget",
+    "x": 0,
+    "y": 0,
+    "w": 8,
+    "h": 4,
+    "key": "approver-worklists"
+   },
+   {
+    "id": "a-inbox",
+    "kind": "widget",
+    "x": 8,
+    "y": 0,
+    "w": 4,
+    "h": 4,
+    "key": "inbox"
+   },
+   {
+    "id": "a-access",
+    "kind": "widget",
+    "x": 0,
+    "y": 11,
+    "w": 12,
+    "h": 2,
+    "key": "admin-access-requests"
+   },
+   {
+    "id": "a-portal",
+    "kind": "section",
+    "x": 0,
+    "y": 13,
+    "w": 12,
+    "h": 5,
+    "title": "Across the portal",
+    "children": [
+     {
+      "id": "a-queue",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "queue-items"
+     },
+     {
+      "id": "a-zones",
+      "kind": "widget",
+      "x": 6,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "zone-pulse"
+     }
+    ]
+   },
+   {
+    "id": "a-health",
+    "kind": "section",
+    "x": 0,
+    "y": 18,
+    "w": 12,
+    "h": 3,
+    "title": "Data health",
+    "children": [
+     {
+      "id": "a-integrity",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "integrity"
+     },
+     {
+      "id": "a-alerts",
+      "kind": "widget",
+      "x": 4,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "alerts-firing"
+     },
+     {
+      "id": "a-coverage",
+      "kind": "widget",
+      "x": 8,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "owner-coverage"
+     }
+    ]
+   },
+   {
+    "id": "a-system",
+    "kind": "section",
+    "x": 0,
+    "y": 21,
+    "w": 12,
+    "h": 13,
+    "title": "Budget, load and system",
+    "children": [
+     {
+      "id": "a-budget",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 2,
+      "key": "budget-headline"
+     },
+     {
+      "id": "a-owners",
+      "kind": "widget",
+      "x": 0,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "owner-load"
+     },
+     {
+      "id": "a-ready",
+      "kind": "widget",
+      "x": 6,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "readiness"
+     },
+     {
+      "id": "a-stock",
+      "kind": "widget",
+      "x": 0,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "stock-health"
+     },
+     {
+      "id": "a-ai",
+      "kind": "widget",
+      "x": 4,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "ai-usage"
+     },
+     {
+      "id": "a-vitals",
+      "kind": "widget",
+      "x": 8,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "vitals"
+     },
+     {
+      "id": "a-imports",
+      "kind": "widget",
+      "x": 0,
+      "y": 9,
+      "w": 12,
+      "h": 3,
+      "key": "import-runs"
+     }
+    ]
+   }
+  ]
+ },
+ "custom2": {
+  "version": 1,
+  "items": [
+   {
+    "id": "a-fig",
+    "kind": "figures",
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 1
+   },
+   {
+    "id": "a-waiting",
+    "kind": "widget",
+    "x": 0,
+    "y": 1,
+    "w": 8,
+    "h": 7,
+    "key": "approver-waiting"
+   },
+   {
+    "id": "a-worklists",
+    "kind": "widget",
+    "x": 8,
+    "y": 5,
+    "w": 4,
+    "h": 3,
+    "key": "approver-worklists"
+   },
+   {
+    "id": "a-inbox",
+    "kind": "widget",
+    "x": 8,
+    "y": 1,
+    "w": 4,
+    "h": 4,
+    "key": "inbox"
+   },
+   {
+    "id": "a-brief",
+    "kind": "widget",
+    "x": 0,
+    "y": 8,
+    "w": 6,
+    "h": 6,
+    "key": "ai-summary"
+   },
+   {
+    "id": "a-pressure",
+    "kind": "widget",
+    "x": 6,
+    "y": 8,
+    "w": 6,
+    "h": 3,
+    "key": "admin-pressure"
+   },
+   {
+    "id": "a-people",
+    "kind": "widget",
+    "x": 6,
+    "y": 11,
+    "w": 6,
+    "h": 3,
+    "key": "people-attention"
+   },
+   {
+    "id": "a-access",
+    "kind": "widget",
+    "x": 0,
+    "y": 14,
+    "w": 12,
+    "h": 2,
+    "key": "admin-access-requests"
+   },
+   {
+    "id": "a-portal",
+    "kind": "section",
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 5,
+    "title": "Across the portal",
+    "children": [
+     {
+      "id": "a-queue",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "queue-items"
+     },
+     {
+      "id": "a-zones",
+      "kind": "widget",
+      "x": 6,
+      "y": 0,
+      "w": 6,
+      "h": 4,
+      "key": "zone-pulse"
+     }
+    ]
+   },
+   {
+    "id": "a-health",
+    "kind": "section",
+    "x": 0,
+    "y": 21,
+    "w": 12,
+    "h": 3,
+    "title": "Data health",
+    "children": [
+     {
+      "id": "a-integrity",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "integrity"
+     },
+     {
+      "id": "a-alerts",
+      "kind": "widget",
+      "x": 4,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "alerts-firing"
+     },
+     {
+      "id": "a-coverage",
+      "kind": "widget",
+      "x": 8,
+      "y": 0,
+      "w": 4,
+      "h": 2,
+      "key": "owner-coverage"
+     }
+    ]
+   },
+   {
+    "id": "a-system",
+    "kind": "section",
+    "x": 0,
+    "y": 24,
+    "w": 12,
+    "h": 13,
+    "title": "Budget, load and system",
+    "children": [
+     {
+      "id": "a-budget",
+      "kind": "widget",
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 2,
+      "key": "budget-headline"
+     },
+     {
+      "id": "a-owners",
+      "kind": "widget",
+      "x": 0,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "owner-load"
+     },
+     {
+      "id": "a-ready",
+      "kind": "widget",
+      "x": 6,
+      "y": 2,
+      "w": 6,
+      "h": 4,
+      "key": "readiness"
+     },
+     {
+      "id": "a-stock",
+      "kind": "widget",
+      "x": 0,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "stock-health"
+     },
+     {
+      "id": "a-ai",
+      "kind": "widget",
+      "x": 4,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "ai-usage"
+     },
+     {
+      "id": "a-vitals",
+      "kind": "widget",
+      "x": 8,
+      "y": 6,
+      "w": 4,
+      "h": 3,
+      "key": "vitals"
+     },
+     {
+      "id": "a-imports",
+      "kind": "widget",
+      "x": 0,
+      "y": 9,
+      "w": 12,
+      "h": 3,
+      "key": "import-runs"
+     }
+    ]
+   },
+   {
+    "id": "w-munaiz9wcl",
+    "kind": "widget",
+    "x": 0,
+    "y": 37,
+    "w": 6,
+    "h": 2,
+    "key": "since"
+   },
+   {
+    "id": "w-munaizyxcm",
+    "kind": "widget",
+    "x": 0,
+    "y": 39,
+    "w": 12,
+    "h": 1,
+    "key": "next-actions"
+   },
+   {
+    "id": "w-munajjoicn",
+    "kind": "widget",
+    "x": 0,
+    "y": 40,
+    "w": 3,
+    "h": 3,
+    "key": "ooo"
+   },
+   {
+    "id": "w-muoao8971",
+    "kind": "widget",
+    "x": 6,
+    "y": 37,
+    "w": 6,
+    "h": 2,
+    "key": "chat"
+   },
+   {
+    "id": "w-muoao8rq2",
+    "kind": "widget",
+    "x": 0,
+    "y": 43,
+    "w": 12,
+    "h": 7,
+    "key": "my-work"
+   },
+   {
+    "id": "w-muobcjzu1",
+    "kind": "widget",
+    "x": 3,
+    "y": 40,
+    "w": 6,
+    "h": 3,
+    "key": "tasks-due"
+   },
+   {
+    "id": "w-muobmgts1",
+    "kind": "widget",
+    "x": 0,
+    "y": 50,
+    "w": 6,
+    "h": 3,
+    "key": "tasks-requested"
+   },
+   {
+    "id": "w-muobmi7k2",
+    "kind": "widget",
+    "x": 6,
+    "y": 50,
+    "w": 4,
+    "h": 1,
+    "key": "integrations-chip"
+   },
+   {
+    "id": "w-muoe5g9s1",
+    "kind": "widget",
+    "x": 6,
+    "y": 51,
+    "w": 6,
+    "h": 3,
+    "key": "forecast-attention"
+   },
+   {
+    "id": "w-muoe5ggz2",
+    "kind": "widget",
+    "x": 0,
+    "y": 53,
+    "w": 6,
+    "h": 3,
+    "key": "spend-vs-pubd"
+   },
+   {
+    "id": "w-muoe5gq53",
+    "kind": "widget",
+    "x": 6,
+    "y": 54,
+    "w": 6,
+    "h": 3,
+    "key": "requests-by-project"
+   },
+   {
+    "id": "w-muoe5gzc4",
+    "kind": "widget",
+    "x": 0,
+    "y": 56,
+    "w": 6,
+    "h": 3,
+    "key": "my-irs-fulfilment"
+   },
+   {
+    "id": "w-muoe5ijo5",
+    "kind": "widget",
+    "x": 0,
+    "y": 59,
+    "w": 12,
+    "h": 2,
+    "key": "delegate-prompt"
+   },
+   {
+    "id": "w-muoe5iqg6",
+    "kind": "widget",
+    "x": 0,
+    "y": 61,
+    "w": 6,
+    "h": 3,
+    "key": "sent-back-by-me"
+   },
+   {
+    "id": "w-muoe5iyz7",
+    "kind": "widget",
+    "x": 6,
+    "y": 61,
+    "w": 6,
+    "h": 3,
+    "key": "covering"
+   },
+   {
+    "id": "w-muoe5j748",
+    "kind": "widget",
+    "x": 6,
+    "y": 57,
+    "w": 6,
+    "h": 2,
+    "key": "my-throughput"
+   },
+   {
+    "id": "w-muoe5jfg9",
+    "kind": "widget",
+    "x": 9,
+    "y": 40,
+    "w": 3,
+    "h": 3,
+    "key": "approval-load"
+   },
+   {
+    "id": "w-muoe5jssa",
+    "kind": "widget",
+    "x": 0,
+    "y": 64,
+    "w": 6,
+    "h": 3,
+    "key": "invoices-requestor"
+   },
+   {
+    "id": "w-muoe5k14b",
+    "kind": "widget",
+    "x": 6,
+    "y": 64,
+    "w": 6,
+    "h": 3,
+    "key": "invoices-delegated"
+   },
+   {
+    "id": "w-muoe5k91c",
+    "kind": "widget",
+    "x": 0,
+    "y": 67,
+    "w": 6,
+    "h": 2,
+    "key": "invoices-ageing"
+   },
+   {
+    "id": "w-muoe5krkd",
+    "kind": "widget",
+    "x": 6,
+    "y": 67,
+    "w": 6,
+    "h": 3,
+    "key": "invoices-manager"
+   },
+   {
+    "id": "w-muoe5kz2e",
+    "kind": "widget",
+    "x": 0,
+    "y": 70,
+    "w": 12,
+    "h": 4,
+    "key": "invoices-review"
+   },
+   {
+    "id": "w-muoe5l7ef",
+    "kind": "widget",
+    "x": 0,
+    "y": 74,
+    "w": 3,
+    "h": 3,
+    "key": "invoices-approved"
+   },
+   {
+    "id": "w-muoe5lzyg",
+    "kind": "widget",
+    "x": 3,
+    "y": 74,
+    "w": 3,
+    "h": 3,
+    "key": "invoices-approved-efp"
+   },
+   {
+    "id": "w-muoe5nr7h",
+    "kind": "widget",
+    "x": 6,
+    "y": 74,
+    "w": 3,
+    "h": 3,
+    "key": "throughput"
+   },
+   {
+    "id": "w-muoe5o5ii",
+    "kind": "widget",
+    "x": 9,
+    "y": 74,
+    "w": 3,
+    "h": 3,
+    "key": "watched"
+   },
+   {
+    "id": "w-muoe5oenj",
+    "kind": "widget",
+    "x": 0,
+    "y": 77,
+    "w": 3,
+    "h": 3,
+    "key": "deadlines"
+   },
+   {
+    "id": "w-muoe5on5k",
+    "kind": "widget",
+    "x": 3,
+    "y": 77,
+    "w": 3,
+    "h": 3,
+    "key": "pins"
+   },
+   {
+    "id": "w-muoe5ounl",
+    "kind": "widget",
+    "x": 6,
+    "y": 77,
+    "w": 3,
+    "h": 3,
+    "key": "recents"
+   },
+   {
+    "id": "s-muogpw7z1",
+    "kind": "section",
+    "x": 0,
+    "y": 81,
+    "w": 12,
+    "h": 2,
+    "title": "New section"
+   },
+   {
+    "id": "f-muogpwig2",
+    "kind": "figures",
+    "x": 0,
+    "y": 80,
+    "w": 12,
+    "h": 1
+   },
+   {
+    "id": "w-muzyvryn1",
+    "kind": "widget",
+    "x": 0,
+    "y": 83,
+    "w": 12,
+    "h": 4,
+    "key": "invoices-my-pos"
+   }
+  ]
+ },
+ "creatorDefault": {
+  "version": 1,
+  "items": [
+   {
+    "id": "w-munbk6mg4",
+    "kind": "widget",
+    "x": 0,
+    "y": 0,
+    "w": 6,
+    "h": 2,
+    "key": "since"
+   },
+   {
+    "id": "w-munbk6mg5",
+    "kind": "widget",
+    "x": 6,
+    "y": 0,
+    "w": 6,
+    "h": 3,
+    "key": "inbox"
+   },
+   {
+    "id": "w-munbk6mg6",
+    "kind": "widget",
+    "x": 0,
+    "y": 3,
+    "w": 12,
+    "h": 5,
+    "key": "creator-needs-you"
+   },
+   {
+    "id": "w-munbk6mge",
+    "kind": "widget",
+    "x": 0,
+    "y": 8,
+    "w": 6,
+    "h": 3,
+    "key": "tasks-due"
+   },
+   {
+    "id": "w-munbk6mgf",
+    "kind": "widget",
+    "x": 6,
+    "y": 8,
+    "w": 6,
+    "h": 3,
+    "key": "chat"
+   },
+   {
+    "id": "w-munbk6mgg",
+    "kind": "widget",
+    "x": 0,
+    "y": 11,
+    "w": 6,
+    "h": 3,
+    "key": "recents"
+   },
+   {
+    "id": "w-munbk6mgm",
+    "kind": "widget",
+    "x": 0,
+    "y": 14,
+    "w": 12,
+    "h": 4,
+    "key": "my-widgets"
+   }
+  ]
+ }
+}

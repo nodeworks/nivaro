@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { noteUsersDeactivated } from '../services/inactive-people-notice.js'
 
 /**
  * Offboarding / workload handoff (#1): everything a departing user HOLDS —
@@ -236,7 +237,10 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
         ...(b.suspend ? { status: 'suspended' } : {})
       })
       .catch(() => {})
-    if (b.suspend) result.suspended = 1
+    if (b.suspend) {
+      result.suspended = 1
+      noteUsersDeactivated([uid], { reason: 'offboarding', actor: req.user?.id, app })
+    }
 
     await logActivity({
       action: 'user-offboard',
@@ -358,6 +362,7 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       .where({ id: twin.id })
       .update({ status: 'suspended', delegate_id: null, is_out_of_office: false })
       .catch(() => {})
+    noteUsersDeactivated([twin.id], { reason: 'merge', actor: req.user?.id, app })
     await logActivity({
       action: 'user-merge',
       user: req.user?.id,

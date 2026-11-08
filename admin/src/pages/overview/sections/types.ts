@@ -102,3 +102,27 @@ export interface OverviewUsage {
   screens_source: 'page_views' | 'rum' | null
   slowest_page: { route: string; p75_ms: number; samples: number } | null
 }
+
+/** GET /api/overview/people-to-offload (= /api/inactive-user-links/offload). */
+export interface OffloadPerson {
+  id: string
+  name: string
+  email: string | null
+  status: string | null
+  reason: 'suspended' | 'redacted' | 'anonymised'
+  since: string | null
+  why: string | null
+  why_source: string | null
+  total: number
+  counts: { seats: number; teams: number; tasks: number; approvals: number; records: number }
+  top: Array<{ source: string; label: string; collection_label: string; count: number }>
+  tool_path: string
+}
+
+export interface OffloadReport {
+  people: OffloadPerson[]
+  total_people: number
+  total_items: number
+  truncated: boolean
+  generated_at: string
+}

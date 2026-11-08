@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { joinDefaultChannelsSoon } from './chat-default-joins.js'
 import { selectInChunks } from './db-batch.js'
+import { noteUsersDeactivated } from './inactive-people-notice.js'
 import {
   bustUserScopeCache,
   getUserScopes,
@@ -383,6 +384,12 @@ export async function runBulkUserAction(
     // Given a role (or back to active): their role's default chat channels, in the background.
     const changed = results.filter((r) => r.outcome === 'changed').map((r) => r.id)
     void joinDefaultChannelsSoon(changed, `bulk ${a.action}`)
+  }
+  if (a.action === 'suspend') {
+    noteUsersDeactivated(
+      results.filter((r) => r.outcome === 'changed').map((r) => r.id),
+      { reason: 'bulk', actor: actorId }
+    )
   }
   if (a.action === 'set_role' || a.action === 'suspend' || a.action === 'activate') {
     // A role or status change moves what someone may read and who can act.

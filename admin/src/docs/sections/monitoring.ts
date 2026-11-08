@@ -1285,8 +1285,21 @@ export const dataIntegrityGuide: DocSection = {
         [
           '`POST /api/inactive-user-links/:userId/remove`',
           '`{source, ids}` — take the account off seats, team places or manual owner rows with no successor.'
+        ],
+        [
+          '`GET /api/inactive-user-links/offload`',
+          'The People to offload list: suspended or redacted people who still hold work, most first, with counts per kind (admin; cached 1 minute).'
         ]
       ]
+    },
+    { type: 'h3', text: 'People to offload and the suspension notice' },
+    {
+      type: 'p',
+      text: 'Whenever people are suspended or redacted — by the directory sync, a Users-page edit or bulk action, offboarding, an account merge or a retention policy — every active administrator gets ONE notification per batch (category **System**, so it can be muted in Profile → Notification rules): "40 accounts were suspended by directory sync — 12 still own open work", linking to this tab. A sync that suspends forty people sends one notice, not forty; the administrator who made a change is not told about their own action. The work count comes from the same scan as this tab, counted with its default rules (owner seats, team places, open tasks, pending approvals and records on open workflows; never created-by stamps).'
+    },
+    {
+      type: 'p',
+      text: 'The **People to offload** card lists those people — name, when and how they were suspended, and how much they hold by kind — most work first. Each row opens this tab on that person (`?person=<id>`), where the work is handed on. It draws nothing when nobody holds work. In the admin app it is an Overview section (administrators only, on by default, hide it in Customize); in the EFP portal it is the dashboard card "People to offload", placed beside "People needing attention". Approvals are listed but cannot be reassigned from here: change the approver on the approval chain.'
     }
   ]
 }
