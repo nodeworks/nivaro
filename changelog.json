@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-11-08T00:59:44.093Z",
+  "generated_at": "2026-11-08T02:16:39.580Z",
   "releases": [
     {
-      "version": "0.3.82",
-      "tag": "v0.3.82",
-      "date": "2026-11-07T19:59:28-05:00",
+      "version": "0.3.83",
+      "tag": "v0.3.83",
+      "date": "2026-11-07T21:16:13-05:00",
       "sections": [
         {
           "label": "Fixed",
@@ -12,19 +12,117 @@
             {
               "section": "Fixed",
               "scope": "shared",
-              "text": "army 9 findings — pickers, locking, lists, forms, queues",
-              "hash": "3c19e13fa"
-            },
-            {
-              "section": "Fixed",
-              "scope": "api",
-              "text": "army 9 findings — scopes, search, imports, alerts, integrity",
-              "hash": "ad1238ea7"
+              "text": "keep the bulk-edit bases ref above the line grid's loading return",
+              "hash": "dfd74b315"
             }
           ]
         }
       ],
-      "count": 2
+      "count": 1
+    },
+    {
+      "version": "0.3.82",
+      "tag": "v0.3.82",
+      "date": "2026-11-07T19:59:44-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Pickers keep every key you type, and a suggested default never takes Enter when nothing matches or while results are still loading.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "The Category picker works from the keyboard, explains when there is nothing to pick, and linked records outside your zone read \"Not available to you\".",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Editing several lines at once now tells you when someone else saved one of them first, and lets you choose which value wins.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Inventory request line changes are kept as a draft if you leave the page and offered back when you return, and a line editor holds the record for you from your first keystroke.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "A new unit picks up what the form already says, and Duplicate checks the copied lines before the new record is created.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Money typed into the forecast and line grids is read the same way everywhere; an amount that could mean two things is refused with a hint.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Lists return to the page you left, worklist columns can be sorted from the keyboard, SLA tiles are hidden on worklists without an SLA, and people who have left are marked as former.",
+              "hash": "3c19e13fa",
+              "commit_text": "army 9 findings — pickers, locking, lists, forms, queues"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Projects now follow your zone, region and project type access, the same as the records under them.",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Search groups invoice lines under their invoice, keeps every result as you page through, and shows dates, amounts and choices the way the record does.",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Imports leave out rows with errors, refuse fractions in whole-number fields, and read the EFP Import sheet as it is laid out.",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Alerts tell each person the figure they are allowed to see.",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Data checks name lines by their position, and an empty line can be removed from the check (and put back if you change your mind).",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Access request notices only go out for people who are actually waiting, email links only ever point at our own sites, and support and coverage pages show names instead of internal numbers.",
+              "hash": "ad1238ea7",
+              "commit_text": "army 9 findings — scopes, search, imports, alerts, integrity"
+            }
+          ]
+        }
+      ],
+      "count": 13
     },
     {
       "version": "0.3.81",
@@ -37,8 +135,9 @@
             {
               "section": "Added",
               "scope": "workflows",
-              "text": "on_failure_children writebacks on child rows",
-              "hash": "19aaab1d8"
+              "text": "When a step sends an order to a partner and the partner refuses it, each line can now show the partner's message, and the message clears once a later attempt goes through.",
+              "hash": "19aaab1d8",
+              "commit_text": "on_failure_children writebacks on child rows"
             }
           ]
         }
@@ -56,14 +155,100 @@
             {
               "section": "Fixed",
               "scope": "shared",
-              "text": "army 8 findings — pickers, lists, forms, live sync",
-              "hash": "399d9c5e1"
+              "text": "Pickers: typing a name and pressing Enter picks what you typed, not the suggested default.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Pickers call a record without a name \"Unnamed record\", and say plainly when a linked record is not available to you, no longer exists or could not be loaded.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Lists can be moved through with the arrow keys, Shift-click selects rows instead of opening a new tab, and going back returns you to the page you were on.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Group totals in lists match the years you picked.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Forms mark the fields their rules require, the summary shows line amounts, and Quick create starts from what you already typed.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "Changes other people save appear in your open record field by field, without disturbing what you are typing.",
+              "hash": "399d9c5e1",
+              "commit_text": "army 8 findings — pickers, lists, forms, live sync"
             },
             {
               "section": "Fixed",
               "scope": "api",
-              "text": "army 8 findings — filters, search seeks, alerts, owners",
-              "hash": "1b2628078"
+              "text": "Search finds records in the largest lists faster.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Alert figures load faster and stay current, and an alert that missed its check catches up without slowing everyone down.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Worklists treat suspended, archived and removed people the same way everywhere, and open faster.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Approval emails name the first approvers and say how many more there are.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Record history shows people and values the way you are allowed to see them.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Help video captions follow the same access rules as the video itself.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Data checks no longer report rules that are only advice.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "Links and connected systems that filter lists the older way keep working.",
+              "hash": "1b2628078",
+              "commit_text": "army 8 findings — filters, search seeks, alerts, owners"
             }
           ]
         },
@@ -74,12 +259,13 @@
               "section": "Documentation",
               "scope": "changelog",
               "text": "plain-language notes for recent fixes",
-              "hash": "3765597b0"
+              "hash": "3765597b0",
+              "audience": "developer"
             }
           ]
         }
       ],
-      "count": 3
+      "count": 15
     },
     {
       "version": "0.3.79",
