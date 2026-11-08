@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-08T17:34:18.881Z",
+  "generated_at": "2026-11-08T18:05:13.291Z",
   "releases": [
+    {
+      "version": "0.3.92",
+      "tag": "v0.3.92",
+      "date": "2026-11-08T13:04:56-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "access",
+              "text": "User Scope restrictions apply to administrators too",
+              "hash": "4dd672ba9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.91",
       "tag": "v0.3.91",
-      "date": "2026-11-08T12:34:02-05:00",
+      "date": "2026-11-08T12:34:18-05:00",
       "sections": [
         {
           "label": "Fixed",
