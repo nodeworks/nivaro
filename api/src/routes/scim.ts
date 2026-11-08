@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { joinDefaultChannelsSoon } from '../services/chat-default-joins.js'
 import type { Role, User } from '../types.js'
 
 /**
@@ -152,6 +153,7 @@ export async function scimRoutes(app: FastifyInstance) {
     })
 
     const user = (await db<User>('nivaro_users').where({ email: body.userName }).first()) as User
+    if (role && user) void joinDefaultChannelsSoon([String(user.id)], 'scim provision')
     await logActivity({
       action: 'scim-provision',
       user: req.user?.id,
@@ -229,6 +231,8 @@ export async function scimRoutes(app: FastifyInstance) {
     if (Object.keys(updates).length > 0) {
       updates.updated_at = new Date()
       await db('nivaro_users').where({ id }).update(updates)
+      if (updates.role || updates.status === 'active')
+        void joinDefaultChannelsSoon([id], 'scim update')
     }
 
     const updated = (await db<User>('nivaro_users').where({ id }).first()) as User

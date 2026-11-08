@@ -939,6 +939,10 @@ export const collabChat: DocSection = {
       type: 'p',
       text: 'The gear in a channel’s header opens its settings: rename, set a topic, change who can see it, add or remove members, or archive it. Only the channel’s creator or an admin can edit — everyone else sees a read-only summary of what kind of room they are in and who else is in it. Adding a member to a private channel grants access immediately; removing one revokes it just as fast.'
     },
+    {
+      type: 'p',
+      text: 'Default roles (admins, also on General): everyone in a listed role joins the channel once. The join happens when a person is given the role (a new account, a role change, an approved access request or a reactivation) and, when an admin saves the default roles, for everyone already in those roles (in the background). A role changed outside the app is picked up on the person’s next request. Someone who leaves a default channel stays out; the ops channel still admits administrators only.'
+    },
     { type: 'h3', text: 'Record conversations' },
     {
       type: 'p',

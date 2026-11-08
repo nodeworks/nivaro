@@ -13,6 +13,7 @@ import { withAuthDeadline } from '../services/auth-deadline.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
+import { autoJoinOnRequest } from '../services/chat-default-joins.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import {
   mcpOAuthEnabled,
@@ -657,6 +658,10 @@ async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
     if (retry) void reply.header('Retry-After', String(retry))
     throw err
   }
+  // Default chat channels (#960) for a person signed in as themselves (session or phone app):
+  // a Map lookup here; at most once per ten minutes per person and role it checks in the
+  // background, so a role changed outside the app is noticed. Never awaited, never throws.
+  autoJoinOnRequest(req)
 }
 
 /**

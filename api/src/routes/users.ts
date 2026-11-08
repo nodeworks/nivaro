@@ -10,6 +10,7 @@ import {
   requireAdmin
 } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { joinDefaultChannelsSoon } from '../services/chat-default-joins.js'
 import { deleteDefaultsForUser } from '../services/field-defaults.js'
 import { onCollectionTouched, publishCollectionTouched } from '../services/item-events.js'
 import { ACCOUNT_KINDS, isAccountKind } from '../services/machine-accounts.js'
@@ -791,6 +792,7 @@ export async function usersRoutes(app: FastifyInstance) {
           .update({ role: role.id, status: 'active', updated_at: new Date() })
       })
       bustUserScopeCache(id)
+      void joinDefaultChannelsSoon([id], 'authorized')
 
       const user = safeUser(await getUser(id))
       const activityId = await logActivity({
@@ -908,6 +910,7 @@ export async function usersRoutes(app: FastifyInstance) {
       return reply.send({ data: { access_request, role_changed: false, unchanged: true } })
 
     await db('nivaro_users').where({ id: me }).update(patch)
+    if (roleChanged) void joinDefaultChannelsSoon([me], 'access requested')
     // This process forgot the row on the write; the other replicas hear it now, so the
     // request page's own re-read of /auth/me sees the new role + request wherever it lands.
     publishCollectionTouched('nivaro_users')
@@ -1661,6 +1664,7 @@ export async function usersRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
+    if (body.role) void joinDefaultChannelsSoon([userId], 'account created')
     const user = safeUser(await getUser(userId))
     const activityId = await logActivity({
       action: 'create',

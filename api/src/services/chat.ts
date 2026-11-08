@@ -1,5 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { autoJoinDue, markAutoJoinChecked } from './chat-default-joins.js'
+import { selectInChunks, whereInList } from './db-batch.js'
 import { readItems } from './items.js'
 import { can } from './permissions.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -916,56 +918,207 @@ async function hasColumnCached(table: string, col: string): Promise<boolean> {
  * Default channels per role (#960): a person joins every channel whose
  * default roles include theirs — once. The auto-join is recorded, so leaving
  * a default channel sticks; being moved into a new role joins that role's.
- * Runs lazily from the room list, memoised per person for ten minutes.
+ *
+ * When it runs (services/chat-default-joins.ts): when a person is given a
+ * role (new account, role change, reactivation), when an admin saves a
+ * channel's default roles (everyone active in them), and on a signed-in
+ * person's request and from the room list — those two memoised per person
+ * and role for ten minutes.
  */
-const autoJoinChecked = new Map<string, number>()
-export async function autoJoinDefaultChannels(user: User): Promise<void> {
+export async function autoJoinDefaultChannels(
+  user: User,
+  opts: { force?: boolean } = {}
+): Promise<void> {
   if (!user.role) return
-  const key = `${currentTenantKey()}|${user.id}|${user.role}`
-  const at = autoJoinChecked.get(key)
-  if (at && Date.now() - at < 10 * 60_000) return
-  autoJoinChecked.set(key, Date.now())
+  if (!opts.force) {
+    if (!autoJoinDue(user.id, user.role)) return
+    markAutoJoinChecked(user.id, user.role)
+  }
   if (!(await hasColumnCached('nivaro_chat_channels', 'default_roles'))) return
   const role = String(user.role).toUpperCase()
+  const byRole = await defaultRoomsByRole([role])
+  for (const target of byRole.get(role) ?? []) {
+    await joinRoomByDefault(target, [String(user.id)])
+  }
+}
+
+type UserRoleRow = {
+  id: string
+  role: string | null
+  status: string | null
+  account_kind?: string | null
+}
+
+/**
+ * Join these people to their role's default channels now (a role was just
+ * given to them). Only active, human accounts with a role; the memo is
+ * bypassed here and set afterwards. Set-based: one read per room per chunk.
+ */
+export async function joinDefaultChannelsForUsers(
+  userIds: string[]
+): Promise<{ people: number; joined: number }> {
+  const none = { people: 0, joined: 0 }
+  const ids = [...new Set(userIds.map((u) => String(u)).filter(Boolean))]
+  if (ids.length === 0) return none
+  if (!(await hasColumnCached('nivaro_chat_channels', 'default_roles'))) return none
+  const cols = (await hasColumnCached('nivaro_users', 'account_kind'))
+    ? ['id', 'role', 'status', 'account_kind']
+    : ['id', 'role', 'status']
+  const rows = await selectInChunks<UserRoleRow>(
+    ids,
+    1000,
+    (chunk) =>
+      whereInList(db('nivaro_users'), 'id', chunk).select(cols) as unknown as Promise<UserRoleRow[]>
+  )
+  const byRolePeople = new Map<string, string[]>()
+  for (const r of rows) {
+    // Suspended, inactive and machine accounts (bot, integration, service) never join.
+    if (!r.role || r.status !== 'active' || r.account_kind) continue
+    const role = String(r.role).toUpperCase()
+    const list = byRolePeople.get(role) ?? []
+    list.push(String(r.id))
+    byRolePeople.set(role, list)
+  }
+  if (byRolePeople.size === 0) return none
+  const rooms = await defaultRoomsByRole([...byRolePeople.keys()])
+  let people = 0
+  let joined = 0
+  for (const [role, members] of byRolePeople) {
+    people += members.length
+    for (const target of rooms.get(role) ?? []) joined += await joinRoomByDefault(target, members)
+    for (const id of members) markAutoJoinChecked(id, role)
+  }
+  return { people, joined }
+}
+
+/**
+ * A channel's (or General's) default roles were saved: everyone active in
+ * those roles joins their role's default channels. Leaving still sticks.
+ */
+export async function backfillDefaultRoles(
+  roleIds: string[]
+): Promise<{ people: number; joined: number }> {
+  const roles = [...new Set(roleIds.map((r) => String(r).toUpperCase()).filter(Boolean))]
+  if (roles.length === 0) return { people: 0, joined: 0 }
+  const ids = (await db('nivaro_users')
+    .whereIn('role', roles.slice(0, 50))
+    .where('status', 'active')
+    .pluck('id')) as string[]
+  return joinDefaultChannelsForUsers(ids.map(String))
+}
+
+interface DefaultRoom {
+  room: string
+  /** The channel key for the history row; null for General, which keeps none. */
+  key: string | null
+}
+
+/** Per role (upper-cased), the default rooms that role joins (archived and group DMs never). */
+async function defaultRoomsByRole(roles: string[]): Promise<Map<string, DefaultRoom[]>> {
+  const out = new Map<string, DefaultRoom[]>()
+  const wanted = new Set(roles.map((r) => String(r).toUpperCase()))
   const general = await generalChannel()
-  const wanted = [general, ...(await channels()).values()].filter(
-    (c) => !c.is_archived && !c.is_direct && (c.default_roles ?? []).includes(role)
-  )
-  if (wanted.length === 0) return
-  const done = new Set(
-    (await db('nivaro_chat_auto_joins')
-      .where({ user: user.id })
-      .pluck('room')
-      .catch(() => [])) as string[]
-  )
-  for (const c of wanted) {
-    const room = c === general ? GLOBAL_ROOM : `ch:${c.key}`
-    if (done.has(room)) continue
-    try {
-      await db('nivaro_chat_auto_joins').insert({ user: user.id, room, joined_at: new Date() })
-    } catch {
-      continue // already recorded by a concurrent request
+  for (const c of [general, ...(await channels()).values()]) {
+    if (c.is_archived || c.is_direct) continue
+    const isGeneral = c === general
+    for (const role of c.default_roles ?? []) {
+      if (!wanted.has(role)) continue
+      const list = out.get(role) ?? []
+      if (list.some((t) => t.room === (isGeneral ? GLOBAL_ROOM : `ch:${c.key}`))) continue
+      list.push({ room: isGeneral ? GLOBAL_ROOM : `ch:${c.key}`, key: isGeneral ? null : c.key })
+      out.set(role, list)
     }
-    const existing = await db('nivaro_chat_memberships').where({ user: user.id, room }).first()
+  }
+  return out
+}
+
+/**
+ * Join these people to one default room: record the auto-join first (a later
+ * leave then sticks, and a join the ops-room guard refused is not retried),
+ * then add the membership for each person not already in the room whom the
+ * guard admits. Returns how many people were added.
+ */
+async function joinRoomByDefault(target: DefaultRoom, userIds: string[]): Promise<number> {
+  const { room } = target
+  const up = (v: unknown) => String(v).toUpperCase()
+  let joined = 0
+  for (const chunk of chunked(userIds, 400)) {
+    const doneRows = (await whereInList(
+      db('nivaro_chat_auto_joins').where('room', room),
+      'user',
+      chunk
+    ).pluck('user')) as string[]
+    const done = new Set(doneRows.map(up))
+    const fresh = chunk.filter((id) => !done.has(up(id)))
+    if (fresh.length === 0) continue
+    const recorded = (
+      await insertEach(
+        'nivaro_chat_auto_joins',
+        fresh.map((user) => ({ user, room, joined_at: new Date() }))
+      )
+    ).map((r) => r.user)
+    if (recorded.length === 0) continue
+    const memberRows = (await whereInList(
+      db('nivaro_chat_memberships').where('room', room),
+      'user',
+      recorded
+    ).pluck('user')) as string[]
+    const members = new Set(memberRows.map(up))
+    const candidates = recorded.filter((id) => !members.has(up(id)))
     // A channel holding the assistant's ops posts only gains administrators (#1967).
     const { nonAdminsFor } = await import('./ops-room-guard.js')
-    if (!existing && (await nonAdminsFor(room, [String(user.id)])).length) continue
-    if (!existing) {
-      await db('nivaro_chat_memberships')
-        .insert({ user: user.id, room, joined_at: new Date(), last_read_at: new Date() })
-        .catch(() => {})
-      // History (#2784): a default-role join has no human actor.
-      if (c !== general) {
-        const { logActivity } = await import('./activity.js')
-        void logActivity({
-          action: 'chat-channel-member-add',
-          user: null,
-          collection: 'nivaro_chat_channels',
-          item: c.key,
-          comment: `${user.id} joined #${c.key} by default role`
-        }).catch(() => {})
+    const refused = new Set((await nonAdminsFor(room, candidates)).map(up))
+    const joining = candidates.filter((id) => !refused.has(up(id)))
+    if (joining.length === 0) continue
+    const now = new Date()
+    const added = await insertEach(
+      'nivaro_chat_memberships',
+      joining.map((user) => ({ user, room, joined_at: now, last_read_at: now }))
+    )
+    joined += added.length
+    // History (#2784): a default-role join has no human actor.
+    if (target.key && added.length) {
+      const { logActivity } = await import('./activity.js')
+      for (const a of added) {
+        await Promise.resolve(
+          logActivity({
+            action: 'chat-channel-member-add',
+            user: null,
+            collection: 'nivaro_chat_channels',
+            item: target.key,
+            comment: `${a.user} joined #${target.key} by default role`
+          })
+        ).catch(() => {})
       }
     }
+  }
+  return joined
+}
+
+/**
+ * Insert rows in one statement; when that fails (a concurrent request wrote
+ * one of them — auto-joins are unique per person and room), row by row.
+ * Returns the rows that went in.
+ */
+async function insertEach<T extends Record<string, unknown>>(
+  table: string,
+  rows: T[]
+): Promise<T[]> {
+  if (rows.length === 0) return []
+  try {
+    await db(table).insert(rows)
+    return rows
+  } catch {
+    const ok: T[] = []
+    for (const r of rows) {
+      try {
+        await db(table).insert(r)
+        ok.push(r)
+      } catch {
+        // already there
+      }
+    }
+    return ok
   }
 }
 

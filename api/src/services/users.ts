@@ -4,6 +4,7 @@ import { likeContains } from '../lib/filter-like.js'
 import type { User } from '../types.js'
 import { stripAiMemory } from './ai-memory.js'
 import { chainFields } from './chain-columns.js'
+import { joinDefaultChannelsSoon } from './chat-default-joins.js'
 import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
@@ -241,6 +242,8 @@ export async function findOrCreateFromOIDC(profile: {
     }
     if (adRole) updates.role = adRole
     await db('nivaro_users').where({ id: existing.id }).update(updates)
+    if (adRole && String(adRole).toUpperCase() !== String(existing.role ?? '').toUpperCase())
+      void joinDefaultChannelsSoon([existing.id], 'role from directory groups')
     if (profile.office_location) queueOfficeGeocode(existing.id)
     await captureEntraIdentity(existing.id, profile)
     return {
@@ -296,6 +299,7 @@ export async function findOrCreateFromOIDC(profile: {
   const newId = typeof id === 'object' ? (id as { id?: string }).id : id
   if (newId) await captureEntraIdentity(newId, profile)
   if (newId && profile.office_location) queueOfficeGeocode(newId)
+  if (newId && assignedRole) void joinDefaultChannelsSoon([newId], 'new account')
   if (newId) {
     void db('nivaro_settings')
       .first('welcome_message')
@@ -651,6 +655,8 @@ export async function updateUser(
     updates.preferences = JSON.stringify(updates.preferences)
   }
   await db('nivaro_users').where({ id }).update(updates)
+  // Given a role (or back to active): their role's default chat channels, in the background.
+  if (data.role || data.status === 'active') void joinDefaultChannelsSoon([id], 'user updated')
   return getUser(id)
 }
 

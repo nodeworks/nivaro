@@ -24,6 +24,7 @@ import {
   saveGeneralSettings
 } from '../services/chat.js'
 import { botUserId, chatBotName } from '../services/chat-bot.js'
+import { backfillDefaultRolesSoon } from '../services/chat-default-joins.js'
 import { customEmojiExists } from '../services/chat-emoji.js'
 import { recordChatDelivery } from '../services/chat-health.js'
 import {
@@ -1357,6 +1358,11 @@ export async function chatRoutes(app: FastifyInstance) {
     // The creator is a member — otherwise a private channel would be invisible
     // to the person who just made it.
     await upsertMembership(String(req.user!.id), `ch:${key}`, {})
+    // Default roles (#960): everyone already in them joins now, in the background.
+    if (extras.patch.default_roles) {
+      const created = await channelByKey(key)
+      void backfillDefaultRolesSoon(created?.default_roles ?? [], 'channel created')
+    }
     await logActivity({
       action: 'chat-channel-create',
       user: req.user?.id,
@@ -1375,6 +1381,9 @@ export async function chatRoutes(app: FastifyInstance) {
       if ('error' in result) return reply.code(400).send({ error: result.error })
       const changed = Object.keys(result.patch)
       const data = changed.length ? await saveGeneralSettings(result.patch) : await generalChannel()
+      // Everyone already in the listed roles joins now, in the background (#960).
+      if ('default_roles' in result.patch)
+        void backfillDefaultRolesSoon(data.default_roles ?? [], 'general default roles saved')
       await logActivity({
         action: 'chat-channel-update',
         user: req.user?.id,
@@ -1451,7 +1460,12 @@ export async function chatRoutes(app: FastifyInstance) {
         : undefined,
       req
     })
-    return { data: await channelByKey(String(row.key)) }
+    const saved = await channelByKey(String(row.key))
+    // Default roles saved, or the channel reopened (#960): everyone already in its default
+    // roles joins now, in the background. A person who left it before stays out.
+    if ('default_roles' in patch || (patch.is_archived === false && row.is_archived))
+      void backfillDefaultRolesSoon(saved?.default_roles ?? [], 'channel default roles saved')
+    return { data: saved }
   })
 
   /** Members of a private channel, so an owner can see who is in it. */

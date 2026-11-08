@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { joinDefaultChannelsSoon } from './chat-default-joins.js'
 import { selectInChunks } from './db-batch.js'
 import {
   bustUserScopeCache,
@@ -186,6 +187,7 @@ export async function applyAccessCopy(
   const target = plan.to.id
   if (plan.role) {
     await db('nivaro_users').where({ id: target }).update({ role: plan.role.proposed.id })
+    void joinDefaultChannelsSoon([target], 'access copied')
   }
   for (const c of plan.scopes) {
     const where = { user: target, dimension: c.dimension, mode: c.mode }
@@ -376,6 +378,11 @@ export async function runBulkUserAction(
     } catch (err) {
       results.push({ id, name, outcome: 'failed', reason: (err as Error).message.slice(0, 200) })
     }
+  }
+  if (a.action === 'set_role' || a.action === 'activate') {
+    // Given a role (or back to active): their role's default chat channels, in the background.
+    const changed = results.filter((r) => r.outcome === 'changed').map((r) => r.id)
+    void joinDefaultChannelsSoon(changed, `bulk ${a.action}`)
   }
   if (a.action === 'set_role' || a.action === 'suspend' || a.action === 'activate') {
     // A role or status change moves what someone may read and who can act.
