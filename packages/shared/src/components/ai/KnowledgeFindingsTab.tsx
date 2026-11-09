@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, toLocalDateString } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
@@ -150,7 +150,7 @@ export function KnowledgeFindingsTab({ onOpenSide }: { onOpenSide: (side: Findin
                 </span>
                 {f.last_seen_at && (
                   <span className='text-[11px] text-muted-foreground'>
-                    seen {new Date(f.last_seen_at).toLocaleDateString()}
+                    seen {toLocalDateString(f.last_seen_at)}
                   </span>
                 )}
                 {f.status !== 'resolved' && (

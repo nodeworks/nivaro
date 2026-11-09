@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, HardDrive } from 'lucide-react'
 import { useEffect, useId, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
 import { userErrorMessage } from '../../../lib/safe-error'
+import { toLocalDateString } from '../../../lib/utils'
 import { Button } from '../../ui/button'
 import {
   Dialog,
@@ -336,7 +337,7 @@ export function StorageButton() {
                         <td className={`${td} tabular-nums`}>v{r.version}</td>
                         <td className={td}>{STATE_LABEL[r.state]}</td>
                         <td className={`${td} whitespace-nowrap`}>
-                          {new Date(r.created_at).toLocaleDateString()}
+                          {toLocalDateString(r.created_at)}
                         </td>
                         <td className={num}>{formatBytes(r.source)}</td>
                         <td className={num}>{formatBytes(r.rendered)}</td>

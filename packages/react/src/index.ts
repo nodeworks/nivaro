@@ -688,6 +688,7 @@ export {
   titleCase,
   toastError,
   tokenize,
+  toLocalDateString,
   toneForOutcome,
   trackActivity,
   trailChain,

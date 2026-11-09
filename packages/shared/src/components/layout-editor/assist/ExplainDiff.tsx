@@ -1,6 +1,6 @@
 import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
-import { cn } from '../../../lib/utils'
+import { cn, toLocalDateString } from '../../../lib/utils'
 import { useLayoutEditorHost } from '../host'
 import { parseSaveFailure } from '../useLayoutDraft'
 import { type DiffSide, type LayoutDiffExplanation, useExplainLayoutDiff } from './assist-api'
@@ -75,7 +75,7 @@ export function ExplainDiffView({ data }: { data: LayoutDiffExplanation }) {
                 <li key={`${n.layout_id}:${n.version}`}>
                   v{n.version} · {n.note}
                   {n.times ? ` (${n.times} saves)` : ''}
-                  {n.at ? ` · ${new Date(n.at).toLocaleDateString()}` : ''}
+                  {n.at ? ` · ${toLocalDateString(n.at)}` : ''}
                   {n.by ? ` · ${n.by}` : ''}
                 </li>
               ))}

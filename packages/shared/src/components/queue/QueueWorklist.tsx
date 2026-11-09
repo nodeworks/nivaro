@@ -3049,7 +3049,8 @@ export function QueueWorklist({
       const d = new Date(display)
       if (!Number.isNaN(d.getTime())) {
         return {
-          text: formatDate(d, { month: '2-digit', day: '2-digit', year: '2-digit' }),
+          // The one read-only date style (army 11), the full stamp on hover.
+          text: formatDate(d),
           title: formatDateTime(d)
         }
       }

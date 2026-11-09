@@ -785,7 +785,7 @@ function getDisplayText(val: unknown): string {
   const s = String(val)
   if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
     try {
-      return new Date(s).toLocaleDateString()
+      return toLocalDateString(s)
     } catch {
       /* noop */
     }

@@ -37,7 +37,14 @@ import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-t
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { userCardQuery } from '../../lib/user-cards'
-import { cn, formatDateTime, formatRelative, humanHours, titleCase } from '../../lib/utils'
+import {
+  cn,
+  formatDateTime,
+  formatRelative,
+  humanHours,
+  titleCase,
+  toLocalDateString
+} from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
@@ -2385,7 +2392,7 @@ function ApprovalChainView({
                               key={u.id}
                               data-tip={`${u.name} is ${REASON_WORD[u.reason] ?? u.reason}${
                                 u.delegate
-                                  ? ` — ${u.delegate.name} covers${u.delegate.expires_at ? ` until ${new Date(u.delegate.expires_at).toLocaleDateString()}` : ''}`
+                                  ? ` — ${u.delegate.name} covers${u.delegate.expires_at ? ` until ${toLocalDateString(u.delegate.expires_at)}` : ''}`
                                   : ' and nobody is covering'
                               }`}
                               className={cn(

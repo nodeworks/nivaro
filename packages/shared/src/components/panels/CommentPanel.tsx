@@ -664,7 +664,9 @@ function RecordedNote({
             ) : (
               <span className='truncate text-[11px] text-slate-400'>{note.context}</span>
             ))}
-          <span className='text-[11px] text-slate-400'>{formatRelative(note.created_at)}</span>
+          <span className='text-[11px] text-slate-400' data-tip={formatDateTime(note.created_at)}>
+            {formatRelative(note.created_at)}
+          </span>
           {note.source === 'inbound' && note.inbound && (
             <InboundRequestPopover
               activityId={note.inbound.activity_id}
@@ -1248,7 +1250,10 @@ export function CommentPanel({
                               {displayName(c.user)}
                             </span>
                             <AgentBadge label={c.via_agent} />
-                            <span className='text-[11px] text-slate-400'>
+                            <span
+                              className='text-[11px] text-slate-400'
+                              data-tip={formatDateTime(c.created_at)}
+                            >
                               {formatRelative(c.created_at)}
                             </span>
                             {c.updated_at && c.updated_at !== c.created_at && (

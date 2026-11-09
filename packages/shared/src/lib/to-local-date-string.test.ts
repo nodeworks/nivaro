@@ -1,28 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, isNullDate, toLocalDateString } from './utils'
+import { formatDate, formatDateTime, formatRelative, isNullDate, toLocalDateString } from './utils'
 
 describe('toLocalDateString', () => {
+  // army 11: one read-only date style everywhere ("Jun 30, 2026").
   it('keeps a date-only value on its calendar day in any zone', () => {
-    expect(toLocalDateString('2026-11-15')).toBe(new Date(2026, 10, 15).toLocaleDateString())
-    expect(toLocalDateString('2001-01-01')).toBe(new Date(2001, 0, 1).toLocaleDateString())
-    expect(toLocalDateString('2026-11-15T00:00:00.000Z')).toBe(
-      new Date(2026, 10, 15).toLocaleDateString()
-    )
-    expect(toLocalDateString('2026-11-15T00:00:00+00:00')).toBe(
-      new Date(2026, 10, 15).toLocaleDateString()
-    )
+    expect(toLocalDateString('2026-11-15')).toBe('Nov 15, 2026')
+    expect(toLocalDateString('2001-01-01')).toBe('Jan 1, 2001')
+    expect(toLocalDateString('2026-11-15T00:00:00.000Z')).toBe('Nov 15, 2026')
+    expect(toLocalDateString('2026-11-15T00:00:00+00:00')).toBe('Nov 15, 2026')
+    expect(toLocalDateString('2026-06-30')).toBe(formatDate('2026-06-30'))
   })
   it('keeps years below 100', () => {
-    const d = new Date(2000, 0, 1)
-    d.setFullYear(1)
-    expect(toLocalDateString('0001-01-01')).toBe(d.toLocaleDateString())
+    expect(toLocalDateString('0001-01-01')).toBe('Jan 1, 1')
   })
-  it('renders real timestamps as before', () => {
+  it('renders real timestamps in the same style', () => {
     const ts = '2026-11-15T18:30:00.000Z'
-    expect(toLocalDateString(ts)).toBe(new Date(ts).toLocaleDateString())
+    expect(toLocalDateString(ts)).toBe(formatDate(ts))
   })
   it('returns the raw value when it is not a date', () => {
     expect(toLocalDateString('soon')).toBe('soon')
+  })
+})
+
+describe('formatRelative past a week', () => {
+  it('shows the date and the time, never the date alone', () => {
+    const old = new Date(2026, 5, 8, 15, 14)
+    expect(formatRelative(old)).toBe(formatDateTime(old))
+    expect(formatRelative(old)).toMatch(/Jun 8, 2026,? 3:14\s?PM/)
   })
 })
 

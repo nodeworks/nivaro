@@ -19,7 +19,8 @@ const ID = {
   xml: '88888888-8888-4888-8888-888888888888',
   mp4: '99999999-9999-4999-8999-999999999999',
   docx: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  lying: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  lying: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  xlsm: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 }
 const ROWS: Record<string, { type: string | null; name: string; disk: string }> = {
   [ID.html]: { type: 'text/html', name: 'x.html', disk: 'd-html.html' },
@@ -37,7 +38,9 @@ const ROWS: Record<string, { type: string | null; name: string; disk: string }> 
     disk: 'd-docx.docx'
   },
   // An uploader's browser can claim any type: an HTML page labelled text/plain.
-  [ID.lying]: { type: 'text/plain', name: 'evil.html', disk: 'd-lying.html' }
+  [ID.lying]: { type: 'text/plain', name: 'evil.html', disk: 'd-lying.html' },
+  // Army 11: a workbook a client uploaded with no part type (busboy → text/plain).
+  [ID.xlsm]: { type: 'text/plain', name: 'HQ26-81397.xlsm', disk: 'd-xlsm.xlsm' }
 }
 
 vi.mock('../../../services/file-access.js', () => ({
@@ -133,10 +136,15 @@ async function get(url: string, headers: Record<string, string> = {}) {
 function expectHardened(res: { headers: Record<string, unknown> }) {
   expect(res.headers['x-content-type-options']).toBe('nosniff')
   // PDFs drop `sandbox` (Firefox/Safari viewers blank under it, review A14) but load nothing.
+  // Attachments keep the sandbox but allow the download: Chrome silently drops a
+  // download whose response CSP is a bare `sandbox` (prod 2026-11-08).
+  const attachment = /^attachment/.test(String(res.headers['content-disposition'] ?? ''))
   expect(res.headers['content-security-policy']).toBe(
     res.headers['content-type'] === 'application/pdf'
       ? "default-src 'none'; object-src 'none'"
-      : "sandbox; default-src 'none'"
+      : attachment
+        ? "sandbox allow-downloads; default-src 'none'"
+        : "sandbox; default-src 'none'"
   )
 }
 
@@ -197,6 +205,28 @@ describe('GET /api/files/:id serves only inline-safe types inline', () => {
     expect(res.headers['content-range']).toBe('bytes 2-4/10')
     expect(res.body).toBe('234')
     expectHardened(res)
+  })
+})
+
+describe('downloads and binary files stored as text (prod 2026-11-08)', () => {
+  it('an .xlsm stored as text/plain downloads as a workbook, never inline text', async () => {
+    const res = await get(`/api/files/${ID.xlsm}`)
+    expect(res.statusCode).toBe(200)
+    expect(String(res.headers['content-disposition'])).toMatch(/^attachment;/)
+    expect(res.headers['content-type']).toBe('application/vnd.ms-excel.sheet.macroenabled.12')
+    expect(res.headers['content-security-policy']).toBe(
+      "sandbox allow-downloads; default-src 'none'"
+    )
+    expectHardened(res)
+  })
+
+  it('?download=1 allows the download; inline stays fully sandboxed', async () => {
+    const dl = await get(`/api/files/${ID.docx}?download=1`)
+    expect(dl.headers['content-security-policy']).toBe(
+      "sandbox allow-downloads; default-src 'none'"
+    )
+    const inline = await get(`/api/files/${ID.png}`)
+    expect(inline.headers['content-security-policy']).toBe("sandbox; default-src 'none'")
   })
 })
 

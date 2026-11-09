@@ -4,7 +4,7 @@ import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { get, post, put } from '../lib/commands'
 import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
 import { userErrorMessage } from '../lib/safe-error'
-import { cn, titleCase } from '../lib/utils'
+import { cn, titleCase, toLocalDateString } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { useOverviewFields } from './layout-editor/overview/overview-api'
 import { TipLayer } from './TipLayer'
@@ -94,7 +94,7 @@ function relTime(iso: string | null): string {
   if (m < 60) return `${m}m ago`
   const h = Math.round(m / 60)
   if (h < 24) return `${h}h ago`
-  return new Date(iso).toLocaleDateString()
+  return toLocalDateString(iso)
 }
 
 function runDuration(r: Run): string {

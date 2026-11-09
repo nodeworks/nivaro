@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { userErrorMessage } from '../../../lib/safe-error'
+import { toLocalDateString } from '../../../lib/utils'
 import { Button } from '../../ui/button'
 import { Skeleton } from '../../ui/skeleton'
 import { helpVideoApi, helpVideoError, helpVideoKeys } from '../api'
@@ -151,7 +152,7 @@ export function VersionsTab({
                 <span className='block text-[12px] text-muted-foreground'>
                   {new Date(v.created_at).toLocaleString()} · {v.created_by_name ?? 'Unknown'} ·{' '}
                   {v.files_removed_at
-                    ? `Files removed by retention on ${new Date(v.files_removed_at).toLocaleDateString()}`
+                    ? `Files removed by retention on ${toLocalDateString(v.files_removed_at)}`
                     : renderLabel(v).text}
                 </span>
               </span>

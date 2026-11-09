@@ -19,7 +19,7 @@ import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
-import { cn, formatDateTime, titleCase } from '../../lib/utils'
+import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
 import { requiredByRules } from '../../lib/validation-rules'
 import { GlossaryLabel } from '../ai/GlossaryText'
 import { FieldSourceInfo, useFieldSource } from '../ConfigReadBack'
@@ -429,6 +429,7 @@ function FieldHistoryButton({
     if (typeof v === 'boolean' || v === 'true' || v === 'false') {
       return v === true || v === 'true' ? 'Yes' : 'No'
     }
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return toLocalDateString(v)
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
       return formatDateTime(v)
     }

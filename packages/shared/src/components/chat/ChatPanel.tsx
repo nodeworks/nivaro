@@ -52,10 +52,10 @@ import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../l
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { userErrorMessage } from '../../lib/safe-error'
 import { userCardQuery } from '../../lib/user-cards'
-import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
+import { cn, formatRelative, getDisplayTimezone, toLocalDateString } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
 import { DoNotDisturbRow } from '../DoNotDisturb'
-import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { useFileDownload } from '../item-edit/file-download'
 import { UserChip } from '../item-edit/UserChip'
 import { type StaleBuild, StaleBuildChip } from '../StaleBuildChip'
 import { UserAvatar } from '../UserAvatar'
@@ -1151,7 +1151,7 @@ export function ChatRoomView({
   // reaction emoji picker) is open, or the popover loses its anchor.
   const msgActions = useMessageActions(room)
   const [actionsOpenId, setActionsOpenId] = useState<number | null>(null)
-  const [preview, setPreview] = useState<PreviewFile | null>(null)
+  const downloadClick = useFileDownload()
   const [threadRoot, setThreadRoot] = useState<number | null>(null)
   // A root the viewer cannot read (hidden, deleted) comes back empty, so the
   // room just opens without the pane.
@@ -1781,14 +1781,10 @@ export function ChatRoomView({
                     const url = client.fileUrl(aid)
                     const isImg = (meta?.type ?? '').startsWith('image/')
                     const clip = clipInfo(meta?.tags, meta?.type)
-                    const openPreview = () =>
-                      setPreview({
-                        id: aid,
-                        url,
-                        name,
-                        type: meta?.type ?? null,
-                        size: meta?.filesize ?? null
-                      })
+                    // Every file click downloads (2026-11-08): no in-app preview.
+                    const dlHref = `${url}?download=1`
+                    const dlName = meta?.filename_download || name
+                    const dlClick = downloadClick(dlHref, dlName)
                     const attach =
                       roomRecord && fileTargets.length > 0 ? (
                         <AttachToRecordButton
@@ -1810,10 +1806,12 @@ export function ChatRoomView({
                       />
                     ) : isImg ? (
                       <span key={aid} className='relative inline-block'>
-                        <button
-                          type='button'
-                          onClick={openPreview}
-                          className='block cursor-zoom-in'
+                        <a
+                          href={dlHref}
+                          download={dlName}
+                          onClick={dlClick}
+                          title='Download'
+                          className='block'
                         >
                           <img
                             src={url}
@@ -1821,14 +1819,16 @@ export function ChatRoomView({
                             className='max-h-40 max-w-[220px] rounded-lg object-cover'
                             loading='lazy'
                           />
-                        </button>
+                        </a>
                         {attach && <span className='absolute right-1 top-1'>{attach}</span>}
                       </span>
                     ) : (
                       <span key={aid} className='inline-flex items-center gap-1'>
-                        <button
-                          type='button'
-                          onClick={openPreview}
+                        <a
+                          href={dlHref}
+                          download={dlName}
+                          onClick={dlClick}
+                          title='Download'
                           className={cn(
                             'inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px]',
                             mine
@@ -1838,7 +1838,7 @@ export function ChatRoomView({
                         >
                           <Paperclip className='h-3 w-3 shrink-0 opacity-60' />
                           <span className='truncate'>{name}</span>
-                        </button>
+                        </a>
                         {attach}
                       </span>
                     )
@@ -2448,7 +2448,6 @@ export function ChatRoomView({
           )
         )}
       </div>
-      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {composer(null)}
       {threadRoot != null && (
         <ThreadPane
@@ -3430,7 +3429,7 @@ export function ChatRoomList({
                       <span className='flex items-center gap-1.5 text-[10.5px] text-slate-400'>
                         <span className='truncate'>{h.sender_name ?? 'Someone'}</span>
                         <span className='ml-auto shrink-0'>
-                          {new Date(h.date_created).toLocaleDateString()}
+                          {toLocalDateString(h.date_created)}
                         </span>
                       </span>
                       <span className='line-clamp-2 text-[12px] text-slate-700 dark:text-slate-200'>

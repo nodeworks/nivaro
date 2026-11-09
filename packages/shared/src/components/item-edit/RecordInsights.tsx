@@ -3,7 +3,7 @@ import { Info } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { formatDateTime } from '../../lib/utils'
+import { formatDateTime, toLocalDateString } from '../../lib/utils'
 
 /**
  * Record insights (Record & Form UX sprint): one header popover answering
@@ -346,7 +346,7 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
                         : 'shrink-0 text-slate-400'
                   }
                 >
-                  {e.status} · {new Date(e.created_at).toLocaleDateString()}
+                  {e.status} · {toLocalDateString(e.created_at)}
                 </span>
               </p>
             ))}
@@ -356,7 +356,7 @@ function IntegrationsTab({ collection, itemId }: { collection: string; itemId: s
                   webhook: {w.webhook}
                 </span>
                 <span className='shrink-0 text-slate-400'>
-                  {w.response_status} · {new Date(w.created_at).toLocaleDateString()}
+                  {w.response_status} · {toLocalDateString(w.created_at)}
                 </span>
               </p>
             ))}
@@ -400,8 +400,7 @@ function OwnerHistoryTab({ collection, itemId }: { collection: string; itemId: s
           <p className='font-medium text-slate-700 dark:text-slate-200'>
             {h.state_label ?? '—'}{' '}
             <span className='font-normal text-[10.5px] text-slate-400'>
-              {new Date(h.entered_at).toLocaleDateString()} →{' '}
-              {h.left_at ? new Date(h.left_at).toLocaleDateString() : 'now'}
+              {toLocalDateString(h.entered_at)} → {h.left_at ? toLocalDateString(h.left_at) : 'now'}
               {h.moved_by ? ` · moved by ${h.moved_by}` : ''}
             </span>
           </p>

@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
-import { cn, titleCase } from '../lib/utils'
+import { cn, titleCase, toLocalDateString } from '../lib/utils'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import {
@@ -1075,7 +1075,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
                         : fmtHours(r.remaining_hours)}
                     </td>
                     <td className='px-3 py-1.5 text-right text-slate-400'>
-                      {new Date(r.entered_at).toLocaleDateString()}
+                      {toLocalDateString(r.entered_at)}
                     </td>
                   </tr>
                 ))}

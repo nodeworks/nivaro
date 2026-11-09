@@ -17,8 +17,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { useGridFlush, useNivaroClient, useParentDraft } from '../../context'
 import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
-import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { cn, formatDateTime } from '../../lib/utils'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
@@ -57,14 +56,9 @@ function fmtSize(bytes: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** One date-time format app-wide ("Jun 8, 2026, 8:19 AM"), honouring the display zone. */
 function fmtDate(iso: string | null) {
-  if (!iso) return null
-  const d = new Date(iso)
-  return (
-    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
-    ' ' +
-    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  )
+  return iso ? formatDateTime(iso) : null
 }
 
 function isImage(type: string | null) {
@@ -268,7 +262,6 @@ export function FilePickerField({
   const flushKey = useId()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [pendingFile, setPendingFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -367,7 +360,6 @@ export function FilePickerField({
 
   return (
     <div className='relative'>
-      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {hasFile ? (
         <div
           ref={usageRef}
@@ -383,19 +375,13 @@ export function FilePickerField({
           ) : isLoading ? (
             <div className='h-10 w-10 rounded bg-slate-200 dark:bg-[hsl(var(--nvr-skeleton))] animate-pulse' />
           ) : (
-            <button
-              type='button'
-              title='Preview'
-              onClick={() =>
-                setPreview({
-                  id: fileId!,
-                  url: getUrl(fileId!),
-                  name: fileDisplayName(file) || fileId!,
-                  type: file?.type ?? null,
-                  size: file?.filesize ?? null
-                })
-              }
-              className='shrink-0 cursor-zoom-in'
+            // Every file click downloads (2026-11-08): no in-app preview.
+            <a
+              href={`${getUrl(fileId!)}?download=1`}
+              download={file?.filename_download || true}
+              onClick={downloadClick(`${getUrl(fileId!)}?download=1`, file?.filename_download)}
+              title='Download'
+              className='shrink-0'
             >
               <FileThumb
                 url={getUrl(fileId!)}
@@ -403,7 +389,7 @@ export function FilePickerField({
                 filename={file?.filename_download ?? ''}
                 size='sm'
               />
-            </button>
+            </a>
           )}
           <div className='flex-1 min-w-0'>
             <div className='flex items-center gap-1'>
@@ -584,7 +570,6 @@ export function FileM2MField({
   const staging = useM2MStaging()
   const [open, setOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [pendingFiles, setPendingFiles] = useState<{ file: File; url: string }[]>([])
   const uploadRef = useRef<HTMLInputElement>(null)
   // pending-save mode: track local adds/removes without hitting API until parent saves
@@ -794,7 +779,6 @@ export function FileM2MField({
 
   return (
     <div className='space-y-2'>
-      {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {(allFileIds.length > 0 || pendingFiles.length > 0) && (
         <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
@@ -804,19 +788,13 @@ export function FileM2MField({
                 key={id}
                 className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'
               >
-                <button
-                  type='button'
-                  title='Preview'
-                  onClick={() =>
-                    setPreview({
-                      id,
-                      url: getUrl(id),
-                      name: fileDisplayName(f) || id,
-                      type: f?.type ?? null,
-                      size: f?.filesize ?? null
-                    })
-                  }
-                  className='shrink-0 cursor-zoom-in'
+                {/* Every file click downloads (2026-11-08): no in-app preview. */}
+                <a
+                  href={`${getUrl(id)}?download=1`}
+                  download={f?.filename_download || true}
+                  onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
+                  title='Download'
+                  className='shrink-0'
                 >
                   <FileThumb
                     url={getUrl(id)}
@@ -824,24 +802,18 @@ export function FileM2MField({
                     filename={f?.filename_download ?? id}
                     size='sm'
                   />
-                </button>
+                </a>
                 <div className='flex-1 min-w-0'>
-                  <button
-                    type='button'
-                    onClick={() =>
-                      setPreview({
-                        id,
-                        url: getUrl(id),
-                        name: fileDisplayName(f) || id,
-                        type: f?.type ?? null,
-                        size: f?.filesize ?? null
-                      })
-                    }
+                  <a
+                    href={`${getUrl(id)}?download=1`}
+                    download={f?.filename_download || true}
+                    onClick={downloadClick(`${getUrl(id)}?download=1`, f?.filename_download)}
+                    title='Download'
                     data-file-name
                     className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline'
                   >
                     {fileDisplayName(f) || id}
-                  </button>
+                  </a>
                   <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                     {f?.type && <span className='text-[10px] text-slate-400'>{f.type}</span>}
                     {f?.filesize != null && (

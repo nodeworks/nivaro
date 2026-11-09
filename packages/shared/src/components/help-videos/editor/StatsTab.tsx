@@ -3,6 +3,7 @@ import { AlertCircle, CornerDownRight, RotateCw, ThumbsDown, ThumbsUp } from 'lu
 import { useId, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { userErrorMessage } from '../../../lib/safe-error'
+import { toLocalDateString } from '../../../lib/utils'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
 import { Skeleton } from '../../ui/skeleton'
@@ -216,7 +217,7 @@ function QuestionRow({
       <div className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground'>
         <span>{item.asked_by_name ?? 'Someone'}</span>
         <span aria-hidden>·</span>
-        <span>{new Date(item.created_at).toLocaleDateString()}</span>
+        <span>{toLocalDateString(item.created_at)}</span>
         <span aria-hidden>·</span>
         <button
           type='button'

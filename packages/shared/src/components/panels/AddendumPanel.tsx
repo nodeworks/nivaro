@@ -15,12 +15,12 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { sanitizeHtml } from '../../lib/sanitize-html'
 import { titleCase } from '../../lib/utils'
-import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
 } from '../import/DocumentAutofillButton'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
+import { useFileDownload } from '../item-edit/file-download'
 import { evalClientFormula } from '../item-edit/InlineTableField'
 import {
   computeLiveRollup,
@@ -961,7 +961,7 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
 
 function AddendumAttachments({ ids }: { ids: string[] | null }) {
   const client = useNivaroClient()
-  const [preview, setPreview] = useState<PreviewFile | null>(null)
+  const downloadClick = useFileDownload()
   const fileIds = Array.isArray(ids) ? ids.filter(Boolean) : []
   const { data: metas = [] } = useQuery<
     Array<{
@@ -1006,25 +1006,19 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
     <>
       <dt className={DETAIL_DT}>Attachments</dt>
       <dd className={cn(DETAIL_DD, 'flex flex-wrap gap-x-4 gap-y-1')}>
-        {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
         {metas.length === 0 && (
           <span className='text-slate-400 dark:text-slate-500'>
             {fileIds.length} {fileIds.length === 1 ? 'file' : 'files'}…
           </span>
         )}
         {metas.map((m) => (
-          <button
+          // Every file click downloads (2026-11-08): no in-app preview.
+          <a
             key={m.id}
-            type='button'
-            onClick={() =>
-              setPreview({
-                id: m.id,
-                url: client.fileUrl(m.id),
-                name: m.filename ?? `File ${m.id.slice(0, 8)}…`,
-                type: m.type,
-                size: m.size
-              })
-            }
+            href={`${client.fileUrl(m.id)}?download=1`}
+            download={m.filename || true}
+            onClick={downloadClick(`${client.fileUrl(m.id)}?download=1`, m.filename)}
+            title='Download'
             className='inline-flex min-w-0 items-center gap-1.5 rounded text-slate-700 underline-offset-2 transition-colors hover:text-nvr-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-200'
           >
             {m.missing && (
@@ -1039,7 +1033,7 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
             <span className='max-w-[320px] truncate'>
               {m.filename ?? `File ${m.id.slice(0, 8)}…`}
             </span>
-          </button>
+          </a>
         ))}
       </dd>
     </>

@@ -365,7 +365,7 @@ export function registerCoreIntegrationSignals(): void {
       label: outcome === 'missing' ? 'Never sent' : 'Overdue acknowledgements',
       description:
         outcome === 'missing'
-          ? 'The data says a partner should have been told something and no send was ever attempted.'
+          ? 'The data says a partner should have been told something, and nothing was sent when this changed.'
           : 'A send is unacknowledged or skipped past its grace period while the partner still lacks it.',
       tab: 'pushes',
       severity: outcome === 'missing' ? 'critical' : 'warn',

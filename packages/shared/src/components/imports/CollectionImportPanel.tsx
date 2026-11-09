@@ -17,7 +17,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { errorSentence, rowErrorSentence } from '../../lib/error-message'
-import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
+import {
+  cn,
+  formatDateTime,
+  formatNumber,
+  formatRelative,
+  toLocalDateString
+} from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -693,7 +699,7 @@ function ImportWizard({
           if (Object.keys(next).length === 0) return current
           setSavedMappingNote(
             saved.updated_at
-              ? `Applied your saved mapping from ${new Date(saved.updated_at).toLocaleDateString()}`
+              ? `Applied your saved mapping from ${toLocalDateString(saved.updated_at)}`
               : 'Applied your saved mapping'
           )
           if (saved.id_field) setIdField((cur) => cur || saved.id_field || '')

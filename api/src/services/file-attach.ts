@@ -223,7 +223,7 @@ export async function attachFileToRecord(
   const max = await instanceMaxBytes()
   const { buffer, dataUrlType } = decodeBase64File(input.content_base64, max)
   const claimed = typeof input.type === 'string' && input.type ? input.type : dataUrlType
-  const mimeType = normalizeStoredType(claimed, () => mime.lookup(filename))
+  const mimeType = normalizeStoredType(claimed, () => mime.lookup(filename), buffer)
   try {
     assertUploadContent(buffer, filename, mimeType)
   } catch (err) {

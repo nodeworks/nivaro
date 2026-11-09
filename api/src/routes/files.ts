@@ -20,6 +20,7 @@ import {
 } from '../services/file-attach.js'
 import {
   STORED_FILE_SECURITY_HEADERS,
+  servingNeedsHead,
   storedFileSecurityHeaders,
   storedFileServing
 } from '../services/file-serving-safety.js'
@@ -47,7 +48,7 @@ import {
   readStorageSettings,
   testStorageDriver
 } from '../services/storage-drivers.js'
-import { sendStoredObject } from '../services/stored-object-stream.js'
+import { peekStoredObject, sendStoredObject } from '../services/stored-object-stream.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
@@ -492,9 +493,16 @@ export async function filesRoutes(app: FastifyInstance) {
       const buffer = await getStorage().get(storageKey)
       // Inline only for types that run nothing; HTML/SVG/XML and unknown types
       // download (H1), and the browser keeps the declared type (nosniff).
-      const serving = storedFileServing(mime.lookup(storageKey) || 'application/octet-stream')
+      const serving = storedFileServing(
+        mime.lookup(storageKey) || 'application/octet-stream',
+        'inline',
+        {
+          filename: storageKey,
+          head: buffer.subarray(0, 1024)
+        }
+      )
       return reply
-        .headers(storedFileSecurityHeaders(serving.contentType))
+        .headers(storedFileSecurityHeaders(serving.contentType, serving.mode))
         .header('Content-Type', serving.contentType)
         .header('Content-Disposition', serving.mode)
         .send(buffer)
@@ -571,10 +579,18 @@ export async function filesRoutes(app: FastifyInstance) {
     // The stored type is whatever the uploader's browser claimed: only types
     // that run nothing are shown inline; HTML/SVG/XML and anything unknown
     // download (H1). sendStoredObject adds nosniff + the sandboxing CSP.
-    const serving = storedFileServing(
-      file.type || mime.lookup(file.filename_download ?? '') || 'application/octet-stream',
-      requested
-    )
+    // A text type over a binary name (.xlsm stored as text/plain) or binary
+    // bytes downloads with the real type (army 11); the head is read only when
+    // the name alone cannot tell.
+    const storedType =
+      file.type || mime.lookup(file.filename_download ?? '') || 'application/octet-stream'
+    const head = servingNeedsHead(storedType, file.filename_download)
+      ? await peekStoredObject(file.filename_disk)
+      : null
+    const serving = storedFileServing(storedType, requested, {
+      filename: file.filename_download,
+      head
+    })
     try {
       return await sendStoredObject(reply, file.filename_disk, {
         rangeHeader: req.headers.range,

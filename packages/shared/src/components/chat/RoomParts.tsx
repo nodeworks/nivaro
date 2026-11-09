@@ -9,10 +9,12 @@ import {
   Users,
   X
 } from 'lucide-react'
+
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { safeLinkKind } from '../../lib/safe-href'
 import { cn, formatFileSize, formatRelative } from '../../lib/utils'
+import { useFileDownload } from '../item-edit/file-download'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
@@ -367,6 +369,7 @@ export function RoomInfoDrawer({
   navigate?: (url: string) => void
 }) {
   const client = useNivaroClient()
+  const downloadClick = useFileDownload()
   const info = useRoomInfo(room)
   const [tab, setTab] = useState<InfoTab>('members')
   const shared = useRoomShared(room, tab === 'files' || tab === 'links')
@@ -664,9 +667,10 @@ export function RoomInfoDrawer({
                   >
                     <FileText className='h-3.5 w-3.5 shrink-0 text-slate-400' />
                     <a
-                      href={client.fileUrl(f.file_id)}
-                      target='_blank'
-                      rel='noopener noreferrer'
+                      href={`${client.fileUrl(f.file_id)}?download=1`}
+                      download={f.name || true}
+                      onClick={downloadClick(`${client.fileUrl(f.file_id)}?download=1`, f.name)}
+                      title='Download'
                       className='min-w-0 flex-1 truncate text-slate-800 hover:underline dark:text-slate-100'
                     >
                       {f.name}

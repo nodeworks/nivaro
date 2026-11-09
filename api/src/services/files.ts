@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { open } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import type { MultipartFile } from '@fastify/multipart'
 import mime from 'mime-types'
@@ -78,7 +79,8 @@ export async function uploadFileBuffer(
   opts: { private?: boolean } = {}
 ): Promise<StoredFile> {
   // One bare media type, never a list or header text (H1 follow-up).
-  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
+  // A generic claim (text/plain, octet-stream) never beats a binary name or bytes (army 11).
+  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename), buffer)
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
@@ -124,6 +126,21 @@ export async function uploadFileBuffer(
 
 /** Store a file that already sits on disk (recordings, renders) without
  *  reading it into memory on local storage. Same row shape as uploadFileBuffer. */
+/** The first `bytes` of a file on disk (for type sniffing), or null when unreadable. */
+async function readFileHead(path: string, bytes = 1024): Promise<Buffer | null> {
+  let fh: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    fh = await open(path, 'r')
+    const buf = Buffer.alloc(bytes)
+    const { bytesRead } = await fh.read(buf, 0, bytes, 0)
+    return buf.subarray(0, bytesRead)
+  } catch {
+    return null
+  } finally {
+    await fh?.close().catch(() => {})
+  }
+}
+
 export async function uploadFileFromPath(
   user: User,
   path: string,
@@ -132,7 +149,11 @@ export async function uploadFileFromPath(
   folderId?: string
 ): Promise<StoredFile> {
   // One bare media type, never a list or header text (H1 follow-up).
-  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
+  const mimeType = normalizeStoredType(
+    claimedType,
+    () => mime.lookup(filename),
+    await readFileHead(path)
+  )
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
   const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
@@ -176,7 +197,12 @@ export async function uploadFile(
 ): Promise<StoredFile> {
   const buffer = await multipart.toBuffer()
   const filename = cleanDownloadName(multipart.filename)
-  const mimeType = normalizeStoredType(multipart.mimetype || null, () => mime.lookup(filename))
+  // busboy reports `text/plain` for a part with no Content-Type: the name and bytes decide then.
+  const mimeType = normalizeStoredType(
+    multipart.mimetype || null,
+    () => mime.lookup(filename),
+    buffer
+  )
   assertUploadContent(buffer, filename, mimeType)
   return uploadFileBuffer(user, buffer, filename, mimeType, folderId)
 }
@@ -492,7 +518,7 @@ export async function replaceFileContent(
   userId?: string
 ): Promise<StoredFile | undefined> {
   // One bare media type, never a list or header text (H1 follow-up).
-  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename))
+  const mimeType = normalizeStoredType(claimedType, () => mime.lookup(filename), buffer)
   const existing = await getFile(id)
   if (!existing) return undefined
   const diskId = ulid().toLowerCase()

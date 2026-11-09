@@ -6,7 +6,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { CORE_GLOSSARY, mergeGlossary } from '../../lib/core-glossary'
 import { type GlossaryTerm, invalidateGlossary } from '../../lib/glossary'
-import { cn } from '../../lib/utils'
+import { cn, toLocalDateString } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -656,9 +656,7 @@ function SuggestionCard({ s }: { s: Suggestion }) {
         </span>
         <span className='text-muted-foreground'>from {s.source}</span>
         {s.created_at && (
-          <span className='text-muted-foreground'>
-            · {new Date(s.created_at).toLocaleDateString()}
-          </span>
+          <span className='text-muted-foreground'>· {toLocalDateString(s.created_at)}</span>
         )}
         {!pending && <span className='ml-auto capitalize text-muted-foreground'>{s.status}</span>}
       </div>
@@ -984,8 +982,7 @@ function GapsTab() {
                 <span className='text-[13px] font-semibold'>{t.topic}</span>
                 <span className='text-[11.5px] text-muted-foreground'>
                   {t.count} question{t.count === 1 ? '' : 's'} · {t.people}{' '}
-                  {t.people === 1 ? 'person' : 'people'} · last{' '}
-                  {new Date(t.last_at).toLocaleDateString()}
+                  {t.people === 1 ? 'person' : 'people'} · last {toLocalDateString(t.last_at)}
                 </span>
                 <Button
                   size='sm'

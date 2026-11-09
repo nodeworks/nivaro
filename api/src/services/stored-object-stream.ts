@@ -1,11 +1,11 @@
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
-import { storedFileSecurityHeaders } from './file-serving-safety.js'
+import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
 import { getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
@@ -90,6 +90,28 @@ export async function openStoredObject(key: string, rangeHeader?: string): Promi
   return { size, range: r, unsatisfiable: false, stream: Readable.from([slice]) }
 }
 
+/** The first `bytes` of a stored object (type sniffing before serving it), or null
+ *  when it cannot be read. Local disk reads only those bytes; remote drivers read
+ *  the object (callers ask only for files stored under a text type). */
+export async function peekStoredObject(key: string, bytes = 1024): Promise<Buffer | null> {
+  try {
+    const path = await localPath(key)
+    if (path) {
+      const fh = await open(path, 'r')
+      try {
+        const buf = Buffer.alloc(bytes)
+        const { bytesRead } = await fh.read(buf, 0, bytes, 0)
+        return buf.subarray(0, bytesRead)
+      } finally {
+        await fh.close().catch(() => {})
+      }
+    }
+    return (await readStoredObject(key)).subarray(0, bytes)
+  } catch {
+    return null
+  }
+}
+
 /** Copy a file on disk into the active storage driver. Local disk streams;
  *  remote drivers read the file into memory (no multipart upload in v1). */
 export async function putStoredObjectFromFile(
@@ -122,7 +144,7 @@ export async function sendStoredObject(
   // Stored bytes are user content: the browser keeps the declared type and
   // anything it renders as a document gets an opaque origin with no script (H1).
   reply
-    .headers(storedFileSecurityHeaders(opts.contentType))
+    .headers(storedFileSecurityHeaders(opts.contentType, dispositionMode(opts.disposition)))
     .header('Accept-Ranges', 'bytes')
     .header('Content-Type', opts.contentType)
   if (opts.disposition) reply.header('Content-Disposition', opts.disposition)

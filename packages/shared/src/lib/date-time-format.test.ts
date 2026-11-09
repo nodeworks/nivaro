@@ -23,9 +23,10 @@ describe('formatValue datetime columns', () => {
       formatDateTime(iso)
     )
   })
-  it('date-only templates and relative keep their own', () => {
-    expect(formatValue('2026-08-11', { type: 'datetime', template: 'MM/DD/YYYY' })).toBe(
-      '08/11/2026'
+  it('a full-date template reads the one date style; partial templates keep theirs', () => {
+    expect(formatValue('2026-06-30', { type: 'datetime', template: 'MM/DD/YYYY' })).toBe(
+      'Jun 30, 2026'
     )
+    expect(formatValue('2026-06-30', { type: 'datetime', template: 'MMM YYYY' })).toBe('Jun 2026')
   })
 })

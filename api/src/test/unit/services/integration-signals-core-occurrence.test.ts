@@ -155,3 +155,11 @@ describe('core:import-failed occurrence', () => {
     expect(rows[0].drill).toEqual({ kind: 'import_run', id: '90' })
   })
 })
+
+describe('Never sent — explainer wording', () => {
+  it('uses the shared plain words, not the ledger key', () => {
+    const s = getIntegrationSignal('core:obligation-missing')
+    expect(s?.description).toContain('nothing was sent when this changed')
+    expect(s?.description).not.toMatch(/no send was ever attempted/)
+  })
+})

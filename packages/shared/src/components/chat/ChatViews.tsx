@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatRelative, toLocalDateString } from '../../lib/utils'
 import {
   Command,
   CommandEmpty,
@@ -530,7 +530,7 @@ export function SearchFilterBar({
             data-chat-filter='date'
           >
             {filters.from || filters.to
-              ? `${filters.from ? new Date(filters.from).toLocaleDateString() : '…'} – ${filters.to ? new Date(filters.to).toLocaleDateString() : '…'}`
+              ? `${filters.from ? toLocalDateString(filters.from) : '…'} – ${filters.to ? toLocalDateString(filters.to) : '…'}`
               : 'Date…'}
           </button>
         </PopoverTrigger>

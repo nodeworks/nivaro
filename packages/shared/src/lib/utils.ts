@@ -87,7 +87,14 @@ export function toLocalDateString(value: unknown): string {
       : new Date(String(value))
   if (Number.isNaN(d.getTime())) return String(value)
   if (dm) d.setFullYear(Number(dm[1]))
-  return d.toLocaleDateString()
+  // THE read-only date format, same as formatDate ("Jun 30, 2026" — army 11:
+  // "6/30/2026" in the Summary rail beside "Nov 8, 2026" elsewhere).
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    ...(dm || !displayTimezone ? {} : { timeZone: displayTimezone })
+  }).format(d)
 }
 
 /**
@@ -179,7 +186,9 @@ export function formatRelative(date: string | Date) {
   if (hrs < 24) return `${hrs}h ago`
   const days = Math.floor(hrs / 24)
   if (days < 7) return `${days}d ago`
-  return formatDate(d)
+  // A timestamp past a week shows its date AND time (army 11: comment stamps
+  // read only "Jun 8, 2026").
+  return formatDateTime(d)
 }
 
 export function titleCase(str: string) {

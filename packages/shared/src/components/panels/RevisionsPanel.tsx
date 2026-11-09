@@ -247,7 +247,7 @@ export function displayValue(value: unknown, dateOnly = false): string {
     return toLocalDateString(value)
   if (typeof value === 'string' && ISO_RE.test(value)) {
     const d = new Date(value)
-    if (!Number.isNaN(d.getTime())) return d.toLocaleString()
+    if (!Number.isNaN(d.getTime())) return formatDateTime(d)
   }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
@@ -1487,7 +1487,7 @@ function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap 
                         {f.by && (
                           <span className='shrink-0 text-[10.5px] text-slate-400'>
                             {f.by.name}
-                            {f.by.when ? ` · ${new Date(f.by.when).toLocaleDateString()}` : ''}
+                            {f.by.when ? ` · ${toLocalDateString(f.by.when)}` : ''}
                           </span>
                         )}
                       </div>
@@ -1874,7 +1874,7 @@ function RevisionAnnotations({ revisionId }: { revisionId: number | string }) {
         <p key={n.id} className='text-[11.5px] text-slate-600 dark:text-slate-300'>
           {n.text}{' '}
           <span className='text-[10px] text-slate-400'>
-            — {n.user_name ?? 'someone'} · {new Date(n.created_at).toLocaleDateString()}
+            — {n.user_name ?? 'someone'} · {toLocalDateString(n.created_at)}
           </span>
         </p>
       ))}

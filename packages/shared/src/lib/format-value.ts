@@ -1,4 +1,4 @@
-import { formatDateTime, formatRelative } from './utils'
+import { formatDateTime, formatRelative, toLocalDateString } from './utils'
 
 // Mirrors ColumnFormatConfig in api/src/services/queues.ts (duplicated by
 // design — admin does not import api types). Display-only: raw values stay
@@ -71,6 +71,17 @@ export function formatValue(raw: string, cfg: ColumnFormatConfig): string {
     // 3:14 PM" in the history). Date-only templates and 'relative' keep theirs.
     if (cfg.template !== 'relative' && /h|H/.test(cfg.template)) {
       const shown = formatDateTime(raw)
+      return shown || raw
+    }
+    // A full calendar date (day + month + year) reads the one read-only
+    // date style ("Jun 30, 2026"); partial templates (month-year…) keep theirs.
+    if (
+      cfg.template !== 'relative' &&
+      /D/.test(cfg.template) &&
+      /M/.test(cfg.template) &&
+      /Y/.test(cfg.template)
+    ) {
+      const shown = toLocalDateString(raw)
       return shown || raw
     }
     return formatDateTemplate(raw, cfg.template)

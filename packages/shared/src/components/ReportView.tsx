@@ -156,7 +156,7 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
-import { cn } from '../lib/utils'
+import { cn, toLocalDateString } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { RechartsGate } from './charts/RechartsGate'
 import { LoadErrorNote } from './LoadErrorNote'
@@ -446,7 +446,7 @@ export function fmtCell(v: unknown, format?: ReportColumnFormat, decimals?: numb
   if (format === 'date' || format === 'datetime') {
     const d = new Date(String(v))
     if (Number.isNaN(d.getTime())) return String(v)
-    const date = d.toLocaleDateString()
+    const date = toLocalDateString(d)
     if (format === 'date') return date
     return `${date} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
   }
@@ -4519,7 +4519,7 @@ export function ReportView({
               <button
                 key={sn.id}
                 type='button'
-                title={`Compare against ${sn.name} (${new Date(sn.taken_at).toLocaleDateString()})`}
+                title={`Compare against ${sn.name} (${toLocalDateString(sn.taken_at)})`}
                 onClick={() => setSnapId((cur) => (cur === sn.id ? null : sn.id))}
                 className={cn(
                   'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px]',
