@@ -906,7 +906,7 @@ export const adminUxListSignals: DocSection = {
     },
     {
       type: 'p',
-      text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API.'
+      text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API. An optional second scope (`value_field_2`, `value_label_2`, `empty_label_2`) adds a second multi-select per member: the rows are then the cross product of both picks (e.g. Zone 1 + Zone 3 with Commercial = two rows), a blank side meaning every value on that side; each edit reconciles that member’s rows to the product (re-pointing rows before creating, deleting only leftovers). EFP uses it for BOM categories — CIFAs by Zone & Project Type.'
     },
     { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },
     {
@@ -922,6 +922,10 @@ export const adminUxListSignals: DocSection = {
     {
       type: 'p',
       text: 'Besides the one collection default everyone gets, an admin can make a saved view the default for one role from the ★ menu on its pill. Members of that role open the browser on it; everyone else keeps the collection default. A role has one default per collection, so picking another view for the same role moves it (`nivaro_saved_views.default_for_role`).'
+    },
+    {
+      type: 'note',
+      text: 'Only an administrator can delete a collection or role default view, even when someone else owns it (`DELETE /api/saved-views/:id` answers 403 `DEFAULT_VIEW_ADMIN_ONLY`; the ✕ is hidden for everyone else). Every view delete takes two presses.'
     },
     { type: 'h2', id: 'list-signals-tree', text: 'Tree view and hierarchy scope' },
     {
