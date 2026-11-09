@@ -434,6 +434,31 @@ export function PersonalDefaultInlineToggle() {
   )
 }
 
+/** 2026-11-09: a yes/no field can be switched straight from Summary view (Lines ready for
+ *  upload) — no trip to Edit. Off unless the placement turns it on. */
+export function SummaryToggleSetting() {
+  const ctx = useFieldCtx()
+  const { ov, info } = ctx
+  if (info.type !== 'boolean') return null
+  return (
+    <Toggle
+      k='field.summary_toggle'
+      label='Switch it from Summary view'
+      effect='In Summary view this yes/no is a switch people can flip without opening Edit. Their access and the edit lock are checked as for any save.'
+      checked={ov.summary_toggle === true}
+      onChange={(v) =>
+        ctx.setOverride(
+          'summary_toggle',
+          v ? true : undefined,
+          v
+            ? `Let ${info.label} be switched from Summary view`
+            : `Keep ${info.label} read-only in Summary view`
+        )
+      }
+    />
+  )
+}
+
 /** A file field (single file or many files). */
 function isFileField(info: Pick<FieldInfo, 'iface'>): boolean {
   return ['file', 'file-image', 'files-m2m'].includes(info.iface ?? '')

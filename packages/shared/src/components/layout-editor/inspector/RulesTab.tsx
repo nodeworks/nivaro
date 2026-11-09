@@ -18,7 +18,8 @@ import {
   PersonalDefaultInlineToggle,
   PersonalDefaultToggle,
   RecommendedToggle,
-  RepeatLastToggle
+  RepeatLastToggle,
+  SummaryToggleSetting
 } from './BehaviourSettings'
 import { useFieldCtx } from './field-context'
 import { AddButton, Choice, Section, Segmented, Setting, TextInput, Toggle } from './kit'
@@ -162,6 +163,7 @@ export function RulesTab() {
       <ConfirmChangeSetting />
       <RepeatLastToggle />
       <FileChipToggles />
+      <SummaryToggleSetting />
       {(info.computedType === 'rollup' || info.computedType === 'write') && (
         <Toggle
           k='field.editable_computed'
