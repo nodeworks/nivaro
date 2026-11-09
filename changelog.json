@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-09T22:28:52.865Z",
+  "generated_at": "2026-11-09T22:48:29.167Z",
   "releases": [
+    {
+      "version": "0.3.113",
+      "tag": "v0.3.113",
+      "date": "2026-11-09T17:48:10-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "bulk-transition",
+              "text": "re-run every gate right before each record moves",
+              "hash": "90110abd4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "item-actions",
+              "text": "pass a partner failure (502/503/504) through instead of a 500",
+              "hash": "625edb7af"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "bulk-transition",
+              "text": "check every record first, then move them four at a time",
+              "hash": "fd7950e04"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.112",
       "tag": "v0.3.112",
-      "date": "2026-11-09T17:28:32-05:00",
+      "date": "2026-11-09T17:28:52-05:00",
       "sections": [
         {
           "label": "Added",
