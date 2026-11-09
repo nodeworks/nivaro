@@ -788,8 +788,15 @@ export async function loadPeopleWaiting() {
       configured: false
     }
 
+  // Waiting = asked for access: the access-request role (Needs Authorization). People still in the
+  // new-user role (First Access) only signed in and never asked — they are not listed (2026-11-09:
+  // the card showed 200 First Access people). The new-user role stands in only when no
+  // access-request role is set.
+  const waitingRoles = settings?.access_request_role
+    ? [String(settings.access_request_role).toUpperCase()]
+    : provisional
   const rows = (await db('nivaro_users')
-    .whereIn('role', provisional)
+    .whereIn('role', waitingRoles)
     .where((w) => w.whereNull('status').orWhereNot('status', 'suspended'))
     .orderBy('created_at', 'asc')
     .limit(200)

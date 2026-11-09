@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-09T17:52:10.192Z",
+  "generated_at": "2026-11-09T18:16:12.961Z",
   "releases": [
+    {
+      "version": "0.3.107",
+      "tag": "v0.3.107",
+      "date": "2026-11-09T13:15:52-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "chat",
+              "text": "Online first switch on the online list",
+              "hash": "bc514c6b7"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "converted in-flight addendums highlight their line changes",
+              "hash": "a87c7a173"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "Online first switch always shows",
+              "hash": "58a19dca5"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.106",
       "tag": "v0.3.106",
-      "date": "2026-11-09T12:51:51-05:00",
+      "date": "2026-11-09T12:52:10-05:00",
       "sections": [
         {
           "label": "Added",
