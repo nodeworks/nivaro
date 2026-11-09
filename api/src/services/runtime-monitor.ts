@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { trackError } from './error-tracking.js'
 import { noteLagSample } from './ops-signals.js'
 
@@ -10,7 +11,35 @@ import { noteLagSample } from './ops-signals.js'
 
 const SAMPLE_MS = 500
 const LAG_WARN_MS = 300
-const RSS_WARN_MB = Number(process.env.RUNTIME_RSS_WARN_MB || 2048)
+/** The container's memory limit in MB (cgroup v2, else v1), or null outside a limit. */
+export function cgroupMemoryLimitMb(
+  read: (path: string) => string | null = (p) => {
+    try {
+      return readFileSync(p, 'utf8')
+    } catch {
+      return null
+    }
+  }
+): number | null {
+  for (const p of ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes']) {
+    const raw = read(p)?.trim()
+    if (!raw || raw === 'max') continue
+    const bytes = Number(raw)
+    // v1 reports ~2^63 for "no limit".
+    if (Number.isFinite(bytes) && bytes > 0 && bytes < 2 ** 50) return Math.floor(bytes / 1048576)
+  }
+  return null
+}
+
+/** RSS warn level: RUNTIME_RSS_WARN_MB, else 80% of the container limit, never under 2048 MB
+ *  (2026-11-09: 8 GiB web tasks importing big invoice files tripped a fixed 2048 MB warning). */
+export function rssWarnMb(envValue: string | undefined, limitMb: number | null): number {
+  const fromEnv = Number(envValue)
+  if (envValue && Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv
+  return limitMb ? Math.max(2048, Math.floor(limitMb * 0.8)) : 2048
+}
+
+const RSS_WARN_MB = rssWarnMb(process.env.RUNTIME_RSS_WARN_MB, cgroupMemoryLimitMb())
 
 let lastSample = Date.now()
 let recentLags: number[] = []
