@@ -560,6 +560,23 @@ function ValuePicker({
           className='mb-1 h-7 w-full rounded border border-slate-200 bg-background px-2 text-[12px] outline-none dark:border-border'
         />
         <ul className='max-h-[240px] overflow-y-auto'>
+          {/* One press back to "every value" — 30 project types are too many to untick (2026-11-09). */}
+          {!q.trim() && (
+            <li className='mb-1 border-b border-slate-100 pb-1 dark:border-border'>
+              <button
+                type='button'
+                onClick={() => {
+                  if (!none) onClear()
+                }}
+                aria-pressed={none}
+                data-membership-clear
+                className='flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] font-medium hover:bg-muted'
+              >
+                <Check className={cn('h-3.5 w-3.5', none ? 'opacity-100' : 'opacity-0')} />
+                {emptyLabel}
+              </button>
+            </li>
+          )}
           {shown.map((o) => (
             <li key={o.id}>
               <button
