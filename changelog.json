@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T18:16:12.961Z",
+  "generated_at": "2026-11-09T18:47:00.883Z",
   "releases": [
+    {
+      "version": "0.3.108",
+      "tag": "v0.3.108",
+      "date": "2026-11-09T13:46:45-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "send-back note is a row of the Progress card",
+              "hash": "481dee893"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.107",
       "tag": "v0.3.107",
-      "date": "2026-11-09T13:15:52-05:00",
+      "date": "2026-11-09T13:16:13-05:00",
       "sections": [
         {
           "label": "Added",
@@ -22,6 +41,12 @@
           "entries": [
             {
               "section": "Fixed",
+              "scope": "overview",
+              "text": "People waiting for access lists only people who asked",
+              "hash": "72ada04fd"
+            },
+            {
+              "section": "Fixed",
               "scope": "addendums",
               "text": "converted in-flight addendums highlight their line changes",
               "hash": "a87c7a173"
@@ -35,7 +60,7 @@
           ]
         }
       ],
-      "count": 3
+      "count": 4
     },
     {
       "version": "0.3.106",
