@@ -4049,16 +4049,68 @@ export function ChatAppearAwayRow() {
   )
 }
 
+/** Active people first, then idle, then away; the incoming (alphabetical) order is kept inside
+ *  each. Pure. */
+export function onlineFirstOrder<T>(
+  list: T[],
+  extra: (u: T) => { is_idle?: boolean; away?: boolean } | undefined
+): T[] {
+  const rank = (u: T) => {
+    const x = extra(u)
+    return x?.away ? 2 : x?.is_idle ? 1 : 0
+  }
+  return list
+    .map((u, i) => ({ u, i, r: rank(u) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((e) => e.u)
+}
+
 /** Set-your-status control (#33): free text + emoji, self-clearing. Saved in
  *  user preferences; /presence/online serves it to every host. */
-function MyStatusRow({ myStatus }: { myStatus: { text: string; emoji: string | null } | null }) {
+function MyStatusRow({
+  myStatus,
+  onlineFirst,
+  onOnlineFirst
+}: {
+  myStatus: { text: string; emoji: string | null } | null
+  /** "Online first" list order (off = alphabetical); null hides the switch. */
+  onlineFirst?: boolean | null
+  onOnlineFirst?: (v: boolean) => void
+}) {
   const th = useTheme()
   return (
-    <CustomStatusEditor
-      status={myStatus ? { text: myStatus.text, emoji: myStatus.emoji } : null}
-      theme={{ accentSoft: th.accentSoft, input: th.input, action: th.action }}
-      className='mb-1.5 px-1'
-    />
+    <div className='mb-1.5 flex items-start justify-between gap-2 px-1'>
+      <CustomStatusEditor
+        status={myStatus ? { text: myStatus.text, emoji: myStatus.emoji } : null}
+        theme={{ accentSoft: th.accentSoft, input: th.input, action: th.action }}
+        className='min-w-0'
+      />
+      {onlineFirst != null && onOnlineFirst && (
+        <button
+          type='button'
+          role='switch'
+          aria-checked={onlineFirst}
+          data-chat-online-first
+          data-tip='Active people first, then idle, then away. Off: alphabetical.'
+          onClick={() => onOnlineFirst(!onlineFirst)}
+          className='inline-flex shrink-0 items-center gap-1.5 rounded px-1 py-1 text-[11.5px] text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:text-slate-400 dark:hover:text-slate-200'
+        >
+          <span
+            aria-hidden
+            className={`relative inline-flex h-[14px] w-6 items-center rounded-full transition-colors ${
+              onlineFirst ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-slate-600'
+            }`}
+          >
+            <span
+              className={`inline-block h-2.5 w-2.5 rounded-full bg-white shadow transition-transform ${
+                onlineFirst ? 'translate-x-[12px]' : 'translate-x-[2px]'
+              }`}
+            />
+          </span>
+          Online first
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -4396,16 +4448,38 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
     if (typeof window === 'undefined') return ''
     return localStorage.getItem('nvr_chat_group_by') ?? ''
   })
+  // "Online first" (off by default = alphabetical): active, then idle, then away — remembered
+  // per browser like Group by.
+  const [onlineFirst, setOnlineFirst] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && localStorage.getItem('nvr_chat_online_first') === '1'
+    } catch {
+      return false
+    }
+  })
+  const changeOnlineFirst = (v: boolean) => {
+    setOnlineFirst(v)
+    try {
+      localStorage.setItem('nvr_chat_online_first', v ? '1' : '0')
+    } catch {
+      /* private mode — the preference just won't persist */
+    }
+  }
   const presenceExtras = usePresenceExtras()
   // The host's online list is an unscoped read of the presence collection; the
   // server decides who this viewer may SEE (restricted users see only people
   // restricted the same way, plus admins). Defer to it once it has answered —
   // before that, show nothing rather than briefly leaking the full list.
-  const users = presenceExtras.loaded
+  const alphabetical = presenceExtras.loaded
     ? sortOnlineUsers(
         cfg.onlineUsers.filter((u) => presenceExtras.byUser.has(String(u.user_id).toUpperCase()))
       )
     : []
+  const users = onlineFirst
+    ? onlineFirstOrder(alphabetical, (u) =>
+        presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+      )
+    : alphabetical
   const onlineSections = useMemo(
     () => buildOnlineSections(users, groupBy, presenceExtras.byUser),
     // biome-ignore lint/correctness/useExhaustiveDependencies: builder is pure
@@ -4569,6 +4643,8 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                 dimension the instance tracks (Zone, Region…). Purely a view
                 preference, remembered per browser. */}
             <MyStatusRow
+              onlineFirst={users.length > 0 ? onlineFirst : null}
+              onOnlineFirst={changeOnlineFirst}
               myStatus={
                 me
                   ? (presenceExtras.byUser.get(String(me.id).toUpperCase())?.custom_status ?? null)
