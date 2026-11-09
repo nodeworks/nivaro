@@ -841,100 +841,101 @@ export async function itemsRoutes(app: FastifyInstance) {
     )
     // Phase 1 — every gate, record by record (fast: the dry run is ~50 ms for a page). A record
     // that fails a gate is reported now; the rest move in phase 2.
-    const ready: Array<{
-      item: unknown
-      instance: Record<string, any>
-      transition: WorkflowTransition
-    }> = []
+    // The whole gate chain for one record, read fresh: run for every record first (fast, and
+    // what ?dry_run=1 answers), then AGAIN right before that record moves — the moves run
+    // several at a time, so a state, lock or owner change in between is caught, not overridden.
+    type Gated =
+      | { instance: Record<string, any>; transition: WorkflowTransition; error?: undefined }
+      | { error: string }
+    const gate = async (item: string): Promise<Gated> => {
+      // Per record: update permission + the caller can see it. A record
+      // outside the caller's scope fails like a missing one.
+      if (
+        !(await instanceAccessAllowed(req.user, req.isAdmin ?? false, collection, String(item)))
+      ) {
+        return { error: 'NOT_FOUND' }
+      }
+      const instance = (await findRecordInstance(collection, String(item))) as
+        | Record<string, any>
+        | undefined
+      if (!instance) {
+        return { error: 'Has no workflow' }
+      }
+      // The transition must belong to this record's own template (and, of several, start at
+      // the record's state).
+      const picked = pickBulkTransitionWhy(
+        candidates,
+        instance as { template: unknown; current_state?: unknown }
+      )
+      const transition = picked.transition
+      if (!transition) {
+        return {
+          error: picked.ambiguous
+            ? 'More than one step it could go to — pick which one'
+            : 'Not available from this record’s state'
+        }
+      }
+
+      // The single-record route's whole gate chain, per record: completed /
+      // escape, from-state, automatic refusal, roles, owner-only, required
+      // note, requirements and condition rules (manual-transition-gate.ts).
+      const refusal = await manualTransitionRefusal({
+        user: req.user,
+        isAdmin,
+        collection,
+        item: String(item),
+        instance: instance as unknown as GateInstance,
+        transition: transition as unknown as GateTransition,
+        comment: comment ?? null,
+        log: req.log
+      })
+      if (refusal) {
+        return { error: String(refusal.body.error ?? refusal.body.code ?? 'Refused') }
+      }
+      // Someone else is editing this one right now: a bulk move never runs
+      // over them (army 11 f4 M4) — the record page asks, the bulk run skips.
+      const held = await editLockRefusal(req, collection, String(item)).catch(() => null)
+      if (held) {
+        return { error: `${held.body.locked_by_name ?? 'Someone else'} is editing it right now` }
+      }
+      return { instance, transition }
+    }
+    const ready: string[] = []
     for (const item of [...new Set(ids.map((x) => String(x)))]) {
       try {
-        // Per record: update permission + the caller can see it. A record
-        // outside the caller's scope fails like a missing one.
-        if (
-          !(await instanceAccessAllowed(req.user, req.isAdmin ?? false, collection, String(item)))
-        ) {
+        const r = await gate(item)
+        if (r.error !== undefined) {
           failed++
-          errors.push({ item: String(item), error: 'NOT_FOUND' })
+          errors.push({ item, error: r.error })
           continue
         }
-        const instance = (await findRecordInstance(collection, String(item))) as
-          | Record<string, any>
-          | undefined
-        if (!instance) {
-          failed++
-          errors.push({ item: String(item), error: 'Has no workflow' })
-          continue
-        }
-        // The transition must belong to this record's own template (and, of several, start at
-        // the record's state).
-        const picked = pickBulkTransitionWhy(
-          candidates,
-          instance as { template: unknown; current_state?: unknown }
-        )
-        const transition = picked.transition
-        if (!transition) {
-          failed++
-          errors.push({
-            item: String(item),
-            error: picked.ambiguous
-              ? 'More than one step it could go to — pick which one'
-              : 'Not available from this record’s state'
-          })
-          continue
-        }
-
-        // The single-record route's whole gate chain, per record: completed /
-        // escape, from-state, automatic refusal, roles, owner-only, required
-        // note, requirements and condition rules (manual-transition-gate.ts).
-        const refusal = await manualTransitionRefusal({
-          user: req.user,
-          isAdmin,
-          collection,
-          item: String(item),
-          instance: instance as unknown as GateInstance,
-          transition: transition as unknown as GateTransition,
-          comment: comment ?? null,
-          log: req.log
-        })
-        if (refusal) {
-          failed++
-          errors.push({
-            item: String(item),
-            error: String(refusal.body.error ?? refusal.body.code ?? 'Refused')
-          })
-          continue
-        }
-        // Someone else is editing this one right now: a bulk move never runs
-        // over them (army 11 f4 M4) — the record page asks, the bulk run skips.
-        const held = await editLockRefusal(req, collection, String(item)).catch(() => null)
-        if (held) {
-          failed++
-          errors.push({
-            item: String(item),
-            error: `${held.body.locked_by_name ?? 'Someone else'} is editing it right now`
-          })
-          continue
-        }
-        // ?dry_run=1: every gate above ran, nothing moves — the bulk bar shows who would and
-        // who would not (and why) before the person runs it.
+        // ?dry_run=1: every gate ran, nothing moves — the bulk bar shows who would and who
+        // would not (and why) before the person runs it.
         if (dryRun) {
           succeeded++
           rp.row(item, 'done')
           continue
         }
-
-        ready.push({ item, instance, transition })
+        ready.push(item)
       } catch {
         failed++
-        errors.push({ item: String(item), error: 'Could not be checked' })
+        errors.push({ item, error: 'Could not be checked' })
       }
     }
     for (const e of errors) rp.row(e.item, 'failed', e.error)
     // Phase 2 — the moves, BULK_TRANSITION_CONCURRENCY at a time. Each runs the single route's
     // chain (claim, blocking ERP actions, state, auto transitions, activity); one at a time a
     // batch of 30 took 20–50 s on production (2026-11-09).
-    const moveOne = async ({ item, instance, transition }: (typeof ready)[number]) => {
+    const moveOne = async (item: string) => {
       try {
+        const fresh = await gate(item)
+        if (fresh.error !== undefined) {
+          failed++
+          errors.push({ item, error: fresh.error })
+          rp.row(item, 'failed', fresh.error)
+          return
+        }
+        const { instance, transition } = fresh
         // Double-fire guard, then the shared mutation chain: blocking actions
         // (an ERP submission) run before the state moves, and a refusal there
         // leaves the record where it is — exactly as the single route.
