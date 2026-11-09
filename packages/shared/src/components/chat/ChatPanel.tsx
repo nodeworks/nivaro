@@ -4674,6 +4674,35 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                     ...presenceExtras.dimensions.map((d) => ({ value: d.name, label: d.label }))
                   ]}
                 />
+                {/* Live counts beside Group by (2026-11-09): same presence feed as the rows,
+                    so they move with every presence update. Away counts as idle. */}
+                {(() => {
+                  let idle = 0
+                  for (const u of users) {
+                    const px = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                    if (px?.away || (px?.is_idle ?? u.is_idle)) idle++
+                  }
+                  const active = users.length - idle
+                  return (
+                    <span
+                      className='ml-auto flex items-center gap-2 whitespace-nowrap text-[11px] tabular-nums text-slate-500 dark:text-muted-foreground'
+                      data-chat-online-counts
+                      aria-live='polite'
+                    >
+                      <span className='flex items-center gap-1'>
+                        <span className='h-2 w-2 rounded-full bg-emerald-500' aria-hidden />
+                        {active} active
+                      </span>
+                      <span className='flex items-center gap-1'>
+                        <span
+                          className='h-2 w-2 rounded-full border-[1.5px] border-amber-500'
+                          aria-hidden
+                        />
+                        {idle} idle
+                      </span>
+                    </span>
+                  )
+                })()}
               </div>
             )}
             {users.length === 0 ? (
