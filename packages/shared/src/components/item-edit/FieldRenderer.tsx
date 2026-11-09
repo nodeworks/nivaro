@@ -1042,6 +1042,11 @@ export const FieldRenderer = memo(function FieldRenderer({
                 | import('./InlineTableField').GridSumCapConfig
                 | null
             }
+            setAllRows={
+              Array.isArray(opts.set_all_rows)
+                ? (opts.set_all_rows as import('./SetAllRowsButton').GridSetAllConfig[])
+                : null
+            }
             spreadRemaining={
               (opts.spread_remaining && typeof opts.spread_remaining === 'object'
                 ? opts.spread_remaining

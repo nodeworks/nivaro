@@ -229,6 +229,7 @@ import {
 } from './RowMatchPanel'
 import { RowWatchButton } from './RowWatchButton'
 import { RuleProvenanceChip } from './RuleProvenancePopover'
+import { type GridSetAllConfig, normalizeSetAllRows, SetAllRowsButton } from './SetAllRowsButton'
 import type { CMSField, CMSRelation, NestedOps } from './types'
 
 // ── ERP error-blob mining (submission_errors) ────────────────────────────────
@@ -1564,6 +1565,7 @@ export function InlineTableField({
   compareSeries,
   sumCap,
   spreadRemaining,
+  setAllRows,
   submissionErrors,
   prefillParentId,
   parentFieldKey,
@@ -1646,6 +1648,9 @@ export function InlineTableField({
    *  stats). The client twin of the server's sum_cap validation rule. */
   sumCap?: GridSumCapConfig | null
   spreadRemaining?: GridSpreadConfig | null
+  /** options.set_all_rows — header buttons that write one value (or blank = clear) into a
+   *  column on every line or the ticked lines; admin-only unless admin_only: false. */
+  setAllRows?: GridSetAllConfig[] | null
   /** Flag rows a failed ERP push rejected (options.submission_errors) — the
    *  latest failed nivaro_erp_submissions row for the PARENT record is parsed
    *  for "LineNumber N: reason" entries and matching rows tint red with the
@@ -8164,6 +8169,33 @@ export function InlineTableField({
               re-run rules…
             </button>
           )}
+          {!readOnly &&
+            activeView === 'original' &&
+            rows.length + pendingRows.length > 0 &&
+            normalizeSetAllRows(setAllRows)
+              .filter((e) => !e.admin_only || viewerIsAdmin)
+              .map((e) => {
+                const targets = selectedTargets.length > 0 ? selectedTargets : allRowTargets()
+                const col = cols.find((c) => c.field === e.field)
+                const label = e.label ?? (col ? compareLabelFor(col) : titleCase(e.field))
+                const vals = new Set(targets.map((t) => String(t.row[e.field] ?? '')))
+                const common = vals.size === 1 ? [...vals][0] || null : null
+                return (
+                  <SetAllRowsButton
+                    key={`set-all:${e.field}`}
+                    label={label}
+                    count={targets.length}
+                    scope={selectedTargets.length > 0 ? 'selected' : 'all'}
+                    commonValue={common}
+                    onApply={(value) =>
+                      applyValuesToTargets({ [e.field]: value }, targets, {
+                        clearSelection: selectedTargets.length > 0,
+                        noun: 'line'
+                      })
+                    }
+                  />
+                )
+              })}
           {activeView === 'original' && rows.length + pendingRows.length > 0 && (
             <button
               type='button'

@@ -908,6 +908,10 @@ export const adminUxListSignals: DocSection = {
       type: 'p',
       text: 'An O2M whose rows are MEMBERSHIPS — one row per (member, scope), where a blank scope means "every scope" — can set `options.membership_set: {key_field, value_field, empty_label?, key_label?, value_label?}` on the inline-table field. The grid is replaced by one line per member with its scopes as a multi-select (toggle chips up to ten options, a searchable checklist beyond). Storage is unchanged: nothing picked = a single row with a blank scope; picks = one row per picked value. The first pick re-points the blank row and clearing the last pick blanks it again, so a member never drops out mid-edit. Writes are immediate and go through the items API. An optional second scope (`value_field_2`, `value_label_2`, `empty_label_2`) adds a second multi-select per member: the rows are then the cross product of both picks (e.g. Zone 1 + Zone 3 with Commercial = two rows), a blank side meaning every value on that side; each edit reconciles that member’s rows to the product (re-pointing rows before creating, deleting only leftovers). EFP uses it for BOM categories — CIFAs by Zone & Project Type.'
     },
+    {
+      type: 'p',
+      text: 'An O2M grid placement can set `options.set_all_rows: [{field, label?, admin_only?}]` to add a **Set <label>…** button to the grid header: one value written into that column on every line (or only the ticked lines while rows are selected), or cleared on all of them when the box is left blank. It runs through the same path as typing on each line, so row rules, locks, change reasons and the grid’s save mode (immediate or saved with the record) all apply. Only administrators see it unless `admin_only: false`. EFP uses it for REQ ID on workflow lines.'
+    },
     { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },
     {
       type: 'p',
