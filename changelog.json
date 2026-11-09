@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-09T16:56:31.919Z",
+  "generated_at": "2026-11-09T17:34:39.533Z",
   "releases": [
+    {
+      "version": "0.3.105",
+      "tag": "v0.3.105",
+      "date": "2026-11-09T12:34:22-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-actions",
+              "text": "one run per action and record at a time",
+              "hash": "05552d7bb"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "Summary view switch, bulk Send Back, item action run lock, skip_sends",
+              "hash": "54e8b0576"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.104",
       "tag": "v0.3.104",
-      "date": "2026-11-09T11:56:14-05:00",
+      "date": "2026-11-09T11:56:31-05:00",
       "sections": [
         {
           "label": "Added",
