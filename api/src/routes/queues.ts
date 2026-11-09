@@ -300,40 +300,44 @@ export async function queuesRoutes(app: FastifyInstance) {
         by_state?: string | null
       }>
       const ownerSigs = new Map<string, Promise<string>>()
-      for (const qid of liveIds) {
-        const q = readable.find((x) => x.id === qid)!
-        const snap = snaps.find((sn) => sn.queue_id === qid)
-        // A snapshot of another definition, or one counted under other access than the
-        // viewer's, is no answer (army 11 Q1-1 / Q2-7): unknown → the caller reads live.
-        let fits = !!snap && (await snapshotsFitViewer(q, req.user, ownerSigs))
-        if (fits && snap) {
-          const defSources = await queueDefSources(qid)
-          fits = snapshotMatchesDefinition(
-            parseJson(snap.by_state ?? null) as Record<string, unknown> | null,
-            defSources,
-            queueDefinitionHash(defSources)
-          )
-        }
-        if (fits && snap) {
-          out[qid] = {
-            ...badgeFromSnapshot(snap),
-            by_state: publicByState(
-              parseJson(snap.by_state ?? null) as Record<string, unknown> | null
-            ),
-            sla_warning: Number((snap as { sla_warning?: number }).sla_warning ?? 0)
+      // Each queue on its own, side by side: one slow live resolve no longer adds to the
+      // others (p95 2.3 s for 3 queues on EFP production, 2026-11-09).
+      await Promise.all(
+        liveIds.map(async (qid) => {
+          const q = readable.find((x) => x.id === qid)!
+          const snap = snaps.find((sn) => sn.queue_id === qid)
+          // A snapshot of another definition, or one counted under other access than the
+          // viewer's, is no answer (army 11 Q1-1 / Q2-7): unknown → the caller reads live.
+          let fits = !!snap && (await snapshotsFitViewer(q, req.user, ownerSigs))
+          if (fits && snap) {
+            const defSources = await queueDefSources(qid)
+            fits = snapshotMatchesDefinition(
+              parseJson(snap.by_state ?? null) as Record<string, unknown> | null,
+              defSources,
+              queueDefinitionHash(defSources)
+            )
           }
-          continue
-        }
-        // No usable snapshot for THIS viewer: count the owner's shared live set (one
-        // resolve per queue a minute, all viewers) through the viewer's own access —
-        // never a live resolve per viewer (coordinator, army 11). Null → unknown.
-        const live = await liveBadgeForViewer(q, req.user!, !!req.isAdmin, (queueId, owner) =>
-          fetchQueueItems(queueId, owner, 'all', {}).then((r) => r.items)
-        ).catch(() => null)
-        out[qid] = live
-          ? { ...live, source: 'live', as_of: new Date().toISOString() }
-          : badgeFromSnapshot(undefined)
-      }
+          if (fits && snap) {
+            out[qid] = {
+              ...badgeFromSnapshot(snap),
+              by_state: publicByState(
+                parseJson(snap.by_state ?? null) as Record<string, unknown> | null
+              ),
+              sla_warning: Number((snap as { sla_warning?: number }).sla_warning ?? 0)
+            }
+            return
+          }
+          // No usable snapshot for THIS viewer: count the owner's shared live set (one
+          // resolve per queue a minute, all viewers) through the viewer's own access —
+          // never a live resolve per viewer (coordinator, army 11). Null → unknown.
+          const live = await liveBadgeForViewer(q, req.user!, !!req.isAdmin, (queueId, owner) =>
+            fetchQueueItems(queueId, owner, 'all', {}).then((r) => r.items)
+          ).catch(() => null)
+          out[qid] = live
+            ? { ...live, source: 'live', as_of: new Date().toISOString() }
+            : badgeFromSnapshot(undefined)
+        })
+      )
     }
     return reply.send({ data: out })
   })

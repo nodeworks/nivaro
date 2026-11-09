@@ -374,6 +374,9 @@ export async function buildServer() {
     // #2441 — configuration reads shared across processes (a fresh replica starts warm).
     const { setMetadataL2Redis } = await import('./db/metadata-l2.js')
     setMetadataL2Redis(app.redis)
+    // Predictive SLA percentiles: one shared copy for every process (services/predictive-sla.ts).
+    const { setPredictiveSlaRedis } = await import('./services/predictive-sla.js')
+    setPredictiveSlaRedis(app.redis)
     // Compiled permission cache (#2442, PERMISSION_CACHE=on): access versions live in Redis;
     // every pool that writes moves them on an access-table write, a procedure that may
     // touch one, and when a transaction that wrote one settles. Off: nothing is attached.

@@ -1,4 +1,6 @@
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Predictive SLA — "records that sat here this long usually end up late."
@@ -10,7 +12,10 @@ import { db } from '../db/index.js'
  * any hard SLA threshold trips.
  *
  * Percentiles are computed in SQL (PERCENTILE_CONT window + DISTINCT) so an
- * 80k-row state costs one aggregate, and cached 10 minutes per state set.
+ * 80k-row state costs one aggregate. The result is shared by every process through Redis
+ * (`nvr:predsla:<tenant>`, 1 h, one refresher at a time under a short lock) and held in each
+ * process for 10 minutes — 2026-11-09 production ran the 6 s / 2.7M-read aggregate ~25
+ * times an hour because each of 4 web tasks + the worker kept its own copy.
  * States with fewer than MIN_SAMPLES completed stays never predict — thin
  * history produces noise, not insight.
  */
@@ -26,6 +31,43 @@ const TTL = 10 * 60_000
 
 let cache: { stats: Map<string, StateDurationStats>; at: number } | null = null
 let loading: Promise<Map<string, StateDurationStats>> | null = null
+
+interface PredRedis {
+  get(key: string): Promise<string | null>
+  set(...args: unknown[]): Promise<unknown>
+  del(key: string): Promise<unknown>
+}
+let redis: PredRedis | null = null
+/** Wired at boot (server.ts) — without it every process computes its own copy. */
+export function setPredictiveSlaRedis(client: PredRedis | null): void {
+  redis = client
+}
+const SHARED_TTL_S = 3600
+const LOCK_TTL_S = 120
+const sharedKey = () => `nvr:predsla:${currentTenantKey() || 'default'}`
+
+/** The shared copy when another process computed it; else compute (one refresher at a time). */
+async function loadShared(): Promise<Map<string, StateDurationStats>> {
+  if (!redis) return runInBackgroundPool(() => loadAllStats())
+  const key = sharedKey()
+  try {
+    const raw = await redis.get(key)
+    if (raw) return new Map(Object.entries(JSON.parse(raw) as Record<string, StateDurationStats>))
+    // Someone else is computing: use what this process has, or compute anyway when cold.
+    const got = await redis.set(`${key}:lock`, '1', 'EX', LOCK_TTL_S, 'NX')
+    if (got === null && cache) return cache.stats
+  } catch {
+    /* Redis trouble: compute locally */
+  }
+  const stats = await runInBackgroundPool(() => loadAllStats())
+  try {
+    await redis.set(key, JSON.stringify(Object.fromEntries(stats)), 'EX', SHARED_TTL_S)
+    await redis.del(`${key}:lock`)
+  } catch {
+    /* the local copy still serves */
+  }
+  return stats
+}
 
 async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
   const rows = (await db.raw(`
@@ -62,7 +104,7 @@ export async function getStateDurationStats(
 ): Promise<Map<string, StateDurationStats>> {
   if (cache && Date.now() - cache.at < TTL) return cache.stats
   if (!loading) {
-    loading = loadAllStats()
+    loading = loadShared()
       .then((stats) => {
         cache = { stats, at: Date.now() }
         return stats
