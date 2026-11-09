@@ -704,15 +704,19 @@ export function FileM2MField({
   // #1288 — what carried each committed file on the record; one read for the
   // whole list once the rows are on screen, never on a new record.
   const parentDraft = useParentDraft()
+  // The record's collection: the edit form's draft knows it; the read view (Summary)
+  // has no draft, so fall back to the relation's own parent side — otherwise the
+  // "used in" and download chips never load there.
+  const ownerCollection = parentDraft?.collection ?? relation.one_collection ?? null
   const [usageRef, usageVisible] = useOnceVisible<HTMLDivElement>(committedIds.length > 0)
   const usage = useFileUsage(
-    parentDraft?.collection,
+    ownerCollection,
     isNew ? null : parentId,
     committedIds,
     usageVisible && showUsage
   )
   const downloads = useFileDownloadStats(
-    parentDraft?.collection,
+    ownerCollection,
     isNew ? null : parentId,
     committedIds,
     usageVisible && showDownloads
@@ -868,7 +872,7 @@ export function FileM2MField({
                     fileId={id}
                     uses={usage.data?.[id]}
                     loading={usage.isLoading}
-                    collection={parentDraft?.collection}
+                    collection={ownerCollection}
                     itemId={parentId}
                   />
                 )}
