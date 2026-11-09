@@ -22,6 +22,12 @@ import type { CMSRelation } from './types'
 //
 // The first pick re-points the blank row at that value and clearing the last
 // pick blanks it again, so a key never drops out of the set mid-edit.
+//
+// Optional SECOND value (`value_field_2`, e.g. Project Type beside Zone): the
+// rows are then the cross product of both picks — Zone 1 + Zone 3 with
+// Commercial = two rows; a blank side means "every value" on that side. Edits
+// reconcile the key's rows to that product (re-pointing rows before creating,
+// deleting only leftovers), so a key always keeps at least one row.
 
 export interface MembershipSetConfig {
   /** Child M2O naming the member (what each line is). */
@@ -32,12 +38,54 @@ export interface MembershipSetConfig {
   empty_label?: string
   key_label?: string
   value_label?: string
+  /** Optional second child M2O the line is also scoped by (blank = every value). */
+  value_field_2?: string
+  value_label_2?: string
+  empty_label_2?: string
 }
 
 interface Row {
   id: string | number
   key: string
   value: string | null
+  value2: string | null
+}
+
+type Pair = [string | null, string | null]
+const pairKey = (a: string | null, b: string | null) => `${a ?? ''}\u0000${b ?? ''}`
+
+/** The edits that turn `rows` into exactly `want` (cross product of picks). Pure. */
+export function planMembershipRows(
+  rows: Array<{ id: string | number; value: string | null; value2: string | null }>,
+  want: Pair[]
+): {
+  repoint: Array<{ id: string | number; pair: Pair }>
+  create: Pair[]
+  remove: Array<string | number>
+} {
+  const wanted = new Map(want.map((p) => [pairKey(p[0], p[1]), p]))
+  const covered = new Set<string>()
+  const extras: Array<string | number> = []
+  for (const r of rows) {
+    const k = pairKey(r.value, r.value2)
+    if (wanted.has(k) && !covered.has(k)) covered.add(k)
+    else extras.push(r.id)
+  }
+  const repoint: Array<{ id: string | number; pair: Pair }> = []
+  const create: Pair[] = []
+  for (const [k, p] of wanted) {
+    if (covered.has(k)) continue
+    const id = extras.shift()
+    if (id !== undefined) repoint.push({ id, pair: p })
+    else create.push(p)
+  }
+  return { repoint, create, remove: extras }
+}
+
+const crossPairs = (a: Set<string>, b: Set<string>): Pair[] => {
+  const as: Array<string | null> = a.size ? [...a] : [null]
+  const bs: Array<string | null> = b.size ? [...b] : [null]
+  return as.flatMap((x) => bs.map((y) => [x, y] as Pair))
 }
 
 const CHIP_LIMIT = 10
@@ -121,7 +169,9 @@ export function MembershipSetField({
   const qc = useQueryClient()
   const isNew = parentId === 'new'
   const { key_field: keyField, value_field: valueField } = config
+  const valueField2 = config.value_field_2 || null
   const emptyLabel = config.empty_label ?? 'All'
+  const emptyLabel2 = config.empty_label_2 ?? emptyLabel
   const [search, setSearch] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -139,6 +189,7 @@ export function MembershipSetField({
       ?.one_collection ?? null
   const keyCollection = targetOf(keyField)
   const valueCollection = targetOf(valueField)
+  const valueCollection2 = valueField2 ? targetOf(valueField2) : null
 
   const rowsKey = ['membership-set-rows', relatedCollection, manyField, String(parentId)]
   const { data: rows = [], isLoading } = useQuery<Row[]>({
@@ -146,7 +197,7 @@ export function MembershipSetField({
     queryFn: async () =>
       (
         await readAll(client, `/items/${relatedCollection}`, {
-          fields: `id,${keyField},${valueField}`,
+          fields: [`id`, keyField, valueField, ...(valueField2 ? [valueField2] : [])].join(','),
           filter: JSON.stringify({ [manyField]: { _eq: parentId } })
         })
       )
@@ -154,7 +205,8 @@ export function MembershipSetField({
         .map((r) => ({
           id: r.id as string | number,
           key: String(r[keyField]),
-          value: r[valueField] == null ? null : String(r[valueField])
+          value: r[valueField] == null ? null : String(r[valueField]),
+          value2: !valueField2 || r[valueField2] == null ? null : String(r[valueField2])
         })),
     enabled: !isNew,
     staleTime: 15_000
@@ -168,13 +220,13 @@ export function MembershipSetField({
   const keyIds = useMemo(() => [...byKey.keys()], [byKey])
   const { labels: keyLabels } = useCollectionLabels(keyCollection, keyIds)
   const { labels: valueLabels } = useCollectionLabels(valueCollection, 'all')
-  const valueOptions = useMemo(
-    () =>
-      [...valueLabels.entries()]
-        .map(([id, label]) => ({ id, label }))
-        .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true })),
-    [valueLabels]
-  )
+  const { labels: valueLabels2 } = useCollectionLabels(valueCollection2, 'all')
+  const toOptions = (labels: Map<string, string>) =>
+    [...labels.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+  const valueOptions = useMemo(() => toOptions(valueLabels), [valueLabels])
+  const valueOptions2 = useMemo(() => toOptions(valueLabels2), [valueLabels2])
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: rowsKey })
@@ -194,46 +246,48 @@ export function MembershipSetField({
     }
   }
 
-  const toggle = (key: string, valueId: string) =>
+  const picksOf = (key: string) => {
+    const mine = byKey.get(key) ?? []
+    return {
+      a: new Set(mine.filter((r) => r.value !== null).map((r) => r.value as string)),
+      b: new Set(mine.filter((r) => r.value2 !== null).map((r) => r.value2 as string))
+    }
+  }
+  const rowBody = ([a, b]: Pair) => ({
+    [valueField]: a,
+    ...(valueField2 ? { [valueField2]: b } : {})
+  })
+  // Every edit = "these are the picks now"; the rows follow (planMembershipRows).
+  const reconcile = (key: string, a: Set<string>, b: Set<string>) =>
     run(key, async () => {
-      const mine = byKey.get(key) ?? []
-      const hit = mine.find((r) => r.value === valueId)
-      const blank = mine.find((r) => r.value === null)
-      if (hit) {
-        // Clearing the last pick blanks the row instead of deleting it — the
-        // member stays, scoped to everything again.
-        const others = mine.filter((r) => r.value !== null && r.id !== hit.id)
-        if (others.length === 0 && !blank)
-          await client.request(patch(`/items/${relatedCollection}/${hit.id}`, { [valueField]: null }))
-        else await client.request(del(`/items/${relatedCollection}/${hit.id}`))
-        return
-      }
-      if (blank)
-        await client.request(
-          patch(`/items/${relatedCollection}/${blank.id}`, { [valueField]: valueId })
-        )
-      else
+      const plan = planMembershipRows(byKey.get(key) ?? [], crossPairs(a, b))
+      for (const r of plan.repoint)
+        await client.request(patch(`/items/${relatedCollection}/${r.id}`, rowBody(r.pair)))
+      for (const p of plan.create)
         await client.request(
           post(`/items/${relatedCollection}`, {
             [manyField]: parentId,
             [keyField]: key,
-            [valueField]: valueId
+            ...rowBody(p)
           })
         )
+      for (const id of plan.remove) await client.request(del(`/items/${relatedCollection}/${id}`))
     })
-
-  const clearValues = (key: string) =>
-    run(key, async () => {
-      const mine = byKey.get(key) ?? []
-      const scoped = mine.filter((r) => r.value !== null)
-      if (scoped.length === 0) return
-      const [keep, ...drop] = scoped
-      const blank = mine.find((r) => r.value === null)
-      for (const r of blank ? scoped : drop)
-        await client.request(del(`/items/${relatedCollection}/${r.id}`))
-      if (!blank)
-        await client.request(patch(`/items/${relatedCollection}/${keep.id}`, { [valueField]: null }))
-    })
+  const flip = (set: Set<string>, id: string) => {
+    const next = new Set(set)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  }
+  const toggle = (key: string, valueId: string, side: 1 | 2 = 1) => {
+    const { a, b } = picksOf(key)
+    return side === 1 ? reconcile(key, flip(a, valueId), b) : reconcile(key, a, flip(b, valueId))
+  }
+  const clearValues = (key: string, side: 1 | 2 = 1) => {
+    const { a, b } = picksOf(key)
+    if ((side === 1 ? a : b).size === 0) return
+    return side === 1 ? reconcile(key, new Set(), b) : reconcile(key, a, new Set())
+  }
 
   const removeKey = (key: string) =>
     run(key, async () => {
@@ -245,7 +299,11 @@ export function MembershipSetField({
     if (id == null || id === '' || byKey.has(String(id))) return
     run(String(id), () =>
       client.request(
-        post(`/items/${relatedCollection}`, { [manyField]: parentId, [keyField]: id, [valueField]: null })
+        post(`/items/${relatedCollection}`, {
+          [manyField]: parentId,
+          [keyField]: id,
+          ...rowBody([null, null])
+        })
       )
     )
   }
@@ -260,6 +318,12 @@ export function MembershipSetField({
 
   const keyTitle = config.key_label ?? titleCase(keyCollection ?? keyField)
   const valueTitle = config.value_label ?? titleCase(valueCollection ?? valueField)
+  const valueTitle2 = valueField2
+    ? (config.value_label_2 ?? titleCase(valueCollection2 ?? valueField2))
+    : ''
+  const gridCols = valueField2
+    ? 'grid-cols-[minmax(140px,1fr)_minmax(0,1.5fr)_minmax(0,1.5fr)_28px]'
+    : 'grid-cols-[minmax(140px,1fr)_minmax(0,2fr)_28px]'
 
   if (isNew)
     return (
@@ -279,7 +343,9 @@ export function MembershipSetField({
               value={null}
               onChange={addKey}
               placeholder={`Add ${keyTitle.toLowerCase()}…`}
-              extraFilter={keyIds.length && keyIds.length <= 400 ? { id: { _nin: keyIds } } : undefined}
+              extraFilter={
+                keyIds.length && keyIds.length <= 400 ? { id: { _nin: keyIds } } : undefined
+              }
             />
           </div>
           {keyIds.length > 8 && (
@@ -298,7 +364,12 @@ export function MembershipSetField({
       )}
 
       <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
-        <div className='grid grid-cols-[minmax(140px,1fr)_minmax(0,2fr)_28px] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-wide text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'>
+        <div
+          className={cn(
+            gridCols,
+            'grid gap-3 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-wide text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+          )}
+        >
           <span>{keyTitle}</span>
           <span>
             {valueTitle}{' '}
@@ -306,6 +377,14 @@ export function MembershipSetField({
               · none picked = {emptyLabel.toLowerCase()}
             </span>
           </span>
+          {valueField2 && (
+            <span>
+              {valueTitle2}{' '}
+              <span className='normal-case tracking-normal text-slate-400'>
+                · none picked = {emptyLabel2.toLowerCase()}
+              </span>
+            </span>
+          )}
           <span />
         </div>
         {isLoading ? (
@@ -322,17 +401,26 @@ export function MembershipSetField({
           <ul className='max-h-[480px] divide-y divide-slate-100 overflow-y-auto dark:divide-border'>
             {lines.map((line) => {
               const mine = byKey.get(line.key) ?? []
-              const picked = new Set(mine.filter((r) => r.value !== null).map((r) => r.value as string))
+              const picked = new Set(
+                mine.filter((r) => r.value !== null).map((r) => r.value as string)
+              )
+              const picked2 = new Set(
+                mine.filter((r) => r.value2 !== null).map((r) => r.value2 as string)
+              )
               return (
                 <li
                   key={line.key}
                   data-membership-key={line.key}
                   className={cn(
-                    'grid grid-cols-[minmax(140px,1fr)_minmax(0,2fr)_28px] items-center gap-3 px-3 py-1.5 text-[12px]',
+                    gridCols,
+                    'grid items-center gap-3 px-3 py-1.5 text-[12px]',
                     busy === line.key && 'opacity-60'
                   )}
                 >
-                  <span className='truncate font-medium text-slate-800 dark:text-foreground' data-tip={line.label}>
+                  <span
+                    className='truncate font-medium text-slate-800 dark:text-foreground'
+                    data-tip={line.label}
+                  >
                     {line.label}
                   </span>
                   <ValuePicker
@@ -344,6 +432,17 @@ export function MembershipSetField({
                     onToggle={(v) => toggle(line.key, v)}
                     onClear={() => clearValues(line.key)}
                   />
+                  {valueField2 && (
+                    <ValuePicker
+                      options={valueOptions2}
+                      picked={picked2}
+                      emptyLabel={emptyLabel2}
+                      valueTitle={valueTitle2}
+                      disabled={!!readOnly || busy === line.key}
+                      onToggle={(v) => toggle(line.key, v, 2)}
+                      onClear={() => clearValues(line.key, 2)}
+                    />
+                  )}
                   {!readOnly ? (
                     <button
                       type='button'
@@ -447,7 +546,9 @@ function ValuePicker({
           disabled={disabled}
           className='flex h-7 w-full items-center justify-between gap-2 rounded-md border border-slate-200 bg-background px-2 text-left text-[12px] dark:border-border'
         >
-          <span className={cn('truncate', none && 'text-slate-500 dark:text-muted-foreground')}>{summary}</span>
+          <span className={cn('truncate', none && 'text-slate-500 dark:text-muted-foreground')}>
+            {summary}
+          </span>
           <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
         </button>
       </PopoverTrigger>
@@ -466,7 +567,9 @@ function ValuePicker({
                 onClick={() => onToggle(o.id)}
                 className='flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[12px] hover:bg-muted'
               >
-                <Check className={cn('h-3.5 w-3.5', picked.has(o.id) ? 'opacity-100' : 'opacity-0')} />
+                <Check
+                  className={cn('h-3.5 w-3.5', picked.has(o.id) ? 'opacity-100' : 'opacity-0')}
+                />
                 {o.label}
               </button>
             </li>

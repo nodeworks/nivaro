@@ -8991,16 +8991,23 @@ export function CollectionBrowserView({
                     onRoleDefault={(role) => setRoleDefault.mutate({ id: v.id, role })}
                   />
                 )}
-                {canChangeView(v) && (
-                  <button
-                    type='button'
-                    onClick={() => deleteView.mutate(v.id)}
-                    title='Delete view'
-                    aria-label={`Delete ${v.name}`}
+                {/* Two presses: one stray click deleted the shared workflows Default
+                    view on prod (2026-11-09) and every list lost its columns. */}
+                {canChangeView(v) && (isAdmin || !(v.is_default || v.default_for_role)) && (
+                  <ConfirmButton
+                    title={`Delete view ${v.name}`}
+                    confirmLabel='Delete?'
+                    confirmTitle={
+                      v.is_default || v.default_for_role
+                        ? `Delete "${v.name}"? Everyone who uses it as their default loses it`
+                        : `Delete the view "${v.name}"?`
+                    }
+                    onConfirm={() => deleteView.mutate(v.id)}
                     className='hover:text-red-500'
+                    armedClassName='rounded bg-red-600 px-1.5 text-[11px] font-semibold text-white dark:text-white'
                   >
                     ✕
-                  </button>
+                  </ConfirmButton>
                 )}
               </>
             )}

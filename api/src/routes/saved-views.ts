@@ -303,6 +303,15 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       .first()) as SavedViewRow | undefined
 
     if (!view) return reply.code(404).send({ error: 'Not found' })
+    // A collection or role default is everyone's list layout: only an
+    // administrator removes it, even when someone else owns the row (the
+    // workflows Default went with one stray click on prod, 2026-11-09).
+    if (!req.isAdmin && (view.is_default || view.default_for_role)) {
+      return reply.code(403).send({
+        error: 'Only an administrator can delete a default view.',
+        code: 'DEFAULT_VIEW_ADMIN_ONLY'
+      })
+    }
     if (!req.isAdmin && !sameId(view.user, req.user!.id)) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
