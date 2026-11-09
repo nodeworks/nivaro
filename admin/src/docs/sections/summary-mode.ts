@@ -96,6 +96,11 @@ export const summaryMode: DocSection = {
     {
       type: 'p',
       text: 'The move-requirements dialog is the one exception: its PATCH carries the header `x-nivaro-requirements-for: <transition id>`, and the fields that move declares as requirements are let through both lock tiers and the admin-only field option, but only when the caller may run that move now on that record (its conditions are still evaluated). The SDK sends it through `withHeaders` on a command.'
+    },
+    { type: 'h3', id: 'summary-mode-switch', text: 'Switching a yes/no field from Summary view' },
+    {
+      type: 'p',
+      text: 'A yes/no (boolean) field can be flipped straight from Summary view, without opening Edit. In the layout editor, select the field and turn on **Switch it from Summary view** (Rules tab). Summary view then shows a switch instead of Yes/No text. Flipping it saves that one field as the reader: their access, the edit lock and the field\u2019s validation are checked as for any save, and a refusal shows why. Off by default; it is a placement option (`summary_toggle: true` in the placement overrides), so each form decides.'
     }
   ]
 }

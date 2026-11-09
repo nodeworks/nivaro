@@ -1737,7 +1737,11 @@ export const extRegistrations: DocSection = {
     { type: 'h3', text: 'Item actions' },
     {
       type: 'p',
-      text: 'Appear as buttons in the item editor toolbar alongside Save. Useful for "Push to ERP", "Generate PDF", "Send notification" patterns.'
+      text: 'Appear as buttons in the item editor toolbar alongside Save, and in the record sidebar opened from a list or queue. Useful for "Push to ERP", "Generate PDF", "Send notification" patterns.'
+    },
+    {
+      type: 'note',
+      text: 'One run per action and record at a time. While `execute` is running for a record, a second press (a double click, another tab, another person) answers 409 `ACTION_RUNNING` ("… is already running on this record") and nothing is sent. The claim is held in the process and, with Redis, across replicas, and it expires after 10 minutes, so a crashed run never blocks the record for good.'
     },
     {
       type: 'pre',

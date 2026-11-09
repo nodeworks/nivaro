@@ -127,6 +127,19 @@ PATCH/DELETE /api/bulk-actions/defs/:id
   "guard": [{ "field": "is_on_hold", "op": "neq", "value": true }],
   "access": { "mode": "roles", "role_ids": ["…"] },
   "require_reason": true, "confirm_text": "…", "variant": "default" }`
+    },
+    { type: 'h3', id: 'bulk-transition-note', text: 'Bulk transitions and Send Back' },
+    {
+      type: 'p',
+      text: 'The list bulk bar\u2019s **Transition** picker offers each move once, by its label. A pipeline often has several transitions with the same label, such as a Send Back from each approval step; picking it moves every selected record with the one that starts at that record\u2019s own state, and records that have no such move are skipped and counted as not moved. When the move needs a note (Send Back, Cancel), a note box asks once and the same note goes on every record; for other moves the note is optional.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/:collection/bulk-transition
+{ "ids": ["371201", "372338"],
+  "transition_ids": ["<send back from L2>", "<send back from L3>"],
+  "comment": "Pricing changed — please re-quote" }
+→ { "succeeded": 2, "failed": 0, "errors": [] }`
     }
   ]
 }

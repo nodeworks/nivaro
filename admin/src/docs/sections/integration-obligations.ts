@@ -151,6 +151,25 @@ export const integrationObligations: DocSection = {
     {
       type: 'note',
       text: 'The same functions run the real cycle: `alertUnmetObligations`, `runRetryPass` and `runMissingRefirePass` take `{ dryRun: true }` and return a `plan` instead of acting. Each pass works one batch at a time (200 notices, 50 retries, 25 re-sends), so the preview shows the first cycle, not the whole backlog.'
+    },
+    {
+      type: 'h3',
+      id: 'obligations-skip-sends',
+      text: 'Records a partner does not take (skip_sends)'
+    },
+    {
+      type: 'p',
+      text: 'An external API can list values the partner must never receive in `integration_config.skip_sends`. Each rule names a field of the request body (a dotted path) and `starts_with` or `equals` (case does not matter), with an optional reason. A body that matches is not sent, by a transition action or a flow step, and its obligation is recorded as `skipped` with the reason (\u201cnot sent: workflow_id B254-1 \u2014 MWF does not support market B254 yet\u201d). The reconciliation sweep never turns such a skip into overdue.'
+    },
+    {
+      type: 'pre',
+      code: `{ "skip_sends": [
+    { "field": "workflow_id", "starts_with": "B254-",
+      "reason": "MWF does not support market B254 yet" } ] }`
+    },
+    {
+      type: 'p',
+      text: 'A flow\u2019s external API step that gets a 2xx answer whose body says it was accepted (OK / SUCCESS) records its obligation as `sent`; a bare 2xx stays `pending` until the partner acknowledges it.'
     }
   ]
 }
