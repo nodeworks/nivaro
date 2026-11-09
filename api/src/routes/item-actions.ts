@@ -265,6 +265,20 @@ export async function itemActionsRoutes(app: FastifyInstance) {
           .send({ error: `${action.label} is not available on this record right now` })
     }
 
+    // One run per action + record at a time: a second press while the first is still talking to
+    // the partner is refused, never sent twice.
+    const { claimItemActionRun, itemActionRunKey, releaseItemActionRun } = await import(
+      '../services/item-action-runs.js'
+    )
+    const runKey = itemActionRunKey(req.params.id, collection, itemId)
+    const redis = (app as unknown as { redis?: Parameters<typeof claimItemActionRun>[1] }).redis
+    if (!(await claimItemActionRun(runKey, redis, req.id ?? user.id))) {
+      return reply.status(409).send({
+        error: `${action.label} is already running on this record. Wait for it to finish, then check the result.`,
+        code: 'ACTION_RUNNING'
+      })
+    }
+
     try {
       const result = await action.execute({
         collection,
@@ -290,6 +304,8 @@ export async function itemActionsRoutes(app: FastifyInstance) {
       return reply
         .status(failure.status)
         .send({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) })
+    } finally {
+      await releaseItemActionRun(runKey, redis)
     }
   })
 }
