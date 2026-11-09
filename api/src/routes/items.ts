@@ -785,6 +785,7 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
+    const dryRun = ['1', 'true'].includes(String((req.query as Record<string, string>).dry_run ?? ''))
     const wanted = [
       ...new Set(
         [...(Array.isArray(transition_ids) ? transition_ids : []), transition_id]
@@ -850,17 +851,24 @@ export async function itemsRoutes(app: FastifyInstance) {
           | undefined
         if (!instance) {
           failed++
+          errors.push({ item: String(item), error: 'Has no workflow' })
           continue
         }
         // The transition must belong to this record's own template (and, of several, start at
         // the record's state).
-        const transition = pickBulkTransition(
+        const picked = pickBulkTransitionWhy(
           candidates,
           instance as { template: unknown; current_state?: unknown }
         )
+        const transition = picked.transition
         if (!transition) {
           failed++
-          errors.push({ item: String(item), error: 'Not available from this record’s state' })
+          errors.push({
+            item: String(item),
+            error: picked.ambiguous
+              ? 'More than one step it could go to — pick which one'
+              : 'Not available from this record’s state'
+          })
           continue
         }
 
@@ -881,7 +889,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           failed++
           errors.push({
             item: String(item),
-            error: String(refusal.body.code ?? refusal.body.error ?? 'Refused')
+            error: String(refusal.body.error ?? refusal.body.code ?? 'Refused')
           })
           continue
         }
@@ -894,6 +902,12 @@ export async function itemsRoutes(app: FastifyInstance) {
             item: String(item),
             error: `${held.body.locked_by_name ?? 'Someone else'} is editing it right now`
           })
+          continue
+        }
+        // ?dry_run=1: every gate above ran, nothing moves — the bulk bar shows who would and
+        // who would not (and why) before the person runs it.
+        if (dryRun) {
+          succeeded++
           continue
         }
 
@@ -955,7 +969,21 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
     }
     rp.end()
-    return reply.send({ succeeded, failed, errors })
+    // Name the records that did not move (as the caller may read them), so the bar can say which.
+    let labeled = errors as Array<{ item: string; error: string; label?: string }>
+    if (errors.length > 0) {
+      try {
+        const { linkLabelsAsUser } = await import('../services/ai-link-labels.js')
+        const labels = await linkLabelsAsUser(
+          req.user as User,
+          new Map([[collection, new Set(errors.slice(0, 200).map((e) => String(e.item)))]])
+        )
+        labeled = errors.map((e) => ({ ...e, label: labels[`${collection}:${e.item}`] }))
+      } catch {
+        /* labels are decoration */
+      }
+    }
+    return reply.send({ succeeded, failed, errors: labeled, ...(dryRun ? { dry_run: true } : {}) })
   })
 
   // POST /items/:collection/auto-id-preview — render an auto_id pattern against
@@ -2375,18 +2403,30 @@ async function simulateSandboxWrite(
 }
 
 /** Of the transitions a bulk move names, the one for this record: same template, starting at the
- *  record's current state, else a from-any one. Null = none applies here. */
-export function pickBulkTransition<T extends { template: unknown; from_state?: unknown }>(
+ *  record's current state, else a from-any one. Null = none applies here. Several from this state
+ *  into different steps (Send Back → Started / → Level 1) is a choice the caller must make, so
+ *  it is refused (`ambiguous`) rather than guessed. */
+export function pickBulkTransition<
+  T extends { template: unknown; from_state?: unknown; to_state?: unknown }
+>(candidates: T[], instance: { template: unknown; current_state?: unknown }): T | null {
+  return pickBulkTransitionWhy(candidates, instance).transition
+}
+
+export function pickBulkTransitionWhy<
+  T extends { template: unknown; from_state?: unknown; to_state?: unknown }
+>(
   candidates: T[],
   instance: { template: unknown; current_state?: unknown }
-): T | null {
+): { transition: T | null; ambiguous: boolean } {
   const key = (v: unknown) => String(v ?? '').toUpperCase()
   const own = candidates.filter((t) => key(t.template) === key(instance.template))
-  if (own.length === 0) return null
-  if (own.length === 1 && candidates.length === 1) return own[0]
-  return (
-    own.find((t) => t.from_state != null && key(t.from_state) === key(instance.current_state)) ??
-    own.find((t) => t.from_state == null) ??
-    null
+  if (own.length === 0) return { transition: null, ambiguous: false }
+  if (own.length === 1 && candidates.length === 1) return { transition: own[0], ambiguous: false }
+  const fromHere = own.filter(
+    (t) => t.from_state != null && key(t.from_state) === key(instance.current_state)
   )
+  const pool = fromHere.length > 0 ? fromHere : own.filter((t) => t.from_state == null)
+  if (new Set(pool.map((t) => key(t.to_state))).size > 1)
+    return { transition: null, ambiguous: true }
+  return { transition: pool[0] ?? null, ambiguous: false }
 }

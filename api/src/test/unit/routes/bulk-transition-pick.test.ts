@@ -25,4 +25,14 @@ describe('pickBulkTransition', () => {
       'sb-l2'
     )
   })
+  it('refuses when two moves from this state go to different steps', () => {
+    const twoTargets = [
+      { id: 'sb-start', template: T, from_state: 'L3', to_state: 'STARTED' },
+      { id: 'sb-l1', template: T, from_state: 'L3', to_state: 'L1' }
+    ]
+    expect(pickBulkTransition(twoTargets, { template: T, current_state: 'L3' })).toBeNull()
+    expect(pickBulkTransition([twoTargets[1]], { template: T, current_state: 'L3' })?.id).toBe(
+      'sb-l1'
+    )
+  })
 })

@@ -3794,6 +3794,7 @@ function BulkBar({
   collection,
   selectedIds,
   transitions,
+  states = [],
   fields,
   relations,
   registryKeys,
@@ -3802,7 +3803,14 @@ function BulkBar({
 }: {
   collection: string
   selectedIds: Array<string | number>
-  transitions: Array<{ id: string; label: string; comment_mode?: string | null }>
+  transitions: Array<{
+    id: string
+    label: string
+    comment_mode?: string | null
+    to_state?: string | null
+  }>
+  /** Pipeline states, for "Send back to …" labels. */
+  states?: Array<{ id: string; label: string; sort?: number | null }>
   fields: CMSField[]
   relations: CMSRelation[]
   /** browser_config.bulk_actions — null = all */
@@ -3903,18 +3911,67 @@ function BulkBar({
   // over records in different states needs all of them — each record takes its own (2026-11-09).
   const [transitionId, setTransitionId] = useState('')
   const [transitionNote, setTransitionNote] = useState('')
+  // A label can lead to several states (Send Back → Started, Send Back → Level 1): the person
+  // picks where they go, and only the transitions into that state are sent.
   const transitionGroups = useMemo(() => {
-    const byLabel = new Map<string, { label: string; ids: string[]; noteRequired: boolean }>()
+    const byLabel = new Map<
+      string,
+      { label: string; ids: string[]; noteRequired: boolean; targets: Map<string, string[]> }
+    >()
     for (const t of transitions) {
       const label = t.label?.trim() || 'Move'
-      const g = byLabel.get(label) ?? { label, ids: [], noteRequired: false }
+      const g = byLabel.get(label) ?? {
+        label,
+        ids: [] as string[],
+        noteRequired: false,
+        targets: new Map<string, string[]>()
+      }
       g.ids.push(t.id)
       if (t.comment_mode === 'required') g.noteRequired = true
+      const to = String(t.to_state ?? '')
+      g.targets.set(to, [...(g.targets.get(to) ?? []), t.id])
       byLabel.set(label, g)
     }
     return [...byLabel.values()]
   }, [transitions])
   const chosenGroup = transitionGroups.find((g) => g.label === transitionId) ?? null
+  const [transitionTarget, setTransitionTarget] = useState('')
+  const stateOf = (id: string) =>
+    states.find((st) => String(st.id).toUpperCase() === id.toUpperCase())
+  const targetOptions = chosenGroup
+    ? [...chosenGroup.targets.keys()]
+        .filter(Boolean)
+        .sort((a, b) => Number(stateOf(a)?.sort ?? 0) - Number(stateOf(b)?.sort ?? 0))
+    : []
+  const needsTarget = targetOptions.length > 1
+  const chosenIds = !chosenGroup
+    ? []
+    : !needsTarget
+      ? chosenGroup.ids
+      : transitionTarget
+        ? (chosenGroup.targets.get(transitionTarget) ?? [])
+        : []
+  // Before running: which of the selected records can make this move, and why the others can't
+  // (another step, no such move from where they are, someone editing it, a requirement).
+  const previewKey = chosenIds.length ? `${chosenIds.join(',')}|${selectedIds.join(',')}` : ''
+  const { data: preview, isFetching: previewing } = useQuery({
+    queryKey: ['bulk-transition-preview', collection, previewKey],
+    queryFn: () =>
+      client.request<{
+        succeeded: number
+        failed: number
+        errors: Array<{ item: string; error: string; label?: string }>
+      }>(
+        post(`/items/${collection}/bulk-transition?dry_run=1`, {
+          ids: selectedIds,
+          transition_ids: chosenIds,
+          comment: '(preview)'
+        })
+      ),
+    enabled: mode === 'transition' && chosenIds.length > 0,
+    staleTime: 15_000,
+    retry: false
+  })
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
 
@@ -4146,27 +4203,39 @@ function BulkBar({
           className='flex items-center gap-1.5'
           onSubmit={(e) => {
             e.preventDefault()
-            if (!chosenGroup) return
+            if (!chosenGroup || chosenIds.length === 0) return
             if (chosenGroup.noteRequired && !transitionNote.trim()) return
             const note = transitionNote.trim()
             void run(async (pid) => {
-              const res = await client.request<{ succeeded: number; failed: number }>(
+              const res = await client.request<{
+                succeeded: number
+                failed: number
+                errors?: Array<{ item: string; error: string; label?: string }>
+              }>(
                 post(`/items/${collection}/bulk-transition?progress=${pid}`, {
                   ids: selectedIds,
-                  transition_ids: chosenGroup.ids,
+                  transition_ids: chosenIds,
                   ...(note ? { comment: note } : {})
                 })
               )
               setTransitionNote('')
               return res.failed > 0
-                ? `${chosenGroup.label}: ${res.succeeded} done, ${res.failed} not moved`
+                ? `${chosenGroup.label}: ${res.succeeded} done, ${res.failed} not moved — ${(
+                    res.errors ?? []
+                  )
+                    .slice(0, 3)
+                    .map((e) => `${e.label ?? `#${e.item}`}: ${e.error}`)
+                    .join('; ')}`
                 : `${chosenGroup.label}: ${res.succeeded} done`
             })
           }}
         >
           <SimpleSelect
             value={transitionId}
-            onChange={setTransitionId}
+            onChange={(v) => {
+              setTransitionId(v)
+              setTransitionTarget('')
+            }}
             options={[
               { value: '', label: 'Choose transition…' },
               ...transitionGroups.map((g) => ({ value: g.label, label: g.label }))
@@ -4174,6 +4243,21 @@ function BulkBar({
             ariaLabel='Choose transition'
             className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white dark:text-foreground focus:ring-0 dark:border-border dark:bg-background dark:text-foreground'
           />
+          {chosenGroup && needsTarget && (
+            <SimpleSelect
+              value={transitionTarget}
+              onChange={setTransitionTarget}
+              options={[
+                { value: '', label: `${chosenGroup.label} to…` },
+                ...targetOptions.map((id) => ({
+                  value: id,
+                  label: stateOf(id)?.label ?? 'another step'
+                }))
+              ]}
+              ariaLabel={`${chosenGroup.label} to which step`}
+              className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white dark:text-foreground focus:ring-0 dark:border-border dark:bg-background dark:text-foreground'
+            />
+          )}
           {chosenGroup && (
             <input
               value={transitionNote}
@@ -4190,11 +4274,42 @@ function BulkBar({
           )}
           <button
             type='submit'
-            disabled={busy || !chosenGroup || (chosenGroup.noteRequired && !transitionNote.trim())}
+            disabled={
+              busy ||
+              !chosenGroup ||
+              chosenIds.length === 0 ||
+              (preview != null && preview.succeeded === 0) ||
+              (chosenGroup.noteRequired && !transitionNote.trim())
+            }
             className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
           >
-            Run
+            {preview && !previewing ? `Run (${preview.succeeded})` : 'Run'}
           </button>
+          {chosenIds.length > 0 && (
+            <span
+              role='status'
+              className='max-w-[420px] text-[12px] text-slate-300 dark:text-muted-foreground'
+              data-bulk-transition-preview
+            >
+              {previewing || !preview ? (
+                'Checking the selected records…'
+              ) : preview.failed === 0 ? (
+                `All ${preview.succeeded} can move.`
+              ) : (
+                <>
+                  <span className='font-medium text-amber-300 dark:text-amber-400'>
+                    {preview.succeeded} of {preview.succeeded + preview.failed} can move.{' '}
+                    {preview.failed} can’t:
+                  </span>{' '}
+                  {preview.errors
+                    .slice(0, 4)
+                    .map((e) => `${e.label ?? `#${e.item}`} — ${e.error}`)
+                    .join('; ')}
+                  {preview.errors.length > 4 ? `; and ${preview.errors.length - 4} more` : ''}
+                </>
+              )}
+            </span>
+          )}
           <button
             type='button'
             disabled={!transitionId}
@@ -5854,7 +5969,12 @@ export function CollectionBrowserView({
       client
         .request<{
           data: {
-            transitions: Array<{ id: string; label: string; comment_mode?: string | null }>
+            transitions: Array<{
+              id: string
+              label: string
+              comment_mode?: string | null
+              to_state?: string | null
+            }>
             states?: Array<{ id: string; key: string; label: string; color?: string | null }>
           }
         }>(get(isAdmin ? `/pipelines/${templateId}` : `/pipelines/${templateId}/outline`))
@@ -10233,6 +10353,7 @@ export function CollectionBrowserView({
           collection={collection}
           selectedIds={selectedIds}
           transitions={pipelineTemplate?.transitions ?? []}
+          states={pipelineTemplate?.states ?? []}
           fields={meta?.fields ?? []}
           relations={meta?.relations ?? []}
           registryKeys={bc.bulk_actions ?? null}

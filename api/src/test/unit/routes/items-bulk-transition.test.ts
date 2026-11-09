@@ -121,7 +121,10 @@ function makeDbMock(fx: DbFixture) {
   return vi.fn((table: string) => {
     switch (table) {
       case 'nivaro_workflow_transitions':
-        return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(fx.transition)) })) }
+        return {
+          where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(fx.transition)) })),
+          whereIn: vi.fn(() => Promise.resolve(fx.transition ? [fx.transition] : []))
+        }
       case 'nivaro_workflow_bindings':
         return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(undefined)) })) }
       case 'nivaro_workflow_instances':
@@ -241,7 +244,10 @@ describe('POST /items/:collection/bulk-transition — requirements enforcement',
         }
       }
       if (table === 'nivaro_workflow_transitions') {
-        return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(baseTransition)) })) }
+        return {
+          where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(baseTransition)) })),
+          whereIn: vi.fn(() => Promise.resolve([baseTransition]))
+        }
       }
       if (table === 'nivaro_workflow_bindings') {
         return { where: vi.fn(() => ({ first: vi.fn(() => Promise.resolve(undefined)) })) }

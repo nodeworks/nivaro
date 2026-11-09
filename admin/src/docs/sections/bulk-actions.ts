@@ -128,10 +128,10 @@ PATCH/DELETE /api/bulk-actions/defs/:id
   "access": { "mode": "roles", "role_ids": ["…"] },
   "require_reason": true, "confirm_text": "…", "variant": "default" }`
     },
-    { type: 'h3', id: 'bulk-transition-note', text: 'Bulk transitions and Send Back' },
     {
-      type: 'p',
-      text: 'The list bulk bar\u2019s **Transition** picker offers each move once, by its label. A pipeline often has several transitions with the same label, such as a Send Back from each approval step; picking it moves every selected record with the one that starts at that record\u2019s own state, and records that have no such move are skipped and counted as not moved. When the move needs a note (Send Back, Cancel), a note box asks once and the same note goes on every record; for other moves the note is optional.'
+      type: 'h3',
+      id: 'bulk-transition-note',
+      text: 'The list bulk bar\u2019s **Transition** picker offers each move once, by its label. When that move can lead to more than one step (Send Back to Started or to Level 1), a second picker asks where the records go, and only moves into that step are used: each record takes the one that starts at its own state. Before you run it, the bar checks every selected record and says how many can move and which cannot, with the reason (a different step, no such move from where it is, someone editing it, a missing requirement); Run shows the count that will move. When the move needs a note (Send Back, Cancel), a note box asks once and the same note goes on every record; for other moves the note is optional. `?dry_run=1` runs the same checks without moving anything.'
     },
     {
       type: 'pre',
