@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T02:56:22.290Z",
+  "generated_at": "2026-11-09T14:13:45.345Z",
   "releases": [
+    {
+      "version": "0.3.100",
+      "tag": "v0.3.100",
+      "date": "2026-11-09T09:13:25-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "a prefilled new record runs the field rules its values trigger",
+              "hash": "f3b1e9eaf"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.99",
       "tag": "v0.3.99",
-      "date": "2026-11-08T21:56:07-05:00",
+      "date": "2026-11-08T21:56:22-05:00",
       "sections": [
         {
           "label": "Fixed",
