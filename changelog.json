@@ -1,10 +1,57 @@
 {
-  "generated_at": "2026-11-09T01:20:57.825Z",
+  "generated_at": "2026-11-09T02:35:42.576Z",
   "releases": [
+    {
+      "version": "0.3.98",
+      "tag": "v0.3.98",
+      "date": "2026-11-08T21:35:27-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "files",
+              "text": "download log, File downloads report, per-file download counts",
+              "hash": "2296a6b2a"
+            },
+            {
+              "section": "Added",
+              "scope": "deploy",
+              "text": "GET /api/preflight/quiet for the deploy's quiet wait",
+              "hash": "019ae25fa"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "monitors",
+              "text": "Deploy watch alerts only on a real regression",
+              "hash": "4a473e661"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "release",
+              "text": "wait for imports and scheduled jobs before a deploy",
+              "hash": "2abf3f7a3"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.97",
       "tag": "v0.3.97",
-      "date": "2026-11-08T20:20:39-05:00",
+      "date": "2026-11-08T20:20:57-05:00",
       "sections": [
         {
           "label": "Fixed",
