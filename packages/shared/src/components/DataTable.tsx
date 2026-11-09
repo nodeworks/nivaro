@@ -1520,6 +1520,17 @@ export function DataTable<T = Record<string, unknown>>({
                   <Button
                     variant='ghost'
                     size='sm'
+                    className='h-7 px-2 text-[12px] text-slate-600'
+                    disabled={page <= 1}
+                    onClick={() => onPageChange(1)}
+                    aria-label='First page'
+                    data-tip='First page'
+                  >
+                    «
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='sm'
                     className='h-7 px-2.5 text-[12px] text-slate-600'
                     disabled={page <= 1}
                     onClick={() => onPageChange(page - 1)}
@@ -1537,6 +1548,17 @@ export function DataTable<T = Record<string, unknown>>({
                     onClick={() => onPageChange(page + 1)}
                   >
                     Next →
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='h-7 px-2 text-[12px] text-slate-600'
+                    disabled={page >= totalPages}
+                    onClick={() => onPageChange(totalPages)}
+                    aria-label='Last page'
+                    data-tip='Last page'
+                  >
+                    »
                   </Button>
                 </div>
               </div>

@@ -4,7 +4,8 @@ import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useS
 import { DrilldownContext, useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { parseAllowedCollections } from '../lib/allowed-collections'
-import { get } from '../lib/commands'
+import { get, patch } from '../lib/commands'
+import { toastError } from '../lib/error-toast'
 import {
   isEmptyValue as isBlank,
   isFolded,
@@ -20,7 +21,7 @@ import {
   isDisplayFormulaField,
   resolvePlacementText
 } from '../lib/placement-behaviour'
-import { useRecordReader } from '../lib/record-loader'
+import { invalidateRecordRow, useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
 import { matchesVisibleWhen } from '../lib/visible-when'
@@ -997,6 +998,16 @@ function ChildTable({
             <button
               type='button'
               disabled={page <= 1}
+              onClick={() => setPage(1)}
+              aria-label='First page'
+              data-tip='First page'
+              className='h-6 rounded px-2 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+            >
+              «
+            </button>
+            <button
+              type='button'
+              disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className='h-6 rounded px-2 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
             >
@@ -1012,6 +1023,16 @@ function ChildTable({
               className='h-6 rounded px-2 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
             >
               Next →
+            </button>
+            <button
+              type='button'
+              disabled={page >= totalPages}
+              onClick={() => setPage(totalPages)}
+              aria-label='Last page'
+              data-tip='Last page'
+              className='h-6 rounded px-2 text-[11px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+            >
+              »
             </button>
           </span>
         </div>
@@ -1518,6 +1539,17 @@ function RecordReadViewBody({
   const renderValue = (a: LayoutAssignment) => {
     const f = fieldByName.get(a.field)
     const ov = parseOverrides(a.overrides)
+    // A yes/no the layout lets people switch from Summary (placement `summary_toggle`).
+    if (ov.summary_toggle === true && !design && itemId && record)
+      return (
+        <SummaryToggle
+          collection={collection}
+          itemId={String(itemId)}
+          field={a.field}
+          value={record[a.field]}
+          label={labelFor(a)}
+        />
+      )
     // #2712: computed here from the record's values; never stored.
     if (isDisplayFormulaField(a.field)) {
       const df = displayFormulaOf(ov)
@@ -2156,5 +2188,69 @@ export function RecordReadView(props: Parameters<typeof RecordReadViewBody>[0]) 
         <RecordReadViewBody {...props} />
       </DrilldownContext.Provider>
     </DesignCanvas>
+  )
+}
+
+/** A yes/no switched straight from Summary view: one PATCH of that field as the reader (access,
+ *  edit lock and validation are the server's, as for any save). */
+function SummaryToggle({
+  collection,
+  itemId,
+  field,
+  value,
+  label
+}: {
+  collection: string
+  itemId: string
+  field: string
+  value: unknown
+  label: ReactNode
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [pending, setPending] = useState<boolean | null>(null)
+  const on = pending ?? (value === true || value === 1 || value === '1' || value === 'true')
+  const flip = async () => {
+    if (pending !== null) return
+    const next = !on
+    setPending(next)
+    try {
+      await client.request(patch(`/items/${collection}/${itemId}`, { [field]: next }))
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['rrv-record', collection, itemId] }),
+        qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+      ])
+      invalidateRecordRow(qc, collection, itemId)
+    } catch (err) {
+      toastError(err, 'Could not save that change')
+    } finally {
+      setPending(null)
+    }
+  }
+  return (
+    <button
+      type='button'
+      role='switch'
+      aria-checked={on}
+      aria-label={typeof label === 'string' ? label : field}
+      disabled={pending !== null}
+      onClick={() => void flip()}
+      data-summary-toggle={field}
+      className='group inline-flex items-center gap-2 rounded-md py-0.5 text-[13px] font-medium text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-60 dark:text-slate-100'
+    >
+      <span
+        aria-hidden
+        className={`relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full transition-colors ${
+          on ? 'bg-nvr-cyan' : 'bg-slate-300 dark:bg-slate-600'
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+            on ? 'translate-x-[16px]' : 'translate-x-[2px]'
+          }`}
+        />
+      </span>
+      {on ? 'Yes' : 'No'}
+    </button>
   )
 }
