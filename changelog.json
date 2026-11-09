@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-09T21:22:25.319Z",
+  "generated_at": "2026-11-09T21:47:55.809Z",
   "releases": [
+    {
+      "version": "0.3.110",
+      "tag": "v0.3.110",
+      "date": "2026-11-09T16:47:37-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "queues",
+              "text": "bulk Move / Send Back from a queue picks the step and takes one note",
+              "hash": "ed076a225"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "queues offer bulk Move / Send Back",
+              "hash": "1bde4f028"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.109",
       "tag": "v0.3.109",
-      "date": "2026-11-09T16:22:08-05:00",
+      "date": "2026-11-09T16:22:25-05:00",
       "sections": [
         {
           "label": "Fixed",
