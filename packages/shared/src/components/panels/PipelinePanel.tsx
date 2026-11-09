@@ -9,6 +9,7 @@ import {
   Minus,
   Search,
   Send,
+  Undo2,
   UserPlus,
   Users,
   X,
@@ -954,17 +955,25 @@ export function latestSendBack(
 function SendBackNotice({ entry }: { entry: PipelineHistoryEntry }) {
   const who =
     [entry.first_name, entry.last_name].filter(Boolean).join(' ') || entry.user_email || 'Someone'
+  // A row of the Progress card, flush like its other rows: the note is what the person must act
+  // on, so it leads; who sent it back and when follows, quieter.
   return (
     <div
-      className='mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/30 dark:bg-amber-500/10'
+      className='flex items-start gap-2.5 border-t border-amber-200/80 bg-amber-50/70 px-4 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/[0.06]'
       data-send-back-notice
     >
-      <p className='text-[12px] font-medium text-amber-900 dark:text-amber-200'>
-        Sent back by {withBehalf(who, entry)} · {formatRelative(entry.timestamp)}
-      </p>
-      <p className='mt-0.5 whitespace-pre-line text-[13px] text-amber-950 dark:text-amber-100'>
-        {entry.comment}
-      </p>
+      <Undo2
+        aria-hidden
+        className='mt-[3px] h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400'
+      />
+      <div className='min-w-0 flex-1'>
+        <p className='whitespace-pre-line break-words text-[13px] leading-snug text-slate-800 dark:text-slate-100'>
+          {entry.comment}
+        </p>
+        <p className='mt-0.5 text-[11.5px] text-amber-800/80 dark:text-amber-300/80'>
+          Sent back by {withBehalf(who, entry)} · {formatRelative(entry.timestamp)}
+        </p>
+      </div>
     </div>
   )
 }
