@@ -382,6 +382,12 @@ export async function preflightRoutes(app: FastifyInstance) {
       }
     })
   }
+  // Deploy gate (efp-nivaro deploy-swarm.sh polls this on a running task right before it
+  // rolls the servers): is an import or a long scheduled job mid-run? Read-only.
+  app.get('/preflight/quiet', { preHandler: requireAdmin }, async () => {
+    const { deployQuietState } = await import('../services/deploy-quiet.js')
+    return { data: await deployQuietState() }
+  })
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
     const [migrations, connectivity, render, media, realtime] = await Promise.all([
       checkMigrations(),

@@ -18,36 +18,19 @@
  * Read-only.
  */
 import { db } from '../db/index.js'
+import { deployQuietState } from '../services/deploy-quiet.js'
 
 const args = process.argv.slice(2)
 const force = args.includes('--force')
 const waitIdx = args.indexOf('--wait-minutes')
 const waitMinutes = waitIdx >= 0 ? Number(args[waitIdx + 1]) || 30 : 30
 const POLL_GAP_MS = 25_000
-const STALE_RUNNING_HOURS = 6
 
 type Busy = { imports: string[]; jobs: string[] }
 
-const BUSY_IMPORT_STATUSES = ['queued', 'pending', 'running', 'processing', 'staging', 'loading']
-
 async function busyNow(): Promise<Busy> {
-  const imports = (await db('nivaro_import_queue')
-    .whereIn('status', BUSY_IMPORT_STATUSES)
-    .whereRaw('created_at > DATEADD(hour, -?, GETUTCDATE())', [STALE_RUNNING_HOURS])
-    .select('id', 'import_key', 'status', 'started_at')) as Array<{
-    id: number
-    import_key: string
-    status: string
-    started_at: Date | null
-  }>
-  const jobs = (await db('nivaro_job_runs')
-    .where('status', 'running')
-    .whereRaw('started_at > DATEADD(hour, -?, GETUTCDATE())', [STALE_RUNNING_HOURS])
-    .select('job_id', 'started_at')) as Array<{ job_id: string; started_at: Date }>
-  return {
-    imports: imports.map((i) => `import #${i.id} ${i.import_key} (${i.status})`),
-    jobs: jobs.map((j) => `job ${j.job_id} (running since ${new Date(j.started_at).toISOString()})`)
-  }
+  const { imports, jobs } = await deployQuietState()
+  return { imports, jobs }
 }
 
 const isQuiet = (b: Busy) => b.imports.length === 0 && b.jobs.length === 0
