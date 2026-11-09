@@ -315,8 +315,33 @@ export function presencePageLabel(
     const label = m[2] ? labels.get(`${m[1]}:${m[2]}`) : undefined
     return label ? `${titleCase(m[1])} › ${label}` : titleCase(m[1])
   }
-  const first = path.split('?')[0].split('/').filter(Boolean)[0]
-  return first ? titleCase(first.replace(/[-_]/g, ' ')) : 'Home'
+  const parts = path.split(/[?#]/)[0].split('/').filter(Boolean)
+  const first = parts[0]
+  if (!first) return 'Home'
+  const section = titleCase(first.replace(/[-_]/g, ' '))
+  // "/admin/imports" reads "Admin › Imports", not just "Admin" (2026-11-09). A second segment that
+  // is an id (number, uuid, long token) stays out — it names a record, not a page.
+  const sub = parts[1]
+  if (!sub || isIdLikeSegment(sub)) return section
+  return `${section} › ${titleCase(decodeSegment(sub).replace(/[-_]/g, ' '))}`
+}
+
+function decodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg)
+  } catch {
+    return seg
+  }
+}
+
+/** A path segment that names a record rather than a page. */
+export function isIdLikeSegment(seg: string): boolean {
+  return (
+    /^\d+$/.test(seg) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg) ||
+    /^[A-Za-z0-9_-]{20,}$/.test(seg) ||
+    (/\d/.test(seg) && /^[A-Z0-9-]+$/.test(seg)) // friendly ids like CM26-80332
+  )
 }
 
 /**

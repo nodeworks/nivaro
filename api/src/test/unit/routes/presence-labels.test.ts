@@ -47,6 +47,14 @@ describe('presence page labels', () => {
   it('reads other routes as their first segment', () => {
     expect(presencePageLabel('/sla-rules/4?x=1', new Map())).toBe('Sla Rules')
     expect(presencePageLabel('/', new Map())).toBe('Home')
+    expect(presencePageLabel('/admin/imports', new Map())).toBe('Admin › Imports')
+    expect(presencePageLabel('/admin/data-integrity?tab=people', new Map())).toBe(
+      'Admin › Data Integrity'
+    )
+    expect(presencePageLabel('/flows/3f525bd5-6b8f-4016-81eb-95a03432b467', new Map())).toBe(
+      'Flows'
+    )
+    expect(presencePageLabel('/workflows/CM26-80332', new Map())).toBe('Workflows')
     expect(presencePageLabel(null, new Map())).toBeNull()
   })
 })
