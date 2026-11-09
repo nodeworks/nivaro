@@ -154,6 +154,7 @@ import { offscreenPill, stateAspectEffect, statsOutrunRows } from './live-state-
 import { OwnerAvatars } from './OwnerAvatars'
 import { pathHeader } from './path-label'
 import { QueueBulkBar } from './QueueBulkBar'
+import { QueueBulkMove } from './QueueBulkMove'
 import { QueueItemSheet } from './QueueItemSheet'
 import { QueueKanbanBoard } from './QueueKanbanBoard'
 import { QueueQuickFilters } from './QueueQuickFilters'
@@ -5315,6 +5316,25 @@ export function QueueWorklist({
               Open in tabs
             </button>
           )}
+          {/* Move / Send Back with one note — the list bar's flow (2026-11-09). */}
+          {builtinGate('transition') &&
+            (() => {
+              const picked = items.filter(
+                (r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks'
+              )
+              const kinds = [...new Set(picked.map((r) => r.collection))]
+              return picked.length > 0 ? (
+                <QueueBulkMove
+                  collection={kinds.length === 1 ? kinds[0] : null}
+                  ids={picked.map((r) => r.item_id)}
+                  disabled={bulkBusy}
+                  onDone={() => {
+                    setSelectedIds([])
+                    void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+                  }}
+                />
+              ) : null
+            })()}
           <BulkActionButtons
             targets={items
               .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
