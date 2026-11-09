@@ -680,7 +680,7 @@ export function RecordLiveSync({
           className='flex items-center gap-3 rounded-lg border border-nvr-cyan/40 bg-nvr-cyan/10 px-3.5 py-2.5'
         >
           <Bot className='h-4 w-4 shrink-0 animate-pulse text-nvr-cyan' />
-          <p className='min-w-0 flex-1 text-[12px] text-[#0e7490] dark:text-[#67e8f9]'>
+          <p className='min-w-0 flex-1 text-[12px] text-[#0e7490] dark:text-slate-200'>
             <span className='font-semibold'>Automation is updating this record</span> —{' '}
             {flows.join(', ')}. Its changes appear here when it finishes.
           </p>
@@ -689,7 +689,7 @@ export function RecordLiveSync({
       {realtime && (flash || uploads.length > 0) && (
         <div className='flex flex-wrap items-center gap-2'>
           {flash && (
-            <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-[#67e8f9]'>
+            <span className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-2.5 py-0.5 text-[11px] font-medium text-[#0e7490] dark:text-slate-200'>
               <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
               Updated just now by someone else
             </span>
