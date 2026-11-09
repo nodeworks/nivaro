@@ -183,6 +183,33 @@ async function waitJob(cfg, project, jobId, label, { minutes }) {
   }
 }
 /** Wait for `before` to succeed, then play the manual `deploy` job and wait. */
+/**
+ * Waits until the target database has no import or scheduled job mid-run, so the
+ * rolling update this push sets off never stops one halfway (2026-11-08: a PO
+ * import finished 3 s after a production deploy — by luck). Read-only; runs
+ * api/src/scripts/deploy-quiet-check.ts against `dbName`. --skip-quiet-check skips it.
+ */
+function quietCheck(dbName, label) {
+  if (!dbName) return
+  if (process.argv.includes('--skip-quiet-check')) {
+    log(`${label}: quiet check skipped (--skip-quiet-check)`)
+    return
+  }
+  const tsx = resolve(ROOT, 'api', 'node_modules', '.bin', 'tsx')
+  log(`${label}: waiting until ${dbName} has no import or scheduled job running`)
+  const r = spawnSync(tsx, [resolve(ROOT, 'api', 'src', 'scripts', 'deploy-quiet-check.ts'), '--wait-minutes', '30'], {
+    cwd: resolve(ROOT, 'api'),
+    env: { ...process.env, DB_DATABASE: dbName, SKIP_BOOT_MIGRATIONS: '1', CRON_TICKS: 'off' },
+    encoding: 'utf8',
+    timeout: 35 * 60_000
+  })
+  const out = String(r.stdout ?? '').split('\n').filter((l) => l.includes('[quiet-check]'))
+  for (const l of out) log(`${label}: ${l.replace('[quiet-check] ', '')}`)
+  if (r.status !== 0) {
+    throw new StageError(`${label}: ${dbName} is still busy (import or scheduled job running) — not deploying. Re-run later, or pass --skip-quiet-check.`)
+  }
+}
+
 async function runDeploy(cfg, project, ref, sha, label, { before, deploy, variables, minutes }) {
   const p = await pipelineFor(cfg, project, ref, sha, label)
   log(`${label}: pipeline ${p.id} (${p.web_url})`)
@@ -230,6 +257,7 @@ function loadConfig() {
     production: {
       name: p.name ?? 'production',
       enabled: p.enabled === true,
+      quietCheckDb: p.quiet_check_db ?? null,
       path: expand(p.path),
       sourceBranch: p.source_branch ?? 'main',
       branch: p.branch ?? 'production',
@@ -448,6 +476,8 @@ async function main() {
 
     currentStage = 'push'
     emit('push', 'start')
+    // The push below starts the production deploy on its own; wait for quiet first.
+    quietCheck(prod.quietCheckDb, 'API')
     const apiSha = pushBranch(prod.path, prod.branch, source.hash, `chore: promote nivaro ${VERSION} to production`, (dir) => {
       writeFileSync(join(dir, prod.pinFile), pinText)
       return [prod.pinFile]
