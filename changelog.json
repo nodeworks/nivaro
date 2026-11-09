@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T00:37:32.135Z",
+  "generated_at": "2026-11-09T01:20:57.825Z",
   "releases": [
+    {
+      "version": "0.3.97",
+      "tag": "v0.3.97",
+      "date": "2026-11-08T20:20:39-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "downloads work, file links download, real file types",
+              "hash": "3fb6d5d1c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.96",
       "tag": "v0.3.96",
-      "date": "2026-11-08T19:37:08-05:00",
+      "date": "2026-11-08T19:37:32-05:00",
       "sections": [
         {
           "label": "Fixed",
