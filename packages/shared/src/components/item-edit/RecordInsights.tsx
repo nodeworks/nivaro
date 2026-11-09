@@ -3,6 +3,7 @@ import { Info } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { formatDateTime } from '../../lib/utils'
 
 /**
  * Record insights (Record & Form UX sprint): one header popover answering
@@ -488,7 +489,7 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
             <p className='mt-0.5 text-[10.5px] text-slate-400'>
               <span data-tip={m.to}>to {shortRecipients(m.to)}</span>
               {' · '}
-              <span data-tip={new Date(m.created_at).toLocaleString()}>
+              <span data-tip={formatDateTime(m.created_at)}>
                 {new Date(m.created_at).toLocaleDateString(undefined, {
                   month: 'short',
                   day: 'numeric'
@@ -557,7 +558,7 @@ function ChatMentionsTab({ collection, itemId }: { collection: string; itemId: s
             <span className='text-slate-400'>in {roomLabel(m.room)}</span>
           </p>
           <p className='truncate text-[11.5px] text-slate-500'>{m.message.slice(0, 160)}</p>
-          <p className='text-[10px] text-slate-400'>{new Date(m.date_created).toLocaleString()}</p>
+          <p className='text-[10px] text-slate-400'>{formatDateTime(m.date_created)}</p>
         </div>
       ))}
     </div>

@@ -26,7 +26,7 @@ import {
 import { get, post } from '../../lib/commands'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
-import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
@@ -960,7 +960,7 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
         </span>
         <span
           className='shrink-0 text-[11px] tabular-nums text-slate-400'
-          title={revision.timestamp ? new Date(revision.timestamp).toLocaleString() : undefined}
+          title={revision.timestamp ? formatDateTime(revision.timestamp) : undefined}
         >
           {exactTime}
         </span>
@@ -1138,7 +1138,7 @@ function RevisionRow({
         <AgentBadge label={revision.via_agent} />
         <span
           className='shrink-0 text-[11px] tabular-nums text-slate-400'
-          title={revision.timestamp ? new Date(revision.timestamp).toLocaleString() : undefined}
+          title={revision.timestamp ? formatDateTime(revision.timestamp) : undefined}
         >
           {exactTime}
         </span>
@@ -1384,9 +1384,7 @@ function TimeTravelTools({ data, meta }: { data: Revision[]; meta: FieldMetaMap 
               <div className='border-b border-slate-200 bg-[#f0fbff] px-2.5 py-1.5 dark:border-border dark:bg-nvr-cyan/10'>
                 <span className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>
                   Record as of{' '}
-                  {asOfRevision.timestamp
-                    ? new Date(asOfRevision.timestamp).toLocaleString()
-                    : asOf}
+                  {asOfRevision.timestamp ? formatDateTime(asOfRevision.timestamp) : asOf}
                 </span>
               </div>
               <div className='max-h-80 overflow-y-auto'>
@@ -1825,8 +1823,8 @@ function RevisionValueSearch({ collection, item }: { collection: string; item: s
                     ))}
                   </p>
                   <p className='text-[10.5px] text-slate-400'>
-                    {m.user_name ?? 'System'} ·{' '}
-                    {m.timestamp ? new Date(m.timestamp).toLocaleString() : ''} · {m.action}
+                    {m.user_name ?? 'System'} · {m.timestamp ? formatDateTime(m.timestamp) : ''} ·{' '}
+                    {m.action}
                   </p>
                 </div>
               ))}
@@ -1971,7 +1969,7 @@ function TimeLapseBar({
       {cur && (
         <p className='mt-1 text-[11.5px] text-slate-600 dark:text-slate-300'>
           <span className='font-medium capitalize'>{cur.action ?? 'change'}</span>
-          {cur.timestamp ? ` · ${new Date(cur.timestamp).toLocaleString()}` : ''}
+          {cur.timestamp ? ` · ${formatDateTime(cur.timestamp)}` : ''}
           {cur.user_name ? ` · ${cur.user_name}` : ''}
           {deltaLabels.length > 0 && (
             <span className='ml-1 text-[10.5px] text-slate-400'>

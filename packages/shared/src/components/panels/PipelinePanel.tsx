@@ -37,7 +37,7 @@ import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-t
 import { userErrorMessage } from '../../lib/safe-error'
 import { serverNow } from '../../lib/server-clock'
 import { userCardQuery } from '../../lib/user-cards'
-import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
@@ -1357,7 +1357,7 @@ function StateTrack({
     const from = labelOf.get(h.from_state ?? '') ?? 'the previous step'
     const to = labelOf.get(h.to_state) ?? 'the next step'
     const who = isMachineEntry(h) ? 'it moved automatically' : `${entryName(h)} moved it`
-    return `Passed over on ${new Date(h.timestamp).toLocaleString()} — ${who} straight from ${from} to ${to}`
+    return `Passed over on ${formatDateTime(h.timestamp)} — ${who} straight from ${from} to ${to}`
   }
 
   return (
@@ -1545,9 +1545,7 @@ function StateTrack({
                             {hopSpan && (
                               <p className='text-muted-foreground'>→ straight to {hopSpan}</p>
                             )}
-                            <p className='text-muted-foreground'>
-                              {new Date(h.timestamp).toLocaleString()}
-                            </p>
+                            <p className='text-muted-foreground'>{formatDateTime(h.timestamp)}</p>
                           </TooltipContent>
                         </Tooltip>
                       )

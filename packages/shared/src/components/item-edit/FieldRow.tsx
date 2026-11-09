@@ -19,7 +19,7 @@ import { useNivaroClient, useParentDraft } from '../../context'
 import { AUTOFILL_CHECK_KEY, readAiFill, showsAiButton } from '../../lib/ai-fill'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
-import { cn, titleCase } from '../../lib/utils'
+import { cn, formatDateTime, titleCase } from '../../lib/utils'
 import { requiredByRules } from '../../lib/validation-rules'
 import { GlossaryLabel } from '../ai/GlossaryText'
 import { FieldSourceInfo, useFieldSource } from '../ConfigReadBack'
@@ -307,7 +307,7 @@ function FieldLineageButton({
                           className='w-[88px] shrink-0 truncate text-right text-[10px] text-slate-400'
                           data-tip={
                             r.updated_at
-                              ? `${r.updated_by ?? 'unknown'} · ${new Date(r.updated_at).toLocaleString()}`
+                              ? `${r.updated_by ?? 'unknown'} · ${formatDateTime(r.updated_at)}`
                               : undefined
                           }
                         >
@@ -430,7 +430,7 @@ function FieldHistoryButton({
       return v === true || v === 'true' ? 'Yes' : 'No'
     }
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
-      return new Date(v).toLocaleString()
+      return formatDateTime(v)
     }
     if (typeof v === 'object') return JSON.stringify(v).slice(0, 60)
     return String(v).slice(0, 80)
@@ -488,7 +488,7 @@ function FieldHistoryButton({
                   </span>
                   <span className='block text-[10.5px] text-slate-400'>
                     {e.action === 'create' ? 'initial value' : 'changed'}
-                    {e.timestamp ? ` · ${new Date(e.timestamp).toLocaleString()}` : ''}
+                    {e.timestamp ? ` · ${formatDateTime(e.timestamp)}` : ''}
                     {e.user_name ? ` · ${e.user_name}` : ''}
                     {/* Lineage: WHERE the value came from, when it wasn't a
                         plain user edit — import, integration, automation. */}

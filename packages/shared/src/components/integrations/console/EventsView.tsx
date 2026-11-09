@@ -613,9 +613,7 @@ export function EventsView({ onOpenRecord }: EventsViewProps) {
           {resolvedRecord ? (
             <>
               Events that touched <span className='font-medium text-foreground'>{record}</span>
-              <span className='text-[12px]'>
-                ({resolvedRecord.collection.replace(/_/g, ' ')} {resolvedRecord.item})
-              </span>
+              <span className='text-[12px]'>({resolvedRecord.collection.replace(/_/g, ' ')})</span>
             </>
           ) : (
             <>No record matches “{record}”</>

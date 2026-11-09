@@ -14,7 +14,14 @@ import { get, post } from '../../lib/commands'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
 import { useRecordReader } from '../../lib/record-loader'
-import { choiceLabel, cn, formatDate, titleCase, toLocalDateString } from '../../lib/utils'
+import {
+  choiceLabel,
+  cn,
+  formatDate,
+  formatDateTime,
+  titleCase,
+  toLocalDateString
+} from '../../lib/utils'
 import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, revealGroupKey, useLayoutDesign } from '../layout-editor/design-context'
 import { GridGuides } from '../layout-editor/grid-guides'
@@ -320,7 +327,7 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
       // formatDate keeps a calendar day on its stored day.
       const dm = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/)
       if (dm) return formatDate(`${dm[1]}-${dm[2]}-${dm[3]}`)
-      return dateOnly ? formatDate(s) : new Date(s).toLocaleString()
+      return dateOnly ? formatDate(s) : formatDateTime(s)
     } catch {
       /* noop */
     }
@@ -818,9 +825,7 @@ export function StripFieldValue({
     }
     if (displayFormat === 'datetime') {
       try {
-        return (
-          <span className={`font-semibold ${base}`}>{new Date(String(val)).toLocaleString()}</span>
-        )
+        return <span className={`font-semibold ${base}`}>{formatDateTime(String(val))}</span>
       } catch {
         /* fall through */
       }

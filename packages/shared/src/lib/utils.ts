@@ -90,7 +90,17 @@ export function toLocalDateString(value: unknown): string {
   return d.toLocaleDateString()
 }
 
-export function formatDateTime(date: string | Date) {
+/**
+ * THE date-time format ("Nov 8, 2026, 3:14 PM", the viewer's local time or
+ * their chosen zone). Every date-time a person reads — worklists, record
+ * history, activity, comments, invoice tables — goes through this, never an
+ * ad hoc toLocaleString (army 11: the worklist and the history disagreed).
+ * Empty → ''; a value that is not a date comes back as written.
+ */
+export function formatDateTime(date: string | Date | number | null | undefined) {
+  if (date === null || date === undefined || date === '') return ''
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return String(date)
   return new Intl.DateTimeFormat('en-US', {
     ...(displayTimezone ? { timeZone: displayTimezone } : {}),
     month: 'short',
@@ -98,7 +108,7 @@ export function formatDateTime(date: string | Date) {
     year: 'numeric',
     hour: 'numeric',
     minute: '2-digit'
-  }).format(new Date(date))
+  }).format(d)
 }
 
 // Display preference setters (#229/#230/#411) — hosts hydrate from the

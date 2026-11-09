@@ -1,4 +1,4 @@
-import { formatRelative } from './utils'
+import { formatDateTime, formatRelative } from './utils'
 
 // Mirrors ColumnFormatConfig in api/src/services/queues.ts (duplicated by
 // design — admin does not import api types). Display-only: raw values stay
@@ -65,7 +65,16 @@ export function formatValue(raw: string, cfg: ColumnFormatConfig): string {
   // callers handle it (countFromResolved); a plain value passes through.
   if (cfg.type === 'count') return raw
 
-  if (cfg.type === 'datetime') return formatDateTemplate(raw, cfg.template)
+  if (cfg.type === 'datetime') {
+    // A template with a time of day reads the ONE shared date-time format
+    // (army 11: "08/11/2026 - 10:10AM" in the worklist beside "Nov 8, 2026,
+    // 3:14 PM" in the history). Date-only templates and 'relative' keep theirs.
+    if (cfg.template !== 'relative' && /h|H/.test(cfg.template)) {
+      const shown = formatDateTime(raw)
+      return shown || raw
+    }
+    return formatDateTemplate(raw, cfg.template)
+  }
   if (cfg.type === 'number') {
     const n = Number(raw)
     if (Number.isNaN(n) || raw.trim() === '') return raw
@@ -107,10 +116,7 @@ export function formatMultiValue(raw: string, cfg: ColumnFormatConfig): string {
  * 2 everywhere else. Out-of-range or missing values fall back rather than
  * throwing at Intl, which rejects anything outside 0–20.
  */
-export function precisionOf(
-  options: unknown,
-  fallback = 2
-): number {
+export function precisionOf(options: unknown, fallback = 2): number {
   const opts =
     typeof options === 'string'
       ? (() => {
@@ -127,10 +133,7 @@ export function precisionOf(
 }
 
 /** Intl options for a numeric field, honoring its configured precision. */
-export function numericIntlOptions(
-  options: unknown,
-  format?: string
-): Intl.NumberFormatOptions {
+export function numericIntlOptions(options: unknown, format?: string): Intl.NumberFormatOptions {
   const digits = precisionOf(options)
   if (format === 'currency') {
     return {
@@ -143,7 +146,6 @@ export function numericIntlOptions(
   return { maximumFractionDigits: digits }
 }
 
-
 /**
  * Relation-count columns (#142/#193): the count behind a resolved multi-value
  * cell. ids are server-capped at 50, but the rendered string carries the true
@@ -154,7 +156,10 @@ export function countFromResolved(value: string | null, ids: string[] | undefine
   if (!value || value === '—') return ids?.length ?? 0
   const m = value.match(/\+(\d+) more$/)
   if (m) {
-    const shown = value.replace(/ \+\d+ more$/, '').split(', ').filter(Boolean).length
+    const shown = value
+      .replace(/ \+\d+ more$/, '')
+      .split(', ')
+      .filter(Boolean).length
     return shown + Number(m[1])
   }
   return value.split(', ').filter(Boolean).length

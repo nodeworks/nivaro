@@ -58,6 +58,7 @@ import {
 } from '../lib/cbv-export'
 import { warmPageLookups } from '../lib/cbv-page-warm'
 import { del, get, patch, post } from '../lib/commands'
+import { type CompareFieldMeta, compareValueText } from '../lib/compare-value'
 import {
   DATE_FILTER_OPS,
   type DateFilterOp,
@@ -153,7 +154,7 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
-import { cn, humanHours } from '../lib/utils'
+import { cn, formatDateTime, humanHours } from '../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
@@ -579,8 +580,10 @@ function findM2ORelation(
     (r) =>
       r.many_collection === collection &&
       r.many_field === field &&
-      r.junction_field === null &&
-      r.one_collection !== null
+      // Loose: a relation list may omit junction_field rather than send null
+      // (record compare showed a raw "124133", army 11 staging check).
+      !r.junction_field &&
+      !!r.one_collection
   )
 }
 
@@ -3998,7 +4001,7 @@ function BulkBar({
               targets={selectedIds.map((id) => ({ collection, id }))}
               fields={fields}
               relations={relations}
-              renderValue={(rels, f, v) => compareCell(collection, rels, f, v)}
+              renderValue={(rels, f, v, m) => compareCell(collection, rels, f, v, m)}
               className='h-8 rounded-md border border-white/20 dark:border-border px-3 text-[12.5px] font-medium hover:bg-white/10 dark:hover:bg-muted'
             />
           )}
@@ -9652,7 +9655,7 @@ export function CollectionBrowserView({
                                   style={pinStyle(key)}
                                   data-tip={
                                     hours != null && inst?.entered_at
-                                      ? `In ${inst.state_label ?? 'this state'} since ${new Date(inst.entered_at).toLocaleString()}`
+                                      ? `In ${inst.state_label ?? 'this state'} since ${formatDateTime(inst.entered_at)}`
                                       : undefined
                                   }
                                   className={`whitespace-nowrap px-3 py-1.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300 ${pinCls(key, 'z-[1]', stickyBg)}`}
@@ -10173,15 +10176,14 @@ export function compareCell(
   collection: string,
   relations: CMSRelation[],
   field: string,
-  v: unknown
+  v: unknown,
+  meta?: CompareFieldMeta
 ): React.ReactNode {
+  // A link reads as the linked record's label, looked up as the viewer.
   const m2o = findM2ORelation(relations, collection, field)
   if (m2o?.one_collection) return <RelationLabel relatedCollection={m2o.one_collection} id={v} />
-  if (typeof v === 'boolean') return v ? 'Yes' : 'No'
-  if (typeof v === 'object') return JSON.stringify(v).slice(0, 80)
-  const s = String(v)
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return new Date(s).toLocaleString()
-  return s.length > 160 ? `${s.slice(0, 160)}…` : s
+  // Choices by their label, yes/no, money, dates (lib/compare-value.ts, army 11).
+  return compareValueText(v, meta)
 }
 
 /** @deprecated Column model changed to plain field keys — kept for source

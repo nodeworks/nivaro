@@ -4,12 +4,14 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
+import type { CompareFieldMeta } from '../lib/compare-value'
 import {
   type FormSection,
   formSections,
   type SectionGroupIn,
   type SectionPlacementIn
 } from '../lib/form-sections'
+import { friendlyIdOf, type RecordRefMeta, recordRefLabel } from '../lib/record-ref'
 import { cn, titleCase } from '../lib/utils'
 import { Skeleton } from './ui/skeleton'
 
@@ -132,6 +134,27 @@ export function buildCompare(input: {
     .filter((s) => s.rows.length > 0)
 }
 
+/**
+ * The heading of one side: the record's business id ("MM26-81441"), else its
+ * own words ("No workflow number · …"), else "Record 2" — never "#367714".
+ * Pure (army 11 staging check).
+ */
+export function compareSideName(
+  meta: RecordRefMeta | null,
+  record: Record<string, unknown> | null,
+  id: string | number,
+  collection: string,
+  index: number
+): string {
+  const friendly = friendlyIdOf(meta, record)
+  if (friendly) return friendly
+  if (meta && record) {
+    const label = recordRefLabel(meta, record, id, collection)
+    if (label && label !== String(id)) return label
+  }
+  return `Record ${index + 1}`
+}
+
 const ABSENT_TEXT = {
   record: 'Not available',
   form: 'Not on this form',
@@ -149,8 +172,9 @@ export function RecordCompareDialog({
   ids: Array<string | number>
   /** The collection's fields in order (used for records without a form). */
   fields: Array<{ field: string; hidden?: boolean }>
-  /** How a value reads (relations as labels, dates, …). */
-  renderValue: (field: string, value: unknown) => ReactNode
+  /** How a value reads (relations as labels, choices, money, dates …); `meta` is the
+   *  field's config row (type, interface, options) when it has loaded. */
+  renderValue: (field: string, value: unknown, meta?: CompareFieldMeta) => ReactNode
   onClose: () => void
 }) {
   const client = useNivaroClient()
@@ -178,15 +202,25 @@ export function RecordCompareDialog({
       staleTime: 30_000
     }))
   })
-  const config = useQuery<Array<{ field: string; label: string | null }>>({
+  const config = useQuery<Array<CompareFieldMeta & { field: string; label: string | null }>>({
     queryKey: ['bulk-fields-config', collection],
     queryFn: () =>
       client
-        .request<{ data: Array<{ field: string; label: string | null }> }>(
+        .request<{ data: Array<CompareFieldMeta & { field: string; label: string | null }> }>(
           get(`/field-config/${collection}`)
         )
         .then((r) => (Array.isArray(r.data) ? r.data : [])),
     staleTime: 60_000
+  })
+  // Each side is named by its business id ("MM26-81441"), never its row id (army 11).
+  const collectionMeta = useQuery<RecordRefMeta | null>({
+    queryKey: ['cbv-collection-meta', collection],
+    queryFn: () =>
+      client
+        .request<{ data: RecordRefMeta }>(get(`/collections/${collection}`))
+        .then((r) => r.data ?? null)
+        .catch(() => null),
+    staleTime: 10 * 60_000
   })
 
   // Focus moves into the dialog on open and back to the opener on close, so
@@ -211,7 +245,13 @@ export function RecordCompareDialog({
   const formRows = forms.map((q) => q.data ?? null)
   // Cheap (a few hundred cells at most): computed on every render.
   const labels: Record<string, string | null> = {}
-  for (const f of config.data ?? []) labels[f.field] = f.label
+  const metaByField = new Map<string, CompareFieldMeta>()
+  for (const f of config.data ?? []) {
+    labels[f.field] = f.label
+    metaByField.set(f.field, f)
+  }
+  const sideName = (i: number) =>
+    compareSideName(collectionMeta.data ?? null, recs[i], ids[i], collection, i)
   const sections = loading
     ? []
     : buildCompare({
@@ -291,8 +331,11 @@ export function RecordCompareDialog({
             <span className='px-3 py-2 text-[11.5px] font-medium text-muted-foreground'>Field</span>
             {ids.map((id, i) => (
               <span key={String(id)} className='min-w-0 px-3 py-2'>
-                <span className='block truncate font-mono text-[12px] font-medium text-foreground'>
-                  #{String(id)}
+                <span
+                  className='block truncate text-[12px] font-semibold text-foreground'
+                  data-compare-side
+                >
+                  {sideName(i)}
                 </span>
                 {!sameForm && (
                   <span className='block truncate text-[11px] text-muted-foreground'>
@@ -364,7 +407,7 @@ export function RecordCompareDialog({
                           ) : c.value == null || c.value === '' ? (
                             <span className='text-muted-foreground'>—</span>
                           ) : (
-                            renderValue(r.field, c.value)
+                            renderValue(r.field, c.value, metaByField.get(r.field))
                           )}
                         </span>
                       ))}

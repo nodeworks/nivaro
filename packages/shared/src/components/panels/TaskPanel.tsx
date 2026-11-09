@@ -17,7 +17,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { invalidateRecordTasks, OPEN_TASK_STATUSES } from '../../lib/record-tasks'
-import { cn, formatDate, formatRelative } from '../../lib/utils'
+import { cn, formatDate, formatDateTime, formatRelative } from '../../lib/utils'
 import { TaskDoButton } from '../ai/TaskDo'
 import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
@@ -813,7 +813,7 @@ function TaskHistory({ taskId }: { taskId: number }) {
           <span className='text-slate-400'>
             {' '}
             · {h.user_name ? `${h.user_name}, ` : ''}
-            <span title={new Date(h.at).toLocaleString()}>{formatRelative(h.at)}</span>
+            <span title={formatDateTime(h.at)}>{formatRelative(h.at)}</span>
           </span>
         </li>
       ))}
@@ -993,9 +993,7 @@ export function TaskPanel({
             {t.status === 'cancelled'
               ? 'Cancelled'
               : `Done${t.completed_by_name ? ` by ${t.completed_by_name}` : ''}`}{' '}
-            <span title={new Date(t.completed_at).toLocaleString()}>
-              {formatRelative(t.completed_at)}
-            </span>
+            <span title={formatDateTime(t.completed_at)}>{formatRelative(t.completed_at)}</span>
           </span>
         )}
         {t.created_by_name && !same(t.created_by, t.assignee) && (

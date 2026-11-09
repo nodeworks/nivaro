@@ -22,6 +22,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { type DigestLine, type DigestSection, registerDigestSection } from './daily-digest.js'
 import { type NotifyUserOptions, notifyUser } from './notification-channels.js'
+import { plainObligationReason } from './obligation-reason-text.js'
 
 const DEDUPE_HOURS = 12
 /** Outcomes worth waking someone up for — `sent`, `pending`, `skipped` and
@@ -384,13 +385,13 @@ export async function alertUnmetObligations(
       ? await resolveFriendlyId(r.collection, r.item).catch(() => `${r.collection} #${r.item}`)
       : `${r.kind} · ${r.item}`
     const why = r.reason
-      ? `${r.api} was never told — ${r.reason}`
+      ? `${r.api} was never told — ${plainObligationReason(r.reason)}`
       : `${r.api} has not received this — it is ${r.outcome}.`
 
     for (const userId of recipients) {
       const opts: NotifyUserOptions = {
         subject: `Integration: ${r.api} has not got ${label}`,
-        message: r.reason ?? `${r.kind} is ${r.outcome}.`,
+        message: r.reason ? plainObligationReason(r.reason) : `${r.kind} is ${r.outcome}.`,
         category: 'integrations',
         collection: r.collection,
         item: r.item,
@@ -492,7 +493,7 @@ async function buildIntegrationDigestSection(userId: string): Promise<DigestSect
       : `${r.kind} · ${r.item}`
     lines.push({
       text: `${r.api} — ${label}: ${r.outcome}`,
-      sub: r.reason,
+      sub: r.reason ? plainObligationReason(r.reason) : r.reason,
       url: routable ? `${config.ADMIN_URL}/collections/${r.collection}/${r.item}` : board
     })
   }

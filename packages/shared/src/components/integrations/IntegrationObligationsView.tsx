@@ -15,6 +15,7 @@ import {
   obligationTabsFor,
   toneForOutcome
 } from '../../lib/obligation-filters'
+import { plainObligationReason } from '../../lib/obligation-reason-text'
 import { serverNow } from '../../lib/server-clock'
 import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { EmptyState } from '../EmptyState'
@@ -232,10 +233,27 @@ interface Row {
   submission_status: string | null
   submission_last_error: string | null
   submission_response: string | null
+  /** The record's business id ("PW26-81102"); null when it does not resolve. */
+  record_label?: string | null
   /** Send now can repeat a stored request (absent on an older server = yes). */
   can_resend?: boolean
   /** "Send current data" is offered (the kind rebuilds from current data). */
   can_send_current?: boolean
+}
+
+/**
+ * How the board names a row's record: its business id ("PW26-81102") — never the internal row
+ * id. Without one, the record kind in words ("Workflow"); an inbound bucket keeps its key, which
+ * is the request path and hour, not an id.
+ */
+export function obligationRecordText(r: {
+  collection: string
+  item: string
+  record_label?: string | null
+}): string {
+  if (r.record_label) return r.record_label
+  if (/^(nivaro|directus)_/i.test(r.collection)) return r.item
+  return titleCase(r.collection).replace(/s$/, '')
 }
 
 /** The four `submission_*` columns, reshaped into the small object the
@@ -808,8 +826,24 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                           : undefined
                       }
                     >
-                      <td className='px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200'>
-                        {r.collection} · {r.item}
+                      <td
+                        className='px-3 py-1.5 font-medium text-slate-700 dark:text-slate-200'
+                        data-obligation-record
+                      >
+                        {routable ? (
+                          <button
+                            type='button'
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              nav.open({ collection: r.collection, itemId: r.item })
+                            }}
+                            className='rounded text-left underline decoration-slate-300 underline-offset-2 hover:decoration-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:decoration-slate-600 dark:hover:decoration-slate-400'
+                          >
+                            {obligationRecordText(r)}
+                          </button>
+                        ) : (
+                          obligationRecordText(r)
+                        )}
                       </td>
                       <td className='px-3 py-1.5 text-slate-600 dark:text-slate-300'>
                         {kindLabel.get(r.kind) ?? r.kind}
@@ -849,14 +883,9 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                       <td
                         className='max-w-[38ch] truncate px-3 py-1.5 text-slate-500 dark:text-muted-foreground'
                         data-obligation-reason
-                        data-tip={r.reason ?? undefined}
+                        data-tip={r.reason ? plainObligationReason(r.reason) : undefined}
                       >
-                        {r.reason ?? '—'}
-                        {r.submission_id != null && (
-                          <span className='ml-1 text-slate-300 dark:text-slate-600'>
-                            · submission #{r.submission_id}
-                          </span>
-                        )}
+                        {r.reason ? plainObligationReason(r.reason) : '—'}
                       </td>
                       <td
                         className='hidden px-3 py-1.5 text-slate-500 dark:text-muted-foreground lg:table-cell'

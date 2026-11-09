@@ -25,3 +25,13 @@ describe('plainDetail', () => {
     expect(plainDetail(null)).toBe('')
   })
 })
+
+describe('plainDetail — obligation reasons read the same as the record panel', () => {
+  it('turns the reconcile sweep reason into the shared plain words', async () => {
+    const { plainDetail } = await import('./tone')
+    expect(plainDetail('no send was ever attempted — the trigger did not fire')).toBe(
+      'nothing was sent when this changed'
+    )
+    expect(plainDetail('skip_when_empty: mwf_queue empty')).toBe('this record has no MWF queue yet')
+  })
+})

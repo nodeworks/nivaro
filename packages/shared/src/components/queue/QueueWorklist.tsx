@@ -2839,7 +2839,7 @@ export function QueueWorklist({
       sortable: true,
       render: (row) =>
         row.state_entered_at ? (
-          formatValue(row.state_entered_at, { type: 'datetime', template: 'MM/DD/YYYY - h:mmA' })
+          formatDateTime(row.state_entered_at)
         ) : (
           <span className='text-slate-300 dark:text-slate-600'>—</span>
         )
@@ -5343,12 +5343,13 @@ export function QueueWorklist({
               targets={items
                 .filter((r) => selectedIds.includes(rowId(r)) && r.collection !== 'tasks')
                 .map((r) => ({ collection: r.collection, id: r.item_id }))}
-              renderValue={(rels, f, v) =>
+              renderValue={(rels, f, v, m) =>
                 compareCell(
                   items.find((r) => selectedIds.includes(rowId(r)))?.collection ?? '',
                   rels,
                   f,
-                  v
+                  v,
+                  m
                 )
               }
               disabled={bulkBusy}

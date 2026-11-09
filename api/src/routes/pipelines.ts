@@ -706,6 +706,37 @@ export function badUuidParam(
   return null
 }
 
+/** Redacted: flagged, or renamed "Redacted Redacted" by the legacy proc. */
+export function isRedactedPerson(row: {
+  is_redacted?: boolean | number | null
+  first_name?: string | null
+  last_name?: string | null
+}): boolean {
+  if (row.is_redacted === true || row.is_redacted === 1) return true
+  return (
+    String(row.first_name ?? '')
+      .trim()
+      .toLowerCase() === 'redacted' &&
+    String(row.last_name ?? '')
+      .trim()
+      .toLowerCase() === 'redacted'
+  )
+}
+
+/** How an owner who can no longer act is marked: a redacted (or archived /
+ *  deleted) account is a former user — even when its status still says
+ *  suspended — a suspended one is suspended. Null = can act. */
+export function ownerInactiveKind(row: {
+  status?: string | null
+  is_redacted?: boolean | number | null
+  first_name?: string | null
+  last_name?: string | null
+}): 'suspended' | 'former' | null {
+  if (!isInactivePerson(row)) return null
+  if (isRedactedPerson(row)) return 'former'
+  return String(row.status ?? '').toLowerCase() === 'suspended' ? 'suspended' : 'former'
+}
+
 export async function pipelinesRoutes(app: FastifyInstance) {
   // Before auth and every route's own checks: a non-uuid id never reaches SQL. Per route —
   // only the params that really are uuids there (uuidParamsOf). Must precede every route
@@ -3768,6 +3799,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // a suspended owner showed as a bare avatar beside the active one).
       const ownerIds = [...new Set([...byKey.values()].flat().map((o) => String(o.id)))]
       const gone = new Map<string, 'suspended' | 'former'>()
+      const redacted = new Set<string>()
       if (ownerIds.length > 0) {
         const rows = (await selectInChunks(ownerIds, 500, (chunk) =>
           db('nivaro_users')
@@ -3781,9 +3813,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           last_name: string | null
         }>
         for (const r of rows) {
-          if (!isInactivePerson(r)) continue
-          const st = String(r.status ?? '').toLowerCase()
-          gone.set(String(r.id).toLowerCase(), st === 'suspended' ? 'suspended' : 'former')
+          const kind = ownerInactiveKind(r)
+          if (kind) gone.set(String(r.id).toLowerCase(), kind)
+          if (isRedactedPerson(r)) redacted.add(String(r.id).toLowerCase())
         }
       }
       const out: Record<
@@ -3795,7 +3827,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           const inactive = gone.get(String(o.id).toLowerCase())
           return {
             id: o.id,
-            name: `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email,
+            // A redacted account reads "Former user" like everywhere else, never
+            // "Redacted Redacted" (army 11 0.3.95 check).
+            name:
+              redacted.has(String(o.id).toLowerCase()) || isRedactedPerson(o)
+                ? 'Former user'
+                : `${o.first_name ?? ''} ${o.last_name ?? ''}`.trim() || o.email,
             ...(inactive ? { inactive } : {})
           }
         })

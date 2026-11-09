@@ -27,6 +27,37 @@ import { registerReadinessCheck } from '../services/readiness.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 
 const MAX_LIMIT = 200
+
+/**
+ * Business ids for a page of ledger rows ("PW26-81102"), one batched lookup per collection
+ * (resolveFriendlyIds). An inbound kind's "record" is an API-log bucket (nivaro_*) — no label.
+ * Never throws; a row that resolves to nothing is absent from the map.
+ */
+export async function obligationRecordLabels(
+  rows: Array<{ collection: string; item: string }>,
+  resolve?: (collection: string, ids: string[]) => Promise<Map<string, string>>
+): Promise<Map<string, string>> {
+  const byCollection = new Map<string, Set<string>>()
+  for (const r of rows) {
+    if (!r.collection || r.item == null || /^(nivaro|directus)_/i.test(r.collection)) continue
+    if (!byCollection.has(r.collection)) byCollection.set(r.collection, new Set())
+    byCollection.get(r.collection)?.add(String(r.item))
+  }
+  const out = new Map<string, string>()
+  if (byCollection.size === 0) return out
+  const resolver =
+    resolve ?? (await import('../services/workflow-transitions.js')).resolveFriendlyIds
+  for (const [collection, ids] of byCollection) {
+    try {
+      for (const [id, label] of await resolver(collection, [...ids])) {
+        if (label && label !== id) out.set(`${collection}:${id}`, label)
+      }
+    } catch {
+      /* labels are a nicety — the row still lists */
+    }
+  }
+  return out
+}
 const RECORD_CAP = 50
 const SUMMARY_ID_CAP = 500
 
@@ -392,8 +423,11 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         's.response as submission_response'
       )
     const { sendOptionsFor } = await import('../services/integration-remediation.js')
+    const labels = await obligationRecordLabels(rows as Array<{ collection: string; item: string }>)
     const withOptions = (rows as Array<Record<string, unknown>>).map((r) => ({
       ...r,
+      // The record's business id ("PW26-81102"), never the row id people do not know.
+      record_label: labels.get(`${r.collection}:${r.item}`) ?? null,
       ...sendOptionsFor(getObligationKind(String(r.api), String(r.kind)), {
         submission_id: (r.submission_id as number | null | undefined) ?? null
       })

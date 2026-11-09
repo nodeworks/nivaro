@@ -8,6 +8,7 @@ import { selectInChunks } from './db-batch.js'
 import { getObligationKind } from './integration-obligations.js'
 import { importCadence, isImportStale } from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
+import { plainObligationReason } from './obligation-reason-text.js'
 
 /** How a person reads an obligation kind: its registered label, else the API
  *  name and the kind's key in words (never "wf.nuvolo_status"). */
@@ -410,7 +411,8 @@ export function registerCoreIntegrationSignals(): void {
             // never the raw key "wf.nuvolo_status" (army 11 O4-12).
             group_label: obligationKindLabel(r.api, r.kind),
             title: obligationKindLabel(r.api, r.kind),
-            detail: r.reason ?? undefined,
+            // The same plain words as the record panel (obligation-reason-text, one source).
+            detail: r.reason ? plainObligationReason(r.reason) : undefined,
             since: new Date(r.due_at ?? r.created_at).toISOString(),
             occurrence: `obl:${r.id}`,
             api: r.api,

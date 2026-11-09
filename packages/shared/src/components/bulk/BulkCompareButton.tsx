@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import type { CompareFieldMeta } from '../../lib/compare-value'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { RecordCompareDialog } from '../RecordCompare'
 
@@ -35,7 +36,7 @@ export function BulkCompareButton<R = CMSRelation>({
   className
 }: {
   targets: Array<{ collection: string; id: string | number }>
-  renderValue: (relations: R[], field: string, value: unknown) => ReactNode
+  renderValue: (relations: R[], field: string, value: unknown, meta?: CompareFieldMeta) => ReactNode
   /** The collection's fields in order, when the host already has them. */
   fields?: Array<{ field: string; hidden?: boolean }>
   relations?: R[]
@@ -82,7 +83,7 @@ export function BulkCompareButton<R = CMSRelation>({
           collection={pick.collection}
           ids={pick.ids}
           fields={fields ?? fieldsQ.data ?? []}
-          renderValue={(f, v) => renderValue(rels, f, v)}
+          renderValue={(f, v, m) => renderValue(rels, f, v, m)}
           onClose={() => setOpen(false)}
         />
       )}

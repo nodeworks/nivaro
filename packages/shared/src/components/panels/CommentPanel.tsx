@@ -23,7 +23,7 @@ import {
   useRecordSignalSender
 } from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
-import { formatRelative, titleCase } from '../../lib/utils'
+import { formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
@@ -85,7 +85,7 @@ function MentionReceipts({ comment }: { comment: Comment }) {
           <span
             key={m.id}
             data-mention-seen={m.seen_at ? 'seen' : 'unseen'}
-            title={m.seen_at ? `Seen ${new Date(m.seen_at).toLocaleString()}` : 'Not seen yet'}
+            title={m.seen_at ? `Seen ${formatDateTime(m.seen_at)}` : 'Not seen yet'}
             className={m.seen_at ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}
           >
             {m.seen_at ? '✓ ' : ''}

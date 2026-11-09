@@ -86,10 +86,7 @@ export function SubmissionRow({
             {sub.endpoint_path ?? '—'}
           </span>
           {sub.record_label && (
-            <span
-              className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
-              data-tip={`${sub.collection}/${sub.item}`}
-            >
+            <span className='shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'>
               {recordBadgeLabel(sub.collection, sub.record_label)}
             </span>
           )}

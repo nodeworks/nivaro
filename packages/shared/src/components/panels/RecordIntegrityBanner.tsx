@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { cn, formatDateTime, formatRelative, titleCase } from '../../lib/utils'
 import type { CMSField } from '../item-edit/types'
 
 /**
@@ -238,7 +238,7 @@ export function RecordIntegrityBanner({
           <span
             className='text-[11px] text-amber-600/80 dark:text-amber-400/70'
             data-integrity-checked='stored'
-            title={new Date(data.checked_at).toLocaleString()}
+            title={formatDateTime(data.checked_at)}
           >
             checked {formatRelative(data.checked_at)}
           </span>

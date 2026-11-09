@@ -25,7 +25,7 @@ import {
   renderActivitySentence
 } from '../lib/activity-sentence'
 import { post } from '../lib/commands'
-import { cn } from '../lib/utils'
+import { cn, formatDateTime } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { UserAvatar } from './UserAvatar'
 
@@ -65,7 +65,7 @@ function timeText(ts: ActivityEntryInput['timestamp']): { short: string; full: s
           hour: 'numeric',
           minute: '2-digit'
         }),
-    full: d.toLocaleString()
+    full: formatDateTime(d)
   }
 }
 

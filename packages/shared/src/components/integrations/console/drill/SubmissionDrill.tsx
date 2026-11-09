@@ -2,6 +2,7 @@ import { ArrowRight, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useMemo } from 'react'
 import { useNavigation } from '../../../../context'
+import { plainObligationReason } from '../../../../lib/obligation-reason-text'
 import { cn, titleCase } from '../../../../lib/utils'
 import { useRetrySubmission, useSubmissionDetail } from '../api'
 import { ErrorExplanation } from '../ErrorExplanation'
@@ -255,7 +256,8 @@ function SubmissionDrillBody({
           )}
           {ob?.reason && ob.reason !== s.last_error && (
             <p className='mt-1.5 max-w-[80ch] text-[12px] leading-relaxed text-muted-foreground'>
-              <span className='font-medium text-foreground'>Obligation:</span> {ob.reason}
+              <span className='font-medium text-foreground'>Obligation:</span>{' '}
+              {plainObligationReason(ob.reason)}
             </p>
           )}
         </Section>

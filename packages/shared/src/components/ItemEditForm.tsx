@@ -146,6 +146,7 @@ import {
   choiceLabel,
   cn,
   formatDate,
+  formatDateTime,
   formatRelative,
   titleCase,
   toLocalDateString
@@ -910,7 +911,7 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
   }
   if (format === 'datetime') {
     try {
-      return new Date(String(value)).toLocaleString()
+      return formatDateTime(String(value))
     } catch {
       return String(value)
     }
@@ -1784,7 +1785,7 @@ function ApiProvenanceChip({
             data-provenance-chip
             data-provenance-api={api.log_id}
             className='inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[9.5px] font-medium text-sky-800 hover:bg-sky-100 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300'
-            data-tip={`Created through the API by ${caller} · ${new Date(timestamp).toLocaleString()} — click for the request`}
+            data-tip={`Created through the API by ${caller} · ${formatDateTime(timestamp)} — click for the request`}
           >
             {origin}
           </button>
@@ -1801,9 +1802,7 @@ function ApiProvenanceChip({
             <dt className='text-slate-400'>Caller</dt>
             <dd className='text-slate-700 dark:text-slate-200'>{caller}</dd>
             <dt className='text-slate-400'>When</dt>
-            <dd className='text-slate-700 dark:text-slate-200'>
-              {new Date(api.at).toLocaleString()}
-            </dd>
+            <dd className='text-slate-700 dark:text-slate-200'>{formatDateTime(api.at)}</dd>
           </dl>
           <p className='mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500'>
             Original payload
@@ -13482,7 +13481,7 @@ function ItemEditFormView({
                                             className='mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] text-slate-400 dark:text-slate-500'
                                             data-tip={
                                               lastTouch
-                                                ? new Date(lastTouch.timestamp).toLocaleString()
+                                                ? formatDateTime(lastTouch.timestamp)
                                                 : undefined
                                             }
                                             data-last-touch
@@ -13542,7 +13541,7 @@ function ItemEditFormView({
                                               <span
                                                 data-provenance-chip
                                                 className='inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
-                                                data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${new Date(provenance.timestamp).toLocaleString()}`}
+                                                data-tip={`${provenance.origin}${provenance.user_name ? ` · ${provenance.user_name}` : ''} · ${formatDateTime(provenance.timestamp)}`}
                                               >
                                                 {provenance.origin}
                                               </span>

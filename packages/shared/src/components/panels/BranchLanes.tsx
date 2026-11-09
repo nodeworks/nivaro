@@ -1,6 +1,6 @@
 import { Check, GitBranch, GitMerge } from 'lucide-react'
 import { serverNow } from '../../lib/server-clock'
-import { formatRelative, humanHours } from '../../lib/utils'
+import { formatDateTime, formatRelative, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 
 /** One parallel branch of a split (#1240) — shape of `branches` on
@@ -154,7 +154,7 @@ export function BranchLanes({ data }: { data: BranchLanesData }) {
                                 : 'transparent',
                             border: `1.5px solid ${step.state.color ?? '#94a3b8'}`
                           }}
-                          data-tip={`${step.state.label} · entered ${new Date(step.entered_at).toLocaleString()}${step.by ? ` by ${step.by}` : ''}`}
+                          data-tip={`${step.state.label} · entered ${formatDateTime(step.entered_at)}${step.by ? ` by ${step.by}` : ''}`}
                         >
                           {(!isCurrent || lane.terminal) && (
                             <Check className='h-2.5 w-2.5 text-white' strokeWidth={3} />

@@ -4,6 +4,8 @@
  * same desaturated dark fallbacks — never a bare hex in a component. Classes
  * are full literals so Tailwind's scanner sees them.
  */
+import { plainObligationReason } from '../../../lib/obligation-reason-text'
+
 export type Tone = 'negative' | 'warning' | 'positive' | 'info' | 'neutral'
 
 export const TONE_TEXT: Record<Tone, string> = {
@@ -95,7 +97,9 @@ const UUID_RE = /:?\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * UUIDs inside a partner's error text are dropped. The raw text stays in the tip.
  */
 export function plainDetail(text: string | null | undefined): string {
-  let t = String(text ?? '').trim()
+  // A ledger reason reads the same everywhere (obligation-reason-text, one source) — also
+  // for a problem row stored before the server started sending the plain words.
+  let t = plainObligationReason(String(text ?? '').trim())
   if (!t) return ''
   if (t.startsWith('{') && t.endsWith('}')) {
     try {
