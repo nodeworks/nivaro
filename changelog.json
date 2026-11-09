@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-09T18:47:00.883Z",
+  "generated_at": "2026-11-09T21:22:25.319Z",
   "releases": [
+    {
+      "version": "0.3.109",
+      "tag": "v0.3.109",
+      "date": "2026-11-09T16:22:08-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "default views deletable by admins only, two-press delete; membership sets take a second value",
+              "hash": "7e88b2952"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "membership sets take a second value; default views are admin-only to delete",
+              "hash": "c8141e56a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.108",
       "tag": "v0.3.108",
-      "date": "2026-11-09T13:46:45-05:00",
+      "date": "2026-11-09T13:47:00-05:00",
       "sections": [
         {
           "label": "Fixed",
