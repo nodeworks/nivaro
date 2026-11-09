@@ -477,6 +477,8 @@ export async function filesRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Not found' })
     }
     let storageKey: string
+    // The row whose bytes go out (not a cached transform): logged like GET /files/:id (#3234).
+    let logged: Awaited<ReturnType<typeof servableFile>> | undefined
     const transform = TRANSFORM_KEY.exec(key)
     if (transform) {
       if (!(await servableFile(transform[1], req)))
@@ -489,6 +491,7 @@ export async function filesRoutes(app: FastifyInstance) {
       const file = row ? await servableFile(String(row.id), req) : undefined
       if (!file?.filename_disk) return reply.code(404).send({ error: 'Not found' })
       storageKey = file.filename_disk
+      logged = file
     }
     try {
       const buffer = await getStorage().get(storageKey)
@@ -502,6 +505,7 @@ export async function filesRoutes(app: FastifyInstance) {
           head: buffer.subarray(0, 1024)
         }
       )
+      if (logged) void logFileDownload(app, req, logged)
       return reply
         .headers(storedFileSecurityHeaders(serving.contentType, serving.mode))
         .header('Content-Type', serving.contentType)

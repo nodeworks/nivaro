@@ -15,20 +15,33 @@ const req = (headers: Record<string, string> = {}, query: Record<string, string>
   ({ headers, query }) as never
 
 describe('downloadKind', () => {
-  it('counts a download and a top-level open', () => {
-    expect(downloadKind(req({}, { download: '1' }))).toBe('download')
-    expect(downloadKind(req({ 'sec-fetch-dest': 'document' }))).toBe('open')
-    expect(downloadKind(req())).toBe('open')
+  const kind = (h: Record<string, string>, q: Record<string, string> = {}, type?: string) =>
+    downloadKind(req(h, q), type)
+
+  it('counts a download and an open', () => {
+    expect(kind({}, { download: '1' })).toEqual({ kind: 'download', continuation: false })
+    expect(kind({ 'sec-fetch-dest': 'document' })).toEqual({ kind: 'open', continuation: false })
+    expect(kind({})).toEqual({ kind: 'open', continuation: false })
   })
 
-  it('skips files a page embeds', () => {
-    expect(downloadKind(req({ 'sec-fetch-dest': 'image' }))).toBeNull()
-    expect(downloadKind(req({ 'sec-fetch-dest': 'style' }))).toBeNull()
+  it('skips only an image a page embeds', () => {
+    expect(kind({ 'sec-fetch-dest': 'image' }, {}, 'image/png')).toBeNull()
+    expect(kind({ 'sec-fetch-dest': 'style' }, {}, 'image/svg+xml')).toBeNull()
   })
 
-  it('counts the first piece of a streamed file only', () => {
-    expect(downloadKind(req({ range: 'bytes=0-' }))).toBe('open')
-    expect(downloadKind(req({ range: 'bytes=65536-131071' }))).toBeNull()
+  it('never lets request headers switch off a real download', () => {
+    // A PDF fetched while claiming to be an embedded image still counts.
+    expect(kind({ 'sec-fetch-dest': 'image' }, {}, 'application/pdf')?.kind).toBe('open')
+    // download=1 always counts, whatever the headers say.
+    expect(kind({ 'sec-fetch-dest': 'image' }, { download: '1' }, 'image/png')?.kind).toBe(
+      'download'
+    )
+    // A later piece of a stream counts (folded by the 30-minute window), never skipped.
+    expect(kind({ range: 'bytes=65536-131071' }, {}, 'video/mp4')).toEqual({
+      kind: 'open',
+      continuation: true
+    })
+    expect(kind({ range: 'bytes=0-' })).toEqual({ kind: 'open', continuation: false })
   })
 })
 

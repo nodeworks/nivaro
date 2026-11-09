@@ -27,6 +27,8 @@ import { normalizeApp } from './traffic-client-facts.js'
 
 export const FILE_DOWNLOAD_ACTION = 'file-download'
 const REPEAT_WINDOW_S = 60
+/** A streamed file's later pieces fold into one entry per person + file per this long. */
+const STREAM_WINDOW_S = 1800
 const MAX_RECORDS_PER_FILE = 5
 
 /** Fetch destinations of a resource a page embeds rather than a person opening it. */
@@ -50,18 +52,35 @@ function header(req: Pick<FastifyRequest, 'headers'>, name: string): string {
   return Array.isArray(v) ? String(v[0] ?? '') : String(v ?? '')
 }
 
-/** 'download' (asked to save), 'open' (opened in the browser) or null (not a person's download). */
+export interface DownloadDecision {
+  kind: 'download' | 'open'
+  /** A later piece of a streamed file (a Range not starting at 0). */
+  continuation: boolean
+}
+
+/**
+ * Whether this fetch of a file is logged, decided on the server. The request
+ * headers are the caller's to choose, so none of them can switch a download
+ * off: `download=1` and every non-image file always count, and a later piece of
+ * a streamed file counts too (folded into the first by a 30-minute window, see
+ * logFileDownload). The one fetch left out is an IMAGE a page embeds
+ * (Sec-Fetch-Dest image/style/…): avatars and pictures in rich text would
+ * otherwise log every page view, and an image shown inline is what a reader
+ * already sees.
+ */
 export function downloadKind(
-  req: Pick<FastifyRequest, 'headers' | 'query'>
-): 'download' | 'open' | null {
-  const range = /^bytes=(\d+)-/i.exec(header(req, 'range'))
-  // A streamed video asks for the rest of the file in pieces; only the first counts.
-  if (range && Number(range[1]) > 0) return null
+  req: Pick<FastifyRequest, 'headers' | 'query'>,
+  fileType?: string | null
+): DownloadDecision | null {
   const q = (req.query ?? {}) as { download?: string }
-  if (q.download === '1' || q.download === 'true') return 'download'
-  const dest = header(req, 'sec-fetch-dest').toLowerCase()
-  if (dest && EMBEDDED_DESTS.has(dest)) return null
-  return 'open'
+  const asked = q.download === '1' || q.download === 'true'
+  const range = /^bytes=(\d+)-/i.exec(header(req, 'range'))
+  const continuation = !!range && Number(range[1]) > 0
+  if (!asked && !continuation) {
+    const dest = header(req, 'sec-fetch-dest').toLowerCase()
+    if (dest && EMBEDDED_DESTS.has(dest) && /^image\//i.test(String(fileType ?? ''))) return null
+  }
+  return { kind: asked ? 'download' : 'open', continuation }
 }
 
 /** Which app the download came from: x-nivaro-app, else the page that linked it ('admin', another
@@ -154,19 +173,32 @@ async function recordsOfFile(file: {
 export async function logFileDownload(
   app: FastifyInstance,
   req: FastifyRequest,
-  file: { id: unknown; filename_download?: string | null; uploaded_on?: unknown }
+  file: {
+    id: unknown
+    filename_download?: string | null
+    uploaded_on?: unknown
+    type?: string | null
+  }
 ): Promise<void> {
   try {
     const user = req.user?.id
     if (!user || req.method !== 'GET') return
-    const kind = downloadKind(req)
-    if (!kind) return
+    const decision = downloadKind(req, file.type)
+    if (!decision) return
+    const { kind } = decision
     const fileId = String(file.id)
     const redis = (app as { redis?: { set: (...a: unknown[]) => Promise<unknown> } }).redis
     if (redis) {
       try {
-        const key = `filedl:${tenantScopedRoom(`${String(user).toLowerCase()}:${fileId.toLowerCase()}`)}`
-        if ((await redis.set(key, '1', 'EX', REPEAT_WINDOW_S, 'NX')) === null) return
+        const who = tenantScopedRoom(`${String(user).toLowerCase()}:${fileId.toLowerCase()}`)
+        if (decision.continuation) {
+          // A later piece: logged only when no entry for this person + file in 30 minutes.
+          if ((await redis.set(`filedl-s:${who}`, '1', 'EX', STREAM_WINDOW_S, 'NX')) === null)
+            return
+        } else {
+          if ((await redis.set(`filedl:${who}`, '1', 'EX', REPEAT_WINDOW_S, 'NX')) === null) return
+          await redis.set(`filedl-s:${who}`, '1', 'EX', STREAM_WINDOW_S)
+        }
       } catch {
         /* no Redis = log every hit rather than lose the record */
       }

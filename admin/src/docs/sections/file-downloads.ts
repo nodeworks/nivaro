@@ -13,7 +13,7 @@ export const fileDownloadsGuide: DocSection = {
       type: 'ul',
       items: [
         'Counted: `GET /api/files/:id` with `download=1` (every file link in the apps) and a direct open of the file.',
-        'Not counted: thumbnails (`/files/:id/transform`), files a page shows inline (images, styles and fonts, told apart by the browser’s `Sec-Fetch-Dest`), the follow-up pieces of a streamed video, HEAD requests, and the same person fetching the same file again within a minute.',
+        'Not counted: thumbnails (`/files/:id/transform`), an image a page shows inline (the browser’s `Sec-Fetch-Dest`; only image files — any other file fetched that way still counts), HEAD requests, and the same person fetching the same file again within a minute. The later pieces of a streamed video fold into one entry per person and file per 30 minutes. The decision is the server’s: no request header can switch off a download with `download=1`. Raw storage-key reads (`/files/raw/*`) count the same way.',
         'Each entry records who, which file, which record, and the app it came from: `admin`, the host name of another front end, or `direct` for a link with no page behind it.',
         'Nothing is logged when the file could not be sent (no access, missing from storage).'
       ]
