@@ -30,6 +30,7 @@ import {
   recordObligation,
   resolveObligation
 } from './integration-obligations.js'
+import { SEND_SKIP_PREFIX } from './send-skip-rules.js'
 
 const DEFAULT_ACK_GRACE_MINUTES = 60
 const DEFAULT_SKIP_GRACE_MINUTES = 30
@@ -97,6 +98,11 @@ export function decideReconcile(opts: {
 
   if (latest.outcome === 'skipped') {
     if (age < skipGraceMinutes) return { item, outcome: 'none', reason: null, obligation_id: null }
+    // An admin's skip_sends rule ("this partner does not take these") is a decision, not a
+    // guard that may be wrong — never re-flag it (2026-11-09: MWF B254 went overdue every sweep).
+    if (latest.reason?.startsWith(SEND_SKIP_PREFIX)) {
+      return { item, outcome: 'none', reason: null, obligation_id: null }
+    }
     // The wrong-guard detector: the mechanism decided not to send, and the
     // partner still does not have it.
     return {

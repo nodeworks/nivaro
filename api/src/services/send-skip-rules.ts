@@ -22,6 +22,10 @@ export interface SendSkipRule {
   reason?: string
 }
 
+/** Every skip_sends reason starts with this — the reconcile sweep reads it as a deliberate
+ *  "never send", not a guard that may be wrong. */
+export const SEND_SKIP_PREFIX = 'not sent: '
+
 function at(body: unknown, path: string): unknown {
   let cur: unknown = body
   for (const seg of path.split('.')) {
@@ -47,7 +51,7 @@ export function matchSendSkip(rules: unknown, body: unknown): string | null {
       (typeof r.equals === 'string' && r.equals && s === r.equals.toUpperCase())
     if (hit) {
       const why = typeof r.reason === 'string' && r.reason.trim() ? r.reason.trim() : null
-      return `not sent: ${r.field} ${String(v)}${why ? ` — ${why}` : ''}`
+      return `${SEND_SKIP_PREFIX}${r.field} ${String(v)}${why ? ` — ${why}` : ''}`
     }
   }
   return null

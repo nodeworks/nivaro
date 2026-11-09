@@ -70,6 +70,22 @@ describe('decideReconcile', () => {
     )
   })
 
+  it('never re-flags a skip an admin skip_sends rule made', () => {
+    const d = decideReconcile({
+      expected,
+      latest: {
+        id: 7,
+        outcome: 'skipped',
+        reason: 'not sent: workflow_id B254-1 — MWF does not support market B254 yet',
+        due_at: minsAgo(900),
+        resolved_at: minsAgo(900)
+      },
+      now,
+      ...grace
+    })
+    expect(d.outcome).toBe('none')
+  })
+
   it('leaves a fresh skip alone — the mechanism gets its window', () => {
     const d = decideReconcile({
       expected,
