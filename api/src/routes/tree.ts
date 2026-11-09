@@ -16,7 +16,7 @@ import {
 } from '../lib/tree.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { ForbiddenError, updateOne } from '../services/items.js'
+import { ForbiddenError, getActualColumns, updateOne } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { visibleRecordIds } from '../services/sla-visibility.js'
 import {
@@ -134,12 +134,27 @@ async function seesNode(req: FastifyRequest, collection: string, id: unknown): P
   return (await visibleRecordIds(req.user!, collection, [String(id)])).has(String(id))
 }
 
+/** A tree config whose parent column really exists on the table; null otherwise. A config
+ *  naming a missing column (prod divisions → parent_id, 2026-11-09) failed every read with a
+ *  500; it now reads as "no tree" so the breadcrumb and tree views simply do not render. */
+async function usableTreeConfig(collection: string): Promise<TreeConfig | null> {
+  const config = await getTreeConfig(collection)
+  if (!config) return null
+  try {
+    const cols = await getActualColumns(collection)
+    const want = String(config.parent_field ?? '').toLowerCase()
+    return [...cols].some((c) => c.toLowerCase() === want) ? config : null
+  } catch {
+    return config
+  }
+}
+
 async function resolveConfig(
   req: FastifyRequest,
   reply: FastifyReply,
   collection: string
 ): Promise<TreeConfig | null> {
-  const config = await getTreeConfig(collection)
+  const config = await usableTreeConfig(collection)
   if (!config) {
     reply.code(404).send({ error: 'No tree config for this collection' })
     return null
@@ -181,6 +196,15 @@ export async function treeRoutes(app: FastifyInstance) {
     const existing = await db('nivaro_tree_configs').where({ collection: body.collection }).first()
     if (existing) {
       return reply.code(409).send({ error: 'A tree config for this collection already exists' })
+    }
+    {
+      const parent = String(body.parent_field ?? 'parent_id').toLowerCase()
+      const cols = await getActualColumns(body.collection).catch(() => new Set<string>())
+      if (cols.size > 0 && ![...cols].some((c) => c.toLowerCase() === parent)) {
+        return reply.code(400).send({
+          error: `${body.collection} has no ${body.parent_field ?? 'parent_id'} column to build a tree from`
+        })
+      }
     }
 
     await db('nivaro_tree_configs').insert({
@@ -307,7 +331,7 @@ export async function treeRoutes(app: FastifyInstance) {
     '/tree-configs/by-collection/:col',
     { preHandler: authenticate },
     async (req, reply) => {
-      const config = await getTreeConfig(req.params.col)
+      const config = await usableTreeConfig(req.params.col)
       return reply.send({ data: config ?? null })
     }
   )

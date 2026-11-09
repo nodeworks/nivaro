@@ -1272,7 +1272,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       viewport: parseViewport(viewport)
     })
     const { row: layout } = resolved
-    if (!layout) return reply.code(404).send({ error: 'No layout found' })
+    // No form set up for this collection (Zone / Region / Task records on EFP): every caller
+    // falls back to the automatic all-fields form, so this is expected, not a missing record.
+    if (!layout)
+      return reply.code(404).send({
+        error: 'No form is set up for this collection',
+        code: 'NO_LAYOUT',
+        hint: 'All of its fields are shown instead.'
+      })
     // army11 f3: `?layout=<name>` that names no form this person may open fell
     // back to the default form without a word. The answer says so; the form
     // tells the person.
