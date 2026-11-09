@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T14:13:45.345Z",
+  "generated_at": "2026-11-09T14:50:26.512Z",
   "releases": [
+    {
+      "version": "0.3.101",
+      "tag": "v0.3.101",
+      "date": "2026-11-09T09:49:52-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "download count and \"used in\" chips show in the read view too",
+              "hash": "fd12f4328"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.100",
       "tag": "v0.3.100",
-      "date": "2026-11-09T09:13:25-05:00",
+      "date": "2026-11-09T09:13:45-05:00",
       "sections": [
         {
           "label": "Fixed",
