@@ -846,6 +846,20 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
       }
     }
 
+    // The integration's "do not send" rules (integration_config.skip_sends): skip on
+    // purpose — the run's obligation records `skipped` with this reason.
+    {
+      const { sendSkipReason } = await import('./send-skip-rules.js')
+      const skipSend = await sendSkipReason(apiId, callOpts.body)
+      if (skipSend) {
+        ctx.log.info(
+          { flowId: ctx.flowId, key: op.key, reason: skipSend },
+          'external-api send skipped'
+        )
+        return { status: 'resolve' as const, output: { ...data, $ext_skipped: skipSend } }
+      }
+    }
+
     if (ctx.dryRun) {
       return {
         status: 'resolve' as const,
@@ -989,7 +1003,17 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
     }
   }
 
-  return { status: 'resolve' as const, output: { ...data, [resultKey]: response, ...httpStatus } }
+  // A body that says OK / SUCCESS (the transition push's own test): the obligation is `sent`.
+  const { detectBodyAcceptance } = await import('./workflow-actions.js')
+  return {
+    status: 'resolve' as const,
+    output: {
+      ...data,
+      [resultKey]: response,
+      ...httpStatus,
+      __ext_accepted: status >= 200 && status < 300 && detectBodyAcceptance(undefined, body)
+    }
+  }
 }
 
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -2081,10 +2105,22 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
       const { resolveObligation, flowHaltReason } = await import('./integration-obligations.js')
       const haltedOp =
         progress.halted != null ? operations.find((o) => o.key === progress.halted) : undefined
-      const halt = haltedOp?.type === 'condition' ? flowHaltReason(progress.halted) : null
+      const halt =
+        typeof data.$ext_skipped === 'string'
+          ? data.$ext_skipped
+          : haltedOp?.type === 'condition'
+            ? flowHaltReason(progress.halted)
+            : null
       const landed = pushStatus == null ? progress.matched : pushStatus >= 200 && pushStatus < 300
+      // A 2xx is judged like a transition push (2026-11-09: every flow-sent MWF link sat at
+      // `pending`, went `overdue` after the ack window and told the owner "MWF has not got"
+      // a link MWF had accepted): a body that says OK / SUCCESS is `sent`; anything else
+      // that landed stays `pending` for the ack sweep. (A 2xx carrying an error body is
+      // already a 422 failure from the op itself.)
+      const accepted = data.__ext_accepted === true
+      delete data.__ext_accepted
       await resolveObligation(obligationId, {
-        outcome: halt ? 'skipped' : landed ? 'pending' : 'failed',
+        outcome: halt ? 'skipped' : landed ? (accepted ? 'sent' : 'pending') : 'failed',
         reason:
           halt ??
           (landed

@@ -1,13 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyBaseLogger } from 'fastify'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { callExternalApi } from '../../../services/external-apis.js'
+import { type ExecutionContext, executeFlow } from '../../../services/flow-executor.js'
 import {
   clearObligationKinds,
   flowHaltReason,
   registerObligationKind
 } from '../../../services/integration-obligations.js'
-import { callExternalApi } from '../../../services/external-apis.js'
-import { executeFlow, type ExecutionContext } from '../../../services/flow-executor.js'
 
 vi.mock('../../../services/external-apis.js', () => ({
   callExternalApi: vi.fn()
@@ -291,7 +291,7 @@ describe('executeFlow — obligation ledger for a flow that pushes to a partner'
     expect(resolvedUpdates[0].reason).toBe('external API request failed')
   })
 
-  it('a landed 2xx push resolves pending, never skipped or failed', async () => {
+  it('a landed 2xx push whose body says OK resolves sent (2026-11-09: MWF links sat pending → overdue)', async () => {
     registerObligationKind({ ...PARTNER_KIND, kind: 'wf.push' })
     const ops: FlowOpFixture[] = [
       {
@@ -309,6 +309,36 @@ describe('executeFlow — obligation ledger for a flow that pushes to a partner'
     ]
     const resolvedUpdates = wireDb(ops, 504)
     vi.mocked(callExternalApi).mockResolvedValue({ status: 200, headers: {}, body: { ok: true } })
+
+    await executeFlow(baseCtx())
+
+    expect(resolvedUpdates).toHaveLength(1)
+    expect(resolvedUpdates[0].outcome).toBe('sent')
+    expect(resolvedUpdates[0].reason).toBeNull()
+  })
+
+  it('a landed 2xx push whose body says nothing about success stays pending', async () => {
+    registerObligationKind({ ...PARTNER_KIND, kind: 'wf.push' })
+    const ops: FlowOpFixture[] = [
+      {
+        id: 'op-push',
+        flow: 'flow-1',
+        name: 'Push',
+        key: 'push',
+        type: 'external-api',
+        position_x: 0,
+        position_y: 0,
+        options: JSON.stringify({ mode: 'predefined', api_id: 'Partner' }),
+        resolve: null,
+        reject: null
+      }
+    ]
+    const resolvedUpdates = wireDb(ops, 504)
+    vi.mocked(callExternalApi).mockResolvedValue({
+      status: 200,
+      headers: {},
+      body: { received: 1 }
+    })
 
     await executeFlow(baseCtx())
 

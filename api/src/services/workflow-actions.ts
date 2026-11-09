@@ -1091,6 +1091,18 @@ export async function runTransitionActions(opts: {
       continue
     }
 
+    // The integration's own "do not send" rules (integration_config.skip_sends — e.g. MWF
+    // markets it does not support yet), judged on the rendered body: a deliberate skip.
+    {
+      const { sendSkipReason } = await import('./send-skip-rules.js')
+      const skipSend = await sendSkipReason(apiId, body)
+      if (skipSend) {
+        skippedReason = skipSend
+        await resolveObligation(obligationId, { outcome: 'skipped', reason: skipSend })
+        continue
+      }
+    }
+
     // Change gate: does this integration care about what just happened?
     // Gated AFTER rendering, so a payload comparison can see what would
     // actually be sent — a linked purchase order reaches the payload through a
