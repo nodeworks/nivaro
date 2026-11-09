@@ -320,6 +320,25 @@ function aliasRelationFor(
   return { kind: rel.junction_field ? 'm2m' : 'o2m', relation: rel }
 }
 
+/** A many-to-many alias's TARGET collection (the junction's other leg), or null. */
+function m2mTargetOf(
+  relations: Array<{
+    many_collection: string | null
+    many_field: string | null
+    one_collection: string | null
+  }>,
+  alias: ReturnType<typeof aliasRelationFor>
+): string | null {
+  if (!alias || alias.kind !== 'm2m') return null
+  const junction = alias.relation.many_collection
+  const leg = alias.relation.junction_field
+  if (!junction || !leg) return null
+  return (
+    relations.find((r) => r.many_collection === junction && r.many_field === leg)?.one_collection ??
+    null
+  )
+}
+
 /** Best label column for a collection: first {{token}} of its display
  *  template that is a real field, else the first LABEL_FALLBACK field, else id. */
 function labelFieldFor(meta: CollectionMeta | undefined): string {
@@ -2795,7 +2814,7 @@ function FieldLevel({
       if (rel?.one_collection && !isSystemCol(rel.one_collection)) out.add(rel.one_collection)
       const alias = aliasRelationFor(meta.relations, collection, f.field)
       if (alias) {
-        const child = alias.relation.many_collection
+        const child = m2mTargetOf(meta.relations, alias) ?? alias.relation.many_collection
         if (child && !isSystemCol(child)) out.add(child)
       }
     }
@@ -2862,7 +2881,11 @@ function FieldLevel({
           }
         })
     } else if (alias) {
-      const child = alias.relation.many_collection
+      // A many-to-many filters and drills on the RELATED collection (Purchase Orders), not
+      // its junction: the server reads ['purchase_orders', 'number'] as a field of the PO.
+      // The old text leaf compared a typed PO number with the junction's ids and answered
+      // 400 VALUE_TYPE_MISMATCH (2026-11-09).
+      const child = m2mTargetOf(meta.relations, alias) ?? alias.relation.many_collection
       if (match(label) && child)
         rows.push({
           key: f.field,
@@ -2871,8 +2894,13 @@ function FieldLevel({
           drillTo:
             depth < 2 ? { collection: child, path: fullPath, pathLabels: fullLabels } : undefined,
           leaf:
-            alias.kind === 'm2m'
-              ? { path: fullPath, pathLabels: fullLabels, fieldType: 'relation', relTarget: '' }
+            alias.kind === 'm2m' && m2mTargetOf(meta.relations, alias)
+              ? {
+                  path: fullPath,
+                  pathLabels: fullLabels,
+                  fieldType: 'relation',
+                  relTarget: m2mTargetOf(meta.relations, alias) as string
+                }
               : undefined
         })
     } else if (match(label)) {
@@ -2896,6 +2924,8 @@ function FieldLevel({
       const parentLabel = titleCase(f.field)
       for (const cf of childMeta.fields) {
         if (cf.hidden) continue
+        // A list on the related record (Vendor › Purchase Orders) is not a text field.
+        if (aliasRelationFor(childMeta.relations, rel.one_collection, cf.field)) continue
         const childLabel = titleCase(cf.field)
         if (!match(childLabel)) continue
         const childRel = isM2OField(childMeta.relations, rel.one_collection, cf.field)
@@ -5366,6 +5396,11 @@ export function CollectionBrowserView({
   })
   const realtime = useOptionalRealtime()
   const { userId: selfUserId } = useItemEditAuth()
+  // A saved view changes only for its owner or an administrator (the server's rule,
+  // routes/saved-views.ts) — 4 people hit 403 on the shared Default view (2026-11-09).
+  const canChangeView = (v: SavedView) =>
+    isAdmin ||
+    (!!selfUserId && String(v.user ?? '').toUpperCase() === String(selfUserId).toUpperCase())
   const rowChanges = useRowChanges()
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
@@ -8757,39 +8792,41 @@ export function CollectionBrowserView({
                     <BellOff className='h-3 w-3' />
                   )}
                 </button>
-                <button
-                  type='button'
-                  onClick={() => updateView.mutate(v.id)}
-                  disabled={updateView.isPending && updateView.variables === v.id}
-                  title={
-                    updateView.isPending && updateView.variables === v.id
-                      ? 'Saving…'
-                      : viewJustSaved === v.id
-                        ? 'Saved'
-                        : 'Update with current state'
-                  }
-                  aria-label={`Update ${v.name}`}
-                  data-view-update={v.id}
-                  data-view-update-state={
-                    updateView.isPending && updateView.variables === v.id
-                      ? 'saving'
-                      : viewJustSaved === v.id
-                        ? 'saved'
-                        : 'idle'
-                  }
-                  className='inline-flex h-3.5 w-3.5 items-center justify-center'
-                >
-                  {updateView.isPending && updateView.variables === v.id ? (
-                    <Loader2 className='h-3 w-3 animate-spin' />
-                  ) : viewJustSaved === v.id ? (
-                    <Check
-                      className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
-                      strokeWidth={3}
-                    />
-                  ) : (
-                    '↺'
-                  )}
-                </button>
+                {canChangeView(v) && (
+                  <button
+                    type='button'
+                    onClick={() => updateView.mutate(v.id)}
+                    disabled={updateView.isPending && updateView.variables === v.id}
+                    title={
+                      updateView.isPending && updateView.variables === v.id
+                        ? 'Saving…'
+                        : viewJustSaved === v.id
+                          ? 'Saved'
+                          : 'Update with current state'
+                    }
+                    aria-label={`Update ${v.name}`}
+                    data-view-update={v.id}
+                    data-view-update-state={
+                      updateView.isPending && updateView.variables === v.id
+                        ? 'saving'
+                        : viewJustSaved === v.id
+                          ? 'saved'
+                          : 'idle'
+                    }
+                    className='inline-flex h-3.5 w-3.5 items-center justify-center'
+                  >
+                    {updateView.isPending && updateView.variables === v.id ? (
+                      <Loader2 className='h-3 w-3 animate-spin' />
+                    ) : viewJustSaved === v.id ? (
+                      <Check
+                        className='h-3 w-3 text-emerald-600 dark:text-emerald-400'
+                        strokeWidth={3}
+                      />
+                    ) : (
+                      '↺'
+                    )}
+                  </button>
+                )}
                 {isAdmin && (
                   <ViewDefaultMenu
                     name={v.name}
@@ -8799,15 +8836,17 @@ export function CollectionBrowserView({
                     onRoleDefault={(role) => setRoleDefault.mutate({ id: v.id, role })}
                   />
                 )}
-                <button
-                  type='button'
-                  onClick={() => deleteView.mutate(v.id)}
-                  title='Delete view'
-                  aria-label={`Delete ${v.name}`}
-                  className='hover:text-red-500'
-                >
-                  ✕
-                </button>
+                {canChangeView(v) && (
+                  <button
+                    type='button'
+                    onClick={() => deleteView.mutate(v.id)}
+                    title='Delete view'
+                    aria-label={`Delete ${v.name}`}
+                    className='hover:text-red-500'
+                  >
+                    ✕
+                  </button>
+                )}
               </>
             )}
           </span>

@@ -185,7 +185,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       .first()) as SavedViewRow | undefined
 
     if (!view) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && view.user !== req.user!.id) {
+    if (!req.isAdmin && !sameId(view.user, req.user!.id)) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
@@ -303,7 +303,7 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       .first()) as SavedViewRow | undefined
 
     if (!view) return reply.code(404).send({ error: 'Not found' })
-    if (!req.isAdmin && view.user !== req.user!.id) {
+    if (!req.isAdmin && !sameId(view.user, req.user!.id)) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
