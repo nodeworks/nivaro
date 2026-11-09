@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T02:35:42.576Z",
+  "generated_at": "2026-11-09T02:56:22.290Z",
   "releases": [
+    {
+      "version": "0.3.99",
+      "tag": "v0.3.99",
+      "date": "2026-11-08T21:56:07-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "download log decided on the server, raw reads logged",
+              "hash": "c8073cafa"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.98",
       "tag": "v0.3.98",
-      "date": "2026-11-08T21:35:27-05:00",
+      "date": "2026-11-08T21:35:42-05:00",
       "sections": [
         {
           "label": "Added",
