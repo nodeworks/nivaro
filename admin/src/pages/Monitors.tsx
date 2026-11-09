@@ -246,6 +246,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [latency, setLatency] = useState('5000')
   // deploy
   const [worsen, setWorsen] = useState('50')
+  const [floorMs, setFloorMs] = useState('500')
   // ssl_cert
   const [sslHost, setSslHost] = useState('')
   const [warnDays, setWarnDays] = useState('30')
@@ -291,7 +292,10 @@ function CreateForm({ onDone }: { onDone: () => void }) {
                           min_samples: Number(dlvMinSamples) || 20,
                           ...(Number(dlvGoodPct) > 0 ? { good_pct: Number(dlvGoodPct) } : {})
                         }
-                      : { p95_worsen_pct: Number(worsen) || 50 }
+                      : {
+                          p95_worsen_pct: Number(worsen) || 50,
+                          p95_floor_ms: Number(floorMs) >= 0 ? Number(floorMs) : 500
+                        }
       return api.post('/monitors', { type, name: name.trim(), config })
     },
     onSuccess: () => {
@@ -383,14 +387,24 @@ function CreateForm({ onDone }: { onDone: () => void }) {
           </>
         )}
         {type === 'deploy_regression' && (
-          <Field label='p95 worsens by (%)'>
-            <input
-              value={worsen}
-              onChange={(e) => setWorsen(e.target.value)}
-              type='number'
-              className={inputCls}
-            />
-          </Field>
+          <>
+            <Field label='p95 worsens by (%)'>
+              <input
+                value={worsen}
+                onChange={(e) => setWorsen(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+            <Field label='And p95 is at least (ms)'>
+              <input
+                value={floorMs}
+                onChange={(e) => setFloorMs(e.target.value)}
+                type='number'
+                className={inputCls}
+              />
+            </Field>
+          </>
         )}
         {type === 'realtime' && (
           <Field label='Delivery limit (ms)'>
@@ -503,8 +517,10 @@ function CreateForm({ onDone }: { onDone: () => void }) {
       )}
       {type === 'deploy_regression' && (
         <p className='mt-2 text-[11.5px] text-slate-400'>
-          Watches the API version; when a deploy lands it snapshots the prior hour's performance and
-          compares an hour later — a regression names the slowest routes.
+          Watches the API version. When a deploy lands it keeps the hour before, skips the first 10
+          minutes (cold caches), then compares the next hour. It fails when p95 is worse by the
+          percentage and at least the minimum, or when server errors rise by more than 5 points, and
+          names the slowest routes.
         </p>
       )}
       {type === 'synthetic' && (

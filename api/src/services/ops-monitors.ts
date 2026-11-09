@@ -155,57 +155,96 @@ interface RouteMetric {
   p95: number
 }
 
-/** Aggregate api-log metrics for a window, overall + worst routes. */
+/** Aggregate api-log metrics for a window: overall + per route, with a real
+ *  p95 (PERCENTILE_CONT). The old estimate (avg + half the gap to max) let one
+ *  slow request on a quiet route move the whole figure (2026-11-08: 0.3.95
+ *  "regressed" 64→176 ms on a cold first hour). One hour on EFP prod is ~10k
+ *  rows and reads in ~0.1 s off idx_api_logs_created_user. */
 async function windowMetrics(
   from: Date,
   to: Date
 ): Promise<{ overall: RouteMetric; routes: Map<string, RouteMetric> }> {
   const rows = (await db.raw(
-    `SELECT [path] AS route,
-            COUNT(*) AS n,
-            SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err,
-            MAX(latency_ms) AS maxd,
-            AVG(CAST(latency_ms AS FLOAT)) AS avgd
+    `SELECT DISTINCT [path] AS route,
+            COUNT(*) OVER (PARTITION BY [path]) AS n,
+            SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) OVER (PARTITION BY [path]) AS err,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) OVER (PARTITION BY [path]) AS p95
      FROM nivaro_api_logs
-     WHERE created_at >= ? AND created_at < ?
-     GROUP BY [path]`,
+     WHERE created_at >= ? AND created_at < ?`,
     [from, to]
-  )) as Array<{ route: string; n: number; err: number; maxd: number; avgd: number }>
-  // A true p95 per route needs PERCENTILE_CONT per group; avg + max bound it
-  // well enough for regression detection — we compare the SAME statistic
-  // across two windows, so the estimator's bias cancels.
+  )) as Array<{ route: string; n: number; err: number; p95: number | null }>
+  const overallRows = (await db.raw(
+    `SELECT TOP 1 COUNT(*) OVER () AS n,
+            SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) OVER () AS err,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) OVER () AS p95
+     FROM nivaro_api_logs
+     WHERE created_at >= ? AND created_at < ?`,
+    [from, to]
+  )) as Array<{ n: number; err: number; p95: number | null }>
   const routes = new Map<string, RouteMetric>()
-  let tn = 0
-  let terr = 0
-  let wsum = 0
   for (const r of rows) {
     const n = Number(r.n)
-    const p95 = Number(r.avgd) + (Number(r.maxd) - Number(r.avgd)) * 0.5
-    routes.set(r.route, { requests: n, errorRate: Number(r.err) / Math.max(1, n), p95 })
-    tn += n
-    terr += Number(r.err)
-    wsum += p95 * n
+    routes.set(r.route, {
+      requests: n,
+      errorRate: Number(r.err) / Math.max(1, n),
+      p95: Number(r.p95) || 0
+    })
   }
+  const o = overallRows[0]
+  const n = Number(o?.n) || 0
   return {
-    overall: { requests: tn, errorRate: terr / Math.max(1, tn), p95: wsum / Math.max(1, tn) },
+    overall: {
+      requests: n,
+      errorRate: (Number(o?.err) || 0) / Math.max(1, n),
+      p95: Number(o?.p95) || 0
+    },
     routes
   }
 }
 
-/** Deploy regression: on a version change, snapshot the pre-deploy baseline;
- *  an hour later, compare and flag routes that got meaningfully worse. */
+/** The verdict half of the deploy check, kept pure for tests. A slowdown
+ *  alone never fails: p95 must be worse by worsenPct AND at least floorMs AND
+ *  at least 100 ms slower than before — 64→176 ms is still fast. A 5-point
+ *  rise in the 5xx rate fails on its own. */
+export function deployRegressed(
+  baseline: { p95?: number; errorRate?: number },
+  post: { p95: number; errorRate: number },
+  opts: { worsenPct: number; floorMs: number }
+): { regressed: boolean; p95Delta: number } {
+  const before = baseline.p95 ?? 0
+  const p95Delta = ((post.p95 - before) / Math.max(1, before)) * 100
+  const slower = p95Delta > opts.worsenPct && post.p95 >= opts.floorMs && post.p95 - before >= 100
+  const errDelta = post.errorRate - (baseline.errorRate ?? 0)
+  return { regressed: slower || errDelta > 0.05, p95Delta }
+}
+
+/** Deploy regression: on a version change, snapshot the hour before the
+ *  deploy; compare it with the hour that starts warmup_minutes after it (a
+ *  fresh process starts with cold caches, so its first minutes are always
+ *  slower) and flag a real slowdown or a 5xx rise.
+ *  Config: p95_worsen_pct (50), p95_floor_ms (500), min_requests (500),
+ *  warmup_minutes (10). */
 async function evalDeployRegression(
-  cfg: { p95_worsen_pct?: number; min_requests?: number },
+  cfg: {
+    p95_worsen_pct?: number
+    p95_floor_ms?: number
+    min_requests?: number
+    warmup_minutes?: number
+  },
   state: Record<string, unknown>
 ): Promise<{ result: EvalResult; state: Record<string, unknown> }> {
   const worsenPct = Math.max(10, Number(cfg.p95_worsen_pct) || 50)
-  const minReq = Math.max(5, Number(cfg.min_requests) || 20)
+  const floorMs = Math.max(0, Number(cfg.p95_floor_ms ?? 500) || 0)
+  const minReq = Math.max(5, Number(cfg.min_requests) || 500)
+  const warmupMs = Math.min(30, Math.max(0, Number(cfg.warmup_minutes ?? 10) || 0)) * 60_000
   const version = NIVARO_VERSION
   const now = Date.now()
 
   if (state.current_version !== version) {
-    // Deploy just landed: capture the baseline from the hour BEFORE it.
-    const base = await windowMetrics(new Date(now - 3_600_000), new Date(now))
+    // Deploy just landed (this tick runs up to 5 min after the new process
+    // took over): baseline = the hour before, stopping 5 min short so the
+    // roll itself stays out of it.
+    const base = await windowMetrics(new Date(now - 65 * 60_000), new Date(now - 5 * 60_000))
     return {
       state: {
         current_version: version,
@@ -215,11 +254,12 @@ async function evalDeployRegression(
           errorRate: base.overall.errorRate,
           requests: base.overall.requests
         },
+        stat: 'p95',
         evaluated: false
       },
       result: {
         status: 'ok',
-        detail: `Deploy ${version} detected — baseline captured, comparing in ~1h`
+        detail: `Deploy ${version} detected — baseline captured, comparing in ~${Math.round((3_600_000 + warmupMs) / 60_000)}m`
       }
     }
   }
@@ -231,38 +271,48 @@ async function evalDeployRegression(
       result: { status: 'ok', detail: `Watching for the next deploy (current ${version})` }
     }
   }
-  if (now - deployAt < 3_600_000) {
+  const compareAt = deployAt + warmupMs + 3_600_000
+  if (now < compareAt) {
     return {
       state,
       result: {
         status: 'ok',
-        detail: `Deploy ${version} ${Math.round((now - deployAt) / 60000)}m ago — comparing at 60m`
+        detail: `Deploy ${version} ${Math.round((now - deployAt) / 60000)}m ago — comparing at ${Math.round((compareAt - deployAt) / 60000)}m`
       }
     }
   }
 
-  const baseline = (state.baseline ?? {}) as { p95?: number; errorRate?: number; requests?: number }
-  const post = await windowMetrics(new Date(deployAt), new Date(deployAt + 3_600_000))
   const nextState = { ...state, evaluated: true }
+  // A baseline stored by the old estimator (no `stat`) is not comparable.
+  if (state.stat !== 'p95') {
+    return {
+      state: nextState,
+      result: {
+        status: 'ok',
+        detail: `Deploy ${version}: baseline from an older check, not compared`
+      }
+    }
+  }
+  const baseline = (state.baseline ?? {}) as { p95?: number; errorRate?: number; requests?: number }
+  const post = await windowMetrics(new Date(deployAt + warmupMs), new Date(compareAt))
   if ((baseline.requests ?? 0) < minReq || post.overall.requests < minReq) {
     return {
       state: nextState,
       result: {
         status: 'ok',
-        detail: `Deploy ${version}: too little traffic to compare (${baseline.requests ?? 0} pre / ${post.overall.requests} post)`
+        detail: `Deploy ${version}: too little traffic to compare (${baseline.requests ?? 0} pre / ${post.overall.requests} post, need ${minReq})`
       }
     }
   }
-  const p95Delta = ((post.overall.p95 - (baseline.p95 ?? 0)) / Math.max(1, baseline.p95 ?? 1)) * 100
-  const errDelta = post.overall.errorRate - (baseline.errorRate ?? 0)
-  if (p95Delta > worsenPct || errDelta > 0.05) {
+  const { regressed, p95Delta } = deployRegressed(baseline, post.overall, { worsenPct, floorMs })
+  if (regressed) {
     const worst = [...post.routes.entries()]
       .filter(([, m]) => m.requests >= 5)
       .sort((a, b) => b[1].p95 - a[1].p95)
       .slice(0, 5)
       .map(
         ([route, m]) =>
-          `  ${route}: ~${Math.round(m.p95)}ms, ${(m.errorRate * 100).toFixed(1)}% errors (${m.requests} reqs)`
+          `  ${route}: p95 ${Math.round(m.p95)}ms, ${(m.errorRate * 100).toFixed(1)}% errors (${m.requests} reqs)`
       )
     return {
       state: nextState,
@@ -280,7 +330,7 @@ async function evalDeployRegression(
     state: nextState,
     result: {
       status: 'ok',
-      detail: `Deploy ${version} healthy: p95 ${p95Delta >= 0 ? '+' : ''}${p95Delta.toFixed(0)}%, error rate ${(post.overall.errorRate * 100).toFixed(1)}%`
+      detail: `Deploy ${version} healthy: p95 ${Math.round(baseline.p95 ?? 0)}→${Math.round(post.overall.p95)}ms (${p95Delta >= 0 ? '+' : ''}${p95Delta.toFixed(0)}%), error rate ${(post.overall.errorRate * 100).toFixed(1)}%`
     }
   }
 }
