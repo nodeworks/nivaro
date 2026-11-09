@@ -362,7 +362,9 @@ export async function addendumsRoutes(app: FastifyInstance) {
         source: 'applied' | 'imported' | 'proposal'
       }
     > = {}
-    const settled = ['approved', 'reverted'].includes(String(row.status))
+    // A converted legacy addendum carries its before → after in the snapshot whatever its status
+    // (70 on production sat in draft, so their line changes never highlighted — 2026-11-09).
+    const settled = ['approved', 'reverted'].includes(String(row.status)) || snap.import === true
     if (settled && snap.o2m) {
       for (const [alias, l] of Object.entries(snap.o2m)) {
         out[alias] = {

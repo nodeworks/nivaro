@@ -22,6 +22,8 @@ interface AddendumLike {
   id: string
   title: string
   status: string
+  /** The pipeline step an in-flight addendum is at (the list attaches it). */
+  workflow_state?: { label: string } | null
   data: Record<string, unknown> | null
   created_at: string
   cost_impact: number | null
@@ -177,7 +179,7 @@ export function AddendumCompare({
                       statusCls(a.status)
                     )}
                   >
-                    {a.status}
+                    {a.workflow_state?.label ?? a.status}
                   </span>
                 </td>
                 <td className={cn(td, 'text-right tabular-nums')}>

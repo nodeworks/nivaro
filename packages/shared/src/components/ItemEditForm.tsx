@@ -6569,7 +6569,12 @@ function ItemEditFormView({
   // imported): its lines come from the server snapshot — before → after —
   // since the live lines already are its "after" and data may be empty.
   const viewedAddendum = addendumData.find((a) => a.id === addendumViewId)
-  const viewedSettled = !!viewedAddendum && ['approved', 'reverted'].includes(viewedAddendum.status)
+  // A draft with no proposed rows of its own (a converted legacy addendum) reads its lines from the
+  // server snapshot too — before 2026-11-09 those showed no line changes at all.
+  const viewedSettled =
+    !!viewedAddendum &&
+    (['approved', 'reverted'].includes(viewedAddendum.status) ||
+      !Object.values(viewedAddendum.data ?? {}).some((v) => Array.isArray(v) && v.length > 0))
   type AddendumLines = Record<
     string,
     {
