@@ -37,7 +37,9 @@ export function QueueBulkBar({
   if (count === 0) return null
 
   return (
-    <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card'>
+    // Labels never wrap ("Push to / Fusion" on two lines, 2026-11-09): every button keeps one
+    // line (white-space inherits) and a bar wider than the window scrolls sideways instead.
+    <div className='nvr-slide-up-centered fixed bottom-6 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'>
       <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
         {count} selected
       </span>
