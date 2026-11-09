@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-09T17:34:39.533Z",
+  "generated_at": "2026-11-09T17:52:10.192Z",
   "releases": [
+    {
+      "version": "0.3.106",
+      "tag": "v0.3.106",
+      "date": "2026-11-09T12:51:51-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "bulk Send Back picks the step and previews who can move",
+              "hash": "d7829127b"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.105",
       "tag": "v0.3.105",
-      "date": "2026-11-09T12:34:22-05:00",
+      "date": "2026-11-09T12:34:39-05:00",
       "sections": [
         {
           "label": "Fixed",
