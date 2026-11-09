@@ -2122,7 +2122,7 @@ function ItemEditFormView({
   // Dynamic field rules (cascading auto-fill) — fetched once per collection.
   // When empty, handleFieldChange's rulesForTriggerField lookup always
   // returns [], so no listeners/timers/requests are ever set up.
-  const { data: fieldRules = [] } = useQuery<FieldRule[]>({
+  const { data: fieldRules = [], isFetched: fieldRulesFetched } = useQuery<FieldRule[]>({
     queryKey: ['field-rules', collection],
     queryFn: () =>
       client
@@ -3751,6 +3751,12 @@ function ItemEditFormView({
   // One-shot plain-value prefill for new records (deep links, "create from
   // common values", AI hand-offs). Keys the user already edited win.
   const appliedInitialValuesRef = useRef(false)
+  // Prefilled values whose field rules / cross-record defaults / upstream fills
+  // have not run yet (they only run on a person's edit). Re-derived once the
+  // rules have loaded, fill-only-when-empty like a restored draft: an MWF
+  // click-through opened an IR on a unit with Project Type, Region and Zone
+  // left empty (2026-11-09).
+  const [prefillToDerive, setPrefillToDerive] = useState<Array<[string, unknown]> | null>(null)
   useEffect(() => {
     if (
       !isNew ||
@@ -3768,6 +3774,10 @@ function ItemEditFormView({
     if (initialValues) {
       setDraft((d) => ({ ...plainInitial, ...d }))
       draftRef.current = { ...plainInitial, ...draftRef.current }
+      const derive = Object.entries(plainInitial).filter(
+        ([, v]) => v !== null && v !== undefined && v !== ''
+      )
+      if (derive.length) setPrefillToDerive(derive)
     }
     const mergedLinks: Record<string, unknown[]> | undefined =
       initialLinks || (prefillLinks && typeof prefillLinks === 'object')
@@ -3797,6 +3807,15 @@ function ItemEditFormView({
     }
     setIsDirty(true)
   }, [isNew, initialValues, initialLinks, initialRows])
+
+  useEffect(() => {
+    if (!prefillToDerive || !fieldRulesFetched) return
+    setPrefillToDerive(null)
+    // A value the person already changed is theirs; only prefilled ones derive.
+    for (const [k, v] of prefillToDerive) {
+      if (draftRef.current[k] === v) rederiveRef.current(k, v)
+    }
+  }, [prefillToDerive, fieldRulesFetched])
 
   useEffect(() => {
     if (!isNew || !initialImportResult || appliedInitialImportRef.current) return
