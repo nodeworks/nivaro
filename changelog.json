@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-09T22:09:09.086Z",
+  "generated_at": "2026-11-09T22:28:52.865Z",
   "releases": [
+    {
+      "version": "0.3.112",
+      "tag": "v0.3.112",
+      "date": "2026-11-09T17:28:32-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "grids",
+              "text": "admin 'Set <column>…' on O2M grids writes or clears one value on every line",
+              "hash": "47ab3964a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "retention",
+              "text": "redact only columns the users table has",
+              "hash": "e8807ca2d"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.111",
       "tag": "v0.3.111",
-      "date": "2026-11-09T17:08:49-05:00",
+      "date": "2026-11-09T17:09:09-05:00",
       "sections": [
         {
           "label": "Added",
