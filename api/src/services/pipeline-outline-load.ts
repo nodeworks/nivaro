@@ -38,6 +38,9 @@ export async function loadPipelineOutline(
         'require_owner',
         ...((await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
           ? ['allow_creator']
+          : []),
+        ...((await hasColumn('nivaro_workflow_transitions', 'comment_mode'))
+          ? ['comment_mode']
           : [])
       )
   ])

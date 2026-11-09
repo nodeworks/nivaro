@@ -65,6 +65,7 @@ describe('pipelineOutline', () => {
       [
         'allow_creator',
         'color',
+        'comment_mode',
         'from_state',
         'group_label',
         'id',

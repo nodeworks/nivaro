@@ -774,27 +774,40 @@ export async function itemsRoutes(app: FastifyInstance) {
     // Migration 516: every activity row this request writes is one burst.
     markActivityBurst(req, 'bulk')
     const { collection } = req.params as { collection: string }
-    const { ids, transition_id, comment } = req.body as {
+    const { ids, transition_id, transition_ids, comment } = req.body as {
       ids: string[]
-      transition_id: string
+      transition_id?: string
+      /** Several transitions sharing one label (every "Send Back", one per from-state): each
+       *  record takes the one that starts at its own state (2026-11-09). */
+      transition_ids?: string[]
       /** The note a transition that requires one asks for, given once for all. */
       comment?: string
     }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
-    if (!transition_id) return reply.code(400).send({ error: 'transition_id required' })
+    const wanted = [
+      ...new Set(
+        [...(Array.isArray(transition_ids) ? transition_ids : []), transition_id]
+          .filter((t): t is string => typeof t === 'string' && t.length > 0)
+          .slice(0, 50)
+      )
+    ]
+    if (wanted.length === 0) return reply.code(400).send({ error: 'transition_id required' })
     if (!(await builtinAllowed(collection, 'transition', req)))
       return reply.code(403).send({ error: 'Bulk transition is not available to you here' })
 
-    const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
-      .where({ id: transition_id })
-      .first()
-    if (!transition) return reply.code(404).send({ error: 'Transition not found' })
+    const candidates = await db<WorkflowTransition>('nivaro_workflow_transitions').whereIn(
+      'id',
+      wanted
+    )
+    if (candidates.length === 0) return reply.code(404).send({ error: 'Transition not found' })
+    const single = candidates.length === 1 ? candidates[0] : null
 
-    // Check role permission once (applies to all items)
+    // Check role permission once when there is one transition (several: per record, in the gate)
     const isAdmin = req.isAdmin ?? false
-    if (!isAdmin && transition.required_roles) {
-      const roles = parseJson(transition.required_roles) as string[] | null
+    const transitionForRoles = single
+    if (transitionForRoles && !isAdmin && transitionForRoles.required_roles) {
+      const roles = parseJson(transitionForRoles.required_roles) as string[] | null
       if (roles && roles.length > 0) {
         const userRole = req.user?.role ?? null
         if (!userRole || !roles.includes(userRole)) {
@@ -839,9 +852,15 @@ export async function itemsRoutes(app: FastifyInstance) {
           failed++
           continue
         }
-        // The transition must belong to this record's own template.
-        if (String(instance.template).toUpperCase() !== String(transition.template).toUpperCase()) {
+        // The transition must belong to this record's own template (and, of several, start at
+        // the record's state).
+        const transition = pickBulkTransition(
+          candidates,
+          instance as { template: unknown; current_state?: unknown }
+        )
+        if (!transition) {
           failed++
+          errors.push({ item: String(item), error: 'Not available from this record’s state' })
           continue
         }
 
@@ -2353,4 +2372,21 @@ async function simulateSandboxWrite(
       sandbox: true
     }
   }
+}
+
+/** Of the transitions a bulk move names, the one for this record: same template, starting at the
+ *  record's current state, else a from-any one. Null = none applies here. */
+export function pickBulkTransition<T extends { template: unknown; from_state?: unknown }>(
+  candidates: T[],
+  instance: { template: unknown; current_state?: unknown }
+): T | null {
+  const key = (v: unknown) => String(v ?? '').toUpperCase()
+  const own = candidates.filter((t) => key(t.template) === key(instance.template))
+  if (own.length === 0) return null
+  if (own.length === 1 && candidates.length === 1) return own[0]
+  return (
+    own.find((t) => t.from_state != null && key(t.from_state) === key(instance.current_state)) ??
+    own.find((t) => t.from_state == null) ??
+    null
+  )
 }

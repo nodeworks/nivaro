@@ -34,6 +34,7 @@ export interface OutlineTransitionRow {
   auto_trigger: boolean | number | null
   require_owner?: boolean | number | null
   allow_creator?: boolean | number | null
+  comment_mode?: string | null
 }
 
 const bool = (v: unknown): boolean => v === true || v === 1 || v === '1'
@@ -86,7 +87,9 @@ export function pipelineOutline(
         sort: t.sort ?? null,
         group_label: t.group_label ?? null,
         require_owner: bool(t.require_owner),
-        allow_creator: bool(t.allow_creator)
+        allow_creator: bool(t.allow_creator),
+        // 'required' = the move needs a note (Send Back, Cancel): bulk bars ask once for all.
+        comment_mode: t.comment_mode ?? null
       }))
   }
 }

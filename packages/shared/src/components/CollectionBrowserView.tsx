@@ -3802,7 +3802,7 @@ function BulkBar({
 }: {
   collection: string
   selectedIds: Array<string | number>
-  transitions: Array<{ id: string; label: string }>
+  transitions: Array<{ id: string; label: string; comment_mode?: string | null }>
   fields: CMSField[]
   relations: CMSRelation[]
   /** browser_config.bulk_actions — null = all */
@@ -3888,7 +3888,9 @@ function BulkBar({
         const res = await client.request<{ succeeded: number; failed: number }>(
           post(`/items/${collection}/bulk-transition?progress=${pid}`, {
             ids: selectedIds,
-            transition_id: t.id
+            transition_ids: transitions
+              .filter((x) => x.label === r.config?.transition_label)
+              .map((x) => x.id)
           })
         )
         return res.failed > 0
@@ -3897,7 +3899,22 @@ function BulkBar({
       })
     }
   }
+  // One choice per transition LABEL: "Send Back" is a transition per from-state, and a bulk run
+  // over records in different states needs all of them — each record takes its own (2026-11-09).
   const [transitionId, setTransitionId] = useState('')
+  const [transitionNote, setTransitionNote] = useState('')
+  const transitionGroups = useMemo(() => {
+    const byLabel = new Map<string, { label: string; ids: string[]; noteRequired: boolean }>()
+    for (const t of transitions) {
+      const label = t.label?.trim() || 'Move'
+      const g = byLabel.get(label) ?? { label, ids: [], noteRequired: false }
+      g.ids.push(t.id)
+      if (t.comment_mode === 'required') g.noteRequired = true
+      byLabel.set(label, g)
+    }
+    return [...byLabel.values()]
+  }, [transitions])
+  const chosenGroup = transitionGroups.find((g) => g.label === transitionId) ?? null
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
 
@@ -4129,17 +4146,21 @@ function BulkBar({
           className='flex items-center gap-1.5'
           onSubmit={(e) => {
             e.preventDefault()
-            if (!transitionId) return
+            if (!chosenGroup) return
+            if (chosenGroup.noteRequired && !transitionNote.trim()) return
+            const note = transitionNote.trim()
             void run(async (pid) => {
               const res = await client.request<{ succeeded: number; failed: number }>(
                 post(`/items/${collection}/bulk-transition?progress=${pid}`, {
                   ids: selectedIds,
-                  transition_id: transitionId
+                  transition_ids: chosenGroup.ids,
+                  ...(note ? { comment: note } : {})
                 })
               )
+              setTransitionNote('')
               return res.failed > 0
-                ? `Transitioned ${res.succeeded}, ${res.failed} failed`
-                : `Transitioned ${res.succeeded} items`
+                ? `${chosenGroup.label}: ${res.succeeded} done, ${res.failed} not moved`
+                : `${chosenGroup.label}: ${res.succeeded} done`
             })
           }}
         >
@@ -4148,14 +4169,28 @@ function BulkBar({
             onChange={setTransitionId}
             options={[
               { value: '', label: 'Choose transition…' },
-              ...transitions.map((t) => ({ value: t.id, label: t.label }))
+              ...transitionGroups.map((g) => ({ value: g.label, label: g.label }))
             ]}
             ariaLabel='Choose transition'
             className='h-8 w-auto rounded-md border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white dark:text-foreground focus:ring-0 dark:border-border dark:bg-background dark:text-foreground'
           />
+          {chosenGroup && (
+            <input
+              value={transitionNote}
+              onChange={(e) => setTransitionNote(e.target.value)}
+              placeholder={
+                chosenGroup.noteRequired
+                  ? 'Note for every record (required)'
+                  : 'Note for every record (optional)'
+              }
+              aria-label='Note for every selected record'
+              maxLength={2000}
+              className='h-8 w-64 rounded-md border border-white/20 bg-[#16233c] px-2 text-[12.5px] text-white placeholder:text-slate-400 focus:outline-none dark:border-border dark:bg-background dark:text-foreground'
+            />
+          )}
           <button
             type='submit'
-            disabled={busy || !transitionId}
+            disabled={busy || !chosenGroup || (chosenGroup.noteRequired && !transitionNote.trim())}
             className='h-8 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-[#0f1e2d] disabled:opacity-50'
           >
             Run
@@ -4164,7 +4199,7 @@ function BulkBar({
             type='button'
             disabled={!transitionId}
             onClick={() => {
-              const t = transitions.find((x) => x.id === transitionId)
+              const t = chosenGroup
               if (!t) return
               setRecipeName('')
               setRecipeNaming({ action_type: 'transition', config: { transition_label: t.label } })
@@ -5819,7 +5854,7 @@ export function CollectionBrowserView({
       client
         .request<{
           data: {
-            transitions: Array<{ id: string; label: string }>
+            transitions: Array<{ id: string; label: string; comment_mode?: string | null }>
             states?: Array<{ id: string; key: string; label: string; color?: string | null }>
           }
         }>(get(isAdmin ? `/pipelines/${templateId}` : `/pipelines/${templateId}/outline`))
