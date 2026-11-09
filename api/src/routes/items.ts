@@ -187,6 +187,9 @@ function parseCsv(text: string): Record<string, string>[] {
   })
 }
 
+/** Bulk-transition moves applied at once (each holds a DB connection and may call a partner). */
+const BULK_TRANSITION_CONCURRENCY = 4
+
 export async function itemsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', resolveWorkspace)
@@ -785,7 +788,9 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
     if (!Array.isArray(ids) || ids.length === 0)
       return reply.code(400).send({ error: 'ids array required' })
-    const dryRun = ['1', 'true'].includes(String((req.query as Record<string, string>).dry_run ?? ''))
+    const dryRun = ['1', 'true'].includes(
+      String((req.query as Record<string, string>).dry_run ?? '')
+    )
     const wanted = [
       ...new Set(
         [...(Array.isArray(transition_ids) ? transition_ids : []), transition_id]
@@ -834,8 +839,14 @@ export async function itemsRoutes(app: FastifyInstance) {
         }
       }
     )
-    for (const item of ids) {
-      rp.next(item)
+    // Phase 1 — every gate, record by record (fast: the dry run is ~50 ms for a page). A record
+    // that fails a gate is reported now; the rest move in phase 2.
+    const ready: Array<{
+      item: unknown
+      instance: Record<string, any>
+      transition: WorkflowTransition
+    }> = []
+    for (const item of [...new Set(ids.map((x) => String(x)))]) {
       try {
         // Per record: update permission + the caller can see it. A record
         // outside the caller's scope fails like a missing one.
@@ -908,9 +919,22 @@ export async function itemsRoutes(app: FastifyInstance) {
         // who would not (and why) before the person runs it.
         if (dryRun) {
           succeeded++
+          rp.row(item, 'done')
           continue
         }
 
+        ready.push({ item, instance, transition })
+      } catch {
+        failed++
+        errors.push({ item: String(item), error: 'Could not be checked' })
+      }
+    }
+    for (const e of errors) rp.row(e.item, 'failed', e.error)
+    // Phase 2 — the moves, BULK_TRANSITION_CONCURRENCY at a time. Each runs the single route's
+    // chain (claim, blocking ERP actions, state, auto transitions, activity); one at a time a
+    // batch of 30 took 20–50 s on production (2026-11-09).
+    const moveOne = async ({ item, instance, transition }: (typeof ready)[number]) => {
+      try {
         // Double-fire guard, then the shared mutation chain: blocking actions
         // (an ERP submission) run before the state moves, and a refusal there
         // leaves the record where it is — exactly as the single route.
@@ -925,7 +949,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           if (err instanceof TransitionDuplicateError) {
             failed++
             errors.push({ item: String(item), error: err.code })
-            continue
+            rp.row(item, 'failed', err.code)
+            return
           }
           throw err
         }
@@ -946,7 +971,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           if (err instanceof TransitionBlockedError) {
             failed++
             errors.push({ item: String(item), error: err.message })
-            continue
+            rp.row(item, 'failed', err.message)
+            return
           }
           throw err
         }
@@ -962,11 +988,22 @@ export async function itemsRoutes(app: FastifyInstance) {
           req,
           comment: `bulk: ${transition.label} → ${applied.newStateObj?.label ?? transition.to_state}`
         })
-
         succeeded++
+        rp.row(item, 'done')
       } catch {
         failed++
+        errors.push({ item: String(item), error: 'Could not be moved' })
+        rp.row(item, 'failed', 'Could not be moved')
       }
+    }
+    if (!dryRun) {
+      let next = 0
+      const worker = async () => {
+        while (next < ready.length) await moveOne(ready[next++])
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(BULK_TRANSITION_CONCURRENCY, ready.length) }, worker)
+      )
     }
     rp.end()
     // Name the records that did not move (as the caller may read them), so the bar can say which.

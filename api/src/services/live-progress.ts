@@ -72,7 +72,12 @@ export function openBulkRowProgress(
   snapshot: () => BulkRowSnapshot
 ) {
   const progress = typeof rawId === 'string' && PROGRESS_ID_RE.test(rawId) ? rawId : null
-  if (!progress || !userId) return { next: (_id: unknown) => {}, end: () => {} }
+  if (!progress || !userId)
+    return {
+      next: (_id: unknown) => {},
+      row: (_id: unknown, _status: BulkRowStatus, _reason?: string | null) => {},
+      end: () => {}
+    }
   let current: string | null = null
   let before: BulkRowSnapshot = { ok: 0, failed: 0, skipped: 0 }
   let buffer: Array<{ id: string; status: BulkRowStatus; reason?: string }> = []
@@ -100,6 +105,14 @@ export function openBulkRowProgress(
       current = String(id)
       before = { ...snapshot() }
       if (buffer.length >= 20 || Date.now() - lastFlush > 150) flush(current)
+    },
+    /** One row's outcome, reported directly — for work that finishes out of order
+     *  (rows run several at a time) instead of the next()/snapshot rhythm. */
+    row(id: unknown, status: BulkRowStatus, reason?: string | null) {
+      const r: { id: string; status: BulkRowStatus; reason?: string } = { id: String(id), status }
+      if (status === 'failed' && reason) r.reason = String(reason).slice(0, 160)
+      buffer.push(r)
+      if (buffer.length >= 20 || Date.now() - lastFlush > 150) flush(null)
     },
     end() {
       settle()
