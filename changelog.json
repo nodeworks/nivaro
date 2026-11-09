@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-11-09T14:50:26.512Z",
+  "generated_at": "2026-11-09T15:32:07.114Z",
   "releases": [
+    {
+      "version": "0.3.102",
+      "tag": "v0.3.102",
+      "date": "2026-11-09T10:31:41-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "saved-view buttons only for the owner, many-to-many columns drill to the target",
+              "hash": "73edbb914"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "tree config with a missing parent column no longer 500s; plain answer when a collection has no form",
+              "hash": "59391c97a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "monitor",
+              "text": "RSS warning follows the container memory limit",
+              "hash": "98bd31df7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "skip unsupported sends on purpose, count accepted flow sends as sent",
+              "hash": "af102e46d"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "share predictive SLA stats across replicas, load queue badges in parallel",
+              "hash": "4412c9cbe"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.101",
       "tag": "v0.3.101",
-      "date": "2026-11-09T09:49:52-05:00",
+      "date": "2026-11-09T09:50:26-05:00",
       "sections": [
         {
           "label": "Fixed",
