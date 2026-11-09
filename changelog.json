@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-11-09T15:52:13.864Z",
+  "generated_at": "2026-11-09T16:56:31.919Z",
   "releases": [
+    {
+      "version": "0.3.104",
+      "tag": "v0.3.104",
+      "date": "2026-11-09T11:56:14-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "switch a yes/no field from Summary view",
+              "hash": "e3692d3cc"
+            },
+            {
+              "section": "Added",
+              "scope": "tables",
+              "text": "first and last page buttons",
+              "hash": "1446feb55"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "bulk Send Back with one note for every record",
+              "hash": "4555fc31a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "records",
+              "text": "live-update banner text readable in dark mode",
+              "hash": "04655516a"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.103",
       "tag": "v0.3.103",
-      "date": "2026-11-09T10:51:50-05:00",
+      "date": "2026-11-09T10:52:13-05:00",
       "sections": [
         {
           "label": "Fixed",
