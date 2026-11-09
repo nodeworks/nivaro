@@ -4643,7 +4643,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                 dimension the instance tracks (Zone, Region…). Purely a view
                 preference, remembered per browser. */}
             <MyStatusRow
-              onlineFirst={users.length > 0 ? onlineFirst : null}
+              onlineFirst={onlineFirst}
               onOnlineFirst={changeOnlineFirst}
               myStatus={
                 me
