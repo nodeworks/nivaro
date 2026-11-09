@@ -18,6 +18,7 @@ import {
   type AttachInput,
   attachFileToRecord
 } from '../services/file-attach.js'
+import { logFileDownload } from '../services/file-downloads.js'
 import {
   STORED_FILE_SECURITY_HEADERS,
   servingNeedsHead,
@@ -592,11 +593,14 @@ export async function filesRoutes(app: FastifyInstance) {
       head
     })
     try {
-      return await sendStoredObject(reply, file.filename_disk, {
+      const sent = await sendStoredObject(reply, file.filename_disk, {
         rangeHeader: req.headers.range,
         contentType: serving.contentType,
         disposition: contentDisposition(file.filename_download ?? 'file', serving.mode)
       })
+      // #3234: who downloaded what, on the record's history (never awaited).
+      void logFileDownload(app, req, file)
+      return sent
     } catch {
       return reply.code(404).send({ error: 'Stored object not found' })
     }

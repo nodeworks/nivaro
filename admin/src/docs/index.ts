@@ -36,6 +36,7 @@ export * from './sections/extensions-system.js'
 export * from './sections/features.js'
 export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
+export * from './sections/file-downloads.js'
 export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
 export * from './sections/ideas.js'
@@ -258,6 +259,8 @@ import {
 } from './sections/features.js'
 import { fieldDisplaySettingsGuide } from './sections/field-display.js'
 import { fieldRulesGuide } from './sections/field-rules.js'
+import { fileDownloadsGuide } from './sections/file-downloads.js'
+import { formHiddenAndFieldComments } from './sections/form-explain-comment'
 import {
   graphqlAuth,
   graphqlFilters,
@@ -289,6 +292,7 @@ import {
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
+import { listEditing } from './sections/list-editing'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import {
@@ -300,6 +304,7 @@ import {
 } from './sections/live-ops.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
+import { loadingFeelDocs } from './sections/loading-feel'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -329,6 +334,7 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
+import { navigationPersonal } from './sections/navigation-personal'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -370,6 +376,8 @@ import {
   userUsersRoles,
   whatIsNivaro
 } from './sections/overview.js'
+import { overviewPageDocs } from './sections/overview-page'
+import { overviewSectionsDocs } from './sections/overview-sections'
 import { payloadTemplates } from './sections/payload-templates.js'
 import {
   aiContentValidation,
@@ -518,12 +526,6 @@ import {
   userWorkflows,
   workflowsApi
 } from './sections/workflows-pipelines.js'
-import { formHiddenAndFieldComments } from './sections/form-explain-comment'
-import { listEditing } from './sections/list-editing'
-import { loadingFeelDocs } from './sections/loading-feel'
-import { navigationPersonal } from './sections/navigation-personal'
-import { overviewPageDocs } from './sections/overview-page'
-import { overviewSectionsDocs } from './sections/overview-sections'
 
 // ─── Navigation structure ─────────────────────────────────────────────────────
 
@@ -737,6 +739,7 @@ export const navSections: NavGroup[] = [
       atRiskFlagging,
       dataIntegrityGuide,
       teamThroughputGuide,
+      fileDownloadsGuide,
       managersTeamGuide,
       peoplePageGuide,
       anomalyDetection,

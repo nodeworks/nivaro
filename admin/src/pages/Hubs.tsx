@@ -57,7 +57,8 @@ const SCREENS: Record<string, Screens> = {
   '/reports': {
     '': page(() => import('@/pages/ReportStudio'), 'ReportStudioPage'),
     scheduled: page(() => import('@/pages/ScheduledReports'), 'ScheduledReportsPage'),
-    throughput: page(() => import('@/pages/TeamThroughput'), 'TeamThroughputPage')
+    throughput: page(() => import('@/pages/TeamThroughput'), 'TeamThroughputPage'),
+    downloads: page(() => import('@/pages/FileDownloads'), 'FileDownloadsPage')
   },
   '/activity': {
     '': page(() => import('@/pages/Activity'), 'ActivityPage'),

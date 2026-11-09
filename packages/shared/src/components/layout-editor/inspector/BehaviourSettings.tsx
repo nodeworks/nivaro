@@ -434,6 +434,51 @@ export function PersonalDefaultInlineToggle() {
   )
 }
 
+/** A file field (single file or many files). */
+function isFileField(info: Pick<FieldInfo, 'iface'>): boolean {
+  return ['file', 'file-image', 'files-m2m'].includes(info.iface ?? '')
+}
+
+/** #3235: the two chips on a file field's files — where each was used, and (for
+ *  administrators) who downloaded it from this record. Both on by default. */
+export function FileChipToggles() {
+  const ctx = useFieldCtx()
+  const { ov, info } = ctx
+  if (!isFileField(info)) return null
+  return (
+    <>
+      <Toggle
+        k='field.file_used_in'
+        label='Show where each file was used'
+        effect='A small chip on each file lists the addendum, integration push, email or generated document on this record that carried it.'
+        checked={ov.file_used_in !== false}
+        onChange={(v) =>
+          ctx.setOverride(
+            'file_used_in',
+            v ? undefined : false,
+            v
+              ? `Show where ${info.label} files were used`
+              : `Hide where ${info.label} files were used`
+          )
+        }
+      />
+      <Toggle
+        k='field.file_downloads'
+        label='Show who downloaded each file'
+        effect='Administrators see how many people downloaded each file from this record; hover names them. Everyone else sees nothing.'
+        checked={ov.file_downloads !== false}
+        onChange={(v) =>
+          ctx.setOverride(
+            'file_downloads',
+            v ? undefined : false,
+            v ? `Show downloads for ${info.label}` : `Hide downloads for ${info.label}`
+          )
+        }
+      />
+    </>
+  )
+}
+
 // ── #2712 Display formula (its own inspector) ────────────────────────────────
 
 const FORMAT_OPTIONS: Array<{ value: DisplayFormat; label: string }> = [

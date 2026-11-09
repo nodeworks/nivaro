@@ -24,7 +24,7 @@ import {
 } from '../../lib/field-interfaces'
 import { precisionOf } from '../../lib/format-value'
 import { resolveOptionFilterTokens } from '../../lib/option-filter-tokens'
-import { counterOf } from '../../lib/placement-behaviour'
+import { counterOf, showsFileDownloads, showsFileUsage } from '../../lib/placement-behaviour'
 import { choiceLabel } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Input } from '../ui/input'
@@ -309,6 +309,8 @@ export const FieldRenderer = memo(function FieldRenderer({
         disabled={field.readonly}
         allowUpload={fOpts?.allow_upload !== false}
         allowPick={fOpts?.allow_pick !== false}
+        showUsage={showsFileUsage(field._overrides)}
+        showDownloads={showsFileDownloads(field._overrides)}
       />
     )
   }
@@ -488,6 +490,8 @@ export const FieldRenderer = memo(function FieldRenderer({
           allowUpload={fOpts?.allow_upload !== false}
           allowPick={fOpts?.allow_pick !== false}
           pendingSave={fOpts?.pending_save === true}
+          showUsage={showsFileUsage(field._overrides)}
+          showDownloads={showsFileDownloads(field._overrides)}
         />
       )
     }

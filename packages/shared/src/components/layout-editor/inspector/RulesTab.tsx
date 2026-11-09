@@ -14,6 +14,7 @@ import { useLayoutEditorHost } from '../host'
 import { tintCard } from '../panel-style'
 import {
   ConfirmChangeSetting,
+  FileChipToggles,
   PersonalDefaultInlineToggle,
   PersonalDefaultToggle,
   RecommendedToggle,
@@ -160,6 +161,7 @@ export function RulesTab() {
       <PersonalDefaultInlineToggle />
       <ConfirmChangeSetting />
       <RepeatLastToggle />
+      <FileChipToggles />
       {(info.computedType === 'rollup' || info.computedType === 'write') && (
         <Toggle
           k='field.editable_computed'

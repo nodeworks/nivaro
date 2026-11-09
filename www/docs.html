@@ -321,6 +321,7 @@
           <a class="docs-nav-item" data-section="at-risk-flagging" href="#at-risk-flagging">At-Risk Flagging</a>
           <a class="docs-nav-item" data-section="data-integrity" href="#data-integrity">Data Integrity</a>
           <a class="docs-nav-item" data-section="team-throughput" href="#team-throughput">Team Throughput</a>
+          <a class="docs-nav-item" data-section="file-downloads" href="#file-downloads">File downloads</a>
           <a class="docs-nav-item" data-section="managers-team" href="#managers-team">Your team (managers)</a>
           <a class="docs-nav-item" data-section="imports" href="#imports">Data Import Queue</a>
           <a class="docs-nav-item" data-section="import-templates" href="#import-templates">Import Templates</a>
@@ -9510,6 +9511,23 @@ bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
           <p class="doc-p">Whenever people are suspended or redacted — by the directory sync, a Users-page edit or bulk action, offboarding, an account merge or a retention policy — every active administrator gets ONE notification per batch (category **System**, so it can be muted in Profile → Notification rules): "40 accounts were suspended by directory sync — 12 still own open work", linking to this tab. A sync that suspends forty people sends one notice, not forty; the administrator who made a change is not told about their own action. The work count comes from the same scan as this tab, counted with its default rules (owner seats, team places, open tasks, pending approvals and records on open workflows; never created-by stamps).</p>
           <p class="doc-p">The **People to offload** card lists those people — name, when and how they were suspended, and how much they hold by kind — most work first. Each row opens this tab on that person (<code class="doc-code">?person=&lt;id&gt;</code>), where the work is handed on. It draws nothing when nobody holds work. In the admin app it is an Overview section (administrators only, on by default, hide it in Customize); in the EFP portal it is the dashboard card "People to offload", placed beside "People needing attention". Approvals are listed but cannot be reassigned from here: change the approver on the approval chain.</p>
           <!-- /SYNC:data-integrity -->
+        </div>
+
+        <div class="doc-section" id="s-file-downloads" data-toc='[{"id":"file-downloads","label":"File downloads"},{"id":"file-downloads-record","label":"On a record"},{"id":"file-downloads-report","label":"The report"}]'>
+          <!-- SYNC:file-downloads -->
+          <h1 class="doc-h1" id="file-downloads">File downloads</h1>
+          <p class="doc-p">Every time a signed-in person downloads a stored file, or opens it in the browser, Nivaro writes one activity entry on each record the file belongs to (up to five). The entry reads "downloaded “quote.pdf” on Workflow 85607" on the record’s history, in the person’s own activity and in the Activity log, and it is kept for as long as the rest of the activity log. A file that belongs to no record is logged on the file itself.</p>
+          <ul class="doc-ul">
+            <li>Counted: <code class="doc-code">GET /api/files/:id</code> with <code class="doc-code">download=1</code> (every file link in the apps) and a direct open of the file.</li>
+            <li>Not counted: thumbnails (<code class="doc-code">/files/:id/transform</code>), files a page shows inline (images, styles and fonts, told apart by the browser’s <code class="doc-code">Sec-Fetch-Dest</code>), the follow-up pieces of a streamed video, HEAD requests, and the same person fetching the same file again within a minute.</li>
+            <li>Each entry records who, which file, which record, and the app it came from: <code class="doc-code">admin</code>, the host name of another front end, or <code class="doc-code">direct</code> for a link with no page behind it.</li>
+            <li>Nothing is logged when the file could not be sent (no access, missing from storage).</li>
+          </ul>
+          <h2 class="doc-h2" id="file-downloads-record">On a record</h2>
+          <p class="doc-p">For administrators, each file on a record form carries a small people count beside its "used in" chip: how many people downloaded it from that record. Hovering names them; clicking lists each person with how many times and when. A file nobody downloaded shows nothing, and other people never see the count (<code class="doc-code">GET /api/file-downloads/on-record?collection=&amp;item=&amp;ids=</code>, administrators only). Both chips are on by default and can be turned off per field in the layout editor (Rules tab → Show where each file was used / Show who downloaded each file; placement overrides <code class="doc-code">file_used_in: false</code> and <code class="doc-code">file_downloads: false</code>).</p>
+          <h2 class="doc-h2" id="file-downloads-report">The report</h2>
+          <p class="doc-p">Reports → File downloads (<code class="doc-code">/reports/downloads</code>, administrators only) folds the downloads in a date range (the last 30 days by default) by file, by person and by record, or lists every download. Filter by collection and person; Export CSV writes one line per download. Downloads on records you cannot open (User Scopes, row filters) are left out, and the newest 20,000 downloads in the range are counted (<code class="doc-code">GET /api/file-downloads/report?from=&amp;to=&amp;collection=&amp;user=&amp;format=csv</code>).</p>
+          <!-- /SYNC:file-downloads -->
         </div>
 
         <div class="doc-section" id="s-team-throughput" data-toc='[{"id":"team-throughput","label":"Team Throughput"},{"id":"team-throughput-metrics","label":"Metrics"},{"id":"team-throughput-first-open","label":"Time until an owner opens a record"}]'>

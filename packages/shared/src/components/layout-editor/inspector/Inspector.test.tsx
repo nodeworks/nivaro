@@ -833,6 +833,22 @@ describe('Inspector', () => {
       expect(lastOverrides(apply)).toMatchObject({ repeat_last: true })
     })
 
+    it('Rules tab: a file field turns its Used in and Downloads chips off (both on by default)', async () => {
+      const { apply } = await mount(field('attachments'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      const sw = (k: string) => host.querySelector(`[data-setting="field.${k}"] [role="switch"]`)
+      expect(sw('file_used_in')?.getAttribute('aria-checked')).toBe('true')
+      expect(sw('file_downloads')?.getAttribute('aria-checked')).toBe('true')
+      await click(sw('file_used_in'))
+      expect(lastOverrides(apply)).toMatchObject({ file_used_in: false })
+      await click(sw('file_downloads'))
+      expect(lastOverrides(apply)).toMatchObject({ file_downloads: false })
+      // Not a file field: no chip settings.
+      await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="rules"]'))
+      expect(host.querySelector('[data-setting="field.file_used_in"]')).toBeNull()
+    })
+
     it('Rules tab: Personal default writes overrides.personal_default and clears it again', async () => {
       const { apply } = await mount(field('title'))
       await click(host.querySelector('[data-inspector-tab="rules"]'))

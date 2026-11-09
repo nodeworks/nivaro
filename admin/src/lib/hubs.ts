@@ -140,12 +140,13 @@ export const CONNECTIONS_HUB: HubDef = {
 export const REPORTS_HUB: HubDef = {
   base: '/reports',
   title: 'Reports',
-  hint: 'Reports built from widgets, the ones emailed on a schedule, and team throughput.',
+  hint: 'Reports built from widgets, the ones emailed on a schedule, team throughput and file downloads.',
   icon: FileBarChart,
   tabs: [
     { path: '', label: 'Report Studio', legacy: '/report-studio' },
     { path: 'scheduled', label: 'Scheduled', legacy: '/scheduled-reports' },
-    { path: 'throughput', label: 'Team throughput', legacy: '/team-throughput' }
+    { path: 'throughput', label: 'Team throughput', legacy: '/team-throughput' },
+    { path: 'downloads', label: 'File downloads', legacy: '/file-downloads' }
   ]
 }
 

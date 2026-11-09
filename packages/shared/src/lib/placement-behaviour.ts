@@ -169,6 +169,18 @@ export function repeatLastOf(ov: unknown): boolean {
   return overridesObject(ov).repeat_last === true
 }
 
+// ── #3235 file chips: where a file was used, who downloaded it ──────────────
+// Both on unless the placement turns them off (`file_used_in: false`,
+// `file_downloads: false`). The download count shows to administrators only.
+
+export function showsFileUsage(ov: unknown): boolean {
+  return overridesObject(ov).file_used_in !== false
+}
+
+export function showsFileDownloads(ov: unknown): boolean {
+  return overridesObject(ov).file_downloads !== false
+}
+
 // ── #2709 character and word counters ───────────────────────────────────────
 
 export const COUNTER_LIMIT_MAX = 1_000_000

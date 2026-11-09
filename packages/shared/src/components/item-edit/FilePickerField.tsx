@@ -18,6 +18,7 @@ import { useGridFlush, useNivaroClient, useParentDraft } from '../../context'
 import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { cn, formatDateTime } from '../../lib/utils'
+import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
 import { useM2MStaging } from './M2MStagingContext'
@@ -248,13 +249,19 @@ export function FilePickerField({
   onChange,
   disabled,
   allowUpload = true,
-  allowPick = true
+  allowPick = true,
+  showUsage = true,
+  showDownloads = true
 }: {
   value: unknown
   onChange: (v: unknown) => void
   disabled?: boolean
   allowUpload?: boolean
   allowPick?: boolean
+  /** The "used in" chip (layout `file_used_in`, on by default). */
+  showUsage?: boolean
+  /** The download count, administrators only (layout `file_downloads`, on by default). */
+  showDownloads?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -279,7 +286,13 @@ export function FilePickerField({
     parentDraft?.collection,
     recordId,
     fileId ? [fileId] : [],
-    usageVisible
+    usageVisible && showUsage
+  )
+  const downloads = useFileDownloadStats(
+    parentDraft?.collection,
+    recordId,
+    fileId ? [fileId] : [],
+    usageVisible && showDownloads
   )
 
   // manage object URL lifecycle
@@ -433,7 +446,7 @@ export function FilePickerField({
               )}
             </div>
           </div>
-          {!hasPending && fileId && (
+          {showUsage && !hasPending && fileId && (
             <FileUsageChip
               fileId={fileId}
               uses={usage.data?.[fileId]}
@@ -441,6 +454,9 @@ export function FilePickerField({
               collection={parentDraft?.collection}
               itemId={recordId}
             />
+          )}
+          {showDownloads && !hasPending && fileId && (
+            <FileDownloadCount fileId={fileId} stat={downloads.data?.[fileId]} />
           )}
           {!hasPending && fileId && (
             <a
@@ -552,7 +568,9 @@ export function FileM2MField({
   disabled,
   allowUpload = true,
   allowPick = true,
-  pendingSave = false
+  pendingSave = false,
+  showUsage = true,
+  showDownloads = true
 }: {
   relation: CMSRelation
   parentId: string
@@ -561,6 +579,10 @@ export function FileM2MField({
   allowUpload?: boolean
   allowPick?: boolean
   pendingSave?: boolean
+  /** The "used in" chip (layout `file_used_in`, on by default). */
+  showUsage?: boolean
+  /** The download count, administrators only (layout `file_downloads`, on by default). */
+  showDownloads?: boolean
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -687,7 +709,13 @@ export function FileM2MField({
     parentDraft?.collection,
     isNew ? null : parentId,
     committedIds,
-    usageVisible
+    usageVisible && showUsage
+  )
+  const downloads = useFileDownloadStats(
+    parentDraft?.collection,
+    isNew ? null : parentId,
+    committedIds,
+    usageVisible && showDownloads
   )
 
   // Auto-check on load — live storage verdict beats the stored stamp.
@@ -835,7 +863,7 @@ export function FileM2MField({
                     file missing
                   </span>
                 )}
-                {!isNew && committedIds.includes(id) && (
+                {showUsage && !isNew && committedIds.includes(id) && (
                   <FileUsageChip
                     fileId={id}
                     uses={usage.data?.[id]}
@@ -843,6 +871,9 @@ export function FileM2MField({
                     collection={parentDraft?.collection}
                     itemId={parentId}
                   />
+                )}
+                {showDownloads && !isNew && committedIds.includes(id) && (
+                  <FileDownloadCount fileId={id} stat={downloads.data?.[id]} />
                 )}
                 <a
                   href={`${getUrl(id)}?download=1`}

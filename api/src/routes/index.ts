@@ -133,6 +133,7 @@ import { fieldHistoryRoutes } from './field-history.js'
 import { fieldRulesRoutes } from './field-rules.js'
 import { fieldTranslationsRoutes } from './field-translations.js'
 import { fieldWatchesRoutes } from './field-watches.js'
+import { fileDownloadsRoutes } from './file-downloads.js'
 import { filesRoutes } from './files.js'
 import { findReplaceRoutes } from './find-replace.js'
 import { flowRegistryRoutes } from './flow-registry.js'
@@ -584,6 +585,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(changesRoutes, { prefix: '/changes' })
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })
+  await app.register(fileDownloadsRoutes, { prefix: '/file-downloads' })
   await app.register(helpVideosRoutes, { prefix: '/help-videos' })
   // Settings + render queue (admin); static paths beside helpVideosRoutes' /:id.
   await app.register(helpVideoAdminRoutes, { prefix: '/help-videos' })

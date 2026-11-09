@@ -911,6 +911,21 @@ export function activityPredicate(
       return `had an import into ${midSentence(nouns.plural)} fail`
     case 'comment':
       return `commented${on}`
+    case 'file-download': {
+      // #3234: the comment is {file, name, app, kind} as JSON.
+      let name = ''
+      let opened = false
+      try {
+        const c = JSON.parse(comment) as { name?: unknown; kind?: unknown }
+        name = typeof c.name === 'string' ? c.name : ''
+        opened = c.kind === 'open'
+      } catch {
+        /* an unreadable comment still says what happened */
+      }
+      const what = name ? `“${name}”` : 'a file'
+      const onRecord = collection === 'nivaro_files' ? '' : on
+      return `${opened ? 'opened' : 'downloaded'} ${what}${onRecord}`
+    }
     case 'picker-exclude':
       return `hid ${record ?? aNoun} from pickers`
     case 'picker-include':
