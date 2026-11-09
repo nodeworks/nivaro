@@ -300,10 +300,14 @@ export async function executeRetentionPolicy(
 ): Promise<RetentionRunResult> {
   const errors: string[] = []
   const noWrites = dryRun || truthy(policy.dry_run_mode)
-  const redactFields: string[] = (() => {
+  const wantedFields: string[] = (() => {
     const f: string[] = parseJson(policy.redact_fields)
     return f.length > 0 ? f : DEFAULT_REDACT_FIELDS
   })()
+  // Only columns this database has: EFP production has no nivaro_users.job_title, and naming
+  // it failed every redaction of the first scheduled run (165 errors, 2026-11-09 4:45 AM ET).
+  const redactFields: string[] = []
+  for (const f of wantedFields) if (await hasColumn('nivaro_users', f)) redactFields.push(f)
   const template = policy.redact_value_template ?? 'Redacted_{{id}}'
 
   const found = await findRetentionCandidates(policy)
