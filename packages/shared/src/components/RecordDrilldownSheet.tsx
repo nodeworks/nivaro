@@ -13,6 +13,7 @@ import { usePresence } from '../lib/presence-hooks'
 import { titleCase } from '../lib/utils'
 import { DesignCanvas } from './layout-editor/design-canvas'
 import type { LayoutDesignProp } from './layout-editor/design-context'
+import { ItemActionButtons } from './panels/ItemActionButtons'
 import type { ReadViewLayout } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
@@ -241,12 +242,20 @@ export function RecordDrilldownSheet({
             {design ? (
               <RecordReadView collection={current.collection} design={design} />
             ) : (
-              <RecordReadView
-                key={`${current.collection}:${current.itemId}:read`}
-                collection={current.collection}
-                itemId={current.itemId}
-                layoutData={detailLayout as unknown as ReadViewLayout}
-              />
+              <>
+                <div className='flex shrink-0 flex-wrap items-center justify-end gap-2 border-b border-slate-200 px-4 py-2 empty:hidden dark:border-border'>
+                  <ItemActionButtons
+                    collection={current.collection}
+                    itemId={String(current.itemId)}
+                  />
+                </div>
+                <RecordReadView
+                  key={`${current.collection}:${current.itemId}:read`}
+                  collection={current.collection}
+                  itemId={current.itemId}
+                  layoutData={detailLayout as unknown as ReadViewLayout}
+                />
+              </>
             )}
           </Suspense>
         </DrilldownContext.Provider>
@@ -262,6 +271,9 @@ export function RecordDrilldownSheet({
                 qc.invalidateQueries({ queryKey: ['queue-items'] })
               }}
               design={design}
+              // Record actions (Push to Fusion…) belong here as on the full page: people work
+              // queues from this sidebar (2026-11-09: an admin found no Push to Fusion in it).
+              showItemActions={!design}
             />
           </Suspense>
         </DrilldownContext.Provider>

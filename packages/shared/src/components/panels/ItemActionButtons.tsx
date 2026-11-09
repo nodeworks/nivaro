@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Play, X } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -43,6 +43,9 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [runningId, setRunningId] = useState<string | null>(null)
+  // In a modal sheet (the record sidebar) the body is pointer-locked: the confirm portals into
+  // the hosting dialog instead, or its buttons could not be pressed.
+  const anchorRef = useRef<HTMLSpanElement>(null)
 
   const { data: actions } = useQuery({
     queryKey: ['item-actions', collection, itemId],
@@ -147,7 +150,7 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
   if (!actions || actions.length === 0) return null
 
   return (
-    <>
+    <span ref={anchorRef} className='contents'>
       {actions.map((a) => (
         <span key={a.id} className='relative inline-flex'>
           <Button
@@ -243,8 +246,8 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
               </div>
             </div>
           </div>,
-          document.body
+          (anchorRef.current?.closest('[role="dialog"]') as HTMLElement | null) ?? document.body
         )}
-    </>
+    </span>
   )
 }
