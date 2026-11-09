@@ -327,7 +327,12 @@ export function executeFailure(err: unknown): { status: number; error: string; c
   const message = err instanceof Error ? err.message.trim() : ''
   if (looksLikeDriverError(err, message))
     return { status: 500, error: 'The action failed. The details are in the server log.' }
-  if (Number.isInteger(status) && status >= 400 && status < 500)
+  // 4xx = the caller's data/state; 502/503/504 = the partner the action called failed (not
+  // our server — the day-1 Fusion rejections counted as 500s, 2026-11-09).
+  if (
+    Number.isInteger(status) &&
+    ((status >= 400 && status < 500) || [502, 503, 504].includes(status))
+  )
     return {
       status,
       error: message || 'The action was refused',
