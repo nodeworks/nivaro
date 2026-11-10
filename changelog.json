@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T21:05:16.862Z",
+  "generated_at": "2026-11-10T21:40:00.324Z",
   "releases": [
+    {
+      "version": "0.3.126",
+      "tag": "v0.3.126",
+      "date": "2026-11-10T16:39:42-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "search",
+              "text": "linked records list in a sensible order",
+              "hash": "ff5c5875c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.125",
       "tag": "v0.3.125",
-      "date": "2026-11-10T16:04:57-05:00",
+      "date": "2026-11-10T16:05:16-05:00",
       "sections": [
         {
           "label": "Added",
