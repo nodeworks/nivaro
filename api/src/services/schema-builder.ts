@@ -31,6 +31,7 @@ import { ALL_DOMAIN_TYPES, UserType, WorkflowInstanceType } from '../graphql/typ
 import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
+import { readAllPages, wantsManyPages } from './graphql-list-pages.js'
 import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
 import {
   assertNestedArgsAllowed,
@@ -50,6 +51,7 @@ import {
   createOne,
   deleteOne,
   ForbiddenError,
+  LIST_READ_MAX,
   readItems,
   readOne,
   rehearseCreate,
@@ -1072,7 +1074,13 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       await assertNestedArgsAllowed(ctx, otherCol, gate, args, m2oOfOther, (c) =>
                         timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
-                      await applyNestedListArgs(q, otherCol, args as never, m2oOfOther, ctx.user as User)
+                      await applyNestedListArgs(
+                        q,
+                        otherCol,
+                        args as never,
+                        m2oOfOther,
+                        ctx.user as User
+                      )
                       const rows = (await q) as Array<Record<string, unknown>>
                       if (!chargeNestedRows(ctx, rows.length)) return []
                       return rows.map(({ __junction_id, ...target }) => ({
@@ -1118,7 +1126,13 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       await assertNestedArgsAllowed(ctx, manyCol, gate, args, m2oOfMany, (c) =>
                         timedGate(ctx, c, () => nestedGate(ctx, c))
                       )
-                      await applyNestedListArgs(q, manyCol, args as never, m2oOfMany, ctx.user as User)
+                      await applyNestedListArgs(
+                        q,
+                        manyCol,
+                        args as never,
+                        m2oOfMany,
+                        ctx.user as User
+                      )
                       const rows = (await q) as Array<Record<string, unknown>>
                       if (!chargeNestedRows(ctx, rows.length)) return []
                       return gate.fields ? rows.map((r) => narrowNestedRow(r, gate)) : rows
@@ -1395,14 +1409,33 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         throw Object.assign(new Error('Unauthorized'), {
           extensions: { code: 'UNAUTHENTICATED' }
         })
-      return readItems(ctx.user, name, {
+      const user = ctx.user
+      const base = {
         filter: translateVirtualKeys(args.filter) as Record<string, unknown> | undefined,
         sort: args.sort as string[] | undefined,
+        search: args.search as string | undefined,
+        ...(fields ? { fields } : {})
+      }
+      // `limit: -1` = every row, a limit above one read = exactly that many
+      // (graphql-list-pages.ts); one items read stops at LIST_READ_MAX.
+      if (wantsManyPages(args.limit, LIST_READ_MAX, args.after))
+        return readAllPages(
+          (limit, offset, first) =>
+            readItems(user, name, {
+              ...base,
+              limit,
+              offset,
+              ...(first ? {} : { count: false })
+            }),
+          args.limit as number,
+          (args.offset as number | undefined) ?? 0,
+          LIST_READ_MAX
+        ) as ReturnType<typeof readItems>
+      return readItems(user, name, {
+        ...base,
         limit: args.limit as number | undefined,
         offset: args.offset as number | undefined,
-        search: args.search as string | undefined,
-        ...(typeof args.after === 'string' ? { after: args.after } : {}),
-        ...(fields ? { fields } : {})
+        ...(typeof args.after === 'string' ? { after: args.after } : {})
       })
     }
 
