@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T14:42:16.869Z",
+  "generated_at": "2026-11-10T14:59:49.000Z",
   "releases": [
+    {
+      "version": "0.3.116",
+      "tag": "v0.3.116",
+      "date": "2026-11-10T09:59:29-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "a saved record's linked parents reloading never clear its cascade children",
+              "hash": "2e39a4166"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.115",
       "tag": "v0.3.115",
-      "date": "2026-11-10T09:41:56-05:00",
+      "date": "2026-11-10T09:42:16-05:00",
       "sections": [
         {
           "label": "Fixed",
