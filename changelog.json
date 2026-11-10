@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T19:51:41.645Z",
+  "generated_at": "2026-11-10T20:16:35.183Z",
   "releases": [
+    {
+      "version": "0.3.123",
+      "tag": "v0.3.123",
+      "date": "2026-11-10T15:16:18-05:00",
+      "sections": [
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "search",
+              "text": "related-label search reads its matches up front",
+              "hash": "88992e8b7"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.122",
       "tag": "v0.3.122",
-      "date": "2026-11-10T14:51:25-05:00",
+      "date": "2026-11-10T14:51:41-05:00",
       "sections": [
         {
           "label": "Fixed",
