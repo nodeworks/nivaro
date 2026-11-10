@@ -10,7 +10,7 @@ vi.mock('./collections.js', () => ({
 vi.mock('./global-search.js', () => ({ labelFor: vi.fn() }))
 
 import type { CMSRelation } from '../types.js'
-import { linkPlans } from './search-linked.js'
+import { groupSort, linkPlans } from './search-linked.js'
 
 const rel = (r: Partial<CMSRelation>) => r as CMSRelation
 
@@ -88,5 +88,26 @@ describe('linkPlans', () => {
       })
     ])
     expect(plans.map((p) => p.field)).toEqual(['billing_location', 'shipping_location'])
+  })
+})
+
+describe('groupSort', () => {
+  const F = [
+    { field: 'line_number', type: 'integer' },
+    { field: 'description', type: 'string' },
+    { field: 'number', type: 'string' }
+  ]
+  it('a PO line list follows the line number its label shows', () => {
+    expect(groupSort(null, 'Line {{line_number}} · {{description}}', F)).toEqual([
+      'line_number',
+      'id'
+    ])
+  })
+  it("the collection's own sort field wins", () => {
+    expect(groupSort('sort', 'Line {{line_number}}', F)).toEqual(['sort', 'id'])
+  })
+  it('a label with no number (or no template) keeps the primary key order', () => {
+    expect(groupSort(null, '{{number}}', F)).toEqual(['id'])
+    expect(groupSort(null, null, F)).toEqual(['id'])
   })
 })

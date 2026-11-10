@@ -95,6 +95,26 @@ export function linkPlans(collection: string, rels: CMSRelation[]): LinkPlan[] {
   })
 }
 
+const NUMERIC_TYPES = new Set(['integer', 'bigInteger', 'float', 'decimal'])
+
+/**
+ * The order a group lists its records in (Rob 2026-11-10: a PO's lines came back 7, 8, 6, 10,
+ * 2): the collection's own sort field, else the first number its label template shows
+ * (`Line {{line_number}} · …`), else the primary key. Pure; exported for tests.
+ */
+export function groupSort(
+  sortField: string | null | undefined,
+  displayTemplate: string | null | undefined,
+  fields: Array<{ field: string; type: string }>
+): string[] {
+  if (sortField) return [sortField, 'id']
+  const types = new Map(fields.map((f) => [f.field, f.type]))
+  for (const m of String(displayTemplate ?? '').matchAll(/\{\{\s*([A-Za-z_][\w]*)\s*\}\}/g)) {
+    if (NUMERIC_TYPES.has(types.get(m[1]) ?? '')) return [m[1], 'id']
+  }
+  return ['id']
+}
+
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let next = 0
@@ -150,6 +170,14 @@ export async function buildSearchLinked(
       const col = await getCollection(p.target)
       if (!col || (p.kind === 'o2m' && col.hidden)) return null
       const name = collectionTitle(p.target, col.display_name)
+      const sort =
+        p.kind === 'm2o'
+          ? undefined
+          : groupSort(
+              col.sort_field,
+              col.display_template,
+              (await getFields(p.target).catch(() => [])) as Array<{ field: string; type: string }>
+            )
       let res: { data: unknown; total?: number | null }
       if (p.kind === 'm2o') {
         const v = row?.[p.field]
@@ -162,6 +190,7 @@ export async function buildSearchLinked(
       } else if (p.kind === 'o2m') {
         res = await readItems(user, p.target, {
           filter: { [p.field]: { _eq: rootId } },
+          sort,
           limit: ITEMS_PER_GROUP,
           count: true
         })
@@ -177,6 +206,7 @@ export async function buildSearchLinked(
         if (!ids.length) return null
         res = await readItems(user, p.target, {
           filter: { id: { _in: [...new Set(ids)] } },
+          sort,
           limit: ITEMS_PER_GROUP,
           count: true
         })
