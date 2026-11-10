@@ -527,6 +527,10 @@ export {
   type MailSuppression,
   useMailSuppression
 } from './components/profile/MailSuppressedPill'
+export {
+  BulkRestrictedScopes,
+  pickBulkDimension
+} from './components/profile/BulkRestrictedScopes'
 export { PersonDidPanel } from './components/profile/PersonDidPanel'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
@@ -570,11 +574,11 @@ export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { RowPresence } from './components/RowPresence'
 export { SearchHighlight } from './components/SearchHighlight'
+export { SignOutNoteAfterSignIn, SignOutNoteBanner } from './components/SignOutNoteBanner'
 // #3229 shape-matched skeletons · #3231 slow-read reasons
 export {
   CardSkeleton,
   FormSkeleton,
-export { SignOutNoteAfterSignIn, SignOutNoteBanner } from './components/SignOutNoteBanner'
   ListSkeleton,
   SkeletonBar,
   TableSkeletonRows
@@ -1155,10 +1159,6 @@ export {
   setServerClockOffset
 } from './lib/server-clock'
 export {
-  claimIdentityCall,
-  guardIdentityCall,
-  isSignedOut,
-export {
   clearSignOutNote,
   parseSignOutNote,
   readSignOutNote,
@@ -1171,6 +1171,10 @@ export {
   saveSignOutNote,
   signOutNoteHeading
 } from './lib/sign-out-note'
+export {
+  claimIdentityCall,
+  guardIdentityCall,
+  isSignedOut,
   isSignedOutError,
   noteCredentialChanged,
   noteSignedIn,

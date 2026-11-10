@@ -587,6 +587,19 @@ export const securityUserScopes: DocSection = {
         'Values are stored as target-collection record ids, so renaming a zone never breaks a scope.'
       ]
     },
+    { type: 'h3', id: 'user-scopes-bulk', text: 'Bulk restricted zones' },
+    {
+      type: 'p',
+      text: 'Administrators change many people\u2019s RESTRICTED values at once from the people list: tick people, choose Restricted zones, pick Add or Remove and the zones, then Preview. The preview lists every person with their zones now and after, and nothing is saved until Apply. Add puts the picked zones next to the ones a person already has; Remove takes only the picked zones away. Defaults, other dimensions and zones you did not pick are never touched, and each person\u2019s change is logged under the administrator.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A person with no zone restriction sees every zone, so Add leaves them as they are rather than narrowing them to the picked zones.',
+        'Remove never takes away someone\u2019s last restricted zone by default: with none left they would see every zone. The preview names them; tick the opt-in under the preview to remove it anyway.',
+        'Up to 500 people per run. A person whose save fails is named; the others are still saved.'
+      ]
+    },
     { type: 'h3', text: 'Enforcement and seeding' },
     {
       type: 'ul',
@@ -608,7 +621,9 @@ POST/PATCH/DELETE /api/scope-dimensions[/:id]  # admin
 GET  /api/scope-dimensions/:id/coverage     # live per-collection route preview (admin)
 GET  /api/users/me/scopes                   # caller's dimensions + defaults + restricted
 PUT  /api/users/me/scopes/:dimension        # self-edit defaults only { values: [ids] }
-GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }`
+GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }
+POST /api/user-scopes/bulk                  # admin: { user_ids (≤500), dimension, op: add|remove,
+                                            #   values, preview?, allow_empty? } — restricted values only`
     },
     { type: 'h3', text: 'Access requests' },
     {

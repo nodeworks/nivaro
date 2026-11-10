@@ -1,3 +1,5 @@
+import { createNivaro } from '@nivaro/sdk'
+import { BulkRestrictedScopes, NivaroProvider } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, X } from 'lucide-react'
 import { useState } from 'react'
@@ -13,7 +15,12 @@ import {
 } from '@/components/ui/select'
 import { api } from '@/lib/api'
 
-type Mode = null | 'role' | 'suspend' | 'activate' | 'delegate' | 'team' | 'notify'
+type Mode = null | 'role' | 'suspend' | 'activate' | 'delegate' | 'team' | 'notify' | 'zones'
+
+// The shared Restricted zones panel talks through an SDK client (cookie session, same origin).
+const zonesClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
+  timeoutMs: 120_000
+})
 
 interface BulkResult {
   results: Array<{
@@ -168,6 +175,7 @@ export function UsersBulkBar({
         {pill('role', 'Set role')}
         {pill('delegate', 'Assign delegate')}
         {pill('team', 'Add to team')}
+        {pill('zones', 'Restricted zones')}
         {pill('notify', 'Send message')}
         <button
           type='button'
@@ -198,6 +206,17 @@ export function UsersBulkBar({
           className='flex flex-wrap items-end gap-2 border-t border-slate-100 px-3 py-2.5 dark:border-border/60'
           data-users-bulk-panel={mode}
         >
+          {mode === 'zones' && (
+            <NivaroProvider client={zonesClient}>
+              <BulkRestrictedScopes
+                userIds={ids}
+                onClose={() => setMode(null)}
+                onDone={() => {
+                  void qc.invalidateQueries({ queryKey: ['users'] })
+                }}
+              />
+            </NivaroProvider>
+          )}
           {mode === 'role' && (
             <>
               <Select value={roleId} onValueChange={setRoleId}>

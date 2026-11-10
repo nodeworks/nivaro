@@ -14661,7 +14661,7 @@ Authorization: Bearer &lt;nvm_-token&gt;
           <!-- /SYNC:masquerade -->
         </div>
 
-        <div class="doc-section" id="s-user-scopes" data-toc='[{"id":"user-scopes","label":"User Scopes"},{"id":"security-suspended-why","label":"Why an account is suspended"}]'>
+        <div class="doc-section" id="s-user-scopes" data-toc='[{"id":"user-scopes","label":"User Scopes"},{"id":"user-scopes-bulk","label":"Bulk restricted zones"},{"id":"security-suspended-why","label":"Why an account is suspended"}]'>
           <!-- SYNC:user-scopes -->
           <h1 class="doc-h1" id="user-scopes">User Scopes</h1>
           <p class="doc-p">User Scopes give each user per-dimension DEFAULT filter values (seed their filter UIs) and RESTRICTED values (server-enforced row scoping — the user can only see rows matching the picked values). A scope dimension names a target collection (e.g. a "Zone" dimension targeting <code class="doc-code">divisions</code>); how it filters every other business collection is auto-resolved from the relations graph — including junction-table hops — so new collections are covered the moment a relation to the target exists.</p>
@@ -14680,6 +14680,13 @@ Authorization: Bearer &lt;nvm_-token&gt;
             <li>Users self-serve their own DEFAULTS from their profile — restrictions are admin-only.</li>
             <li>Values are stored as target-collection record ids, so renaming a zone never breaks a scope.</li>
           </ul>
+          <h3 class="doc-h3" id="user-scopes-bulk">Bulk restricted zones</h3>
+          <p class="doc-p">Administrators change many people’s RESTRICTED values at once from the people list: tick people, choose Restricted zones, pick Add or Remove and the zones, then Preview. The preview lists every person with their zones now and after, and nothing is saved until Apply. Add puts the picked zones next to the ones a person already has; Remove takes only the picked zones away. Defaults, other dimensions and zones you did not pick are never touched, and each person’s change is logged under the administrator.</p>
+          <ul class="doc-ul">
+            <li>A person with no zone restriction sees every zone, so Add leaves them as they are rather than narrowing them to the picked zones.</li>
+            <li>Remove never takes away someone’s last restricted zone by default: with none left they would see every zone. The preview names them; tick the opt-in under the preview to remove it anyway.</li>
+            <li>Up to 500 people per run. A person whose save fails is named; the others are still saved.</li>
+          </ul>
           <h3 class="doc-h3">Enforcement and seeding</h3>
           <ul class="doc-ul">
             <li>Restrictions are enforced server-side on every item read (list + single) and on native report widgets, alongside role row filters.</li>
@@ -14693,7 +14700,9 @@ POST/PATCH/DELETE /api/scope-dimensions[/:id]  # admin
 GET  /api/scope-dimensions/:id/coverage     # live per-collection route preview (admin)
 GET  /api/users/me/scopes                   # caller's dimensions + defaults + restricted
 PUT  /api/users/me/scopes/:dimension        # self-edit defaults only { values: [ids] }
-GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }</code></pre>
+GET/PUT /api/user-scopes/:userId            # admin: both modes { dimension, mode, values }
+POST /api/user-scopes/bulk                  # admin: { user_ids (≤500), dimension, op: add|remove,
+                                            #   values, preview?, allow_empty? } — restricted values only</code></pre>
           <h3 class="doc-h3">Access requests</h3>
           <p class="doc-p">When a record is hidden from someone, the access-denied panel explains why and offers "Request access". The request notifies admins and lands under System → Access Requests with the reasons captured at that moment (evaluated as the requester): a role without read permission, a row-level rule, or a User Scope whose values exclude the record — with the record's own value named ("this record's Zone is National, you are limited to Zone 1, 2, 3"). Granting applies the smallest fitting change: widen that scope by the record's value, or add a read policy to the role. Row-level rules are never changed automatically — the request stays pending and says what still blocks it. Both sides are notified; a whole-collection request works the same way with a read policy. Admins see the pending count on the notification bell (with a Review shortcut) and a "Access requests waiting on you" section in the daily digest; a request nobody acted on within 14 days expires with a note to the requester.</p>
           <pre class="doc-pre"><code>POST /api/access-requests { collection, item?, note? }   # any user

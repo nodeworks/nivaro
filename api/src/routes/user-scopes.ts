@@ -301,6 +301,144 @@ export async function userScopesRoutes(app: FastifyInstance) {
   /** Admin routes that name a person: an administrator, and a uuid (else 400, b11-N9). */
   const adminUserId = [requireAdmin, requireUuidUserId]
 
+  // Bulk add / remove of RESTRICTED values on one dimension for many people
+  // (Rob 2026-11-10, zones). Never touches defaults, other dimensions, or values
+  // not named; see services/user-scopes-bulk.ts for the cases it refuses.
+  app.post<{
+    Body: {
+      user_ids?: unknown
+      dimension?: string
+      op?: string
+      values?: unknown
+      preview?: boolean
+      allow_empty?: boolean
+    }
+  }>('/user-scopes/bulk', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = req.body ?? {}
+    const op = String(b.op ?? '')
+    if (op !== 'add' && op !== 'remove')
+      return reply.code(400).send({ error: "op must be 'add' or 'remove'" })
+    const userIds = Array.isArray(b.user_ids)
+      ? b.user_ids.map((u) => String(u).trim()).filter((u) => USER_ID_RE.test(u))
+      : []
+    if (userIds.length === 0)
+      return reply.code(400).send({ error: 'Pick at least one person', code: 'NO_PEOPLE' })
+    if (userIds.length > 500)
+      return reply.code(400).send({ error: 'At most 500 people at once', code: 'TOO_MANY_PEOPLE' })
+    const values = sanitizeValues(b.values)
+    if (values.length === 0)
+      return reply.code(400).send({ error: 'Pick at least one value', code: 'NO_VALUES' })
+    const dims = await listScopeDimensions(false)
+    const dim = dims.find((d) => d.name === b.dimension)
+    if (!dim) return reply.code(404).send({ error: 'Unknown dimension' })
+    const ident = /^[A-Za-z_][A-Za-z0-9_]*$/
+    const display = dim.display_field && ident.test(dim.display_field) ? dim.display_field : 'id'
+    if (!ident.test(dim.target_collection))
+      return reply.code(400).send({ error: 'The dimension’s collection cannot be read' })
+    const { runBulkScopeChange } = await import('../services/user-scopes-bulk.js')
+    const noun = String(dim.label ?? dim.name).toLowerCase()
+    const result = await runBulkScopeChange(
+      {
+        userIds,
+        dimension: dim.name,
+        noun,
+        op,
+        values,
+        preview: b.preview === true,
+        allowEmpty: b.allow_empty === true
+      },
+      {
+        users: async (ids) => {
+          const rows = (await db('nivaro_users')
+            .whereIn('id', ids)
+            .select('id', 'first_name', 'last_name', 'email')) as Array<{
+            id: string
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+          }>
+          return new Map(
+            rows.map((r) => [
+              String(r.id),
+              `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || r.email || String(r.id)
+            ])
+          )
+        },
+        restricted: async (ids, dimension) => {
+          const rows = (await db('nivaro_user_scopes')
+            .where({ dimension, mode: 'restrict' })
+            .whereIn('user', ids)
+            .select('user', 'values')) as Array<{ user: string; values: string | null }>
+          const out = new Map<string, Array<string | number>>()
+          for (const r of rows) {
+            let v: unknown = []
+            try {
+              v = JSON.parse(r.values ?? '[]')
+            } catch {
+              v = []
+            }
+            out.set(String(r.user).toLowerCase(), sanitizeValues(v))
+          }
+          return out
+        },
+        labels: async (vals) => {
+          const rows = (await db(dim.target_collection)
+            .whereIn(
+              'id',
+              vals.map((v) => (typeof v === 'number' || /^\d+$/.test(String(v)) ? Number(v) : v))
+            )
+            .select('id', ...(display === 'id' ? [] : [display]))) as Array<Record<string, unknown>>
+          return new Map(
+            rows.map((r) => [String(r.id).toLowerCase(), String(r[display] ?? r.id)] as const)
+          )
+        },
+        write: async (userId, dimension, next, before) => {
+          const where = { user: userId, dimension, mode: 'restrict' }
+          await db.transaction(async (trx) => {
+            const existing = await trx('nivaro_user_scopes').where(where).first('id')
+            if (next.length === 0) {
+              if (existing) await trx('nivaro_user_scopes').where({ id: existing.id }).del()
+            } else if (existing) {
+              await trx('nivaro_user_scopes')
+                .where({ id: existing.id })
+                .update({ values: JSON.stringify(next), updated_at: new Date() })
+            } else {
+              await trx('nivaro_user_scopes').insert({
+                ...where,
+                values: JSON.stringify(next),
+                updated_at: new Date()
+              })
+            }
+          })
+          bustUserScopeCache(userId)
+          await logActivity({
+            action: 'update',
+            collection: 'nivaro_user_scopes',
+            item: `${userId}:${dimension}:restrict`,
+            user: req.user?.id,
+            comment: `Bulk ${op} restricted ${noun}s: [${before.join(', ')}] → [${next.join(', ')}]`,
+            req
+          })
+        }
+      }
+    )
+    if (result.unknown_values.length > 0)
+      return reply.code(400).send({
+        error: `Not a ${noun}: ${result.unknown_values.join(', ')}`,
+        code: 'UNKNOWN_VALUES',
+        unknown_values: result.unknown_values
+      })
+    return {
+      data: {
+        preview: b.preview === true,
+        dimension: dim.name,
+        label: dim.label ?? dim.name,
+        op,
+        ...result
+      }
+    }
+  })
+
   app.get<{ Params: { userId: string } }>(
     '/user-scopes/:userId',
     { preHandler: adminUserId },
