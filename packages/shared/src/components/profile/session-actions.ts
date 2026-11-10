@@ -45,6 +45,10 @@ export function reloadPushedText(r: ReloadPushed): string {
   )
 }
 
+/** How long an armed Sign out waits with an empty message box before letting go.
+ *  30 s (was 10): long enough to decide what to write; a typed message holds it. */
+export const SIGN_OUT_ARM_MS = 30_000
+
 export function signedOutText(name: string, revoked: number): string {
   return revoked > 0
     ? `${name} is signed out of ${revoked} session${revoked === 1 ? '' : 's'} — every open tab goes back to sign-in.`

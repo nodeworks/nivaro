@@ -22,7 +22,11 @@ import { HuddlePresenceLine } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
 import { SignOutMessageInput } from '../profile/SignOutMessageInput'
-import { useReloadTheirTabs, useSignOutEverywhere } from '../profile/session-actions'
+import {
+  SIGN_OUT_ARM_MS,
+  useReloadTheirTabs,
+  useSignOutEverywhere
+} from '../profile/session-actions'
 import { useCardPresence } from '../profile/usePersonPresence'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -737,7 +741,7 @@ export function UserCardAdminRow({
   // Armed Sign out lets go after a quiet moment — never while a message is being written.
   useEffect(() => {
     if (!armed || message.trim()) return
-    const t = setTimeout(() => setArmed(false), 10_000)
+    const t = setTimeout(() => setArmed(false), SIGN_OUT_ARM_MS)
     return () => clearTimeout(t)
   }, [armed, message])
   const reload = useReloadTheirTabs(userId, { onDone })

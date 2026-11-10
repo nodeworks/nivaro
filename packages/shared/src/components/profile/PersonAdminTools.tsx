@@ -7,7 +7,7 @@ import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { EmptyLine, SectionCard } from './primitives'
 import { SignOutMessageInput } from './SignOutMessageInput'
-import { useReloadTheirTabs, useSignOutEverywhere } from './session-actions'
+import { SIGN_OUT_ARM_MS, useReloadTheirTabs, useSignOutEverywhere } from './session-actions'
 import { errorText, type PersonProfile, useInvalidatePerson } from './types'
 
 /**
@@ -75,7 +75,7 @@ export function SignOutEverywhereCard({ profile: p }: { profile: PersonProfile }
   // Armed lets go after a quiet moment — never while a message is being written.
   useEffect(() => {
     if (!armed || message.trim()) return
-    const t = setTimeout(() => setArmed(false), 10_000)
+    const t = setTimeout(() => setArmed(false), SIGN_OUT_ARM_MS)
     return () => clearTimeout(t)
   }, [armed, message])
   const signOut = useSignOutEverywhere(p.id, name, {
