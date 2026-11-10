@@ -5,6 +5,7 @@
  */
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { chainChunks, chainParts, ensureChainHot } from './session-recording-chain.js'
 import { ensureRecordingHot } from './session-replay-storage.js'
 
 export type RrwebEvent = { type: number; timestamp: number; data?: Record<string, unknown> }
@@ -21,14 +22,23 @@ export function decodeChunk(stored: string): string {
   return stored
 }
 
-/** Every event of a recording in order; a corrupt chunk is skipped (a partial replay beats none). */
+/**
+ * Every event of a recording in order; a corrupt chunk is skipped (a partial
+ * replay beats none). A session that rolled over into parts is read whole
+ * (./session-recording-chain).
+ */
 export async function loadRecordingEvents(recordingId: string): Promise<RrwebEvent[]> {
+  const parts = await chainParts(recordingId)
   // #1411 — a cold recording is read back from object storage first.
-  await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
-  const chunks = (await db('nivaro_session_events')
-    .where({ recording: recordingId })
-    .orderBy('seq', 'asc')
-    .select('events')) as Array<{ events: string }>
+  if (parts.length > 1) await ensureChainHot(parts, { wait: true }).catch(() => null)
+  else await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
+  const chunks =
+    parts.length > 1
+      ? await chainChunks(parts)
+      : ((await db('nivaro_session_events')
+          .where({ recording: recordingId })
+          .orderBy('seq', 'asc')
+          .select('events')) as Array<{ events: string }>)
   const events: RrwebEvent[] = []
   for (const c of chunks) {
     try {

@@ -1,6 +1,7 @@
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
+import { chainChunks, chainParts, ensureChainHot } from './session-recording-chain.js'
 import { ReplayNodeMap, type RrwebEventLike } from './session-replay-heat-nodes.js'
 import { ensureRecordingHot } from './session-replay-storage.js'
 import { normalizeScreenPath } from './traffic-client-facts.js'
@@ -383,6 +384,8 @@ export async function runHeatFold(
     const folder = new RecordingHeatFolder(acc, { id: String(rec.id), app: rec.app })
     const chunks = (await db('nivaro_session_events')
       .where({ recording: rec.id })
+      // A later part's copied opening (seq -1) repeats the part before it.
+      .where('seq', '>=', 0)
       .orderBy('seq', 'asc')
       .select('events')) as Array<{ events: string }>
     for (const c of chunks) {
@@ -711,12 +714,18 @@ export async function readFrameEvents(
   recordingId: string,
   atMs: number
 ): Promise<RrwebEventLike[] | null> {
+  // A session that rolled over is read whole: `atMs` is on its one timeline.
+  const parts = await chainParts(recordingId)
   // #1411 — a cold recording is read back from object storage first.
-  await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
-  const chunks = (await db('nivaro_session_events')
-    .where({ recording: recordingId })
-    .orderBy('seq', 'asc')
-    .select('events')) as Array<{ events: string }>
+  if (parts.length > 1) await ensureChainHot(parts, { wait: true }).catch(() => null)
+  else await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
+  const chunks =
+    parts.length > 1
+      ? await chainChunks(parts)
+      : ((await db('nivaro_session_events')
+          .where({ recording: recordingId })
+          .orderBy('seq', 'asc')
+          .select('events')) as Array<{ events: string }>)
   if (chunks.length === 0) return null
   const fc = new FrameCollector(atMs)
   let decoded = 0

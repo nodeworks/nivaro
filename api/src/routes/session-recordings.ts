@@ -4,6 +4,20 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  chainChunks,
+  chainHasSeq,
+  chainMetaOf,
+  chainParts,
+  chainSummary,
+  endChain,
+  ensureChainHot,
+  laterPartIds,
+  newestPart,
+  type PartRow,
+  rollOver,
+  rollsOver
+} from '../services/session-recording-chain.js'
 import { chunkMeta, dailyCapStatus, noteChunk } from '../services/session-replay-cost.js'
 import { scheduleReplayIndex } from '../services/session-replay-index.js'
 import { replayClientPolicy } from '../services/session-replay-policy.js'
@@ -129,12 +143,47 @@ export async function purgeExpiredRecordings(): Promise<void> {
   const cutoff = new Date(Date.now() - days * 86_400_000)
   // #1411 — cold recordings' objects in the storage driver go with them.
   await purgeColdObjects(cutoff)
+  // A rolled-over session goes with its first part: later parts started
+  // after the cutoff would otherwise linger, listed nowhere.
+  try {
+    const heads = (await db('nivaro_session_recordings')
+      .where('started_at', '<', cutoff)
+      .andWhere('meta', 'like', '%"parts":%')
+      .whereNotIn('id', db('nivaro_replay_clips').select('recording'))
+      .select('id', 'user')) as Array<{ id: string; user: string }>
+    const later = await laterPartIds(heads)
+    for (const id of later) await deleteColdObject(id).catch(() => {})
+    for (let i = 0; i < later.length; i += 500) {
+      await db('nivaro_session_recordings')
+        .whereIn('id', later.slice(i, i + 500))
+        .whereNotIn('id', db('nivaro_replay_clips').select('recording'))
+        .del()
+    }
+  } catch {
+    /* the parts' own started_at retires them in a later pass */
+  }
   // A saved library clip (#1415) is its own cut recording, kept until someone
   // deletes the clip — retention purges everything else, its source included.
   await db('nivaro_session_recordings')
     .where('started_at', '<', cutoff)
     .whereNotIn('id', db('nivaro_replay_clips').select('recording'))
     .del()
+}
+
+/**
+ * List rows of sessions that rolled over get the chain's totals (start of the
+ * first part, end and last activity of the newest, summed counts and bytes).
+ */
+async function withChainTotals(rows: Array<Record<string, unknown>>): Promise<void> {
+  for (const row of rows) {
+    if (!chainMetaOf(row.meta).parts) continue
+    try {
+      const parts = await chainParts(String(row.id))
+      if (parts.length > 1) Object.assign(row, chainSummary(parts))
+    } catch {
+      /* the first part's own figures stand */
+    }
+  }
 }
 
 /** #1371 — the signal an auto-record token was minted for (consumed), or null. */
@@ -286,8 +335,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (!Array.isArray(events) || events.length === 0 || typeof seq !== 'number') {
         return reply.code(400).send({ error: 'seq and events[] are required' })
       }
-      const rec = (await db('nivaro_session_recordings').where({ id: req.params.id }).first()) as
-        | { id: string; user: string; byte_size: number; truncated: boolean; ended_at: Date | null }
+      let rec = (await db('nivaro_session_recordings').where({ id: req.params.id }).first()) as
+        | (PartRow & { byte_size: number; truncated: boolean; ended_at: Date | null })
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Recording not found' })
       // army6 M54: a tab that started recording as the admin and then switched to
@@ -297,6 +346,13 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (rec.user !== req.user!.id && req.masqueradeAdminId) return reply.code(204).send()
       // Only the recording's own user appends to it
       if (rec.user !== req.user!.id) return reply.code(403).send({ error: 'Forbidden' })
+      // A recording that rolled over (./services/session-recording-chain): the
+      // recorder still posts to the id it knows; its chunks go to the newest part.
+      const chain = rec.ended_at ? await chainParts(rec.id) : [rec]
+      const newest = chain[chain.length - 1]
+      if (newest && newest.id !== rec.id && !newest.ended_at && !newest.truncated) {
+        rec = newest as typeof rec
+      }
       if (rec.truncated || rec.ended_at) {
         noteChunk('closed', meta)
         return reply.code(409).send({ error: 'Recording is closed' })
@@ -305,10 +361,15 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // Recorders retry a chunk under the SAME seq (#1369) — after a timeout
       // whose request actually landed, or a pagehide keepalive copy the next
       // page sends again. A seq this recording already holds is a success
-      // that adds nothing: no second row, no bytes counted twice.
-      const existing = await db('nivaro_session_events')
-        .where({ recording: rec.id, seq })
-        .first('id')
+      // that adds nothing: no second row, no bytes counted twice. After a
+      // roll-over the first copy may sit in an earlier part.
+      const existing =
+        chain.length > 1
+          ? await chainHasSeq(
+              chain.map((p) => p.id),
+              seq
+            )
+          : await db('nivaro_session_events').where({ recording: rec.id, seq }).first('id')
       if (existing) {
         noteChunk('duplicate', meta)
         return reply.send({ data: { ok: true, duplicate: true } })
@@ -326,11 +387,29 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       }
       const stored = encodeChunk(payload)
       if (rec.byte_size + stored.length > MAX_BYTES) {
-        await db('nivaro_session_recordings')
-          .where({ id: rec.id })
-          .update({ truncated: true, ended_at: new Date() })
-        noteChunk('size_cap', meta)
-        return reply.code(409).send({ error: 'Recording size cap reached' })
+        // Full: the session goes on in the chain's next part, nothing lost and
+        // nothing for the recorder to notice. A one-shot clip still stops here.
+        const next = rollsOver(rec.app)
+          ? await rollOver(rec, { maxRawBytes: MAX_CHUNK }).catch((err) => {
+              req.log.warn({ err, recording: rec?.id }, 'session recording roll-over failed')
+              return null
+            })
+          : null
+        if (next) {
+          rec = { ...rec, id: next.id, byte_size: next.byte_size, ended_at: null, truncated: false }
+        } else {
+          // Another request rolled it over (or ended it) first.
+          const newestNow = rollsOver(rec.app) ? await newestPart(rec.id) : null
+          if (newestNow && newestNow.id !== rec.id && !newestNow.ended_at) {
+            rec = newestNow as typeof rec
+          } else {
+            await db('nivaro_session_recordings')
+              .where({ id: rec.id })
+              .update({ truncated: true, ended_at: new Date() })
+            noteChunk('size_cap', meta)
+            return reply.code(409).send({ error: 'Recording size cap reached', reason: 'size_cap' })
+          }
+        }
       }
 
       await db('nivaro_session_events').insert({
@@ -364,10 +443,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       if (rec.user !== req.user!.id && !req.isAdmin) {
         return reply.code(403).send({ error: 'Forbidden' })
       }
-      await db('nivaro_session_recordings')
-        .where({ id: req.params.id })
-        .whereNull('ended_at')
-        .update({ ended_at: new Date() })
+      // The recorder names the id it started with; a rolled-over session ends
+      // in its newest part.
+      await endChain(req.params.id)
       return reply.send({ data: { ended: true } })
     }
   )
@@ -388,7 +466,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const rows = (await db.raw(
         `SELECT r.[user] AS [user],
                 LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) AS user_name,
-                COUNT(*) AS recording_count,
+                SUM(CASE WHEN r.meta LIKE '%"chain":"%' THEN 0 ELSE 1 END) AS recording_count,
                 SUM(CAST(r.byte_size AS BIGINT)) AS total_bytes,
                 MAX(COALESCE(r.last_event_at, r.started_at)) AS last_active,
                 MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > DATEADD(minute, -2, GETUTCDATE()) THEN 1 ELSE 0 END) AS live
@@ -449,6 +527,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           )
         )
       if (req.query.user) q.where('r.user', req.query.user)
+      // A rolled-over session lists once, as its first part with the chain's totals.
+      q.where((qb) => {
+        qb.whereNull('r.meta').orWhere('r.meta', 'not like', '%"chain":"%')
+      })
       if (req.query.origins) {
         const { list, includeNull } = parseOrigins(req.query.origins)
         q.where((qb) => {
@@ -460,6 +542,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         })
       }
       const rows = await q.offset((page - 1) * limit).limit(limit)
+      await withChainTotals(rows)
       await attachUserScopes(rows)
       return reply.send({ data: rows, page })
     }
@@ -472,10 +555,13 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
    * against loaded rows silently landed on the bare list.
    */
   app.get<{ Params: { id: string } }>('/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    // Any part of a rolled-over session opens the session (its first part).
+    const parts = await chainParts(req.params.id)
+    const headId = parts[0]?.id ?? req.params.id
     const rec = (await db('nivaro_session_recordings as r')
       .leftJoin('nivaro_users as u', 'r.user', 'u.id')
       .leftJoin('nivaro_users as ma', 'r.masquerade_admin', 'ma.id')
-      .where('r.id', req.params.id)
+      .where('r.id', headId)
       .first(
         'r.id',
         'r.user',
@@ -498,6 +584,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         )
       )) as Record<string, unknown> | undefined
     if (!rec) return reply.code(404).send({ error: 'Not found' })
+    if (parts.length > 1) Object.assign(rec, chainSummary(parts))
     await attachUserScopes([rec])
     return reply.send({ data: rec })
   })
@@ -518,16 +605,15 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         | Record<string, unknown>
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Not found' })
-      // #1411 — a cold recording is loaded back from storage first.
-      const hot = await ensureRecordingHot(req.params.id, { wait: true })
+      // #1411 — a cold recording is loaded back from storage first. A
+      // rolled-over session is read whole, every part in order.
+      const parts = await chainParts(req.params.id)
+      const hot = await ensureChainHot(parts, { wait: true })
       if (hot.state === 'failed') {
         return reply.code(502).send({ error: 'Could not load this recording from storage' })
       }
 
-      const chunks = (await db('nivaro_session_events')
-        .where({ recording: req.params.id })
-        .orderBy('seq', 'asc')
-        .select('events')) as Array<{ events: string }>
+      const chunks = await chainChunks(parts)
       const events: RrwebEventLike[] = []
       for (const c of chunks) {
         try {
@@ -573,21 +659,28 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const afterSeq = Number(req.query?.after_seq)
       const incremental = Number.isFinite(afterSeq)
       // #1411 — a cold recording answers 202 while it loads from storage;
-      // the player polls and says "Loading from storage…".
-      const hot = await ensureRecordingHot(req.params.id)
+      // the player polls and says "Loading from storage…". A rolled-over
+      // session (any part's id) is read whole, as one recording: its parts in
+      // order, their copied openings skipped, its seqs continuing across parts.
+      const parts = await chainParts(req.params.id)
+      const hot =
+        parts.length > 1 ? await ensureChainHot(parts) : await ensureRecordingHot(req.params.id)
       if (hot.state === 'loading') {
         return reply.code(202).send({ data: { status: 'loading_from_storage' } })
       }
       if (hot.state === 'failed') {
         return reply.code(502).send({ error: 'Could not load this recording from storage' })
       }
-      const chunks = (await db('nivaro_session_events')
-        .where({ recording: req.params.id })
-        .modify((qb) => {
-          if (incremental) qb.where('seq', '>', afterSeq)
-        })
-        .orderBy('seq', 'asc')
-        .select('seq', 'events')) as Array<{ seq: number; events: string }>
+      const chunks =
+        parts.length > 1
+          ? await chainChunks(parts, incremental ? { afterSeq } : {})
+          : ((await db('nivaro_session_events')
+              .where({ recording: req.params.id })
+              .modify((qb) => {
+                if (incremental) qb.where('seq', '>', afterSeq)
+              })
+              .orderBy('seq', 'asc')
+              .select('seq', 'events')) as Array<{ seq: number; events: string }>)
       if (chunks.length === 0) {
         // Incremental polls with nothing new are a normal empty answer.
         if (incremental) return reply.send({ data: { events: [], last_seq: afterSeq } })
@@ -621,6 +714,16 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         | RailRecording
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Not found' })
+      // A rolled-over session's rail spans every part.
+      const parts = await chainParts(req.params.id)
+      if (parts.length > 1) {
+        const s = chainSummary(parts)
+        Object.assign(rec, {
+          started_at: s.started_at,
+          ended_at: s.ended_at,
+          last_event_at: s.last_event_at
+        })
+      }
       return reply.send({ data: await buildEventRail(rec) })
     }
   )
@@ -629,8 +732,12 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     '/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      await deleteColdObject(req.params.id) // #1411 — its object in storage, if cold
-      await db('nivaro_session_recordings').where({ id: req.params.id }).del()
+      // A rolled-over session goes whole: every part, each part's object.
+      const parts = await chainParts(req.params.id)
+      const ids = parts.length > 1 ? parts.map((p) => p.id) : [req.params.id]
+      for (const id of ids) await deleteColdObject(id) // #1411 — its object in storage, if cold
+      if (ids.length > 1) await db('nivaro_session_recordings').whereIn('id', ids).del()
+      else await db('nivaro_session_recordings').where({ id: req.params.id }).del()
       await logActivity({
         action: 'session-recording-delete',
         collection: 'nivaro_session_recordings',

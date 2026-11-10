@@ -181,7 +181,7 @@ export const sessionReplayDocs: DocSection = {
       items: [
         'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
-        'Recordings cap at 15MB (then mark truncated) and purge after the retention period (7 days unless changed on the Session Replays page); after 3 days they move from the database to file storage.',
+        'A long session never stops recording: once a recording holds 15MB, the server carries on in a next part (opened with the last full snapshot), and the list, the player and exports show the parts as one recording. Error and support clips still stop at 15MB. Recordings purge after the retention period (7 days unless changed on the Session Replays page), a session with all its parts; after 3 days they move from the database to file storage.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
         'Tell your team before enabling — this records their screens.'
       ]

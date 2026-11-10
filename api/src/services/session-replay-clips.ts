@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { decodeChunk, encodeChunk } from '../routes/session-recordings.js'
+import { chainParts, loadChainEvents, stripChainKeys } from './session-recording-chain.js'
 import {
   type CutResult,
   chunkEvents,
@@ -46,6 +47,9 @@ export const MIN_CLIP_MS = 1_000
 
 /** Every event of a recording, in chunk order; corrupt chunks are skipped. */
 export async function loadRecordingEvents(recordingId: string): Promise<unknown[]> {
+  // A session that rolled over into parts is cut from the whole chain.
+  const parts = await chainParts(recordingId)
+  if (parts.length > 1) return loadChainEvents(recordingId)
   // #1411 — a cold recording is read back from object storage first.
   await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
   const chunks = (await db('nivaro_session_events')
@@ -134,7 +138,8 @@ export async function storeCut(
       user: source.user,
       app: 'clip',
       origin: source.origin ?? null,
-      meta: source.meta ?? null,
+      // A clip is its own recording, never a part of the source's chain.
+      meta: stripChainKeys(source.meta ?? null),
       masquerade_admin: source.masquerade_admin ?? null,
       started_at: new Date(cut.startTs),
       ended_at: new Date(cut.endTs),
