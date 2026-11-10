@@ -2,6 +2,7 @@ import { openAskPanel, TipLayer, userErrorMessage } from '@nivaro/shared'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
+  ArrowUpRight,
   Bookmark,
   BookmarkPlus,
   CornerDownLeft,
@@ -1452,7 +1453,11 @@ export function CommandPalette() {
                 </>
               )}
             </CommandList>
-            <PreviewPane entry={entries.get(selectedValue) ?? null} open={open} />
+            <PreviewPane
+              entry={entries.get(selectedValue) ?? null}
+              open={open}
+              onOpenLinked={(t) => go(recordPath(t.collection, t.id), { label: t.label })}
+            />
           </div>
 
           {/* Footer hint row */}
@@ -1632,7 +1637,24 @@ function CommandConfirm({
   )
 }
 
-function PreviewPane({ entry, open }: { entry: PaneEntry | null; open: boolean }) {
+/** Records linked to the previewed one (GET /global-search/preview/linked), read as you. */
+interface LinkedGroup {
+  collection: string
+  title: string
+  direction: 'to' | 'from'
+  total: number | null
+  items: Array<{ id: string; label: string }>
+}
+
+function PreviewPane({
+  entry,
+  open,
+  onOpenLinked
+}: {
+  entry: PaneEntry | null
+  open: boolean
+  onOpenLinked: (t: { collection: string; id: string; label: string }) => void
+}) {
   // Arrowing through rows changes the entry quickly — ask only once it rests.
   const rec = entry?.record
   const key = rec ? `${rec.collection}\u0000${rec.id}` : ''
@@ -1655,6 +1677,22 @@ function PreviewPane({ entry, open }: { entry: PaneEntry | null; open: boolean }
   })
   const p = rec && preview.isSuccess ? preview.data : null
   const loading = !!rec && (settled !== key || preview.isLoading)
+  // Linked records (a PO's workflow, project, vendor …): a separate read so the preview
+  // itself never waits on it; an older API without the route shows nothing.
+  const linked = useQuery({
+    queryKey: ['global-search-linked', rec?.collection, rec ? String(rec.id) : null],
+    queryFn: () =>
+      api
+        .get<{ data: LinkedGroup[] }>('/global-search/preview/linked', {
+          params: { collection: rec?.collection, id: rec ? String(rec.id) : '' }
+        })
+        .then((r) => (Array.isArray(r.data.data) ? r.data.data : []))
+        .catch(() => [] as LinkedGroup[]),
+    enabled: open && !!rec && settled === key,
+    retry: false,
+    staleTime: 30_000
+  })
+  const groups = rec && linked.isSuccess ? linked.data : []
 
   if (!entry)
     return (
@@ -1720,6 +1758,50 @@ function PreviewPane({ entry, open }: { entry: PaneEntry | null; open: boolean }
           Updated {formatRelative(p.updated_at)}
           {p.updated_by ? ` by ${p.updated_by}` : ''}
         </p>
+      )}
+      {groups.length > 0 && (
+        <section aria-label='Linked records' className='mt-1 border-t border-border pt-2'>
+          <p className='text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>
+            Linked
+          </p>
+          <div className='mt-1 space-y-1.5'>
+            {groups.map((g) => (
+              <div key={`${g.collection}:${g.title}`}>
+                <p className='text-[11px] text-muted-foreground'>
+                  {g.title}
+                  {g.total != null && g.total > 1 && (
+                    <span className='ml-1 tabular-nums'>{g.total}</span>
+                  )}
+                </p>
+                <ul>
+                  {g.items.map((i) => (
+                    <li key={i.id}>
+                      <button
+                        type='button'
+                        data-palette-linked={`${g.collection}:${i.id}`}
+                        onClick={() =>
+                          onOpenLinked({ collection: g.collection, id: i.id, label: i.label })
+                        }
+                        className='group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11.5px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                      >
+                        <span className='min-w-0 flex-1 truncate'>{i.label}</span>
+                        <ArrowUpRight
+                          className='h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100'
+                          aria-hidden
+                        />
+                      </button>
+                    </li>
+                  ))}
+                  {g.total != null && g.total > g.items.length && (
+                    <li className='px-1 text-[10.5px] text-muted-foreground'>
+                      +{g.total - g.items.length} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
       <p className='mt-auto break-all pt-1 font-mono text-[10.5px] text-muted-foreground'>
         {entry.path}

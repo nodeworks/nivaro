@@ -108,6 +108,58 @@ describe('command palette with the new search answer', () => {
     expect(screen.getByText('Pump is late')).toBeInTheDocument()
   })
 
+  it('the preview lists linked records and opens one on click (a PO → its workflow)', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/global-search')
+        return Promise.resolve({
+          data: {
+            data: {
+              records: [
+                {
+                  collection: 'purchase_orders',
+                  display_name: 'Purchase Orders',
+                  id: 158658,
+                  label: '102-300114155',
+                  snippet: ''
+                }
+              ],
+              pages: [],
+              actions: []
+            }
+          }
+        })
+      if (url === '/global-search/preview/linked')
+        return Promise.resolve({
+          data: {
+            data: [
+              {
+                collection: 'workflows',
+                title: 'Workflows',
+                direction: 'from',
+                total: 1,
+                items: [{ id: '372896', label: 'MM26-67370' }]
+              }
+            ]
+          }
+        })
+      if (url === '/global-search/saved' || url === '/global-search/preview')
+        return Promise.reject({ response: { status: 404 } })
+      return Promise.resolve({ data: { data: [] } })
+    })
+    await openAndType('102-300114155')
+    const row = (await screen.findByText('102-300114155', {}, { timeout: 3000 })).closest(
+      '[cmdk-item]'
+    ) as HTMLElement
+    // Point at the record: the preview (and its Linked section) follows the selection.
+    fireEvent.pointerMove(row)
+    const link = await screen.findByText('MM26-67370', {}, { timeout: 3000 })
+    expect(screen.getByText('Linked')).toBeInTheDocument()
+    expect(document.querySelector('[data-palette-linked="workflows:372896"]')).toBeInTheDocument()
+    fireEvent.click(link)
+    // Opening a linked record closes the palette.
+    expect(screen.queryByPlaceholderText('Search pages, people, records, actions…')).toBeNull()
+  })
+
   it('asks before running a command, then posts the transition route', async () => {
     answer({
       commands: [
