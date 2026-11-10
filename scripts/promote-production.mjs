@@ -82,6 +82,9 @@ const opt = (n, d) => {
 const GO = flag('go')
 const EVENTS = flag('events')
 const BOOTSTRAP = flag('bootstrap')
+// --portal-only: push + deploy the portal staging serves; the API stays as it is
+// (staging's API carries work not cleared for production yet).
+const PORTAL_ONLY = flag('portal-only')
 const VERSION = opt('version', null)
 const TOKEN = process.env.GITLAB_TOKEN || ''
 
@@ -396,8 +399,10 @@ async function main() {
       cwd: prod.path,
       allowFail: true
     }).ok
-  if (prodVersion === VERSION && sourceOnProd)
+  if (prodVersion === VERSION && sourceOnProd && !PORTAL_ONLY)
     blockers.push(`production already runs ${VERSION}`)
+  if (PORTAL_ONLY && !fe) blockers.push('--portal-only: no portal configured')
+  if (PORTAL_ONLY && frontend?.alreadyOnBranch) blockers.push(`--portal-only: production already holds ${frontend.short}`)
   if (prodVersion && semverCmp(VERSION, prodVersion) < 0)
     blockers.push(`${VERSION} is older than production's ${prodVersion} — a rollback, not a promotion`)
   if (!cfg.gitlab) blockers.push('no "gitlab" { api, project } in the production block — the deploy jobs cannot be run')
@@ -458,11 +463,14 @@ async function main() {
 
     currentStage = 'push'
     emit('push', 'start')
-    const apiSha = pushBranch(prod.path, prod.branch, source.hash, `chore: promote nivaro ${VERSION} to production`, (dir) => {
-      writeFileSync(join(dir, prod.pinFile), pinText)
-      return [prod.pinFile]
-    })
-    log(`API: pushed ${apiSha.slice(0, 8)} to ${prod.branch}`)
+    const apiSha = PORTAL_ONLY
+      ? null
+      : pushBranch(prod.path, prod.branch, source.hash, `chore: promote nivaro ${VERSION} to production`, (dir) => {
+          writeFileSync(join(dir, prod.pinFile), pinText)
+          return [prod.pinFile]
+        })
+    if (apiSha) log(`API: pushed ${apiSha.slice(0, 8)} to ${prod.branch}`)
+    else log('API: --portal-only — not pushed')
     let feSha = null
     if (fe) {
       if (frontend.alreadyOnBranch) {
@@ -477,7 +485,7 @@ async function main() {
 
     currentStage = 'deploy'
     emit('deploy', 'start')
-    await runDeploy(cfg, cfg.gitlab.project, prod.branch, apiSha, 'API', {
+    if (apiSha) await runDeploy(cfg, cfg.gitlab.project, prod.branch, apiSha, 'API', {
       before: 'build_extension',
       deploy: 'deploy_production',
       variables: BOOTSTRAP ? [{ key: 'GATE_MODE', value: 'bootstrap' }] : [],
@@ -496,7 +504,7 @@ async function main() {
     emit('verify', 'start')
     if (priority !== null && priority >= 3) {
       const checks = [
-        ...prod.verify.map((v) => ({ ...v, want: VERSION })),
+        ...(PORTAL_ONLY ? [] : prod.verify.map((v) => ({ ...v, want: VERSION }))),
         ...(fe ? fe.verify.map((v) => ({ ...v, want: frontend.short })) : [])
       ]
       for (const v of checks) {
