@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T21:40:00.324Z",
+  "generated_at": "2026-11-10T22:53:31.520Z",
   "releases": [
+    {
+      "version": "0.3.127",
+      "tag": "v0.3.127",
+      "date": "2026-11-10T17:53:08-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "resends honour the partner's skip_sends rules",
+              "hash": "03a71ff33"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.126",
       "tag": "v0.3.126",
-      "date": "2026-11-10T16:39:42-05:00",
+      "date": "2026-11-10T16:40:00-05:00",
       "sections": [
         {
           "label": "Fixed",
