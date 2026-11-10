@@ -326,6 +326,33 @@ describe('create_record goes through the items service', () => {
     ])
   })
 
+  it('a link-back a rule refuses (refuseRaw) is not slipped in raw: the action fails and runs on_failure', async () => {
+    vi.mocked(updateOne).mockRejectedValueOnce(
+      Object.assign(new Error('This project already has a CAR (1)'), {
+        statusCode: 422,
+        refuseRaw: true
+      })
+    )
+    await run([{ ...create, on_failure: { set: { status: 'link failed' } } }])
+    const rawLinks = builders.filter(
+      (x) =>
+        x.table === 'orders' &&
+        x.b.update.mock.calls.some(
+          (c: unknown[]) => (c[0] as Record<string, unknown>)?.project === 900
+        )
+    )
+    expect(rawLinks).toHaveLength(0)
+    const updates = vi.mocked(updateOne).mock.calls.map((c) => c[3])
+    expect(updates).toContainEqual({
+      status: 'link failed',
+      _change_reason: 'transition-action: Submit'
+    })
+    expect(updates).not.toContainEqual({
+      status: 'linked 900',
+      _change_reason: 'transition-action: Submit'
+    })
+  })
+
   it('with no administrator role at all the old raw insert path still works', async () => {
     await run([create], { tables: { nivaro_roles: [], projects: [{ id: 901 }] } })
     expect(createOne).not.toHaveBeenCalled()

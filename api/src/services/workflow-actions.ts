@@ -1553,13 +1553,19 @@ async function runCreateRecordAction(
     // feeds the created parent's stored rollup) — the items service write
     // recalcs that, and the raw fallback recalcs it explicitly.
     if (action.link_field && IDENTIFIER_RE.test(action.link_field)) {
-      await updateAsAction(
+      const linked = await updateAsAction(
         await w.writer(),
         collection,
         item,
         { [action.link_field]: targetId },
         w.reason
       )
+      // A link a rule refused (refuseRaw — e.g. "a project has one CAR") or a
+      // write that failed outright fails the action: its on_failure runs.
+      if (linked === 'failed')
+        throw new Error(
+          `The new ${target} record could not be linked back to ${collection} ${item}`
+        )
     }
 
     // Stays raw on purpose: nivaro_record_links is a system table with no

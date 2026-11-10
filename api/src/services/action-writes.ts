@@ -123,6 +123,11 @@ export type ActionWritePath = 'items' | 'raw' | 'failed'
  * Update one row as an action. Items service first; on refusal the raw write
  * (plus the stored-rollup recalc the raw write would otherwise skip). Never
  * throws.
+ *
+ * A refusal whose error carries `refuseRaw: true` is a business rule saying
+ * no (an extension's invariant, e.g. "a project has one CAR") — that write
+ * fails ('failed'), it is never slipped in raw past the rule. Other refusals
+ * (edit lock, validation) keep the raw fallback transitions rely on.
  */
 export async function updateAsAction(
   writer: User | null,
@@ -138,6 +143,13 @@ export async function updateAsAction(
       await updateOne(writer, collection, id, { ...patch, _change_reason: reason })
       return 'items'
     } catch (err) {
+      if ((err as { refuseRaw?: unknown } | null)?.refuseRaw === true) {
+        console.warn(
+          `[transition-action] items service refused the write to ${collection}/${id} — not retried raw (rule):`,
+          err instanceof Error ? err.message : err
+        )
+        return 'failed'
+      }
       console.warn(
         `[transition-action] items service refused the write to ${collection}/${id} — writing raw:`,
         err instanceof Error ? err.message : err
