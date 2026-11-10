@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-11-10T17:44:27.303Z",
+  "generated_at": "2026-11-10T18:07:11.852Z",
   "releases": [
+    {
+      "version": "0.3.119",
+      "tag": "v0.3.119",
+      "date": "2026-11-10T13:06:50-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "user-scopes",
+              "text": "bulk add / remove people's restricted zones",
+              "hash": "d9bf9defb"
+            },
+            {
+              "section": "Added",
+              "scope": "auth",
+              "text": "an administrator's sign-out can leave a message on the person's sign-in page",
+              "hash": "42ab9d441"
+            },
+            {
+              "section": "Added",
+              "scope": "integrations",
+              "text": "skip_sends allow list — send only values that start with one of these",
+              "hash": "17f63df67"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "shared",
+              "text": "sort the BulkRestrictedScopes export",
+              "hash": "21052f461"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.3.118",
       "tag": "v0.3.118",
-      "date": "2026-11-10T12:44:01-05:00",
+      "date": "2026-11-10T12:44:27-05:00",
       "sections": [
         {
           "label": "Added",
