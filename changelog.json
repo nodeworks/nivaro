@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-10T20:47:42.783Z",
+  "generated_at": "2026-11-10T21:05:16.862Z",
   "releases": [
+    {
+      "version": "0.3.125",
+      "tag": "v0.3.125",
+      "date": "2026-11-10T16:04:57-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "admin",
+              "text": "command palette preview lists linked records",
+              "hash": "a2e62f371"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "admin",
+              "text": "underline linked records in the palette preview",
+              "hash": "5e56fa7b8"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.124",
       "tag": "v0.3.124",
-      "date": "2026-11-10T15:47:27-05:00",
+      "date": "2026-11-10T15:47:42-05:00",
       "sections": [
         {
           "label": "Added",
