@@ -171,6 +171,13 @@ export async function sendPayload(
   // Every resend path checks first (409 / skip); this is the last line, so a null body is never
   // POSTed as `null` to a partner.
   if (!hasResendableBody(stored)) throw new NoBodyToResendError()
+  // The partner's "do not send" rules (integration_config.skip_sends — MWF's market allow list,
+  // Rob 2026-11-10) bind every resend too: a retry, Send now or re-fire of a body the partner
+  // does not take never leaves. Recorded as a failure that names the rule; no request is made.
+  const { sendSkipReason } = await import('../services/send-skip-rules.js')
+  const skip = await sendSkipReason(externalApi, stored.body)
+  if (skip)
+    return { status: 'failed', external_ref: null, error: skip, response: null, http_status: 0 }
   try {
     const res = await callExternalApi(externalApi, {
       method: 'POST',
