@@ -34,6 +34,14 @@ import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { SearchHighlight } from '../SearchHighlight'
 import { useOverflowTip } from '../TipLayer'
 import { ColResizeHandle, fitWidth, ResetColumnsButton, useColumnWidths } from './catalog-columns'
+import {
+  type FacetPicks,
+  type FacetRow,
+  facetOptions,
+  facetResults,
+  facetsComplete,
+  setFacetPick
+} from './catalog-facets'
 import { orderCatalogMatches, rowMatchesFields } from './catalog-search'
 import { applyDisplayTemplate } from './helpers'
 import { evalClientFormula } from './InlineTableField'
@@ -244,12 +252,30 @@ export interface CatalogModeConfig {
 export interface CatalogBuilderConfig {
   /** Section title (e.g. 'Yellow Fiber Jumpers'). */
   label: string
-  /** Resolver collection: one row per attribute combination, carrying an item FK (e.g. 'fiber_jumpers'). */
-  collection: string
+  /** Resolver collection: one row per attribute combination, carrying an item FK (e.g. 'fiber_jumpers').
+   *  Unused by a facet builder (`facets`). */
+  collection?: string
   /** Resolver's M2O field pointing at the catalog collection (defaults to the picker's item_field name). */
   item_field?: string
   /** Ordered attribute picks; each an M2O field on the resolver collection + the label field on its target. */
-  attributes: Array<{ field: string; label_field: string }>
+  attributes?: Array<{ field: string; label_field: string }>
+  /** FACET BUILDER (instead of collection + attributes): `source` is a GET path
+   *  under /api answering {data: rows}, one row per catalog item, each holding
+   *  the item id in `item_key` (default 'item') and a value per facet. The
+   *  person picks facets in any order (each pick narrows the others); once
+   *  every facet holds a value the matching rows are listed by `result`, each
+   *  with a quantity and Add. */
+  source?: string
+  /** Row column holding the catalog item id (facet builder). */
+  item_key?: string
+  /** Facets in display order: row column + label. */
+  facets?: Array<{ key: string; label: string }>
+  /** Two facets whose order does not matter (a cable's two ends): picks
+   *  {X, Y} match rows holding X and Y in either order. */
+  symmetric?: [string, string]
+  /** What each listed row shows: `key` the main label, `detail` a muted second
+   *  line, `sort` the column the list sorts by (numeric when it reads as one). */
+  result?: { key: string; label?: string; detail?: string; sort?: string }
   /** Optional filter on the resolver fetch. */
   filter?: Record<string, unknown>
   /** Show this builder only when the parent draft matches, e.g. {"type": {"_in": [1, 2]}}. */
@@ -2933,20 +2959,34 @@ export function CatalogPickerField({
           {/* ── Attribute-driven builders (fiber jumpers, attenuator pads, …) ────── */}
           {(config.builders ?? [])
             .filter((b) => matchesShowWhen(b.show_when, parentDraft))
-            .map((b) => (
-              <BuilderCard
-                key={b.label}
-                builder={b}
-                defaultItemField={config.item_field}
-                catalogCol={catalogCol}
-                catalogFields={catalogFields}
-                tmpl={tmpl}
-                currentQty={currentQty}
-                addQty={(id, total, row) => commitQty(id, String(total), row)}
-                qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
-                readOnly={readOnly}
-              />
-            ))}
+            .map((b) =>
+              b.facets?.length && b.source ? (
+                <FacetBuilderCard
+                  key={b.label}
+                  builder={b}
+                  catalogCol={catalogCol}
+                  catalogFields={catalogFields}
+                  tmpl={tmpl}
+                  currentQty={currentQty}
+                  addQty={(id, total, row) => commitQty(id, String(total), row)}
+                  qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
+                  readOnly={readOnly}
+                />
+              ) : (
+                <BuilderCard
+                  key={b.label}
+                  builder={b}
+                  defaultItemField={config.item_field}
+                  catalogCol={catalogCol}
+                  catalogFields={catalogFields}
+                  tmpl={tmpl}
+                  currentQty={currentQty}
+                  addQty={(id, total, row) => commitQty(id, String(total), row)}
+                  qtyStep={isIntegerFieldType(qtyFieldType) ? 1 : 'any'}
+                  readOnly={readOnly}
+                />
+              )
+            )}
         </>
       )}
       {/* ── Summary of everything picked + arbitrary add ─────────────────────── */}
@@ -3411,6 +3451,7 @@ function BuilderCard({
 }) {
   const client = useNivaroClient()
   const itemField = builder.item_field ?? defaultItemField
+  const attributes = builder.attributes ?? []
   const [expanded, setExpanded] = useState(false)
   const [sel, setSel] = useState<Record<string, string>>({})
   const [qty, setQty] = useState('1')
@@ -3421,9 +3462,9 @@ function BuilderCard({
       [
         'id',
         itemField,
-        ...builder.attributes.flatMap((a) => [`${a.field}.id`, `${a.field}.${a.label_field}`])
+        ...attributes.flatMap((a) => [`${a.field}.id`, `${a.field}.${a.label_field}`])
       ].join(','),
-    [itemField, builder.attributes]
+    [itemField, attributes]
   )
   const { data: resolverRows = [], isLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: [
@@ -3454,7 +3495,7 @@ function BuilderCard({
     if (v == null) return null
     if (typeof v === 'object') {
       const o = v as Record<string, unknown>
-      const lf = builder.attributes.find((a) => a.field === field)?.label_field ?? 'id'
+      const lf = attributes.find((a) => a.field === field)?.label_field ?? 'id'
       return { id: String(o.id ?? ''), label: String(o[lf] ?? o.id ?? '') }
     }
     return { id: String(v), label: String(v) }
@@ -3463,18 +3504,16 @@ function BuilderCard({
   // Rows matching the selections made for attributes BEFORE index i
   const matchingRows = (uptoIdx: number): Record<string, unknown>[] =>
     resolverRows.filter((row) =>
-      builder.attributes.slice(0, uptoIdx).every((a) => {
+      attributes.slice(0, uptoIdx).every((a) => {
         const chosen = sel[a.field]
         if (!chosen) return true
         return attrOf(row, a.field)?.id === chosen
       })
     )
 
-  const allSelected = builder.attributes.every((a) => sel[a.field])
+  const allSelected = attributes.every((a) => sel[a.field])
   const resolvedRow = allSelected
-    ? resolverRows.find((row) =>
-        builder.attributes.every((a) => attrOf(row, a.field)?.id === sel[a.field])
-      )
+    ? resolverRows.find((row) => attributes.every((a) => attrOf(row, a.field)?.id === sel[a.field]))
     : undefined
   const resolvedItemId = resolvedRow?.[itemField] != null ? String(resolvedRow[itemField]) : null
 
@@ -3541,7 +3580,7 @@ function BuilderCard({
             </div>
           ) : (
             <div className='flex flex-wrap items-end gap-3'>
-              {builder.attributes.map((a, i) => {
+              {attributes.map((a, i) => {
                 const opts = new Map<string, string>()
                 for (const row of matchingRows(i)) {
                   const av = attrOf(row, a.field)
@@ -3557,13 +3596,13 @@ function BuilderCard({
                     value={sel[a.field] ?? null}
                     valueLabel={sel[a.field] ? (opts.get(sel[a.field]) ?? sel[a.field]) : null}
                     options={sorted}
-                    disabled={i > 0 && !sel[builder.attributes[i - 1].field]}
+                    disabled={i > 0 && !sel[attributes[i - 1].field]}
                     onChange={(id) =>
                       setSel((prev) => {
                         const next: Record<string, string> = {}
                         // keep selections up to this attr; clear later ones
                         for (let j = 0; j < i; j++) {
-                          const f = builder.attributes[j].field
+                          const f = attributes[j].field
                           if (prev[f]) next[f] = prev[f]
                         }
                         if (id) next[a.field] = id
@@ -3624,6 +3663,252 @@ function BuilderCard({
                 )}
               </div>
             </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── FacetBuilderCard ─────────────────────────────────────────────────────────
+// A facet builder (CatalogBuilderConfig.facets): one row per catalog item from
+// `source`, facets picked in any order (each narrows the others; a symmetric
+// pair matches in either order — catalog-facets.ts), then every matching row
+// listed by its result with its own quantity and Add.
+
+export function FacetBuilderCard({
+  builder,
+  catalogCol,
+  catalogFields,
+  tmpl,
+  currentQty,
+  addQty,
+  qtyStep,
+  readOnly
+}: {
+  builder: CatalogBuilderConfig
+  catalogCol: string
+  catalogFields: string
+  tmpl: string | undefined
+  currentQty: (catalogId: string) => number | null
+  addQty: (catalogId: string, qty: number, catalogRow: Record<string, unknown>) => Promise<void>
+  qtyStep: number | 'any'
+  readOnly?: boolean
+}) {
+  const client = useNivaroClient()
+  const facets = builder.facets ?? []
+  const itemKey = builder.item_key ?? 'item'
+  const resultKey = builder.result?.key ?? 'label'
+  const symmetric = builder.symmetric ?? null
+  const [expanded, setExpanded] = useState(false)
+  const [picks, setPicks] = useState<FacetPicks>({})
+  const [qtys, setQtys] = useState<Record<string, string>>({})
+  const [adding, setAdding] = useState<string | null>(null)
+
+  const {
+    data: rows = [],
+    isLoading,
+    isError
+  } = useQuery<FacetRow[]>({
+    queryKey: ['catalog-facet-builder', builder.source],
+    queryFn: () =>
+      client
+        .request<{ data: FacetRow[] }>(get(String(builder.source)))
+        .then((r) => (Array.isArray(r.data) ? r.data : [])),
+    enabled: expanded && !!builder.source,
+    staleTime: 5 * 60_000
+  })
+
+  const complete = facetsComplete(picks, facets)
+  const results = useMemo(
+    () =>
+      complete
+        ? facetResults(rows, picks, facets, {
+            itemKey,
+            labelKey: resultKey,
+            sortKey: builder.result?.sort,
+            symmetric
+          })
+        : [],
+    [complete, rows, picks, facets, itemKey, resultKey, builder.result?.sort, symmetric]
+  )
+  const resultIds = useMemo(() => results.map((r) => String(r[itemKey])), [results, itemKey])
+  const { data: catalogById = new Map<string, Record<string, unknown>>() } = useQuery({
+    queryKey: ['catalog-facet-items', catalogCol, catalogFields, resultIds.join(',')],
+    queryFn: async () => {
+      const out = new Map<string, Record<string, unknown>>()
+      for (let i = 0; i < resultIds.length; i += 200) {
+        const chunk = resultIds.slice(i, i + 200)
+        const r = await client.request<{ data: Record<string, unknown>[] }>(
+          get(`/items/${catalogCol}`, {
+            filter: JSON.stringify({ id: { _in: chunk } }),
+            fields: catalogFields,
+            limit: chunk.length
+          })
+        )
+        for (const row of r.data ?? []) out.set(String(row.id), row)
+      }
+      return out
+    },
+    enabled: resultIds.length > 0,
+    staleTime: 60_000
+  })
+
+  const pickedCount = facets.filter((f) => picks[f.key]).length
+  async function add(id: string) {
+    const raw = qtys[id] ?? '1'
+    const n = Number(raw)
+    const row = catalogById.get(id)
+    if (!row || !Number.isFinite(n) || n <= 0 || (qtyStep !== 'any' && !Number.isInteger(n))) return
+    setAdding(id)
+    try {
+      await addQty(id, (currentQty(id) ?? 0) + n, row)
+      setQtys((q) => ({ ...q, [id]: '1' }))
+    } finally {
+      setAdding(null)
+    }
+  }
+
+  return (
+    <div
+      className='rounded-lg border border-slate-200 text-[12px] dark:border-border'
+      data-facet-builder
+    >
+      <button
+        type='button'
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        className='flex w-full items-center gap-1.5 rounded-t-lg bg-slate-100/80 px-2 py-1.5 text-left dark:bg-muted'
+      >
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+            expanded && 'rotate-90'
+          )}
+        />
+        <span className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
+          {builder.label}
+        </span>
+      </button>
+      {expanded && (
+        <div className='space-y-3 border-t border-slate-200 p-3 dark:border-border'>
+          {isLoading ? (
+            <div className='flex items-center gap-2 py-2 text-slate-400'>
+              <Loader2 className='h-4 w-4 animate-spin' /> Loading options…
+            </div>
+          ) : isError ? (
+            <p className='text-slate-500 dark:text-slate-400'>
+              The options could not be loaded. Close and open this section to try again.
+            </p>
+          ) : (
+            <>
+              <div className='flex flex-wrap items-end gap-3'>
+                {facets.map((f) => {
+                  const opts = facetOptions(rows, picks, facets, f.key, symmetric)
+                  return (
+                    <AttrSelect
+                      key={f.key}
+                      label={f.label}
+                      value={picks[f.key] ?? null}
+                      valueLabel={picks[f.key] ?? null}
+                      options={opts.map((o) => [o, o] as [string, string])}
+                      onChange={(v) =>
+                        setPicks((p) => setFacetPick(rows, p, facets, f.key, v, symmetric))
+                      }
+                    />
+                  )
+                })}
+                {pickedCount > 0 && (
+                  <button
+                    type='button'
+                    onClick={() => setPicks({})}
+                    className='mb-0.5 flex h-7 items-center gap-1 rounded px-2 text-[12px] text-slate-500 hover:bg-muted hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                  >
+                    <X className='h-3 w-3' /> Clear
+                  </button>
+                )}
+              </div>
+              {!complete ? (
+                <p className='text-slate-400'>
+                  Pick{' '}
+                  {facets
+                    .filter((f) => !picks[f.key])
+                    .map((f) => f.label)
+                    .join(', ')}{' '}
+                  to see the {(builder.result?.label ?? 'options').toLowerCase()}.
+                </p>
+              ) : results.length === 0 ? (
+                <p className='text-slate-400'>Nothing matches this combination.</p>
+              ) : (
+                <div className='divide-y divide-slate-100 rounded border border-slate-200 dark:divide-border dark:border-border'>
+                  <div className='flex items-center gap-2 bg-slate-50 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:bg-muted dark:text-slate-400'>
+                    <span className='flex-1'>{builder.result?.label ?? 'Option'}</span>
+                    {!readOnly && <span className='w-[124px] text-right'>Quantity</span>}
+                  </div>
+                  {results.map((r) => {
+                    const id = String(r[itemKey])
+                    const catalogRow = catalogById.get(id)
+                    const inSummary = currentQty(id) ?? 0
+                    const detail = builder.result?.detail
+                      ? String(r[builder.result.detail] ?? '')
+                      : ''
+                    return (
+                      <div
+                        key={id}
+                        className='flex items-center gap-2 px-2 py-1.5'
+                        data-facet-result={id}
+                      >
+                        <div className='min-w-0 flex-1'>
+                          <p className='truncate font-medium tabular-nums text-slate-700 dark:text-slate-200'>
+                            {String(r[resultKey] ?? '')}
+                          </p>
+                          <p className='truncate text-[11px] text-slate-400'>
+                            {detail || (catalogRow ? applyDisplayTemplate(tmpl, catalogRow) : '')}
+                          </p>
+                        </div>
+                        {inSummary > 0 && (
+                          <span className='shrink-0 rounded bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#00728d] dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+                            {inSummary} in summary
+                          </span>
+                        )}
+                        {!readOnly && (
+                          <>
+                            <input
+                              type='number'
+                              min={0}
+                              step={qtyStep}
+                              value={qtys[id] ?? '1'}
+                              aria-label={`Quantity of ${String(r[resultKey] ?? '')}`}
+                              onChange={(e) => setQtys((q) => ({ ...q, [id]: e.target.value }))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  void add(id)
+                                }
+                              }}
+                              className='h-7 w-16 shrink-0 rounded border border-slate-200 bg-white px-2 text-right text-[12px] outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+                            />
+                            <button
+                              type='button'
+                              onClick={() => void add(id)}
+                              disabled={!catalogRow || adding !== null}
+                              className='flex h-7 w-[52px] shrink-0 items-center justify-center gap-1 rounded bg-nvr-cyan px-2 text-[12px] font-medium text-white hover:bg-nvr-cyan/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-1 disabled:opacity-50'
+                            >
+                              {adding === id ? (
+                                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                              ) : (
+                                <Plus className='h-3.5 w-3.5' />
+                              )}
+                              Add
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

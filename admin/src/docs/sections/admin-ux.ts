@@ -912,6 +912,15 @@ export const adminUxListSignals: DocSection = {
       type: 'p',
       text: 'An O2M grid placement can set `options.set_all_rows: [{field, label?, admin_only?}]` to add a **Set <label>…** button to the grid header: one value written into that column on every line (or only the ticked lines while rows are selected), or cleared on all of them when the box is left blank. It runs through the same path as typing on each line, so row rules, locks, change reasons and the grid’s save mode (immediate or saved with the record) all apply. Only administrators see it unless `admin_only: false`. EFP uses it for REQ ID on workflow lines.'
     },
+    { type: 'h2', id: 'list-signals-facet-builder', text: 'Facet builders on a catalog picker' },
+    {
+      type: 'p',
+      text: 'A catalog-picker builder can be a FACET builder instead of an attribute chain: `catalog_mode.builders[]` entry `{label, source, item_key?, facets: [{key, label}], symmetric?: [keyA, keyB], result: {key, label?, detail?, sort?}, show_when?}`. `source` is a GET path under /api that answers `{data: rows}` — one row per catalog item, the item id in `item_key` (default `item`) and one value per facet. The person picks facets in any order; every pick narrows the options of the others and a pick another one made impossible is cleared. Once every facet holds a value, the matching rows are listed by `result.key` (sorted by `result.sort`, numeric when it reads as a number), with `result.detail` as a second line, each with its own quantity and Add — Add puts that catalog item in the Summary exactly like picking it from a section (copied fields, line rules and all).'
+    },
+    {
+      type: 'p',
+      text: '`symmetric` names two facets whose order does not matter — the two ends of a cable: picks X and Y match rows holding X and Y in either order, and with one end picked the other end offers whatever sits opposite it. The source decides what rows exist (an extension route can normalise part names into facet values); the builder never reads more than that one path.'
+    },
     { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },
     {
       type: 'p',
