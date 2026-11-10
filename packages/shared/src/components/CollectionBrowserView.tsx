@@ -191,6 +191,8 @@ import { rowFocusTarget, tabStopRowKey } from './cbv/row-focus'
 import { riskFilterEntry, splitRiskFilter } from './cbv/saved-view-risk'
 import { dropUnknownField, isFilterRefusal, unknownFieldsOf } from './cbv/unknown-fields'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
+import { exactCountParams, lastPageFromCount } from './cbv-pager'
+import { mergeFilterOptions, relationFilterRequests } from './cbv-relation-filter'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
 import { FocusModeToggle } from './FocusModeToggle'
@@ -1977,9 +1979,9 @@ function RelationColFilter({
   selected: Array<string | number>
   onChange: (vals: Array<string | number>) => void
   /** Ids present on the CURRENT page — offered first, so the dropdown opens
-   *  on values the person is looking at instead of the alphabetical head of
-   *  a 40k-row table (every purchase order numbered "1"). Typing searches
-   *  the whole target server-side. */
+   *  on values the person is looking at; the rest of the related collection
+   *  follows (cbv-relation-filter.ts). Typing searches the whole target
+   *  server-side. */
   preferIds?: Array<string | number>
 }) {
   const client = useNivaroClient()
@@ -2000,36 +2002,35 @@ function RelationColFilter({
   const labelField = labelFieldFor(meta)
   const template = meta?.display_template ?? null
   const { data: options = [], isLoading } = useQuery({
-    queryKey: ['cbv-filter-options', target, labelField, template ?? '', search, preferKey],
-    queryFn: () => {
-      const fields = optionFieldsFor(template, labelField)
-      const hasPage = !!preferIds && preferIds.length > 0
-      // Default list order: the page's own values; otherwise NEWEST records
-      // first — the alphabetical head of a big reference table is where the
-      // junk lives (thousands of purchase orders numbered "1"). Typing
-      // searches the whole table.
-      const params: Record<string, string | number> = {
-        limit: search ? 60 : hasPage ? 500 : 100,
-        sort: search || hasPage ? labelField : '-id',
-        ...(fields ? { fields } : {})
-      }
-      if (search) params.search = search
-      else if (hasPage) params.filter = JSON.stringify({ id: { _in: preferIds.slice(0, 500) } })
-      // Values already on the page are real data and stay offered; the rest of
-      // the list hides records excluded from pickers.
-      if (!hasPage || search) params.picker = '1'
-      return client
-        .request<{ data: Array<Record<string, unknown>> }>(get(`/items/${target}`, params))
-        .then((r) =>
-          (r.data ?? [])
-            .map((row) => ({
-              value: row.id as string | number,
-              label:
-                (template ? renderDisplayTemplate(template, row) : '') ||
-                String(row[labelField] ?? row.id ?? '')
-            }))
-            .filter((o) => o.value != null && o.label !== '')
+    // Own key shape (an array of {value,label}) — 'cbv-filter-options' held the
+    // page-only list; a new name keeps an old cached entry from answering.
+    queryKey: ['cbv-filter-options-all', target, labelField, template ?? '', search, preferKey],
+    queryFn: async () => {
+      // The WHOLE related collection (Rob 2026-11-10): the page's own values
+      // first, then the rest of the related records (newest first, capped);
+      // typing searches the whole table server-side. Each read runs as the
+      // caller, so read access and User Scopes decide what is offered.
+      const requests = relationFilterRequests({
+        search,
+        preferIds,
+        labelField,
+        fields: optionFieldsFor(template, labelField)
+      })
+      const toOptions = (rows: Array<Record<string, unknown>>) =>
+        rows.map((row) => ({
+          value: row.id as string | number,
+          label:
+            (template ? renderDisplayTemplate(template, row) : '') ||
+            String(row[labelField] ?? row.id ?? '')
+        }))
+      const groups = await Promise.all(
+        requests.map((params) =>
+          client
+            .request<{ data: Array<Record<string, unknown>> }>(get(`/items/${target}`, params))
+            .then((r) => toOptions(r.data ?? []))
         )
+      )
+      return mergeFilterOptions(groups)
     },
     staleTime: 10 * 60_000,
     enabled: active && !!meta,
@@ -5408,6 +5409,36 @@ export function CollectionBrowserView({
   const totalPages = totalUnknown
     ? page + (rows.length >= effPageSize ? 1 : 0)
     : Math.max(1, Math.ceil(total / effPageSize))
+  // Last page (Rob 2026-11-10): an "about" or missing total can point short of
+  // the end or past it, so Last asks for an exact count first (cbv-pager.ts).
+  const [findingLast, setFindingLast] = useState(false)
+  const goLastPage = async () => {
+    if (!totalApprox && !totalUnknown) {
+      setPage(totalPages)
+      return
+    }
+    setFindingLast(true)
+    try {
+      const res = await client.request<{ total?: number | null; total_timed_out?: boolean }>(
+        get(
+          `/items/${collection}`,
+          exactCountParams({ search: appliedSearch, conditions: conditionsParam })
+        )
+      )
+      const last = lastPageFromCount(res, effPageSize)
+      if (last == null) {
+        toast('This list is too big to count right now', {
+          description: 'Use Next to keep going, or narrow the list with a filter.'
+        })
+        return
+      }
+      setPage(last)
+    } catch (err) {
+      toastError(err, 'Could not find the last page', { retry: () => void goLastPage() })
+    } finally {
+      setFindingLast(false)
+    }
+  }
 
   // A list narrowed by the person's DEFAULT scope filter (never a restriction
   // — the server applies those anyway) that comes back empty says so, and how
@@ -10262,9 +10293,11 @@ export function CollectionBrowserView({
                     disabled={page <= 1}
                     onClick={() => setPage(1)}
                     aria-label='First page'
-                    className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                    data-tip='First page'
+                    className='inline-flex h-7 items-center gap-1 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
                   >
-                    «
+                    <ChevronsLeft className='h-3.5 w-3.5' aria-hidden />
+                    <span className='hidden sm:inline'>First</span>
                   </button>
                   <button
                     type='button'
@@ -10287,12 +10320,19 @@ export function CollectionBrowserView({
                   </button>
                   <button
                     type='button'
-                    disabled={page >= totalPages}
-                    onClick={() => setPage(totalPages)}
+                    disabled={page >= totalPages || findingLast}
+                    onClick={() => void goLastPage()}
                     aria-label='Last page'
-                    className='h-7 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
+                    aria-busy={findingLast || undefined}
+                    data-tip={totalApprox || totalUnknown ? 'Last page (counts first)' : 'Last page'}
+                    className='inline-flex h-7 items-center gap-1 rounded px-2 text-[12px] text-slate-600 hover:bg-slate-100 disabled:opacity-30 dark:text-slate-300 dark:hover:bg-slate-800'
                   >
-                    »
+                    <span className='hidden sm:inline'>Last</span>
+                    {findingLast ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />
+                    ) : (
+                      <ChevronsRight className='h-3.5 w-3.5' aria-hidden />
+                    )}
                   </button>
                 </span>
               </div>
