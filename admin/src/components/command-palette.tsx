@@ -1784,7 +1784,9 @@ function PreviewPane({
                         }
                         className='group flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11.5px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
                       >
-                        <span className='min-w-0 flex-1 truncate'>{i.label}</span>
+                        <span className='min-w-0 flex-1 truncate underline decoration-muted-foreground/60 underline-offset-2 group-hover:decoration-current'>
+                          {i.label}
+                        </span>
                         <ArrowUpRight
                           className='h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100'
                           aria-hidden
