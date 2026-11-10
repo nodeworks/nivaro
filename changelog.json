@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T19:01:33.154Z",
+  "generated_at": "2026-11-10T19:51:41.645Z",
   "releases": [
+    {
+      "version": "0.3.122",
+      "tag": "v0.3.122",
+      "date": "2026-11-10T14:51:25-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "list queries honour limit -1 and limits above 1,000",
+              "hash": "78212ea0a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.121",
       "tag": "v0.3.121",
-      "date": "2026-11-10T14:01:16-05:00",
+      "date": "2026-11-10T14:01:33-05:00",
       "sections": [
         {
           "label": "Fixed",
