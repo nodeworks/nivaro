@@ -1,0 +1,13 @@
+{% layout 'base' %}
+{% block content %}
+{%- comment -%}
+  A new person asked for portal access and waits in Needs Authorization until an administrator
+  gives them a role. Sent to every admin (services/portal-access-request.ts). Data: requester_name,
+  requester_email, reason, facts [{label, value}], review_url, waiting_label.
+{%- endcomment -%}
+{% assign _heading = requester_name | append: ' asked for access to the portal' %}{% render 'partials/heading', text: _heading %}
+<p style="margin:0 0 18px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.5;color:#475569;">They can&rsquo;t use the portal until an administrator gives them a role. {{ waiting_label }}</p>
+{% render 'partials/quote', text: reason, by: requester_name %}
+{% render 'partials/facts', rows: facts %}
+{% render 'partials/button', url: review_url, label: 'Review request' %}
+{% endblock %}

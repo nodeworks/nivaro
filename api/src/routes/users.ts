@@ -857,6 +857,57 @@ export async function usersRoutes(app: FastifyInstance) {
     }
   )
 
+  // POST /users/access-requests/remind (admin) — tell every admin again, email included, about
+  // each person still waiting in the access-request role (Needs Authorization) with a stored
+  // request (Rob 2026-11-10: the requests filed before admins were emailed). ?dry_run=1 lists
+  // who would be sent without sending.
+  app.post('/access-requests/remind', { preHandler: requireAdmin }, async (req, reply) => {
+    const dry = ['1', 'true'].includes(String((req.query as { dry_run?: string }).dry_run ?? ''))
+    const settings = (await db('nivaro_settings')
+      .first('access_request_role')
+      .catch(() => null)) as { access_request_role?: string | null } | null
+    if (!settings?.access_request_role)
+      return reply.code(409).send({ error: 'No access-request role is set' })
+    const waiting = (await db('nivaro_users')
+      .where({ role: settings.access_request_role })
+      .where((qb) => void qb.where('status', 'active').orWhereNull('status'))
+      .select('id', 'first_name', 'last_name', 'email', 'preferences')) as Array<{
+      id: string
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+      preferences: unknown
+    }>
+    const out: Array<{ id: string; name: string; notified: number | null }> = []
+    for (const u of waiting) {
+      let prefs: Record<string, unknown> = {}
+      try {
+        prefs =
+          typeof u.preferences === 'string'
+            ? (JSON.parse(u.preferences) as Record<string, unknown>)
+            : ((u.preferences as Record<string, unknown>) ?? {})
+      } catch {
+        prefs = {}
+      }
+      const request = storedRequest(prefs)
+      if (!request) continue
+      const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email || 'Someone'
+      const notified = dry
+        ? null
+        : await notifyAdminsOfAccessRequest(app, { id: String(u.id), name }, request).catch(() => 0)
+      out.push({ id: String(u.id), name, notified })
+    }
+    if (!dry && out.length)
+      await logActivity({
+        action: 'access-request-remind',
+        user: req.user!.id,
+        collection: 'nivaro_users',
+        comment: `admins re-told about ${out.length} waiting access request(s)`,
+        req
+      })
+    return reply.send({ data: { dry_run: dry, waiting: out } })
+  })
+
   // POST /users/me/access-request — a provisional account (the role
   // nivaro_settings.new_user_role hands to a first sign-in) submits why it
   // needs access. The request lives in preferences.access_request (what the

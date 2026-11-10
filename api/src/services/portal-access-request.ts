@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { adminBaseUrl } from '../admin-base.js'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { appForUser, portalRegistration } from './app-links.js'
 import { isMachineAccount } from './machine-accounts.js'
 import { notifyUser } from './notification-channels.js'
 
@@ -157,10 +160,67 @@ export async function existingIds(table: string, ids: Id[]): Promise<Id[]> {
  * request is waiting. Through notifyUser only — inbox, push and each admin's
  * own notification rules. Returns how many were told.
  */
+/** "Nov 10, 5:02 PM ET" — admins read EFP times in Eastern. */
+export function easternStamp(iso: string | null | undefined): string | null {
+  const d = iso ? new Date(iso) : null
+  if (!d || Number.isNaN(d.getTime())) return null
+  const s = d.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+  return `${s} ET`
+}
+
+/** Where an admin reviews it: the portal's people page when the portal registers one
+ *  (`people_awaiting` portal route), else the admin app's Users list. */
+async function reviewUrl(adminId: string): Promise<string> {
+  const admin = `${(adminBaseUrl() ?? config.ADMIN_URL).replace(/\/$/, '')}/users`
+  if ((await appForUser(adminId).catch(() => 'admin')) !== 'portal') return admin
+  const reg = await portalRegistration().catch(() => null)
+  const route = (reg?.routes as Record<string, string | undefined> | undefined)?.people_awaiting
+  return reg && route ? `${reg.base}${route}` : admin
+}
+
+/** The email's facts: who, which zones (by name), vendor, when. Empty values are skipped. */
+async function requestFacts(
+  requesterId: string,
+  request: Partial<PortalAccessRequest>
+): Promise<Array<{ label: string; value: string | null }>> {
+  const who = (await db('nivaro_users')
+    .where({ id: requesterId })
+    .first('email')
+    .catch(() => undefined)) as { email?: string | null } | undefined
+  let zones: string | null = null
+  const ids = Array.isArray(request.divisions) ? request.divisions : []
+  if (ids.length) {
+    try {
+      const rows = (await db('divisions')
+        .whereIn('id', ids as Array<string | number>)
+        .select('name')) as Array<{ name: string | null }>
+      zones =
+        rows
+          .map((r) => r.name)
+          .filter(Boolean)
+          .join(', ') || null
+    } catch {
+      zones = null
+    }
+  }
+  return [
+    { label: 'Email', value: who?.email ?? null },
+    { label: 'Zones asked for', value: zones },
+    { label: 'Vendor', value: request.vendor_name ?? null },
+    { label: 'Asked', value: easternStamp(request.submitted_at) }
+  ]
+}
+
 export async function notifyAdminsOfAccessRequest(
   app: FastifyInstance,
   requester: { id: string; name: string },
-  request: Pick<PortalAccessRequest, 'reason'>
+  request: Pick<PortalAccessRequest, 'reason'> & Partial<PortalAccessRequest>
 ): Promise<number> {
   const admins = (await db('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
@@ -176,6 +236,12 @@ export async function notifyAdminsOfAccessRequest(
     (a) => !isMachineAccount(a) && String(a.id).toUpperCase() !== requester.id.toUpperCase()
   )
   const reason = request.reason.length > 200 ? `${request.reason.slice(0, 200)}…` : request.reason
+  const facts = await requestFacts(requester.id, request).catch(() => [])
+  const asked = request.submitted_at ? new Date(request.submitted_at) : null
+  const waiting =
+    asked && !Number.isNaN(asked.getTime()) && Date.now() - asked.getTime() > 3600_000
+      ? `They’ve been waiting since ${easternStamp(request.submitted_at)}.`
+      : ''
   let told = 0
   for (const a of people) {
     const res = await notifyUser(app, String(a.id), {
@@ -189,7 +255,16 @@ export async function notifyAdminsOfAccessRequest(
       // Rob 2026-11-10: admins are emailed every portal access request (the requester sits in
       // Needs Authorization until one of them acts), whatever their own rules say for the
       // category — a request seen only in the inbox waited days.
-      channels: { email: true }
+      channels: { email: true },
+      template: 'portal_access_request',
+      template_data: {
+        why: 'you are an administrator — portal access requests go to every admin',
+        requester_name: requester.name,
+        reason: request.reason,
+        facts,
+        waiting_label: waiting,
+        review_url: await reviewUrl(String(a.id))
+      }
     }).catch(() => null)
     if (res) told++
   }
