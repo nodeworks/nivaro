@@ -108,6 +108,7 @@ import {
   parseRollupFormula,
   type RollupSource,
   recalcAffectedRollups,
+  recalcOwnFilteredRollups,
   roundToScale
 } from './rollups.js'
 import {
@@ -7681,6 +7682,13 @@ export async function updateOne(
       false,
       opts?.callerPayload === true
     )
+
+  // A field this row's OWN stored rollup filters on (projects.pub_amount_follows_cars)
+  // moves the row in or out of that rollup — recompute it now, not at the next child write,
+  // and before the read-back so the answer carries the new figure.
+  await span('rollup-recalc-own', () =>
+    recalcOwnFilteredRollups(collection, id, Object.keys(ctx.payload))
+  )
 
   const result = await span('read-back', () => readOne(user, collection, id, workspaceId))
   if (opts?.outcome) {

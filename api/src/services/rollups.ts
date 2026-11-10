@@ -763,6 +763,65 @@ export async function recalcStoredRollupsForRecords(
   return { fields: [...byField.keys()], records: parentIds.length }
 }
 
+/**
+ * The stored rollups ON `collection` that carry a parent_filter, with the
+ * parent's own fields that filter reads. A write to one of those fields can
+ * move the parent in or out of the rollup, and no child write announces that.
+ */
+export async function ownParentFilterRollups(
+  collection: string
+): Promise<Array<{ field: string; filterFields: string[] }>> {
+  if (!contributorCache) contributorCache = await buildContributorCache()
+  const seen = new Map<string, string[]>()
+  for (const list of contributorCache.values()) {
+    for (const entry of list) {
+      if (entry.parentCollection !== collection || !entry.parentFilter) continue
+      if (seen.has(entry.rollupField)) continue
+      seen.set(
+        entry.rollupField,
+        Object.keys(entry.parentFilter).filter((c) => IDENT_RE.test(c))
+      )
+    }
+  }
+  return [...seen].map(([field, filterFields]) => ({ field, filterFields }))
+}
+
+/**
+ * After a write to `collection` row `id` that changed `changedKeys`: recompute
+ * each of the row's OWN stored rollups whose parent_filter reads one of those
+ * keys (a project handed back to its CARs gets its CAR total at once; one
+ * taken off them keeps its typed figure — recalcRollupsForParent skips a parent
+ * the filter excludes). Returns the rollup fields recomputed. Never throws.
+ */
+export async function recalcOwnFilteredRollups(
+  collection: string,
+  id: unknown,
+  changedKeys: string[]
+): Promise<string[]> {
+  if (id == null || changedKeys.length === 0) return []
+  try {
+    const keys = new Set(changedKeys)
+    const own = (await ownParentFilterRollups(collection)).filter((r) =>
+      r.filterFields.some((f) => keys.has(f))
+    )
+    if (own.length === 0) return []
+    const fields = new Set(own.map((r) => r.field))
+    const done: string[] = []
+    for (const list of contributorCache?.values() ?? []) {
+      for (const entry of list) {
+        if (entry.parentCollection !== collection || !fields.has(entry.rollupField)) continue
+        if (done.includes(entry.rollupField)) continue
+        done.push(entry.rollupField)
+        await recalcRollupsForParent(entry, id)
+      }
+    }
+    return done
+  } catch (err) {
+    console.error({ err, collection }, 'Own rollup recalc failed')
+    return []
+  }
+}
+
 /** Clears the cached contributor map; the next lookup rebuilds it from nivaro_fields. */
 export function bustRollupContributorCache(): void {
   contributorCache = null
