@@ -523,14 +523,14 @@ export {
 export { AgentsPanel } from './components/profile/AgentsPanel'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
 export {
+  BulkRestrictedScopes,
+  pickBulkDimension
+} from './components/profile/BulkRestrictedScopes'
+export {
   MailSuppressedPill,
   type MailSuppression,
   useMailSuppression
 } from './components/profile/MailSuppressedPill'
-export {
-  BulkRestrictedScopes,
-  pickBulkDimension
-} from './components/profile/BulkRestrictedScopes'
 export { PersonDidPanel } from './components/profile/PersonDidPanel'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
