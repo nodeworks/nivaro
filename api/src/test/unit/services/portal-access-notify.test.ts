@@ -44,4 +44,15 @@ describe('notifyAdminsOfAccessRequest', () => {
     expect(ACCESS_REQUEST_NOTIFY_CATEGORY).not.toBe('other')
     for (const s of sent) expect(s.opts.category).toBe(ACCESS_REQUEST_NOTIFY_CATEGORY)
   })
+
+  it('emails every admin, whatever their own rules say (Rob 2026-11-10)', async () => {
+    sent.length = 0
+    await notifyAdminsOfAccessRequest(
+      {} as never,
+      { id: 'REQ', name: 'Sophie' },
+      { reason: 'Need forecasting access' }
+    )
+    expect(sent.length).toBeGreaterThan(0)
+    for (const s of sent) expect(s.opts.channels).toEqual({ email: true })
+  })
 })

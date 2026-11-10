@@ -185,7 +185,11 @@ export async function notifyAdminsOfAccessRequest(
       // army7 b10: a real category, so admins can route or mute these under
       // Profile → Notification rules (and ask for email) — never "other".
       category: ACCESS_REQUEST_NOTIFY_CATEGORY,
-      target: { kind: 'access_request', action: 'review' }
+      target: { kind: 'access_request', action: 'review' },
+      // Rob 2026-11-10: admins are emailed every portal access request (the requester sits in
+      // Needs Authorization until one of them acts), whatever their own rules say for the
+      // category — a request seen only in the inbox waited days.
+      channels: { email: true }
     }).catch(() => null)
     if (res) told++
   }
