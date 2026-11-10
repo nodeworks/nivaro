@@ -387,7 +387,17 @@ async function main() {
   if (!source) blockers.push(`no commit on ${prod.sourceBranch} deployed nivaro ${VERSION} to staging`)
   if (!stagingNow && !verifiedRuns.includes(VERSION))
     blockers.push(`staging never answered with ${VERSION} — neither now nor in a finished release run`)
-  if (prodVersion === VERSION) blockers.push(`production already runs ${VERSION}`)
+  // Same version again is a no-op UNLESS staging's deploy commit for it is
+  // newer than what production's branch holds: an extension-only change
+  // (efp-ops) re-stamped on the same image by a reused-tag release chain.
+  const sourceOnProd =
+    !!source &&
+    sh('git', ['merge-base', '--is-ancestor', source.hash, `origin/${prod.branch}`], {
+      cwd: prod.path,
+      allowFail: true
+    }).ok
+  if (prodVersion === VERSION && sourceOnProd)
+    blockers.push(`production already runs ${VERSION}`)
   if (prodVersion && semverCmp(VERSION, prodVersion) < 0)
     blockers.push(`${VERSION} is older than production's ${prodVersion} — a rollback, not a promotion`)
   if (!cfg.gitlab) blockers.push('no "gitlab" { api, project } in the production block — the deploy jobs cannot be run')
