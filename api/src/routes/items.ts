@@ -2307,6 +2307,10 @@ export async function itemsRoutes(app: FastifyInstance) {
           )
           .map((f) => f.field)
       )
+      // A copy has none of the original's children: its own stored rollups (and
+      // the fields their parent_filter reads) start fresh, never as a copied total.
+      const { cloneDerivedFields } = await import('../services/rollups.js')
+      for (const f of await cloneDerivedFields(collection)) serverSet.add(f)
       const clone: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(original)) {
         if (!PROTECTED_FIELDS.has(k) && !serverSet.has(k)) clone[k] = v

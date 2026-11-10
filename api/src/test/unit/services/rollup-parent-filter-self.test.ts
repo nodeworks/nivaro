@@ -10,6 +10,7 @@ import { db } from '../../../db/index.js'
 import {
   bustRollupContributorCache,
   clearDecimalScaleCache,
+  cloneDerivedFields,
   ownParentFilterRollups,
   recalcOwnFilteredRollups
 } from '../../../services/rollups.js'
@@ -127,5 +128,11 @@ describe("a parent's own stored rollup and its parent_filter", () => {
       throw new Error('boom')
     })
     await expect(recalcOwnFilteredRollups('projects', 42, ['x'])).resolves.toEqual([])
+  })
+
+  it('a clone starts without the stored rollups and the fields their filter reads', async () => {
+    wire({ flag: null, current: null, carTotal: null })
+    expect(await cloneDerivedFields('projects')).toEqual(['pub_amount', 'pub_amount_follows_cars'])
+    expect(await cloneDerivedFields('workflows')).toEqual([])
   })
 })

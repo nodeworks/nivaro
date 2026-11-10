@@ -787,6 +787,25 @@ export async function ownParentFilterRollups(
 }
 
 /**
+ * Fields a CLONE of a `collection` row must not copy: its own stored rollups
+ * (the copy has none of the original's children, so the total would be a
+ * false figure the next child write never corrects) and the parent fields
+ * their parent_filter reads (projects.pub_amount + pub_amount_follows_cars).
+ */
+export async function cloneDerivedFields(collection: string): Promise<string[]> {
+  if (!contributorCache) contributorCache = await buildContributorCache()
+  const out: string[] = []
+  for (const list of contributorCache.values()) {
+    for (const entry of list) {
+      if (entry.parentCollection !== collection) continue
+      for (const f of [entry.rollupField, ...Object.keys(entry.parentFilter ?? {})])
+        if (IDENT_RE.test(f) && !out.includes(f)) out.push(f)
+    }
+  }
+  return out
+}
+
+/**
  * After a write to `collection` row `id` that changed `changedKeys`: recompute
  * each of the row's OWN stored rollups whose parent_filter reads one of those
  * keys (a project handed back to its CARs gets its CAR total at once; one
