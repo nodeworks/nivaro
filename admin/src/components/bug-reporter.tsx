@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { Bug, Camera, Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router'
 import { toast } from 'sonner'
@@ -117,6 +117,17 @@ export function BugReporter() {
     onError: (err: { response?: { data?: { error?: string } } }) =>
       toast.error(err.response?.data?.error ?? 'Could not file the report')
   })
+
+  // The button covers the bottom-right corner (right-4 + w-9 = 52px). Bars that
+  // end in that corner (the list pager's Last button, 2026-11-10) pad their
+  // right edge by --nvr-corner-float so nothing sits under it.
+  useEffect(() => {
+    const root = document.documentElement
+    root.style.setProperty('--nvr-corner-float', '3.25rem')
+    return () => {
+      root.style.removeProperty('--nvr-corner-float')
+    }
+  }, [])
 
   // The button portals to <body>: a `position: fixed` element inside any
   // ancestor that carries a transform (the page-enter animation keeps
