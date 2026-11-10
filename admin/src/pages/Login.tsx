@@ -1,3 +1,4 @@
+import { SignOutNoteBanner } from '@nivaro/shared'
 import { Monitor, Moon, ShieldCheck, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
@@ -336,6 +337,8 @@ export function LoginPage() {
 
   return (
     <div className='flex min-h-screen overflow-hidden'>
+      {/* An administrator's message from signing this person out (stays until they sign in). */}
+      <SignOutNoteBanner />
       {/* ── Left panel ─────────────────────────────────────────────── */}
       <div
         className='relative hidden flex-col overflow-hidden lg:flex lg:w-1/2'

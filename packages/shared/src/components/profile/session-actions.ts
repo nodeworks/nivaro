@@ -83,14 +83,25 @@ export function useSignOutEverywhere(
 ) {
   const client = useOptionalNivaroClient()
   return useMutation({
-    mutationFn: () => {
+    // `message` (optional): shown to them on their sign-in page (sign-out-note).
+    mutationFn: (v: { message?: string } | void) => {
       if (!client) throw new Error('Not connected')
+      const message = v && typeof v.message === 'string' ? v.message.trim() : ''
       return client
-        .request<{ data: { revoked: number } }>(post(`/security/users/${userId}/sign-out`))
+        .request<{ data: { revoked: number; message_left?: boolean } }>(
+          post(`/security/users/${userId}/sign-out`, message ? { message } : {})
+        )
         .then((r) => r.data)
     },
     onSuccess: (r) => {
-      toast.success(signedOutText(name, r.revoked))
+      toast.success(
+        signedOutText(name, r.revoked) +
+          (r.message_left === true
+            ? ' Your message waits on their sign-in page.'
+            : r.message_left === false
+              ? ' Your message could not be left — tell them another way.'
+              : '')
+      )
       opts.onDone?.()
     },
     onError: (e) => toast.error(errorText(e, 'Could not sign them out'))

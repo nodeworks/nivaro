@@ -11,12 +11,15 @@ import {
   forgetSettledReads,
   guardIdentityCall,
   measureClockOffset,
+  parseSignOutNote,
   type RealtimeAdapter,
   type RealtimeStatus,
   refetchEventsFor,
   relayLiveEvent,
+  SIGN_OUT_NOTE_EVENT,
   type SocketLike,
   type SocketRealtime,
+  saveSignOutNote,
   setServerClockOffset,
   shouldUseWorkerSocket,
   tapReplaySocket,
@@ -352,6 +355,12 @@ export function getSocket(): Socket {
     if (catchupTimer) clearTimeout(catchupTimer)
     catchupTimer = null
     setStatus({ state: 'reconnecting', refreshed: null })
+  })
+  // An administrator signed this person out with a message (sign-out-note): keep it for the
+  // sign-in page; `session:ended` arrives right after and takes the tab there.
+  socket.on(SIGN_OUT_NOTE_EVENT, (p: unknown) => {
+    const note = parseSignOutNote(p)
+    if (note) saveSignOutNote(note)
   })
   socket.on('session:ended', (p: { reason?: string }) => void onSessionEnded(p?.reason))
   // #1720 — the server took rooms away after a permission change: what this tab shows may

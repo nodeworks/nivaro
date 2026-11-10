@@ -14,6 +14,7 @@ import {
   registerViewAsOpener,
   resolveAccentColor,
   rumRouteChange,
+  SignOutNoteAfterSignIn,
   setRecordingSelf,
   startRum,
   UserAvatar,
@@ -1082,7 +1083,12 @@ function ForceRefreshBanner() {
       window.removeEventListener('nvr:access-changed', onCatchupFull)
     }
   }, [qc])
-  return <ForceReloadBanner />
+  return (
+    <>
+      <ForceReloadBanner />
+      <SignOutNoteAfterSignIn />
+    </>
+  )
 }
 
 // ─── Session-expiry warning (#199) ───────────────────────────────────────────

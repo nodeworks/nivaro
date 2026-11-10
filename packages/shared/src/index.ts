@@ -574,6 +574,7 @@ export { SearchHighlight } from './components/SearchHighlight'
 export {
   CardSkeleton,
   FormSkeleton,
+export { SignOutNoteAfterSignIn, SignOutNoteBanner } from './components/SignOutNoteBanner'
   ListSkeleton,
   SkeletonBar,
   TableSkeletonRows
@@ -1157,6 +1158,19 @@ export {
   claimIdentityCall,
   guardIdentityCall,
   isSignedOut,
+export {
+  clearSignOutNote,
+  parseSignOutNote,
+  readSignOutNote,
+  SIGN_OUT_NOTE_EVENT,
+  SIGN_OUT_NOTE_KEEP_MS,
+  SIGN_OUT_NOTE_KEY,
+  SIGN_OUT_NOTE_WINDOW_EVENT,
+  type SignOutNote,
+  sameSignOutNote,
+  saveSignOutNote,
+  signOutNoteHeading
+} from './lib/sign-out-note'
   isSignedOutError,
   noteCredentialChanged,
   noteSignedIn,

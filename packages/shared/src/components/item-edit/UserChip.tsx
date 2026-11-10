@@ -21,6 +21,7 @@ import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { HuddlePresenceLine } from '../chat/huddle/HuddleLiveBadge'
 import { useHuddleLive } from '../chat/huddle/huddle-live'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
+import { SignOutMessageInput } from '../profile/SignOutMessageInput'
 import { useReloadTheirTabs, useSignOutEverywhere } from '../profile/session-actions'
 import { useCardPresence } from '../profile/usePersonPresence'
 import { UserAvatar } from '../UserAvatar'
@@ -732,54 +733,64 @@ export function UserCardAdminRow({
   onDone?: () => void
 }) {
   const [armed, setArmed] = useState(false)
+  const [message, setMessage] = useState('')
+  // Armed Sign out lets go after a quiet moment — never while a message is being written.
   useEffect(() => {
-    if (!armed) return
-    const t = setTimeout(() => setArmed(false), 4000)
+    if (!armed || message.trim()) return
+    const t = setTimeout(() => setArmed(false), 10_000)
     return () => clearTimeout(t)
-  }, [armed])
+  }, [armed, message])
   const reload = useReloadTheirTabs(userId, { onDone })
   const signOut = useSignOutEverywhere(userId, name, { onDone })
+  const confirm = () => signOut.mutate({ message })
   const cls =
     'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50'
   return (
-    <div
-      className='flex items-center gap-1 border-t border-slate-100 p-2 dark:border-border'
-      data-user-card-admin
-    >
-      <button
-        type='button'
-        disabled={reload.isPending}
-        onClick={() => reload.mutate({})}
-        data-tip='Every tab they have open shows a 15-second countdown, then reloads'
-        className={cn(
-          cls,
-          'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
-        )}
-        data-user-card-reload
-      >
-        <RefreshCw className={cn('h-3.5 w-3.5', reload.isPending && 'animate-spin')} />
-        {reload.isPending ? 'Sending…' : 'Reload tabs'}
-      </button>
-      <button
-        type='button'
-        disabled={signOut.isPending}
-        onClick={() => (armed ? signOut.mutate() : setArmed(true))}
-        data-tip={
-          armed
-            ? 'Click again to sign them out of every session'
-            : 'Ends every session they have, on every app — they can sign in again'
-        }
-        className={cn(
-          cls,
-          armed
-            ? 'bg-red-600 text-white hover:bg-red-700'
-            : 'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
-        )}
-        data-user-card-sign-out={armed ? 'armed' : ''}
-      >
-        <LogOut className='h-3.5 w-3.5' />
-        {signOut.isPending ? 'Signing out…' : armed ? 'Confirm sign out' : 'Sign out'}
-      </button>
+    <div className='border-t border-slate-100 p-2 dark:border-border' data-user-card-admin>
+      <div className='flex items-center gap-1'>
+        <button
+          type='button'
+          disabled={reload.isPending}
+          onClick={() => reload.mutate({})}
+          data-tip='Every tab they have open shows a 15-second countdown, then reloads'
+          className={cn(
+            cls,
+            'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
+          )}
+          data-user-card-reload
+        >
+          <RefreshCw className={cn('h-3.5 w-3.5', reload.isPending && 'animate-spin')} />
+          {reload.isPending ? 'Sending…' : 'Reload tabs'}
+        </button>
+        <button
+          type='button'
+          disabled={signOut.isPending}
+          onClick={() => (armed ? confirm() : setArmed(true))}
+          data-tip={
+            armed
+              ? 'Click again to sign them out of every session'
+              : 'Ends every session they have, on every app — they can sign in again'
+          }
+          className={cn(
+            cls,
+            armed
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'text-amber-800 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-500/10'
+          )}
+          data-user-card-sign-out={armed ? 'armed' : ''}
+        >
+          <LogOut className='h-3.5 w-3.5' />
+          {signOut.isPending ? 'Signing out…' : armed ? 'Confirm sign out' : 'Sign out'}
+        </button>
+      </div>
+      {armed && (
+        <SignOutMessageInput
+          value={message}
+          onChange={setMessage}
+          onSubmit={confirm}
+          className='mt-2'
+        />
+      )}
     </div>
   )
 }

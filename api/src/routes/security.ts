@@ -3,6 +3,13 @@ import { revokeSessions, revokeUserSessions } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  clearSignOutNote,
+  leaveSignOutNote,
+  parseSignOutMessage,
+  type SignOutNote,
+  takeSignOutNote
+} from '../services/sign-out-note.js'
 
 /**
  * Security center reads: active sessions (Redis sess:* scan, mapped to users)
@@ -95,46 +102,84 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   // every app, every tab, their sockets closed on every replica. They can sign
   // in again — suspending the account is what keeps them out. Never the
   // caller: that is /my/sessions/sign-out-others.
-  app.post<{ Params: { id: string } }>('/users/:id/sign-out', async (req, reply) => {
-    const id = String(req.params.id)
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
-      return reply.code(400).send({ error: 'Not a user id' })
-    if (id.toUpperCase() === String(req.user?.id ?? '').toUpperCase())
-      return reply
-        .code(400)
-        .send({ error: 'That is you — use Sign out everywhere else on your own profile' })
-    const user = (await db('nivaro_users')
-      .where({ id })
-      .first('id', 'first_name', 'last_name', 'email')) as
-      | { id: string; first_name?: string | null; last_name?: string | null; email?: string | null }
-      | undefined
-    if (!user) return reply.code(404).send({ error: 'User not found' })
-    if (!app.redis) return reply.code(503).send({ error: 'The session store is unavailable' })
-    let revoked: number
-    try {
-      // Sessions and phone sign-ins; a static token or API key the person's phone uses keeps
-      // its alerts (they are not sessions — revoke that token or key to stop them).
-      revoked = await revokeUserSessions(app.redis, id, { full: false })
-    } catch (e) {
-      req.log.warn(
-        { err: e, user: id },
-        'sign-out everywhere did not reach every session and phone'
-      )
-      return reply.code(503).send({
-        error: 'Could not reach every session and phone — nothing was reported as done. Try again.'
+  app.post<{ Params: { id: string }; Body: { message?: unknown } | null }>(
+    '/users/:id/sign-out',
+    async (req, reply) => {
+      const id = String(req.params.id)
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+        return reply.code(400).send({ error: 'Not a user id' })
+      // Optional note for the person: shown on their sign-in page (sign-out-note.ts).
+      const parsed = parseSignOutMessage(req.body?.message)
+      if ('error' in parsed) return reply.code(400).send({ error: parsed.error })
+      if (id.toUpperCase() === String(req.user?.id ?? '').toUpperCase())
+        return reply
+          .code(400)
+          .send({ error: 'That is you — use Sign out everywhere else on your own profile' })
+      const user = (await db('nivaro_users')
+        .where({ id })
+        .first('id', 'first_name', 'last_name', 'email')) as
+        | {
+            id: string
+            first_name?: string | null
+            last_name?: string | null
+            email?: string | null
+          }
+        | undefined
+      if (!user) return reply.code(404).send({ error: 'User not found' })
+      if (!app.redis) return reply.code(503).send({ error: 'The session store is unavailable' })
+      // The note goes out BEFORE the sessions end: the person's tabs get it on the
+      // socket that is about to close (and keep it on the sign-in page). A note that
+      // cannot be stored never stops the sign-out — the response says it was not left.
+      let noteLeft = false
+      if (parsed.message) {
+        const admin = req.user as
+          | { first_name?: string | null; last_name?: string | null; email?: string | null }
+          | undefined
+        const note: SignOutNote = {
+          user_id: String(user.id).toUpperCase(),
+          message: parsed.message,
+          by_name:
+            `${admin?.first_name ?? ''} ${admin?.last_name ?? ''}`.trim() || admin?.email || null,
+          at: new Date().toISOString()
+        }
+        try {
+          await leaveSignOutNote(app.redis, String(user.id), note)
+          noteLeft = true
+        } catch (e) {
+          req.log.warn({ err: e, user: id }, 'sign-out note not stored')
+        }
+      }
+      let revoked: number
+      try {
+        // Sessions and phone sign-ins; a static token or API key the person's phone uses keeps
+        // its alerts (they are not sessions — revoke that token or key to stop them).
+        revoked = await revokeUserSessions(app.redis, id, { full: false })
+      } catch (e) {
+        req.log.warn(
+          { err: e, user: id },
+          'sign-out everywhere did not reach every session and phone'
+        )
+        return reply.code(503).send({
+          error:
+            'Could not reach every session and phone — nothing was reported as done. Try again.'
+        })
+      }
+      const name = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.email || id
+      await logActivity({
+        action: 'sessions-revoke-user',
+        user: req.user?.id,
+        collection: 'nivaro_users',
+        item: id,
+        comment:
+          `${name}: ${revoked} ${revoked === 1 ? 'session or phone' : 'sessions and phones'} signed out` +
+          (noteLeft ? ` — message left: “${parsed.message}”` : ''),
+        req
       })
+      return {
+        data: { revoked, ...(parsed.message ? { message_left: noteLeft } : {}) }
+      }
     }
-    const name = `${user.first_name ?? ''} ${user.last_name ?? ''}`.trim() || user.email || id
-    await logActivity({
-      action: 'sessions-revoke-user',
-      user: req.user?.id,
-      collection: 'nivaro_users',
-      item: id,
-      comment: `${name}: ${revoked} ${revoked === 1 ? 'session or phone' : 'sessions and phones'} signed out`,
-      req
-    })
-    return { data: { revoked } }
-  })
+  )
 
   // Masquerade history (#233): who impersonated whom, when — mined from the
   // masquerade-start/stop activity rows.
@@ -247,6 +292,23 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
  *  hook above is plugin-scoped and must not gate a user reading their OWN
  *  sessions/permissions. */
 export async function securitySelfRoutes(app: FastifyInstance) {
+  // The note an administrator left when signing me out (sign-out-note.ts): read
+  // once after the next sign-in, then DELETE. Own note only.
+  app.get('/my/sign-out-note', { preHandler: authenticate }, async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Sign in first' })
+    if (!app.redis) return { data: null }
+    try {
+      return { data: await takeSignOutNote(app.redis, String(req.user.id)) }
+    } catch {
+      return { data: null }
+    }
+  })
+  app.delete('/my/sign-out-note', { preHandler: authenticate }, async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Sign in first' })
+    if (app.redis) await clearSignOutNote(app.redis, String(req.user.id)).catch(() => {})
+    return reply.code(204).send()
+  })
+
   // My active sessions + my recent logins (#103).
   app.get('/my/sessions', { preHandler: authenticate }, async (req) => {
     const me = String(req.user!.id).toUpperCase()

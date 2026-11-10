@@ -470,12 +470,18 @@ GET /api/environments/env-presence         → every registered API, compared`
     },
     {
       type: 'p',
+      text: 'Arming Sign out opens an optional message box (280 characters, one line; Enter confirms). The message reaches every tab they have open the moment you confirm: those tabs go straight to sign-in and show it in a large amber band at the top — "Signed out by <your name> at 3:42 PM" and your message — readable from across the room, and it stays there through reloads until they sign in again. Someone with no tab open sees it once right after their next sign-in (Got it clears it). The message is kept for 14 days and recorded in the activity entry; a sign-out without a message works exactly as before.'
+    },
+    {
+      type: 'p',
       text: 'A reload never throws away work. While the tab has unsaved changes — a record form, the layout editor, a payload template, a help-video recording, a `useNivaroForm` form, or saves waiting in the offline outbox — the banner reads "A reload is waiting — save or discard your changes" and reloads the moment they are saved or discarded; Reload now reloads at once. A custom front end reports its own forms with `useUnsavedWork(dirty, label)` or `registerUnsavedWork(label, () => dirty)`.'
     },
     {
       type: 'pre',
       code: `POST   /api/realtime/force-refresh {user_ids, seconds?, message?}   → reload one person's tabs
-POST   /api/security/users/:id/sign-out              → end every session of that person (admin; not yourself)
+POST   /api/security/users/:id/sign-out {message?}   → end every session of that person (admin; not yourself); message = shown on their sign-in page
+GET    /api/security/my/sign-out-note                → the message left when I was signed out (null = none)
+DELETE /api/security/my/sign-out-note                → clear it once read
 GET    /api/realtime/force-refresh/remembered        → pushes still delivered on reconnect
 DELETE /api/realtime/force-refresh/remembered/:id    → stop one (:id = all stops every one)
 GET    /api/realtime/min-build                       → rules, open tabs below each, builds seen

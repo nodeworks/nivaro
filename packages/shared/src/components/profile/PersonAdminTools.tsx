@@ -6,6 +6,7 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { EmptyLine, SectionCard } from './primitives'
+import { SignOutMessageInput } from './SignOutMessageInput'
 import { useReloadTheirTabs, useSignOutEverywhere } from './session-actions'
 import { errorText, type PersonProfile, useInvalidatePerson } from './types'
 
@@ -70,12 +71,20 @@ export function ForceReloadCard({ profile: p }: { profile: PersonProfile }) {
 export function SignOutEverywhereCard({ profile: p }: { profile: PersonProfile }) {
   const name = [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || 'They'
   const [armed, setArmed] = useState(false)
+  const [message, setMessage] = useState('')
+  // Armed lets go after a quiet moment — never while a message is being written.
   useEffect(() => {
-    if (!armed) return
-    const t = setTimeout(() => setArmed(false), 4000)
+    if (!armed || message.trim()) return
+    const t = setTimeout(() => setArmed(false), 10_000)
     return () => clearTimeout(t)
-  }, [armed])
-  const signOut = useSignOutEverywhere(p.id, name, { onDone: () => setArmed(false) })
+  }, [armed, message])
+  const signOut = useSignOutEverywhere(p.id, name, {
+    onDone: () => {
+      setArmed(false)
+      setMessage('')
+    }
+  })
+  const confirm = () => signOut.mutate({ message })
   return (
     <SectionCard
       icon={<LogOut className='h-4 w-4' />}
@@ -88,8 +97,12 @@ export function SignOutEverywhereCard({ profile: p }: { profile: PersonProfile }
         <button
           type='button'
           disabled={signOut.isPending}
-          onClick={() => (armed ? signOut.mutate() : setArmed(true))}
-          onBlur={() => setArmed(false)}
+          onClick={() => (armed ? confirm() : setArmed(true))}
+          onBlur={(e) => {
+            // Moving into the message box keeps it armed.
+            const to = e.relatedTarget as HTMLElement | null
+            if (!to?.closest('[data-sign-out-message]')) setArmed(false)
+          }}
           className={cn(
             'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[11.5px] font-medium transition-colors disabled:opacity-50',
             armed
@@ -101,6 +114,14 @@ export function SignOutEverywhereCard({ profile: p }: { profile: PersonProfile }
           {signOut.isPending ? 'Signing out…' : armed ? 'Confirm sign out' : 'Sign them out'}
         </button>
       </div>
+      {armed && (
+        <SignOutMessageInput
+          value={message}
+          onChange={setMessage}
+          onSubmit={confirm}
+          className='mt-2 max-w-md'
+        />
+      )}
       <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
         They can sign in again straight away — suspend the account to keep them out. API keys and
         static tokens keep working.
