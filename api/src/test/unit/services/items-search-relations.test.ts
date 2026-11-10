@@ -70,7 +70,9 @@ const state = vi.hoisted(() => ({
   config: { search_relations: ['divisions.short_name'] } as Record<string, unknown> | null,
   allowed: {} as Record<string, string[] | null>,
   readable: new Set<string>(),
-  scopeOn: true
+  scopeOn: true,
+  /** Rows the up-front related read answers (resolveRelationSearch); > 2000 = EXISTS fallback. */
+  farRows: 1
 }))
 
 vi.mock('../../../db/index.js', async (orig) => {
@@ -90,6 +92,10 @@ vi.mock('../../../db/index.js', async (orig) => {
           DATA_TYPE: ty
         }))
       }
+      // resolveRelationSearch: the far side's ids, then the junction's root ids
+      if (/^select top \(\?\) \[(divisions|programs)\]\.\[id\] as \[?id\]?/i.test(sql))
+        return Array.from({ length: state.farRows }, (_, i) => ({ id: i + 1 }))
+      if (/^select distinct .*from \[projects_divisions\]/i.test(sql)) return [{ id: 42 }]
       return []
     }
   })
@@ -144,12 +150,24 @@ import { readItems } from '../../../services/items.js'
 
 const USER = { id: 'U-1', role: 'R-PLANNER' } as never
 
-async function searchSql(search: string, extra: Record<string, unknown> = {}) {
+async function allSql(search: string, extra: Record<string, unknown> = {}) {
   const seen: string[] = []
   ;(globalThis as { __searchSql?: string[] }).__searchSql = seen
   await readItems(USER, 'projects', { search, limit: 10, ...extra } as never).catch(() => undefined)
   delete (globalThis as { __searchSql?: string[] }).__searchSql
-  return seen.filter((s) => /from \[projects\]/i.test(s) && /like/i.test(s))
+  return seen
+}
+
+async function searchSql(search: string, extra: Record<string, unknown> = {}) {
+  return (await allSql(search, extra)).filter(
+    (s) => /from \[projects\]/i.test(s) && /like/i.test(s)
+  )
+}
+
+/** The up-front related reads (resolveRelationSearch) against `table`. */
+async function farReads(search: string, table: string) {
+  const re = new RegExp(`^select top \\(\\?\\) \\[${table}\\]\\.\\[id\\] as \\[?id\\]?`, 'i')
+  return (await allSql(search)).filter((s) => re.test(s))
 }
 
 beforeEach(() => {
@@ -157,10 +175,36 @@ beforeEach(() => {
   state.allowed = {}
   state.readable = new Set(['projects', 'divisions', 'programs', 'nivaro_users'])
   state.scopeOn = true
+  state.farRows = 1
 })
 
 describe('list search through search_relations', () => {
-  it('each word also matches the related label, gated by the far User Scope (probe, page, count)', async () => {
+  it('reads the related matches up front, gated by the far User Scope, then searches id IN', async () => {
+    const far = await farReads('2026 Central', 'divisions')
+    // one up-front read per word
+    expect(far).toHaveLength(2)
+    for (const s of far) {
+      expect(s).toMatch(/\[divisions\]\.\[id\] in/i)
+      expect(s).toMatch(/\[divisions\]\.\[short_name\] LIKE CAST\(\? AS varchar\(4000\)\)/)
+    }
+    const reads = await searchSql('2026 Central')
+    expect(reads.length).toBeGreaterThanOrEqual(1)
+    for (const s of reads) {
+      expect(s).not.toMatch(/exists/i)
+      // each word: own columns OR the root ids the related read found
+      expect((s.match(/\[projects\]\.\[id\] in \(\?\)/gi) ?? []).length).toBe(2)
+    }
+  })
+
+  it('a word no related record matches adds no relation predicate', async () => {
+    state.farRows = 0
+    for (const s of await searchSql('Central')) {
+      expect(s).not.toMatch(/divisions|\[projects\]\.\[id\] in/i)
+    }
+  })
+
+  it('more matches than one up-front read takes: each word also matches the related label, gated by the far User Scope (probe, page, count)', async () => {
+    state.farRows = 2001
     const reads = await searchSql('2026 Central')
     // the search probe (a clone of the gated count query) runs first
     expect(reads.length).toBeGreaterThanOrEqual(1)
@@ -178,6 +222,9 @@ describe('list search through search_relations', () => {
 
   it('a caller with no scope on the far collection gets no extra predicate', async () => {
     state.scopeOn = false
+    for (const s of await farReads('Central', 'divisions'))
+      expect(s).not.toMatch(/\[divisions\]\.\[id\] in/i)
+    state.farRows = 2001
     const reads = await searchSql('Central')
     for (const s of reads) {
       expect(s).toMatch(
@@ -223,8 +270,18 @@ describe('list search through search_relations', () => {
     }
   })
 
-  it('an M2O path compiles to an EXISTS on the related row', async () => {
+  it('an M2O path matches the FK against the related ids read up front', async () => {
     state.config = { search_relations: ['program.title'] }
+    state.farRows = 3
+    for (const s of await searchSql('Central')) {
+      expect(s).toMatch(/\[projects\]\.\[program\] in \(\?, \?, \?\)/i)
+      expect(s).not.toMatch(/exists/i)
+    }
+  })
+
+  it('an M2O path past the up-front cap compiles to an EXISTS on the related row', async () => {
+    state.config = { search_relations: ['program.title'] }
+    state.farRows = 2001
     const reads = await searchSql('Central')
     for (const s of reads) {
       expect(s).toMatch(

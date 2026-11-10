@@ -45,6 +45,7 @@ import {
 import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
+import { whereInList } from './db-batch.js'
 import { assertNotEditLocked } from './edit-lock.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
@@ -4787,46 +4788,114 @@ export async function searchRelationPlan(
  * caller's gate (a collection the gate was never primed for matches nothing). The LIKE takes
  * the same varchar / binary-collation form as the collection's own columns.
  */
+type RelationLike = (
+  b: Knex.QueryBuilder,
+  ref: string,
+  type: string | undefined,
+  pattern: string
+) => void
+
+/** The far side of hop `i` (a query FROM hop.to): its gate, then the next hops or the LIKE. */
+function relationFarMatch(
+  far: Knex.QueryBuilder,
+  group: SearchRelationPlan['groups'][number],
+  i: number,
+  pattern: string,
+  gate: FilterScopeGate | undefined,
+  like: RelationLike
+): void {
+  const hop = group.hops[i]
+  gate?.apply(far, hop.to)
+  if (i < group.hops.length - 1) relationHop(far, hop.to, group, i + 1, pattern, gate, like)
+  else
+    far.where((any) => {
+      for (const f of group.fields) like(any, `${hop.to}.${f}`, group.types.get(f), pattern)
+    })
+}
+
+/** Related records a search word reaches before the search falls back to the EXISTS form. */
+export const RELATION_SEARCH_RESOLVE_MAX = 2000
+
+/**
+ * The root rows one related-label group matches for one pattern, as `column IN ids`, read
+ * up front (Rob 2026-11-10: workflows searched by PO number — the per-row EXISTS made every
+ * workflow search 1–3 s; the PO lookup alone takes ~0.1 s). The first hop's far side is read
+ * with every gate (the same SQL the EXISTS carries), then mapped onto the root: an M2O hop is
+ * `root.fk IN far`, an M2M hop reads the junction. More than RELATION_SEARCH_RESOLVE_MAX
+ * matches at either step = null, and the caller keeps the EXISTS form.
+ */
+export async function resolveRelationSearch(
+  group: SearchRelationPlan['groups'][number],
+  pattern: string,
+  gate: FilterScopeGate | undefined,
+  like: RelationLike
+): Promise<{ column: string; ids: Array<string | number> } | null> {
+  const hop = group.hops[0]
+  const farQ = db(hop.to)
+    .select(db.raw('??.?? as id', [hop.to, 'id']))
+    .limit(RELATION_SEARCH_RESOLVE_MAX + 1)
+  relationFarMatch(farQ, group, 0, pattern, gate, like)
+  const far = ((await farQ) as Array<{ id: string | number }>).map((r) => r.id)
+  if (far.length > RELATION_SEARCH_RESOLVE_MAX) return null
+  if (hop.kind === 'm2o') return { column: hop.column, ids: far }
+  if (!far.length) return { column: 'id', ids: [] }
+  const rootQ = db(hop.junction)
+    .distinct(db.raw('?? as id', [hop.fkToParent]))
+    .whereNotNull(hop.fkToParent)
+    .limit(RELATION_SEARCH_RESOLVE_MAX + 1)
+  whereInList(rootQ, hop.fkToOther, far)
+  const ids = ((await rootQ) as Array<{ id: string | number }>).map((r) => r.id)
+  return ids.length > RELATION_SEARCH_RESOLVE_MAX ? null : { column: 'id', ids }
+}
+
+function relationHop(
+  b: Knex.QueryBuilder,
+  from: string,
+  group: SearchRelationPlan['groups'][number],
+  i: number,
+  pattern: string,
+  gate: FilterScopeGate | undefined,
+  like: RelationLike
+): void {
+  const hop = group.hops[i]
+  const onFar = (far: Knex.QueryBuilder) => relationFarMatch(far, group, i, pattern, gate, like)
+  if (hop.kind === 'm2o') {
+    b.whereExists(function (this: QB) {
+      this.select(db.raw('1'))
+        .from(hop.to)
+        .whereRaw('??.?? = ??.??', [hop.to, 'id', from, hop.column])
+      onFar(this)
+    })
+  } else {
+    b.whereExists(function (this: QB) {
+      this.select(db.raw('1'))
+        .from(hop.junction)
+        .whereRaw('??.?? = ??.??', [hop.junction, hop.fkToParent, from, 'id'])
+        .whereExists(function (this: QB) {
+          this.select(db.raw('1'))
+            .from(hop.to)
+            .whereRaw('??.?? = ??.??', [hop.to, 'id', hop.junction, hop.fkToOther])
+          onFar(this)
+        })
+    })
+  }
+}
+
 function orRelationSearch(
   w: Knex.QueryBuilder,
   root: string,
   group: SearchRelationPlan['groups'][number],
   pattern: string,
   gate: FilterScopeGate | undefined,
-  like: (b: Knex.QueryBuilder, ref: string, type: string | undefined, pattern: string) => void
+  like: RelationLike,
+  resolved?: { column: string; ids: Array<string | number> } | null
 ): void {
-  const step = (b: Knex.QueryBuilder, from: string, i: number) => {
-    const hop = group.hops[i]
-    const onFar = (far: Knex.QueryBuilder) => {
-      gate?.apply(far, hop.to)
-      if (i < group.hops.length - 1) step(far, hop.to, i + 1)
-      else
-        far.where((any) => {
-          for (const f of group.fields) like(any, `${hop.to}.${f}`, group.types.get(f), pattern)
-        })
-    }
-    if (hop.kind === 'm2o') {
-      b.whereExists(function (this: QB) {
-        this.select(db.raw('1'))
-          .from(hop.to)
-          .whereRaw('??.?? = ??.??', [hop.to, 'id', from, hop.column])
-        onFar(this)
-      })
-    } else {
-      b.whereExists(function (this: QB) {
-        this.select(db.raw('1'))
-          .from(hop.junction)
-          .whereRaw('??.?? = ??.??', [hop.junction, hop.fkToParent, from, 'id'])
-          .whereExists(function (this: QB) {
-            this.select(db.raw('1'))
-              .from(hop.to)
-              .whereRaw('??.?? = ??.??', [hop.to, 'id', hop.junction, hop.fkToOther])
-            onFar(this)
-          })
-      })
-    }
+  if (resolved) {
+    if (resolved.ids.length)
+      w.orWhere((sub) => whereInList(sub, `${root}.${resolved.column}`, resolved.ids))
+    return
   }
-  w.orWhere((sub) => step(sub, root, 0))
+  w.orWhere((sub) => relationHop(sub, root, group, 0, pattern, gate, like))
 }
 
 async function probeSearchMatches(countQ: Knex.QueryBuilder, collection: string) {
@@ -5208,12 +5277,39 @@ export async function readItems(
           w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [ref, pattern.toUpperCase()])
         else w.orWhere(db.raw('??', [ref]), 'like', pattern)
       }
+      // Related-label matches are read up front per group × pattern (resolveRelationSearch):
+      // `id IN (…)` instead of a per-row EXISTS. A failed or too-wide read keeps the EXISTS.
+      const relResolved = new Map<string, Awaited<ReturnType<typeof resolveRelationSearch>>>()
+      if (relPlan.groups.length) {
+        const patterns = new Set<string>()
+        for (const v of variants)
+          for (const slot of v) for (const alt of slot) patterns.add(`%${likeEscape(alt)}%`)
+        await Promise.all(
+          relPlan.groups.flatMap((g, gi) =>
+            [...patterns].map(async (p) => {
+              relResolved.set(
+                `${gi}\u0000${p}`,
+                await resolveRelationSearch(g, p, relPlan.gate, likeOn).catch(() => null)
+              )
+            })
+          )
+        )
+      }
       const slotWhere = (w: Knex.QueryBuilder, slot: string[]) => {
         for (const alt of slot) {
           const pattern = `%${likeEscape(alt)}%`
           for (const f of searchCols) likeOn(w, f, columnTypes.get(f), pattern)
-          for (const g of relPlan.groups)
-            orRelationSearch(w, collection, g, pattern, relPlan.gate, likeOn)
+          relPlan.groups.forEach((g, gi) => {
+            orRelationSearch(
+              w,
+              collection,
+              g,
+              pattern,
+              relPlan.gate,
+              likeOn,
+              relResolved.get(`${gi}\u0000${pattern}`)
+            )
+          })
         }
       }
       const applySearch = (qb: QB) => {
