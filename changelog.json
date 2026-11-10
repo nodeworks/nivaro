@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-10T14:59:49.000Z",
+  "generated_at": "2026-11-10T17:17:07.905Z",
   "releases": [
+    {
+      "version": "0.3.117",
+      "tag": "v0.3.117",
+      "date": "2026-11-10T12:16:51-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "release",
+              "text": "promote --portal-only pushes and deploys the portal alone",
+              "hash": "3526e7d58"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "actions",
+              "text": "a write a business rule refused is never slipped in raw",
+              "hash": "06c4a9352"
+            },
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "promote the same version again when staging's deploy commit is newer than production's",
+              "hash": "21914feaf"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.116",
       "tag": "v0.3.116",
-      "date": "2026-11-10T09:59:29-05:00",
+      "date": "2026-11-10T09:59:49-05:00",
       "sections": [
         {
           "label": "Fixed",
