@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-10T18:31:34.731Z",
+  "generated_at": "2026-11-10T19:01:33.154Z",
   "releases": [
+    {
+      "version": "0.3.121",
+      "tag": "v0.3.121",
+      "date": "2026-11-10T14:01:16-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "armed Sign out waits 30 s for a message, not 10",
+              "hash": "649fe052c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cbv",
+              "text": "pager's Last button clears admin's bug float",
+              "hash": "c9ccc254d"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.120",
       "tag": "v0.3.120",
-      "date": "2026-11-10T13:31:17-05:00",
+      "date": "2026-11-10T13:31:34-05:00",
       "sections": [
         {
           "label": "Added",
