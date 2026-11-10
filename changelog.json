@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-11-10T22:53:31.520Z",
+  "generated_at": "2026-11-10T23:15:24.465Z",
   "releases": [
+    {
+      "version": "0.3.128",
+      "tag": "v0.3.128",
+      "date": "2026-11-10T18:15:06-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "access",
+              "text": "portal access request email for admins + resend route",
+              "hash": "ab68a57a6"
+            },
+            {
+              "section": "Added",
+              "scope": "access",
+              "text": "admins are emailed every portal access request",
+              "hash": "c2494f2c4"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.127",
       "tag": "v0.3.127",
-      "date": "2026-11-10T17:53:08-05:00",
+      "date": "2026-11-10T17:53:31-05:00",
       "sections": [
         {
           "label": "Fixed",
