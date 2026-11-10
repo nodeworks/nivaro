@@ -19,6 +19,9 @@ export interface SendSkipRule {
   field: string
   starts_with?: string
   equals?: string
+  /** Allow list (Rob 2026-11-10, MWF markets): skip when the value starts with
+   *  NONE of these. An empty list skips nothing; a blank value is not judged. */
+  not_starts_with_any?: string[]
   reason?: string
 }
 
@@ -44,11 +47,15 @@ export function matchSendSkip(rules: unknown, body: unknown): string | null {
     const v = at(body, r.field)
     if (v == null) continue
     const s = String(v).trim().toUpperCase()
+    const allow = Array.isArray(r.not_starts_with_any)
+      ? r.not_starts_with_any.filter((p): p is string => typeof p === 'string' && p.trim() !== '')
+      : []
     const hit =
       (typeof r.starts_with === 'string' &&
         r.starts_with &&
         s.startsWith(r.starts_with.toUpperCase())) ||
-      (typeof r.equals === 'string' && r.equals && s === r.equals.toUpperCase())
+      (typeof r.equals === 'string' && r.equals && s === r.equals.toUpperCase()) ||
+      (allow.length > 0 && s !== '' && !allow.some((p) => s.startsWith(p.trim().toUpperCase())))
     if (hit) {
       const why = typeof r.reason === 'string' && r.reason.trim() ? r.reason.trim() : null
       return `${SEND_SKIP_PREFIX}${r.field} ${String(v)}${why ? ` — ${why}` : ''}`
