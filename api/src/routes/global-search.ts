@@ -35,6 +35,7 @@ import {
   typedEquals,
   withFastContains
 } from '../services/search-like.js'
+import { buildSearchLinked } from '../services/search-linked.js'
 import { buildSearchPreview, previewValue } from '../services/search-preview.js'
 import {
   type FieldMeta,
@@ -2542,6 +2543,20 @@ export async function globalSearchRoutes(app: FastifyInstance) {
     if (c.toLowerCase().startsWith('nivaro_') || c.toLowerCase().startsWith('directus_'))
       return reply.code(404).send({ error: 'Not found' })
     const data = await buildSearchPreview(req.user as User, c, item, req.isAdmin === true)
+    if (!data) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data })
+  })
+
+  // GET /preview/linked?collection=&id= — records linked to the previewed one, both ways
+  // (a PO's workflows, project, vendor …), read as the caller (services/search-linked.ts).
+  app.get('/preview/linked', async (req, reply) => {
+    const { collection, id } = req.query as { collection?: string; id?: string }
+    const c = (collection ?? '').trim()
+    const item = (id ?? '').trim()
+    if (!IDENT_RE.test(c) || !item || item.length > 100)
+      return reply.code(400).send({ error: 'collection and id are required' })
+    if (/^(nivaro_|directus_)/i.test(c)) return reply.code(404).send({ error: 'Not found' })
+    const data = await buildSearchLinked(req.user as User, c, item)
     if (!data) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data })
   })

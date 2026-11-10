@@ -118,6 +118,16 @@ GET /api/global-search/preview?collection=customers&id=cust-123
   "state": { "label": "In review", "color": "#00ceff" }, "owners": [{ "id": "…", "name": "Sam Ray" }],
   "fields": [{ "label": "City", "value": "Denver" }], "updated_at": "…", "updated_by": "Ana Acme" } }
 
+// Linked records for the preview's "Linked" section, both ways, read as you: what the record
+// points at (project, vendor …), what points at it, and what a junction links (a PO's
+// workflows). Up to 5 per group with the group's total; groups you cannot read are left out;
+// system and junction tables never listed. 404 when you cannot open the record itself.
+GET /api/global-search/preview/linked?collection=purchase_orders&id=158658
+{ "data": [ { "collection": "workflows", "title": "Workflows", "direction": "from", "total": 1,
+    "items": [{ "id": "372896", "label": "MM26-67370" }] },
+  { "collection": "projects", "title": "Projects", "direction": "to", "total": 1,
+    "items": [{ "id": "7917", "label": "201174 - FREEDOM REGION METRO E" }] } ] }
+
 // Labels for records shown without one (recents / pins saved with a bare id), read as you,
 // batched (at most 100). A record never shows its id: its label, else a business id
 // column (workflow_id…), else the collection's name alone — also when you cannot read it.
