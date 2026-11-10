@@ -121,3 +121,20 @@ export function notePersonLinkEdit(
   state.seq.set(field, state.next())
   return true
 }
+
+/**
+ * After a save: what the person touched is now the record's saved state, so
+ * the "changed this session" set starts over (CR27-55150, 2026-11-10). The
+ * save resets the staged links and the linked parents (Zone) reload a moment
+ * later; with the old set still saying "Zone touched", that reload read as the
+ * person changing Zone and the cascade emptied Funding Year, Project and Sub
+ * Type — which the next save then deleted. A save that left work staged (a
+ * refused line, a reason still owed) keeps the set: those edits are unsaved.
+ */
+export function settleTouchedAfterSave(
+  touched: Set<string>,
+  opts: { leftWorkStaged: boolean }
+): void {
+  if (opts.leftWorkStaged) return
+  touched.clear()
+}

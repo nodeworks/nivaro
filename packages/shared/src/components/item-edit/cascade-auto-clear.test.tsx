@@ -7,7 +7,8 @@ import {
   cascadeClearText,
   cascadeRootParent,
   joinLabels,
-  notePersonLinkEdit
+  notePersonLinkEdit,
+  settleTouchedAfterSave
 } from './cascade-clear-notice'
 import { CascadeEffectController, type CascadeRule } from './helpers'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -129,5 +130,29 @@ describe('a person-changed linked parent (army11 browser check: Zone 1 → 2 kep
       { field: 'project', label: 'Project', parents: ['divisions', 'regions', 'project_type'] }
     ]
     expect(cascadeRootParent(notes, (f) => s.seq.get(f) ?? -1)).toBe('divisions')
+  })
+})
+
+// CR27-55150 (2026-11-10): after a save, the record's linked Zone reloads a
+// moment later. The form still held "Zone touched this session", so the reload
+// read as the person changing Zone and the cascade emptied Funding Year,
+// Project and Sub Type — the next save then deleted them.
+describe('a saved record: its parents settling are not a person change', () => {
+  it('a save that fully landed empties the touched set; a save that left work staged keeps it', () => {
+    const touched = new Set(['divisions', 'project'])
+    settleTouchedAfterSave(touched, { leftWorkStaged: true })
+    expect([...touched]).toEqual(['divisions', 'project'])
+    settleTouchedAfterSave(touched, { leftWorkStaged: false })
+    expect(touched.size).toBe(0)
+  })
+
+  it('Zone reloading after the save clears nothing once the touched set is settled', async () => {
+    const dirty = new Set(['division'])
+    const first = await run([], 1, dirty)
+    expect(first.onClear).toHaveBeenCalledTimes(1) // the person's own Zone change still clears
+    settleTouchedAfterSave(dirty, { leftWorkStaged: false })
+    const after = await run([], 2, dirty) // the saved Zone settling in
+    expect(after.client.request).not.toHaveBeenCalled()
+    expect(after.onClear).not.toHaveBeenCalled()
   })
 })

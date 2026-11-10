@@ -193,6 +193,7 @@ import { CloneDialog } from './item-edit/CloneDialog'
 import {
   CascadeClearNoticeContext,
   notePersonLinkEdit,
+  settleTouchedAfterSave,
   useCascadeClearNotices
 } from './item-edit/cascade-clear-notice'
 import { columnLengthError } from './item-edit/column-length'
@@ -10447,6 +10448,9 @@ function ItemEditFormView({
       const childFailed = !isNew && saveLeftWorkStaged(saveNoticeRef.current)
       childRefusedRef.current = childFailed
       if (!childFailed) setIsDirty(false)
+      // What was touched is saved now: a linked parent reloading after this
+      // save must not read as the person changing it (CR27-55150).
+      if (!isNew) settleTouchedAfterSave(userTouchedRef.current, { leftWorkStaged: childFailed })
       // The persisted recovery draft is spent — remove it now rather than on
       // the debounce, since a created record navigates away immediately.
       if (!isNew && !childFailed) void deleteDraft(recoveryKey)
