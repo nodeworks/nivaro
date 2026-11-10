@@ -28,6 +28,7 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { installMouseTail } from './mouse-tail'
 import { ReplayNotesPanel } from './NotesPanel'
 import { NotesRail } from './NotesRail'
 import { useReplayNoteList } from './notes'
@@ -207,6 +208,7 @@ export function ReplayPlayer({
   useEffect(() => {
     let cancelled = false
     let raf = 0
+    let stopTail: (() => void) | null = null
     setRail(null)
     setCtx(NO_CONTEXT)
     setRange(null)
@@ -317,6 +319,10 @@ export function ReplayPlayer({
           insertStyleRules: REPLAY_FRAME_STYLE_RULES
         }) as unknown as NonNullable<typeof replayerRef.current>
         replayerRef.current = replayer
+        // Our own trail drawing: rrweb strokes one line through every position
+        // a catch-up fires at once (late live chunk, tab back from hidden) and
+        // fills the frame with a scribble (./mouse-tail).
+        stopTail = installMouseTail(replayer, { strokeStyle: '#00ceff' })
         setTotal(replayer.getMetaData().totalTime)
         replayer.on('fullsnapshot-rebuilded', rescale)
         replayer.on('resize', rescale)
@@ -396,6 +402,7 @@ export function ReplayPlayer({
     return () => {
       cancelled = true
       cancelAnimationFrame(raf)
+      stopTail?.()
       window.removeEventListener('resize', rescale)
       rescaleRef.current = null
       replayerRef.current?.pause()
