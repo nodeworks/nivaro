@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-10T17:17:07.905Z",
+  "generated_at": "2026-11-10T17:44:27.303Z",
   "releases": [
+    {
+      "version": "0.3.118",
+      "tag": "v0.3.118",
+      "date": "2026-11-10T12:44:01-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "catalog-picker",
+              "text": "facet builders — pick facets in any order, then list every matching item",
+              "hash": "175992133"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.117",
       "tag": "v0.3.117",
-      "date": "2026-11-10T12:16:51-05:00",
+      "date": "2026-11-10T12:17:07-05:00",
       "sections": [
         {
           "label": "Added",
