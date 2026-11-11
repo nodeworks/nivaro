@@ -88,12 +88,18 @@ export const hostHungIoCheck: ReadinessCheck = {
   label: 'No host is stuck waiting on IO',
   group: 'Infrastructure',
   description:
-    'Processes stuck in D state, kernel hung-task messages, NFS servers that stopped answering and a high load with an idle CPU, from the host facts collector and node_exporter.',
+    "Processes stuck in D state, kernel hung-task messages, NFS servers that stopped answering and a high load with an idle CPU, from the host facts collector and node_exporter — on this deployment's own Docker hosts (DOCKER_HOSTS).",
   ttlMs: 2 * 60_000,
   run: async () => {
     const r = await hostsReport()
     if (!r.store) return { status: 'skip', detail: 'The telemetry store is not configured.' }
-    const judged = r.hosts.filter((h) => h.hung.level !== 'unknown')
+    // The metrics store is shared by every environment: production's readiness
+    // listed staging's dead NFS mount (2026-11-11). Judge only this deployment's
+    // own Docker hosts (DOCKER_HOSTS); without any, every host the store knows.
+    const own = new Set(dockerHosts().map((h) => h.name))
+    const judged = r.hosts.filter(
+      (h) => h.hung.level !== 'unknown' && (own.size === 0 || own.has(h.host))
+    )
     if (judged.length === 0)
       return { status: 'skip', detail: 'Host facts are not collected on any host yet.' }
     const bad = judged.filter((h) => h.hung.level === 'warning' || h.hung.level === 'critical')

@@ -368,6 +368,9 @@ export interface ExtensionContext {
   readiness: {
     /** A scored check on the go-live readiness scorecard. */
     registerCheck(check: ReadinessCheck): void
+    /** Take a check (core's or any extension's) off this installation's scorecard —
+     *  e.g. go-live checks once the cutover is done. Older cores lack it. */
+    retireCheck?(id: string): void
   }
   /** Operational tasks — repairs, backfills, migrations — run from the admin
    *  console (dry run by default, one at a time, every run recorded). */

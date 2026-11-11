@@ -1,5 +1,4 @@
 import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { registerOpsSection } from '../services/ops-report/sections.js'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -39,12 +38,13 @@ import { registerIntegrityCheck } from '../services/integrity-checks.js'
 import { registerMailTemplateRoot, renderMailTemplate } from '../services/mail.js'
 import { registerMailType, renderViaFlow } from '../services/mail-types.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { registerOpsSection } from '../services/ops-report/sections.js'
 import { registerOpsTask } from '../services/ops-tasks.js'
 import {
   registerPayloadTemplate,
   renderPayloadTemplate
 } from '../services/payload-templates/index.js'
-import { registerReadinessCheck } from '../services/readiness.js'
+import { registerReadinessCheck, retireReadinessCheck } from '../services/readiness.js'
 import { registerTransitionCheck } from '../services/transition-checks.js'
 import { resolveExtensionBuild } from './build-identity.js'
 import { type BulkActionDef, bulkActionRegistry } from './bulk-actions.js'
@@ -955,6 +955,10 @@ export function registrationMembers(
         note('readiness')
         own('readiness_checks', `${check.id} · ${check.label}`)
         registerReadinessCheck(check)
+      },
+      retireCheck: (id) => {
+        note('readiness')
+        retireReadinessCheck(String(id))
       }
     },
     tasks: {

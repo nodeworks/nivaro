@@ -32,8 +32,18 @@ export type { ReadinessCheck, ReadinessResult, ReadinessStatus } from '@nivaro/e
 
 const registry = new Map<string, ReadinessCheck>()
 
+/** Ids an installation retired (an extension's `readiness.retireCheck`): never registered again. */
+const retired = new Set<string>()
+
 export function registerReadinessCheck(check: ReadinessCheck): void {
+  if (retired.has(check.id)) return
   registry.set(check.id, check)
+}
+
+/** Drop a check from this installation's scorecard — registered already or later. */
+export function retireReadinessCheck(id: string): void {
+  retired.add(id)
+  registry.delete(id)
 }
 
 /** #40 — the registered checks, without their handlers. */

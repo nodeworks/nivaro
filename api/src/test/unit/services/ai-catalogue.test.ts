@@ -22,6 +22,7 @@ describe('model catalogue watch (#2732)', () => {
   it('collects every id the settings name', () => {
     const ids = configuredModelIds(
       {
+        ai_provider: 'gateway',
         ai_model: 'm-default',
         ai_models: JSON.stringify({ chat: 'm-chat', default: 'm-default' }),
         ai_gateway_model: 'm-gw'
@@ -46,6 +47,26 @@ describe('model catalogue watch (#2732)', () => {
       }
     )
     expect(new Set(ids)).toEqual(new Set(['m-default', 'm-chat', 'm-gw', 'm-fb', 'm-cheap']))
+  })
+
+  it('reads only the provider in use: a gateway never counts the direct-Anthropic ai_model', () => {
+    // Prod 2026-11-11: ai_model kept a retired Anthropic id no gateway call sends.
+    const gw = configuredModelIds(
+      {
+        ai_provider: 'gateway',
+        ai_model: 'claude-haiku-4-5-20251001',
+        ai_gateway_model: 'claude-4-5-haiku'
+      },
+      DEFAULT_QUALITY
+    )
+    expect(gw).toEqual(['claude-4-5-haiku'])
+    // A gateway with no model of its own still falls back to ai_model (ai-client.ts).
+    expect(
+      configuredModelIds({ ai_provider: 'gateway', ai_model: 'm-legacy' }, DEFAULT_QUALITY)
+    ).toEqual(['m-legacy'])
+    expect(
+      configuredModelIds({ ai_provider: 'anthropic', ai_model: 'm-direct' }, DEFAULT_QUALITY)
+    ).toEqual(['m-direct'])
   })
 })
 

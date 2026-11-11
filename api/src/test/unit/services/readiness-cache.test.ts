@@ -361,3 +361,19 @@ async function versionOf(): Promise<string> {
   const { NIVARO_VERSION } = await import('../../../version.js')
   return NIVARO_VERSION
 }
+
+describe('retireReadinessCheck', () => {
+  it('drops a registered check and refuses it when it registers later', async () => {
+    const { registerReadinessCheck, retireReadinessCheck, listReadinessChecks } = await import(
+      '../../../services/readiness.js'
+    )
+    const run = async () => ({ status: 'pass' as const, detail: 'ok' })
+    registerReadinessCheck({ id: 'retire-me-now', label: 'Now', run })
+    retireReadinessCheck('retire-me-now')
+    retireReadinessCheck('retire-me-later')
+    registerReadinessCheck({ id: 'retire-me-later', label: 'Later', run })
+    const ids = listReadinessChecks().map((c) => c.id)
+    expect(ids).not.toContain('retire-me-now')
+    expect(ids).not.toContain('retire-me-later')
+  })
+})

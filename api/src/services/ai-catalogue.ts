@@ -86,11 +86,20 @@ export function configuredModelIds(
 ): string[] {
   const out = new Set<string>()
   const row = (s ?? {}) as Parameters<typeof parseAiModels>[0]
-  for (const v of Object.values(parseAiModels(row))) if (v) out.add(v)
-  for (const k of ['ai_model', 'ai_gateway_model'] as const) {
+  const models = parseAiModels(row)
+  for (const v of Object.values(models)) if (v) out.add(v)
+  const text = (k: string) => {
     const v = (s as Record<string, unknown> | null)?.[k]
-    if (typeof v === 'string' && v.trim()) out.add(v.trim())
+    return typeof v === 'string' && v.trim() ? v.trim() : null
   }
+  // Only the provider in use: on a gateway `ai_model` is the direct-Anthropic
+  // setting, read only when no gateway model is set (ai-client.ts) — counting it
+  // flagged a retired id no call ever sends (prod, 2026-11-11).
+  if (text('ai_provider') === 'gateway') {
+    const gw = text('ai_gateway_model')
+    if (gw) out.add(gw)
+    else if (!models.default && text('ai_model')) out.add(text('ai_model') as string)
+  } else if (text('ai_model')) out.add(text('ai_model') as string)
   if (cfg.fallback_model) out.add(cfg.fallback_model)
   for (const c of cfg.budgets.caps) if (c.cheaper_model) out.add(c.cheaper_model)
   return [...out]
