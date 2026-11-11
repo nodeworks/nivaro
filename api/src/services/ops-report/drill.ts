@@ -1528,7 +1528,52 @@ export async function drill(
     }
     case 'backlog':
     case 'sla_breaches': {
-      if (!key) throw new DrillError(400, metric === 'backlog' ? 'Name the step' : 'Name the rule')
+      // No step / rule named (the KPI tile drills the whole number): list
+      // them first, each opening its own records — a 400 "Name the step"
+      // reached people from the Backlog tile (2026-11-11).
+      if (!key && metric === 'backlog') {
+        const steps = await rows(
+          `SELECT TOP ${limit} s.label, COUNT(*) n FROM nivaro_workflow_instances i
+             JOIN nivaro_workflow_states s ON s.id = i.current_state
+            WHERE i.completed_at IS NULL
+            GROUP BY s.label ORDER BY COUNT(*) DESC`,
+          []
+        )
+        return out(
+          'Work waiting, by step',
+          'Open records at each pipeline step now; pick a step to see its records.',
+          [
+            { key: 'step', label: 'Step' },
+            { key: 'n', label: 'Waiting', type: 'number' }
+          ],
+          steps.map((s) => ({
+            step: str(s.label),
+            n: num(s.n),
+            _drill_metric: 'backlog',
+            _drill_key: str(s.label)
+          }))
+        )
+      }
+      if (!key) {
+        const rules = await rows(
+          `SELECT TOP ${limit} r.name, r.duration_hours FROM nivaro_sla_rules r ORDER BY r.name`,
+          []
+        )
+        return out(
+          'SLA rules',
+          'Pick a rule to see the records past it now.',
+          [
+            { key: 'rule', label: 'Rule' },
+            { key: 'hours', label: 'Limit (hours)', type: 'number' }
+          ],
+          rules.map((r) => ({
+            rule: str(r.name),
+            hours: num(r.duration_hours),
+            _drill_metric: 'sla_breaches',
+            _drill_key: str(r.name)
+          }))
+        )
+      }
       let stateIds: Row[] = []
       let overHours: number | null = null
       if (metric === 'backlog')
@@ -1544,7 +1589,7 @@ export async function drill(
         }
       }
       if (!stateIds.length) return out(key, 'Nothing found for that step.', [], [])
-      const ids = stateIds.map((s) => num(s.id))
+      const ids = stateIds.map((s) => str(s.id)) // state ids are GUIDs
       const r = await rows(
         `SELECT TOP ${limit} i.collection, i.item, i.started_at,
                 (SELECT MAX(h.[timestamp]) FROM nivaro_workflow_history h WHERE h.instance = i.id AND h.to_state = i.current_state) entered
