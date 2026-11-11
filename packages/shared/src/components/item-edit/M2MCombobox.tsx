@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronsUpDown, Loader2, Mail, X } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { parseAllowedCollections } from '../../lib/allowed-collections'
@@ -50,6 +50,121 @@ import type { CMSRelation } from './types'
 
 function allowedList(rel: CMSRelation | undefined): string[] {
   return parseAllowedCollections(rel?.one_allowed_collections)
+}
+
+// ─── M2A picks outside the picker's own table ─────────────────────────────────
+// A ship-to contact is a person OR an external email (the old portal searched
+// both by email in one box). A staged pick from the other table travels as a
+// token `m2a:<collection>:<id>`; the save turns it into `{collection, id}`.
+
+const M2A_TOKEN_RE = /^m2a:([A-Za-z_][A-Za-z0-9_]*):(.+)$/
+
+export function m2aToken(collection: string, id: unknown): string {
+  return `m2a:${collection}:${String(id)}`
+}
+
+export function parseM2aToken(v: unknown): { collection: string; id: string } | null {
+  if (typeof v !== 'string') return null
+  const m = v.match(M2A_TOKEN_RE)
+  return m ? { collection: m[1] as string, id: m[2] as string } : null
+}
+
+/** The collections an M2A leg allows besides people (e.g. additional_emails). */
+export function m2aExtraCollections(otherRel: CMSRelation | undefined): string[] {
+  if (!otherRel || otherRel.one_collection) return []
+  const allowed = allowedList(otherRel)
+  if (allowed.length < 2) return []
+  return allowed.filter((c) => c !== 'directus_users' && c !== 'nivaro_users')
+}
+
+export interface M2AExtraOption {
+  token: string
+  collection: string
+  label: string
+}
+
+/** Options from an M2A leg's other tables, searched by their label (an external
+ *  email reads `{{email}}`). The tables are small lookup lists, read whole. */
+function useM2AExtraOptions(
+  client: ReturnType<typeof useNivaroClient>,
+  otherRel: CMSRelation | undefined,
+  search: string,
+  enabled: boolean
+): M2AExtraOption[] {
+  const cols = m2aExtraCollections(otherRel)
+  const { data } = useQuery({
+    queryKey: ['m2a-extra-options', cols.join(',')],
+    queryFn: async () => {
+      const out: M2AExtraOption[] = []
+      for (const col of cols) {
+        const [meta, rows] = await Promise.all([
+          client
+            .request<{ data: { display_template?: string } }>(get(`/collections/${col}`))
+            .then((r) => r.data)
+            .catch(() => null),
+          client
+            .request<{ data: Record<string, unknown>[] }>(get(`/items/${col}`, { limit: 500 }))
+            .then((r) => r.data ?? [])
+            .catch(() => [] as Record<string, unknown>[])
+        ])
+        for (const row of rows)
+          out.push({
+            token: m2aToken(col, row.id),
+            collection: col,
+            label: applyDisplayTemplate(meta?.display_template ?? null, row)
+          })
+      }
+      return out
+    },
+    enabled: enabled && cols.length > 0,
+    staleTime: 60_000
+  })
+  const q = search.trim().toLowerCase()
+  return (data ?? [])
+    .filter((o) => !q || o.label.toLowerCase().includes(q))
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .slice(0, 25)
+}
+
+function ExtraOptionsGroup({
+  options,
+  isSelected,
+  onPick,
+  round
+}: {
+  options: M2AExtraOption[]
+  isSelected: (token: string) => boolean
+  onPick: (token: string) => void
+  round: boolean
+}) {
+  if (options.length === 0) return null
+  return (
+    <CommandGroup heading='External emails' data-m2a-extra-options=''>
+      {options.map((o) => {
+        const on = isSelected(o.token)
+        return (
+          <CommandItem
+            key={o.token}
+            value={o.token}
+            onSelect={() => onPick(o.token)}
+            className='flex items-center gap-2 text-[12px]'
+          >
+            <div
+              className={cn(
+                'flex h-4 w-4 shrink-0 items-center justify-center border transition-colors',
+                round ? 'rounded-full' : 'rounded',
+                on ? 'border-nvr-cyan bg-nvr-cyan' : 'border-slate-300 dark:border-slate-500'
+              )}
+            >
+              {on && <Check className='h-2.5 w-2.5 text-white' />}
+            </div>
+            <Mail className='h-3.5 w-3.5 shrink-0 text-slate-400' aria-hidden />
+            <span className='truncate'>{o.label}</span>
+          </CommandItem>
+        )
+      })}
+    </CommandGroup>
+  )
 }
 
 /** The junction column naming each link's collection on an M2A leg; null for a plain M2M. */
@@ -247,11 +362,17 @@ export function M2MCombobox({
     labelOf: getLabel
   })
   const guessSelection = useGuessSelection(!!closeMatches, search)
+  const extraOptions = useM2AExtraOptions(client, otherRel, search, open)
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
   const committedItems = junctionItems.filter((i) => !stagedUnlinks.has(i.id))
   const committedIds = new Set(committedItems.map((i) => String(i[junctionField])))
+  // A link's selection key: its id, or a token when it lives in another table.
+  const linkKey = (ji: Record<string, unknown>) => {
+    const own = rowCollection(ji)
+    return own && own !== relatedCollection ? m2aToken(own, ji[junctionField]) : ji[junctionField]
+  }
   // Only links into the picker's own table can be checked against its options
   // (an external email is never "no longer an available option" for people).
   const committedIdsList = [
@@ -291,7 +412,10 @@ export function M2MCombobox({
   // lower-case from an import's email lookup — the same person must not be
   // linked twice ("Peter Moniz, Peter Moniz", army9 b02).
   const stagedLinkIds = new Set(stagedLinks.map(m2mIdKey))
-  const allSelectedIds = new Set([...[...committedIds].map(m2mIdKey), ...stagedLinkIds])
+  const allSelectedIds = new Set([
+    ...committedItems.map((i) => m2mIdKey(linkKey(i))),
+    ...stagedLinkIds
+  ])
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
@@ -305,7 +429,7 @@ export function M2MCombobox({
       staging?.unstageLink(stagingKey, optId)
       return
     }
-    const existing = junctionItems.find((i) => m2mIdKey(i[junctionField]) === strId)
+    const existing = junctionItems.find((i) => m2mIdKey(linkKey(i)) === strId)
     if (existing) {
       if (stagedUnlinks.has(existing.id)) staging?.unstageUnlink(stagingKey, existing.id)
       else staging?.stageUnlink(stagingKey, existing.id)
@@ -448,7 +572,12 @@ export function M2MCombobox({
                     key={String(relId)}
                     className='inline-flex items-center gap-1 rounded-full border border-dashed border-nvr-cyan/50 bg-nvr-cyan/5 pl-2.5 pr-1.5 py-0.5 text-[12px] text-slate-600 dark:text-slate-300'
                   >
-                    {relatedCollection ? (
+                    {parseM2aToken(relId) ? (
+                      <OwnCollectionLabel
+                        collection={(parseM2aToken(relId) as { collection: string }).collection}
+                        id={(parseM2aToken(relId) as { id: string }).id}
+                      />
+                    ) : relatedCollection ? (
                       <RelatedItemLabel
                         collection={relatedCollection}
                         id={relId}
@@ -555,6 +684,12 @@ export function M2MCombobox({
                     )
                   })}
               </CommandGroup>
+              <ExtraOptionsGroup
+                options={extraOptions}
+                isSelected={(t) => allSelectedIds.has(m2mIdKey(t))}
+                onPick={(t) => handleToggle(t)}
+                round={false}
+              />
             </CommandList>
           </Command>
         </PopoverContent>
@@ -777,6 +912,7 @@ export function M2MSingleSelectCombobox({
     labelOf: getLabel
   })
   const guessSelection = useGuessSelection(!!closeMatches, search)
+  const extraOptions = useM2AExtraOptions(client, otherRel, search, open)
 
   const stagedLinks = staging?.getStagedLinks(stagingKey) ?? []
   const stagedUnlinks = staging?.getStagedUnlinks(stagingKey) ?? new Set()
@@ -794,10 +930,21 @@ export function M2MSingleSelectCombobox({
   }, [currentRelatedId])
 
   // A picked value is always from the picker's table; the stored link names its own.
+  const stagedTok = parseM2aToken(stagedRelatedId)
   const currentCollection =
     stagedRelatedId != null
-      ? relatedCollection
+      ? (stagedTok?.collection ?? relatedCollection)
       : m2aRowCollection(committedItem, disc, relatedCollection)
+  const currentReadId = stagedTok ? stagedTok.id : currentRelatedId
+  // The committed link's selection key: its id, or a token for another table.
+  const committedCollection = m2aRowCollection(committedItem, disc, relatedCollection)
+  const committedKey =
+    committedItem == null
+      ? null
+      : committedCollection && committedCollection !== relatedCollection
+        ? m2aToken(committedCollection, committedRelatedId)
+        : String(committedRelatedId)
+  const currentKey = stagedRelatedId != null ? String(stagedRelatedId) : committedKey
   const currentForeign = currentCollection !== relatedCollection
   const { data: ownMeta } = useQuery({
     queryKey: ['col-meta', currentCollection],
@@ -810,12 +957,12 @@ export function M2MSingleSelectCombobox({
     retry: false
   })
   const { data: currentItemData } = useQuery<Record<string, unknown>>({
-    queryKey: ['relation-single', currentCollection, String(currentRelatedId)],
+    queryKey: ['relation-single', currentCollection, String(currentReadId)],
     queryFn: () =>
-      readRow(currentCollection as string, currentRelatedId as string | number) as Promise<
+      readRow(currentCollection as string, currentReadId as string | number) as Promise<
         Record<string, unknown>
       >,
-    enabled: !!currentCollection && currentRelatedId != null,
+    enabled: !!currentCollection && currentReadId != null,
     staleTime: 60_000
   })
 
@@ -873,9 +1020,9 @@ export function M2MSingleSelectCombobox({
     for (const id of stagedLinks) staging?.unstageLink(stagingKey, id)
     if (committedItem && !stagedUnlinks.has(committedItem.id))
       staging?.stageUnlink(stagingKey, committedItem.id)
-    if (String(optId) === String(committedRelatedId) && committedItem) {
+    if (String(optId) === committedKey && committedItem) {
       staging?.unstageUnlink(stagingKey, committedItem.id)
-    } else if (String(optId) !== String(currentRelatedId)) {
+    } else if (String(optId) !== currentKey) {
       staging?.stageLink(stagingKey, optId)
     }
     setOpen(false)
@@ -1039,6 +1186,12 @@ export function M2MSingleSelectCombobox({
                     })}
                 </CommandGroup>
               )}
+              <ExtraOptionsGroup
+                options={extraOptions}
+                isSelected={(t) => currentKey === t}
+                onPick={(t) => handleSelect(t)}
+                round
+              />
             </CommandList>
           </Command>
         </PopoverContent>

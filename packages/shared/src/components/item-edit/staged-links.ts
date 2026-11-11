@@ -1,4 +1,4 @@
-import { m2aWriteMeta } from './M2MCombobox'
+import { m2aWriteMeta, parseM2aToken } from './M2MCombobox'
 import type { CMSRelation } from './types'
 
 /**
@@ -41,6 +41,8 @@ interface AliasTarget {
   field: string
   junctionField: string
   m2aCollection: string | null
+  /** M2A: the junction column naming each link's collection. */
+  m2aField: string | null
 }
 
 function aliasFor(collection: string, relations: CMSRelation[], key: string): AliasTarget | null {
@@ -67,7 +69,12 @@ function aliasFor(collection: string, relations: CMSRelation[], key: string): Al
       c.id !== rel!.id
   )
   const m2a = m2aWriteMeta(companion)
-  return { field: rel.one_field, junctionField, m2aCollection: m2a?.value ?? null }
+  return {
+    field: rel.one_field,
+    junctionField,
+    m2aCollection: m2a?.value ?? null,
+    m2aField: m2a?.field ?? null
+  }
 }
 
 /** What the draft already holds for an alias (a seeded or server-shaped value), as link entries. */
@@ -99,8 +106,24 @@ export function foldStagedLinks(input: FoldInput): Set<string> {
     if (add.length === 0 && drop.size === 0) continue
     const target = aliasFor(collection, relations, key)
     if (!target) continue
-    const entry = (id: unknown) =>
-      target.m2aCollection ? { collection: target.m2aCollection, id } : id
+    // A pick from another table of an M2A field (an external email) is a
+    // `m2a:<collection>:<id>` token; everything else is the default kind.
+    const entry = (id: unknown) => {
+      if (!target.m2aCollection) return id
+      const tok = parseM2aToken(id)
+      return tok
+        ? { collection: tok.collection, id: tok.id }
+        : { collection: target.m2aCollection, id }
+    }
+    // A committed junction row keeps the kind it names — never relabelled as a
+    // person (an external-email link re-sent as a person wrote a bogus link).
+    const rowEntry = (r: Record<string, unknown>): unknown | null => {
+      const id = r[target.junctionField]
+      if (id == null) return null
+      if (!target.m2aCollection) return id
+      const kind = target.m2aField ? r[target.m2aField] : null
+      return typeof kind === 'string' && kind ? { collection: kind, id } : null
+    }
     if (isNew) {
       if (drop.size > 0) continue // nothing committed to unlink on a new record
       const merged: unknown[] = []
@@ -121,20 +144,24 @@ export function foldStagedLinks(input: FoldInput): Set<string> {
     if (drop.size > 0) {
       if (!rows) continue
       const byId = new Map(rows.map((r) => [String(r.id), r]))
-      const mapped = [...drop].map((jid) => byId.get(String(jid))?.[target.junctionField])
+      const mapped = [...drop].map((jid) => {
+        const row = byId.get(String(jid))
+        return row ? rowEntry(row) : null
+      })
+      // Unknown kind: leave it to the follow-up step (deletes the junction row by id).
       if (mapped.some((v) => v == null)) continue
-      removals = mapped.map(entry)
+      removals = mapped
     }
     // The links that stay ride along too (the server skips pairs that exist),
     // so rules and validation on the server read the record's whole resulting
     // set — not just the newly added ids.
     const kept = (rows ?? [])
       .filter((r) => !drop.has(r.id) && !drop.has(String(r.id)))
-      .map((r) => r[target.junctionField])
+      .map(rowEntry)
       .filter((v) => v != null)
     const create: unknown[] = []
     const seen = new Set<string>()
-    for (const e of [...kept.map(entry), ...add.map(entry)]) {
+    for (const e of [...kept, ...add.map(entry)]) {
       const k = entryKey(e)
       if (seen.has(k)) continue
       seen.add(k)

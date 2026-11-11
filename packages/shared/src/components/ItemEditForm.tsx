@@ -82,6 +82,7 @@ import { errorToastOptions } from '../lib/error-toast'
 import { setFormulaConstants } from '../lib/expression'
 import { parseFieldDeepLink } from '../lib/field-comments'
 import { setFiscalStartMonth } from '../lib/fiscal'
+import { FORM_NOT_READY_MESSAGE, formReadyToSave } from '../lib/form-ready'
 import {
   isEmptyValue,
   isFolded,
@@ -109,6 +110,7 @@ import { currentViewport, quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLeaveLinkGuard } from '../lib/leave-guard'
 import { useLiveRefetchInterval } from '../lib/live-queries'
+import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
 import { useRecordReader } from '../lib/record-loader'
 import {
@@ -142,8 +144,6 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
-import { FORM_NOT_READY_MESSAGE, formReadyToSave } from '../lib/form-ready'
-import { requestMoveState } from '../lib/move-state'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
 import {
   choiceLabel,
@@ -284,7 +284,7 @@ import {
   parseRollupSources
 } from './item-edit/live-rollups'
 import { HiddenByRulesNote, refineLockReasons, useLockWhy } from './item-edit/lock-why'
-import { m2aWriteMeta, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
+import { m2aWriteMeta, parseM2aToken, resolveM2MRelatedCollection } from './item-edit/M2MCombobox'
 import { M2MStagingContext, type M2MStagingCtx } from './item-edit/M2MStagingContext'
 import { LineCollisionDialog, MidairCollisionDialog } from './item-edit/MidairCollisionDialog'
 import { editedRowIds, invalidateM2MFor } from './item-edit/m2m-invalidate'
@@ -9355,12 +9355,23 @@ function ItemEditFormView({
       const committedLinks = (key: string) => {
         const info = [...m2mAliasFieldsForRules.values()].find((i) => i.stagingKey === key)
         if (!info) return undefined
-        return qc.getQueryData<Record<string, unknown>[]>([
-          'm2m-items',
-          info.manyCollection,
-          info.manyField,
-          itemId
-        ])
+        // An M2A picker reads its rows WITH each link's kind under the longer
+        // key; prefer those so a save keeps every link's own collection.
+        return (
+          qc.getQueryData<Record<string, unknown>[]>([
+            'm2m-items',
+            info.manyCollection,
+            info.manyField,
+            itemId,
+            'm2a'
+          ]) ??
+          qc.getQueryData<Record<string, unknown>[]>([
+            'm2m-items',
+            info.manyCollection,
+            info.manyField,
+            itemId
+          ])
+        )
       }
       const foldedLinkKeys = foldStagedLinks({
         collection,
@@ -9841,18 +9852,22 @@ function ItemEditFormView({
             )
             const m2a = m2aWriteMeta(companion)
             const extra = m2a ? { [m2a.field]: m2a.value } : {}
-            for (const relId of ids)
+            for (const relId of ids) {
+              // An external-email pick (M2A token) names its own collection.
+              const tok = parseM2aToken(relId)
               additions.push(
                 client
                   .request(
                     post(`/items/${rel.many_collection}`, {
                       [rel.many_field!]: savedId,
-                      [rel.junction_field]: relId,
-                      ...extra
+                      [rel.junction_field]: tok ? tok.id : relId,
+                      ...extra,
+                      ...(tok && m2a ? { [m2a.field]: tok.collection } : {})
                     })
                   )
                   .catch(note('A link could not be added'))
               )
+            }
           }
           await Promise.all(additions)
           if (failed.length > 0) {

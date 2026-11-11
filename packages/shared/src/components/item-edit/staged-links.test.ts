@@ -59,6 +59,57 @@ const RELS: CMSRelation[] = [
 ]
 
 describe('foldStagedLinks', () => {
+  it('create: an external-email pick (M2A token) keeps its own collection', () => {
+    const payload: Record<string, unknown> = {}
+    foldStagedLinks({
+      collection: 'workflows',
+      relations: RELS,
+      links: new Map<string, unknown[]>([['contacts', ['m2a:additional_emails:10', 'U1']]]),
+      unlinks: new Map(),
+      payload,
+      isNew: true
+    })
+    expect(payload.contacts).toEqual([
+      { collection: 'additional_emails', id: '10' },
+      { collection: 'nivaro_users', id: 'U1' }
+    ])
+  })
+
+  it('update: a committed external-email link is re-sent as one, never as a person', () => {
+    const payload: Record<string, unknown> = {}
+    const folded = foldStagedLinks({
+      collection: 'workflows',
+      relations: RELS,
+      links: new Map<string, unknown[]>([['contacts', ['U2']]]),
+      unlinks: new Map(),
+      payload,
+      isNew: false,
+      committed: () => [{ id: 7, item: '10', collection: 'additional_emails' }]
+    })
+    expect(folded.has('contacts')).toBe(true)
+    expect(payload.contacts).toEqual({
+      create: [
+        { collection: 'additional_emails', id: '10' },
+        { collection: 'nivaro_users', id: 'U2' }
+      ]
+    })
+  })
+
+  it('update: a committed M2A row of unknown kind is not guessed', () => {
+    const payload: Record<string, unknown> = {}
+    const folded = foldStagedLinks({
+      collection: 'workflows',
+      relations: RELS,
+      links: new Map(),
+      unlinks: new Map([['contacts', new Set<unknown>([7])]]),
+      payload,
+      isNew: false,
+      committed: () => [{ id: 7, item: '10' }]
+    })
+    // Left to the follow-up step, which deletes the junction row by its id.
+    expect(folded.has('contacts')).toBe(false)
+  })
+
   it('create: every staged pick goes in the body (M2M ids, M2A {collection,id})', () => {
     const payload: Record<string, unknown> = { project: 8170 }
     const folded = foldStagedLinks({
