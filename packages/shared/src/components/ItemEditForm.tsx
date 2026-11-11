@@ -14417,18 +14417,26 @@ function ItemEditFormView({
                                                         // without one gets the same form in a dialog.
                                                         if (
                                                           !requestMoveState({
-                                                            collection,
-                                                            item: String(itemId)
+                                                            // The viewed addendum's own pipeline,
+                                                            // else the record's.
+                                                            collection: pipelineCollection,
+                                                            item: String(pipelineItem)
                                                           })
                                                         )
                                                           setMoveStateOpen(true)
                                                       }}
-                                                      title='Put this record straight into a chosen pipeline state, with a reason. No transition steps run (admin)'
+                                                      title={
+                                                        viewingAddendum
+                                                          ? 'Put the addendum you are viewing straight into a chosen state of its pipeline, with a reason. No transition steps run (admin)'
+                                                          : 'Put this record straight into a chosen pipeline state, with a reason. No transition steps run (admin)'
+                                                      }
                                                       className='gap-1.5'
                                                       data-move-to-state-menu
                                                     >
                                                       <MoveRight className='h-3.5 w-3.5' />
-                                                      Move to state…
+                                                      {viewingAddendum
+                                                        ? 'Move addendum to state…'
+                                                        : 'Move to state…'}
                                                     </Button>
                                                   )}
                                                   {effectiveShowClone && (
@@ -15119,19 +15127,21 @@ function ItemEditFormView({
                                       <DialogContent className='max-w-lg'>
                                         <DialogHeader>
                                           <DialogTitle className='text-[15px]'>
-                                            Move to state
+                                            {viewingAddendum
+                                              ? 'Move addendum to state'
+                                              : 'Move to state'}
                                           </DialogTitle>
                                         </DialogHeader>
                                         <DialogBody>
                                           <MoveToStatePanel
-                                            collection={collection}
-                                            item={String(itemId)}
+                                            collection={pipelineCollection}
+                                            item={String(pipelineItem)}
                                             standalone
                                             onCancel={() => setMoveStateOpen(false)}
                                             onMoved={() => {
                                               setMoveStateOpen(false)
                                               qc.invalidateQueries({
-                                                queryKey: ['pipeline-instance', collection]
+                                                queryKey: ['pipeline-instance', pipelineCollection]
                                               })
                                               qc.invalidateQueries({
                                                 queryKey: ['item', collection, String(itemId)]
