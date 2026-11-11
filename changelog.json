@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-11T00:43:50.344Z",
+  "generated_at": "2026-11-11T02:19:49.724Z",
   "releases": [
+    {
+      "version": "0.3.130",
+      "tag": "v0.3.130",
+      "date": "2026-11-10T21:19:31-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ops-report",
+              "text": "nightly operations post-mortem with drill-down page",
+              "hash": "066c04f53"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "ops-report",
+              "text": "scrub job outcome, progress and mail text in drill-down",
+              "hash": "151bdf61c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.129",
       "tag": "v0.3.129",
-      "date": "2026-11-10T19:43:25-05:00",
+      "date": "2026-11-10T19:43:50-05:00",
       "sections": [
         {
           "label": "Fixed",
