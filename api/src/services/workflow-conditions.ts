@@ -1,7 +1,9 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
 import { daysFromToday } from './liquid-dates.js'
-import { resolvePipelineSubject } from './pipeline-subject.js'
+import { ADDENDUM_COLLECTION, resolvePipelineSubject } from './pipeline-subject.js'
+
+const row = (r: Record<string, unknown>) => Object.keys(r).length > 0
 
 // ─── Workflow transition condition rules ─────────────────────────────────────
 // Shared evaluator used by the pipelines routes (available-transition listing +
@@ -398,6 +400,8 @@ export async function fetchRecordForConditions(
   // Conditions read the subject record — an addendum's parent, whose lines
   // and columns the rules actually name (pipeline-subject.ts).
   const subject = await resolvePipelineSubject(collection, itemId)
+  const addendumId =
+    collection === ADDENDUM_COLLECTION && subject.collection !== collection ? itemId : null
   collection = subject.collection
   itemId = subject.itemId
   let record: Record<string, unknown> = {}
@@ -409,6 +413,19 @@ export async function fetchRecordForConditions(
   } catch (err) {
     if (opts.strict) throw err
     return {}
+  }
+  // Until an addendum is approved its parent still holds the OLD figures, so a
+  // rule like "PO amount = requisition amount" matched the original PO and the
+  // addendum skipped Waiting on PO (TP26-79847). Its rules read the parent as
+  // the addendum proposes it: proposed scalars + rollups over proposed lines.
+  if (addendumId && row(record)) {
+    try {
+      const { buildAddendumRenderOverlay } = await import('./addendum-render.js')
+      const overlay = await buildAddendumRenderOverlay(collection, record, addendumId)
+      if (overlay) record = { ...overlay.item }
+    } catch (err) {
+      if (opts.strict) throw err
+    }
   }
 
   const dotted = new Set<string>()

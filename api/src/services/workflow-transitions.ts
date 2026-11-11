@@ -1846,9 +1846,14 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
           void announceAddendumChange(String(instance.item))
           return
         }
-        const { applyAddendumApproval } = await import('./addendum-approve.js')
+        const { addendumMachineApprover, applyAddendumApproval } = await import(
+          './addendum-approve.js'
+        )
         const { getApp } = await import('./io-holder.js')
-        await applyAddendumApproval(String(instance.item), opts.userId ?? null, {
+        // An auto transition has no person; the last one who moved it approves,
+        // or its line changes are skipped (TP26-79847).
+        const approver = opts.userId ?? (await addendumMachineApprover(String(instance.id)))
+        await applyAddendumApproval(String(instance.item), approver, {
           allowedFromStatuses: ['draft', 'review'],
           app: getApp()
         })

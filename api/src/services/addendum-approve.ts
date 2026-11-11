@@ -162,6 +162,26 @@ async function applyGuardedLineChanges(
   return { applied, failed }
 }
 
+/**
+ * Who approves an addendum an AUTO transition completed ("PO Received (auto)"
+ * once the PO matches): the last person who moved it. Without one the line
+ * changes have nobody to land as and were skipped while the addendum still
+ * read Approved (TP26-79847, 2026-11-11). Null when no person ever moved it.
+ */
+export async function addendumMachineApprover(instanceId: string): Promise<string | null> {
+  try {
+    const row = (await db('nivaro_workflow_history')
+      .where({ instance: instanceId })
+      .whereNotNull('user')
+      .where((q) => q.whereNull('origin').orWhereNot('origin', 'machine'))
+      .orderBy('id', 'desc')
+      .first('user')) as { user: string | null } | undefined
+    return row?.user ? String(row.user) : null
+  } catch {
+    return null
+  }
+}
+
 export interface ApproveAddendumResult {
   ok: boolean
   error?: string
