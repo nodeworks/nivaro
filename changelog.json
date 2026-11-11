@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-11-11T17:48:53.800Z",
+  "generated_at": "2026-11-11T18:17:38.730Z",
   "releases": [
+    {
+      "version": "0.3.139",
+      "tag": "v0.3.139",
+      "date": "2026-11-11T13:17:18-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "forms",
+              "text": "labels, not ids, in the rule popover and the 'was' change note",
+              "hash": "a1020e51f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "notifications",
+              "text": "room under the Why? row in the bell",
+              "hash": "279b386a8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "notification Why? spacing, calmer support ticket sheet, quiet header flags",
+              "hash": "263056664"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.138",
       "tag": "v0.3.138",
-      "date": "2026-11-11T12:48:34-05:00",
+      "date": "2026-11-11T12:48:53-05:00",
       "sections": [
         {
           "label": "Other",
